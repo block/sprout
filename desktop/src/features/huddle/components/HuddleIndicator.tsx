@@ -109,8 +109,7 @@ export function HuddleIndicator({
           case KIND_HUDDLE_PARTICIPANT_LEFT: {
             if (!ephId) break;
             // 48102 events are relay-signed — the actual participant is in the "p" tag.
-            const leftPk =
-              ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
+            const leftPk = ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
             if (!huddle || ephId !== huddle.ephemeralChannelId) {
               huddle = {
                 ephemeralChannelId: ephId,

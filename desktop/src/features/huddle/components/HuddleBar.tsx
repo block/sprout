@@ -449,7 +449,9 @@ export function HuddleBar({ className }: HuddleBarProps) {
 
       {/* Screen reader announcements for huddle state changes */}
       <output aria-live="polite" className="sr-only">
-        {micConnected ? "In huddle, microphone connected" : "In huddle, no microphone"}
+        {micConnected
+          ? "In huddle, microphone connected"
+          : "In huddle, no microphone"}
         {`, voice input: ${isPttMode ? "push to talk, press Ctrl+Space to transmit" : "voice activity detection"}`}
         {modelStatus &&
           modelStatus.moonshine !== "ready" &&

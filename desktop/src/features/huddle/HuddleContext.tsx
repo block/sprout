@@ -183,7 +183,11 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const disconnectMedia = React.useCallback(async () => {
     // Invalidate any in-flight startHuddle/joinHuddle
     tokenRef.current += 1;
-    try { workletRef.current?.stop(); } catch { /* best-effort */ }
+    try {
+      workletRef.current?.stop();
+    } catch {
+      /* best-effort */
+    }
     workletRef.current = null;
     audioTrackRef.current?.stop();
     setLocalAudioTrack(null);
@@ -241,8 +245,15 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       stream: MediaStream | null,
       isCreator: boolean,
     ) => {
-      try { worklet?.stop(); } catch { /* best-effort */ }
-      if (stream) stream.getTracks().forEach(t => t.stop());
+      try {
+        worklet?.stop();
+      } catch {
+        /* best-effort */
+      }
+      if (stream)
+        stream.getTracks().forEach((t) => {
+          t.stop();
+        });
       setLocalAudioTrack(null);
       setMicConnected(false);
       setEphemeralChannelId(null);
@@ -284,7 +295,9 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         try {
           const identity = await invoke<{ pubkey: string }>("get_identity");
           selfPubkeyRef.current = identity.pubkey;
-        } catch { /* best-effort */ }
+        } catch {
+          /* best-effort */
+        }
       }
 
       if (tokenRef.current !== myToken) throw new Error("superseded");
@@ -306,8 +319,12 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         setMicConnected(true);
 
         // Setup AudioWorklet — PCM goes to Rust via push_audio_pcm
-        const initialTransmitting = voiceInputModeRef.current !== "push_to_talk";
-        const worklet = await setupAudioWorklet(audioTrack, initialTransmitting);
+        const initialTransmitting =
+          voiceInputModeRef.current !== "push_to_talk";
+        const worklet = await setupAudioWorklet(
+          audioTrack,
+          initialTransmitting,
+        );
 
         if (tokenRef.current !== myToken) {
           worklet.stop();
@@ -321,7 +338,9 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         return { worklet, stream };
       } catch (err) {
         // Always stop the mic stream on any failure path.
-        stream.getTracks().forEach((t) => t.stop());
+        stream.getTracks().forEach((t) => {
+          t.stop();
+        });
         setLocalAudioTrack(null);
         setMicConnected(false);
         throw err;
