@@ -1,4 +1,3 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -215,7 +214,7 @@ class MessageContent extends StatelessWidget {
     r'|(\*(?:[^*])+\*)' // 3: italic
     r'|(~~(?:[^~])+~~)' // 4: strikethrough
     r'|(\[([^\]]+)\]\(([^)]+)\))' // 5,6,7: [text](url) link
-    r'|(https?://[^\s<>\)]+)' // 8: bare URL
+    r'|(https?://[^\s<>\)]+[^\s<>\).,;:!?])' // 8: bare URL (strip trailing punct)
     r'|(@\S+)' // 9: @mention
     r'|(#\S+)', // 10: #channel
   );
@@ -330,24 +329,30 @@ class MessageContent extends StatelessWidget {
     );
   }
 
-  TextSpan _linkSpan(
+  WidgetSpan _linkSpan(
     String text,
     String url,
     TextStyle style,
     BuildContext context,
   ) {
-    return TextSpan(
-      text: text,
-      style: style.copyWith(
-        color: context.colors.primary,
-        decoration: TextDecoration.underline,
-        decorationColor: context.colors.primary,
-      ),
-      recognizer: TapGestureRecognizer()
-        ..onTap = () {
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.middle,
+      child: GestureDetector(
+        onTap: () {
           final uri = Uri.tryParse(url);
-          if (uri != null) launchUrl(uri, mode: LaunchMode.externalApplication);
+          if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+            launchUrl(uri, mode: LaunchMode.externalApplication);
+          }
         },
+        child: Text(
+          text,
+          style: style.copyWith(
+            color: context.colors.primary,
+            decoration: TextDecoration.underline,
+            decorationColor: context.colors.primary,
+          ),
+        ),
+      ),
     );
   }
 

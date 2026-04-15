@@ -17,8 +17,10 @@ import 'timeline_message.dart';
 
 /// Fetch channel members and preload their profiles into the user cache.
 Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
+  // Capture references before async gap to avoid using disposed ref.
+  final client = ref.read(relayClientProvider);
+  final notifier = ref.read(userCacheProvider.notifier);
   try {
-    final client = ref.read(relayClientProvider);
     final json =
         await client.get('/api/channels/$channelId/members')
             as Map<String, dynamic>;
@@ -27,7 +29,7 @@ Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
         .map((m) => (m as Map<String, dynamic>)['pubkey'] as String)
         .toList();
     if (pubkeys.isNotEmpty) {
-      ref.read(userCacheProvider.notifier).preload(pubkeys);
+      notifier.preload(pubkeys);
     }
   } catch (_) {
     // Non-fatal — mentions will just fall back to cache from messages.
@@ -131,6 +133,15 @@ class _MessageList extends ConsumerWidget {
       );
     }
 
+    // Build channel names map once for all message bubbles.
+    final channelsAsync = ref.watch(channelsProvider);
+    final channelNamesMap = <String, String>{};
+    channelsAsync.whenData((channels) {
+      for (final ch in channels) {
+        channelNamesMap[ch.name.toLowerCase()] = ch.id;
+      }
+    });
+
     return ListView.builder(
       reverse: true,
       padding: const EdgeInsets.symmetric(
@@ -155,7 +166,11 @@ class _MessageList extends ConsumerWidget {
             prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
             (message.createdAt - prevMessage.createdAt) > 300;
 
-        return _MessageBubble(message: message, showAuthor: showAuthor);
+        return _MessageBubble(
+          message: message,
+          showAuthor: showAuthor,
+          channelNames: channelNamesMap,
+        );
       },
     );
   }
@@ -232,34 +247,32 @@ class _SystemMessageRow extends ConsumerWidget {
 class _MessageBubble extends ConsumerWidget {
   final TimelineMessage message;
   final bool showAuthor;
+  final Map<String, String> channelNames;
 
-  const _MessageBubble({required this.message, required this.showAuthor});
+  const _MessageBubble({
+    required this.message,
+    required this.showAuthor,
+    required this.channelNames,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final userCache = ref.watch(userCacheProvider);
+    // Watch only this user's profile to avoid rebuilding on unrelated cache changes.
+    final pk = message.pubkey.toLowerCase();
     final profile =
-        userCache[message.pubkey.toLowerCase()] ??
-        ref.read(userCacheProvider.notifier).get(message.pubkey.toLowerCase());
+        ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
+        ref.read(userCacheProvider.notifier).get(pk);
     final displayName = profile?.label ?? _shortPubkey(message.pubkey);
 
     // Build mention names map from event p-tags.
+    final userCache = ref.watch(userCacheProvider);
     final mentionNames = <String, String>{};
-    for (final pk in message.mentionPubkeys) {
-      final p = userCache[pk.toLowerCase()];
+    for (final mpk in message.mentionPubkeys) {
+      final p = userCache[mpk.toLowerCase()];
       if (p?.displayName != null) {
-        mentionNames[pk.toLowerCase()] = p!.displayName!;
+        mentionNames[mpk.toLowerCase()] = p!.displayName!;
       }
     }
-
-    // Build channel names map for #channel links.
-    final channelsAsync = ref.watch(channelsProvider);
-    final channelNamesMap = <String, String>{};
-    channelsAsync.whenData((channels) {
-      for (final ch in channels) {
-        channelNamesMap[ch.name.toLowerCase()] = ch.id;
-      }
-    });
 
     return Padding(
       padding: EdgeInsets.only(top: showAuthor ? Grid.xxs : Grid.quarter),
@@ -310,7 +323,7 @@ class _MessageBubble extends ConsumerWidget {
                 MessageContent(
                   content: message.content,
                   mentionNames: mentionNames,
-                  channelNames: channelNamesMap,
+                  channelNames: channelNames,
                 ),
               ],
             ),
@@ -414,9 +427,9 @@ class _ComposeBar extends HookConsumerWidget {
         await ref
             .read(sendMessageProvider)
             .call(channelId: channelId, content: text);
-        controller.clear();
+        if (context.mounted) controller.clear();
       } finally {
-        isSending.value = false;
+        if (context.mounted) isSending.value = false;
       }
     }
 
