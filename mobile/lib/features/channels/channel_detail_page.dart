@@ -11,6 +11,7 @@ import 'channel.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'send_message_provider.dart';
+import 'timeline_message.dart';
 
 /// Fetch channel members and preload their profiles into the user cache.
 Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
@@ -76,8 +77,10 @@ class ChannelDetailPage extends HookConsumerWidget {
                   ),
                 ),
               ),
-              data: (messages) =>
-                  _MessageList(messages: messages, channelId: channel.id),
+              data: (events) {
+                final messages = formatTimeline(events);
+                return _MessageList(messages: messages, channelId: channel.id);
+              },
             ),
           ),
           if (typingEntries.isNotEmpty)
@@ -90,7 +93,7 @@ class ChannelDetailPage extends HookConsumerWidget {
 }
 
 class _MessageList extends ConsumerWidget {
-  final List<NostrEvent> messages;
+  final List<TimelineMessage> messages;
   final String channelId;
 
   const _MessageList({required this.messages, required this.channelId});
@@ -126,54 +129,117 @@ class _MessageList extends ConsumerWidget {
       );
     }
 
-    // Filter to only renderable message events for display and grouping.
-    final displayMessages = messages
-        .where(
-          (e) =>
-              e.kind == EventKind.streamMessage ||
-              e.kind == EventKind.streamMessageV2,
-        )
-        .toList();
-
     return ListView.builder(
       reverse: true,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.xxs,
       ),
-      itemCount: displayMessages.length,
+      itemCount: messages.length,
       itemBuilder: (context, index) {
         // Reversed list: index 0 = newest (bottom of screen).
-        final chronIdx = displayMessages.length - 1 - index;
-        final message = displayMessages[chronIdx];
-        // The message visually above is the one earlier in time.
-        final prevMessage = chronIdx > 0 ? displayMessages[chronIdx - 1] : null;
+        final chronIdx = messages.length - 1 - index;
+        final message = messages[chronIdx];
 
+        if (message.isSystem) {
+          return _SystemMessageRow(message: message);
+        }
+
+        // The message visually above is the one earlier in time.
+        final prevMessage = chronIdx > 0 ? messages[chronIdx - 1] : null;
         final showAuthor =
             prevMessage == null ||
+            prevMessage.isSystem ||
             prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
             (message.createdAt - prevMessage.createdAt) > 300;
 
-        return _MessageBubble(event: message, showAuthor: showAuthor);
+        return _MessageBubble(message: message, showAuthor: showAuthor);
       },
     );
   }
 }
 
-class _MessageBubble extends ConsumerWidget {
-  final NostrEvent event;
-  final bool showAuthor;
+// ---------------------------------------------------------------------------
+// System message row
+// ---------------------------------------------------------------------------
 
-  const _MessageBubble({required this.event, required this.showAuthor});
+class _SystemMessageRow extends ConsumerWidget {
+  final TimelineMessage message;
+
+  const _SystemMessageRow({required this.message});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Look up the user profile for display name.
+    final systemEvent = message.systemEvent;
+    if (systemEvent == null) return const SizedBox.shrink();
+
+    final userCache = ref.watch(userCacheProvider);
+
+    String resolveLabel(String? pubkey) {
+      if (pubkey == null) return 'Someone';
+      final profile =
+          userCache[pubkey.toLowerCase()] ??
+          ref.read(userCacheProvider.notifier).get(pubkey.toLowerCase());
+      return profile?.label ?? _shortPubkey(pubkey);
+    }
+
+    final description = systemEvent.describe(resolveLabel);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Grid.half),
+      child: Row(
+        children: [
+          Container(
+            width: 20,
+            height: 20,
+            decoration: BoxDecoration(
+              color: context.colors.surfaceContainerHighest,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              LucideIcons.arrowLeftRight,
+              size: 12,
+              color: context.colors.outline,
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Expanded(
+            child: Text(
+              description,
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.outline,
+              ),
+            ),
+          ),
+          Text(
+            _formatTime(message.createdAt),
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colors.outline.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// User message bubble
+// ---------------------------------------------------------------------------
+
+class _MessageBubble extends ConsumerWidget {
+  final TimelineMessage message;
+  final bool showAuthor;
+
+  const _MessageBubble({required this.message, required this.showAuthor});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final userCache = ref.watch(userCacheProvider);
     final profile =
-        userCache[event.pubkey.toLowerCase()] ??
-        ref.read(userCacheProvider.notifier).get(event.pubkey.toLowerCase());
-    final displayName = profile?.label ?? _shortPubkey(event.pubkey);
+        userCache[message.pubkey.toLowerCase()] ??
+        ref.read(userCacheProvider.notifier).get(message.pubkey.toLowerCase());
+    final displayName = profile?.label ?? _shortPubkey(message.pubkey);
 
     return Padding(
       padding: EdgeInsets.only(top: showAuthor ? Grid.xxs : Grid.quarter),
@@ -181,7 +247,7 @@ class _MessageBubble extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (showAuthor)
-            _UserAvatar(profile: profile, pubkey: event.pubkey)
+            _UserAvatar(profile: profile, pubkey: message.pubkey)
           else
             const SizedBox(width: 28),
           const SizedBox(width: Grid.xxs),
@@ -203,16 +269,26 @@ class _MessageBubble extends ConsumerWidget {
                         ),
                         const SizedBox(width: Grid.xxs),
                         Text(
-                          _formatTime(event.createdAt),
+                          _formatTime(message.createdAt),
                           style: context.textTheme.labelSmall?.copyWith(
                             color: context.colors.outline,
                           ),
                         ),
+                        if (message.edited) ...[
+                          const SizedBox(width: Grid.half),
+                          Text(
+                            '(edited)',
+                            style: context.textTheme.labelSmall?.copyWith(
+                              color: context.colors.outline,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
                 Text(
-                  event.content,
+                  message.content,
                   style: context.textTheme.bodyMedium?.copyWith(
                     color: context.colors.onSurface,
                   ),
@@ -224,29 +300,6 @@ class _MessageBubble extends ConsumerWidget {
       ),
     );
   }
-
-  static String _shortPubkey(String pubkey) {
-    if (pubkey.length > 12) {
-      return '${pubkey.substring(0, 8)}…';
-    }
-    return pubkey;
-  }
-
-  static String _formatTime(int createdAt) {
-    final dt = DateTime.fromMillisecondsSinceEpoch(
-      createdAt * 1000,
-      isUtc: true,
-    ).toLocal();
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-
-    if (diff.inDays > 0) {
-      return '${dt.month}/${dt.day} ${_pad(dt.hour)}:${_pad(dt.minute)}';
-    }
-    return '${_pad(dt.hour)}:${_pad(dt.minute)}';
-  }
-
-  static String _pad(int n) => n.toString().padLeft(2, '0');
 }
 
 class _UserAvatar extends StatelessWidget {
@@ -277,6 +330,10 @@ class _UserAvatar extends StatelessWidget {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Typing indicator
+// ---------------------------------------------------------------------------
 
 class _TypingIndicator extends ConsumerWidget {
   final List<TypingEntry> entries;
@@ -313,12 +370,11 @@ class _TypingIndicator extends ConsumerWidget {
       ),
     );
   }
-
-  static String _shortPubkey(String pubkey) {
-    if (pubkey.length > 12) return '${pubkey.substring(0, 8)}…';
-    return pubkey;
-  }
 }
+
+// ---------------------------------------------------------------------------
+// Compose bar
+// ---------------------------------------------------------------------------
 
 class _ComposeBar extends HookConsumerWidget {
   final String channelId;
@@ -409,3 +465,28 @@ class _ComposeBar extends HookConsumerWidget {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+String _shortPubkey(String pubkey) {
+  if (pubkey.length > 12) return '${pubkey.substring(0, 8)}…';
+  return pubkey;
+}
+
+String _formatTime(int createdAt) {
+  final dt = DateTime.fromMillisecondsSinceEpoch(
+    createdAt * 1000,
+    isUtc: true,
+  ).toLocal();
+  final now = DateTime.now();
+  final diff = now.difference(dt);
+
+  if (diff.inDays > 0) {
+    return '${dt.month}/${dt.day} ${_pad(dt.hour)}:${_pad(dt.minute)}';
+  }
+  return '${_pad(dt.hour)}:${_pad(dt.minute)}';
+}
+
+String _pad(int n) => n.toString().padLeft(2, '0');

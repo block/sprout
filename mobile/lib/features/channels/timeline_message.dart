@@ -1,0 +1,220 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+
+import '../../shared/relay/relay.dart';
+
+// ---------------------------------------------------------------------------
+// System event types (kind 40099)
+// ---------------------------------------------------------------------------
+
+enum SystemEventType {
+  memberJoined,
+  memberLeft,
+  memberRemoved,
+  topicChanged,
+  purposeChanged,
+  channelCreated,
+  channelArchived,
+  channelUnarchived,
+}
+
+@immutable
+class SystemEvent {
+  final SystemEventType type;
+  final String? actorPubkey;
+  final String? targetPubkey;
+  final String? topic;
+  final String? purpose;
+
+  const SystemEvent({
+    required this.type,
+    this.actorPubkey,
+    this.targetPubkey,
+    this.topic,
+    this.purpose,
+  });
+
+  /// Parse a system event from the JSON content of a kind-40099 event.
+  /// Returns null if the payload is unrecognised.
+  static SystemEvent? fromContent(String content) {
+    final Map<String, dynamic> json;
+    try {
+      json = jsonDecode(content) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+
+    final type = switch (json['type'] as String?) {
+      'member_joined' => SystemEventType.memberJoined,
+      'member_left' => SystemEventType.memberLeft,
+      'member_removed' => SystemEventType.memberRemoved,
+      'topic_changed' => SystemEventType.topicChanged,
+      'purpose_changed' => SystemEventType.purposeChanged,
+      'channel_created' => SystemEventType.channelCreated,
+      'channel_archived' => SystemEventType.channelArchived,
+      'channel_unarchived' => SystemEventType.channelUnarchived,
+      _ => null,
+    };
+
+    if (type == null) return null;
+
+    return SystemEvent(
+      type: type,
+      actorPubkey: json['actor'] as String?,
+      targetPubkey: json['target'] as String?,
+      topic: json['topic'] as String?,
+      purpose: json['purpose'] as String?,
+    );
+  }
+
+  /// Human-readable description. [resolveLabel] maps a pubkey to a display
+  /// name — the caller provides it so this class stays free of provider deps.
+  String describe(String Function(String? pubkey) resolveLabel) {
+    final actor = resolveLabel(actorPubkey);
+
+    return switch (type) {
+      SystemEventType.memberJoined => () {
+        if (actorPubkey != null && actorPubkey == targetPubkey) {
+          return '$actor joined the channel';
+        }
+        final target = resolveLabel(targetPubkey);
+        return '$actor added $target to the channel';
+      }(),
+      SystemEventType.memberLeft => '$actor left the channel',
+      SystemEventType.memberRemoved => () {
+        final target = resolveLabel(targetPubkey);
+        return '$actor removed $target from the channel';
+      }(),
+      SystemEventType.topicChanged => '$actor changed the topic to "$topic"',
+      SystemEventType.purposeChanged =>
+        '$actor changed the purpose to "$purpose"',
+      SystemEventType.channelCreated => '$actor created this channel',
+      SystemEventType.channelArchived => '$actor archived this channel',
+      SystemEventType.channelUnarchived => '$actor unarchived this channel',
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TimelineMessage — a processed, display-ready message
+// ---------------------------------------------------------------------------
+
+@immutable
+class TimelineMessage {
+  final String id;
+  final String pubkey;
+  final int createdAt;
+  final String content;
+  final bool isSystem;
+  final bool edited;
+  final SystemEvent? systemEvent;
+
+  const TimelineMessage({
+    required this.id,
+    required this.pubkey,
+    required this.createdAt,
+    required this.content,
+    this.isSystem = false,
+    this.edited = false,
+    this.systemEvent,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// formatTimeline — converts raw NostrEvents into display-ready messages
+// ---------------------------------------------------------------------------
+
+/// Process a chronologically-sorted list of [NostrEvent]s into a list of
+/// [TimelineMessage]s, applying deletions, edits, and system event parsing.
+///
+/// Mirrors the desktop's `formatTimelineMessages` logic.
+List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
+  // 1. Collect deletion targets.
+  final deletedIds = <String>{};
+  for (final event in events) {
+    if (event.kind != EventKind.deletion) continue;
+    for (final tag in event.tags) {
+      if (tag.length >= 2 && tag[0] == 'e') {
+        deletedIds.add(tag[1]);
+      }
+    }
+  }
+
+  // 2. Build edit map: targetId → latest edit content.
+  final edits = <String, _Edit>{};
+  for (final event in events) {
+    if (event.kind != EventKind.streamMessageEdit) continue;
+    if (deletedIds.contains(event.id)) continue;
+
+    final targetId = _lastETag(event.tags);
+    if (targetId == null || deletedIds.contains(targetId)) continue;
+
+    final existing = edits[targetId];
+    if (existing == null || event.createdAt > existing.createdAt) {
+      edits[targetId] = _Edit(
+        content: event.content,
+        createdAt: event.createdAt,
+      );
+    }
+  }
+
+  // 3. Filter to visible content events and build TimelineMessages.
+  final result = <TimelineMessage>[];
+  for (final event in events) {
+    if (deletedIds.contains(event.id)) continue;
+
+    if (event.kind == EventKind.systemMessage) {
+      final systemEvent = SystemEvent.fromContent(event.content);
+      if (systemEvent != null) {
+        result.add(
+          TimelineMessage(
+            id: event.id,
+            pubkey: event.pubkey,
+            createdAt: event.createdAt,
+            content: event.content,
+            isSystem: true,
+            systemEvent: systemEvent,
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (event.kind == EventKind.streamMessage ||
+        event.kind == EventKind.streamMessageV2 ||
+        event.kind == EventKind.streamMessageDiff) {
+      final edit = edits[event.id];
+      result.add(
+        TimelineMessage(
+          id: event.id,
+          pubkey: event.pubkey,
+          createdAt: event.createdAt,
+          content: edit?.content ?? event.content,
+          edited: edit != null,
+        ),
+      );
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+class _Edit {
+  final String content;
+  final int createdAt;
+  const _Edit({required this.content, required this.createdAt});
+}
+
+/// Get the last `e` tag value (reaction/edit target convention).
+String? _lastETag(List<List<String>> tags) {
+  for (var i = tags.length - 1; i >= 0; i--) {
+    final tag = tags[i];
+    if (tag.length >= 2 && tag[0] == 'e') return tag[1];
+  }
+  return null;
+}
