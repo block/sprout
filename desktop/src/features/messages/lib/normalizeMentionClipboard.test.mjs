@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  hasMentionClipboardHtml,
-} from "./normalizeMentionClipboard.ts";
+import { hasMentionClipboardHtml } from "./normalizeMentionClipboard.ts";
 
 // NOTE: normalizeMentionClipboardHtml uses the browser DOMParser API which
 // is not available in Node.  Those paths are covered by the e2e paste tests.
