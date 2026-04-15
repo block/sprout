@@ -110,6 +110,13 @@ export function MessageComposer({
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
 
+  // ── Refs consumed by Tiptap's submitOnEnter extension ──────────────
+  const isAutocompleteOpenRef = React.useRef(false);
+  isAutocompleteOpenRef.current =
+    mentions.isMentionOpen || channelLinks.isChannelOpen;
+
+  const submitMessageRef = React.useRef<() => void>(() => {});
+
   // ── Computed placeholder ─────────────────────────────────────────────
   const computedPlaceholder = editTarget
     ? "Edit your message"
@@ -124,6 +131,8 @@ export function MessageComposer({
     editable: !disabled,
     mentionNames: mentions.knownNames,
     channelNames: channelLinks.knownChannelNames,
+    onSubmit: () => submitMessageRef.current(),
+    isAutocompleteOpen: isAutocompleteOpenRef,
     onUpdate: ({ markdown, text }) => {
       setContent(markdown);
       contentRef.current = markdown;
@@ -361,6 +370,7 @@ export function MessageComposer({
     richText.clearContent,
     richText.setContent,
   ]);
+  submitMessageRef.current = submitMessage;
 
   const handleSubmit = React.useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
@@ -372,8 +382,9 @@ export function MessageComposer({
 
   // ── Keyboard handling ───────────────────────────────────────────────
   // Tiptap handles formatting shortcuts (⌘B, ⌘I, etc.) natively.
-  // We intercept Enter (submit) and arrow keys (autocomplete) via a
-  // keydown listener on the editor wrapper.
+  // Plain Enter → submit is now handled inside the Tiptap `submitOnEnter`
+  // extension (fires before ProseMirror's splitBlock). This wrapper only
+  // handles autocomplete arrow/enter keys and Escape for edit mode.
   const handleEditorKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       // Let autocomplete handle keys first
@@ -399,32 +410,12 @@ export function MessageComposer({
         onCancelEdit();
         return;
       }
-
-      if (event.key !== "Enter" || event.nativeEvent.isComposing) {
-        return;
-      }
-
-      // Shift+Enter or Ctrl+Enter → newline (Tiptap handles this natively
-      // via hard break, so let it through)
-      if (event.shiftKey || event.ctrlKey) {
-        return;
-      }
-
-      // Meta/Alt+Enter → let through (system shortcuts)
-      if (event.metaKey || event.altKey) {
-        return;
-      }
-
-      // Plain Enter → submit
-      event.preventDefault();
-      void submitMessage();
     },
     [
       channelLinks.handleChannelKeyDown,
       applyChannelInsert,
       mentions.handleMentionKeyDown,
       applyMentionInsert,
-      submitMessage,
       onCancelEdit,
     ],
   );
