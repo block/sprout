@@ -18,6 +18,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::api;
 use crate::api::tokens;
+use crate::audio;
 use crate::connection::handle_connection;
 use crate::metrics::track_metrics;
 use crate::nip11::{relay_info_handler, RelayInfo};
@@ -51,13 +52,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
-        // ── Internal routes (not exposed through the public API gateway) ─────
-        // LiveKit fires this on participant_joined/left (including crashes),
-        // providing authoritative presence tracking for crash-orphan recovery.
-        .route(
-            "/internal/livekit/webhook",
-            post(api::handle_livekit_webhook),
-        )
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
@@ -111,8 +105,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/approvals/by-hash/{hash}/deny",
             post(api::deny_approval_by_hash),
         )
-        // Huddle routes
-        .route("/api/huddles/{channel_id}/token", post(api::huddle_token))
+        // Huddle audio WebSocket route
+        .route(
+            "/huddle/{channel_id}/audio",
+            get(audio::handler::ws_audio_handler),
+        )
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes

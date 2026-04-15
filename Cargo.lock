@@ -3750,25 +3750,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sprout-huddle"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hex",
- "hmac 0.13.0",
- "jsonwebtoken",
- "nostr",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sprout-core",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "sprout-mcp"
 version = "0.1.0"
 dependencies = [
@@ -3904,7 +3885,6 @@ dependencies = [
  "sprout-auth",
  "sprout-core",
  "sprout-db",
- "sprout-huddle",
  "sprout-media",
  "sprout-pubsub",
  "sprout-search",

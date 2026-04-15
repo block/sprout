@@ -10,7 +10,6 @@ use sprout_db::{Db, DbConfig};
 use sprout_pubsub::PubSubManager;
 use sprout_search::{SearchConfig, SearchService};
 
-use sprout_huddle::{HuddleConfig, HuddleService};
 use sprout_relay::config::Config;
 use sprout_relay::metrics as relay_metrics;
 use sprout_relay::router::{build_health_router, build_router};
@@ -128,28 +127,6 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
     info!("Media storage connected");
 
-    // Huddles are enabled by default with dev credentials.
-    // Set SPROUT_HUDDLES_DISABLED=true to turn them off.
-    // Override LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET for production.
-    let huddle_service = if std::env::var("SPROUT_HUDDLES_DISABLED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
-    {
-        info!("Huddles explicitly disabled via SPROUT_HUDDLES_DISABLED");
-        None
-    } else {
-        let url = std::env::var("LIVEKIT_URL").unwrap_or_else(|_| "ws://localhost:7880".into());
-        let key = std::env::var("LIVEKIT_API_KEY").unwrap_or_else(|_| "devkey".into());
-        let secret = std::env::var("LIVEKIT_API_SECRET").unwrap_or_else(|_| "secret".into());
-        info!("Huddles enabled (LiveKit URL: {url})");
-        let svc = HuddleService::new(HuddleConfig {
-            livekit_url: url.clone(),
-            livekit_api_key: key,
-            livekit_api_secret: secret,
-        });
-        Some((svc, url))
-    };
-
     let state = Arc::new(AppState::new(
         config.clone(),
         db,
@@ -161,7 +138,6 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&workflow_engine),
         relay_keypair,
         media_storage,
-        huddle_service,
     ));
 
     // Wire the action sink — must happen after AppState (which creates

@@ -16,7 +16,6 @@ const KIND_HUDDLE_ENDED = 48103;
 
 type ActiveHuddle = {
   ephemeralChannelId: string;
-  livekitRoom: string;
   participants: Set<string>;
 };
 
@@ -77,11 +76,9 @@ export function HuddleIndicator({
 
       for (const ev of sorted) {
         let ephId: string | null = null;
-        let room = "";
         try {
           const content = JSON.parse(ev.content);
           ephId = content.ephemeral_channel_id ?? null;
-          room = content.livekit_room ?? "";
         } catch {
           continue; // Malformed — skip
         }
@@ -91,38 +88,35 @@ export function HuddleIndicator({
             if (!ephId) break;
             huddle = {
               ephemeralChannelId: ephId,
-              livekitRoom: room,
               participants: new Set([ev.pubkey]),
             };
             break;
           }
           case KIND_HUDDLE_PARTICIPANT_JOINED: {
             if (!ephId) break;
-            // Infer huddle exists if we missed the start event (late mount
-            // or >100 lifecycle events pushed it out of the window).
+            // 48101 events are relay-signed — the actual participant is in the "p" tag.
+            const joinedPk =
+              ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
             if (!huddle || ephId !== huddle.ephemeralChannelId) {
               huddle = {
                 ephemeralChannelId: ephId,
-                livekitRoom: room,
                 participants: new Set(),
               };
             }
-            huddle.participants.add(ev.pubkey);
+            huddle.participants.add(joinedPk);
             break;
           }
           case KIND_HUDDLE_PARTICIPANT_LEFT: {
             if (!ephId) break;
-            // Infer huddle exists from LEFT too — if the window starts with
-            // only LEFT events (all joiners departed, creator still active),
-            // we still need to know the huddle is alive.
+            // 48102 events are relay-signed — the actual participant is in the "p" tag.
+            const leftPk = ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
             if (!huddle || ephId !== huddle.ephemeralChannelId) {
               huddle = {
                 ephemeralChannelId: ephId,
-                livekitRoom: room,
                 participants: new Set(),
               };
             }
-            huddle.participants.delete(ev.pubkey);
+            huddle.participants.delete(leftPk);
             break;
           }
           case KIND_HUDDLE_ENDED: {
@@ -198,11 +192,7 @@ export function HuddleIndicator({
     if (!activeHuddle || isJoining) return;
     setIsJoining(true);
     try {
-      await joinHuddle(
-        channelId,
-        activeHuddle.ephemeralChannelId,
-        activeHuddle.livekitRoom,
-      );
+      await joinHuddle(channelId, activeHuddle.ephemeralChannelId);
       // Refetch channels so the ephemeral channel appears in the sidebar.
       void queryClient.invalidateQueries({ queryKey: ["channels"] });
     } catch (e) {

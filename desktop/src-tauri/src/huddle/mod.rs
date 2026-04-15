@@ -1,8 +1,8 @@
-//! Huddle (voice/video) state machine and Tauri commands.
+//! Huddle (voice) state machine and Tauri commands.
 //!
 //! Mental model:
-//!   parent channel → start_huddle → ephemeral channel + LiveKit token
-//!   other clients  → join_huddle  → LiveKit token
+//!   parent channel → start_huddle → ephemeral channel + audio WS relay
+//!   other clients  → join_huddle  → audio WS relay
 //!   any client     → leave_huddle → lifecycle event, clear local state
 //!   creator        → end_huddle   → archive ephemeral channel, clear state
 //!
@@ -67,10 +67,9 @@ use crate::{app_state::AppState, events, relay::submit_event};
 
 use pipeline::{maybe_start_stt_pipeline, maybe_start_tts_pipeline, post_connect_setup};
 use relay_api::{
-    count_human_members, fetch_channel_members, fetch_livekit_token, parse_channel_uuid,
-    validate_pubkey_hex, MAX_HUDDLE_AGENTS,
+    count_human_members, fetch_channel_members, parse_channel_uuid, validate_pubkey_hex,
+    MAX_HUDDLE_AGENTS,
 };
-use state::LiveKitTokenResponse;
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
@@ -122,10 +121,9 @@ pub fn get_voice_input_mode(state: State<'_, AppState>) -> Result<VoiceInputMode
 ///
 /// Steps:
 /// 1. Create an ephemeral channel (kind 9007, ttl=3600).
-/// 2. Add each invited member to the ephemeral channel (kind 9000).
-/// 3. Fetch a LiveKit token from the relay.
-/// 4. Emit KIND_HUDDLE_STARTED to the parent channel (kind 48100) — only after
-///    token is confirmed, so no phantom announcement on failure.
+/// 2. Post voice-mode guidelines (kind 48106).
+/// 3. Add each invited member to the ephemeral channel (kind 9000).
+/// 4. Emit KIND_HUDDLE_STARTED to the parent channel (kind 48100).
 /// 5. Store state and return join info.
 ///
 /// If ANY step fails (including channel creation), the orphaned ephemeral
@@ -179,7 +177,7 @@ pub async fn start_huddle(
     // channel_was_created tracks whether we need to archive on rollback.
     let mut channel_was_created = false;
 
-    let result: Result<(LiveKitTokenResponse, Vec<String>), String> = async {
+    let result: Result<Vec<String>, String> = async {
         // 1. Create ephemeral channel.
         let create_builder = events::build_create_channel(
             ephemeral_uuid,
@@ -218,32 +216,24 @@ pub async fn start_huddle(
             }
         }
 
-        // 4. Fetch LiveKit token BEFORE emitting HUDDLE_STARTED.
-        //    This prevents a phantom announcement if the token fetch fails.
-        //    Creator is already the channel owner — no auto-add needed (None).
-        let lk = fetch_livekit_token(&ephemeral_channel_id, None, &state).await?;
-
-        // 5. Emit HUDDLE_STARTED to parent channel — only now that token is confirmed.
+        // 4. Emit HUDDLE_STARTED to parent channel.
         let started_builder =
-            events::build_huddle_started(&parent_channel_id, &ephemeral_channel_id, &lk.room)?;
+            events::build_huddle_started(&parent_channel_id, &ephemeral_channel_id)?;
         submit_event(started_builder, &state).await?;
 
-        Ok((lk, successful_agents))
+        Ok(successful_agents)
     }
     .await;
 
     match result {
-        Ok((lk, successful_agents)) => {
+        Ok(successful_agents) => {
             // 5. Store active state.
             {
                 let mut hs = state.huddle()?;
                 hs.phase = HuddlePhase::Connected;
                 hs.is_creator = true;
                 hs.ephemeral_channel_id = Some(ephemeral_channel_id.clone());
-                hs.livekit_token = Some(lk.token.clone());
-                hs.livekit_url = Some(lk.url.clone());
-                hs.livekit_room = Some(lk.room.clone());
-                // Only store agents that were successfully enrolled (Fix 1).
+                // Only store agents that were successfully enrolled.
                 *hs.agent_pubkeys.lock().unwrap_or_else(|e| e.into_inner()) =
                     successful_agents.clone();
                 // Include the current user + successfully enrolled agents as participants.
@@ -264,17 +254,27 @@ pub async fn start_huddle(
             // 6. Notify frontend of state change.
             state.emit_huddle_state_changed();
 
-            // 7. Hydrate members, download models, start pipelines.
+            // 7. Hydrate members, download models, start pipelines (incl. audio relay).
+            // Audio relay failure is fatal — no point in a huddle without audio.
             if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
-                eprintln!("sprout-desktop: post_connect_setup failed (degraded mode): {e}");
-                // Non-fatal: huddle works without STT/TTS pipelines.
+                // Rollback: audio relay failed after state was committed.
+                // Archive the ephemeral channel and reset state.
+                if let Ok(archive_builder) = events::build_archive(ephemeral_uuid) {
+                    if let Err(ae) = submit_event(archive_builder, &state).await {
+                        eprintln!(
+                            "sprout-desktop: rollback archive of {ephemeral_channel_id} failed: {ae}"
+                        );
+                    }
+                }
+                if let Ok(mut hs) = state.huddle_state.lock() {
+                    hs.reset_preserving_generation();
+                }
+                state.emit_huddle_state_changed();
+                return Err(e);
             }
 
             Ok(HuddleJoinInfo {
                 ephemeral_channel_id,
-                livekit_token: lk.token,
-                livekit_url: lk.url,
-                livekit_room: lk.room,
             })
         }
         Err(e) => {
@@ -303,16 +303,14 @@ pub async fn start_huddle(
 ///
 /// Steps:
 /// 1. Transition to Connecting.
-/// 2. Fetch a LiveKit token from the relay (relay auto-adds caller as member
-///    of the ephemeral channel via `parent_channel_id` query param).
-/// 3. Emit KIND_HUDDLE_PARTICIPANT_JOINED to the parent channel (best-effort).
-/// 4. Store state and return join info.
-/// 5. Post-connect setup (pipelines, model hydration).
+/// 2. Store state and return join info.
+/// 3. Post-connect setup (audio relay WS, pipelines, model hydration).
+///
+/// The relay emits kind:48101 (participant joined) when the audio WS authenticates.
 #[tauri::command]
 pub async fn join_huddle(
     parent_channel_id: String,
     ephemeral_channel_id: String,
-    livekit_room: String,
     state: State<'_, AppState>,
 ) -> Result<HuddleJoinInfo, String> {
     // Transition to Connecting.
@@ -327,80 +325,42 @@ pub async fn join_huddle(
         hs.phase = HuddlePhase::Connecting;
         hs.parent_channel_id = Some(parent_channel_id.clone());
         hs.ephemeral_channel_id = Some(ephemeral_channel_id.clone());
-        hs.livekit_room = Some(livekit_room.clone());
     }
 
-    let result: Result<(LiveKitTokenResponse, String), String> = async {
-        // 1. Fetch LiveKit token — relay auto-adds caller to the ephemeral channel
-        //    when parent_channel_id is provided (caller must be a parent member).
-        let lk =
-            fetch_livekit_token(&ephemeral_channel_id, Some(&parent_channel_id), &state).await?;
+    // Seed participant list with own pubkey as a fallback until relay responds.
+    let own_pubkey = state
+        .keys
+        .lock()
+        .map(|k| k.public_key().to_hex())
+        .unwrap_or_default();
 
-        // 2. Emit PARTICIPANT_JOINED (best-effort) — include own pubkey as p-tag.
-        //    Fetch own_pubkey AFTER the token call so a key-lock failure doesn't
-        //    block the join; the event is best-effort anyway.
-        let own_pubkey = state
-            .keys
-            .lock()
-            .map(|k| k.public_key().to_hex())
-            .unwrap_or_default();
-        if let Ok(joined_builder) = events::build_huddle_participant_joined(
-            &parent_channel_id,
-            &ephemeral_channel_id,
-            if own_pubkey.is_empty() {
-                None
-            } else {
-                Some(own_pubkey.as_str())
-            },
-        ) {
-            if let Err(e) = submit_event(joined_builder, &state).await {
-                eprintln!("sprout-desktop: huddle_participant_joined event failed: {e}");
-            }
-        }
-
-        Ok((lk, own_pubkey))
-    }
-    .await;
-
-    match result {
-        Ok((lk, own_pubkey)) => {
-            // 3. Store active state.
-            {
-                let mut hs = state.huddle()?;
-                hs.phase = HuddlePhase::Connected;
-                hs.livekit_token = Some(lk.token.clone());
-                hs.livekit_url = Some(lk.url.clone());
-                hs.livekit_room = Some(lk.room.clone());
-                // Seed with current user as a fallback until relay responds.
-                if !own_pubkey.is_empty() {
-                    hs.participants = vec![own_pubkey];
-                }
-            }
-
-            // 4. Notify frontend of state change.
-            state.emit_huddle_state_changed();
-
-            // 5. Hydrate members, download models, start pipelines.
-            if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
-                eprintln!("sprout-desktop: post_connect_setup failed (degraded mode): {e}");
-            }
-
-            Ok(HuddleJoinInfo {
-                ephemeral_channel_id,
-                livekit_token: lk.token,
-                livekit_url: lk.url,
-                livekit_room: lk.room,
-            })
-        }
-        Err(e) => {
-            // Rollback: just reset state to Idle — the relay auto-added us and
-            // the ephemeral channel has a TTL, so no manual leave is needed.
-            if let Ok(mut hs) = state.huddle_state.lock() {
-                hs.reset_preserving_generation();
-            }
-            Err(e)
+    {
+        let mut hs = state.huddle()?;
+        hs.phase = HuddlePhase::Connected;
+        if !own_pubkey.is_empty() {
+            hs.participants = vec![own_pubkey];
         }
     }
+
+    // Notify frontend of state change.
+    state.emit_huddle_state_changed();
+
+    // Hydrate members, download models, start pipelines (incl. audio relay).
+    // Audio relay failure is fatal — no point in a huddle without audio.
+    if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
+        // Rollback: audio relay failed after state was committed.
+        // Reset state to Idle so the user can retry. The ephemeral channel
+        // has a TTL and will expire — no manual archive needed for joiners.
+        if let Ok(mut hs) = state.huddle_state.lock() {
+            hs.reset_preserving_generation();
+        }
+        state.emit_huddle_state_changed();
+        return Err(e);
+    }
+
+    Ok(HuddleJoinInfo {
+        ephemeral_channel_id,
+    })
 }
 
 /// Shut down all pipelines and reset huddle state to Idle.
@@ -411,17 +371,26 @@ fn teardown_huddle(state: &AppState) -> Result<(), String> {
     // Take pipeline handles out of state and drop the lock before shutdown.
     // Pipeline Drop impls join worker threads — this avoids blocking while
     // the mutex is held (ONNX inference can take ~200ms).
-    let (old_stt, old_tts) = {
+    let (old_stt, old_tts, _audio_cancel) = {
         let mut hs = state.huddle()?;
         // Increment generation first — this immediately invalidates any
         // in-flight transcription task, even before pipelines shut down.
         hs.session_generation.fetch_add(1, Ordering::Release);
         let stt = hs.stt_pipeline.take();
         let tts = hs.tts_pipeline.take();
+        let cancel = hs.audio_ws_cancel.take();
+        // Cancel the relay token BEFORE dropping the sender. If we drop
+        // pcm_tx first, the send task sees None from recv() and can exit
+        // the pipeline before is_cancelled() is true — causing a spurious
+        // huddle-audio-disconnected event on intentional teardown.
+        if let Some(ref c) = cancel {
+            c.cancel();
+        }
+        hs.audio_relay_pcm_tx.take(); // Drop sender — signals the relay task.
         hs.reset_preserving_generation();
-        (stt, tts)
+        (stt, tts, cancel)
     };
-    // Shut down outside the lock — thread joins happen here.
+    // Shut down STT/TTS outside the lock — thread joins happen here.
     if let Some(ref p) = old_stt {
         p.shutdown();
     }
@@ -468,9 +437,11 @@ async fn emit_end_and_archive(
 /// Leave the current huddle.
 ///
 /// Steps:
-/// 1. Emit KIND_HUDDLE_PARTICIPANT_LEFT to the parent channel.
-/// 2. Shut down the STT pipeline (Fix 5).
-/// 3. Clear local huddle state.
+/// 1. Transition to Leaving.
+/// 2. Auto-end check: if last human, emit HUDDLE_ENDED + archive.
+/// 3. Shut down pipelines and audio relay.
+///
+/// The relay emits kind:48102 (participant left) when the audio WS disconnects.
 #[tauri::command]
 pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
     let (parent_channel_id, ephemeral_channel_id) = {
@@ -484,20 +455,6 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
             hs.ephemeral_channel_id.clone().unwrap_or_default(),
         )
     };
-
-    // Emit PARTICIPANT_LEFT (best-effort) — include own pubkey as p-tag.
-    let own_pubkey = state.keys.lock().ok().map(|k| k.public_key().to_hex());
-    if !parent_channel_id.is_empty() && !ephemeral_channel_id.is_empty() {
-        if let Ok(left_builder) = events::build_huddle_participant_left(
-            &parent_channel_id,
-            &ephemeral_channel_id,
-            own_pubkey.as_deref(),
-        ) {
-            if let Err(e) = submit_event(left_builder, &state).await {
-                eprintln!("sprout-desktop: huddle_participant_left event failed: {e}");
-            }
-        }
-    }
 
     // Auto-end: check if any human participants remain. If not, end the huddle
     // (emit HUDDLE_ENDED + archive). If others remain, just remove self from
@@ -574,7 +531,7 @@ pub async fn end_huddle(force: Option<bool>, state: State<'_, AppState>) -> Resu
     Ok(())
 }
 
-/// Confirm that the frontend has established LiveKit + AudioWorklet.
+/// Confirm that the frontend has established mic + AudioWorklet.
 /// Transitions from Connected → Active. No-op if already Active.
 #[tauri::command]
 pub async fn confirm_huddle_active(state: State<'_, AppState>) -> Result<(), String> {
@@ -644,8 +601,13 @@ pub fn push_audio_pcm(
                 ));
             }
             if let Ok(hs) = state.huddle() {
+                // Fan out to STT pipeline.
                 if let Some(ref pipeline) = hs.stt_pipeline {
                     pipeline.push_audio(bytes.to_vec())?;
+                }
+                // Fan out to audio relay encoder (best-effort, non-blocking).
+                if let Some(ref pcm_tx) = hs.audio_relay_pcm_tx {
+                    let _ = pcm_tx.try_send(bytes.to_vec());
                 }
             }
             Ok(())
