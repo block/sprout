@@ -81,6 +81,7 @@ hmac      = "0.13"
 
 # Randomness
 rand = "0.10"
+subtle = "2.6"
 
 # Concurrent data structures
 dashmap = "6"

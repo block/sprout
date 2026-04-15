@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum PairingMessage {
-    /// Initiator → Responder. Announces the session and its ID.
+    /// Target → Source. Announces the session and proves possession of the QR secret.
     Offer {
         /// Hex-encoded 32-byte session ID derived via HKDF from the session secret.
         session_id: String,

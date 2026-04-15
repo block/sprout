@@ -21,5 +21,6 @@ chrono     = { workspace = true }
 hex        = { workspace = true }
 schemars   = { workspace = true, optional = true }
 rand       = { workspace = true }
+subtle     = { workspace = true }
 
 # NO tokio, NO sqlx, NO redis, NO axum — zero I/O dependencies

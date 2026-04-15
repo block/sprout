@@ -54,10 +54,6 @@ enum Cmd {
         /// nsec (bech32) of the key to transfer. If omitted, generates a test key.
         #[arg(long)]
         nsec: Option<String>,
-
-        /// Print sensitive material (secrets, keys) to stdout. Off by default.
-        #[arg(long, default_value_t = false)]
-        show_secret: bool,
     },
 
     /// Act as the target device (scans QR code, receives the secret).
@@ -114,11 +110,7 @@ async fn main() {
 
 async fn run(cmd: Cmd) -> Result<(), CliError> {
     match cmd {
-        Cmd::Source {
-            relay,
-            nsec,
-            show_secret,
-        } => cmd_source(relay, nsec, show_secret).await,
+        Cmd::Source { relay, nsec } => cmd_source(relay, nsec).await,
         Cmd::Target { relay, show_secret } => cmd_target(relay, show_secret).await,
         Cmd::TestVectors => cmd_test_vectors(),
     }
@@ -126,11 +118,7 @@ async fn run(cmd: Cmd) -> Result<(), CliError> {
 
 // ── source subcommand ─────────────────────────────────────────────────────────
 
-async fn cmd_source(
-    relay_url: String,
-    nsec: Option<String>,
-    _show_secret: bool,
-) -> Result<(), CliError> {
+async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliError> {
     // Resolve the payload to transfer.
     let (payload_str, payload_type) = resolve_payload(nsec)?;
 
@@ -138,7 +126,8 @@ async fn cmd_source(
     let (mut session, qr) = PairingSession::new_source(relay_url.clone());
     let qr_uri = encode_qr(&qr);
 
-    println!("QR URI: {qr_uri}");
+    println!("QR URI (contains session secret — do not share beyond the target device):");
+    println!("{qr_uri}");
     println!("Waiting for target to scan QR code...");
 
     // Connect to relay.

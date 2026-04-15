@@ -125,15 +125,13 @@ pub fn format_sas(code: u32) -> String {
 
 /// Constant-time comparison of two 32-byte arrays.
 ///
-/// Returns `true` iff all bytes are equal. Does **not** short-circuit on the
-/// first differing byte, preventing timing side-channels on secret-derived
-/// values like transcript hashes and session IDs.
+/// Returns `true` iff all bytes are equal. Uses [`subtle::ConstantTimeEq`]
+/// to guarantee the comparison is not optimized into a short-circuit by the
+/// compiler, preventing timing side-channels on secret-derived values like
+/// transcript hashes and session IDs.
 pub fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut acc: u8 = 0;
-    for i in 0..32 {
-        acc |= a[i] ^ b[i];
-    }
-    acc == 0
+    use subtle::ConstantTimeEq;
+    a.ct_eq(b).into()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

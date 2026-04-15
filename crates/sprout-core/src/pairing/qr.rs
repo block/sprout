@@ -19,8 +19,8 @@
 //! nostrpair://abc123...?secret=def456...&relay=wss%3A%2F%2Frelay1.example.com&relay=wss%3A%2F%2Frelay2.example.com
 //! ```
 //!
-//! URL encoding is minimal: only `%3A` (`:`) and `%2F` (`/`) are handled,
-//! which is sufficient for `wss://` relay URLs.
+//! All characters unsafe in a query-parameter value (`:`, `/`, `?`, `#`,
+//! `&`, `=`, `%`, and space) are percent-encoded.
 
 use nostr::PublicKey;
 
@@ -156,6 +156,18 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
         return Err(PairingError::InvalidQr(
             "at least one 'relay' query parameter is required".into(),
         ));
+    }
+
+    // Validate relay URL schemes — only WebSocket schemes are acceptable.
+    // Accepting arbitrary schemes would let a malicious QR induce outbound
+    // connections to attacker-chosen hosts (SSRF / transport downgrade).
+    for relay in &relays {
+        if !relay.starts_with("wss://") && !relay.starts_with("ws://") {
+            return Err(PairingError::InvalidQr(format!(
+                "relay URL must use wss:// or ws:// scheme, got {:?}",
+                relay
+            )));
+        }
     }
 
     Ok(QrPayload {
@@ -378,6 +390,46 @@ mod tests {
         let keys = Keys::generate();
         let pubkey = keys.public_key().to_hex();
         let uri = format!("nostrpair://{}", pubkey);
+        let err = decode_qr(&uri).unwrap_err();
+        assert!(matches!(err, PairingError::InvalidQr(_)));
+    }
+
+    #[test]
+    fn reject_non_websocket_relay_scheme() {
+        let keys = Keys::generate();
+        let pubkey = keys.public_key().to_hex();
+        let secret = hex::encode([0xab; 32]);
+        // http:// is not a valid relay scheme
+        let relay_encoded = url_encode("https://evil.example.com");
+        let uri = format!(
+            "nostrpair://{}?secret={}&relay={}",
+            pubkey, secret, relay_encoded
+        );
+        let err = decode_qr(&uri).unwrap_err();
+        assert!(matches!(err, PairingError::InvalidQr(_)));
+    }
+
+    #[test]
+    fn accept_ws_and_wss_relay_schemes() {
+        let payload_wss = make_payload(vec!["wss://relay.example.com".to_string()]);
+        let uri_wss = encode_qr(&payload_wss);
+        assert!(decode_qr(&uri_wss).is_ok(), "wss:// should be accepted");
+
+        let payload_ws = make_payload(vec!["ws://relay.example.com".to_string()]);
+        let uri_ws = encode_qr(&payload_ws);
+        assert!(decode_qr(&uri_ws).is_ok(), "ws:// should be accepted");
+    }
+
+    #[test]
+    fn reject_relay_with_no_scheme() {
+        let keys = Keys::generate();
+        let pubkey = keys.public_key().to_hex();
+        let secret = hex::encode([0xab; 32]);
+        let relay_encoded = url_encode("relay.example.com");
+        let uri = format!(
+            "nostrpair://{}?secret={}&relay={}",
+            pubkey, secret, relay_encoded
+        );
         let err = decode_qr(&uri).unwrap_err();
         assert!(matches!(err, PairingError::InvalidQr(_)));
     }

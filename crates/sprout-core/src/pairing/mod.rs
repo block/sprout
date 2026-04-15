@@ -73,4 +73,8 @@ pub enum PairingError {
     /// A public key string could not be parsed.
     #[error("invalid pubkey: {0}")]
     InvalidPubkey(String),
+
+    /// Event signing or construction failed.
+    #[error("event signing failed: {0}")]
+    SigningError(String),
 }

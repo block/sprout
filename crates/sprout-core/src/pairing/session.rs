@@ -512,7 +512,7 @@ impl PairingSession {
         )
         .custom_created_at(ts)
         .sign_with_keys(&self.keys)
-        .map_err(|e| PairingError::InvalidPubkey(e.to_string()))
+        .map_err(|e| PairingError::SigningError(e.to_string()))
     }
 
     /// Decrypt and parse a NIP-44 encrypted pairing message from an event.
@@ -778,7 +778,7 @@ mod tests {
     /// handle_abort() before peer is known is rejected (prevents relay-observer DoS).
     #[test]
     fn reject_handle_abort_before_peer_known() {
-        let (mut source, qr) = PairingSession::new_source("wss://relay.test".into());
+        let (mut source, _qr) = PairingSession::new_source("wss://relay.test".into());
         // Build a fake abort event from an unknown sender.
         let rogue = Keys::generate();
         let msg = PairingMessage::Abort {
