@@ -18,7 +18,7 @@ import 'channels_provider.dart';
 
 enum _QuickAction { createChannel, createForum, newDm }
 
-class ChannelsPage extends ConsumerWidget {
+class ChannelsPage extends HookConsumerWidget {
   const ChannelsPage({super.key});
 
   @override
@@ -29,6 +29,14 @@ class ChannelsPage extends ConsumerWidget {
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
         .value;
+
+    // Cache the last successfully loaded channels so the UI never flashes
+    // back to a loading state when the provider rebuilds.
+    final cachedChannels = useRef<List<Channel>?>(null);
+    if (channelsAsync.asData?.value case final data?) {
+      cachedChannels.value = data;
+    }
+    final channels = cachedChannels.value;
 
     Future<void> openChannel(Channel channel) async {
       if (!context.mounted) return;
@@ -147,25 +155,25 @@ class ChannelsPage extends ConsumerWidget {
         shape: const CircleBorder(),
         child: const Icon(LucideIcons.plus),
       ),
-      body: Column(
-        children: [
-          _ConnectionBanner(status: sessionState.status),
-          Expanded(
-            child: channelsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, _) => _ErrorView(
-                error: error,
-                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
-              ),
-              data: (channels) => _ChannelsList(
-                channels: channels,
-                currentPubkey: currentPubkey,
-                onSelectChannel: openChannel,
-              ),
-            ),
-          ),
-        ],
-      ),
+      body: channels != null
+          ? Column(
+              children: [
+                _ConnectionBanner(status: sessionState.status),
+                Expanded(
+                  child: _ChannelsList(
+                    channels: channels,
+                    currentPubkey: currentPubkey,
+                    onSelectChannel: openChannel,
+                  ),
+                ),
+              ],
+            )
+          : channelsAsync.hasError
+          ? _ErrorView(
+              error: channelsAsync.error!,
+              onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+            )
+          : const _ConnectionBanner(status: SessionStatus.connecting),
     );
   }
 }

@@ -563,6 +563,17 @@ class _MembersSheet extends HookConsumerWidget {
     final membersAsync = ref.watch(channelMembersProvider(channel.id));
     final allMembers = membersAsync.asData?.value ?? const <ChannelMember>[];
     final people = allMembers.where((member) => !member.isBot).toList();
+    final userCache = ref.watch(userCacheProvider);
+
+    // Preload profiles for all members so avatars appear.
+    useEffect(() {
+      if (people.isNotEmpty) {
+        ref
+            .read(userCacheProvider.notifier)
+            .preload(people.map((m) => m.pubkey).toList());
+      }
+      return null;
+    }, [people.length]);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -614,18 +625,25 @@ class _MembersSheet extends HookConsumerWidget {
                           shrinkWrap: true,
                           children: [
                             for (final member in people)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: CircleAvatar(
-                                  child: Text(
-                                    member
-                                        .labelFor(currentPubkey)
-                                        .substring(0, 1)
-                                        .toUpperCase(),
-                                  ),
-                                ),
-                                title: Text(member.labelFor(currentPubkey)),
-                                subtitle: Text(member.role),
+                              Builder(
+                                builder: (context) {
+                                  final profile =
+                                      userCache[member.pubkey.toLowerCase()];
+                                  final avatarUrl = profile?.avatarUrl;
+                                  final label = member.labelFor(currentPubkey);
+                                  final initial = label
+                                      .substring(0, 1)
+                                      .toUpperCase();
+                                  return ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: _MemberAvatar(
+                                      avatarUrl: avatarUrl,
+                                      initial: initial,
+                                    ),
+                                    title: Text(label),
+                                    subtitle: Text(member.role),
+                                  );
+                                },
                               ),
                           ],
                         ),
@@ -645,6 +663,33 @@ class _MembersSheet extends HookConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _MemberAvatar extends HookWidget {
+  final String? avatarUrl;
+  final String initial;
+
+  const _MemberAvatar({required this.avatarUrl, required this.initial});
+
+  @override
+  Widget build(BuildContext context) {
+    final failed = useState(false);
+
+    useEffect(() {
+      failed.value = false;
+      return null;
+    }, [avatarUrl]);
+
+    final url = avatarUrl;
+    if (url == null || failed.value) {
+      return CircleAvatar(child: Text(initial));
+    }
+    return CircleAvatar(
+      backgroundImage: NetworkImage(url),
+      onBackgroundImageError: (_, _) => failed.value = true,
+      child: null,
     );
   }
 }

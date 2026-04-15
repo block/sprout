@@ -170,20 +170,15 @@ class PairingPage extends HookConsumerWidget {
   }
 }
 
-class _ScannerPage extends StatefulWidget {
+class _ScannerPage extends HookWidget {
   final void Function(String code) onScanned;
 
   const _ScannerPage({required this.onScanned});
 
   @override
-  State<_ScannerPage> createState() => _ScannerPageState();
-}
-
-class _ScannerPageState extends State<_ScannerPage> {
-  bool _handled = false;
-
-  @override
   Widget build(BuildContext context) {
+    final handled = useState(false);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Scan QR Code'),
@@ -194,13 +189,13 @@ class _ScannerPageState extends State<_ScannerPage> {
       ),
       body: MobileScanner(
         onDetect: (capture) {
-          if (_handled) return;
+          if (handled.value) return;
           final barcodes = capture.barcodes;
           if (barcodes.isNotEmpty) {
             final value = barcodes.first.rawValue;
             if (value != null && value.isNotEmpty) {
-              _handled = true;
-              widget.onScanned(value);
+              handled.value = true;
+              onScanned(value);
             }
           }
         },
