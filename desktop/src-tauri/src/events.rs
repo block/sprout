@@ -395,51 +395,8 @@ fn build_huddle_event(
 pub fn build_huddle_started(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
-    livekit_room: &str,
 ) -> Result<EventBuilder, String> {
-    build_huddle_event(
-        48100,
-        parent_channel_id,
-        ephemeral_channel_id,
-        &[("livekit_room", livekit_room)],
-        None,
-    )
-}
-
-/// Kind 48101 — participant joined a huddle, posted to the parent channel.
-///
-/// `participant_pubkey`: when provided, adds a `["p", pubkey]` tag so
-/// consumers can identify who joined without parsing the event's author.
-pub fn build_huddle_participant_joined(
-    parent_channel_id: &str,
-    ephemeral_channel_id: &str,
-    participant_pubkey: Option<&str>,
-) -> Result<EventBuilder, String> {
-    build_huddle_event(
-        48101,
-        parent_channel_id,
-        ephemeral_channel_id,
-        &[],
-        participant_pubkey,
-    )
-}
-
-/// Kind 48102 — participant left a huddle, posted to the parent channel.
-///
-/// `participant_pubkey`: when provided, adds a `["p", pubkey]` tag so
-/// consumers can identify who left without parsing the event's author.
-pub fn build_huddle_participant_left(
-    parent_channel_id: &str,
-    ephemeral_channel_id: &str,
-    participant_pubkey: Option<&str>,
-) -> Result<EventBuilder, String> {
-    build_huddle_event(
-        48102,
-        parent_channel_id,
-        ephemeral_channel_id,
-        &[],
-        participant_pubkey,
-    )
+    build_huddle_event(48100, parent_channel_id, ephemeral_channel_id, &[], None)
 }
 
 /// Kind 48103 — huddle ended, posted to the parent channel.

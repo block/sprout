@@ -30,7 +30,6 @@ type HuddleState = {
     | "leaving";
   parent_channel_id: string | null;
   ephemeral_channel_id: string | null;
-  livekit_room: string | null;
   participants: string[]; // pubkey hex strings
   agent_pubkeys: string[];
   tts_enabled: boolean;
@@ -53,7 +52,6 @@ export function HuddleBar({ className }: HuddleBarProps) {
     voiceInputMode,
     setVoiceInputMode,
     activeSpeakers,
-    isReconnecting,
     huddleError,
     clearHuddleError,
   } = useHuddle();
@@ -245,13 +243,6 @@ export function HuddleBar({ className }: HuddleBarProps) {
         <Users className="h-3 w-3" />
         <span>In huddle</span>
       </div>
-
-      {/* Reconnecting indicator */}
-      {isReconnecting && (
-        <div className="flex items-center gap-1 text-xs text-amber-500">
-          <span className="animate-pulse">Reconnecting…</span>
-        </div>
-      )}
 
       {/* Model download progress */}
       {modelStatus &&
@@ -458,11 +449,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
 
       {/* Screen reader announcements for huddle state changes */}
       <output aria-live="polite" className="sr-only">
-        {isReconnecting
-          ? "Huddle reconnecting"
-          : micConnected
-            ? "In huddle, microphone connected"
-            : "In huddle, no microphone"}
+        {micConnected ? "In huddle, microphone connected" : "In huddle, no microphone"}
         {`, voice input: ${isPttMode ? "push to talk, press Ctrl+Space to transmit" : "voice activity detection"}`}
         {modelStatus &&
           modelStatus.moonshine !== "ready" &&

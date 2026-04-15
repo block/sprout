@@ -1,0 +1,513 @@
+//! WebSocket audio handler: NIP-42 auth → room join → frame relay → cleanup.
+//!
+//! ```text
+//! ws_audio_handler
+//!   └─ handle_audio_connection
+//!        ├─ send challenge, await auth (5s timeout)
+//!        ├─ ensure_membership (auto-add for ephemeral channels)
+//!        ├─ room.add_peer → broadcast joined
+//!        ├─ spawn send_loop + heartbeat_loop
+//!        ├─ run recv_loop (blocks until disconnect)
+//!        └─ cleanup: remove peer, broadcast left, emit lifecycle events
+//! ```
+
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::ws::{Message as WsMessage, WebSocket};
+use axum::{
+    extract::{Path, State, WebSocketUpgrade},
+    response::IntoResponse,
+};
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
+use nostr::{EventBuilder, Kind, Tag};
+use serde::Deserialize;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
+use uuid::Uuid;
+
+use sprout_auth::generate_challenge;
+use sprout_db::channel::MemberRole;
+
+use crate::audio::room::PeerCtrl;
+use crate::state::AppState;
+
+/// Maximum binary frame size: 4 KB is generous for a single Opus packet.
+const MAX_AUDIO_FRAME_BYTES: usize = 4096;
+
+/// Heartbeat interval.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Missed pong limit before disconnect.
+const MAX_MISSED_PONGS: u8 = 3;
+
+/// Auth timeout.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ── Route handler ─────────────────────────────────────────────────────────────
+
+/// WebSocket upgrade handler for `/huddle/:channel_id/audio`.
+pub async fn ws_audio_handler(
+    State(state): State<Arc<AppState>>,
+    Path(channel_id): Path<Uuid>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_audio_connection(socket, state, channel_id))
+}
+
+// ── Auth message shape ────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AuthMsg {
+    #[serde(rename = "type")]
+    msg_type: String,
+    event: nostr::Event,
+    parent_channel_id: Option<Uuid>,
+}
+
+// ── Core connection lifecycle ─────────────────────────────────────────────────
+
+async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channel_id: Uuid) {
+    let (mut ws_send, mut ws_recv) = socket.split();
+
+    // ── Step 1: send challenge ────────────────────────────────────────────────
+    let challenge = generate_challenge();
+    let challenge_msg =
+        serde_json::json!({"type": "challenge", "challenge": challenge}).to_string();
+    if ws_send
+        .send(WsMessage::Text(challenge_msg.into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // ── Step 2: await auth (5s timeout) ──────────────────────────────────────
+    let auth_result = tokio::time::timeout(AUTH_TIMEOUT, async {
+        while let Some(Ok(msg)) = ws_recv.next().await {
+            if let WsMessage::Text(text) = msg {
+                if let Ok(auth) = serde_json::from_str::<AuthMsg>(&text) {
+                    if auth.msg_type == "auth" {
+                        return Some(auth);
+                    }
+                }
+            }
+        }
+        None
+    })
+    .await;
+
+    let auth_msg = match auth_result {
+        Ok(Some(a)) => a,
+        _ => {
+            debug!(channel_id = %channel_id, "audio auth timeout or disconnect");
+            return;
+        }
+    };
+
+    let relay_url = state.config.relay_url.clone();
+    let auth_ctx = match state
+        .auth
+        .verify_auth_event(auth_msg.event, &challenge, &relay_url)
+        .await
+    {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            warn!(channel_id = %channel_id, "audio auth failed: {e}");
+            let _ = ws_send
+                .send(WsMessage::Text(
+                    serde_json::json!({"type":"error","message":"auth failed"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    let pubkey = auth_ctx.pubkey;
+    let pubkey_hex = pubkey.to_hex();
+    let pubkey_bytes = pubkey.serialize().to_vec();
+    let parent_channel_id = auth_msg.parent_channel_id;
+
+    // ── Step 3: membership check / auto-add ───────────────────────────────────
+    if let Err(e) = ensure_membership(&state, channel_id, &pubkey_bytes, parent_channel_id).await {
+        warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio membership denied: {e}");
+        let _ = ws_send
+            .send(WsMessage::Text(
+                serde_json::json!({"type":"error","message":"not a member"})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        return;
+    }
+
+    // ── Step 4: join room ─────────────────────────────────────────────────────
+    let room = state.audio_rooms.get_or_create(channel_id);
+    let (peer_id, peer_index, audio_rx, peer_ctrl_rx) = match room.add_peer(pubkey_hex.clone()) {
+        Some(v) => v,
+        None => {
+            warn!(channel_id = %channel_id, "audio room full (255 peers exhausted)");
+            let _ = ws_send
+                .send(WsMessage::Text(
+                    serde_json::json!({"type":"error","code":"room_full","message":"peer index space exhausted"})
+                        .to_string().into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    info!(
+        channel_id = %channel_id,
+        pubkey = %pubkey_hex,
+        peer_index,
+        "audio peer joined"
+    );
+
+    // ── Step 5: broadcast joined + send welcome ───────────────────────────────
+    let peers_snapshot: Vec<serde_json::Value> = room
+        .peer_pubkeys()
+        .into_iter()
+        .map(|(pk, idx)| serde_json::json!({"pubkey": pk, "peer_index": idx}))
+        .collect();
+
+    let joined_msg = serde_json::json!({
+        "type": "joined",
+        "pubkey": pubkey_hex,
+        "peer_index": peer_index,
+        "peers": peers_snapshot,
+    })
+    .to_string();
+
+    room.broadcast_control(joined_msg);
+
+    // ── Step 6: emit kind:48101 (PARTICIPANT_JOINED) ──────────────────────────
+    let parent_id_for_event = parent_channel_id.unwrap_or(channel_id);
+    emit_participant_event(
+        &state,
+        Kind::Custom(48101),
+        channel_id,
+        parent_id_for_event,
+        &pubkey_hex,
+    )
+    .await;
+
+    // ── Step 7: spawn send + heartbeat loops ──────────────────────────────────
+    let cancel = CancellationToken::new();
+    let missed_pongs = Arc::new(AtomicU8::new(0));
+
+    // Dual-channel pattern (matches connection.rs): data channel for audio,
+    // control channel for Ping/Pong/Close/control JSON with priority drain.
+    let (data_tx, data_rx) = mpsc::channel::<WsMessage>(16);
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<WsMessage>(8);
+
+    let send_cancel = cancel.child_token();
+    let send_task = tokio::spawn(send_loop(ws_send, data_rx, ctrl_rx, send_cancel));
+
+    let hb_cancel = cancel.clone();
+    let hb_missed = Arc::clone(&missed_pongs);
+    let heartbeat_task = tokio::spawn(heartbeat_loop(ctrl_tx.clone(), hb_missed, hb_cancel));
+
+    // ── Step 8: audio forward loop (room channels → WS send channels) ────────
+    let fwd_cancel = cancel.child_token();
+    let forward_task = tokio::spawn(audio_forward_loop(
+        audio_rx,
+        peer_ctrl_rx,
+        data_tx,
+        ctrl_tx.clone(),
+        fwd_cancel,
+    ));
+
+    // ── Step 9: recv loop (blocks until disconnect) ───────────────────────────
+    recv_loop(
+        ws_recv,
+        Arc::clone(&room),
+        peer_id,
+        ctrl_tx,
+        Arc::clone(&missed_pongs),
+        cancel.clone(),
+    )
+    .await;
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+    cancel.cancel();
+    let _ = send_task.await;
+    let _ = heartbeat_task.await;
+    let _ = forward_task.await;
+
+    room.remove_peer(peer_id);
+
+    let left_msg = serde_json::json!({
+        "type": "left",
+        "pubkey": pubkey_hex,
+        "peer_index": peer_index,
+    })
+    .to_string();
+    room.broadcast_control(left_msg);
+
+    emit_participant_event(
+        &state,
+        Kind::Custom(48102),
+        channel_id,
+        parent_id_for_event,
+        &pubkey_hex,
+    )
+    .await;
+
+    state.audio_rooms.cleanup_if_empty(channel_id);
+
+    info!(
+        channel_id = %channel_id,
+        pubkey = %pubkey_hex,
+        "audio peer left"
+    );
+}
+
+// ── Recv loop ─────────────────────────────────────────────────────────────────
+
+async fn recv_loop(
+    mut ws_recv: futures_util::stream::SplitStream<WebSocket>,
+    room: Arc<crate::audio::room::Room>,
+    peer_id: Uuid,
+    ctrl_tx: mpsc::Sender<WsMessage>,
+    missed_pongs: Arc<AtomicU8>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            msg = ws_recv.next() => {
+                match msg {
+                    Some(Ok(WsMessage::Binary(data))) => {
+                        if data.len() > MAX_AUDIO_FRAME_BYTES {
+                            warn!(peer_id = %peer_id, bytes = data.len(), "audio frame too large — dropping");
+                            continue;
+                        }
+                        room.broadcast_frame(peer_id, Bytes::copy_from_slice(&data));
+                    }
+                    Some(Ok(WsMessage::Text(text))) => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if v.get("type").and_then(|t| t.as_str()) == Some("leave") {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(WsMessage::Pong(_))) => {
+                        missed_pongs.store(0, Ordering::Relaxed);
+                    }
+                    Some(Ok(WsMessage::Ping(data))) => {
+                        // Pong goes through the control channel — priority delivery.
+                        let _ = ctrl_tx.try_send(WsMessage::Pong(data));
+                    }
+                    Some(Ok(WsMessage::Close(_))) | None => break,
+                    Some(Err(e)) => {
+                        debug!(peer_id = %peer_id, "ws error: {e}");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Send loop ─────────────────────────────────────────────────────────────────
+
+/// Outbound send loop with control-frame priority (matches connection.rs pattern).
+///
+/// Control frames (Ping, Pong, Close, control JSON) are drained first on every
+/// iteration, so heartbeat pings are never starved by audio backpressure.
+async fn send_loop(
+    mut ws_send: futures_util::stream::SplitSink<WebSocket, WsMessage>,
+    mut data_rx: mpsc::Receiver<WsMessage>,
+    mut ctrl_rx: mpsc::Receiver<WsMessage>,
+    cancel: CancellationToken,
+) {
+    loop {
+        // Priority: drain all pending control frames before data.
+        while let Ok(ctrl_msg) = ctrl_rx.try_recv() {
+            if ws_send.send(ctrl_msg).await.is_err() {
+                return;
+            }
+        }
+
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                let _ = ws_send.send(WsMessage::Close(None)).await;
+                break;
+            }
+            Some(ctrl_msg) = ctrl_rx.recv() => {
+                if ws_send.send(ctrl_msg).await.is_err() { break; }
+            }
+            Some(msg) = data_rx.recv() => {
+                if ws_send.send(msg).await.is_err() { break; }
+            }
+        }
+    }
+}
+
+// ── Audio forward loop ────────────────────────────────────────────────────────
+// Bridges the room's mpsc channel to the WS send channel.
+
+/// Bridges room per-peer channels → WS send channels.
+/// Audio frames (from room audio_rx) go to data_tx.
+/// Control messages (from room ctrl_rx) go to ws ctrl_tx (priority path).
+/// Two separate room channels ensure control is never starved by audio backpressure.
+async fn audio_forward_loop(
+    mut audio_rx: mpsc::Receiver<Bytes>,
+    mut peer_ctrl_rx: mpsc::Receiver<PeerCtrl>,
+    data_tx: mpsc::Sender<WsMessage>,
+    ctrl_tx: mpsc::Sender<WsMessage>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            // Control messages get priority over audio in the select.
+            msg = peer_ctrl_rx.recv() => {
+                match msg {
+                    Some(PeerCtrl::Json(json)) => {
+                        let _ = ctrl_tx.try_send(WsMessage::Text(json.into()));
+                    }
+                    Some(PeerCtrl::Close) | None => break,
+                }
+            }
+            frame = audio_rx.recv() => {
+                match frame {
+                    Some(bytes) => {
+                        let _ = data_tx.try_send(WsMessage::Binary(bytes));
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+}
+
+// ── Heartbeat loop ────────────────────────────────────────────────────────────
+
+async fn heartbeat_loop(
+    ws_tx: mpsc::Sender<WsMessage>,
+    missed_pongs: Arc<AtomicU8>,
+    cancel: CancellationToken,
+) {
+    let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                let missed = missed_pongs.fetch_add(1, Ordering::Relaxed);
+                if missed >= MAX_MISSED_PONGS - 1 {
+                    warn!("audio: 3 missed pongs — closing connection");
+                    cancel.cancel();
+                    break;
+                }
+                if ws_tx.try_send(WsMessage::Ping(axum::body::Bytes::new())).is_err() {
+                    cancel.cancel();
+                    break;
+                }
+            }
+            _ = cancel.cancelled() => break,
+        }
+    }
+}
+
+// ── Membership helper ─────────────────────────────────────────────────────────
+
+async fn ensure_membership(
+    state: &AppState,
+    channel_id: Uuid,
+    pubkey_bytes: &[u8],
+    parent_channel_id: Option<Uuid>,
+) -> Result<(), String> {
+    // Fast path: already a member.
+    let is_member = state
+        .db
+        .is_member(channel_id, pubkey_bytes)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    if is_member {
+        return Ok(());
+    }
+
+    // Check if the channel is open (no membership required).
+    let channel = state
+        .db
+        .get_channel(channel_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    if channel.visibility == "open" {
+        return Ok(());
+    }
+
+    // Auto-add path: private ephemeral channel + caller is member of parent.
+    // Note: parent_channel_id is client-supplied. We don't verify it's the
+    // *actual* parent of this ephemeral channel. This is acceptable because
+    // the ephemeral UUID is random and only discoverable via the kind:48100
+    // event in the real parent channel — which requires parent membership.
+    // A future hardening pass could verify the linkage via the 48100 event.
+    if channel.ttl_seconds.is_some() {
+        if let Some(parent_id) = parent_channel_id {
+            let parent_member = state
+                .db
+                .is_member(parent_id, pubkey_bytes)
+                .await
+                .map_err(|e| format!("db error: {e}"))?;
+
+            if parent_member {
+                state
+                    .db
+                    .add_member(
+                        channel_id,
+                        pubkey_bytes,
+                        MemberRole::Member,
+                        Some(&channel.created_by),
+                    )
+                    .await
+                    .map_err(|e| format!("auto-add failed: {e}"))?;
+
+                return Ok(());
+            }
+        }
+    }
+
+    Err("not a member".into())
+}
+
+// ── Lifecycle event helper ────────────────────────────────────────────────────
+
+async fn emit_participant_event(
+    state: &AppState,
+    kind: Kind,
+    channel_id: Uuid,
+    parent_channel_id: Uuid,
+    participant_pubkey: &str,
+) {
+    let content = serde_json::json!({"ephemeral_channel_id": channel_id.to_string()}).to_string();
+
+    let tags = vec![
+        Tag::parse(&["h", &parent_channel_id.to_string()])
+            .unwrap_or_else(|_| Tag::parse(&["h", ""]).unwrap()),
+        Tag::parse(&["p", participant_pubkey]).unwrap_or_else(|_| Tag::parse(&["p", ""]).unwrap()),
+    ];
+
+    let event = match EventBuilder::new(kind, content, tags).sign_with_keys(&state.relay_keypair) {
+        Ok(e) => e,
+        Err(e) => {
+            warn!("audio: failed to sign lifecycle event: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = state.pubsub.publish_event(parent_channel_id, &event).await {
+        warn!("audio: failed to publish lifecycle event: {e}");
+    }
+}

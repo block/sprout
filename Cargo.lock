@@ -3196,9 +3196,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -3750,25 +3750,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sprout-huddle"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hex",
- "hmac 0.13.0",
- "jsonwebtoken",
- "nostr",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sprout-core",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "sprout-mcp"
 version = "0.1.0"
 dependencies = [
@@ -3904,7 +3885,6 @@ dependencies = [
  "sprout-auth",
  "sprout-core",
  "sprout-db",
- "sprout-huddle",
  "sprout-media",
  "sprout-pubsub",
  "sprout-search",

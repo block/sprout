@@ -15,7 +15,7 @@ use crate::app_state::AppState;
 use crate::events;
 
 use super::models;
-use super::relay_api::{fetch_channel_members, parse_channel_uuid};
+use super::relay_api::{self, fetch_channel_members, parse_channel_uuid};
 use super::state::{HuddlePhase, VoiceInputMode};
 use super::stt;
 use super::tts;
@@ -42,6 +42,20 @@ pub(crate) async fn post_connect_setup(
     if let Some(mgr) = models::global_model_manager() {
         mgr.start_moonshine_download(state.http_client.clone());
         mgr.start_kokoro_download(state.http_client.clone());
+    }
+
+    // Connect audio relay WebSocket (Opus encode/decode pipeline).
+    // This is the core audio path — failure is fatal for the huddle.
+    let parent_id = {
+        let hs = state.huddle()?;
+        hs.parent_channel_id.clone()
+    };
+    let (cancel, pcm_tx) =
+        relay_api::connect_audio_relay(ephemeral_channel_id, parent_id.as_deref(), state).await?;
+    {
+        let mut hs = state.huddle()?;
+        hs.audio_ws_cancel = Some(cancel);
+        hs.audio_relay_pcm_tx = Some(pcm_tx);
     }
 
     // Start pipelines: TTS first (so STT can capture tts_cancel for barge-in).

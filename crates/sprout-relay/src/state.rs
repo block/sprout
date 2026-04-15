@@ -15,13 +15,13 @@ use sprout_audit::AuditService;
 use sprout_auth::AuthService;
 use sprout_core::event::StoredEvent;
 use sprout_db::Db;
-use sprout_huddle::HuddleService;
 use sprout_media::MediaStorage;
 use sprout_pubsub::PubSubManager;
 use sprout_search::SearchService;
 use sprout_workflow::WorkflowEngine;
 
 use crate::api::tokens::MintRateLimiter;
+use crate::audio::AudioRoomManager;
 use crate::config::Config;
 use crate::connection::{ConnectionSubscriptions, SLOW_CLIENT_GRACE_LIMIT};
 use crate::subscription::SubscriptionRegistry;
@@ -203,10 +203,8 @@ pub struct AppState {
     pub search_index_tx: mpsc::Sender<StoredEvent>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
-    /// LiveKit huddle service — `None` when LiveKit is not configured.
-    pub huddle_service: Option<Arc<HuddleService>>,
-    /// LiveKit server URL — populated when `huddle_service` is `Some`.
-    pub livekit_url: Option<String>,
+    /// Audio relay room manager — tracks active huddle audio rooms.
+    pub audio_rooms: Arc<AudioRoomManager>,
     /// Set to `true` on SIGTERM — readiness probe returns 503.
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
@@ -227,7 +225,6 @@ impl AppState {
         workflow_engine: Arc<WorkflowEngine>,
         relay_keypair: nostr::Keys,
         media_storage: MediaStorage,
-        huddle_service: Option<(HuddleService, String)>,
     ) -> Self {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
@@ -286,8 +283,7 @@ impl AppState {
 
             search_index_tx,
             media_storage: Arc::new(media_storage),
-            livekit_url: huddle_service.as_ref().map(|(_, url)| url.clone()),
-            huddle_service: huddle_service.map(|(svc, _)| Arc::new(svc)),
+            audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
         }
