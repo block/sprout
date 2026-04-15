@@ -3,6 +3,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../shared/relay/relay.dart';
 import 'channel.dart';
 
+const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
+
 class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   void Function()? _unsubscribe;
 
@@ -34,9 +36,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     final channels = json
         .cast<Map<String, dynamic>>()
         .map(Channel.fromJson)
-        .where((c) => !c.isDm) // exclude DMs from channel list
         .toList();
-    channels.sort((a, b) => a.name.compareTo(b.name));
+    channels.sort((left, right) {
+      final typeOrder =
+          (_channelTypeOrder[left.channelType] ?? 99) -
+          (_channelTypeOrder[right.channelType] ?? 99);
+      if (typeOrder != 0) {
+        return typeOrder;
+      }
+      return left.name.compareTo(right.name);
+    });
     return channels;
   }
 
