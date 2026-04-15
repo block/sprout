@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -5,9 +7,11 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel.dart';
+import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
@@ -43,8 +47,26 @@ class ChannelDetailPage extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final detailsAsync = ref.watch(channelDetailsProvider(channel.id));
+    final channelsAsync = ref.watch(channelsProvider);
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
     final typingEntries = ref.watch(channelTypingProvider(channel.id));
+    final currentPubkey = ref
+        .watch(profileProvider)
+        .whenData((value) => value?.pubkey)
+        .value;
+    final baseChannel =
+        channelsAsync
+            .whenData(
+              (channels) => channels.firstWhere(
+                (candidate) => candidate.id == channel.id,
+                orElse: () => channel,
+              ),
+            )
+            .value ??
+        channel;
+    final resolvedChannel =
+        detailsAsync.whenData(baseChannel.mergeDetails).value ?? baseChannel;
 
     // Preload channel member profiles so @mentions resolve correctly.
     useEffect(() {
@@ -57,39 +79,88 @@ class ChannelDetailPage extends HookConsumerWidget {
         title: Row(
           children: [
             Icon(
-              channel.isPrivate ? LucideIcons.lock : LucideIcons.hash,
+              channelIcon(resolvedChannel),
               size: 18,
               color: context.colors.onSurfaceVariant,
             ),
             const SizedBox(width: Grid.half),
             Expanded(
-              child: Text(channel.name, overflow: TextOverflow.ellipsis),
+              child: Text(
+                resolvedChannel.displayLabel(currentPubkey: currentPubkey),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            onPressed: () {
+              showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                showDragHandle: true,
+                builder: (_) => _MembersSheet(
+                  channel: resolvedChannel,
+                  currentPubkey: currentPubkey,
+                ),
+              );
+            },
+            tooltip: 'View members',
+            icon: const Icon(LucideIcons.users),
+          ),
+          if (!resolvedChannel.isDm)
+            IconButton(
+              onPressed: () async {
+                final shouldClose = await showModalBottomSheet<bool>(
+                  context: context,
+                  isScrollControlled: true,
+                  showDragHandle: true,
+                  builder: (_) => _ManageChannelSheet(channel: resolvedChannel),
+                );
+                if (shouldClose == true && context.mounted) {
+                  Navigator.of(context).pop();
+                }
+              },
+              tooltip: 'Manage channel',
+              icon: const Icon(LucideIcons.ellipsis),
+            ),
+        ],
       ),
       body: Column(
         children: [
           Expanded(
-            child: messagesState.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(
-                child: Text(
-                  'Failed to load messages',
-                  style: context.textTheme.bodyMedium?.copyWith(
-                    color: context.colors.error,
+            child: resolvedChannel.isForum
+                ? _ForumPlaceholder(channel: resolvedChannel)
+                : messagesState.when(
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(
+                      child: Text(
+                        'Failed to load messages',
+                        style: context.textTheme.bodyMedium?.copyWith(
+                          color: context.colors.error,
+                        ),
+                      ),
+                    ),
+                    data: (events) {
+                      final messages = formatTimeline(events);
+                      return _MessageList(
+                        messages: messages,
+                        channelId: channel.id,
+                      );
+                    },
                   ),
-                ),
-              ),
-              data: (events) {
-                final messages = formatTimeline(events);
-                return _MessageList(messages: messages, channelId: channel.id);
-              },
-            ),
           ),
-          if (typingEntries.isNotEmpty)
+          if (!resolvedChannel.isForum && typingEntries.isNotEmpty)
             _TypingIndicator(entries: typingEntries),
-          _ComposeBar(channelId: channel.id),
+          if (!resolvedChannel.isForum &&
+              resolvedChannel.isMember &&
+              !resolvedChannel.isArchived)
+            _ComposeBar(channelId: channel.id)
+          else if (!resolvedChannel.isForum &&
+              !resolvedChannel.isDm &&
+              (!resolvedChannel.isMember || resolvedChannel.isArchived))
+            _ReadOnlyNotice(channel: resolvedChannel),
         ],
       ),
     );
@@ -385,6 +456,491 @@ class _UserAvatar extends StatelessWidget {
               ),
             )
           : null,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Channel management
+// ---------------------------------------------------------------------------
+
+IconData channelIcon(Channel channel) {
+  if (channel.isDm) return LucideIcons.messagesSquare;
+  if (channel.isPrivate) return LucideIcons.lock;
+  if (channel.isForum) return LucideIcons.messageSquareText;
+  return LucideIcons.hash;
+}
+
+class _ForumPlaceholder extends StatelessWidget {
+  final Channel channel;
+
+  const _ForumPlaceholder({required this.channel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: Grid.sm),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              LucideIcons.messageSquareText,
+              size: Grid.xl,
+              color: context.colors.outline,
+            ),
+            const SizedBox(height: Grid.xs),
+            Text(
+              'Forum threads are not on mobile yet',
+              style: context.textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: Grid.xxs),
+            Text(
+              'You can still view channel context, canvas, and members from the actions above.',
+              style: context.textTheme.bodyMedium?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            if (channel.description.trim().isNotEmpty) ...[
+              const SizedBox(height: Grid.xs),
+              Text(
+                channel.description,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.outline,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadOnlyNotice extends StatelessWidget {
+  final Channel channel;
+
+  const _ReadOnlyNotice({required this.channel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.only(
+        left: Grid.xs,
+        right: Grid.xs,
+        top: Grid.xxs,
+        bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
+      ),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: context.colors.outlineVariant)),
+        color: context.colors.surface,
+      ),
+      child: Text(
+        channel.isArchived
+            ? 'This ${channel.isForum ? 'forum' : 'channel'} is archived and read-only on mobile.'
+            : 'Join this ${channel.isForum ? 'forum' : 'channel'} from Manage to participate.',
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colors.onSurfaceVariant,
+        ),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
+class _MembersSheet extends HookConsumerWidget {
+  final Channel channel;
+  final String? currentPubkey;
+
+  const _MembersSheet({required this.channel, required this.currentPubkey});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final membersAsync = ref.watch(channelMembersProvider(channel.id));
+    final allMembers = membersAsync.asData?.value ?? const <ChannelMember>[];
+    final people = allMembers.where((member) => !member.isBot).toList();
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        Grid.xs,
+        0,
+        Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Members', style: context.textTheme.titleMedium),
+              const SizedBox(height: Grid.xxs),
+              Text(
+                'People in ${channel.displayLabel(currentPubkey: currentPubkey)}.',
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ),
+              if (!channel.isDm) ...[
+                const SizedBox(height: Grid.xxs),
+                Text(
+                  channel.isArchived
+                      ? 'Archived channels are read-only on mobile. Member and bot management stay on desktop.'
+                      : 'Member and bot management stay on desktop.',
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.colors.outline,
+                  ),
+                ),
+              ],
+              if (!channel.isDm) ...[const Divider(height: Grid.sm)],
+              SizedBox(
+                height: 280,
+                child: membersAsync.when(
+                  data: (_) => people.isEmpty
+                      ? Center(
+                          child: Text(
+                            'No people found.',
+                            style: context.textTheme.bodySmall?.copyWith(
+                              color: context.colors.outline,
+                            ),
+                          ),
+                        )
+                      : ListView(
+                          shrinkWrap: true,
+                          children: [
+                            for (final member in people)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: CircleAvatar(
+                                  child: Text(
+                                    member
+                                        .labelFor(currentPubkey)
+                                        .substring(0, 1)
+                                        .toUpperCase(),
+                                  ),
+                                ),
+                                title: Text(member.labelFor(currentPubkey)),
+                                subtitle: Text(member.role),
+                              ),
+                          ],
+                        ),
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (error, _) => Center(
+                    child: Text(
+                      error.toString(),
+                      style: context.textTheme.bodySmall?.copyWith(
+                        color: context.colors.error,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ManageChannelSheet extends HookConsumerWidget {
+  final Channel channel;
+
+  const _ManageChannelSheet({required this.channel});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final canvasAsync = ref.watch(channelCanvasProvider(channel.id));
+    final isEditingCanvas = useState(false);
+    final isSavingCanvas = useState(false);
+    final isBusy = useState(false);
+    final actionError = useState<String?>(null);
+    final canvasController = useTextEditingController();
+
+    useEffect(() {
+      final canvas = canvasAsync.asData?.value;
+      if (!isEditingCanvas.value) {
+        canvasController.text = canvas?.content ?? '';
+      }
+      return null;
+    }, [canvasAsync.asData?.value.content, isEditingCanvas.value]);
+
+    final canJoin =
+        channel.visibility == 'open' &&
+        !channel.isArchived &&
+        !channel.isMember &&
+        !channel.isDm;
+    final canLeave = channel.isMember && !channel.isArchived && !channel.isDm;
+    final canEditCanvas = channel.isMember && !channel.isArchived;
+
+    Future<void> joinChannel() async {
+      if (isBusy.value) return;
+      isBusy.value = true;
+      actionError.value = null;
+      try {
+        await ref.read(channelActionsProvider).joinChannel(channel.id);
+        if (context.mounted) {
+          Navigator.of(context).pop(false);
+        }
+      } catch (error) {
+        actionError.value = error.toString();
+      } finally {
+        isBusy.value = false;
+      }
+    }
+
+    Future<void> leaveChannel() async {
+      if (isBusy.value) return;
+      isBusy.value = true;
+      actionError.value = null;
+      try {
+        await ref.read(channelActionsProvider).leaveChannel(channel.id);
+        if (context.mounted) {
+          Navigator.of(context).pop(true);
+        }
+      } catch (error) {
+        actionError.value = error.toString();
+      } finally {
+        isBusy.value = false;
+      }
+    }
+
+    Future<void> saveCanvas() async {
+      if (isSavingCanvas.value) {
+        return;
+      }
+      isSavingCanvas.value = true;
+      actionError.value = null;
+      try {
+        await ref
+            .read(channelActionsProvider)
+            .setCanvas(
+              channelId: channel.id,
+              content: canvasController.text.trim(),
+            );
+        if (context.mounted) {
+          isEditingCanvas.value = false;
+        }
+      } catch (error) {
+        actionError.value = error.toString();
+      } finally {
+        isSavingCanvas.value = false;
+      }
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        Grid.xs,
+        0,
+        Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+      ),
+      child: SafeArea(
+        top: false,
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Text('Manage channel', style: context.textTheme.titleMedium),
+            const SizedBox(height: Grid.xxs),
+            Text(
+              'Basic management for ${channel.name}.',
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+            if (actionError.value case final error?) ...[
+              const SizedBox(height: Grid.xs),
+              Text(
+                error,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.error,
+                ),
+              ),
+            ],
+            if (canJoin || canLeave) ...[
+              const SizedBox(height: Grid.xs),
+              Wrap(
+                spacing: Grid.xxs,
+                children: [
+                  if (canJoin)
+                    FilledButton.tonal(
+                      onPressed: isBusy.value ? null : joinChannel,
+                      child: Text(isBusy.value ? 'Joining…' : 'Join channel'),
+                    ),
+                  if (canLeave)
+                    OutlinedButton(
+                      onPressed: isBusy.value ? null : leaveChannel,
+                      child: Text(isBusy.value ? 'Leaving…' : 'Leave channel'),
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: Grid.sm),
+            Text('Context', style: context.textTheme.labelLarge),
+            const SizedBox(height: Grid.xxs),
+            _ContextCard(
+              label: 'Description',
+              value: channel.description,
+              emptyLabel: 'No description set',
+            ),
+            const SizedBox(height: Grid.xxs),
+            _ContextCard(
+              label: 'Topic',
+              value: channel.topic,
+              emptyLabel: 'No topic set',
+            ),
+            const SizedBox(height: Grid.xxs),
+            _ContextCard(
+              label: 'Purpose',
+              value: channel.purpose,
+              emptyLabel: 'No purpose set',
+            ),
+            if (!channel.isDm) ...[
+              const SizedBox(height: Grid.sm),
+              Text('Canvas', style: context.textTheme.labelLarge),
+              const SizedBox(height: Grid.xxs),
+              canvasAsync.when(
+                data: (canvas) {
+                  if (isEditingCanvas.value) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextField(
+                          controller: canvasController,
+                          maxLines: 8,
+                          minLines: 6,
+                          decoration: const InputDecoration(
+                            hintText: 'Write your canvas content in Markdown…',
+                          ),
+                        ),
+                        const SizedBox(height: Grid.xxs),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: isSavingCanvas.value
+                                  ? null
+                                  : () {
+                                      isEditingCanvas.value = false;
+                                      canvasController.text =
+                                          canvas.content ?? '';
+                                    },
+                              child: const Text('Cancel'),
+                            ),
+                            const SizedBox(width: Grid.half),
+                            FilledButton(
+                              onPressed: isSavingCanvas.value
+                                  ? null
+                                  : saveCanvas,
+                              child: Text(
+                                isSavingCanvas.value
+                                    ? 'Saving…'
+                                    : 'Save canvas',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(Grid.xs),
+                        decoration: BoxDecoration(
+                          color: context.colors.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(Radii.md),
+                        ),
+                        child: Text(
+                          canvas.content?.trim().isNotEmpty == true
+                              ? canvas.content!
+                              : 'No canvas set for this channel.',
+                          style: context.textTheme.bodyMedium?.copyWith(
+                            color: context.colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: Grid.xxs),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: FilledButton.tonal(
+                          onPressed: canEditCanvas
+                              ? () => isEditingCanvas.value = true
+                              : null,
+                          child: Text(
+                            canvas.content?.trim().isNotEmpty == true
+                                ? 'Edit canvas'
+                                : 'Create canvas',
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, _) => Text(
+                  error.toString(),
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.colors.error,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ContextCard extends StatelessWidget {
+  final String label;
+  final String? value;
+  final String emptyLabel;
+
+  const _ContextCard({
+    required this.label,
+    required this.value,
+    required this.emptyLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(Grid.xs),
+      decoration: BoxDecoration(
+        color: context.colors.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colors.outline,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: Grid.half),
+          Text(
+            value?.trim().isNotEmpty == true ? value!.trim() : emptyLabel,
+            style: context.textTheme.bodyMedium?.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

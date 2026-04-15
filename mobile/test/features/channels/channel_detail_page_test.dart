@@ -7,9 +7,11 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:sprout_mobile/features/channels/channel.dart';
 import 'package:sprout_mobile/features/channels/channel_detail_page.dart';
+import 'package:sprout_mobile/features/channels/channel_management_provider.dart';
 import 'package:sprout_mobile/features/channels/channel_messages_provider.dart';
 import 'package:sprout_mobile/features/channels/channel_typing_provider.dart';
 import 'package:sprout_mobile/features/channels/channels_provider.dart';
+import 'package:sprout_mobile/features/profile/profile_provider.dart';
 import 'package:sprout_mobile/features/profile/user_cache_provider.dart';
 import 'package:sprout_mobile/features/profile/user_profile.dart';
 import 'package:sprout_mobile/shared/relay/relay.dart';
@@ -109,10 +111,17 @@ Widget _buildTestable({
   required List<NostrEvent> messages,
   List<TypingEntry> typing = const [],
   Map<String, UserProfile> users = const {},
+  List<ChannelMember> members = const [],
   Channel? channel,
   List<Channel>? channels,
+  _FakeChannelsNotifier? channelsNotifier,
   List<NavigatorObserver> navigatorObservers = const [],
+  Future<List<ChannelMember>> Function()? loadMembers,
+  ChannelActions Function(Ref ref)? createChannelActions,
 }) {
+  final resolvedChannel = channel ?? _testChannel;
+  final fakeChannelsNotifier =
+      channelsNotifier ?? _FakeChannelsNotifier(channels ?? [resolvedChannel]);
   return ProviderScope(
     overrides: [
       channelMessagesProvider(
@@ -122,9 +131,23 @@ Widget _buildTestable({
         _channelId,
       ).overrideWith(() => _FakeTypingNotifier(typing)),
       userCacheProvider.overrideWith(() => _FakeUserCacheNotifier(users)),
-      channelsProvider.overrideWith(
-        () => _FakeChannelsNotifier(channels ?? [channel ?? _testChannel]),
+      profileProvider.overrideWith(() => _FakeProfileNotifier()),
+      channelsProvider.overrideWith(() => fakeChannelsNotifier),
+      channelDetailsProvider(_channelId).overrideWith(
+        (ref) async => ChannelDetails.fromChannel(resolvedChannel),
       ),
+      channelCanvasProvider(_channelId).overrideWith(
+        (ref) async => const ChannelCanvas(
+          content: null,
+          updatedAt: null,
+          authorPubkey: null,
+        ),
+      ),
+      channelMembersProvider(_channelId).overrideWith(
+        (ref) async => loadMembers != null ? loadMembers() : members,
+      ),
+      if (createChannelActions != null)
+        channelActionsProvider.overrideWith(createChannelActions),
       // Stub the relay client provider so preloadMembers doesn't crash.
       relayClientProvider.overrideWithValue(
         RelayClient(baseUrl: 'http://localhost:3000'),
@@ -133,7 +156,7 @@ Widget _buildTestable({
     child: MaterialApp(
       theme: AppTheme.lightTheme,
       navigatorObservers: navigatorObservers,
-      home: ChannelDetailPage(channel: channel ?? _testChannel),
+      home: ChannelDetailPage(channel: resolvedChannel),
     ),
   );
 }
@@ -155,6 +178,121 @@ Finder findRichText(String text) {
 
 void main() {
   group('ChannelDetailPage', () {
+    testWidgets('shows forum placeholder for forum channels', (tester) async {
+      final forumChannel = Channel(
+        id: _channelId,
+        name: 'design-forum',
+        channelType: 'forum',
+        visibility: 'open',
+        description: 'Talk through design changes',
+        createdBy: 'abc123',
+        createdAt: DateTime(2025),
+        memberCount: 5,
+        isMember: true,
+      );
+
+      await tester.pumpWidget(
+        _buildTestable(messages: const [], channel: forumChannel),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Forum threads are not on mobile yet'), findsOneWidget);
+      expect(find.text('Talk through design changes'), findsOneWidget);
+      expect(find.text('Message…'), findsNothing);
+    });
+
+    testWidgets('members sheet stays read-only on mobile', (tester) async {
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          members: [
+            ChannelMember(
+              pubkey: 'self',
+              role: 'owner',
+              joinedAt: DateTime(2025),
+              displayName: 'Self',
+            ),
+            ChannelMember(
+              pubkey: 'alice',
+              role: 'member',
+              joinedAt: DateTime(2025),
+              displayName: 'Alice',
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('View members'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Member and bot management stay on desktop.'),
+        findsOneWidget,
+      );
+      expect(find.text('Alice'), findsOneWidget);
+      expect(find.byKey(const Key('members-search-field')), findsNothing);
+    });
+
+    testWidgets('hides composer for archived channels', (tester) async {
+      final archivedChannel = _testChannel.copyWith(
+        archivedAt: DateTime.utc(2025, 1, 2),
+      );
+
+      await tester.pumpWidget(
+        _buildTestable(messages: const [], channel: archivedChannel),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Message…'), findsNothing);
+      expect(
+        find.text('This channel is archived and read-only on mobile.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('updates detail page state after joining a channel', (
+      tester,
+    ) async {
+      final openChannel = _testChannel.copyWith(isMember: false);
+      final channelsNotifier = _FakeChannelsNotifier([openChannel]);
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          channel: openChannel,
+          channelsNotifier: channelsNotifier,
+          createChannelActions: (ref) => _FakeChannelActions(
+            ref,
+            onJoinChannel: (_) async {
+              channelsNotifier.setChannels([
+                openChannel.copyWith(isMember: true, memberCount: 6),
+              ]);
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Join this channel from Manage to participate.'),
+        findsOneWidget,
+      );
+      expect(find.text('Message…'), findsNothing);
+
+      await tester.tap(find.byTooltip('Manage channel'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Join channel'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Join channel'), findsNothing);
+      expect(
+        find.text('Join this channel from Manage to participate.'),
+        findsNothing,
+      );
+      expect(find.text('Message…'), findsOneWidget);
+    });
+
     testWidgets('shows empty state when no messages', (tester) async {
       await tester.pumpWidget(_buildTestable(messages: []));
       await tester.pumpAndSettle();
@@ -896,6 +1034,12 @@ class _FakeTypingNotifier extends ChannelTypingNotifier {
   List<TypingEntry> build() => _entries;
 }
 
+class _FakeProfileNotifier extends ProfileNotifier {
+  @override
+  Future<UserProfile?> build() async =>
+      const UserProfile(pubkey: 'self', displayName: 'Self');
+}
+
 class _FakeUserCacheNotifier extends UserCacheNotifier {
   final Map<String, UserProfile> _users;
   _FakeUserCacheNotifier(this._users);
@@ -908,11 +1052,41 @@ class _FakeUserCacheNotifier extends UserCacheNotifier {
 }
 
 class _FakeChannelsNotifier extends ChannelsNotifier {
-  final List<Channel> _channels;
+  List<Channel> _channels;
   _FakeChannelsNotifier(this._channels);
 
   @override
   Future<List<Channel>> build() => SynchronousFuture(_channels);
+
+  void setChannels(List<Channel> channels) {
+    _channels = channels;
+    state = AsyncData(channels);
+  }
+}
+
+class _FakeChannelActions extends ChannelActions {
+  final Future<void> Function(String channelId)? onJoinChannel;
+
+  _FakeChannelActions(Ref ref, {this.onJoinChannel})
+    : super(
+        ref: ref,
+        client: RelayClient(baseUrl: 'http://localhost:3000'),
+        signedEventRelay: SignedEventRelay(
+          client: RelayClient(baseUrl: 'http://localhost:3000'),
+          nsec: null,
+        ),
+        currentPubkey: 'self',
+      );
+
+  @override
+  Future<void> joinChannel(String channelId) async {
+    await onJoinChannel?.call(channelId);
+  }
+
+  @override
+  Future<void> leaveChannel(String channelId) async {
+    return;
+  }
 }
 
 class _TestNavigatorObserver extends NavigatorObserver {

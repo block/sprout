@@ -18,6 +18,7 @@ const MOBILE_SCOPES: TokenScope[] = [
   "messages:read",
   "messages:write",
   "channels:read",
+  "channels:write",
   "users:read",
   "files:read",
 ];
