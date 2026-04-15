@@ -1,16 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/theme/theme.dart';
 
-/// Renders message content with inline markdown formatting, @mentions, and
-/// #channel links. Keeps things lightweight — no external markdown package.
-///
-/// Supported inline syntax:
-///   **bold**, *italic*, ~~strikethrough~~, `inline code`,
-///   [link text](url), bare URLs, @mentions, #channel-links
-///
-/// Block-level: fenced code blocks (```), blockquotes (>)
+/// Renders message content with markdown formatting, @mentions, and
+/// #channel links using [GptMarkdown] for standard markdown and a
+/// pre-processing step for Sprout-specific tokens.
 class MessageContent extends StatelessWidget {
   final String content;
 
@@ -40,329 +36,118 @@ class MessageContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final style =
         baseStyle ??
-        context.textTheme.bodyMedium?.copyWith(
-          color: context.colors.onSurface,
-        ) ??
-        const TextStyle();
+        context.textTheme.bodyMedium?.copyWith(color: context.colors.onSurface);
 
-    final blocks = _parseBlocks(content);
-    if (blocks.length == 1 && blocks[0] is _InlineBlock) {
-      // Fast path: single paragraph — no Column overhead.
-      return RichText(
-        text: TextSpan(
-          children: _buildInlineSpans(
-            (blocks[0] as _InlineBlock).text,
-            style,
-            context,
-          ),
-        ),
+    // If the content has mentions or channel refs, we need a custom component
+    // builder to render them. Otherwise, just use plain GptMarkdown.
+    final hasMentions = _mentionPattern.hasMatch(content);
+    final hasChannels = _channelPattern.hasMatch(content);
+
+    if (!hasMentions && !hasChannels) {
+      return _buildMarkdown(context, content, style);
+    }
+
+    // Pre-process: split content into segments of plain text, @mentions,
+    // and #channels. Render each appropriately.
+    return _buildWithTokens(context, content, style);
+  }
+
+  Widget _buildMarkdown(BuildContext context, String text, TextStyle? style) {
+    return GptMarkdown(
+      text,
+      style: style,
+      followLinkColor: false,
+      linkBuilder: (context, linkText, url, linkStyle) =>
+          _buildLink(context, linkText, url, linkStyle, style),
+    );
+  }
+
+  /// Build content that contains @mentions and/or #channel tokens.
+  /// We split on these tokens and render a Column of GptMarkdown widgets
+  /// interspersed with mention/channel pills.
+  Widget _buildWithTokens(BuildContext context, String text, TextStyle? style) {
+    final segments = _tokenize(text);
+
+    // If all segments fit on one line (no block-level markdown), use a Wrap.
+    // Otherwise fall back to Column.
+    final hasBlockContent = segments.any(
+      (s) => s.type == _TokenType.text && _hasBlockMarkdown(s.value),
+    );
+
+    if (hasBlockContent) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final segment in segments)
+            switch (segment.type) {
+              _TokenType.text => _buildMarkdown(context, segment.value, style),
+              _TokenType.mention => _buildMentionPill(context, segment.value),
+              _TokenType.channel => _buildChannelPill(context, segment.value),
+            },
+        ],
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // Inline-only: use Wrap so mentions/channels flow with text.
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        for (final block in blocks)
-          switch (block) {
-            _CodeBlock b => _buildCodeBlock(b, context),
-            _BlockquoteBlock b => _buildBlockquote(b, style, context),
-            _InlineBlock b => Padding(
-              padding: blocks.length > 1
-                  ? const EdgeInsets.only(bottom: Grid.half)
-                  : EdgeInsets.zero,
-              child: RichText(
-                text: TextSpan(
-                  children: _buildInlineSpans(b.text, style, context),
-                ),
-              ),
-            ),
+        for (final segment in segments)
+          switch (segment.type) {
+            _TokenType.text => _buildMarkdown(context, segment.value, style),
+            _TokenType.mention => _buildMentionPill(context, segment.value),
+            _TokenType.channel => _buildChannelPill(context, segment.value),
           },
       ],
     );
   }
 
   // ---------------------------------------------------------------------------
-  // Block parsing
+  // Link builder (URL scheme validation)
   // ---------------------------------------------------------------------------
 
-  static final _codeBlockPattern = RegExp(r'```(\w*)\n?([\s\S]*?)```');
-
-  List<_Block> _parseBlocks(String text) {
-    final blocks = <_Block>[];
-    var remaining = text;
-
-    while (remaining.isNotEmpty) {
-      final codeMatch = _codeBlockPattern.firstMatch(remaining);
-      if (codeMatch == null) {
-        // No more code blocks — handle blockquotes in remaining text.
-        _addInlineOrBlockquote(blocks, remaining);
-        break;
-      }
-
-      // Text before the code block.
-      final before = remaining.substring(0, codeMatch.start).trimRight();
-      if (before.isNotEmpty) {
-        _addInlineOrBlockquote(blocks, before);
-      }
-
-      blocks.add(
-        _CodeBlock(
-          language: codeMatch.group(1) ?? '',
-          code: codeMatch.group(2)?.trimRight() ?? '',
-        ),
-      );
-
-      remaining = remaining.substring(codeMatch.end).trimLeft();
-    }
-
-    return blocks;
-  }
-
-  void _addInlineOrBlockquote(List<_Block> blocks, String text) {
-    // Split into lines, group consecutive blockquote lines.
-    final lines = text.split('\n');
-    final buffer = StringBuffer();
-    var inBlockquote = false;
-
-    void flushBuffer() {
-      final content = buffer.toString().trim();
-      if (content.isNotEmpty) {
-        blocks.add(
-          inBlockquote ? _BlockquoteBlock(content) : _InlineBlock(content),
-        );
-      }
-      buffer.clear();
-    }
-
-    for (final line in lines) {
-      final isQuote = line.startsWith('>');
-      if (isQuote != inBlockquote) {
-        flushBuffer();
-        inBlockquote = isQuote;
-      }
-      final stripped = isQuote ? line.substring(1).trimLeft() : line;
-      if (buffer.isNotEmpty) buffer.write('\n');
-      buffer.write(stripped);
-    }
-    flushBuffer();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Block widgets
-  // ---------------------------------------------------------------------------
-
-  Widget _buildCodeBlock(_CodeBlock block, BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Grid.half),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(Grid.xxs),
-        decoration: BoxDecoration(
-          color: context.colors.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(Radii.sm),
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Text(
-            block.code,
-            style: context.textTheme.bodySmall?.copyWith(
-              fontFamily: 'GeistMono',
-              color: context.colors.onSurface,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBlockquote(
-    _BlockquoteBlock block,
-    TextStyle style,
+  Widget _buildLink(
     BuildContext context,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Grid.half),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border(
-            left: BorderSide(color: context.colors.outline, width: 3),
-          ),
-        ),
-        padding: const EdgeInsets.only(left: Grid.xxs),
-        child: RichText(
-          text: TextSpan(
-            children: _buildInlineSpans(
-              block.text,
-              style.copyWith(fontStyle: FontStyle.italic),
-              context,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Inline span parsing
-  // ---------------------------------------------------------------------------
-
-  /// Master regex for inline elements. Order matters — earlier alternatives
-  /// take priority.
-  static final _inlinePattern = RegExp(
-    r'(`[^`]+`)' // 1: inline code
-    r'|(\*\*(?:[^*]|\*(?!\*))+\*\*)' // 2: bold
-    r'|(\*(?:[^*])+\*)' // 3: italic
-    r'|(~~(?:[^~])+~~)' // 4: strikethrough
-    r'|(\[([^\]]+)\]\(([^)]+)\))' // 5,6,7: [text](url) link
-    r'|(https?://[^\s<>\)]+[^\s<>\).,;:!?])' // 8: bare URL (strip trailing punct)
-    r'|(@\S+)' // 9: @mention
-    r'|(#\S+)', // 10: #channel
-  );
-
-  List<InlineSpan> _buildInlineSpans(
-    String text,
-    TextStyle style,
-    BuildContext context,
-  ) {
-    final spans = <InlineSpan>[];
-    var lastEnd = 0;
-
-    for (final match in _inlinePattern.allMatches(text)) {
-      // Plain text before this match.
-      if (match.start > lastEnd) {
-        spans.add(
-          TextSpan(text: text.substring(lastEnd, match.start), style: style),
-        );
-      }
-
-      if (match.group(1) != null) {
-        // Inline code
-        final code = match.group(1)!;
-        spans.add(_codeSpan(code.substring(1, code.length - 1), context));
-      } else if (match.group(2) != null) {
-        // Bold
-        final bold = match.group(2)!;
-        final inner = bold.substring(2, bold.length - 2);
-        spans.addAll(
-          _buildInlineSpans(
-            inner,
-            style.copyWith(fontWeight: FontWeight.w600),
-            context,
-          ),
-        );
-      } else if (match.group(3) != null) {
-        // Italic
-        final italic = match.group(3)!;
-        final inner = italic.substring(1, italic.length - 1);
-        spans.addAll(
-          _buildInlineSpans(
-            inner,
-            style.copyWith(fontStyle: FontStyle.italic),
-            context,
-          ),
-        );
-      } else if (match.group(4) != null) {
-        // Strikethrough
-        final strike = match.group(4)!;
-        final inner = strike.substring(2, strike.length - 2);
-        spans.addAll(
-          _buildInlineSpans(
-            inner,
-            style.copyWith(decoration: TextDecoration.lineThrough),
-            context,
-          ),
-        );
-      } else if (match.group(5) != null) {
-        // Markdown link [text](url)
-        final linkText = match.group(6)!;
-        final url = match.group(7)!;
-        spans.add(_linkSpan(linkText, url, style, context));
-      } else if (match.group(8) != null) {
-        // Bare URL
-        final url = match.group(8)!;
-        spans.add(_linkSpan(url, url, style, context));
-      } else if (match.group(9) != null) {
-        // @mention
-        spans.add(_mentionSpan(match.group(9)!, context));
-      } else if (match.group(10) != null) {
-        // #channel
-        spans.add(_channelSpan(match.group(10)!, context));
-      }
-
-      lastEnd = match.end;
-    }
-
-    // Trailing plain text.
-    if (lastEnd < text.length) {
-      spans.add(TextSpan(text: text.substring(lastEnd), style: style));
-    }
-
-    // If no spans at all (empty string), return a single empty span.
-    if (spans.isEmpty) {
-      spans.add(TextSpan(text: text, style: style));
-    }
-
-    return spans;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Span builders
-  // ---------------------------------------------------------------------------
-
-  WidgetSpan _codeSpan(String code, BuildContext context) {
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.middle,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: context.colors.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(Radii.sm),
-        ),
-        child: Text(
-          code,
-          style: context.textTheme.bodySmall?.copyWith(
-            fontFamily: 'GeistMono',
-            color: context.colors.onSurface,
-          ),
-        ),
-      ),
-    );
-  }
-
-  WidgetSpan _linkSpan(
-    String text,
+    InlineSpan linkText,
     String url,
-    TextStyle style,
-    BuildContext context,
+    TextStyle linkStyle,
+    TextStyle? fallbackStyle,
   ) {
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.middle,
-      child: GestureDetector(
-        onTap: () {
-          final uri = Uri.tryParse(url);
-          if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
-            launchUrl(uri, mode: LaunchMode.externalApplication);
-          }
-        },
-        child: Text(
-          text,
-          style: style.copyWith(
-            color: context.colors.primary,
-            decoration: TextDecoration.underline,
-            decorationColor: context.colors.primary,
-          ),
+    String text = '';
+    linkText.visitChildren((span) {
+      if (span is TextSpan && span.text != null) {
+        text += span.text!;
+      }
+      return true;
+    });
+
+    final baseStyle = fallbackStyle ?? linkStyle;
+
+    return GestureDetector(
+      onTap: () {
+        final uri = Uri.tryParse(url);
+        if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+          launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
+      },
+      child: Text(
+        text,
+        style: baseStyle.copyWith(
+          color: context.colors.primary,
+          decoration: TextDecoration.underline,
+          decorationColor: context.colors.primary,
         ),
       ),
     );
   }
 
-  /// Render @mention as a highlighted span. Matches the mention text against
-  /// known display names from the event's p-tags.
-  InlineSpan _mentionSpan(String raw, BuildContext context) {
-    // Strip the @ prefix for matching.
+  // ---------------------------------------------------------------------------
+  // Mention / channel pills
+  // ---------------------------------------------------------------------------
+
+  Widget _buildMentionPill(BuildContext context, String raw) {
     final name = raw.substring(1).toLowerCase();
 
-    // Try to find the mentioned user in our resolved names map.
     String? displayName;
     for (final entry in mentionNames.entries) {
       final entryName = entry.value.toLowerCase();
@@ -373,29 +158,24 @@ class MessageContent extends StatelessWidget {
       }
     }
 
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.middle,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-        decoration: BoxDecoration(
-          color: context.colors.primary.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(Radii.sm),
-        ),
-        child: Text(
-          '@${displayName ?? raw.substring(1)}',
-          style: context.textTheme.bodyMedium?.copyWith(
-            color: context.colors.primary,
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      decoration: BoxDecoration(
+        color: context.colors.primary.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Text(
+        '@${displayName ?? raw.substring(1)}',
+        style: context.textTheme.bodyMedium?.copyWith(
+          color: context.colors.primary,
         ),
       ),
     );
   }
 
-  /// Render #channel as a tappable highlighted span.
-  InlineSpan _channelSpan(String raw, BuildContext context) {
+  Widget _buildChannelPill(BuildContext context, String raw) {
     final name = raw.substring(1).toLowerCase();
 
-    // Look up channel ID.
     String? channelId;
     String? displayChannelName;
     for (final entry in channelNames.entries) {
@@ -406,49 +186,83 @@ class MessageContent extends StatelessWidget {
       }
     }
 
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.middle,
-      child: GestureDetector(
-        onTap: channelId != null && onChannelTap != null
-            ? () => onChannelTap!(channelId!)
-            : null,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-          decoration: BoxDecoration(
-            color: context.colors.primary.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(Radii.sm),
-          ),
-          child: Text(
-            '#${displayChannelName ?? raw.substring(1)}',
-            style: context.textTheme.bodyMedium?.copyWith(
-              color: context.colors.primary,
-              fontWeight: FontWeight.w500,
-            ),
+    return GestureDetector(
+      onTap: channelId != null && onChannelTap != null
+          ? () => onChannelTap!(channelId!)
+          : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          color: context.colors.primary.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(Radii.sm),
+        ),
+        child: Text(
+          '#${displayChannelName ?? raw.substring(1)}',
+          style: context.textTheme.bodyMedium?.copyWith(
+            color: context.colors.primary,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ),
     );
   }
+
+  // ---------------------------------------------------------------------------
+  // Tokenizer
+  // ---------------------------------------------------------------------------
+
+  static final _mentionPattern = RegExp(r'@\S+');
+  static final _channelPattern = RegExp(r'#\S+');
+  static final _tokenPattern = RegExp(r'(@\S+|#\S+)');
+
+  static bool _hasBlockMarkdown(String text) {
+    return text.contains('```') ||
+        text.contains('\n> ') ||
+        text.startsWith('> ') ||
+        text.contains('\n- ') ||
+        text.startsWith('- ') ||
+        text.contains('\n1. ') ||
+        text.startsWith('1. ') ||
+        RegExp(r'^#{1,3}\s', multiLine: true).hasMatch(text);
+  }
+
+  List<_Token> _tokenize(String text) {
+    final tokens = <_Token>[];
+    var lastEnd = 0;
+
+    for (final match in _tokenPattern.allMatches(text)) {
+      if (match.start > lastEnd) {
+        tokens.add(
+          _Token(_TokenType.text, text.substring(lastEnd, match.start)),
+        );
+      }
+
+      final value = match.group(0)!;
+      if (value.startsWith('@')) {
+        tokens.add(_Token(_TokenType.mention, value));
+      } else {
+        tokens.add(_Token(_TokenType.channel, value));
+      }
+
+      lastEnd = match.end;
+    }
+
+    if (lastEnd < text.length) {
+      tokens.add(_Token(_TokenType.text, text.substring(lastEnd)));
+    }
+
+    return tokens;
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Block types
+// Token types
 // ---------------------------------------------------------------------------
 
-sealed class _Block {}
+enum _TokenType { text, mention, channel }
 
-class _InlineBlock extends _Block {
-  final String text;
-  _InlineBlock(this.text);
-}
-
-class _CodeBlock extends _Block {
-  final String language;
-  final String code;
-  _CodeBlock({required this.language, required this.code});
-}
-
-class _BlockquoteBlock extends _Block {
-  final String text;
-  _BlockquoteBlock(this.text);
+class _Token {
+  final _TokenType type;
+  final String value;
+  const _Token(this.type, this.value);
 }

@@ -139,8 +139,8 @@ void main() {
           _testable(const MessageContent(content: 'Use `flutter test` to run')),
         );
 
-        // Inline code is rendered as a WidgetSpan with a Container.
-        expect(find.text('flutter test'), findsOneWidget);
+        // Inline code is rendered inside a styled span.
+        expect(_findRich('flutter test'), findsWidgets);
       });
 
       testWidgets('renders markdown link', (tester) async {
@@ -179,9 +179,9 @@ void main() {
           ),
         );
 
-        expect(find.text('code here'), findsOneWidget);
-        expect(_findRich('Before'), findsOneWidget);
-        expect(_findRich('After'), findsOneWidget);
+        expect(_findRich('code here'), findsWidgets);
+        expect(_findRich('Before'), findsWidgets);
+        expect(_findRich('After'), findsWidgets);
       });
 
       testWidgets('renders code block with language tag', (tester) async {
@@ -191,7 +191,7 @@ void main() {
           ),
         );
 
-        expect(find.text('void main() {}'), findsOneWidget);
+        expect(_findRich('void main() {}'), findsWidgets);
       });
     });
 
@@ -302,9 +302,9 @@ void main() {
           ),
         );
 
-        expect(find.text('flutter test'), findsOneWidget);
-        expect(_findRich('Try this:'), findsOneWidget);
-        expect(_findRich('Did it work?'), findsOneWidget);
+        expect(_findRich('flutter test'), findsWidgets);
+        expect(_findRich('Try this:'), findsWidgets);
+        expect(_findRich('Did it work?'), findsWidgets);
       });
     });
   });
