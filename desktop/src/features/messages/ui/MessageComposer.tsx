@@ -10,6 +10,10 @@ import {
   useMediaUpload,
 } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
+import {
+  hasMentionClipboardHtml,
+  normalizeMentionClipboardHtml,
+} from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { cn } from "@/shared/lib/cn";
@@ -450,22 +454,15 @@ export function MessageComposer({
           // custom `data-mention` / `data-channel-link` spans, so the
           // pasted text can arrive with stale formatting and without the
           // `@` / `#` prefix.  Detect this case, flatten the HTML to
-          // plain text, and let TipTap re-parse it as markdown.
+          // plain text and insert directly — bypassing TipTap's Bold
+          // extension which would otherwise wrap the mention in `**`.
+          // NOTE: This flattens *all* formatting in the pasted fragment
+          // when mentions are present. Acceptable for the primary use
+          // case (pasting a mention chip); a future refinement could
+          // preserve non-mention formatting.
           const html = event.clipboardData?.getData("text/html");
-          if (
-            html &&
-            (html.includes("data-mention") ||
-              html.includes("data-channel-link"))
-          ) {
-            const doc = new DOMParser().parseFromString(html, "text/html");
-            // Replace mention / channel-link elements with their text
-            for (const el of Array.from(
-              doc.querySelectorAll("[data-mention], [data-channel-link]"),
-            )) {
-              const text = doc.createTextNode(el.textContent ?? "");
-              el.replaceWith(text);
-            }
-            const cleanText = doc.body.textContent ?? "";
+          if (html && hasMentionClipboardHtml(html)) {
+            const cleanText = normalizeMentionClipboardHtml(html);
             event.preventDefault();
             _view.dispatch(
               _view.state.tr.insertText(
