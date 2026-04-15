@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:gpt_markdown/custom_widgets/markdown_config.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/theme/theme.dart';
 
 /// Renders message content with markdown formatting, @mentions, and
-/// #channel links using [GptMarkdown] for standard markdown and a
-/// pre-processing step for Sprout-specific tokens.
+/// #channel links using [GptMarkdown] plus custom inline components for
+/// Sprout-specific tokens.
 class MessageContent extends StatelessWidget {
   final String content;
 
@@ -38,66 +39,16 @@ class MessageContent extends StatelessWidget {
         baseStyle ??
         context.textTheme.bodyMedium?.copyWith(color: context.colors.onSurface);
 
-    // If the content has mentions or channel refs, we need a custom component
-    // builder to render them. Otherwise, just use plain GptMarkdown.
-    final hasMentions = _mentionPattern.hasMatch(content);
-    final hasChannels = _channelPattern.hasMatch(content);
-
-    if (!hasMentions && !hasChannels) {
-      return _buildMarkdown(context, content, style);
-    }
-
-    // Pre-process: split content into segments of plain text, @mentions,
-    // and #channels. Render each appropriately.
-    return _buildWithTokens(context, content, style);
-  }
-
-  Widget _buildMarkdown(BuildContext context, String text, TextStyle? style) {
     return GptMarkdown(
-      text,
+      content,
       style: style,
       followLinkColor: false,
       linkBuilder: (context, linkText, url, linkStyle) =>
           _buildLink(context, linkText, url, linkStyle, style),
-    );
-  }
-
-  /// Build content that contains @mentions and/or #channel tokens.
-  /// We split on these tokens and render a Column of GptMarkdown widgets
-  /// interspersed with mention/channel pills.
-  Widget _buildWithTokens(BuildContext context, String text, TextStyle? style) {
-    final segments = _tokenize(text);
-
-    // If all segments fit on one line (no block-level markdown), use a Wrap.
-    // Otherwise fall back to Column.
-    final hasBlockContent = segments.any(
-      (s) => s.type == _TokenType.text && _hasBlockMarkdown(s.value),
-    );
-
-    if (hasBlockContent) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final segment in segments)
-            switch (segment.type) {
-              _TokenType.text => _buildMarkdown(context, segment.value, style),
-              _TokenType.mention => _buildMentionPill(context, segment.value),
-              _TokenType.channel => _buildChannelPill(context, segment.value),
-            },
-        ],
-      );
-    }
-
-    // Inline-only: use Wrap so mentions/channels flow with text.
-    return Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        for (final segment in segments)
-          switch (segment.type) {
-            _TokenType.text => _buildMarkdown(context, segment.value, style),
-            _TokenType.mention => _buildMentionPill(context, segment.value),
-            _TokenType.channel => _buildChannelPill(context, segment.value),
-          },
+      inlineComponents: [
+        _MentionMd(mentionNames: mentionNames),
+        _ChannelLinkMd(channelNames: channelNames, onChannelTap: onChannelTap),
+        ...MarkdownComponent.inlineComponents,
       ],
     );
   }
@@ -140,14 +91,33 @@ class MessageContent extends StatelessWidget {
       ),
     );
   }
+}
 
-  // ---------------------------------------------------------------------------
-  // Mention / channel pills
-  // ---------------------------------------------------------------------------
+class _MentionMd extends InlineMd {
+  final Map<String, String> mentionNames;
+  late final RegExp _exp = _buildPrefixPattern(
+    prefix: '@',
+    knownNames: _mentionAliases(mentionNames.values),
+    genericTokenPattern: r'[A-Za-z0-9_][A-Za-z0-9_-]*',
+  );
 
-  Widget _buildMentionPill(BuildContext context, String raw) {
+  _MentionMd({required this.mentionNames});
+
+  @override
+  RegExp get exp => _exp;
+
+  @override
+  InlineSpan span(
+    BuildContext context,
+    String text,
+    final GptMarkdownConfig config,
+  ) {
+    final raw = exp.firstMatch(text.trim())?.group(0);
+    if (raw == null) {
+      return TextSpan(text: text, style: config.style);
+    }
+
     final name = raw.substring(1).toLowerCase();
-
     String? displayName;
     for (final entry in mentionNames.entries) {
       final entryName = entry.value.toLowerCase();
@@ -158,6 +128,66 @@ class MessageContent extends StatelessWidget {
       }
     }
 
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: _TokenPill(
+        text: '@${displayName ?? raw.substring(1)}',
+        textStyle: config.style,
+      ),
+    );
+  }
+}
+
+class _ChannelLinkMd extends InlineMd {
+  final Map<String, String> channelNames;
+  final void Function(String channelId)? onChannelTap;
+  late final RegExp _exp = _buildPrefixPattern(
+    prefix: '#',
+    knownNames: channelNames.keys,
+    genericTokenPattern: r'[A-Za-z0-9_][A-Za-z0-9_-]*',
+  );
+
+  _ChannelLinkMd({required this.channelNames, this.onChannelTap});
+
+  @override
+  RegExp get exp => _exp;
+
+  @override
+  InlineSpan span(
+    BuildContext context,
+    String text,
+    final GptMarkdownConfig config,
+  ) {
+    final raw = exp.firstMatch(text.trim())?.group(0);
+    if (raw == null) {
+      return TextSpan(text: text, style: config.style);
+    }
+
+    final channelId = channelNames[raw.substring(1).toLowerCase()];
+    final child = _TokenPill(
+      text: raw,
+      textStyle: config.style?.copyWith(fontWeight: FontWeight.w500),
+    );
+
+    return WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: channelId != null && onChannelTap != null
+          ? GestureDetector(onTap: () => onChannelTap!(channelId), child: child)
+          : child,
+    );
+  }
+}
+
+class _TokenPill extends StatelessWidget {
+  final String text;
+  final TextStyle? textStyle;
+
+  const _TokenPill({required this.text, this.textStyle});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
       decoration: BoxDecoration(
@@ -165,104 +195,58 @@ class MessageContent extends StatelessWidget {
         borderRadius: BorderRadius.circular(Radii.sm),
       ),
       child: Text(
-        '@${displayName ?? raw.substring(1)}',
-        style: context.textTheme.bodyMedium?.copyWith(
-          color: context.colors.primary,
-        ),
+        text,
+        style:
+            textStyle?.copyWith(color: context.colors.primary) ??
+            context.textTheme.bodyMedium?.copyWith(
+              color: context.colors.primary,
+            ),
       ),
     );
-  }
-
-  Widget _buildChannelPill(BuildContext context, String raw) {
-    final name = raw.substring(1).toLowerCase();
-
-    String? channelId;
-    String? displayChannelName;
-    for (final entry in channelNames.entries) {
-      if (entry.key == name) {
-        channelId = entry.value;
-        displayChannelName = entry.key;
-        break;
-      }
-    }
-
-    return GestureDetector(
-      onTap: channelId != null && onChannelTap != null
-          ? () => onChannelTap!(channelId!)
-          : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-        decoration: BoxDecoration(
-          color: context.colors.primary.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(Radii.sm),
-        ),
-        child: Text(
-          '#${displayChannelName ?? raw.substring(1)}',
-          style: context.textTheme.bodyMedium?.copyWith(
-            color: context.colors.primary,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tokenizer
-  // ---------------------------------------------------------------------------
-
-  static final _mentionPattern = RegExp(r'@\S+');
-  static final _channelPattern = RegExp(r'#\S+');
-  static final _tokenPattern = RegExp(r'(@\S+|#\S+)');
-
-  static bool _hasBlockMarkdown(String text) {
-    return text.contains('```') ||
-        text.contains('\n> ') ||
-        text.startsWith('> ') ||
-        text.contains('\n- ') ||
-        text.startsWith('- ') ||
-        text.contains('\n1. ') ||
-        text.startsWith('1. ') ||
-        RegExp(r'^#{1,3}\s', multiLine: true).hasMatch(text);
-  }
-
-  List<_Token> _tokenize(String text) {
-    final tokens = <_Token>[];
-    var lastEnd = 0;
-
-    for (final match in _tokenPattern.allMatches(text)) {
-      if (match.start > lastEnd) {
-        tokens.add(
-          _Token(_TokenType.text, text.substring(lastEnd, match.start)),
-        );
-      }
-
-      final value = match.group(0)!;
-      if (value.startsWith('@')) {
-        tokens.add(_Token(_TokenType.mention, value));
-      } else {
-        tokens.add(_Token(_TokenType.channel, value));
-      }
-
-      lastEnd = match.end;
-    }
-
-    if (lastEnd < text.length) {
-      tokens.add(_Token(_TokenType.text, text.substring(lastEnd)));
-    }
-
-    return tokens;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Token types
-// ---------------------------------------------------------------------------
+RegExp _buildPrefixPattern({
+  required String prefix,
+  required Iterable<String> knownNames,
+  required String genericTokenPattern,
+}) {
+  final names =
+      knownNames
+          .map((name) => name.trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort((a, b) => b.length.compareTo(a.length));
 
-enum _TokenType { text, mention, channel }
+  final escapedPrefix = RegExp.escape(prefix);
+  const leadingBoundary = r'(?<![\w./:-])';
+  const trailingBoundary = r'(?=$|[\s,;.!?:)\]}])';
 
-class _Token {
-  final _TokenType type;
-  final String value;
-  const _Token(this.type, this.value);
+  if (names.isEmpty) {
+    return RegExp(
+      '$leadingBoundary$escapedPrefix(?:$genericTokenPattern)$trailingBoundary',
+      caseSensitive: false,
+      multiLine: true,
+    );
+  }
+
+  final knownAlternatives = names.map(RegExp.escape).join('|');
+  return RegExp(
+    '$leadingBoundary$escapedPrefix(?:(?:$knownAlternatives)$trailingBoundary|(?:$genericTokenPattern)$trailingBoundary)',
+    caseSensitive: false,
+    multiLine: true,
+  );
+}
+
+Iterable<String> _mentionAliases(Iterable<String> mentionNames) sync* {
+  for (final name in mentionNames) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) continue;
+    yield trimmed;
+    final firstName = trimmed.split(RegExp(r'\s+')).first;
+    if (firstName.isNotEmpty) {
+      yield firstName;
+    }
+  }
 }

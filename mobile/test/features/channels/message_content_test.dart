@@ -235,6 +235,20 @@ void main() {
 
         expect(find.text('@unknown'), findsOneWidget);
       });
+
+      testWidgets('does not treat email addresses as mentions', (tester) async {
+        await tester.pumpWidget(
+          _testable(
+            const MessageContent(
+              content: 'Email alice@example.com for access',
+              mentionNames: {'pk1': 'Alice'},
+            ),
+          ),
+        );
+
+        expect(_allRichText(tester), contains('alice@example.com'));
+        expect(find.text('@example.com'), findsNothing);
+      });
     });
 
     group('#channel links', () {
@@ -276,6 +290,22 @@ void main() {
 
         expect(find.text('#unknown'), findsOneWidget);
       });
+
+      testWidgets('does not treat URL fragments as channel links', (
+        tester,
+      ) async {
+        await tester.pumpWidget(
+          _testable(
+            const MessageContent(
+              content: 'See https://example.com/docs#frag',
+              channelNames: {'frag': 'ch-id-1'},
+            ),
+          ),
+        );
+
+        expect(_allRichText(tester), contains('https://example.com/docs#frag'));
+        expect(find.text('#frag'), findsNothing);
+      });
     });
 
     group('mixed content', () {
@@ -291,6 +321,20 @@ void main() {
 
         expect(_hasBoldSpan(tester, 'Important'), isTrue);
         expect(find.text('@Alice'), findsOneWidget);
+      });
+
+      testWidgets('preserves markdown around mentions', (tester) async {
+        await tester.pumpWidget(
+          _testable(
+            const MessageContent(
+              content: '**@Alice** please review',
+              mentionNames: {'pk1': 'Alice'},
+            ),
+          ),
+        );
+
+        expect(find.text('@Alice'), findsOneWidget);
+        expect(_allRichText(tester), isNot(contains('**')));
       });
 
       testWidgets('renders code block between paragraphs', (tester) async {

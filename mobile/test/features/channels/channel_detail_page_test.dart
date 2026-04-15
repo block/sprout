@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -109,6 +110,8 @@ Widget _buildTestable({
   List<TypingEntry> typing = const [],
   Map<String, UserProfile> users = const {},
   Channel? channel,
+  List<Channel>? channels,
+  List<NavigatorObserver> navigatorObservers = const [],
 }) {
   return ProviderScope(
     overrides: [
@@ -119,7 +122,9 @@ Widget _buildTestable({
         _channelId,
       ).overrideWith(() => _FakeTypingNotifier(typing)),
       userCacheProvider.overrideWith(() => _FakeUserCacheNotifier(users)),
-      channelsProvider.overrideWith(() => _FakeChannelsNotifier()),
+      channelsProvider.overrideWith(
+        () => _FakeChannelsNotifier(channels ?? [channel ?? _testChannel]),
+      ),
       // Stub the relay client provider so preloadMembers doesn't crash.
       relayClientProvider.overrideWithValue(
         RelayClient(baseUrl: 'http://localhost:3000'),
@@ -127,6 +132,7 @@ Widget _buildTestable({
     ],
     child: MaterialApp(
       theme: AppTheme.lightTheme,
+      navigatorObservers: navigatorObservers,
       home: ChannelDetailPage(channel: channel ?? _testChannel),
     ),
   );
@@ -753,7 +759,9 @@ void main() {
               _channelId,
             ).overrideWith(() => _FakeTypingNotifier([])),
             userCacheProvider.overrideWith(() => _FakeUserCacheNotifier({})),
-            channelsProvider.overrideWith(() => _FakeChannelsNotifier()),
+            channelsProvider.overrideWith(
+              () => _FakeChannelsNotifier([_testChannel]),
+            ),
             relayClientProvider.overrideWithValue(
               RelayClient(baseUrl: 'http://localhost:3000'),
             ),
@@ -816,6 +824,48 @@ void main() {
       expect(findRichText('Thanks for the invite!'), findsOneWidget);
     });
   });
+
+  group('Channel links', () {
+    testWidgets('tapping a channel link opens that channel', (tester) async {
+      final randomChannel = Channel(
+        id: 'random-channel',
+        name: 'random',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'Random discussion',
+        createdBy: 'abc123',
+        createdAt: DateTime(2025),
+        memberCount: 3,
+        isMember: true,
+      );
+      final observer = _TestNavigatorObserver();
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [
+            _textMsg(
+              id: 'msg1',
+              pubkey: 'alice',
+              content: 'Take this to #random',
+              createdAt: 1000,
+            ),
+          ],
+          users: {
+            'alice': const UserProfile(pubkey: 'alice', displayName: 'Alice'),
+          },
+          channels: [_testChannel, randomChannel],
+          navigatorObservers: [observer],
+        ),
+      );
+      await tester.pumpAndSettle();
+      final initialPushCount = observer.pushCount;
+
+      await tester.tap(find.text('#random'));
+      await tester.pumpAndSettle();
+
+      expect(observer.pushCount, initialPushCount + 1);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +908,19 @@ class _FakeUserCacheNotifier extends UserCacheNotifier {
 }
 
 class _FakeChannelsNotifier extends ChannelsNotifier {
+  final List<Channel> _channels;
+  _FakeChannelsNotifier(this._channels);
+
   @override
-  Future<List<Channel>> build() async => [];
+  Future<List<Channel>> build() => SynchronousFuture(_channels);
+}
+
+class _TestNavigatorObserver extends NavigatorObserver {
+  int pushCount = 0;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushCount += 1;
+    super.didPush(route, previousRoute);
+  }
 }

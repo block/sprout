@@ -38,14 +38,18 @@ class SystemEvent {
   /// Parse a system event from the JSON content of a kind-40099 event.
   /// Returns null if the payload is unrecognised.
   static SystemEvent? fromContent(String content) {
-    final Map<String, dynamic> json;
+    final Map<dynamic, dynamic> json;
     try {
-      json = jsonDecode(content) as Map<String, dynamic>;
+      final decoded = jsonDecode(content);
+      if (decoded is! Map) {
+        return null;
+      }
+      json = decoded;
     } catch (_) {
       return null;
     }
 
-    final type = switch (json['type'] as String?) {
+    final type = switch (_readString(json, 'type')) {
       'member_joined' => SystemEventType.memberJoined,
       'member_left' => SystemEventType.memberLeft,
       'member_removed' => SystemEventType.memberRemoved,
@@ -61,10 +65,10 @@ class SystemEvent {
 
     return SystemEvent(
       type: type,
-      actorPubkey: json['actor'] as String?,
-      targetPubkey: json['target'] as String?,
-      topic: json['topic'] as String?,
-      purpose: json['purpose'] as String?,
+      actorPubkey: _readString(json, 'actor'),
+      targetPubkey: _readString(json, 'target'),
+      topic: _readString(json, 'topic'),
+      purpose: _readString(json, 'purpose'),
     );
   }
 
@@ -226,4 +230,9 @@ String? _lastETag(List<List<String>> tags) {
     if (tag.length >= 2 && tag[0] == 'e') return tag[1];
   }
   return null;
+}
+
+String? _readString(Map<dynamic, dynamic> json, String key) {
+  final value = json[key];
+  return value is String ? value : null;
 }

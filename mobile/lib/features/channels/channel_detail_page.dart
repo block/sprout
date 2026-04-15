@@ -170,6 +170,7 @@ class _MessageList extends ConsumerWidget {
           message: message,
           showAuthor: showAuthor,
           channelNames: channelNamesMap,
+          currentChannelId: channelId,
         );
       },
     );
@@ -248,11 +249,13 @@ class _MessageBubble extends ConsumerWidget {
   final TimelineMessage message;
   final bool showAuthor;
   final Map<String, String> channelNames;
+  final String currentChannelId;
 
   const _MessageBubble({
     required this.message,
     required this.showAuthor,
     required this.channelNames,
+    required this.currentChannelId,
   });
 
   @override
@@ -324,6 +327,29 @@ class _MessageBubble extends ConsumerWidget {
                   content: message.content,
                   mentionNames: mentionNames,
                   channelNames: channelNames,
+                  onChannelTap: (channelId) {
+                    if (channelId == currentChannelId) {
+                      return;
+                    }
+                    final channelsAsync = ref.read(channelsProvider);
+                    final channels = channelsAsync.hasValue
+                        ? channelsAsync.value
+                        : null;
+                    Channel? targetChannel;
+                    for (final channel in channels ?? const <Channel>[]) {
+                      if (channel.id == channelId) {
+                        targetChannel = channel;
+                        break;
+                      }
+                    }
+                    if (targetChannel == null) return;
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ChannelDetailPage(channel: targetChannel!),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),

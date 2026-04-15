@@ -132,6 +132,18 @@ void main() {
       expect(SystemEvent.fromContent('not json'), isNull);
     });
 
+    test('returns null for wrong JSON field types', () {
+      expect(
+        SystemEvent.fromContent(
+          jsonEncode({
+            'type': ['member_joined'],
+            'actor': 123,
+          }),
+        ),
+        isNull,
+      );
+    });
+
     test('parses target, topic, and purpose fields', () {
       final event = SystemEvent.fromContent(
         jsonEncode({
@@ -332,6 +344,23 @@ void main() {
 
       final result = formatTimeline(events);
       expect(result, isEmpty);
+    });
+
+    test('malformed system messages are skipped safely', () {
+      final events = [
+        _systemMsg(
+          id: 's1',
+          payload: {
+            'type': ['member_joined'],
+            'actor': 123,
+          },
+        ),
+        _textMsg(id: 'a', content: 'hello', createdAt: 1100),
+      ];
+
+      final result = formatTimeline(events);
+      expect(result, hasLength(1));
+      expect(result[0].content, 'hello');
     });
 
     test('reactions and typing indicators are filtered out', () {
