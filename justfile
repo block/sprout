@@ -151,9 +151,17 @@ dev *ARGS:
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
 staging *ARGS:
-    cd {{desktop_dir}} && pnpm install
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{desktop_dir}}
+    pnpm install
+    cd ..
     cargo build --release -p sprout-acp -p sprout-mcp
-    cd {{desktop_dir}} && SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co" pnpm exec tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
+    cd {{desktop_dir}}
+    source ../scripts/instance-env.sh
+    export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
+    echo "Starting staging on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
+    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop frontend dev server (port derived from worktree)
 desktop-dev:
