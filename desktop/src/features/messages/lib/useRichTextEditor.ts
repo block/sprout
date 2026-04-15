@@ -19,6 +19,11 @@ export type RichTextEditorOptions = {
   editable?: boolean;
   mentionNames?: string[];
   channelNames?: string[];
+  /** Called on plain Enter (submit). Handled inside Tiptap's extension system
+   *  so it fires *before* ProseMirror's default splitBlock behaviour. */
+  onSubmit?: () => void;
+  /** When true, plain Enter is passed through (e.g. to select an autocomplete item). */
+  isAutocompleteOpen?: React.RefObject<boolean>;
 };
 
 /**
@@ -36,9 +41,14 @@ export function useRichTextEditor({
   editable = true,
   mentionNames,
   channelNames,
+  onSubmit,
+  isAutocompleteOpen,
 }: RichTextEditorOptions) {
   const onUpdateRef = React.useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+
+  const onSubmitRef = React.useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
 
   const placeholderRef = React.useRef(placeholder);
   placeholderRef.current = placeholder;
@@ -144,6 +154,24 @@ export function useRichTextEditor({
               ArrowDown: ({ editor: ed }) => {
                 // Empty last list item + Down → exit list to paragraph below.
                 return exitListIfEmptyLast(ed);
+              },
+            };
+          },
+        }),
+        // Plain Enter → submit the message. This runs inside ProseMirror's
+        // keymap pipeline so it fires *before* the default splitBlock command,
+        // preventing the phantom paragraph-split that caused \n\n in messages.
+        Extension.create({
+          name: "submitOnEnter",
+          addKeyboardShortcuts() {
+            return {
+              Enter: () => {
+                // Let autocomplete dropdowns consume Enter first.
+                if (isAutocompleteOpen?.current) return false;
+                // No submit callback → fall through to default behaviour.
+                if (!onSubmitRef.current) return false;
+                onSubmitRef.current();
+                return true; // prevents splitBlock
               },
             };
           },
