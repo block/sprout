@@ -38,7 +38,6 @@ use crate::queue::{
     PromptProfileLookup,
 };
 use crate::relay::{ChannelInfo, RestClient};
-use crate::reply_context::ReplyContextStore;
 
 // ── FlushBatch Clone note ─────────────────────────────────────────────────────
 // FlushBatch and BatchEvent derive Clone (added in queue.rs) so we can store
@@ -189,8 +188,6 @@ pub struct PromptContext {
     pub max_turns_per_session: u32,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
-    /// Deterministic per-channel reply context for MCP sends in the current channel scope.
-    pub reply_context: ReplyContextStore,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -429,28 +426,6 @@ async fn create_session_and_apply_model(
     }
 
     Ok(resp.session_id)
-}
-
-fn install_reply_context(ctx: &PromptContext, batch: Option<&FlushBatch>) {
-    let Some(batch) = batch else {
-        return;
-    };
-
-    let parent_event_id = batch
-        .events
-        .last()
-        .map(|event| crate::queue::parse_thread_tags(&event.event))
-        .and_then(|thread_tags| thread_tags.parent_event_id);
-
-    if let Err(err) = ctx
-        .reply_context
-        .set_channel_parent(batch.channel_id, parent_event_id.as_deref())
-    {
-        tracing::warn!(
-            channel = %batch.channel_id,
-            "failed to persist reply context for channel scope: {err}"
-        );
-    }
 }
 
 /// Send the appropriate ACP model-switch request with a timeout.
@@ -870,10 +845,6 @@ pub async fn run_prompt_task(
         return;
     };
 
-    // Publish the current thread level for this channel so later MCP sends
-    // keep the same branch until a newer batch overwrites the scope.
-    install_reply_context(&ctx, batch.as_ref());
-
     // 💬 — fire-and-forget so the prompt fires immediately.
     // The guard's cleanup (spawned on drop) removes 💬 after the turn completes.
     // A brief race where 💬 appears slightly after the agent starts is acceptable.
@@ -1215,9 +1186,8 @@ async fn fetch_conversation_context(
     // because /api/channels/{id}/messages excludes thread replies.
     let last_event = batch.events.last()?;
     let tags = crate::queue::parse_thread_tags(&last_event.event);
-    if let Some(context_event_id) = conversation_context_anchor_event_id(&tags) {
-        return fetch_thread_context(batch.channel_id, context_event_id, limit, &ctx.rest_client)
-            .await;
+    if let Some(root_id) = tags.root_event_id {
+        return fetch_thread_context(batch.channel_id, &root_id, limit, &ctx.rest_client).await;
     }
 
     // DM non-reply: fetch recent conversation history.
@@ -1226,13 +1196,6 @@ async fn fetch_conversation_context(
     }
 
     None
-}
-
-fn conversation_context_anchor_event_id(thread_tags: &crate::queue::ThreadTags) -> Option<&str> {
-    thread_tags
-        .parent_event_id
-        .as_deref()
-        .or(thread_tags.root_event_id.as_deref())
 }
 
 /// Normalize AND validate a pubkey for the batch profile API request.
@@ -1344,26 +1307,26 @@ async fn fetch_prompt_profile_lookup(
 /// Fetch thread context via REST: `GET /api/channels/{id}/threads/{event_id}?limit=N`
 async fn fetch_thread_context(
     channel_id: Uuid,
-    context_event_id: &str,
+    root_event_id: &str,
     limit: u32,
     rest: &RestClient,
 ) -> Option<ConversationContext> {
     // Defense-in-depth: validate hex before interpolating into URL path.
     // Nostr event IDs are 32-byte SHA-256 hashes = 64 hex chars.
-    if context_event_id.is_empty()
-        || context_event_id.len() != 64
-        || !context_event_id.chars().all(|c| c.is_ascii_hexdigit())
+    if root_event_id.is_empty()
+        || root_event_id.len() != 64
+        || !root_event_id.chars().all(|c| c.is_ascii_hexdigit())
     {
         tracing::warn!(
             channel_id = %channel_id,
-            "invalid context_event_id (expected 64 hex chars) — skipping thread context fetch"
+            "invalid root_event_id (expected 64 hex chars) — skipping thread context fetch"
         );
         return None;
     }
 
     let path = format!(
         "/api/channels/{}/threads/{}?limit={}",
-        channel_id, context_event_id, limit
+        channel_id, root_event_id, limit
     );
 
     fetch_with_retry(|| async {
@@ -1372,7 +1335,7 @@ async fn fetch_thread_context(
             Ok(Err(e)) => {
                 tracing::warn!(
                     channel_id = %channel_id,
-                    event_id = context_event_id,
+                    root = root_event_id,
                     "thread context fetch failed: {e} — will retry"
                 );
                 None
@@ -1380,7 +1343,7 @@ async fn fetch_thread_context(
             Err(_) => {
                 tracing::warn!(
                     channel_id = %channel_id,
-                    event_id = context_event_id,
+                    root = root_event_id,
                     "thread context fetch timed out — will retry"
                 );
                 None
@@ -1822,10 +1785,6 @@ mod tests {
     use super::*;
     use nostr::{EventBuilder, Keys, Kind, Tag};
     use serde_json::json;
-    use std::collections::HashMap;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     // ── parse_thread_response tests ──────────────────────────────────────────
 
@@ -2103,135 +2062,6 @@ mod tests {
         expected.sort();
 
         assert_eq!(pubkeys, expected);
-    }
-
-    #[test]
-    fn test_conversation_context_anchor_event_id_prefers_parent_for_nested_scope() {
-        let root = "a".repeat(64);
-        let parent = "b".repeat(64);
-
-        let nested = crate::queue::ThreadTags {
-            root_event_id: Some(root.clone()),
-            parent_event_id: Some(parent.clone()),
-            mentioned_pubkeys: vec![],
-        };
-        assert_eq!(
-            conversation_context_anchor_event_id(&nested),
-            Some(parent.as_str())
-        );
-
-        let direct = crate::queue::ThreadTags {
-            root_event_id: Some(root.clone()),
-            parent_event_id: Some(root.clone()),
-            mentioned_pubkeys: vec![],
-        };
-        assert_eq!(
-            conversation_context_anchor_event_id(&direct),
-            Some(root.as_str())
-        );
-
-        let root_only = crate::queue::ThreadTags {
-            root_event_id: Some(root.clone()),
-            parent_event_id: None,
-            mentioned_pubkeys: vec![],
-        };
-        assert_eq!(
-            conversation_context_anchor_event_id(&root_only),
-            Some(root.as_str())
-        );
-    }
-
-    fn temp_reply_context_path(name: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should be monotonic enough for tests")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "sprout-acp-pool-{name}-{}-{nanos}.json",
-            std::process::id()
-        ))
-    }
-
-    fn make_prompt_context(reply_context: ReplyContextStore) -> PromptContext {
-        PromptContext {
-            mcp_servers: vec![],
-            initial_message: None,
-            idle_timeout: Duration::from_secs(1),
-            max_turn_duration: Duration::from_secs(1),
-            dedup_mode: DedupMode::Queue,
-            system_prompt: None,
-            heartbeat_prompt: None,
-            cwd: ".".into(),
-            rest_client: RestClient {
-                http: reqwest::Client::new(),
-                base_url: "http://localhost".into(),
-                api_token: None,
-                keys: Keys::generate(),
-            },
-            channel_info: HashMap::new(),
-            context_message_limit: 0,
-            max_turns_per_session: 0,
-            permission_mode: PermissionMode::Default,
-            reply_context,
-        }
-    }
-
-    fn make_batch_with_tags(channel_id: Uuid, tags: Vec<Tag>) -> FlushBatch {
-        let event = EventBuilder::new(Kind::Custom(9), "hello", tags)
-            .sign_with_keys(&Keys::generate())
-            .expect("event should sign");
-        FlushBatch {
-            channel_id,
-            events: vec![crate::queue::BatchEvent {
-                event,
-                prompt_tag: "@Solo".into(),
-                received_at: Instant::now(),
-            }],
-            cancelled_events: vec![],
-        }
-    }
-
-    #[test]
-    fn test_install_reply_context_persists_until_next_batch_overwrites_it() {
-        let path = temp_reply_context_path("reply-context-persist");
-        let store = ReplyContextStore::new(path.clone());
-        let ctx = make_prompt_context(store);
-        let channel_id = Uuid::new_v4();
-        let channel_key = channel_id.to_string();
-        let channel_tag = Tag::parse(&["h", &channel_key]).expect("channel tag");
-        let root_id = "a".repeat(64);
-        let parent_id = "b".repeat(64);
-
-        let threaded_batch = make_batch_with_tags(
-            channel_id,
-            vec![
-                channel_tag.clone(),
-                Tag::parse(&["e", &root_id, "", "root"]).expect("root tag"),
-                Tag::parse(&["e", &parent_id, "", "reply"]).expect("reply tag"),
-            ],
-        );
-        install_reply_context(&ctx, Some(&threaded_batch));
-
-        let raw = fs::read_to_string(&path).expect("reply context file should exist");
-        let persisted: serde_json::Value =
-            serde_json::from_str(&raw).expect("reply context json should parse");
-        assert_eq!(
-            persisted[&channel_key]["parent_event_id"].as_str(),
-            Some(parent_id.as_str())
-        );
-
-        let root_batch = make_batch_with_tags(channel_id, vec![channel_tag]);
-        install_reply_context(&ctx, Some(&root_batch));
-
-        let raw = fs::read_to_string(&path).expect("reply context file should still exist");
-        let persisted: serde_json::Value =
-            serde_json::from_str(&raw).expect("reply context json should parse");
-        assert!(
-            persisted[&channel_key]["parent_event_id"].is_null(),
-            "next batch should overwrite the channel scope with explicit top-level context"
-        );
-
-        let _ = fs::remove_file(path);
     }
 
     #[test]
