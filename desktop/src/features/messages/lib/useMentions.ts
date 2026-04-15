@@ -221,8 +221,12 @@ export function useMentions(channelId: string | null) {
 
       const hasMention = (name: string): boolean => {
         const escaped = escapeRegExp(name);
+        // Match @Name preceded by start-of-string, whitespace, or markdown
+        // bold/italic markers (*, **, ***, _, __, ___) — pasting a mention
+        // from the chat area can wrap it in bold/italic marks via TipTap's
+        // Bold parseHTML rule (font-weight >= 500 → bold).
         const pattern = new RegExp(
-          `(?:^|\\s)@${escaped}(?=[\\s,;.!?:)\\]}]|$)`,
+          `(?:^|\\s|[*_]{1,3})@${escaped}(?=[\\s,;.!?:)\\]}*_]|$)`,
           "i",
         );
         return pattern.test(text);

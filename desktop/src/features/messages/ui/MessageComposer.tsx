@@ -431,17 +431,53 @@ export function MessageComposer({
       editorProps: {
         ...richText.editor.options.editorProps,
         handlePaste: (_view, event) => {
+          // --- Media paste ---
           const items = Array.from(event.clipboardData?.items ?? []);
           const mediaItem = items.find((item) =>
             ALLOWED_MEDIA_TYPES.includes(item.type),
           );
-          if (!mediaItem) return false;
-
-          const file = mediaItem.getAsFile();
-          if (file) {
-            void uploadFileRef.current(file);
+          if (mediaItem) {
+            const file = mediaItem.getAsFile();
+            if (file) {
+              void uploadFileRef.current(file);
+            }
+            return true;
           }
-          return true;
+
+          // --- Mention / channel-link normalization ---
+          // When copying from the chat area the browser puts styled HTML
+          // on the clipboard. TipTap's DOMParser doesn't understand our
+          // custom `data-mention` / `data-channel-link` spans, so the
+          // pasted text can arrive with stale formatting and without the
+          // `@` / `#` prefix.  Detect this case, flatten the HTML to
+          // plain text, and let TipTap re-parse it as markdown.
+          const html = event.clipboardData?.getData("text/html");
+          if (
+            html &&
+            (html.includes("data-mention") ||
+              html.includes("data-channel-link"))
+          ) {
+            const doc = new DOMParser().parseFromString(html, "text/html");
+            // Replace mention / channel-link elements with their text
+            for (const el of Array.from(
+              doc.querySelectorAll("[data-mention], [data-channel-link]"),
+            )) {
+              const text = doc.createTextNode(el.textContent ?? "");
+              el.replaceWith(text);
+            }
+            const cleanText = doc.body.textContent ?? "";
+            event.preventDefault();
+            _view.dispatch(
+              _view.state.tr.insertText(
+                cleanText,
+                _view.state.selection.from,
+                _view.state.selection.to,
+              ),
+            );
+            return true;
+          }
+
+          return false;
         },
       },
     });

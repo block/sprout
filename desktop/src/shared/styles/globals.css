@@ -104,6 +104,7 @@
   background: hsl(var(--primary) / 0.15);
   padding: 0.125rem 0.375rem;
   color: hsl(var(--primary));
+  font-weight: 600;
 }
 
 @layer base {
