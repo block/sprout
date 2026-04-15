@@ -155,6 +155,34 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
 
     // ── Step 4: join room ─────────────────────────────────────────────────────
     let room = state.audio_rooms.get_or_create(channel_id);
+
+    // Re-check archived status after obtaining the room. This closes the
+    // cross-boundary race: a joiner that passed ensure_membership before
+    // the last peer archived the channel could get a fresh room via
+    // get_or_create (the old room was already cleaned up). This DB check
+    // catches that case. The room-level ended flag (checked inside add_peer)
+    // handles the same-room case.
+    match state.db.get_channel(channel_id).await {
+        Ok(ch) if ch.archived_at.is_some() => {
+            debug!(channel_id = %channel_id, "channel archived before room join");
+            let _ = ws_send
+                .send(WsMessage::Text(
+                    serde_json::json!({"type":"error","message":"huddle has ended"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            state.audio_rooms.cleanup_if_empty(channel_id);
+            return;
+        }
+        Err(e) => {
+            warn!(channel_id = %channel_id, "pre-join channel check failed (fail-closed): {e}");
+            state.audio_rooms.cleanup_if_empty(channel_id);
+            return;
+        }
+        Ok(_) => {} // Channel exists and is not archived — proceed.
+    }
+
     let (peer_id, peer_index, audio_rx, peer_ctrl_rx) = match room.add_peer(pubkey_hex.clone()) {
         Some(v) => v,
         None => {
@@ -247,7 +275,14 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let _ = heartbeat_task.await;
     let _ = forward_task.await;
 
-    room.remove_peer(peer_id);
+    // Atomic remove + end check: remove_peer_and_check_ended holds the
+    // AdmissionGuard lock across index recycling AND the is_empty + ended=true
+    // check. This is the SAME lock that add_peer holds across its ended check
+    // + insert. So they are mutually exclusive — no concurrent add_peer can
+    // succeed between the removal and the ended flag being set.
+    let (_, should_auto_end) = room
+        .remove_peer_and_check_ended(peer_id)
+        .unwrap_or((peer_index, false));
 
     let left_msg = serde_json::json!({
         "type": "left",
@@ -266,7 +301,30 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     )
     .await;
 
-    state.audio_rooms.cleanup_if_empty(channel_id);
+    if should_auto_end {
+        info!(channel_id = %channel_id, "audio room empty — auto-ending huddle");
+
+        match state.db.archive_channel(channel_id).await {
+            Err(e) => {
+                warn!(channel_id = %channel_id, "auto-archive failed, huddle stays alive: {e}");
+                room.clear_ended();
+            }
+            Ok(()) => {
+                state.audio_rooms.cleanup_if_empty(channel_id);
+
+                emit_participant_event(
+                    &state,
+                    Kind::Custom(48103),
+                    channel_id,
+                    parent_id_for_event,
+                    &pubkey_hex,
+                )
+                .await;
+            }
+        }
+    } else {
+        state.audio_rooms.cleanup_if_empty(channel_id);
+    }
 
     info!(
         channel_id = %channel_id,
@@ -438,6 +496,18 @@ async fn ensure_membership(
     pubkey_bytes: &[u8],
     parent_channel_id: Option<Uuid>,
 ) -> Result<(), String> {
+    // Load channel first — reject archived channels before any membership check.
+    // This ensures auto-ended huddles can't be rejoined by existing members.
+    let channel = state
+        .db
+        .get_channel(channel_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    if channel.archived_at.is_some() {
+        return Err("channel is archived".into());
+    }
+
     // Fast path: already a member.
     let is_member = state
         .db
@@ -448,13 +518,6 @@ async fn ensure_membership(
     if is_member {
         return Ok(());
     }
-
-    // Check if the channel is open (no membership required).
-    let channel = state
-        .db
-        .get_channel(channel_id)
-        .await
-        .map_err(|e| format!("db error: {e}"))?;
 
     if channel.visibility == "open" {
         return Ok(());

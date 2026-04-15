@@ -47,27 +47,25 @@ const CTRL_CHANNEL_CAPACITY: usize = 32;
 /// is reasonable. The 255 index space is the hard limit; this is the soft one.
 const MAX_PEERS_PER_ROOM: usize = 25;
 
-/// A single audio room for one channel.
-pub struct Room {
-    /// Channel UUID this room belongs to.
-    pub channel_id: Uuid,
-    /// Connected peers keyed by peer UUID.
-    pub peers: DashMap<Uuid, AudioPeer>,
-    /// Recycled peer indices (returned on leave) + next fresh index.
-    index_pool: std::sync::Mutex<IndexPool>,
-}
-
-/// Simple index allocator: hands out 0–254, recycles on remove.
-struct IndexPool {
+/// Peer index allocator + room lifecycle gate.
+///
+/// The `ended` flag and peer admission are synchronized under the same mutex.
+/// `add_peer` holds this lock across the ended check, index allocation, and
+/// peer insert — so `mark_ended` (which also acquires this lock) is mutually
+/// exclusive with peer admission. This closes the race between the last
+/// peer's cleanup path and a concurrent joiner.
+struct AdmissionGuard {
     next_fresh: u8,
     free: Vec<u8>,
+    ended: bool,
 }
 
-impl IndexPool {
+impl AdmissionGuard {
     fn new() -> Self {
         Self {
             next_fresh: 0,
             free: Vec::new(),
+            ended: false,
         }
     }
 
@@ -88,18 +86,51 @@ impl IndexPool {
     }
 }
 
+/// A single audio room for one channel.
+pub struct Room {
+    /// Channel UUID this room belongs to.
+    pub channel_id: Uuid,
+    /// Connected peers keyed by peer UUID.
+    pub peers: DashMap<Uuid, AudioPeer>,
+    /// Admission gate: index allocator + ended flag under one lock.
+    guard: std::sync::Mutex<AdmissionGuard>,
+}
+
 impl Room {
     /// Create an empty room for the given channel.
     pub fn new(channel_id: Uuid) -> Self {
         Self {
             channel_id,
             peers: DashMap::new(),
-            index_pool: std::sync::Mutex::new(IndexPool::new()),
+            guard: std::sync::Mutex::new(AdmissionGuard::new()),
+        }
+    }
+
+    /// Mark the room as ended. After this returns, no new `add_peer` can
+    /// succeed — they'll see `ended == true` under the same lock.
+    /// Returns `true` if the room is empty (safe to archive + emit 48103).
+    /// Returns `false` if a peer snuck in before we acquired the lock.
+    pub fn mark_ended(&self) -> bool {
+        if let Ok(mut g) = self.guard.lock() {
+            g.ended = true;
+            self.peers.is_empty()
+        } else {
+            false
+        }
+    }
+
+    /// Undo `mark_ended` — used when archive needs to be rolled back.
+    pub fn clear_ended(&self) {
+        if let Ok(mut g) = self.guard.lock() {
+            g.ended = false;
         }
     }
 
     /// Add a peer. Returns `(peer_id, peer_index, audio_rx, ctrl_rx)`, or
-    /// `None` if the room has hit the peer cap or exhausted the 0–254 index space.
+    /// `None` if the room has ended, hit the peer cap, or exhausted the index space.
+    ///
+    /// The ended check, index allocation, and peer insert all happen under
+    /// the admission guard lock — mutually exclusive with `mark_ended`.
     pub fn add_peer(
         &self,
         pubkey: String,
@@ -107,8 +138,15 @@ impl Room {
         if self.peers.len() >= MAX_PEERS_PER_ROOM {
             return None;
         }
+        // Hold the guard across ended check + index alloc + peer insert.
+        // This makes add_peer mutually exclusive with mark_ended — the lock
+        // is the single synchronization point that closes the race.
+        let mut g = self.guard.lock().ok()?;
+        if g.ended {
+            return None;
+        }
+        let peer_index = g.alloc()?;
         let peer_id = Uuid::new_v4();
-        let peer_index = self.index_pool.lock().ok()?.alloc()?;
         let (audio_tx, audio_rx) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
         let (ctrl_tx, ctrl_rx) = mpsc::channel(CTRL_CHANNEL_CAPACITY);
         self.peers.insert(
@@ -120,16 +158,42 @@ impl Room {
                 peer_index,
             },
         );
+        drop(g); // Release lock after insert.
         Some((peer_id, peer_index, audio_rx, ctrl_rx))
     }
 
     /// Remove a peer and recycle its index.
     pub fn remove_peer(&self, peer_id: Uuid) {
         if let Some((_, peer)) = self.peers.remove(&peer_id) {
-            if let Ok(mut pool) = self.index_pool.lock() {
-                pool.release(peer.peer_index);
+            if let Ok(mut g) = self.guard.lock() {
+                g.release(peer.peer_index);
             }
         }
+    }
+
+    /// Remove a peer AND atomically check if the room should end.
+    /// If the room is now empty, sets `ended = true` under the same lock
+    /// acquisition that recycles the index — no window for a concurrent
+    /// `add_peer` to sneak in between removal and the ended flag.
+    /// Returns `(peer_index, should_auto_end)`.
+    pub fn remove_peer_and_check_ended(&self, peer_id: Uuid) -> Option<(u8, bool)> {
+        let (_, peer) = self.peers.remove(&peer_id)?;
+        let peer_index = peer.peer_index;
+        let should_end = if let Ok(mut g) = self.guard.lock() {
+            g.release(peer_index);
+            // Only the first task to see empty + !ended wins the auto-end.
+            // This prevents duplicate archive/48103 when two peers disconnect
+            // simultaneously and both see is_empty() == true.
+            if !g.ended && self.peers.is_empty() {
+                g.ended = true;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        Some((peer_index, should_end))
     }
 
     /// Fan-out a binary frame to all peers except the sender.
@@ -211,9 +275,11 @@ impl AudioRoomManager {
             .clone()
     }
 
-    /// Remove the room if it has no peers.
-    pub fn cleanup_if_empty(&self, channel_id: Uuid) {
-        self.rooms.remove_if(&channel_id, |_, room| room.is_empty());
+    /// Remove the room if it has no peers. Returns `true` if the room was removed.
+    pub fn cleanup_if_empty(&self, channel_id: Uuid) -> bool {
+        self.rooms
+            .remove_if(&channel_id, |_, room| room.is_empty())
+            .is_some()
     }
 }
 
