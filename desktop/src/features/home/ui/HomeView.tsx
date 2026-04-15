@@ -1,11 +1,11 @@
 import * as React from "react";
-import { AtSign, CircleAlert, RefreshCcw } from "lucide-react";
+import { Activity, AtSign, Bot, CircleAlert, RefreshCcw } from "lucide-react";
 
 import { useRelayAgentsQuery } from "@/features/agents/hooks";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useContactListQuery, useTimelineQuery } from "@/features/pulse/hooks";
-import type { HomeFeedResponse } from "@/shared/api/types";
+import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -19,7 +19,12 @@ const RecentNotesSection = React.lazy(async () => {
   return { default: module.RecentNotesSection };
 });
 
-type FeedFilter = "all" | "mention" | "needs_action";
+type FeedFilter =
+  | "all"
+  | "mention"
+  | "needs_action"
+  | "activity"
+  | "agent_activity";
 
 function HomeLoadingState() {
   return (
@@ -46,6 +51,8 @@ const FILTER_OPTIONS: { value: FeedFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "mention", label: "Mentions" },
   { value: "needs_action", label: "Needs Action" },
+  { value: "activity", label: "Activity" },
+  { value: "agent_activity", label: "Agent Updates" },
 ];
 
 type HomeViewProps = {
@@ -54,7 +61,7 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
-  onOpenChannel: (channelId: string) => void;
+  onOpenFeedItem: (item: FeedItem) => void;
   onOpenPulse: () => void;
   onRefresh: () => void;
 };
@@ -65,7 +72,7 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
-  onOpenChannel,
+  onOpenFeedItem,
   onOpenPulse,
   onRefresh,
 }: HomeViewProps) {
@@ -105,7 +112,12 @@ export function HomeView({
   );
 
   const feedItems = feed
-    ? [...feed.feed.mentions, ...feed.feed.needsAction]
+    ? [
+        ...feed.feed.mentions,
+        ...feed.feed.needsAction,
+        ...(feed.feed.activity ?? []),
+        ...(feed.feed.agentActivity ?? []),
+      ]
     : [];
   const feedProfilesQuery = useUsersBatchQuery(
     feedItems.map((item) => item.pubkey),
@@ -142,6 +154,8 @@ export function HomeView({
 
   const showMentions = filter === "all" || filter === "mention";
   const showNeedsAction = filter === "all" || filter === "needs_action";
+  const showActivity = filter === "all" || filter === "activity";
+  const showAgentActivity = filter === "all" || filter === "agent_activity";
   const singleColumn = filter !== "all";
 
   return (
@@ -186,7 +200,7 @@ export function HomeView({
                 icon={AtSign}
                 items={feed.feed.mentions}
                 onMarkDone={markDone}
-                onOpenChannel={onOpenChannel}
+                onOpenItem={onOpenFeedItem}
                 onUndoDone={undoDone}
                 showDoneAction={false}
                 title="Mentions"
@@ -203,10 +217,44 @@ export function HomeView({
                 icon={CircleAlert}
                 items={feed.feed.needsAction}
                 onMarkDone={markDone}
-                onOpenChannel={onOpenChannel}
+                onOpenItem={onOpenFeedItem}
                 onUndoDone={undoDone}
                 showDoneAction={true}
                 title="Needs Action"
+              />
+            ) : null}
+            {showActivity ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="Recent channel messages and forum posts will show up here."
+                emptyTitle="No channel activity yet"
+                icon={Activity}
+                items={feed.feed.activity ?? []}
+                onMarkDone={markDone}
+                onOpenItem={onOpenFeedItem}
+                onUndoDone={undoDone}
+                showDoneAction={false}
+                title="Channel Activity"
+              />
+            ) : null}
+            {showAgentActivity ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="Agent job requests, progress, and results will appear here."
+                emptyTitle="No agent updates yet"
+                icon={Bot}
+                items={feed.feed.agentActivity ?? []}
+                onMarkDone={markDone}
+                onOpenItem={onOpenFeedItem}
+                onUndoDone={undoDone}
+                showDoneAction={false}
+                title="Agent Updates"
               />
             ) : null}
           </div>
