@@ -110,6 +110,9 @@ class TimelineMessage {
   final bool edited;
   final SystemEvent? systemEvent;
 
+  /// Pubkeys mentioned in this message (from p-tags).
+  final List<String> mentionPubkeys;
+
   const TimelineMessage({
     required this.id,
     required this.pubkey,
@@ -118,6 +121,7 @@ class TimelineMessage {
     this.isSystem = false,
     this.edited = false,
     this.systemEvent,
+    this.mentionPubkeys = const [],
   });
 }
 
@@ -185,6 +189,10 @@ List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
         event.kind == EventKind.streamMessageV2 ||
         event.kind == EventKind.streamMessageDiff) {
       final edit = edits[event.id];
+      final mentions = <String>[
+        for (final tag in event.tags)
+          if (tag.length >= 2 && tag[0] == 'p') tag[1],
+      ];
       result.add(
         TimelineMessage(
           id: event.id,
@@ -192,6 +200,7 @@ List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
           createdAt: event.createdAt,
           content: edit?.content ?? event.content,
           edited: edit != null,
+          mentionPubkeys: mentions,
         ),
       );
     }

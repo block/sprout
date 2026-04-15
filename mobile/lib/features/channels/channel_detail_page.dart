@@ -10,6 +10,8 @@ import '../profile/user_profile.dart';
 import 'channel.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
+import 'channels_provider.dart';
+import 'message_content.dart';
 import 'send_message_provider.dart';
 import 'timeline_message.dart';
 
@@ -241,6 +243,24 @@ class _MessageBubble extends ConsumerWidget {
         ref.read(userCacheProvider.notifier).get(message.pubkey.toLowerCase());
     final displayName = profile?.label ?? _shortPubkey(message.pubkey);
 
+    // Build mention names map from event p-tags.
+    final mentionNames = <String, String>{};
+    for (final pk in message.mentionPubkeys) {
+      final p = userCache[pk.toLowerCase()];
+      if (p?.displayName != null) {
+        mentionNames[pk.toLowerCase()] = p!.displayName!;
+      }
+    }
+
+    // Build channel names map for #channel links.
+    final channelsAsync = ref.watch(channelsProvider);
+    final channelNamesMap = <String, String>{};
+    channelsAsync.whenData((channels) {
+      for (final ch in channels) {
+        channelNamesMap[ch.name.toLowerCase()] = ch.id;
+      }
+    });
+
     return Padding(
       padding: EdgeInsets.only(top: showAuthor ? Grid.xxs : Grid.quarter),
       child: Row(
@@ -287,11 +307,10 @@ class _MessageBubble extends ConsumerWidget {
                       ],
                     ),
                   ),
-                Text(
-                  message.content,
-                  style: context.textTheme.bodyMedium?.copyWith(
-                    color: context.colors.onSurface,
-                  ),
+                MessageContent(
+                  content: message.content,
+                  mentionNames: mentionNames,
+                  channelNames: channelNamesMap,
                 ),
               ],
             ),

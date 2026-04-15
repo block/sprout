@@ -8,6 +8,7 @@ import 'package:sprout_mobile/features/channels/channel.dart';
 import 'package:sprout_mobile/features/channels/channel_detail_page.dart';
 import 'package:sprout_mobile/features/channels/channel_messages_provider.dart';
 import 'package:sprout_mobile/features/channels/channel_typing_provider.dart';
+import 'package:sprout_mobile/features/channels/channels_provider.dart';
 import 'package:sprout_mobile/features/profile/user_cache_provider.dart';
 import 'package:sprout_mobile/features/profile/user_profile.dart';
 import 'package:sprout_mobile/shared/relay/relay.dart';
@@ -118,6 +119,7 @@ Widget _buildTestable({
         _channelId,
       ).overrideWith(() => _FakeTypingNotifier(typing)),
       userCacheProvider.overrideWith(() => _FakeUserCacheNotifier(users)),
+      channelsProvider.overrideWith(() => _FakeChannelsNotifier()),
       // Stub the relay client provider so preloadMembers doesn't crash.
       relayClientProvider.overrideWithValue(
         RelayClient(baseUrl: 'http://localhost:3000'),
@@ -128,6 +130,17 @@ Widget _buildTestable({
       home: ChannelDetailPage(channel: channel ?? _testChannel),
     ),
   );
+}
+
+/// Finder that searches for text within RichText spans. [find.text] only
+/// matches the top-level text property; this also searches nested TextSpans.
+Finder findRichText(String text) {
+  return find.byWidgetPredicate((widget) {
+    if (widget is RichText) {
+      return widget.text.toPlainText().contains(text);
+    }
+    return false;
+  }, description: 'RichText containing "$text"');
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +186,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Hello world!'), findsOneWidget);
-      expect(find.text('Hey Alice!'), findsOneWidget);
+      expect(findRichText('Hello world!'), findsOneWidget);
+      expect(findRichText('Hey Alice!'), findsOneWidget);
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Bob'), findsOneWidget);
     });
@@ -207,8 +220,8 @@ void main() {
 
       // Author name should appear only once (grouped).
       expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('First message'), findsOneWidget);
-      expect(find.text('Second message'), findsOneWidget);
+      expect(findRichText('First message'), findsOneWidget);
+      expect(findRichText('Second message'), findsOneWidget);
     });
 
     testWidgets('shows author again after 5min gap', (tester) async {
@@ -254,7 +267,7 @@ void main() {
       await tester.pumpWidget(_buildTestable(messages: messages));
       await tester.pumpAndSettle();
 
-      expect(find.text('Hi'), findsOneWidget);
+      expect(findRichText('Hi'), findsOneWidget);
       // Should show first 8 chars of pubkey + ellipsis
       expect(find.text('abcdef12…'), findsOneWidget);
     });
@@ -489,7 +502,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Only the text message should render, unknown system event is skipped.
-      expect(find.text('Hello'), findsOneWidget);
+      expect(findRichText('Hello'), findsOneWidget);
       // No system message row rendered for unknown type.
       expect(find.byIcon(LucideIcons.arrowLeftRight), findsNothing);
     });
@@ -524,8 +537,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Keep this'), findsOneWidget);
-      expect(find.text('Delete this'), findsNothing);
+      expect(findRichText('Keep this'), findsOneWidget);
+      expect(findRichText('Delete this'), findsNothing);
     });
 
     testWidgets('deletion of multiple messages', (tester) async {
@@ -539,9 +552,9 @@ void main() {
       await tester.pumpWidget(_buildTestable(messages: messages));
       await tester.pumpAndSettle();
 
-      expect(find.text('One'), findsNothing);
-      expect(find.text('Two'), findsOneWidget);
-      expect(find.text('Three'), findsNothing);
+      expect(findRichText('One'), findsNothing);
+      expect(findRichText('Two'), findsOneWidget);
+      expect(findRichText('Three'), findsNothing);
     });
   });
 
@@ -574,8 +587,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Edited text'), findsOneWidget);
-      expect(find.text('Original text'), findsNothing);
+      expect(findRichText('Edited text'), findsOneWidget);
+      expect(findRichText('Original text'), findsNothing);
       expect(find.text('(edited)'), findsOneWidget);
     });
 
@@ -596,9 +609,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('V3'), findsOneWidget);
-      expect(find.text('V1'), findsNothing);
-      expect(find.text('V2'), findsNothing);
+      expect(findRichText('V3'), findsOneWidget);
+      expect(findRichText('V1'), findsNothing);
+      expect(findRichText('V2'), findsNothing);
     });
   });
 
@@ -740,6 +753,7 @@ void main() {
               _channelId,
             ).overrideWith(() => _FakeTypingNotifier([])),
             userCacheProvider.overrideWith(() => _FakeUserCacheNotifier({})),
+            channelsProvider.overrideWith(() => _FakeChannelsNotifier()),
             relayClientProvider.overrideWithValue(
               RelayClient(baseUrl: 'http://localhost:3000'),
             ),
@@ -797,9 +811,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Alice created this channel'), findsOneWidget);
-      expect(find.text('Welcome everyone!'), findsOneWidget);
+      expect(findRichText('Welcome everyone!'), findsOneWidget);
       expect(find.text('Bob joined the channel'), findsOneWidget);
-      expect(find.text('Thanks for the invite!'), findsOneWidget);
+      expect(findRichText('Thanks for the invite!'), findsOneWidget);
     });
   });
 }
@@ -841,4 +855,9 @@ class _FakeUserCacheNotifier extends UserCacheNotifier {
 
   @override
   UserProfile? get(String pubkey) => _users[pubkey.toLowerCase()];
+}
+
+class _FakeChannelsNotifier extends ChannelsNotifier {
+  @override
+  Future<List<Channel>> build() async => [];
 }
