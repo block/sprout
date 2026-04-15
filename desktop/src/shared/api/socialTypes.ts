@@ -14,3 +14,22 @@ export type UserNotesResponse = {
   notes: UserNote[];
   nextCursor: UserNotesCursor | null;
 };
+
+export type PublishNoteResult = {
+  eventId: string;
+  accepted: boolean;
+  message: string;
+};
+
+export type ContactEntry = {
+  pubkey: string;
+  relayUrl?: string;
+  petname?: string;
+};
+
+export type ContactListResponse = {
+  id: string;
+  pubkey: string;
+  createdAt: number;
+  contacts: ContactEntry[];
+};

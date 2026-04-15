@@ -42,3 +42,6 @@ base64 = "0.22"
 
 # SHA-256 — NIP-98 payload hash tag
 sha2 = "0.11"
+
+# Persona pack parsing, validation, and resolution
+sprout-persona = { path = "../sprout-persona" }

@@ -349,6 +349,15 @@ pub struct CliArgs {
     /// Owner pubkey is always implicitly included.
     #[arg(long, env = "SPROUT_ACP_RESPOND_TO_ALLOWLIST", value_delimiter = ',')]
     pub respond_to_allowlist: Option<Vec<String>>,
+
+    /// Path to a persona pack directory. Used with --persona-name to configure
+    /// the agent from a .persona.md pack instead of CLI flags.
+    #[arg(long, env = "SPROUT_ACP_PERSONA_PACK")]
+    pub persona_pack: Option<PathBuf>,
+
+    /// Name of the persona within the pack to use. Required when --persona-pack is set.
+    #[arg(long, env = "SPROUT_ACP_PERSONA_NAME")]
+    pub persona_name: Option<String>,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -400,6 +409,9 @@ pub struct Config {
     pub respond_to: RespondTo,
     /// Validated allowlist of pubkey hex strings (used when respond_to == Allowlist).
     pub respond_to_allowlist: HashSet<String>,
+    /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL).
+    /// Populated from persona pack resolution. Empty when no pack is configured.
+    pub persona_env_vars: Vec<(String, String)>,
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
@@ -507,7 +519,7 @@ impl Config {
             .replace_range(.., &"0".repeat(args.private_key.len()));
         args.private_key.clear();
 
-        let system_prompt = if let Some(text) = args.system_prompt {
+        let mut system_prompt = if let Some(text) = args.system_prompt {
             Some(text)
         } else if let Some(ref path) = args.system_prompt_file {
             Some(std::fs::read_to_string(path)?)
@@ -642,6 +654,54 @@ impl Config {
             HashSet::new()
         };
 
+        // ── Persona pack resolution ──────────────────────────────────────────
+        //
+        // Precedence: CLI/env args > persona values > built-in defaults.
+        // Persona fills in what's missing. Explicit flags always win.
+        let (persona_system_prompt, persona_model, persona_env_vars) =
+            match (&args.persona_pack, &args.persona_name) {
+                (Some(pack_dir), Some(name)) => {
+                    let pack = sprout_persona::resolve::resolve_pack(pack_dir).map_err(|e| {
+                        ConfigError::ConfigFile(format!(
+                            "failed to resolve pack {}: {e}",
+                            pack_dir.display()
+                        ))
+                    })?;
+                    let persona = pack
+                        .personas
+                        .into_iter()
+                        .find(|p| p.name == *name)
+                        .ok_or_else(|| {
+                            ConfigError::ConfigFile(format!(
+                                "persona '{name}' not found in pack {}",
+                                pack_dir.display()
+                            ))
+                        })?;
+                    (
+                        Some(persona.system_prompt),
+                        persona.model,
+                        persona.goose_env_vars,
+                    )
+                }
+                (Some(_), None) => {
+                    return Err(ConfigError::ConfigFile(
+                        "--persona-pack requires --persona-name".into(),
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(ConfigError::ConfigFile(
+                        "--persona-name requires --persona-pack".into(),
+                    ));
+                }
+                (None, None) => (None, None, vec![]),
+            };
+
+        // Apply persona defaults: CLI/env wins, persona fills gaps.
+        if system_prompt.is_none() {
+            system_prompt = persona_system_prompt;
+        }
+        let model = args.model.or(persona_model);
+
         // ── Multiple-event-handling validation ──────────────────────────────
         if matches!(
             args.multiple_event_handling,
@@ -682,10 +742,11 @@ impl Config {
             max_turns_per_session: args.max_turns_per_session,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
-            model: args.model,
+            model,
             permission_mode: args.permission_mode,
             respond_to: args.respond_to,
             respond_to_allowlist,
+            persona_env_vars,
         };
 
         Ok(config)
@@ -1045,6 +1106,7 @@ mod tests {
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
+            persona_env_vars: vec![],
         }
     }
 

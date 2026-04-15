@@ -410,6 +410,13 @@ export type UpdateManagedAgentInput = {
   model?: string | null;
   systemPrompt?: string | null;
   mcpToolsets?: string | null;
+  parallelism?: number;
+  turnTimeoutSeconds?: number;
+  relayUrl?: string;
+  acpCommand?: string;
+  agentCommand?: string;
+  agentArgs?: string[];
+  mcpCommand?: string;
 };
 export type AgentPersona = {
   id: string;
@@ -423,6 +430,8 @@ export type AgentPersona = {
   namePool: string[];
   isBuiltIn: boolean;
   isActive: boolean;
+  /** Pack ID if this persona was imported from a persona pack. Pack personas are non-editable. */
+  sourcePack?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -481,6 +490,9 @@ export type {
   TriggerWorkflowResponse,
 } from "@/shared/api/workflowTypes";
 export type {
+  ContactEntry,
+  ContactListResponse,
+  PublishNoteResult,
   UserNote,
   UserNotesCursor,
   UserNotesResponse,

@@ -40,6 +40,37 @@ async function ensureTimelineScrollable(
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
 }
 
+async function openSearchDialogWithShortcut(
+  page: import("@playwright/test").Page,
+) {
+  const searchDialog = page.getByTestId("search-dialog");
+  const openSearchButton = page.getByTestId("open-search");
+  const shortcut = process.platform === "darwin" ? "Meta+K" : "Control+K";
+
+  await expect(openSearchButton).toBeVisible();
+  await expect
+    .poll(async () => {
+      if (await searchDialog.isVisible()) {
+        return true;
+      }
+
+      await page.keyboard.press(shortcut);
+      return searchDialog.isVisible();
+    })
+    .toBe(true);
+}
+
+async function openSearchDialogWithButton(
+  page: import("@playwright/test").Page,
+) {
+  const searchDialog = page.getByTestId("search-dialog");
+  const openSearchButton = page.getByTestId("open-search");
+
+  await expect(openSearchButton).toBeVisible();
+  await openSearchButton.click();
+  await expect(searchDialog).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -57,15 +88,12 @@ test("creates a new mocked stream", async ({ page }) => {
   const channelName = `release-notes-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("Release coordination");
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -141,11 +169,7 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
 }) => {
   await page.goto("/");
 
-  await expect(page.getByTestId("open-search")).toBeVisible();
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithShortcut(page);
 
   await page.getByTestId("search-input").fill("shipped");
   await expect(page.getByTestId("search-results")).toContainText(
@@ -171,10 +195,7 @@ test("search results use your resolved profile label instead of You", async ({
 }) => {
   await page.goto("/");
 
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithButton(page);
 
   await page.getByTestId("search-input").fill("welcome");
   const results = page.getByTestId("search-results");
@@ -189,10 +210,7 @@ test("opens accessible unjoined channels from search in read-only mode", async (
 }) => {
   await page.goto("/");
 
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithButton(page);
 
   await page.getByTestId("search-input").fill("critique");
   const results = page.getByTestId("search-results");
@@ -206,7 +224,10 @@ test("opens accessible unjoined channels from search in read-only mode", async (
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Design critique notes for the browse flow.",
   );
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
 
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
@@ -267,19 +288,21 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("send-message")).toContainText("Send");
   const initialInputHeight = await input.evaluate(
-    (element) => (element as HTMLTextAreaElement).clientHeight,
+    (element) => (element as HTMLElement).clientHeight,
   );
   expect(initialInputHeight).toBeLessThan(40);
   await input.fill(firstLine);
   for (const line of restOfLines) {
-    await input.press("Control+Enter");
-    await input.type(line);
+    await input.press("Shift+Enter");
+    await input.pressSequentially(line);
   }
-  await expect(input).toHaveValue([firstLine, ...restOfLines].join("\n"));
+  for (const line of [firstLine, ...restOfLines]) {
+    await expect(input).toContainText(line);
+  }
   const expandedInputHeight = await input.evaluate(
-    (element) => (element as HTMLTextAreaElement).clientHeight,
+    (element) => (element as HTMLElement).clientHeight,
   );
-  expect(expandedInputHeight).toBeLessThanOrEqual(100);
+  expect(expandedInputHeight).toBeLessThanOrEqual(130);
   await expect(page.getByTestId("message-timeline")).not.toContainText(
     firstLine,
   );
@@ -314,12 +337,12 @@ test("does not shift the timeline when the composer grows", async ({
   const before = await getTimelineMetrics(page);
 
   await input.fill("Composer growth line one");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line two");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line three");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line four");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line two");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line three");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line four");
 
   await page.waitForTimeout(1200);
 

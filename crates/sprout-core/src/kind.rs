@@ -219,6 +219,8 @@ pub const KIND_HUDDLE_ENDED: u32 = 48103;
 pub const KIND_HUDDLE_TRACK_PUBLISHED: u32 = 48104;
 /// A huddle recording became available.
 pub const KIND_HUDDLE_RECORDING_AVAILABLE: u32 = 48105;
+/// Huddle channel guidelines/rules document.
+pub const KIND_HUDDLE_GUIDELINES: u32 = 48106;
 
 // Media (49000–49999)
 /// Internal kind for media upload audit entries. Not a relay event kind.

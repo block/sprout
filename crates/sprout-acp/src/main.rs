@@ -21,7 +21,7 @@ use nostr::ToBech32;
 use pool::{
     AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource, SessionState,
 };
-use queue::{EventQueue, QueuedEvent};
+use queue::{EventQueue, QueuedEvent, ThreadTags};
 use relay::HarnessRelay;
 use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
@@ -541,7 +541,12 @@ async fn tokio_main() -> Result<()> {
         // This matches the run_models pattern and prevents zombie leaks on
         // init timeout (the cancelled future would drop the AcpClient via
         // Drop which is best-effort only).
-        let spawn_result = AcpClient::spawn(&config.agent_command, &config.agent_args).await;
+        let spawn_result = AcpClient::spawn(
+            &config.agent_command,
+            &config.agent_args,
+            &config.persona_env_vars,
+        )
+        .await;
         match spawn_result {
             Ok(mut acp) => {
                 match tokio::time::timeout(Duration::from_secs(60), acp.initialize()).await {
@@ -800,7 +805,7 @@ async fn tokio_main() -> Result<()> {
     } else {
         None
     };
-    let mut typing_channels: HashSet<Uuid> = HashSet::new();
+    let mut typing_channels: HashMap<Uuid, ThreadTags> = HashMap::new();
     let mut presence_task: Option<tokio::task::JoinHandle<()>> = None;
 
     // ── Step 6d: Maintenance (slot refill + queue compaction) ────────────────
@@ -912,9 +917,10 @@ async fn tokio_main() -> Result<()> {
                 tracing::info!(agent = idx, "slot refill: spawning background respawn");
                 let cmd = config.agent_command.clone();
                 let args = config.agent_args.clone();
+                let env = config.persona_env_vars.clone();
                 let guard = RespawnGuard::new(idx, respawn_tx.clone());
                 respawn_tasks.spawn(async move {
-                    let result = spawn_and_init(&cmd, &args).await;
+                    let result = spawn_and_init(&cmd, &args, &env).await;
                     guard.send(result);
                 });
             }
@@ -925,7 +931,9 @@ async fn tokio_main() -> Result<()> {
             // called on relay events or pool results, neither of which
             // arrive when the channel is silent.
             if queue.has_flushable_work() {
-                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                    typing_channels.insert(channel_id, thread_tags);
+                }
             }
         }
 
@@ -956,7 +964,9 @@ async fn tokio_main() -> Result<()> {
         // this, batches requeued during crash recovery sit idle until the
         // next relay event arrives — which can be minutes on quiet channels.
         if respawn_collected {
-            typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+            for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                typing_channels.insert(channel_id, thread_tags);
+            }
         }
 
         // Borrow result_rx and join_set simultaneously via split-borrow helper.
@@ -1266,7 +1276,11 @@ async fn tokio_main() -> Result<()> {
                                 }
                             }
                             // ── End mode gate ────────────────────────────────
-                            typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                            for (channel_id, thread_tags) in
+                                dispatch_pending(&mut pool, &mut queue, &ctx)
+                            {
+                                typing_channels.insert(channel_id, thread_tags);
+                            }
                         }
                         None => {
                             tracing::warn!("relay event stream ended — requesting reconnect");
@@ -1288,7 +1302,11 @@ async fn tokio_main() -> Result<()> {
                     let _ = result_rx;
                     if queue.has_flushable_work() {
                         tracing::debug!("heartbeat_skipped_events");
-                        typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                        for (channel_id, thread_tags) in
+                            dispatch_pending(&mut pool, &mut queue, &ctx)
+                        {
+                            typing_channels.insert(channel_id, thread_tags);
+                        }
                     } else if pool.any_idle() {
                         dispatch_heartbeat(&mut pool, &ctx, &mut heartbeat_in_flight);
                     } else {
@@ -1325,8 +1343,12 @@ async fn tokio_main() -> Result<()> {
                     // Use try_publish (non-blocking) for typing indicators —
                     // they're ephemeral and must not block the main loop during
                     // relay reconnection (#35).
-                    for &ch in &typing_channels {
-                        if let Ok(event) = relay.build_typing_event(ch) {
+                    for (&ch, thread_tags) in &typing_channels {
+                        if let Ok(event) = relay.build_typing_event(
+                            ch,
+                            thread_tags.root_event_id.as_deref(),
+                            thread_tags.parent_event_id.as_deref(),
+                        ) {
                             if let Err(e) = relay.try_publish_event(event) {
                                 tracing::debug!("typing indicator dropped for {ch}: {e}");
                             }
@@ -1375,7 +1397,9 @@ async fn tokio_main() -> Result<()> {
                 {
                     break;
                 }
-                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                    typing_channels.insert(channel_id, thread_tags);
+                }
             }
             Some(PoolEvent::Panic(join_error)) => {
                 tracing::error!("agent task panicked: {join_error}");
@@ -1395,7 +1419,9 @@ async fn tokio_main() -> Result<()> {
                     tracing::error!("all agents dead — exiting");
                     break;
                 }
-                typing_channels.extend(dispatch_pending(&mut pool, &mut queue, &ctx));
+                for (channel_id, thread_tags) in dispatch_pending(&mut pool, &mut queue, &ctx) {
+                    typing_channels.insert(channel_id, thread_tags);
+                }
             }
             None => {} // relay/heartbeat/shutdown branches handled inline above
         }
@@ -1534,7 +1560,7 @@ fn dispatch_pending(
     pool: &mut AgentPool,
     queue: &mut EventQueue,
     ctx: &Arc<PromptContext>,
-) -> Vec<Uuid> {
+) -> Vec<(Uuid, ThreadTags)> {
     let mut dispatched_channels = Vec::new();
     loop {
         let batch = match queue.flush_next() {
@@ -1542,6 +1568,11 @@ fn dispatch_pending(
             None => break,
         };
         let channel_id = batch.channel_id;
+        let typing_scope = batch
+            .events
+            .last()
+            .map(|event| queue::parse_thread_tags(&event.event))
+            .unwrap_or_default();
         let affinity_hit = pool.has_session_for(channel_id);
         let agent = match pool.try_claim(Some(channel_id)) {
             Some(a) => a,
@@ -1589,7 +1620,7 @@ fn dispatch_pending(
                 cancel_tx: Some(cancel_tx),
             },
         );
-        dispatched_channels.push(channel_id);
+        dispatched_channels.push((channel_id, typing_scope));
     }
     tracing::debug!(
         dispatched = dispatched_channels.len(),
@@ -1773,7 +1804,7 @@ fn recover_panicked_agent(
     join_error: tokio::task::JoinError,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
-    typing_channels: &mut HashSet<Uuid>,
+    typing_channels: &mut HashMap<Uuid, ThreadTags>,
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
@@ -1837,12 +1868,13 @@ fn recover_panicked_agent(
     slot.respawn_in_flight = true;
     let cmd = config.agent_command.clone();
     let args = config.agent_args.clone();
+    let env = config.persona_env_vars.clone();
     let guard = RespawnGuard::new(i, respawn_tx.clone());
     respawn_tasks.spawn(async move {
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        let result = spawn_and_init(&cmd, &args).await;
+        let result = spawn_and_init(&cmd, &args, &env).await;
         guard.send(result);
     });
 }
@@ -1856,7 +1888,7 @@ fn drain_ready_join_results(
     config: &Config,
     heartbeat_in_flight: &mut bool,
     removed_channels: &HashSet<Uuid>,
-    typing_channels: &mut HashSet<Uuid>,
+    typing_channels: &mut HashMap<Uuid, ThreadTags>,
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
@@ -1983,6 +2015,7 @@ fn spawn_respawn_task(
     // Spawn the actual work (shutdown + sleep + spawn + init) off the main loop.
     let cmd = config.agent_command.clone();
     let args = config.agent_args.clone();
+    let env = config.persona_env_vars.clone();
     let guard = RespawnGuard::new(index, respawn_tx.clone());
     respawn_tasks.spawn(async move {
         // Shutdown old agent (reap child, prevent zombie).
@@ -1994,7 +2027,7 @@ fn spawn_respawn_task(
             tokio::time::sleep(delay).await;
         }
 
-        let result = spawn_and_init(&cmd, &args).await;
+        let result = spawn_and_init(&cmd, &args, &env).await;
         guard.send(result);
     });
 
@@ -2007,8 +2040,12 @@ fn spawn_respawn_task(
 ///
 /// Takes owned args so it can run in a background `tokio::spawn` task without
 /// borrowing `Config`. All respawn/refill paths use this.
-async fn spawn_and_init(command: &str, args: &[String]) -> Result<AcpClient> {
-    let mut acp = AcpClient::spawn(command, args)
+async fn spawn_and_init(
+    command: &str,
+    args: &[String],
+    extra_env: &[(String, String)],
+) -> Result<AcpClient> {
+    let mut acp = AcpClient::spawn(command, args, extra_env)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
 
@@ -2045,7 +2082,8 @@ async fn run_models(args: ModelsArgs) -> Result<()> {
         .to_string();
 
     // Spawn outside the timeout so we always own the child for cleanup.
-    let mut client = match AcpClient::spawn(&args.agent_command, &agent_args).await {
+    // `models` subcommand doesn't use persona packs — no extra env.
+    let mut client = match AcpClient::spawn(&args.agent_command, &agent_args, &[]).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: failed to spawn agent: {e}");

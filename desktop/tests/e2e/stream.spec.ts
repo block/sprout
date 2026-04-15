@@ -43,7 +43,7 @@ async function ensureTimelineScrollable(
 
     const message = `${prefix} seed ${index}`;
 
-    await expect(input).toBeEnabled();
+    await expect(input).toHaveAttribute("contenteditable", "true");
     await input.fill(message);
     await sendButton.click();
     await expectTimelineToContain(receiverPage, message);
@@ -58,12 +58,9 @@ async function createAndJoinSharedStream(
   memberPage: Page,
   channelName: string,
 ) {
-  await ownerPage.getByRole("button", { name: "Create a stream" }).click();
-  await ownerPage.getByTestId("create-stream-name").fill(channelName);
-  await ownerPage
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await ownerPage.getByRole("button", { name: "Create a channel" }).click();
+  await ownerPage.getByTestId("create-channel-name").fill(channelName);
+  await ownerPage.getByTestId("create-channel-submit").click();
   await expect(ownerPage.getByTestId("stream-list")).toContainText(channelName);
   await expect(ownerPage.getByTestId("chat-title")).toHaveText(channelName);
 
@@ -128,15 +125,12 @@ test("creates a relay-backed stream", async ({ page }) => {
 
   await installRelayBridge(page, "tyler");
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("Created from Playwright");
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);

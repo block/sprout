@@ -370,3 +370,23 @@ where
 fn default_true() -> bool {
     true
 }
+
+// ── Social / Contact list ───────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactListResponse {
+    pub id: String,
+    pub pubkey: String,
+    pub created_at: i64,
+    pub tags: Vec<Vec<String>>,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactEntry {
+    pub pubkey: String,
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub petname: Option<String>,
+}

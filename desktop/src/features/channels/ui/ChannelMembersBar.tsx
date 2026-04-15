@@ -1,6 +1,8 @@
 import { Plus, Settings2, Users, Zap } from "lucide-react";
 import * as React from "react";
-
+import { useQueryClient } from "@tanstack/react-query";
+import { useHuddle } from "@/features/huddle";
+import { HuddleIndicator } from "@/features/huddle/components/HuddleIndicator";
 import {
   useAcpProvidersQuery,
   useBackendProvidersQuery,
@@ -38,6 +40,8 @@ export function ChannelMembersBar({
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [isCreateWorkflowOpen, setIsCreateWorkflowOpen] = React.useState(false);
+  const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
+  const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channel.id);
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
@@ -185,6 +189,21 @@ export function ChannelMembersBar({
         >
           <Zap className="h-4 w-4" />
         </Button>
+
+        <HuddleIndicator
+          channelId={channel.id}
+          onStart={async () => {
+            try {
+              await startHuddle(channel.id, []);
+              // Refetch channels so the new ephemeral channel appears in the sidebar immediately
+              // (default poll interval is 60s — too slow for huddle UX).
+              void queryClient.invalidateQueries({ queryKey: ["channels"] });
+            } catch (e) {
+              console.error("Failed to start huddle:", e);
+            }
+          }}
+          startDisabled={!canAddAgents || isStartingHuddle}
+        />
 
         <Button
           aria-label={`View channel members (${memberCount})`}

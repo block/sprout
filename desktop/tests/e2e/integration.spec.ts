@@ -12,15 +12,12 @@ async function createStream(
   channelName: string,
   description?: string,
 ) {
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   if (description !== undefined) {
-    await page.getByTestId("create-stream-description").fill(description);
+    await page.getByTestId("create-channel-description").fill(description);
   }
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -168,12 +165,9 @@ test("create channel and verify in sidebar", async ({ page }) => {
 
   await installRelayBridge(page, "tyler");
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -195,12 +189,9 @@ test("two users see the same channel", async ({
     await installRelayBridge(pageTwo, "alice");
 
     await pageOne.goto("/");
-    await pageOne.getByRole("button", { name: "Create a stream" }).click();
-    await pageOne.getByTestId("create-stream-name").fill(channelName);
-    await pageOne
-      .getByTestId("create-stream-form")
-      .getByRole("button", { name: "Create" })
-      .click();
+    await pageOne.getByRole("button", { name: "Create a channel" }).click();
+    await pageOne.getByTestId("create-channel-name").fill(channelName);
+    await pageOne.getByTestId("create-channel-submit").click();
     await expect(pageOne.getByTestId("stream-list")).toContainText(channelName);
 
     await pageTwo.goto("/");
@@ -428,21 +419,15 @@ test("multiple channels independent", async ({ page }) => {
   await page.goto("/");
 
   // Create channel A
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelA);
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelA);
+  await page.getByTestId("create-channel-submit").click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelA);
 
   // Create channel B
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelB);
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelB);
+  await page.getByTestId("create-channel-submit").click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelB);
 
   // Navigate to channel A and send a message
@@ -547,7 +532,10 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await closeChannelManagement(page);
 
   await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
   await expect(page.getByTestId("send-message")).toBeDisabled();
 
   await page.reload();
@@ -561,7 +549,10 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await page.getByTestId(`browse-channel-${channelName}`).click();
   await expect(page.getByTestId("channel-browser-dialog")).not.toBeVisible();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
 
   await openChannelManagement(page);
   await page.getByTestId("channel-management-unarchive").click();
@@ -569,5 +560,8 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await closeChannelManagement(page);
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
-  await expect(page.getByTestId("message-input")).toBeEnabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "true",
+  );
 });

@@ -451,6 +451,10 @@ export async function getIdentity(): Promise<Identity> {
   };
 }
 
+export async function getNsec(): Promise<string> {
+  return invokeTauri<string>("get_nsec");
+}
+
 export async function getProfile(): Promise<Profile> {
   const profile = await invokeTauri<RawProfile>("get_profile");
   return fromRawProfile(profile);
@@ -613,6 +617,14 @@ export async function removeChannelMember(
   pubkey: string,
 ): Promise<void> {
   await invokeTauri("remove_channel_member", { channelId, pubkey });
+}
+
+export async function changeChannelMemberRole(
+  channelId: string,
+  pubkey: string,
+  role: string,
+): Promise<void> {
+  await invokeTauri("change_channel_member_role", { channelId, pubkey, role });
 }
 
 export async function joinChannel(channelId: string): Promise<void> {
@@ -1046,13 +1058,22 @@ export async function getAgentModels(pubkey: string) {
   return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
 }
 
+type RawUpdateManagedAgentResponse = {
+  agent: RawManagedAgent;
+  profile_sync_error: string | null;
+};
+
 export async function updateManagedAgent(
   input: UpdateManagedAgentInput,
-): Promise<ManagedAgent> {
-  const response = await invokeTauri<RawManagedAgent>("update_managed_agent", {
-    input,
-  });
-  return fromRawManagedAgent(response);
+): Promise<{ agent: ManagedAgent; profileSyncError: string | null }> {
+  const response = await invokeTauri<RawUpdateManagedAgentResponse>(
+    "update_managed_agent",
+    { input },
+  );
+  return {
+    agent: fromRawManagedAgent(response.agent),
+    profileSyncError: response.profile_sync_error,
+  };
 }
 
 // ── Backend provider discovery ────────────────────────────────────────────────

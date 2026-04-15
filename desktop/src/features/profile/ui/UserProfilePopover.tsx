@@ -10,10 +10,15 @@ import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Markdown } from "@/shared/ui/markdown";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 
 type UserProfilePopoverProps = {
   children: React.ReactNode;
   pubkey: string;
+  /** When set to "bot", a BotIdenticon badge renders next to the display name. */
+  role?: string;
+  /** Value used to generate the BotIdenticon glyph (typically the author name). */
+  botIdenticonValue?: string;
 };
 
 function truncatePubkey(pubkey: string) {
@@ -27,11 +32,14 @@ function truncatePubkey(pubkey: string) {
 export function UserProfilePopover({
   children,
   pubkey,
+  role,
+  botIdenticonValue,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
+  const [showAllNotes, setShowAllNotes] = React.useState(false);
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
   const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
-    limit: 3,
+    limit: showAllNotes ? 20 : 3,
   });
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
@@ -63,9 +71,18 @@ export function UserProfilePopover({
             )}
 
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold">
-                {profile?.displayName ?? truncatePubkey(pubkey)}
-              </p>
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-semibold">
+                  {profile?.displayName ?? truncatePubkey(pubkey)}
+                </p>
+                {role === "bot" && botIdenticonValue ? (
+                  <BotIdenticon
+                    value={botIdenticonValue}
+                    size={20}
+                    className="shrink-0 rounded"
+                  />
+                ) : null}
+              </div>
               {profile?.nip05Handle ? (
                 <p className="truncate text-xs text-muted-foreground">
                   {profile.nip05Handle}
@@ -100,10 +117,23 @@ export function UserProfilePopover({
               className="border-t border-border/60 pt-3"
               data-testid="user-profile-notes"
             >
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Recent Notes
-              </p>
-              <div className="space-y-2">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Recent Notes
+                </p>
+                {notes.length >= 3 ? (
+                  <button
+                    className="text-[11px] text-primary hover:underline"
+                    onClick={() => setShowAllNotes(!showAllNotes)}
+                    type="button"
+                  >
+                    {showAllNotes ? "Show less" : "View all"}
+                  </button>
+                ) : null}
+              </div>
+              <div
+                className={`space-y-2 ${showAllNotes ? "max-h-64 overflow-y-auto" : ""}`}
+              >
                 {notes.map((note) => (
                   <article
                     className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"

@@ -19,11 +19,12 @@ import {
   type RelaySubscription,
   type RelaySubscriptionFilter,
 } from "@/shared/api/relayClientShared";
+import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 
-const RECONNECT_BASE_DELAY_MS = 1_000;
-const RECONNECT_MAX_DELAY_MS = 30_000;
-const RECONNECT_REPLAY_SKEW_SECS = 5;
-const EVENT_BATCH_MS = 16;
+const RECONNECT_BASE_DELAY_MS = 1_000,
+  RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_REPLAY_SKEW_SECS = 5,
+  EVENT_BATCH_MS = 16;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -135,7 +136,11 @@ export class RelayClient {
     );
   }
 
-  async sendTypingIndicator(channelId: string) {
+  async sendTypingIndicator(
+    channelId: string,
+    parentEventId?: string | null,
+    rootEventId?: string | null,
+  ) {
     // Bail when disconnected — not worth triggering a reconnect for ephemeral typing events.
     if (this.wsId === null) {
       return;
@@ -143,7 +148,11 @@ export class RelayClient {
     const event = await signRelayEvent({
       kind: KIND_TYPING_INDICATOR,
       content: "",
-      tags: [["h", channelId]],
+      tags: buildThreadReferenceTags(
+        channelId,
+        parentEventId ?? null,
+        rootEventId ?? null,
+      ),
     });
 
     // Fire-and-forget: no need to wait for relay acknowledgement.
@@ -155,6 +164,47 @@ export class RelayClient {
     onEvent: (event: RelayEvent) => void,
   ) {
     return this.subscribe(this.buildChannelFilter(channelId, 50), onEvent);
+  }
+
+  /**
+   * Subscribe to a channel starting from NOW — no history backfill.
+   * Used by huddle TTS where only live kind:9 messages should be spoken.
+   * The `since` filter ensures the relay never sends historical backlog.
+   * The high `limit` ensures reconnect replay can recover all missed events.
+   */
+  async subscribeToChannelLive(
+    channelId: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      {
+        kinds: [KIND_STREAM_MESSAGE],
+        "#h": [channelId],
+        limit: 1000,
+        since: Math.floor(Date.now() / 1_000),
+      },
+      onEvent,
+    );
+  }
+
+  /**
+   * Subscribe to huddle lifecycle events (kinds 48100–48103) for a channel.
+   * Used by HuddleIndicator to detect active huddles without being drowned
+   * out by regular channel messages in the generic subscription window.
+   * Includes both historical (last 10) and live events.
+   */
+  async subscribeToHuddleEvents(
+    channelId: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      {
+        kinds: [48100, 48101, 48102, 48103],
+        "#h": [channelId],
+        limit: 100,
+      },
+      onEvent,
+    );
   }
 
   async subscribeToTypingIndicators(

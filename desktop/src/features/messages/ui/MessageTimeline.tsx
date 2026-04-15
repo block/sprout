@@ -110,10 +110,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           onScroll={syncScrollState}
           ref={scrollContainerRef}
         >
-          <div
-            className="mx-auto flex w-full max-w-4xl flex-col gap-2"
-            ref={contentRef}
-          >
+          <div className="flex w-full flex-col gap-3 px-4" ref={contentRef}>
             <div ref={topSentinelRef} aria-hidden className="h-px" />
 
             {isFetchingOlder ? (

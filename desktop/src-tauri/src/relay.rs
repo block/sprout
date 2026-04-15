@@ -302,7 +302,7 @@ mod tests {
 // ── Signed-event submission ──────────────────────────────────────────────────
 
 /// Response from `POST /api/events`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 pub struct SubmitEventResponse {
     pub event_id: String,
     pub accepted: bool,

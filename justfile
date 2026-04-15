@@ -43,7 +43,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check mobile-check
 
 # Format all Rust code
 fmt:
@@ -105,7 +105,7 @@ desktop-e2e-integration:
     cd {{desktop_dir}} && pnpm test:e2e:integration
 
 # Run all checks suitable for CI / pre-push (no infra needed)
-ci: check test-unit desktop-build desktop-tauri-check
+ci: check test-unit desktop-build desktop-tauri-check mobile-test
 
 # ─── Test ─────────────────────────────────────────────────────────────────────
 
@@ -194,6 +194,22 @@ desktop-release-build version="" target="aarch64-apple-darwin" *args:
         just desktop-set-version "{{version}}"
     fi
     cd {{desktop_dir}} && pnpm exec tauri build --target {{target}} --config src-tauri/tauri.release.conf.json {{args}}
+
+# ─── Mobile ──────────────────────────────────────────────────────────────────
+
+mobile_dir := "mobile"
+
+# Install mobile Flutter dependencies
+mobile-install:
+    cd {{mobile_dir}} && flutter pub get
+
+# Run mobile lint and format checks
+mobile-check:
+    cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
+
+# Run mobile tests
+mobile-test:
+    cd {{mobile_dir}} && flutter test
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

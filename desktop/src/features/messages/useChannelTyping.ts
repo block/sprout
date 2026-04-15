@@ -1,6 +1,9 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
-import { getChannelIdFromTags } from "@/features/messages/lib/threading";
+import {
+  getChannelIdFromTags,
+  getThreadReference,
+} from "@/features/messages/lib/threading";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import {
@@ -9,7 +12,17 @@ import {
   KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
 
-type TypingEntry = { expiresAt: number; firstSeenAt: number };
+export type TypingIndicatorEntry = {
+  pubkey: string;
+  threadHeadId: string | null;
+};
+
+type TypingEntry = {
+  expiresAt: number;
+  firstSeenAt: number;
+  pubkey: string;
+  threadHeadId: string | null;
+};
 type TypingState = Record<string, TypingEntry>;
 
 const TYPING_INDICATOR_TTL_MS = 8_000;
@@ -43,6 +56,14 @@ function isTypingCompletionEvent(event: RelayEvent | null | undefined) {
   );
 }
 
+function getTypingScopeId(event: RelayEvent) {
+  return getThreadReference(event.tags).parentId ?? null;
+}
+
+function getTypingStateKey(pubkey: string, threadHeadId: string | null) {
+  return `${pubkey}:${threadHeadId ?? "channel"}`;
+}
+
 export function useChannelTyping(
   channel: Channel | null,
   currentPubkey?: string,
@@ -65,21 +86,23 @@ export function useChannelTyping(
     }
 
     const typingPubkey = event.pubkey.toLowerCase();
+    const threadHeadId = getTypingScopeId(event);
+    const typingKey = getTypingStateKey(typingPubkey, threadHeadId);
     if (normalizedCurrentPubkey && typingPubkey === normalizedCurrentPubkey) {
       return;
     }
 
     const suppressUntil =
-      typingSuppressUntilByPubkeyRef.current[typingPubkey] ?? 0;
+      typingSuppressUntilByPubkeyRef.current[typingKey] ?? 0;
     if (suppressUntil > Date.now()) {
       return;
     }
     if (suppressUntil > 0) {
-      delete typingSuppressUntilByPubkeyRef.current[typingPubkey];
+      delete typingSuppressUntilByPubkeyRef.current[typingKey];
     }
 
     const latestMessageCreatedAt =
-      latestMessageCreatedAtByPubkeyRef.current[typingPubkey] ?? 0;
+      latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0;
     if (event.created_at <= latestMessageCreatedAt) {
       return;
     }
@@ -87,12 +110,14 @@ export function useChannelTyping(
     const now = Date.now();
     setTypingByPubkey((current) => {
       const pruned = pruneTypingState(current, now);
-      const existing = pruned[typingPubkey];
+      const existing = pruned[typingKey];
       return {
         ...pruned,
-        [typingPubkey]: {
+        [typingKey]: {
           expiresAt: now + TYPING_INDICATOR_TTL_MS,
           firstSeenAt: existing?.firstSeenAt ?? now,
+          pubkey: typingPubkey,
+          threadHeadId,
         },
       };
     });
@@ -119,20 +144,22 @@ export function useChannelTyping(
     }
 
     const authorPubkey = latestMessageEvent.pubkey.toLowerCase();
-    latestMessageCreatedAtByPubkeyRef.current[authorPubkey] = Math.max(
-      latestMessageCreatedAtByPubkeyRef.current[authorPubkey] ?? 0,
+    const threadHeadId = getTypingScopeId(latestMessageEvent);
+    const typingKey = getTypingStateKey(authorPubkey, threadHeadId);
+    latestMessageCreatedAtByPubkeyRef.current[typingKey] = Math.max(
+      latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0,
       latestMessageEvent.created_at,
     );
-    typingSuppressUntilByPubkeyRef.current[authorPubkey] =
+    typingSuppressUntilByPubkeyRef.current[typingKey] =
       Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
     setTypingByPubkey((current) => {
       const next = pruneTypingState(current);
-      if (!(authorPubkey in next)) {
+      if (!(typingKey in next)) {
         return next;
       }
 
       const updated = { ...next };
-      delete updated[authorPubkey];
+      delete updated[typingKey];
       return updated;
     });
   }, [channelId, latestMessageEvent]);
@@ -193,9 +220,9 @@ export function useChannelTyping(
 
   return useMemo(
     () =>
-      Object.entries(typingByPubkey)
-        .sort((left, right) => left[1].firstSeenAt - right[1].firstSeenAt)
-        .map(([pubkey]) => pubkey),
+      Object.values(typingByPubkey)
+        .sort((left, right) => left.firstSeenAt - right.firstSeenAt)
+        .map(({ pubkey, threadHeadId }) => ({ pubkey, threadHeadId })),
     [typingByPubkey],
   );
 }

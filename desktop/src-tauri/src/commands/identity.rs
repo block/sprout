@@ -60,6 +60,14 @@ pub fn sign_event(
 }
 
 #[tauri::command]
+pub fn get_nsec(state: State<'_, AppState>) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|error| error.to_string())?;
+    keys.secret_key()
+        .to_bech32()
+        .map_err(|error| format!("encode nsec: {error}"))
+}
+
+#[tauri::command]
 pub fn create_auth_event(
     challenge: String,
     relay_url: String,

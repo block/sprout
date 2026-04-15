@@ -278,6 +278,7 @@ type RawRelayAgent = {
   name: string;
   agent_type: string;
   channels: string[];
+  channel_ids: string[];
   capabilities: string[];
   status: PresenceStatus;
 };
@@ -395,6 +396,9 @@ declare global {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
+    __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+      channelName: string;
+    }) => boolean;
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -616,6 +620,7 @@ function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
   return {
     ...agent,
     channels: [...agent.channels],
+    channel_ids: [...agent.channel_ids],
     capabilities: [...agent.capabilities],
   };
 }
@@ -1060,6 +1065,10 @@ let mockRelayAgents: RawRelayAgent[] = [
     name: "alice",
     agent_type: "goose",
     channels: ["general", "agents"],
+    channel_ids: [
+      "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+      "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    ],
     capabilities: ["search", "summaries", "workflows"],
     status: "online",
   },
@@ -1068,6 +1077,7 @@ let mockRelayAgents: RawRelayAgent[] = [
     name: "charlie",
     agent_type: "codex",
     channels: ["general"],
+    channel_ids: ["9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
     capabilities: ["code", "reviews"],
     status: "away",
   },
@@ -1328,17 +1338,36 @@ function syncMockRelayAgentsFromManagedAgents() {
       !mockManagedAgents.some((managed) => managed.pubkey === agent.pubkey),
   );
   const managedAgentsAsRelay: RawRelayAgent[] = mockManagedAgents.map(
-    (agent) => ({
-      pubkey: agent.pubkey,
-      name: agent.name,
-      agent_type: agent.agent_command,
-      channels: ["agents"],
-      capabilities: ["messages", "channels", "mcp"],
-      status: agent.status === "running" ? "online" : "offline",
-    }),
+    (agent) => {
+      const memberships = getManagedAgentRelayMembership(agent.pubkey);
+
+      return {
+        pubkey: agent.pubkey,
+        name: agent.name,
+        agent_type: agent.agent_command,
+        channels: memberships.channels,
+        channel_ids: memberships.channelIds,
+        capabilities: ["messages", "channels", "mcp"],
+        status:
+          agent.status === "running" || agent.status === "deployed"
+            ? "online"
+            : "offline",
+      };
+    },
   );
 
   mockRelayAgents = [...baseAgents, ...managedAgentsAsRelay];
+}
+
+function getManagedAgentRelayMembership(pubkey: string) {
+  const memberships = mockChannels.filter((channel) =>
+    channel.members.some((member) => member.pubkey === pubkey),
+  );
+
+  return {
+    channelIds: memberships.map((channel) => channel.id),
+    channels: memberships.map((channel) => channel.name),
+  };
 }
 
 function getConfig(): E2eConfig | undefined {
@@ -1595,6 +1624,21 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
       }
     }
   }
+}
+
+function hasMockLiveSubscription(channelId: string) {
+  for (const socket of mockSockets.values()) {
+    for (const subscribedChannelId of socket.subscriptions.values()) {
+      if (
+        subscribedChannelId === channelId ||
+        subscribedChannelId === GLOBAL_MOCK_SUBSCRIPTION
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function recordMockMessage(channelId: string, event: RelayEvent) {
@@ -2583,6 +2627,7 @@ async function handleAddChannelMembers(
 
     syncMockChannel(channel);
     touchMockChannel(channel);
+    syncMockRelayAgentsFromManagedAgents();
     return {
       added,
       errors,
@@ -2624,6 +2669,7 @@ async function handleRemoveChannelMember(
     );
     syncMockChannel(channel);
     touchMockChannel(channel);
+    syncMockRelayAgentsFromManagedAgents();
     return;
   }
 
@@ -3460,11 +3506,15 @@ async function handleGetManagedAgentLog(args: {
 async function handleUpdateManagedAgent(args: {
   input: {
     pubkey: string;
+    name?: string;
     model?: string | null;
     systemPrompt?: string | null;
   };
-}): Promise<RawManagedAgent> {
+}): Promise<{ agent: RawManagedAgent; profile_sync_error: string | null }> {
   const agent = getMockManagedAgent(args.input.pubkey);
+  if (args.input.name !== undefined) {
+    agent.name = args.input.name;
+  }
   if (args.input.model !== undefined) {
     agent.model = args.input.model;
   }
@@ -3472,7 +3522,7 @@ async function handleUpdateManagedAgent(args: {
     agent.system_prompt = args.input.systemPrompt;
   }
   agent.updated_at = new Date().toISOString();
-  return cloneManagedAgent(agent);
+  return { agent: cloneManagedAgent(agent), profile_sync_error: null };
 }
 
 async function handleSearchMessages(
@@ -3978,6 +4028,16 @@ export function maybeInstallE2eTauriMocks() {
 
     return emitMockTypingIndicator(channel.id, pubkey ?? CHARLIE_PUBKEY);
   };
+  window.__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__ = ({ channelName }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+
+    return hasMockLiveSubscription(channel.id);
+  };
   window.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
     const category = item.category === "mention" ? "mentions" : item.category;
     mockFeedOverrides[category].unshift(item);
@@ -4326,6 +4386,11 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return disconnectMockSocket((payload as { id: number }).id);
+      case "plugin:window|show":
+      case "plugin:window|unminimize":
+      case "plugin:window|set_focus":
+      case "plugin:window|set_badge_count":
+        return null;
       case "get_channel_workflows":
         return handleGetChannelWorkflows(
           payload as Parameters<typeof handleGetChannelWorkflows>[0],

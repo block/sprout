@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import {
   ChevronDown,
   ChevronRight,
@@ -5,6 +7,7 @@ import {
   Ellipsis,
   FileText,
   KeyRound,
+  Pencil,
   Play,
   Power,
   Square,
@@ -26,12 +29,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { EditAgentDialog } from "./EditAgentDialog";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ModelPicker } from "./ModelPicker";
 import { truncatePubkey } from "./agentUi";
 
 export function ManagedAgentRow({
   agent,
+  channelNames,
   isActionPending,
   isLogSelected,
   logContent,
@@ -48,6 +53,7 @@ export function ManagedAgentRow({
   onToggleStartOnAppLaunch,
 }: {
   agent: ManagedAgent;
+  channelNames: string[];
   isActionPending: boolean;
   isLogSelected: boolean;
   logContent: string | null;
@@ -66,9 +72,7 @@ export function ManagedAgentRow({
   const isActive = agent.status === "running" || agent.status === "deployed";
   const isLocal = agent.backend.type === "local";
   const runtimeSource =
-    agent.backend.type === "local"
-      ? `ACP ${agent.acpCommand}`
-      : `Provider ${agent.backend.id}`;
+    agent.backend.type === "provider" ? `Provider ${agent.backend.id}` : null;
   const personaLabel = agent.personaId
     ? (personaLabelsById[agent.personaId] ?? null)
     : null;
@@ -105,6 +109,7 @@ export function ManagedAgentRow({
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
               <AgentSummary
                 agent={agent}
+                channelNames={channelNames}
                 isExpandable
                 isLogSelected={isLogSelected}
                 personaLabel={personaLabel}
@@ -123,6 +128,7 @@ export function ManagedAgentRow({
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(120px,0.8fr)_minmax(0,1.1fr)] lg:gap-4">
               <AgentSummary
                 agent={agent}
+                channelNames={channelNames}
                 isExpandable={false}
                 isLogSelected={false}
                 personaLabel={personaLabel}
@@ -175,12 +181,14 @@ export function ManagedAgentRow({
 
 function AgentSummary({
   agent,
+  channelNames,
   isExpandable,
   isLogSelected,
   personaLabel,
   presenceStatus,
 }: {
   agent: ManagedAgent;
+  channelNames: string[];
   isExpandable: boolean;
   isLogSelected: boolean;
   personaLabel: string | null;
@@ -222,12 +230,19 @@ function AgentSummary({
             ) : (
               <span>Remote deployment</span>
             )}
-            {isExpandable ? (
-              <span>
-                {isLogSelected ? "Logs visible inline" : "Click to view logs"}
-              </span>
-            ) : null}
           </div>
+          {channelNames.length > 0 ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {channelNames.map((name) => (
+                <span
+                  className="inline-flex rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                  key={name}
+                >
+                  # {name}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -259,7 +274,7 @@ function RuntimeBlock({
   runtimeSource,
 }: {
   agent: ManagedAgent;
-  runtimeSource: string;
+  runtimeSource: string | null;
 }) {
   return (
     <div className="space-y-1 lg:pt-0.5">
@@ -269,10 +284,12 @@ function RuntimeBlock({
       <p className="truncate font-mono text-xs text-foreground">
         {agent.agentCommand}
       </p>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span>{runtimeSource}</span>
-        {agent.model ? <span>{agent.model}</span> : null}
-      </div>
+      {runtimeSource || agent.model ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {runtimeSource ? <span>{runtimeSource}</span> : null}
+          {agent.model ? <span>{agent.model}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -300,111 +317,128 @@ function AgentActionsMenu({
   onStop: (pubkey: string) => void;
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
 }) {
+  const [editOpen, setEditOpen] = React.useState(false);
+
   return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          type="button"
+    <>
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger asChild>
+          <button
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            type="button"
+          >
+            <Ellipsis className="h-4 w-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => event.preventDefault()}
         >
-          <Ellipsis className="h-4 w-4" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        onCloseAutoFocus={(event) => event.preventDefault()}
-      >
-        {agent.backend.type === "provider" ? (
-          <>
-            <DropdownMenuItem
-              disabled={isActionPending}
-              onClick={() => onStart(agent.pubkey)}
-            >
-              <Play className="h-4 w-4" />
-              {isActive ? "Redeploy" : "Deploy"}
-            </DropdownMenuItem>
+          {agent.backend.type === "provider" ? (
+            <>
+              <DropdownMenuItem
+                disabled={isActionPending}
+                onClick={() => onStart(agent.pubkey)}
+              >
+                <Play className="h-4 w-4" />
+                {isActive ? "Redeploy" : "Deploy"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={isActionPending}
+                onClick={() => onStop(agent.pubkey)}
+              >
+                <Square className="h-4 w-4" />
+                Shutdown
+              </DropdownMenuItem>
+            </>
+          ) : isActive ? (
             <DropdownMenuItem
               disabled={isActionPending}
               onClick={() => onStop(agent.pubkey)}
             >
               <Square className="h-4 w-4" />
-              Shutdown
+              Stop
             </DropdownMenuItem>
-          </>
-        ) : isActive ? (
+          ) : (
+            <DropdownMenuItem
+              disabled={isActionPending}
+              onClick={() => onStart(agent.pubkey)}
+            >
+              <Play className="h-4 w-4" />
+              Spawn
+            </DropdownMenuItem>
+          )}
+
+          {agent.backend.type !== "provider" ? (
+            <DropdownMenuItem onClick={() => setEditOpen(true)}>
+              <Pencil className="h-4 w-4" />
+              Edit
+            </DropdownMenuItem>
+          ) : null}
+
           <DropdownMenuItem
             disabled={isActionPending}
-            onClick={() => onStop(agent.pubkey)}
+            onClick={() => onAddToChannel(agent)}
           >
-            <Square className="h-4 w-4" />
-            Stop
+            <UserPlus className="h-4 w-4" />
+            Add to channel
           </DropdownMenuItem>
-        ) : (
+
           <DropdownMenuItem
             disabled={isActionPending}
-            onClick={() => onStart(agent.pubkey)}
+            onClick={() => onMintToken(agent.pubkey, agent.name)}
           >
-            <Play className="h-4 w-4" />
-            Spawn
+            <KeyRound className="h-4 w-4" />
+            Mint token
           </DropdownMenuItem>
-        )}
 
-        <DropdownMenuItem
-          disabled={isActionPending}
-          onClick={() => onAddToChannel(agent)}
-        >
-          <UserPlus className="h-4 w-4" />
-          Add to channel
-        </DropdownMenuItem>
-
-        <DropdownMenuItem
-          disabled={isActionPending}
-          onClick={() => onMintToken(agent.pubkey, agent.name)}
-        >
-          <KeyRound className="h-4 w-4" />
-          Mint token
-        </DropdownMenuItem>
-
-        <DropdownMenuItem
-          onClick={() => navigator.clipboard.writeText(agent.pubkey)}
-        >
-          <Clipboard className="h-4 w-4" />
-          Copy pubkey
-        </DropdownMenuItem>
-
-        {agent.backend.type === "local" ? (
-          <DropdownMenuItem onClick={() => onOpenLogs(agent.pubkey)}>
-            <FileText className="h-4 w-4" />
-            View logs
-          </DropdownMenuItem>
-        ) : null}
-
-        {agent.backend.type === "local" ? (
           <DropdownMenuItem
-            disabled={isActionPending}
-            onClick={() =>
-              onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
-            }
+            onClick={() => navigator.clipboard.writeText(agent.pubkey)}
           >
-            <Power className="h-4 w-4" />
-            {agent.startOnAppLaunch
-              ? "Disable auto-start"
-              : "Enable auto-start"}
+            <Clipboard className="h-4 w-4" />
+            Copy pubkey
           </DropdownMenuItem>
-        ) : null}
 
-        <DropdownMenuSeparator />
+          {agent.backend.type === "local" ? (
+            <DropdownMenuItem onClick={() => onOpenLogs(agent.pubkey)}>
+              <FileText className="h-4 w-4" />
+              View logs
+            </DropdownMenuItem>
+          ) : null}
 
-        <DropdownMenuItem
-          className="text-destructive focus:text-destructive"
-          disabled={isActionPending}
-          onClick={() => onDelete(agent.pubkey)}
-        >
-          <Trash2 className="h-4 w-4" />
-          Delete
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          {agent.backend.type === "local" ? (
+            <DropdownMenuItem
+              disabled={isActionPending}
+              onClick={() =>
+                onToggleStartOnAppLaunch(agent.pubkey, !agent.startOnAppLaunch)
+              }
+            >
+              <Power className="h-4 w-4" />
+              {agent.startOnAppLaunch
+                ? "Disable auto-start"
+                : "Enable auto-start"}
+            </DropdownMenuItem>
+          ) : null}
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            disabled={isActionPending}
+            onClick={() => onDelete(agent.pubkey)}
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <EditAgentDialog
+        agent={agent}
+        onOpenChange={setEditOpen}
+        open={editOpen}
+      />
+    </>
   );
 }
 

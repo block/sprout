@@ -389,6 +389,19 @@ export function useAddChannelMembersMutation(channelId: string | null) {
   });
 }
 
+export async function removeChannelMemberWithManagedAgentCleanup(
+  channelId: string,
+  pubkey: string,
+) {
+  await removeChannelMember(channelId, pubkey);
+
+  try {
+    await cleanupManagedAgentIfOrphaned(pubkey, channelId);
+  } catch (error) {
+    console.warn("Failed to clean up managed agent:", error);
+  }
+}
+
 export function useRemoveChannelMemberMutation(channelId: string | null) {
   const queryClient = useQueryClient();
 
@@ -398,13 +411,7 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      await removeChannelMember(channelId, pubkey);
-
-      try {
-        await cleanupManagedAgentIfOrphaned(pubkey, channelId);
-      } catch (error) {
-        console.warn("Failed to clean up managed agent:", error);
-      }
+      await removeChannelMemberWithManagedAgentCleanup(channelId, pubkey);
     },
     onSettled: async () => {
       await Promise.all([
