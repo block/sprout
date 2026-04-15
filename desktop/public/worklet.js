@@ -13,7 +13,7 @@
 class SttTapProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.buffer = new Float32Array(960);  // ~20ms at 48kHz
+    this.buffer = new Float32Array(960); // ~20ms at 48kHz
     this.offset = 0;
     this.transmitting = true; // default: open (VAD mode). PTT mode sets false on init.
 
