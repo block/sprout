@@ -117,7 +117,10 @@ test("loads the home feed from the relay", async ({ page }) => {
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Channel Activity" }),
-  ).toHaveCount(0);
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Agent Updates" }),
+  ).toBeVisible();
 });
 
 test("creates a relay-backed stream", async ({ page }) => {
