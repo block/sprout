@@ -15,6 +15,7 @@ members = [
     "crates/sprout-workflow",
     "crates/sprout-media",
     "crates/sprout-cli",
+    "crates/sprout-pairing-cli",
     "crates/sprout-sdk",
     "crates/sprout-persona",
 ]

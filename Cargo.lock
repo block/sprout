@@ -3724,6 +3724,7 @@ dependencies = [
  "chrono",
  "hex",
  "nostr",
+ "rand 0.10.0",
  "schemars",
  "serde",
  "serde_json",
@@ -3799,6 +3800,22 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "sprout-pairing-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "futures-util",
+ "hex",
+ "nostr",
+ "serde_json",
+ "sprout-core",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "url",
 ]
 
 [[package]]
