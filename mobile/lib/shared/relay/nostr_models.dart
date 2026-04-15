@@ -1,0 +1,138 @@
+import 'package:flutter/foundation.dart';
+
+/// Nostr event kind constants.
+///
+/// Keep in sync with `desktop/src/shared/constants/kinds.ts`.
+abstract final class EventKind {
+  static const deletion = 5;
+  static const reaction = 7;
+  static const streamMessage = 9;
+  static const typingIndicator = 20002;
+  static const auth = 22242;
+  static const streamMessageV2 = 40002;
+  static const streamMessageEdit = 40003;
+  static const streamMessageDiff = 40008;
+  static const systemMessage = 40099;
+  static const forumPost = 45001;
+  static const forumComment = 45003;
+
+  /// Event kinds that represent channel activity (messages, edits, reactions,
+  /// deletions, system events). Matches the desktop's `CHANNEL_EVENT_KINDS`.
+  static const channelEventKinds = [
+    deletion, // 5
+    reaction, // 7
+    streamMessage, // 9
+    40001, // legacy pre-migration stream messages
+    streamMessageEdit, // 40003
+    streamMessageDiff, // 40008
+    systemMessage, // 40099
+  ];
+}
+
+/// A Nostr event as defined by NIP-01.
+@immutable
+class NostrEvent {
+  final String id;
+  final String pubkey;
+  final int createdAt;
+  final int kind;
+  final List<List<String>> tags;
+  final String content;
+  final String sig;
+
+  const NostrEvent({
+    required this.id,
+    required this.pubkey,
+    required this.createdAt,
+    required this.kind,
+    required this.tags,
+    required this.content,
+    required this.sig,
+  });
+
+  factory NostrEvent.fromJson(Map<String, dynamic> json) {
+    return NostrEvent(
+      id: json['id'] as String,
+      pubkey: json['pubkey'] as String,
+      createdAt: json['created_at'] as int,
+      kind: json['kind'] as int,
+      tags: (json['tags'] as List<dynamic>)
+          .map((t) => (t as List<dynamic>).map((e) => e as String).toList())
+          .toList(),
+      content: json['content'] as String,
+      sig: json['sig'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'pubkey': pubkey,
+    'created_at': createdAt,
+    'kind': kind,
+    'tags': tags,
+    'content': content,
+    'sig': sig,
+  };
+
+  /// Get the first value for a given tag key.
+  String? getTagValue(String key) {
+    for (final tag in tags) {
+      if (tag.isNotEmpty && tag[0] == key && tag.length > 1) {
+        return tag[1];
+      }
+    }
+    return null;
+  }
+
+  /// The channel/group ID from the `h` tag (NIP-29).
+  String? get channelId => getTagValue('h');
+
+  /// The parent event ID from the `e` tag.
+  String? get parentEventId => getTagValue('e');
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || other is NostrEvent && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
+}
+
+/// A NIP-01 subscription filter.
+@immutable
+class NostrFilter {
+  final List<int> kinds;
+  final int limit;
+  final int? since;
+  final int? until;
+
+  /// Tag filters, e.g. `{'#h': ['channel-id']}`.
+  final Map<String, List<String>> tags;
+
+  const NostrFilter({
+    required this.kinds,
+    this.limit = 100,
+    this.since,
+    this.until,
+    this.tags = const {},
+  });
+
+  /// Return a copy with an updated `since` value.
+  NostrFilter copyWithSince(int since) => NostrFilter(
+    kinds: kinds,
+    limit: limit,
+    since: since,
+    until: until,
+    tags: tags,
+  );
+
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{'kinds': kinds, 'limit': limit};
+    if (since != null) json['since'] = since;
+    if (until != null) json['until'] = until;
+    for (final entry in tags.entries) {
+      json[entry.key] = entry.value;
+    }
+    return json;
+  }
+}

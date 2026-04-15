@@ -63,6 +63,19 @@ class RelayClient {
     return jsonDecode(response.body);
   }
 
+  /// POST [path] with a pre-encoded string body. Returns the raw response body.
+  Future<String> postRaw(String path, {required String body}) async {
+    final response = await _http.post(
+      _uri(path),
+      headers: _headers,
+      body: body,
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw RelayException(response.statusCode, response.body);
+    }
+    return response.body;
+  }
+
   void dispose() => _http.close();
 }
 

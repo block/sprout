@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../relay/relay.dart';
@@ -16,12 +15,6 @@ class AuthState {
 class AuthNotifier extends AsyncNotifier<AuthState> {
   @override
   Future<AuthState> build() async {
-    // If a token is provided via dart-define in debug mode, treat as
-    // pre-authenticated.
-    if (kDebugMode && Env.apiToken.isNotEmpty) {
-      return const AuthState(status: AuthStatus.authenticated);
-    }
-
     final storage = CredentialStorage();
     final creds = await storage.load();
     if (creds == null) {
@@ -39,6 +32,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
             baseUrl: creds.relayUrl,
             apiToken: creds.token,
             devPubkey: null,
+            nsec: creds.nsec,
           );
       return AuthState(status: AuthStatus.authenticated, credentials: creds);
     } on RelayException {
@@ -69,6 +63,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           baseUrl: creds.relayUrl,
           apiToken: creds.token,
           devPubkey: null,
+          nsec: creds.nsec,
         );
 
     state = AsyncData(

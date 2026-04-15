@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'features/home/home_page.dart';
 import 'features/pairing/pairing_page.dart';
 import 'shared/auth/auth.dart';
+import 'shared/relay/relay.dart';
 import 'shared/theme/theme.dart';
 
 class App extends HookConsumerWidget {
@@ -18,6 +19,13 @@ class App extends HookConsumerWidget {
 
     final lightScheme = applyAccent(lightColorScheme, accentIndex);
     final darkScheme = applyAccent(darkColorScheme, accentIndex);
+
+    // Eagerly initialize websocket session and lifecycle observer when
+    // authenticated. These providers connect and manage the websocket.
+    if (authState.value?.status == AuthStatus.authenticated) {
+      ref.watch(relaySessionProvider);
+      ref.watch(appLifecycleProvider);
+    }
 
     return MaterialApp(
       title: 'Sprout',

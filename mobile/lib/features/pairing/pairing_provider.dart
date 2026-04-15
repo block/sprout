@@ -109,6 +109,7 @@ class PairingNotifier extends Notifier<PairingState> {
       relayUrl: relayUrl,
       token: token,
       pubkey: decoded['pubkey'] as String?,
+      nsec: decoded['nsec'] as String?,
     );
   }
 
