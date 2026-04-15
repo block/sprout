@@ -80,10 +80,11 @@ class PresenceNotifier extends AsyncNotifier<String> {
     final client = ref.read(relayClientProvider);
     try {
       await client.post('/api/presence', body: {'status': status});
-      return status;
     } catch (_) {
-      return state.value ?? 'offline';
+      // Optimistically report the requested status even if the POST fails —
+      // the heartbeat will retry on the next tick.
     }
+    return status;
   }
 
   Future<String> _fetch() async {
