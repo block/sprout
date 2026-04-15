@@ -79,6 +79,8 @@ pub const EPHEMERAL_KIND_MAX: u32 = 29999;
 // Ephemeral events (20000–29999) — Redis pub/sub only, never stored.
 /// Ephemeral: user presence update (online/away/offline).
 pub const KIND_PRESENCE_UPDATE: u32 = 20001;
+/// NIP-AB: Device pairing event. Ephemeral — relay may discard after delivery.
+pub const KIND_PAIRING: u32 = 24134;
 /// Ephemeral: typing indicator for a channel.
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
 
@@ -254,6 +256,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_GROUP_ROLES,
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
+    KIND_PAIRING,
     KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
     KIND_STREAM_MESSAGE_EDIT,

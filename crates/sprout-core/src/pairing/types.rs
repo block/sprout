@@ -1,0 +1,182 @@
+//! NIP-AB pairing message types.
+//!
+//! All message types are serialized as JSON with a `"type"` discriminant field
+//! (kebab-case). These are the plaintext payloads that get NIP-44 encrypted
+//! before being placed in a [`crate::kind::KIND_PAIRING`] event.
+
+use serde::{Deserialize, Serialize};
+
+/// The set of messages exchanged during a NIP-AB device-pairing session.
+///
+/// Serialized with `"type"` as the tag field (kebab-case). Example:
+/// ```json
+/// {"type":"offer","session_id":"a1b2c3..."}
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum PairingMessage {
+    /// Initiator → Responder. Announces the session and its ID.
+    Offer {
+        /// Hex-encoded 32-byte session ID derived via HKDF from the session secret.
+        session_id: String,
+    },
+
+    /// Either party → other. Confirms the Short Authentication String matches.
+    SasConfirm {
+        /// Hex-encoded 32-byte transcript hash, binding all session parameters.
+        transcript_hash: String,
+    },
+
+    /// Initiator → Responder (or vice-versa). Delivers the actual secret payload.
+    Payload {
+        /// Discriminates the payload format so the receiver knows how to handle it.
+        payload_type: PayloadType,
+        /// The payload content (format depends on `payload_type`).
+        payload: String,
+    },
+
+    /// Sent by either party to signal successful session completion.
+    Complete {
+        /// `true` if the session completed successfully, `false` on partial failure.
+        success: bool,
+    },
+
+    /// Sent by either party to abort the session early.
+    Abort {
+        /// Machine-readable reason for the abort.
+        reason: AbortReason,
+    },
+}
+
+/// Discriminates the content of a [`PairingMessage::Payload`] message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadType {
+    /// Raw `nsec` bech32 secret key.
+    Nsec,
+    /// NIP-46 bunker connection string.
+    Bunker,
+    /// NIP-46 `nostrconnect://` URI.
+    Connect,
+    /// Application-defined payload; interpretation is out-of-band.
+    Custom,
+}
+
+/// Machine-readable reason a pairing session was aborted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbortReason {
+    /// The Short Authentication Strings shown to both users did not match.
+    SasMismatch,
+    /// The user explicitly denied the pairing request.
+    UserDenied,
+    /// The session exceeded its time limit without completing.
+    Timeout,
+    /// An unexpected or malformed message was received.
+    ProtocolError,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offer_round_trip() {
+        let msg = PairingMessage::Offer {
+            session_id: "deadbeef".repeat(8),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(
+            json.contains(r#""type":"offer""#),
+            "tag field present: {json}"
+        );
+        let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn sas_confirm_round_trip() {
+        let msg = PairingMessage::SasConfirm {
+            transcript_hash: "cafebabe".repeat(8),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(
+            json.contains(r#""type":"sas-confirm""#),
+            "kebab-case tag: {json}"
+        );
+        let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn payload_round_trip() {
+        let msg = PairingMessage::Payload {
+            payload_type: PayloadType::Nsec,
+            payload: "nsec1abc".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains(r#""type":"payload""#));
+        assert!(json.contains(r#""payload_type":"nsec""#));
+        let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn abort_sas_mismatch_round_trip() {
+        let msg = PairingMessage::Abort {
+            reason: AbortReason::SasMismatch,
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(
+            json.contains(r#""reason":"sas_mismatch""#),
+            "snake_case: {json}"
+        );
+        let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn complete_round_trip() {
+        for success in [true, false] {
+            let msg = PairingMessage::Complete { success };
+            let json = serde_json::to_string(&msg).expect("serialize");
+            let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(msg, back);
+        }
+    }
+
+    #[test]
+    fn all_abort_reasons_round_trip() {
+        let reasons = [
+            AbortReason::SasMismatch,
+            AbortReason::UserDenied,
+            AbortReason::Timeout,
+            AbortReason::ProtocolError,
+        ];
+        for reason in reasons {
+            let msg = PairingMessage::Abort { reason };
+            let json = serde_json::to_string(&msg).expect("serialize");
+            let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(msg, back);
+        }
+    }
+
+    #[test]
+    fn all_payload_types_round_trip() {
+        let types = [
+            PayloadType::Nsec,
+            PayloadType::Bunker,
+            PayloadType::Connect,
+            PayloadType::Custom,
+        ];
+        for payload_type in types {
+            let msg = PairingMessage::Payload {
+                payload_type,
+                payload: "data".to_string(),
+            };
+            let json = serde_json::to_string(&msg).expect("serialize");
+            let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(msg, back);
+        }
+    }
+}
