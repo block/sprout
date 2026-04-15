@@ -1,15 +1,13 @@
-import { Plus } from "lucide-react";
-
 import type { ManagedAgent, PresenceLookup } from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { CreateNewButton } from "./CreateNewButton";
 import { ManagedAgentRow } from "./ManagedAgentRow";
 
 export function ManagedAgentsSection({
   actionErrorMessage,
   actionNoticeMessage,
   agents,
+  channelsByPubkey,
   error,
   isActionPending,
   isLoading,
@@ -31,6 +29,7 @@ export function ManagedAgentsSection({
   actionErrorMessage: string | null;
   actionNoticeMessage: string | null;
   agents: ManagedAgent[];
+  channelsByPubkey: Record<string, string[]>;
   error: Error | null;
   isActionPending: boolean;
   isLoading: boolean;
@@ -60,20 +59,11 @@ export function ManagedAgentsSection({
             Agent profiles and process state — local and remote.
           </p>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Create agent"
-              onClick={onCreate}
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Create agent</TooltipContent>
-        </Tooltip>
+        <CreateNewButton
+          ariaLabel="Create agent"
+          label="Agent"
+          onClick={onCreate}
+        />
       </div>
 
       {isLoading ? (
@@ -109,6 +99,7 @@ export function ManagedAgentsSection({
           {agents.map((agent) => (
             <ManagedAgentRow
               agent={agent}
+              channelNames={channelsByPubkey[agent.pubkey] ?? []}
               isActionPending={isActionPending}
               isLogSelected={selectedLogAgentPubkey === agent.pubkey}
               key={agent.pubkey}

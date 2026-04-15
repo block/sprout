@@ -1,19 +1,16 @@
 import * as React from "react";
-
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useAddChannelMembersMutation,
   useChannelMembersQuery,
-  useRemoveChannelMemberMutation,
 } from "@/features/channels/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import { formatMemberName } from "@/features/channels/lib/memberUtils";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { changeChannelMemberRole } from "@/shared/api/tauri";
 import type { Channel, ChannelMember } from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   Sheet,
   SheetContent,
@@ -21,7 +18,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/shared/ui/sheet";
+import { MembersSidebarAgentControls } from "./MembersSidebarAgentControls";
 import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
+import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
+import { useMembersSidebarActions } from "./useMembersSidebarActions";
 
 type MembersSidebarProps = {
   channel: Channel | null;
@@ -30,14 +30,6 @@ type MembersSidebarProps = {
   onOpenChange: (open: boolean) => void;
 };
 
-function formatRoleLabel(member: ChannelMember, memberIsBot: boolean) {
-  if (memberIsBot) {
-    return "Bot";
-  }
-
-  return `${member.role[0]?.toUpperCase() ?? ""}${member.role.slice(1)}`;
-}
-
 export function MembersSidebar({
   channel,
   currentPubkey,
@@ -45,15 +37,28 @@ export function MembersSidebar({
   onOpenChange,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
+  const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
-  const removeMemberMutation = useRemoveChannelMemberMutation(channelId);
+  const changeRoleMutation = useMutation({
+    mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
+      if (!channelId) throw new Error("No channel selected.");
+      await changeChannelMemberRole(channelId, pubkey, role);
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["channels", channelId],
+      });
+    },
+  });
+  const changeRoleError =
+    changeRoleMutation.error instanceof Error
+      ? changeRoleMutation.error.message
+      : null;
 
   const rawMembers = membersQuery.data ?? [];
-  const { people, bots, isBot } = useClassifiedMembers(
-    rawMembers,
-    currentPubkey,
-  );
+  const { people, bots, isBot, isMyBot, managedAgentsQuery } =
+    useClassifiedMembers(rawMembers, currentPubkey);
 
   const allMemberPubkeys = React.useMemo(
     () => rawMembers.map((member) => member.pubkey),
@@ -72,75 +77,102 @@ export function MembersSidebar({
     selfMember?.role === "owner" || selfMember?.role === "admin";
   const isArchived =
     channel?.archivedAt !== null && channel?.archivedAt !== undefined;
+  const managedAgentByPubkey = React.useMemo(
+    () =>
+      new Map(
+        (managedAgentsQuery.data ?? []).map((agent) => [
+          normalizePubkey(agent.pubkey),
+          agent,
+        ]),
+      ),
+    [managedAgentsQuery.data],
+  );
+  const controllableManagedBots = React.useMemo(
+    () =>
+      bots.flatMap((member) => {
+        const agent = managedAgentByPubkey.get(normalizePubkey(member.pubkey));
+        return agent ? [agent] : [];
+      }),
+    [bots, managedAgentByPubkey],
+  );
+  const canRemoveMember = React.useCallback(
+    (member: ChannelMember) => {
+      return (
+        (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
+        (selfMember?.role === "owner" && isBot(member)) ||
+        Boolean(selfMember && isMyBot(member)) ||
+        member.pubkey === currentPubkey
+      );
+    },
+    [currentPubkey, isBot, isMyBot, selfMember],
+  );
+  const removableManagedBots = React.useMemo(
+    () =>
+      bots.flatMap((member) => {
+        if (!canRemoveMember(member)) {
+          return [];
+        }
+
+        const agent = managedAgentByPubkey.get(normalizePubkey(member.pubkey));
+        return agent ? [agent] : [];
+      }),
+    [bots, canRemoveMember, managedAgentByPubkey],
+  );
+  const {
+    actionErrorMessage,
+    actionNoticeMessage,
+    handleLifecycleAction: handleAgentLifecycleAction,
+    handleRemoveAll,
+    handleRemoveMember,
+    handleRespawnAll,
+    handleStopAll,
+    hasControllableManagedBots,
+    hasRemovableManagedBots,
+    hasStoppableManagedBots,
+    isActionPending,
+  } = useMembersSidebarActions({
+    channelId,
+    controllableManagedBots,
+    removableManagedBots,
+    currentPubkey,
+    onOpenChange,
+  });
 
   if (!channel) {
     return null;
   }
 
   function renderMemberCard(member: ChannelMember, memberIsBot: boolean) {
-    const canRemoveMember =
-      (selfMember?.role === "admin" && member.pubkey !== currentPubkey) ||
-      (selfMember?.role === "owner" && isBot(member)) ||
-      (currentPubkey && member.pubkey === currentPubkey);
-    const memberLabel = formatMemberName(member, currentPubkey);
-    const profile =
-      memberProfilesQuery.data?.profiles[member.pubkey.toLowerCase()] ?? null;
-    const presenceStatus =
-      memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null;
-    const roleLabel = formatRoleLabel(member, memberIsBot);
-
     return (
-      <div
-        className="flex items-center justify-between gap-3 rounded-xl border border-border/80 bg-background px-3 py-2.5"
-        data-testid={`sidebar-member-${member.pubkey}`}
+      <MembersSidebarMemberCard
+        canChangeRole={canManageMembers && member.pubkey !== currentPubkey}
+        canRemoveMember={canRemoveMember(member)}
+        isActionPending={isActionPending || changeRoleMutation.isPending}
+        isArchived={isArchived}
         key={member.pubkey}
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <ProfileAvatar
-            avatarUrl={profile?.avatarUrl ?? null}
-            className="h-9 w-9 rounded-full text-[11px] shadow-none"
-            iconClassName="h-4 w-4"
-            label={memberLabel}
-          />
-          <div className="min-w-0 space-y-0.5">
-            <p className="truncate text-sm font-medium leading-5">
-              {memberLabel}
-            </p>
-            <div
-              className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
-              data-testid={`sidebar-member-presence-${member.pubkey}`}
-            >
-              {presenceStatus ? (
-                <>
-                  <PresenceDot className="h-2 w-2" status={presenceStatus} />
-                  <span>{getPresenceLabel(presenceStatus)}</span>
-                  <span aria-hidden="true">&middot;</span>
-                </>
-              ) : null}
-              <span>{roleLabel}</span>
-            </div>
-          </div>
-        </div>
-        {canRemoveMember ? (
-          <Button
-            className="h-8 shrink-0 rounded-full px-2.5 text-xs text-muted-foreground hover:text-foreground"
-            data-testid={`sidebar-remove-member-${member.pubkey}`}
-            disabled={removeMemberMutation.isPending || isArchived}
-            onClick={() => {
-              void removeMemberMutation.mutateAsync(member.pubkey).then(() => {
-                if (member.pubkey === currentPubkey) {
-                  onOpenChange(false);
-                }
-              });
-            }}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            Remove
-          </Button>
-        ) : null}
-      </div>
+        managedAgent={
+          memberIsBot
+            ? managedAgentByPubkey.get(normalizePubkey(member.pubkey))
+            : undefined
+        }
+        member={member}
+        memberIsBot={memberIsBot}
+        memberLabel={formatMemberName(member, currentPubkey)}
+        onChangeRole={(m, role) => {
+          void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });
+        }}
+        onManagedAgentAction={(agent) => {
+          void handleAgentLifecycleAction(agent);
+        }}
+        onRemoveMember={handleRemoveMember}
+        presenceStatus={
+          memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null
+        }
+        profileAvatarUrl={
+          memberProfilesQuery.data?.profiles[member.pubkey.toLowerCase()]
+            ?.avatarUrl ?? null
+        }
+      />
     );
   }
 
@@ -195,11 +227,28 @@ export function MembersSidebar({
           </section>
 
           <section className="space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold tracking-tight">Bots</h2>
               <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                 {bots.length}
               </span>
+              {hasControllableManagedBots ? (
+                <MembersSidebarAgentControls
+                  canBulkRemove={hasRemovableManagedBots}
+                  canBulkRespawn={hasControllableManagedBots}
+                  canBulkStop={hasStoppableManagedBots}
+                  disabled={isActionPending || isArchived}
+                  onRemoveAll={() => {
+                    void handleRemoveAll();
+                  }}
+                  onRespawnAll={() => {
+                    void handleRespawnAll();
+                  }}
+                  onStopAll={() => {
+                    void handleStopAll();
+                  }}
+                />
+              ) : null}
             </div>
             <div className="space-y-2" data-testid="members-sidebar-bots">
               {bots.length > 0 ? (
@@ -214,9 +263,21 @@ export function MembersSidebar({
             </div>
           </section>
 
-          {removeMemberMutation.error instanceof Error ? (
-            <p className="text-sm text-destructive">
-              {removeMemberMutation.error.message}
+          {actionNoticeMessage ? (
+            <p
+              className="text-sm text-muted-foreground"
+              data-testid="members-sidebar-action-notice"
+            >
+              {actionNoticeMessage}
+            </p>
+          ) : null}
+
+          {actionErrorMessage || changeRoleError ? (
+            <p
+              className="text-sm text-destructive"
+              data-testid="members-sidebar-action-error"
+            >
+              {actionErrorMessage ?? changeRoleError}
             </p>
           ) : null}
         </div>

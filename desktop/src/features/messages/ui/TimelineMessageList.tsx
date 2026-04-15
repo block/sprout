@@ -4,54 +4,54 @@ import {
   formatDayHeading,
   isSameDay,
 } from "@/features/messages/lib/dateFormatters";
-import type {
-  ThreadConversationHint,
-  TimelineMessage,
-} from "@/features/messages/types";
+import { buildMainTimelineEntries } from "@/features/messages/lib/threadPanel";
+import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { DayDivider } from "./DayDivider";
 import { MessageRow } from "./MessageRow";
+import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
   activeReplyTargetId?: string | null;
-  activeThreadRootId?: string | null;
   currentPubkey?: string;
   highlightedMessageId?: string | null;
   messages: TimelineMessage[];
-  threadHintsByAnchorId?: Map<string, ThreadConversationHint>;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
-  onOpenThread?: (message: TimelineMessage) => void;
   onReply?: (message: TimelineMessage) => void;
   onToggleReaction?: (
     message: TimelineMessage,
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  /** Map from lowercase pubkey → persona display name for bot members. */
+  personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
   activeReplyTargetId = null,
-  activeThreadRootId = null,
   currentPubkey,
   highlightedMessageId = null,
   messages,
-  threadHintsByAnchorId,
   onDelete,
   onEdit,
-  onOpenThread,
   onReply,
   onToggleReaction,
+  personaLookup,
   profiles,
 }: TimelineMessageListProps) {
   const elements: React.ReactNode[] = [];
+  const entries = React.useMemo(
+    () => buildMainTimelineEntries(messages),
+    [messages],
+  );
 
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
-    const prev = i > 0 ? messages[i - 1] : null;
+  for (let i = 0; i < entries.length; i++) {
+    const { message, summary } = entries[i];
+    const prev = i > 0 ? entries[i - 1]?.message : null;
 
     if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
       elements.push(
@@ -69,17 +69,16 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           body={message.body}
           createdAt={message.createdAt}
           currentPubkey={currentPubkey}
+          personaLookup={personaLookup}
           profiles={profiles}
           time={message.time}
         />,
       );
     } else {
-      const threadHint = threadHintsByAnchorId?.get(message.id);
       elements.push(
         <MessageRow
           key={message.id}
           activeReplyTargetId={activeReplyTargetId}
-          activeThreadRootId={activeThreadRootId}
           highlighted={message.id === highlightedMessageId}
           message={message}
           onDelete={
@@ -92,13 +91,22 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               ? onEdit
               : undefined
           }
-          onOpenThread={onOpenThread}
           onToggleReaction={onToggleReaction}
           onReply={onReply}
           profiles={profiles}
-          threadHint={threadHint}
         />,
       );
+
+      if (summary && onReply) {
+        elements.push(
+          <MessageThreadSummaryRow
+            key={`thread-summary-${message.id}`}
+            message={message}
+            onOpenThread={onReply}
+            summary={summary}
+          />,
+        );
+      }
     }
   }
 

@@ -1,4 +1,5 @@
-import { Bot, Home, Lock, PenSquare, Plus, Search, Zap } from "lucide-react";
+// biome-ignore format: keep compact to stay within file size limit
+import { Activity, Bot, Home, PenSquare, Plus, Search, Zap } from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -11,6 +12,7 @@ import {
   ChannelMenuButton,
   SidebarSection,
 } from "@/features/sidebar/ui/SidebarSection";
+import { CreateChannelDialog } from "@/features/sidebar/ui/CreateChannelDialog";
 import { NewDirectMessageDialog } from "@/features/sidebar/ui/NewDirectMessageDialog";
 import type {
   Channel,
@@ -19,8 +21,6 @@ import type {
   Profile,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
-import { Checkbox } from "@/shared/ui/checkbox";
-import { Input } from "@/shared/ui/input";
 import {
   Sidebar,
   SidebarContent,
@@ -48,6 +48,8 @@ const SECTION_ICON_BUTTON_CLASS =
 // Types
 // ---------------------------------------------------------------------------
 
+type CreateChannelKind = "stream" | "forum";
+
 type AppSidebarProps = {
   channels: Channel[];
   currentPubkey?: string;
@@ -61,17 +63,19 @@ type AppSidebarProps = {
   selfPresenceStatus: PresenceStatus;
   errorMessage?: string;
   selectedChannelId: string | null;
-  selectedView: "home" | "channel" | "agents" | "workflows";
+  selectedView: "home" | "channel" | "agents" | "workflows" | "pulse";
   unreadChannelIds: Set<string>;
   onCreateChannel: (input: {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
+    ttlSeconds?: number;
   }) => Promise<void>;
   onCreateForum: (input: {
     name: string;
     description?: string;
     visibility: ChannelVisibility;
+    ttlSeconds?: number;
   }) => Promise<void>;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
@@ -79,6 +83,7 @@ type AppSidebarProps = {
   onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onSelectAgents: () => void;
+  onSelectPulse: () => void;
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -88,105 +93,8 @@ type AppSidebarProps = {
 };
 
 // ---------------------------------------------------------------------------
-// useCreateForm — shared state + handler for channel/forum creation
+// Helpers
 // ---------------------------------------------------------------------------
-
-function useCreateForm(
-  onCreate: (input: {
-    name: string;
-    description?: string;
-    visibility: ChannelVisibility;
-  }) => Promise<void>,
-  entityLabel: string,
-) {
-  const [isOpen, setIsOpen] = React.useState(false);
-  const [draftName, setDraftName] = React.useState("");
-  const [draftDescription, setDraftDescription] = React.useState("");
-  const [draftVisibility, setDraftVisibility] =
-    React.useState<ChannelVisibility>("open");
-  const [errorMessage, setErrorMessage] = React.useState<string | undefined>();
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    if (isOpen) {
-      inputRef.current?.focus();
-    }
-  }, [isOpen]);
-
-  function toggle() {
-    setErrorMessage(undefined);
-    setIsOpen((current) => !current);
-  }
-
-  function cancel() {
-    setErrorMessage(undefined);
-    setDraftName("");
-    setDraftDescription("");
-    setDraftVisibility("open");
-    setIsOpen(false);
-  }
-
-  function changeName(value: string) {
-    setErrorMessage(undefined);
-    setDraftName(value);
-  }
-
-  function changeDescription(value: string) {
-    setErrorMessage(undefined);
-    setDraftDescription(value);
-  }
-
-  function changeVisibility(value: ChannelVisibility) {
-    setErrorMessage(undefined);
-    setDraftVisibility(value);
-  }
-
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const name = draftName.trim();
-    const description = draftDescription.trim();
-    if (!name) {
-      return;
-    }
-
-    setErrorMessage(undefined);
-
-    try {
-      await onCreate({
-        name,
-        description: description || undefined,
-        visibility: draftVisibility,
-      });
-
-      setDraftName("");
-      setDraftDescription("");
-      setDraftVisibility("open");
-      setIsOpen(false);
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : `Failed to create ${entityLabel}.`,
-      );
-    }
-  }
-
-  return {
-    isOpen,
-    draftName,
-    draftDescription,
-    draftVisibility,
-    errorMessage,
-    inputRef,
-    toggle,
-    cancel,
-    changeName,
-    changeDescription,
-    changeVisibility,
-    handleSubmit,
-  };
-}
 
 function useDeferredSidebarLoad(
   activateImmediately: boolean,
@@ -223,25 +131,21 @@ function useDeferredSidebarLoad(
 }
 
 // ---------------------------------------------------------------------------
-// SectionHeaderActions — search + create icon buttons for section headers
+// SectionHeaderActions — browse + create icon buttons for section headers
 // ---------------------------------------------------------------------------
 
 function SectionHeaderActions({
   browseAriaLabel,
   browseTestId,
   createAriaLabel,
-  closeAriaLabel,
-  isCreateOpen,
   onBrowse,
-  onToggleCreate,
+  onCreateClick,
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
   createAriaLabel: string;
-  closeAriaLabel: string;
-  isCreateOpen: boolean;
   onBrowse: () => void;
-  onToggleCreate: () => void;
+  onCreateClick: () => void;
 }) {
   return (
     <div className="absolute right-1 top-3 flex items-center gap-0.5">
@@ -255,109 +159,49 @@ function SectionHeaderActions({
         <Search className="h-3.5 w-3.5" />
       </button>
       <button
-        aria-expanded={isCreateOpen}
-        aria-label={isCreateOpen ? closeAriaLabel : createAriaLabel}
+        aria-label={createAriaLabel}
         className={SECTION_ICON_BUTTON_CLASS}
-        onClick={onToggleCreate}
+        onClick={onCreateClick}
         type="button"
       >
-        <Plus
-          className={
-            isCreateOpen
-              ? "h-4 w-4 rotate-45 transition-transform"
-              : "h-4 w-4 transition-transform"
-          }
-        />
+        <Plus className="h-4 w-4" />
       </button>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// PrivateCheckbox — checkbox toggle for channel visibility
-// ---------------------------------------------------------------------------
-
-function PrivateCheckbox({
-  disabled,
-  isPrivate,
-  onChange,
-  testId,
-}: {
-  disabled: boolean;
-  isPrivate: boolean;
-  onChange: (isPrivate: boolean) => void;
-  testId: string;
-}) {
-  const id = React.useId();
-
-  return (
-    <div className="flex items-center gap-2">
-      <Checkbox
-        checked={isPrivate}
-        data-testid={testId}
-        disabled={disabled}
-        id={id}
-        onCheckedChange={(checked) => onChange(checked === true)}
-      />
-      <label
-        className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-sidebar-foreground/70 select-none peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
-        htmlFor={id}
-      >
-        <Lock className="h-3 w-3" />
-        Private channel
-      </label>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ChannelGroupSection — unified Channels / Forums section
+// ChannelGroupSection — unified Channels / Forums section (no inline form)
 // ---------------------------------------------------------------------------
 
 function ChannelGroupSection({
   browseAriaLabel,
   browseTestId,
-  closeAriaLabel,
   createAriaLabel,
-  createFormTestId,
-  createNameTestId,
-  createDescriptionTestId,
-  createVisibilityTestId,
   groupClassName,
   isActiveChannel,
-  isCreating,
   items,
   listTestId,
-  namePlaceholder,
-  descriptionPlaceholder,
   onBrowse,
+  onCreateClick,
   onSelectChannel,
   selectedChannelId,
   title,
   unreadChannelIds,
-  form,
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
-  closeAriaLabel: string;
   createAriaLabel: string;
-  createFormTestId: string;
-  createNameTestId: string;
-  createDescriptionTestId: string;
-  createVisibilityTestId: string;
   groupClassName?: string;
   isActiveChannel: boolean;
-  isCreating: boolean;
   items: Channel[];
   listTestId: string;
-  namePlaceholder: string;
-  descriptionPlaceholder: string;
   onBrowse: () => void;
+  onCreateClick: () => void;
   onSelectChannel: (channelId: string) => void;
   selectedChannelId: string | null;
   title: string;
   unreadChannelIds: Set<string>;
-  form: ReturnType<typeof useCreateForm>;
 }) {
   return (
     <SidebarGroup className={groupClassName}>
@@ -365,75 +209,11 @@ function ChannelGroupSection({
       <SectionHeaderActions
         browseAriaLabel={browseAriaLabel}
         browseTestId={browseTestId}
-        closeAriaLabel={closeAriaLabel}
         createAriaLabel={createAriaLabel}
-        isCreateOpen={form.isOpen}
         onBrowse={onBrowse}
-        onToggleCreate={form.toggle}
+        onCreateClick={onCreateClick}
       />
       <SidebarGroupContent>
-        {form.isOpen ? (
-          <form
-            className="mb-2 space-y-2 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/60 p-2"
-            data-testid={createFormTestId}
-            onSubmit={(event) => {
-              void form.handleSubmit(event);
-            }}
-          >
-            <Input
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              className="h-8 bg-background/80"
-              data-testid={createNameTestId}
-              disabled={isCreating}
-              onChange={(event) => form.changeName(event.target.value)}
-              placeholder={namePlaceholder}
-              ref={form.inputRef}
-              spellCheck={false}
-              value={form.draftName}
-            />
-            <Input
-              autoComplete="off"
-              className="h-8 bg-background/80"
-              data-testid={createDescriptionTestId}
-              disabled={isCreating}
-              onChange={(event) => form.changeDescription(event.target.value)}
-              placeholder={descriptionPlaceholder}
-              value={form.draftDescription}
-            />
-            <PrivateCheckbox
-              disabled={isCreating}
-              isPrivate={form.draftVisibility === "private"}
-              onChange={(isPrivate) =>
-                form.changeVisibility(isPrivate ? "private" : "open")
-              }
-              testId={createVisibilityTestId}
-            />
-            <div className="flex items-center gap-2">
-              <Button
-                disabled={isCreating || form.draftName.trim().length === 0}
-                size="sm"
-                type="submit"
-              >
-                {isCreating ? "Creating..." : "Create"}
-              </Button>
-              <Button
-                disabled={isCreating}
-                onClick={form.cancel}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                Cancel
-              </Button>
-            </div>
-            {form.errorMessage ? (
-              <p className="text-sm text-destructive">{form.errorMessage}</p>
-            ) : null}
-          </form>
-        ) : null}
-
         {items.length > 0 ? (
           <SidebarMenu data-testid={listTestId}>
             {items.map((channel) => (
@@ -480,6 +260,7 @@ export function AppSidebar({
   onHideDm,
   onOpenDm,
   onSelectAgents,
+  onSelectPulse,
   onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
@@ -490,17 +271,20 @@ export function AppSidebar({
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
   const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
+  const [createDialogKind, setCreateDialogKind] =
+    React.useState<CreateChannelKind | null>(null);
 
-  const streamForm = useCreateForm(onCreateChannel, "stream");
-  const forumForm = useCreateForm(onCreateForum, "forum");
+  const visibleChannels = channels.filter(
+    (channel) => channel.archivedAt === null,
+  );
 
-  const streamChannels = channels.filter(
+  const streamChannels = visibleChannels.filter(
     (channel) => channel.channelType === "stream",
   );
-  const forumChannels = channels.filter(
+  const forumChannels = visibleChannels.filter(
     (channel) => channel.channelType === "forum",
   );
-  const directMessages = channels.filter(
+  const directMessages = visibleChannels.filter(
     (channel) => channel.channelType === "dm",
   );
   const isSelectedDirectMessage =
@@ -532,6 +316,29 @@ export function AppSidebar({
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||
     "Current identity";
+
+  const isCreatingAny =
+    createDialogKind === "stream"
+      ? isCreatingChannel
+      : createDialogKind === "forum"
+        ? isCreatingForum
+        : false;
+
+  const handleCreateFromDialog = React.useCallback(
+    async (input: {
+      name: string;
+      description?: string;
+      visibility: ChannelVisibility;
+      ttlSeconds?: number;
+    }) => {
+      if (createDialogKind === "stream") {
+        await onCreateChannel(input);
+      } else if (createDialogKind === "forum") {
+        await onCreateForum(input);
+      }
+    },
+    [createDialogKind, onCreateChannel, onCreateForum],
+  );
 
   return (
     <Sidebar
@@ -573,6 +380,18 @@ export function AppSidebar({
                 {Math.min(homeBadgeCount, 99)}
               </SidebarMenuBadge>
             ) : null}
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-pulse-view"
+              isActive={selectedView === "pulse"}
+              onClick={onSelectPulse}
+              tooltip="Pulse"
+              type="button"
+            >
+              <Activity className="h-4 w-4" />
+              <span>Pulse</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -628,21 +447,13 @@ export function AppSidebar({
             <ChannelGroupSection
               browseAriaLabel="Browse channels"
               browseTestId="browse-channels"
-              closeAriaLabel="Close new stream form"
-              createAriaLabel="Create a stream"
-              createFormTestId="create-stream-form"
-              createNameTestId="create-stream-name"
-              createDescriptionTestId="create-stream-description"
-              createVisibilityTestId="create-stream-visibility"
-              descriptionPlaceholder="What this stream is for"
-              form={streamForm}
+              createAriaLabel="Create a channel"
               groupClassName="pt-1"
               isActiveChannel={selectedView === "channel"}
-              isCreating={isCreatingChannel}
               items={streamChannels}
               listTestId="stream-list"
-              namePlaceholder="release-notes"
               onBrowse={onOpenBrowseChannels}
+              onCreateClick={() => setCreateDialogKind("stream")}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}
               title="Channels"
@@ -651,20 +462,12 @@ export function AppSidebar({
             <ChannelGroupSection
               browseAriaLabel="Browse forums"
               browseTestId="browse-forums"
-              closeAriaLabel="Close new forum form"
-              createAriaLabel="New forum"
-              createFormTestId="create-forum-form"
-              createNameTestId="create-forum-name"
-              createDescriptionTestId="create-forum-description"
-              createVisibilityTestId="create-forum-visibility"
-              descriptionPlaceholder="What this forum is for"
-              form={forumForm}
+              createAriaLabel="Create a forum"
               isActiveChannel={selectedView === "channel"}
-              isCreating={isCreatingForum}
               items={forumChannels}
               listTestId="forum-list"
-              namePlaceholder="design-discussions"
               onBrowse={onOpenBrowseForums}
+              onCreateClick={() => setCreateDialogKind("forum")}
               onSelectChannel={onSelectChannel}
               selectedChannelId={selectedChannelId}
               title="Forums"
@@ -764,6 +567,15 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <CreateChannelDialog
+        channelKind={createDialogKind}
+        isCreating={isCreatingAny}
+        onOpenChange={(open) => {
+          if (!open) setCreateDialogKind(null);
+        }}
+        onCreate={handleCreateFromDialog}
+      />
 
       <NewDirectMessageDialog
         currentPubkey={currentPubkey}

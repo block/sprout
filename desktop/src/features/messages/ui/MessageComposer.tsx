@@ -7,6 +7,7 @@ import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { escapeRegExp } from "@/shared/lib/mentionPattern";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
@@ -51,6 +52,9 @@ type MessageComposerProps = {
     displayName: string;
     pubkey: string;
   } | null;
+  showTopBorder?: boolean;
+  typingParentEventId?: string | null;
+  typingRootEventId?: string | null;
 };
 
 const MAX_TEXTAREA_ROWS = 4;
@@ -75,6 +79,9 @@ export function MessageComposer({
   placeholder,
   replyTarget = null,
   implicitThreadAgentMention = null,
+  showTopBorder = true,
+  typingParentEventId = null,
+  typingRootEventId = null,
 }: MessageComposerProps) {
   const [content, setContent] = React.useState("");
   const contentRef = React.useRef(content);
@@ -93,7 +100,11 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
-  const notifyTyping = useTypingBroadcast(channelId);
+  const notifyTyping = useTypingBroadcast(
+    channelId,
+    typingParentEventId,
+    typingRootEventId,
+  );
 
   const media = useMediaUpload(setContent);
 
@@ -354,6 +365,8 @@ export function MessageComposer({
             ...(d.dim ? [`dim ${d.dim}`] : []),
             ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
             ...(d.thumb ? [`thumb ${d.thumb}`] : []),
+            ...(d.duration != null ? [`duration ${d.duration}`] : []),
+            ...(d.image ? [`image ${d.image}`] : []),
           ])
         : undefined;
 
@@ -578,7 +591,12 @@ export function MessageComposer({
   }, [media.handlePaperclip]);
 
   return (
-    <footer className="shrink-0 bg-transparent px-4 pb-4 pt-0">
+    <footer
+      className={cn(
+        "shrink-0 bg-transparent px-4 pb-4",
+        showTopBorder ? "border-t border-border/80 pt-4" : "pt-0",
+      )}
+    >
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
         <form
           className="relative isolate rounded-2xl border border-border/50 bg-background/25 px-3 py-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)] sm:px-4"

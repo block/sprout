@@ -1,4 +1,4 @@
-//! The 23 typed event builder functions.
+//! The 25 typed event builder functions.
 //!
 //! All functions return `Result<nostr::EventBuilder, SdkError>`.
 //! The caller signs: `builder.sign_with_keys(&keys)?`.
@@ -476,6 +476,201 @@ pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
 pub fn build_delete_channel(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
     Ok(EventBuilder::new(Kind::Custom(9008), "", tags))
+}
+
+// ── Builder 24: build_note ───────────────────────────────────────────────────
+
+/// Build a global text note (kind:1, NIP-01).
+///
+/// `reply_to_event_id`: adds a single `["e", <id>, "", "reply"]` tag.
+/// This is intentionally simpler than the full `ThreadRef` mechanism used
+/// for channel messages — social notes use a flat reply model for now.
+/// Full NIP-10 threading (root + reply + p-tags) is deferred.
+pub fn build_note(
+    content: &str,
+    reply_to_event_id: Option<nostr::EventId>,
+) -> Result<EventBuilder, SdkError> {
+    check_content(content, 64 * 1024)?;
+    let mut tags = vec![];
+    if let Some(reply_id) = reply_to_event_id {
+        tags.push(tag(&["e", &reply_id.to_hex(), "", "reply"])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(1), content, tags))
+}
+
+// ── Builder 25: build_contact_list ───────────────────────────────────────────
+
+/// Maximum number of contacts allowed in a single contact list event.
+const MAX_CONTACTS: usize = 10_000;
+
+/// Build a contact list replacement event (kind:3, NIP-02).
+///
+/// Each contact is `(pubkey_hex, relay_url, petname)`.
+/// `pubkey_hex` must be exactly 64 hex characters (any case accepted, normalized
+/// to lowercase before storage). Non-hex or wrong-length pubkeys are rejected
+/// with `SdkError::InvalidInput`.
+/// `relay_url` and `petname` may be `None` (stored as empty string per NIP-02).
+///
+/// Duplicate pubkeys are silently deduplicated — the first occurrence is kept.
+///
+/// Replaces the entire contact list — callers must read-before-write for deltas.
+pub fn build_contact_list(
+    contacts: &[(&str, Option<&str>, Option<&str>)],
+) -> Result<EventBuilder, SdkError> {
+    if contacts.len() > MAX_CONTACTS {
+        return Err(SdkError::InvalidInput(format!(
+            "contact list exceeds maximum of {} contacts (got {})",
+            MAX_CONTACTS,
+            contacts.len()
+        )));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(contacts.len());
+    let mut tags = Vec::with_capacity(contacts.len());
+    for &(pubkey_hex, relay_url, petname) in contacts {
+        if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err(SdkError::InvalidInput(format!(
+                "contact pubkey must be exactly 64 hex chars, got len={}",
+                pubkey_hex.len()
+            )));
+        }
+        if let Some(url) = relay_url {
+            if url.len() > 2048 {
+                return Err(SdkError::InvalidInput(format!(
+                    "relay_url exceeds 2048 bytes (got {})",
+                    url.len()
+                )));
+            }
+        }
+        if let Some(name) = petname {
+            if name.len() > 256 {
+                return Err(SdkError::InvalidInput(format!(
+                    "petname exceeds 256 bytes (got {})",
+                    name.len()
+                )));
+            }
+        }
+        let lower = pubkey_hex.to_ascii_lowercase();
+        if !seen.insert(lower.clone()) {
+            continue;
+        }
+        tags.push(tag(&[
+            "p",
+            &lower,
+            relay_url.unwrap_or(""),
+            petname.unwrap_or(""),
+        ])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(3), "", tags))
+}
+
+// ── Huddle shared helper ──────────────────────────────────────────────────────
+
+/// Shared builder for huddle lifecycle events (kinds 48100–48103).
+///
+/// All huddle events share: an `["h", parent_channel_id]` tag, JSON content
+/// with `ephemeral_channel_id`, optional extra content fields, and optional
+/// p-tags for participant identity.
+fn build_huddle_event_sdk(
+    kind: u16,
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+    extra_fields: &[(&str, &str)],
+    participant_pubkey: Option<&str>,
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![tag(&["h", &parent_channel_id.to_string()])?];
+    if let Some(pk) = participant_pubkey {
+        tags.push(tag(&["p", pk])?);
+    }
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "ephemeral_channel_id".into(),
+        serde_json::Value::String(ephemeral_channel_id.to_string()),
+    );
+    for (k, v) in extra_fields {
+        map.insert((*k).into(), serde_json::Value::String(v.to_string()));
+    }
+    let content = serde_json::Value::Object(map).to_string();
+    Ok(EventBuilder::new(Kind::Custom(kind), content, tags))
+}
+
+// ── Builder 26: build_huddle_started ─────────────────────────────────────────
+
+/// Build a huddle-started event (kind 48100).
+///
+/// Posted to the parent channel as an advisory UI hint that a huddle has begun.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+/// - `livekit_room`: LiveKit room name participants should join
+pub fn build_huddle_started(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+    livekit_room: &str,
+) -> Result<EventBuilder, SdkError> {
+    build_huddle_event_sdk(
+        48100,
+        parent_channel_id,
+        ephemeral_channel_id,
+        &[("livekit_room", livekit_room)],
+        None,
+    )
+}
+
+// ── Builder 27: build_huddle_participant_joined ───────────────────────────────
+
+/// Build a huddle-participant-joined event (kind 48101).
+///
+/// Posted to the parent channel when a participant enters the huddle.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+/// - `participant_pubkey`: hex pubkey of the joining participant (p-tag)
+pub fn build_huddle_participant_joined(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+    participant_pubkey: &str,
+) -> Result<EventBuilder, SdkError> {
+    build_huddle_event_sdk(
+        48101,
+        parent_channel_id,
+        ephemeral_channel_id,
+        &[],
+        Some(participant_pubkey),
+    )
+}
+
+// ── Builder 28: build_huddle_participant_left ─────────────────────────────────
+
+/// Build a huddle-participant-left event (kind 48102).
+///
+/// Posted to the parent channel when a participant exits the huddle.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+/// - `participant_pubkey`: hex pubkey of the departing participant (p-tag)
+pub fn build_huddle_participant_left(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+    participant_pubkey: &str,
+) -> Result<EventBuilder, SdkError> {
+    build_huddle_event_sdk(
+        48102,
+        parent_channel_id,
+        ephemeral_channel_id,
+        &[],
+        Some(participant_pubkey),
+    )
+}
+
+// ── Builder 29: build_huddle_ended ───────────────────────────────────────────
+
+/// Build a huddle-ended event (kind 48103).
+///
+/// Posted to the parent channel when the huddle session concludes.
+/// - `parent_channel_id`: the channel the huddle belongs to (h-tag)
+/// - `ephemeral_channel_id`: the short-lived channel UUID for the huddle session
+pub fn build_huddle_ended(
+    parent_channel_id: Uuid,
+    ephemeral_channel_id: Uuid,
+) -> Result<EventBuilder, SdkError> {
+    build_huddle_event_sdk(48103, parent_channel_id, ephemeral_channel_id, &[], None)
 }
 
 // ── Helper: extract_channel_id ───────────────────────────────────────────────
@@ -1131,5 +1326,276 @@ mod tests {
             .sign_with_keys(&keys())
             .unwrap();
         assert_eq!(extract_channel_id(&ev), None);
+    }
+
+    // ── Builder 24: build_note ───────────────────────────────────────────────
+
+    #[test]
+    fn build_note_happy_path() {
+        let builder = build_note("hello world", None).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.kind, Kind::Custom(1));
+        assert_eq!(event.content, "hello world");
+        assert!(event.tags.is_empty());
+    }
+
+    #[test]
+    fn build_note_with_reply() {
+        let keys = nostr::Keys::generate();
+        // Create a dummy event to get a valid EventId
+        let dummy = EventBuilder::new(Kind::Custom(1), "dummy", vec![])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let builder = build_note("reply text", Some(dummy.id)).unwrap();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.kind, Kind::Custom(1));
+        assert_eq!(event.content, "reply text");
+        assert_eq!(event.tags.len(), 1);
+        let tag = event.tags.iter().next().unwrap();
+        assert_eq!(tag.as_slice()[0], "e");
+        assert_eq!(tag.as_slice()[1], dummy.id.to_hex());
+        assert_eq!(tag.as_slice()[3], "reply");
+    }
+
+    #[test]
+    fn build_note_content_too_large() {
+        let big = "x".repeat(64 * 1024 + 1);
+        let err = build_note(&big, None).unwrap_err();
+        assert!(matches!(err, SdkError::ContentTooLarge { .. }));
+    }
+
+    #[test]
+    fn build_note_empty_content() {
+        // Empty content is valid per NIP-01.
+        let builder = build_note("", None).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.kind, Kind::Custom(1));
+        assert_eq!(event.content, "");
+        assert!(event.tags.is_empty());
+    }
+
+    // ── Builder 25: build_contact_list ───────────────────────────────────────
+
+    #[test]
+    fn build_contact_list_happy_path() {
+        let pubkey = "a".repeat(64);
+        let contacts = vec![(pubkey.as_str(), None, None)];
+        let builder = build_contact_list(&contacts).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.kind, Kind::Custom(3));
+        assert_eq!(event.content, "");
+        assert_eq!(event.tags.len(), 1);
+        let tag = event.tags.iter().next().unwrap();
+        assert_eq!(tag.as_slice()[0], "p");
+        assert_eq!(tag.as_slice()[1], pubkey);
+    }
+
+    #[test]
+    fn build_contact_list_normalizes_uppercase() {
+        let upper = "A".repeat(64);
+        let contacts = vec![(upper.as_str(), None, None)];
+        let builder = build_contact_list(&contacts).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        let tag = event.tags.iter().next().unwrap();
+        assert_eq!(tag.as_slice()[1], "a".repeat(64));
+    }
+
+    #[test]
+    fn build_contact_list_with_relay_and_petname() {
+        let pubkey = "b".repeat(64);
+        let contacts = vec![(
+            pubkey.as_str(),
+            Some("wss://relay.example.com"),
+            Some("alice"),
+        )];
+        let builder = build_contact_list(&contacts).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        let tag = event.tags.iter().next().unwrap();
+        assert_eq!(tag.as_slice()[0], "p");
+        assert_eq!(tag.as_slice()[2], "wss://relay.example.com");
+        assert_eq!(tag.as_slice()[3], "alice");
+    }
+
+    #[test]
+    fn build_contact_list_empty() {
+        let builder = build_contact_list(&[]).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.kind, Kind::Custom(3));
+        assert!(event.tags.is_empty());
+    }
+
+    #[test]
+    fn build_contact_list_rejects_short_pubkey() {
+        let short = "a".repeat(63);
+        let contacts = vec![(short.as_str(), None, None)];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn build_contact_list_rejects_long_pubkey() {
+        let long = "a".repeat(65);
+        let contacts = vec![(long.as_str(), None, None)];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn build_contact_list_rejects_non_hex() {
+        let non_hex = "g".repeat(64);
+        let contacts = vec![(non_hex.as_str(), None, None)];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn build_contact_list_rejects_long_relay_url() {
+        let pubkey = "a".repeat(64);
+        let long_url = "x".repeat(2049);
+        let contacts = vec![(pubkey.as_str(), Some(long_url.as_str()), None)];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn build_contact_list_rejects_long_petname() {
+        let pubkey = "a".repeat(64);
+        let long_name = "x".repeat(257);
+        let contacts = vec![(pubkey.as_str(), None, Some(long_name.as_str()))];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn build_contact_list_duplicate_pubkeys() {
+        let pubkey = "c".repeat(64);
+        // Same pubkey twice — only one p-tag should be emitted.
+        let contacts = vec![
+            (pubkey.as_str(), None, None),
+            (
+                pubkey.as_str(),
+                Some("wss://relay.example.com"),
+                Some("bob"),
+            ),
+        ];
+        let builder = build_contact_list(&contacts).unwrap();
+        let keys = nostr::Keys::generate();
+        let event = builder.sign_with_keys(&keys).unwrap();
+        assert_eq!(event.tags.len(), 1);
+        let tag = event.tags.iter().next().unwrap();
+        assert_eq!(tag.as_slice()[0], "p");
+        assert_eq!(tag.as_slice()[1], pubkey);
+    }
+
+    #[test]
+    fn build_contact_list_too_many() {
+        let pubkey = "d".repeat(64);
+        // MAX_CONTACTS + 1 entries (all same pubkey — uniqueness doesn't matter,
+        // the cap is checked before deduplication).
+        let entry = (pubkey.as_str(), None, None);
+        let contacts = vec![entry; MAX_CONTACTS + 1];
+        let err = build_contact_list(&contacts).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    // ── build_huddle_started ──────────────────────────────────────────────────
+
+    #[test]
+    fn huddle_started_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_started(parent, ephemeral, "my-room").unwrap());
+        assert_eq!(ev.kind.as_u16(), 48100);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+        assert_eq!(v["livekit_room"], "my-room");
+    }
+
+    #[test]
+    fn huddle_started_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_started(parent, ephemeral, "room").unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_huddle_participant_joined ───────────────────────────────────────
+
+    #[test]
+    fn huddle_participant_joined_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let pubkey = "a".repeat(64);
+        let ev = sign(build_huddle_participant_joined(parent, ephemeral, &pubkey).unwrap());
+        assert_eq!(ev.kind.as_u16(), 48101);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(has_tag(&ev, "p", &pubkey));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+    }
+
+    #[test]
+    fn huddle_participant_joined_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let pubkey = "b".repeat(64);
+        let ev = sign(build_huddle_participant_joined(parent, ephemeral, &pubkey).unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_huddle_participant_left ─────────────────────────────────────────
+
+    #[test]
+    fn huddle_participant_left_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let pubkey = "c".repeat(64);
+        let ev = sign(build_huddle_participant_left(parent, ephemeral, &pubkey).unwrap());
+        assert_eq!(ev.kind.as_u16(), 48102);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(has_tag(&ev, "p", &pubkey));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+    }
+
+    #[test]
+    fn huddle_participant_left_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let pubkey = "d".repeat(64);
+        let ev = sign(build_huddle_participant_left(parent, ephemeral, &pubkey).unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_huddle_ended ────────────────────────────────────────────────────
+
+    #[test]
+    fn huddle_ended_happy_path() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_ended(parent, ephemeral).unwrap());
+        assert_eq!(ev.kind.as_u16(), 48103);
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        let v: serde_json::Value = serde_json::from_str(&ev.content).unwrap();
+        assert_eq!(v["ephemeral_channel_id"], ephemeral.to_string());
+    }
+
+    #[test]
+    fn huddle_ended_h_tag_is_parent_not_ephemeral() {
+        let parent = uuid();
+        let ephemeral = uuid();
+        let ev = sign(build_huddle_ended(parent, ephemeral).unwrap());
+        assert!(has_tag(&ev, "h", &parent.to_string()));
+        assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
     }
 }

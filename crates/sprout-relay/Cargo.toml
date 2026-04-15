@@ -38,10 +38,11 @@ deadpool-redis = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
 base64 = "0.22"
+sprout-huddle = { workspace = true, features = ["webhook"] }
 sprout-workflow = { workspace = true, features = ["reqwest"] }
 sprout-media = { workspace = true }
 bytes = "1"
-infer = "0.16"
+infer = "0.19"
 serde_yaml      = { workspace = true }
 sha2            = { workspace = true }
 hex             = { workspace = true }

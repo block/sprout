@@ -40,6 +40,37 @@ async function ensureTimelineScrollable(
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
 }
 
+async function openSearchDialogWithShortcut(
+  page: import("@playwright/test").Page,
+) {
+  const searchDialog = page.getByTestId("search-dialog");
+  const openSearchButton = page.getByTestId("open-search");
+  const shortcut = process.platform === "darwin" ? "Meta+K" : "Control+K";
+
+  await expect(openSearchButton).toBeVisible();
+  await expect
+    .poll(async () => {
+      if (await searchDialog.isVisible()) {
+        return true;
+      }
+
+      await page.keyboard.press(shortcut);
+      return searchDialog.isVisible();
+    })
+    .toBe(true);
+}
+
+async function openSearchDialogWithButton(
+  page: import("@playwright/test").Page,
+) {
+  const searchDialog = page.getByTestId("search-dialog");
+  const openSearchButton = page.getByTestId("open-search");
+
+  await expect(openSearchButton).toBeVisible();
+  await openSearchButton.click();
+  await expect(searchDialog).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -57,15 +88,12 @@ test("creates a new mocked stream", async ({ page }) => {
   const channelName = `release-notes-${Date.now()}`;
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Create a stream" }).click();
-  await page.getByTestId("create-stream-name").fill(channelName);
+  await page.getByRole("button", { name: "Create a channel" }).click();
+  await page.getByTestId("create-channel-name").fill(channelName);
   await page
-    .getByTestId("create-stream-description")
+    .getByTestId("create-channel-description")
     .fill("Release coordination");
-  await page
-    .getByTestId("create-stream-form")
-    .getByRole("button", { name: "Create" })
-    .click();
+  await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
@@ -141,11 +169,7 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
 }) => {
   await page.goto("/");
 
-  await expect(page.getByTestId("open-search")).toBeVisible();
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithShortcut(page);
 
   await page.getByTestId("search-input").fill("shipped");
   await expect(page.getByTestId("search-results")).toContainText(
@@ -157,6 +181,9 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
     .getByText("Engineering shipped the desktop build.")
     .click();
 
+  await expect(page).toHaveURL(
+    /#\/channels\/1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9\?messageId=mock-engineering-shipped$/,
+  );
   await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Engineering shipped the desktop build.",
@@ -168,10 +195,7 @@ test("search results use your resolved profile label instead of You", async ({
 }) => {
   await page.goto("/");
 
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithButton(page);
 
   await page.getByTestId("search-input").fill("welcome");
   const results = page.getByTestId("search-results");
@@ -186,10 +210,7 @@ test("opens accessible unjoined channels from search in read-only mode", async (
 }) => {
   await page.goto("/");
 
-  await page.keyboard.press(
-    process.platform === "darwin" ? "Meta+K" : "Control+K",
-  );
-  await expect(page.getByTestId("search-dialog")).toBeVisible();
+  await openSearchDialogWithButton(page);
 
   await page.getByTestId("search-input").fill("critique");
   const results = page.getByTestId("search-results");

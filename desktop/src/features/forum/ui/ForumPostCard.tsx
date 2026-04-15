@@ -1,11 +1,11 @@
 import { MessageSquare, MoreHorizontal, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { ForumPost } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
@@ -77,12 +77,7 @@ export function ForumPostCard({
       type="button"
     >
       <div className="flex items-center gap-2">
-        <ProfileAvatar
-          avatarUrl={avatarUrl}
-          className="h-6 w-6 rounded-full text-[10px]"
-          iconClassName="h-3 w-3"
-          label={authorLabel}
-        />
+        <UserAvatar avatarUrl={avatarUrl} displayName={authorLabel} size="sm" />
         <span className="text-sm font-medium text-foreground">
           {authorLabel}
         </span>

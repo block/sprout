@@ -46,6 +46,26 @@ pub struct SearchUsersResponse {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct UserNoteInfo {
+    pub id: String,
+    pub pubkey: String,
+    pub created_at: i64,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserNotesCursor {
+    pub before: i64,
+    pub before_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserNotesResponse {
+    pub notes: Vec<UserNoteInfo>,
+    pub next_cursor: Option<UserNotesCursor>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct SetPresenceResponse {
     pub status: PresenceStatus,
     pub ttl_seconds: u64,
@@ -70,6 +90,8 @@ pub struct ChannelInfo {
     pub participant_pubkeys: Vec<String>,
     #[serde(default = "default_true")]
     pub is_member: bool,
+    pub ttl_seconds: Option<i32>,
+    pub ttl_deadline: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,6 +116,8 @@ pub struct ChannelDetailInfo {
     pub topic_required: bool,
     pub max_members: Option<i32>,
     pub nip29_group_id: Option<String>,
+    pub ttl_seconds: Option<i32>,
+    pub ttl_deadline: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -255,6 +279,16 @@ pub struct GetUsersBatchBody<'a> {
     pub pubkeys: &'a [String],
 }
 
+#[derive(Serialize)]
+pub struct GetUserNotesQuery<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_id: Option<&'a str>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub reply_count: u32,
@@ -335,4 +369,24 @@ where
 
 fn default_true() -> bool {
     true
+}
+
+// ── Social / Contact list ───────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactListResponse {
+    pub id: String,
+    pub pubkey: String,
+    pub created_at: i64,
+    pub tags: Vec<Vec<String>>,
+    pub content: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ContactEntry {
+    pub pubkey: String,
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub petname: Option<String>,
 }

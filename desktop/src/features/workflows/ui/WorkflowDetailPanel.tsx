@@ -1,16 +1,18 @@
 import { ArrowLeft, LayoutList, Pencil, Play } from "lucide-react";
 import * as React from "react";
+import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 
 import {
   useRunApprovalsQuery,
   useTriggerWorkflowMutation,
+  useUpdateWorkflowMutation,
   useWorkflowQuery,
   useWorkflowRunsQuery,
 } from "@/features/workflows/hooks";
+import { WorkflowContextEditorPanel } from "@/features/workflows/ui/WorkflowContextEditorPanel";
 import { WorkflowDefinitionGraph } from "@/features/workflows/ui/WorkflowDefinitionGraph";
 import { WorkflowPropertiesPanel } from "@/features/workflows/ui/WorkflowPropertiesPanel";
 import { WorkflowRunHistoryList } from "@/features/workflows/ui/WorkflowRunHistoryList";
-import type { Workflow } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
   Sheet,
@@ -22,32 +24,35 @@ import {
   getWorkflowDisplayStatus,
   getWorkflowDisplayTitle,
 } from "./workflowDefinition";
+import {
+  formStateToYaml,
+  type WorkflowFormState,
+  yamlToFormState,
+} from "./workflowFormTypes";
 
 type WorkflowDetailPanelProps = {
   workflowId: string;
   channelName?: string | null;
   onClose: () => void;
-  onEdit: (workflow: Workflow) => void;
 };
 
-/**
- * Diagram uses the full content area; on large screens the properties panel is a
- * floating rounded column over the map (no split layout / no vertical chrome).
- */
 export function WorkflowDetailPanel({
   workflowId,
   channelName,
   onClose,
-  onEdit,
 }: WorkflowDetailPanelProps) {
   const workflowQuery = useWorkflowQuery(workflowId);
   const runsQuery = useWorkflowRunsQuery(workflowId);
   const triggerMutation = useTriggerWorkflowMutation(workflowId);
+  const updateMutation = useUpdateWorkflowMutation(workflowId);
   const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
   const [graphSelection, setGraphSelection] = React.useState<string | null>(
     null,
   );
   const [propertiesOpen, setPropertiesOpen] = React.useState(false);
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [draftFormState, setDraftFormState] =
+    React.useState<WorkflowFormState | null>(null);
 
   const handleGraphSelection = React.useCallback((id: string | null) => {
     setGraphSelection(id);
@@ -62,7 +67,25 @@ export function WorkflowDetailPanel({
   const workflow = workflowQuery.data;
   const runs = runsQuery.data ?? [];
   const approvalsQuery = useRunApprovalsQuery(workflowId, selectedRunId);
-  const workflowStatus = workflow ? getWorkflowDisplayStatus(workflow) : null;
+  const graphDefinition = React.useMemo(() => {
+    if (!workflow) {
+      return null;
+    }
+    if (!isEditing || !draftFormState) {
+      return workflow.definition;
+    }
+
+    const parsed = yamlParse(formStateToYaml(draftFormState));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : workflow.definition;
+  }, [draftFormState, isEditing, workflow]);
+  const displayWorkflow = workflow
+    ? { ...workflow, definition: graphDefinition ?? workflow.definition }
+    : null;
+  const workflowStatus = displayWorkflow
+    ? getWorkflowDisplayStatus(displayWorkflow)
+    : null;
 
   const approvalsSnapshot = React.useMemo(
     () => ({
@@ -83,11 +106,66 @@ export function WorkflowDetailPanel({
   }
 
   const propertiesTitle =
-    graphSelection === null
+    isEditing
+      ? graphSelection === null
+        ? "Edit Workflow"
+        : graphSelection === "trigger"
+          ? "Edit Trigger"
+          : "Edit Step"
+      : graphSelection === null
       ? "Workflow"
       : graphSelection === "trigger"
         ? "Trigger"
         : "Step";
+
+  const handleToggleEditing = React.useCallback(() => {
+    if (isEditing) {
+      setIsEditing(false);
+      setDraftFormState(null);
+      updateMutation.reset();
+      return;
+    }
+
+    if (!workflow) {
+      return;
+    }
+
+    const result = yamlToFormState(yamlStringify(workflow.definition));
+    if (!result.ok) {
+      return;
+    }
+
+    setDraftFormState(result.state);
+    setIsEditing(true);
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 1023px)").matches
+    ) {
+      setPropertiesOpen(true);
+    }
+  }, [isEditing, updateMutation, workflow]);
+
+  const handleSaveInlineEdits = React.useCallback(async () => {
+    if (!draftFormState) {
+      return;
+    }
+
+    try {
+      await updateMutation.mutateAsync(formStateToYaml(draftFormState));
+    } catch {
+      // React Query stores the error; keep the editor open.
+    }
+  }, [draftFormState, updateMutation]);
+
+  const handleDraftFormStateChange = React.useCallback(
+    (next: WorkflowFormState) => {
+      if (updateMutation.error) {
+        updateMutation.reset();
+      }
+      setDraftFormState(next);
+    },
+    [updateMutation],
+  );
 
   const runHistoryProps = {
     approvalsQuery: approvalsSnapshot,
@@ -122,12 +200,19 @@ export function WorkflowDetailPanel({
           <div className="min-w-0 pl-0 sm:pl-1">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-sm font-semibold">
-                {workflow ? getWorkflowDisplayTitle(workflow) : "Loading..."}
+                {displayWorkflow
+                  ? getWorkflowDisplayTitle(displayWorkflow)
+                  : "Loading..."}
               </h3>
               {workflowStatus ? (
                 <RunStatusBadge status={workflowStatus} />
               ) : null}
             </div>
+            {channelName ? (
+              <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                {channelName}
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -144,16 +229,16 @@ export function WorkflowDetailPanel({
           ) : null}
           {workflow ? (
             <Button
-              onClick={() => onEdit(workflow)}
+              onClick={handleToggleEditing}
               size="sm"
               variant="outline"
             >
               <Pencil className="mr-1 h-3 w-3" />
-              Edit
+              {isEditing ? "Cancel" : "Edit"}
             </Button>
           ) : null}
           <Button
-            disabled={triggerMutation.isPending}
+            disabled={triggerMutation.isPending || workflowQuery.isLoading}
             onClick={() => void handleTrigger()}
             size="sm"
             variant="outline"
@@ -170,15 +255,17 @@ export function WorkflowDetailPanel({
         </div>
       ) : null}
 
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {/* Map: edge-to-edge on lg so the canvas reads as full-bleed behind the overlay */}
+      <div
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        data-scroll-restoration-id={`workflow-detail:${workflowId}`}
+      >
         <div className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3 lg:absolute lg:inset-0 lg:p-0">
             {workflow ? (
               <WorkflowDefinitionGraph
                 className="min-h-0 flex-1 lg:rounded-none lg:border-0 lg:bg-muted/25"
                 controlsPosition="bottom-left"
-                definition={workflow.definition}
+                definition={graphDefinition ?? workflow.definition}
                 onSelectedNodeIdChange={handleGraphSelection}
                 selectedNodeId={graphSelection}
               />
@@ -200,12 +287,31 @@ export function WorkflowDetailPanel({
             >
               <div className="pointer-events-auto flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-background/45 shadow-2xl backdrop-blur-xl backdrop-saturate-150 dark:border-white/5 dark:bg-background/35 supports-[backdrop-filter]:bg-background/40">
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-                  <WorkflowPropertiesPanel
-                    channelName={channelName}
-                    className="gap-4 p-0"
-                    selectedNodeId={graphSelection}
-                    workflow={workflow}
-                  />
+                  {isEditing && draftFormState ? (
+                    <WorkflowContextEditorPanel
+                      channelName={channelName}
+                      className="gap-4 p-0"
+                      disabled={updateMutation.isPending}
+                      errorMessage={
+                        updateMutation.error instanceof Error
+                          ? updateMutation.error.message
+                          : null
+                      }
+                      formState={draftFormState}
+                      isSaving={updateMutation.isPending}
+                      onChange={handleDraftFormStateChange}
+                      onSave={() => void handleSaveInlineEdits()}
+                      onSelectedNodeIdChange={setGraphSelection}
+                      selectedNodeId={graphSelection}
+                    />
+                  ) : (
+                    <WorkflowPropertiesPanel
+                      channelName={channelName}
+                      className="gap-4 p-0"
+                      selectedNodeId={graphSelection}
+                      workflow={workflow}
+                    />
+                  )}
                   <div className="mt-5 border-t border-border/40 pt-5">
                     <WorkflowRunHistoryList {...runHistoryProps} />
                   </div>
@@ -233,11 +339,29 @@ export function WorkflowDetailPanel({
                 <SheetTitle>{propertiesTitle}</SheetTitle>
               </SheetHeader>
               <div className="min-h-0 flex-1 overflow-y-auto">
-                <WorkflowPropertiesPanel
-                  channelName={channelName}
-                  selectedNodeId={graphSelection}
-                  workflow={workflow}
-                />
+                {isEditing && draftFormState ? (
+                  <WorkflowContextEditorPanel
+                    channelName={channelName}
+                    disabled={updateMutation.isPending}
+                    errorMessage={
+                      updateMutation.error instanceof Error
+                        ? updateMutation.error.message
+                        : null
+                    }
+                    formState={draftFormState}
+                    isSaving={updateMutation.isPending}
+                    onChange={handleDraftFormStateChange}
+                    onSave={() => void handleSaveInlineEdits()}
+                    onSelectedNodeIdChange={setGraphSelection}
+                    selectedNodeId={graphSelection}
+                  />
+                ) : (
+                  <WorkflowPropertiesPanel
+                    channelName={channelName}
+                    selectedNodeId={graphSelection}
+                    workflow={workflow}
+                  />
+                )}
               </div>
             </SheetContent>
           </Sheet>

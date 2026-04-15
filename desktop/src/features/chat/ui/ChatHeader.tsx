@@ -1,4 +1,13 @@
-import { Bot, CircleDot, FileText, Hash, Home, Lock, Zap } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  CircleDot,
+  FileText,
+  Hash,
+  Home,
+  Lock,
+  Zap,
+} from "lucide-react";
 import type * as React from "react";
 
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
@@ -10,7 +19,7 @@ type ChatHeaderProps = {
   description?: string;
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
-  mode?: "home" | "channel" | "agents" | "workflows";
+  mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
   statusBadge?: React.ReactNode;
 };
 
@@ -21,7 +30,7 @@ function ChannelIcon({
 }: {
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
-  mode?: "home" | "channel" | "agents" | "workflows";
+  mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
 }) {
   if (mode === "home") {
     return <Home className="h-5 w-5 text-primary" />;
@@ -33,6 +42,10 @@ function ChannelIcon({
 
   if (mode === "workflows") {
     return <Zap className="h-5 w-5 text-primary" />;
+  }
+
+  if (mode === "pulse") {
+    return <Activity className="h-5 w-5 text-primary" />;
   }
 
   if (channelType === "dm") {
@@ -66,19 +79,23 @@ export function ChatHeader({
       data-tauri-drag-region
     >
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ChannelIcon
             channelType={channelType}
             mode={mode}
             visibility={visibility}
           />
           <h1
-            className="truncate text-lg font-semibold tracking-tight"
+            className="min-w-0 truncate text-lg font-semibold tracking-tight"
             data-testid="chat-title"
           >
             {title}
           </h1>
-          {statusBadge ? <div className="shrink-0">{statusBadge}</div> : null}
+          {statusBadge ? (
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {statusBadge}
+            </div>
+          ) : null}
         </div>
         {description?.trim() ? (
           <p

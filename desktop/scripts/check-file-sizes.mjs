@@ -30,25 +30,39 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
-  ["src-tauri/src/managed_agents/personas.rs", 600], // built-in persona system prompts (Solo, Ralph, Strategist) are long string literals
-  ["src-tauri/src/managed_agents/persona_card.rs", 772], // PNG/ZIP persona card codec + provider/model fields + 27 unit tests (~350 lines of tests); rustfmt adds line breaks around long literals/builders
+  ["src-tauri/src/managed_agents/personas.rs", 830], // built-in persona system prompts + persona pack import/uninstall/list + uninstall safety check
+  ["src-tauri/src/managed_agents/persona_card.rs", 970], // PNG/ZIP/MD persona card codec + pack-zip detection + nested root finder + provider/model/namePool fields + 27 unit tests
   ["src/app/AppShell.tsx", 860], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + memory-leak safeguards
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/messages/hooks.ts", 500], // message query/mutation hooks + optimistic updates
   ["src/features/messages/ui/MessageComposer.tsx", 700], // media upload handlers (paste, drop, dialog) + channelId reset effect + edit mode (pre-fill, save, cancel, escape)
   ["src/features/settings/ui/SettingsView.tsx", 600],
-  ["src/features/sidebar/ui/AppSidebar.tsx", 850], // channels + forums creation forms
+  ["src/features/sidebar/ui/AppSidebar.tsx", 860], // channels + forums creation forms + Pulse nav
   ["src/features/tokens/ui/TokenSettingsCard.tsx", 800],
-  ["src/shared/api/relayClientSession.ts", 790], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore
+  ["src/shared/api/relayClientSession.ts", 835], // durable websocket session manager with reconnect/replay/recovery state + sendTypingIndicator + fetchChannelHistoryBefore + subscribeToChannelLive (huddle TTS) + subscribeToHuddleEvents (huddle indicator)
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
-  ["src-tauri/src/commands/agents.rs", 849], // remote agent lifecycle routing (local + provider branches) + scope enforcement; rustfmt adds line breaks around long tuple/closure blocks
-  ["src-tauri/src/managed_agents/runtime.rs", 650], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle
+  ["src-tauri/src/lib.rs", 710], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration + PTT global shortcut handler + persona pack commands + app_handle storage for event emission
+  ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
+  ["src-tauri/src/commands/agents.rs", 880], // remote agent lifecycle routing (local + provider branches) + scope enforcement + persona pack metadata wiring + mcp_toolsets field
+  ["src-tauri/src/managed_agents/runtime.rs", 690], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle + pack persona live-read
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
-  ["src/features/agents/ui/AgentsView.tsx", 790], // remote agent stop/delete + channel UUID resolution + presence-aware delete guard + persona/team import + provider/model fields
+  ["src/features/huddle/HuddleContext.tsx", 650], // huddle lifecycle context + joinHuddle + connectAndSetupMedia shared helper + activeSpeakers/isReconnecting state + PTT (reusable AudioContext) + TTS subscription + mic level analyser (10fps throttle) + agent pubkey refresh
+  ["src/features/agents/hooks.ts", 540], // agent query/mutation surface now includes built-in persona library activation + useUpdateManagedAgentMutation
+  ["src/features/agents/ui/AgentsView.tsx", 880], // remote agent lifecycle controls + persona/team management + persona import-update dialog wiring + built-in catalog/library state orchestration
+  ["src/features/agents/ui/ManagedAgentRow.tsx", 530], // EditAgentDialog integration + provider/local branching
+  ["src/features/agents/ui/TeamDialog.tsx", 530], // team create/edit dialog with persona multi-select, import button, window drag detection, removal confirmation
+  ["src/features/agents/ui/TeamImportUpdateDialog.tsx", 660], // team import diff preview with member matching/updating/adding/removing sections, LCS line counts, removal confirmation
+  ["src/features/agents/ui/useTeamActions.ts", 510], // team CRUD + export + import + import-update orchestration with query invalidation
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
-  ["src/shared/api/types.ts", 525], // persona provider/model fields + forum types + workflow type re-exports
+  ["src/shared/api/types.ts", 550], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets + sourcePack + UpdateManagedAgentInput edit fields
+  ["src-tauri/src/events.rs", 555], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper + participant p-tag on join/leave
+  ["src-tauri/src/huddle/kokoro.rs", 980], // Kokoro ONNX TTS engine + three-tier G2P + ARPAbet→IPA + CoreML + synth_chunk() public API + style validation + hyphenated compound splitting + 23 unit tests
+  ["src-tauri/src/huddle/mod.rs", 1020], // huddle state machine + Tauri commands + sync protocol doc; state/relay/pipeline extracted + emit_huddle_state_changed wiring
+  ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Kokoro TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
+  ["src-tauri/src/huddle/stt.rs", 580], // STT pipeline + PTT edge-detection flush + PTT gating (is_speech AND ptt_active) + barge-in for VAD mode + rubato resampler + earshot VAD + sherpa-onnx transcription
+  ["src-tauri/src/huddle/preprocessing.rs", 670], // TTS text preprocessing pipeline + unified split_sentences + int_to_words 0-999999 + URL trailing punctuation preservation + 23 unit tests
 ]);
 
 async function walkFiles(directory) {

@@ -27,6 +27,7 @@ type DialogMode = "create" | "edit" | "duplicate";
 
 type WorkflowDialogProps = {
   channels: Channel[];
+  initialCreateDraft?: { prompt: string; yaml: string } | null;
   mode: DialogMode;
   onOpenChange: (open: boolean) => void;
   open: boolean;
@@ -65,6 +66,7 @@ const PENDING_LABELS: Record<DialogMode, string> = {
 
 export function WorkflowDialog({
   channels,
+  initialCreateDraft = null,
   mode,
   onOpenChange,
   open,
@@ -114,9 +116,21 @@ export function WorkflowDialog({
           ? workflowChannelId
           : defaultChannelId;
       setSelectedChannelId(newChannelId);
-      setYamlDefinition(getInitialYaml(mode, workflow));
-      setWorkflowPrompt("");
-      setCreateStage(mode === "create" ? "prompt" : "setup");
+      setYamlDefinition(
+        mode === "create" && initialCreateDraft
+          ? initialCreateDraft.yaml
+          : getInitialYaml(mode, workflow),
+      );
+      setWorkflowPrompt(
+        mode === "create" && initialCreateDraft ? initialCreateDraft.prompt : "",
+      );
+      setCreateStage(
+        mode === "create"
+          ? initialCreateDraft
+            ? "setup"
+            : "prompt"
+          : "setup",
+      );
       setSavedWebhookInfo(null);
       resetCreate();
       resetUpdate();
@@ -126,6 +140,7 @@ export function WorkflowDialog({
     mode,
     workflow,
     workflowChannelId,
+    initialCreateDraft,
     defaultChannelId,
     resetCreate,
     resetUpdate,

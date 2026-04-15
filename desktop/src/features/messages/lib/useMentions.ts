@@ -2,6 +2,7 @@ import * as React from "react";
 
 import {
   useManagedAgentsQuery,
+  usePersonasQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
@@ -21,6 +22,8 @@ export function useMentions(channelId: string | null) {
   const members = membersQuery.data;
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
+  const personasQuery = usePersonasQuery();
+
   const managedAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
@@ -31,6 +34,7 @@ export function useMentions(channelId: string | null) {
       ),
     [managedAgentsQuery.data],
   );
+
   const relayAgentNamesByPubkey = React.useMemo(
     () =>
       new Map(
@@ -42,44 +46,71 @@ export function useMentions(channelId: string | null) {
     [relayAgentsQuery.data],
   );
 
-  const knownNames = React.useMemo<string[]>(() => {
-    if (!members) return [];
-    const names: string[] = [];
-    for (const member of members) {
-      const name =
-        member.displayName ??
-        managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
-        relayAgentNamesByPubkey.get(member.pubkey.toLowerCase());
-      if (name) {
-        names.push(name);
+  const personaNameByPubkey = React.useMemo(() => {
+    const agents = managedAgentsQuery.data ?? [];
+    const personas = personasQuery.data ?? [];
+    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
+    const lookup = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.personaId) {
+        const name = personaById.get(agent.personaId);
+        if (name) {
+          lookup.set(agent.pubkey.toLowerCase(), name);
+        }
       }
     }
+    return lookup;
+  }, [managedAgentsQuery.data, personasQuery.data]);
+
+  const knownNames = React.useMemo<string[]>(() => {
+    const names: string[] = [];
+    const seen = new Set<string>();
+
+    for (const member of members ?? []) {
+      const pubkeyLower = member.pubkey.toLowerCase();
+      const name =
+        member.displayName ??
+        managedAgentNamesByPubkey.get(pubkeyLower) ??
+        relayAgentNamesByPubkey.get(pubkeyLower);
+      if (name && !seen.has(name.toLowerCase())) {
+        names.push(name);
+        seen.add(name.toLowerCase());
+      }
+
+      const personaName = personaNameByPubkey.get(pubkeyLower);
+      if (personaName && !seen.has(personaName.toLowerCase())) {
+        names.push(personaName);
+        seen.add(personaName.toLowerCase());
+      }
+    }
+
     if (channelId) {
       for (const agent of relayAgentsQuery.data ?? []) {
         if (!agent.channelIds.includes(channelId)) {
           continue;
         }
-        if (!names.includes(agent.name)) {
+        if (!seen.has(agent.name.toLowerCase())) {
           names.push(agent.name);
+          seen.add(agent.name.toLowerCase());
         }
       }
     }
+
     return names;
   }, [
     channelId,
-    members,
     managedAgentNamesByPubkey,
+    members,
+    personaNameByPubkey,
     relayAgentNamesByPubkey,
     relayAgentsQuery.data,
   ]);
 
-  /** Lower-cased version of knownNames, used for case-insensitive prefix matching. */
   const knownNamesLower = React.useMemo<string[]>(
     () => knownNames.map((n) => n.toLowerCase()),
     [knownNames],
   );
 
-  // --- Debounce infrastructure for updateMentionQuery ---
   const debounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -87,12 +118,10 @@ export function useMentions(channelId: string | null) {
   const latestCursorRef = React.useRef<number>(0);
   const knownNamesLowerRef = React.useRef<string[]>(knownNamesLower);
 
-  // Keep the known-names ref in sync so the debounced callback never reads stale data.
   React.useEffect(() => {
     knownNamesLowerRef.current = knownNamesLower;
   }, [knownNamesLower]);
 
-  // Clean up any pending debounce timer on unmount.
   React.useEffect(() => {
     return () => {
       if (debounceTimerRef.current !== null) {
@@ -107,33 +136,57 @@ export function useMentions(channelId: string | null) {
     }
 
     const lowerQuery = mentionQuery.toLowerCase();
+
+    const scoreLabel = (label: string): number | null => {
+      const lower = label.toLowerCase();
+      if (lower.startsWith(lowerQuery)) return 0;
+      const words = lower.split(/[\s\-_]+/).filter(Boolean);
+      if (words.some((word) => word.startsWith(lowerQuery))) return 1;
+      return null;
+    };
+
     return (members ?? [])
       .map((member) => {
-        const fallbackName =
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
-          relayAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
-          member.pubkey.slice(0, 8);
+        const pubkeyLower = member.pubkey.toLowerCase();
+        const actualName =
+          member.displayName ??
+          managedAgentNamesByPubkey.get(pubkeyLower) ??
+          relayAgentNamesByPubkey.get(pubkeyLower);
+        const personaName = personaNameByPubkey.get(pubkeyLower) ?? null;
+        const label = actualName ?? member.pubkey.slice(0, 8);
 
-        return {
-          member,
-          label: member.displayName ?? fallbackName,
-        };
+        const nameScore = actualName ? scoreLabel(actualName) : null;
+        const personaScore = personaName ? scoreLabel(personaName) : null;
+        const labelScore =
+          nameScore !== null && personaScore !== null
+            ? Math.min(nameScore, personaScore)
+            : (nameScore ?? personaScore);
+
+        const pubkeyScore = pubkeyLower.startsWith(lowerQuery)
+          ? 3
+          : pubkeyLower.includes(lowerQuery)
+            ? 4
+            : null;
+        const score = labelScore !== null ? labelScore : pubkeyScore;
+
+        return { member, label, personaName, score };
       })
       .filter(
-        ({ label, member }) =>
-          label.toLowerCase().includes(lowerQuery) ||
-          member.pubkey.toLowerCase().includes(lowerQuery),
+        (item): item is typeof item & { score: number } => item.score !== null,
       )
+      .sort((a, b) => a.score - b.score)
       .slice(0, 8)
-      .map(({ member, label }) => ({
+      .map(({ member, label, personaName }) => ({
         pubkey: member.pubkey,
         displayName: label,
         role: member.role === "admin" ? "admin" : null,
+        personaName,
       }));
   }, [
     managedAgentNamesByPubkey,
     members,
     mentionQuery,
+    personaNameByPubkey,
     relayAgentNamesByPubkey,
   ]);
 
@@ -145,7 +198,6 @@ export function useMentions(channelId: string | null) {
       content: string,
       selectionEnd: number,
     ): { nextContent: string; nextCursor: number } => {
-      // Cancel any pending debounced detection — user already selected
       if (debounceTimerRef.current !== null) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
@@ -169,11 +221,9 @@ export function useMentions(channelId: string | null) {
 
   const updateMentionQuery = React.useCallback(
     (value: string, cursorPosition: number) => {
-      // Stash the latest values so the debounced callback always uses fresh data.
       latestValueRef.current = value;
       latestCursorRef.current = cursorPosition;
 
-      // Clear any previously scheduled detection.
       if (debounceTimerRef.current !== null) {
         clearTimeout(debounceTimerRef.current);
       }
@@ -196,7 +246,6 @@ export function useMentions(channelId: string | null) {
         }
       }, MENTION_DEBOUNCE_MS);
     },
-    // Stable: refs are used inside the timeout, so no reactive deps needed.
     [],
   );
 
@@ -223,11 +272,17 @@ export function useMentions(channelId: string | null) {
         if (pubkeys.includes(member.pubkey)) {
           continue;
         }
+        const pubkeyLower = member.pubkey.toLowerCase();
         const name =
           member.displayName ??
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase()) ??
-          relayAgentNamesByPubkey.get(member.pubkey.toLowerCase());
+          managedAgentNamesByPubkey.get(pubkeyLower) ??
+          relayAgentNamesByPubkey.get(pubkeyLower);
+        const personaName = personaNameByPubkey.get(pubkeyLower);
         if (name && hasMention(name)) {
+          pubkeys.push(member.pubkey);
+          continue;
+        }
+        if (personaName && hasMention(personaName)) {
           pubkeys.push(member.pubkey);
         }
       }
@@ -238,6 +293,9 @@ export function useMentions(channelId: string | null) {
         ) {
           continue;
         }
+        if (channelId && !agent.channelIds.includes(channelId)) {
+          continue;
+        }
         if (hasMention(agent.name)) {
           pubkeys.push(agent.pubkey);
         }
@@ -246,8 +304,10 @@ export function useMentions(channelId: string | null) {
       return [...new Set(pubkeys)];
     },
     [
-      members,
+      channelId,
       managedAgentNamesByPubkey,
+      members,
+      personaNameByPubkey,
       relayAgentNamesByPubkey,
       relayAgentsQuery.data,
     ],

@@ -238,7 +238,6 @@ function buildMessageStep(
 
   return {
     id: "step_1",
-    name: "Notify channel",
     action: "send_message",
     channel: trigger.on === "webhook" ? defaultChannelId : undefined,
     text,
@@ -259,18 +258,14 @@ function buildPrimaryActionStep(
   ) {
     return {
       id: "step_1",
-      name: "Call webhook",
       action: "call_webhook",
       url: url ?? "https://example.com/webhook",
-      method: "POST",
-      body: '{"text":"{{trigger.text}}"}',
     };
   }
 
   if (/\b(direct message| dm |^dm\b|\bdm\b)\b/i.test(` ${lower} `)) {
     return {
       id: "step_1",
-      name: "Send direct message",
       action: "send_dm",
       to: "{{trigger.author}}",
       text: "Workflow triggered.",
@@ -280,11 +275,9 @@ function buildPrimaryActionStep(
   if (/\b(approve|approval)\b/i.test(prompt)) {
     return {
       id: "step_1",
-      name: "Request approval",
       action: "request_approval",
       from: "channel_admins",
       message: "Approve this workflow run.",
-      timeout: "24h",
     };
   }
 
@@ -293,7 +286,6 @@ function buildPrimaryActionStep(
   ) {
     return {
       id: "step_1",
-      name: "Add reaction",
       action: "add_reaction",
       emoji: inferEmoji(prompt) ?? "eyes",
     };
@@ -302,7 +294,6 @@ function buildPrimaryActionStep(
   if (/\b(set|change|update)\b.*\btopic\b/i.test(prompt)) {
     return {
       id: "step_1",
-      name: "Set channel topic",
       action: "set_channel_topic",
       topic: inferTopic(prompt) ?? "Workflow updated topic",
     };
@@ -326,7 +317,6 @@ function buildSteps(
   return [
     {
       id: "step_1",
-      name: "Wait",
       action: "delay",
       duration: delayDuration,
     },
@@ -346,7 +336,7 @@ export function draftWorkflowFromPrompt(
 
   return {
     name: inferWorkflowName(trimmedPrompt, trigger),
-    description: trimmedPrompt,
+    description: "",
     enabled: true,
     trigger,
     steps: buildSteps(trimmedPrompt, trigger, options?.defaultChannelId),

@@ -92,6 +92,8 @@ type RawChannel = {
   archived_at: string | null;
   participants: string[];
   participant_pubkeys: string[];
+  ttl_seconds: number | null;
+  ttl_deadline: string | null;
 };
 
 type RawChannelWithMembership = RawChannel & {
@@ -161,6 +163,69 @@ type RawHomeFeedResponse = {
   };
 };
 
+type RawThreadSummary = {
+  reply_count: number;
+  descendant_count: number;
+  last_reply_at: number | null;
+  participants: string[];
+};
+
+type RawForumPost = {
+  event_id: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  created_at: number;
+  channel_id: string;
+  tags: string[][];
+  thread_summary: RawThreadSummary | null;
+  reactions: unknown;
+};
+
+type RawForumPostsResponse = {
+  messages: RawForumPost[];
+  next_cursor: number | null;
+};
+
+type RawForumReply = {
+  event_id: string;
+  pubkey: string;
+  content: string;
+  kind: number;
+  created_at: number;
+  channel_id: string;
+  tags: string[][];
+  parent_event_id: string | null;
+  root_event_id: string | null;
+  depth: number;
+  broadcast: boolean;
+  reactions: unknown;
+};
+
+type RawForumThreadResponse = {
+  root: RawForumPost;
+  replies: RawForumReply[];
+  total_replies: number;
+  next_cursor: string | null;
+};
+
+type RawUserNote = {
+  id: string;
+  pubkey: string;
+  created_at: number;
+  content: string;
+};
+
+type RawUserNotesCursor = {
+  before: number;
+  before_id: string;
+};
+
+type RawUserNotesResponse = {
+  notes: RawUserNote[];
+  next_cursor: RawUserNotesCursor | null;
+};
+
 type RawSearchHit = {
   event_id: string;
   content: string;
@@ -213,6 +278,7 @@ type RawRelayAgent = {
   name: string;
   agent_type: string;
   channels: string[];
+  channel_ids: string[];
   capabilities: string[];
   status: PresenceStatus;
 };
@@ -293,6 +359,16 @@ type RawPersona = {
   avatar_url: string | null;
   system_prompt: string;
   is_builtin: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type RawTeam = {
+  id: string;
+  name: string;
+  description: string | null;
+  persona_ids: string[];
   created_at: string;
   updated_at: string;
 };
@@ -320,6 +396,9 @@ declare global {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
+    __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+      channelName: string;
+    }) => boolean;
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
@@ -329,6 +408,10 @@ declare global {
       channelName: string;
       pubkey?: string;
     }) => RelayEvent;
+    __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+      command: string,
+      payload?: Record<string, unknown>,
+    ) => Promise<unknown>;
     __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
   }
 }
@@ -388,6 +471,8 @@ function toRawChannel(channel: MockChannel): RawChannelWithMembership {
     archived_at: channel.archived_at,
     participants: [...channel.participants],
     participant_pubkeys: [...channel.participant_pubkeys],
+    ttl_seconds: channel.ttl_seconds ?? null,
+    ttl_deadline: channel.ttl_deadline ?? null,
     is_member: channel.members.some(
       (member) =>
         member.pubkey === MOCK_IDENTITY_PUBKEY ||
@@ -434,11 +519,15 @@ function createMockChannel(
     | "updated_at"
     | "participant_pubkeys"
     | "participants"
+    | "ttl_seconds"
+    | "ttl_deadline"
   > & {
     created_minutes_ago: number;
     members: RawChannelMember[];
     participant_pubkeys?: string[];
     participants?: string[];
+    ttl_seconds?: number | null;
+    ttl_deadline?: string | null;
     updated_minutes_ago?: number;
   },
 ): MockChannel {
@@ -449,6 +538,8 @@ function createMockChannel(
     members: cloneMembers(seed.members),
     participant_pubkeys: [...(seed.participant_pubkeys ?? [])],
     participants: [...(seed.participants ?? [])],
+    ttl_seconds: seed.ttl_seconds ?? null,
+    ttl_deadline: seed.ttl_deadline ?? null,
     updated_at: isoMinutesAgo(
       seed.updated_minutes_ago ?? seed.created_minutes_ago,
     ),
@@ -529,6 +620,7 @@ function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
   return {
     ...agent,
     channels: [...agent.channels],
+    channel_ids: [...agent.channel_ids],
     capabilities: [...agent.capabilities],
   };
 }
@@ -588,52 +680,32 @@ function resetMockPersonas() {
   const now = new Date().toISOString();
   mockPersonas = [
     {
-      id: "builtin:orchestrator",
-      display_name: "Orchestrator",
+      id: "builtin:solo",
+      display_name: "Solo",
       avatar_url: null,
-      system_prompt:
-        "You are an orchestration agent. Coordinate multi-step work across specialized agents, keep the overall plan moving, and synthesize results into a clear final outcome. When another agent should take a task, @mention them explicitly with the assignment, expected deliverable, and any relevant constraints or deadlines.",
+      system_prompt: "You are Solo.",
       is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
     {
-      id: "builtin:researcher",
-      display_name: "Researcher",
+      id: "builtin:ralph",
+      display_name: "Ralph",
       avatar_url: null,
-      system_prompt:
-        "You are a research agent. Gather relevant information, compare sources, call out uncertainty, and return concise findings with evidence.",
+      system_prompt: "You are Ralph.",
       is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
     {
-      id: "builtin:planner",
-      display_name: "Planner",
+      id: "builtin:scout",
+      display_name: "Scout",
       avatar_url: null,
-      system_prompt:
-        "You are a planning agent. Turn ambiguous requests into structured plans with milestones, dependencies, risks, and clear next actions. Do not implement the work yourself unless asked.",
+      system_prompt: "You are Scout.",
       is_builtin: true,
-      created_at: now,
-      updated_at: now,
-    },
-    {
-      id: "builtin:implementer",
-      display_name: "Builder",
-      avatar_url: null,
-      system_prompt:
-        "You are a builder agent. Execute tasks directly, make code and configuration changes carefully, validate the result, and explain important decisions and follow-up items.",
-      is_builtin: true,
-      created_at: now,
-      updated_at: now,
-    },
-    {
-      id: "builtin:refactor",
-      display_name: "Refactor",
-      avatar_url: null,
-      system_prompt:
-        "You are a refactoring agent. Improve structure, naming, duplication, and module boundaries without changing externally observable behavior. Keep changes incremental, preserve compatibility, and add or update validation when behavior could drift.",
-      is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
@@ -641,13 +713,17 @@ function resetMockPersonas() {
       id: "builtin:reviewer",
       display_name: "Reviewer",
       avatar_url: null,
-      system_prompt:
-        "You are a review agent. Inspect plans, code, and outputs for bugs, regressions, edge cases, security issues, and missing tests. Prioritize findings by severity, cite concrete evidence, and keep summaries secondary to the actual review.",
+      system_prompt: "You are Reviewer.",
       is_builtin: true,
+      is_active: false,
       created_at: now,
       updated_at: now,
     },
   ];
+}
+
+function resetMockTeams() {
+  mockTeams = [];
 }
 
 function getMockProfileByPubkey(pubkey: string): RawProfile | null {
@@ -982,12 +1058,17 @@ let mockTokens: MockToken[] = [];
 let mockMintTokenError: string | null = null;
 let mockManagedAgents: MockManagedAgent[] = [];
 let mockPersonas: RawPersona[] = [];
+let mockTeams: RawTeam[] = [];
 let mockRelayAgents: RawRelayAgent[] = [
   {
     pubkey: ALICE_PUBKEY,
     name: "alice",
     agent_type: "goose",
     channels: ["general", "agents"],
+    channel_ids: [
+      "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+      "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+    ],
     capabilities: ["search", "summaries", "workflows"],
     status: "online",
   },
@@ -996,6 +1077,7 @@ let mockRelayAgents: RawRelayAgent[] = [
     name: "charlie",
     agent_type: "codex",
     channels: ["general"],
+    channel_ids: ["9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
     capabilities: ["code", "reviews"],
     status: "away",
   },
@@ -1256,17 +1338,36 @@ function syncMockRelayAgentsFromManagedAgents() {
       !mockManagedAgents.some((managed) => managed.pubkey === agent.pubkey),
   );
   const managedAgentsAsRelay: RawRelayAgent[] = mockManagedAgents.map(
-    (agent) => ({
-      pubkey: agent.pubkey,
-      name: agent.name,
-      agent_type: agent.agent_command,
-      channels: ["agents"],
-      capabilities: ["messages", "channels", "mcp"],
-      status: agent.status === "running" ? "online" : "offline",
-    }),
+    (agent) => {
+      const memberships = getManagedAgentRelayMembership(agent.pubkey);
+
+      return {
+        pubkey: agent.pubkey,
+        name: agent.name,
+        agent_type: agent.agent_command,
+        channels: memberships.channels,
+        channel_ids: memberships.channelIds,
+        capabilities: ["messages", "channels", "mcp"],
+        status:
+          agent.status === "running" || agent.status === "deployed"
+            ? "online"
+            : "offline",
+      };
+    },
   );
 
   mockRelayAgents = [...baseAgents, ...managedAgentsAsRelay];
+}
+
+function getManagedAgentRelayMembership(pubkey: string) {
+  const memberships = mockChannels.filter((channel) =>
+    channel.members.some((member) => member.pubkey === pubkey),
+  );
+
+  return {
+    channelIds: memberships.map((channel) => channel.id),
+    channels: memberships.map((channel) => channel.name),
+  };
 }
 
 function getConfig(): E2eConfig | undefined {
@@ -1470,7 +1571,35 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
             sig: "mocksig".repeat(20).slice(0, 128),
           },
         ]
-      : [];
+      : channelId === "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"
+        ? [
+            {
+              id: "mock-forum-release-thread",
+              pubkey:
+                "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+              created_at: Math.floor(Date.now() / 1000) - 90 * 60,
+              kind: 45001,
+              tags: [["h", channelId]],
+              content: "Release checklist: async feedback thread.",
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+            {
+              id: "mock-forum-release-reply",
+              pubkey: ALICE_PUBKEY,
+              created_at: Math.floor(Date.now() / 1000) - 80 * 60,
+              kind: 45003,
+              tags: buildReplyMessageTags(
+                channelId,
+                ALICE_PUBKEY,
+                "mock-forum-release-thread",
+                "mock-forum-release-thread",
+                undefined,
+              ),
+              content: "Looks good to me. We should ship it.",
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+          ]
+        : [];
 
   mockMessages.set(channelId, seeded);
   return seeded;
@@ -1495,6 +1624,21 @@ function emitMockLiveEvent(channelId: string, event: RelayEvent) {
       }
     }
   }
+}
+
+function hasMockLiveSubscription(channelId: string) {
+  for (const socket of mockSockets.values()) {
+    for (const subscribedChannelId of socket.subscriptions.values()) {
+      if (
+        subscribedChannelId === channelId ||
+        subscribedChannelId === GLOBAL_MOCK_SUBSCRIPTION
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function recordMockMessage(channelId: string, event: RelayEvent) {
@@ -1534,6 +1678,200 @@ function emitMockTypingIndicator(channelId: string, pubkey: string) {
 
   emitMockLiveEvent(channelId, event);
   return event;
+}
+
+function toRawForumPost(
+  event: RelayEvent,
+  channelId: string,
+  threadSummary: RawThreadSummary | null,
+): RawForumPost {
+  return {
+    event_id: event.id,
+    pubkey: event.pubkey,
+    content: event.content,
+    kind: event.kind,
+    created_at: event.created_at,
+    channel_id: channelId,
+    tags: event.tags,
+    thread_summary: threadSummary,
+    reactions: null,
+  };
+}
+
+function toRawForumReply(event: RelayEvent, channelId: string): RawForumReply {
+  const thread = getThreadReferenceFromTags(event.tags);
+
+  return {
+    event_id: event.id,
+    pubkey: event.pubkey,
+    content: event.content,
+    kind: event.kind,
+    created_at: event.created_at,
+    channel_id: channelId,
+    tags: event.tags,
+    parent_event_id: thread.parentEventId,
+    root_event_id: thread.rootEventId,
+    depth:
+      thread.rootEventId && thread.parentEventId !== thread.rootEventId ? 2 : 1,
+    broadcast: false,
+    reactions: null,
+  };
+}
+
+async function handleGetForumPosts(args: {
+  channelId: string;
+  limit?: number | null;
+  before?: number | null;
+}): Promise<RawForumPostsResponse> {
+  const events = getMockMessageStore(args.channelId);
+  const posts = events
+    .filter((event) => event.kind === 45001)
+    .filter((event) => (args.before ? event.created_at < args.before : true))
+    .sort((left, right) => right.created_at - left.created_at)
+    .slice(0, args.limit ?? 50)
+    .map((event) => {
+      const replies = events.filter((candidate) => {
+        if (candidate.kind !== 45003) {
+          return false;
+        }
+
+        const thread = getThreadReferenceFromTags(candidate.tags);
+        return (thread.rootEventId ?? thread.parentEventId) === event.id;
+      });
+
+      return toRawForumPost(event, args.channelId, {
+        reply_count: replies.length,
+        descendant_count: replies.length,
+        last_reply_at:
+          replies.length > 0 ? replies[replies.length - 1].created_at : null,
+        participants: [...new Set(replies.map((reply) => reply.pubkey))],
+      });
+    });
+
+  return {
+    messages: posts,
+    next_cursor: null,
+  };
+}
+
+async function handleGetForumThread(args: {
+  channelId: string;
+  eventId: string;
+}): Promise<RawForumThreadResponse> {
+  const events = getMockMessageStore(args.channelId);
+  const root = events.find(
+    (event) => event.id === args.eventId && event.kind === 45001,
+  );
+  if (!root) {
+    throw new Error(`Mock forum thread not found: ${args.eventId}`);
+  }
+
+  const replies = events
+    .filter((event) => event.kind === 45003)
+    .filter((event) => {
+      const thread = getThreadReferenceFromTags(event.tags);
+      return (thread.rootEventId ?? thread.parentEventId) === root.id;
+    })
+    .sort((left, right) => left.created_at - right.created_at)
+    .map((event) => toRawForumReply(event, args.channelId));
+
+  return {
+    root: toRawForumPost(root, args.channelId, {
+      reply_count: replies.length,
+      descendant_count: replies.length,
+      last_reply_at:
+        replies.length > 0 ? replies[replies.length - 1].created_at : null,
+      participants: [...new Set(replies.map((reply) => reply.pubkey))],
+    }),
+    replies,
+    total_replies: replies.length,
+    next_cursor: null,
+  };
+}
+
+function getMockUserNotes(pubkey: string): RawUserNote[] {
+  const now = Math.floor(Date.now() / 1000);
+
+  if (pubkey === DEFAULT_MOCK_IDENTITY.pubkey) {
+    return [
+      {
+        id: "mock-note-launch",
+        pubkey,
+        created_at: now - 20 * 60,
+        content: "Shipped the new desktop sidebar polish today.",
+      },
+      {
+        id: "mock-note-forum",
+        pubkey,
+        created_at: now - 3 * 60 * 60,
+        content: "Forum threads feel like the right home for slower decisions.",
+      },
+    ];
+  }
+
+  if (pubkey === ALICE_PUBKEY) {
+    return [
+      {
+        id: "mock-alice-note-release",
+        pubkey,
+        created_at: now - 45 * 60,
+        content: "Release checklist is ready for async feedback.",
+      },
+      {
+        id: "mock-alice-note-design",
+        pubkey,
+        created_at: now - 5 * 60 * 60,
+        content: "Trying a lighter forum layout for longer-form notes.",
+      },
+    ];
+  }
+
+  return [];
+}
+
+async function handleGetUserNotes(
+  args: {
+    pubkey: string;
+    limit?: number | null;
+    before?: number | null;
+    beforeId?: string | null;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawUserNotesResponse> {
+  const identity = getIdentity(config);
+  if (!identity) {
+    const notes = getMockUserNotes(args.pubkey)
+      .filter((note) => (args.before ? note.created_at < args.before : true))
+      .sort((left, right) => right.created_at - left.created_at)
+      .slice(0, args.limit ?? 50);
+
+    return {
+      notes,
+      next_cursor: null,
+    };
+  }
+
+  const url = new URL(
+    `/api/users/${args.pubkey}/notes`,
+    getRelayHttpUrl(config),
+  );
+  if (args.limit !== undefined && args.limit !== null) {
+    url.searchParams.set("limit", String(args.limit));
+  }
+  if (args.before !== undefined && args.before !== null) {
+    url.searchParams.set("before", String(args.before));
+  }
+  if (args.beforeId) {
+    url.searchParams.set("before_id", args.beforeId);
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      "X-Pubkey": identity.pubkey,
+    },
+  });
+  await assertOk(response);
+  return response.json();
 }
 
 function createMockEvent(
@@ -1897,10 +2235,15 @@ async function handleCreateChannel(
     channelType: "stream" | "forum";
     visibility: "open" | "private";
     description?: string;
+    ttlSeconds?: number;
   },
   config: E2eConfig | undefined,
 ) {
   const identity = getIdentity(config);
+  const ttlDeadline =
+    typeof args.ttlSeconds === "number"
+      ? new Date(Date.now() + args.ttlSeconds * 1_000).toISOString()
+      : null;
   if (!identity) {
     const owner = createCurrentMember(config, "owner");
     const channel = createMockChannel({
@@ -1918,6 +2261,8 @@ async function handleCreateChannel(
       topic_set_at: null,
       purpose_set_by: null,
       purpose_set_at: null,
+      ttl_seconds: args.ttlSeconds ?? null,
+      ttl_deadline: ttlDeadline,
       topic_required: false,
       max_members: null,
       nip29_group_id: null,
@@ -1938,6 +2283,9 @@ async function handleCreateChannel(
   ];
   if (args.description) {
     tags.push(["about", args.description]);
+  }
+  if (typeof args.ttlSeconds === "number") {
+    tags.push(["ttl", String(args.ttlSeconds)]);
   }
   await submitSignedEvent(config, { kind: 9007, content: "", tags });
 
@@ -2279,6 +2627,7 @@ async function handleAddChannelMembers(
 
     syncMockChannel(channel);
     touchMockChannel(channel);
+    syncMockRelayAgentsFromManagedAgents();
     return {
       added,
       errors,
@@ -2320,6 +2669,7 @@ async function handleRemoveChannelMember(
     );
     syncMockChannel(channel);
     touchMockChannel(channel);
+    syncMockRelayAgentsFromManagedAgents();
     return;
   }
 
@@ -2715,6 +3065,7 @@ async function handleCreatePersona(args: {
     avatar_url: args.input.avatarUrl?.trim() || null,
     system_prompt: args.input.systemPrompt.trim(),
     is_builtin: false,
+    is_active: true,
     created_at: now,
     updated_at: now,
   };
@@ -2756,6 +3107,11 @@ async function handleDeletePersona(args: { id: string }): Promise<void> {
   if (persona.is_builtin) {
     throw new Error("Built-in personas cannot be deleted.");
   }
+  if (mockTeams.some((team) => team.persona_ids.includes(args.id))) {
+    throw new Error(
+      `${persona.display_name} is still referenced by a team. Remove it from those teams first.`,
+    );
+  }
 
   mockPersonas = mockPersonas.filter((candidate) => candidate.id !== args.id);
   const now = new Date().toISOString();
@@ -2765,6 +3121,148 @@ async function handleDeletePersona(args: { id: string }): Promise<void> {
       agent.updated_at = now;
     }
   }
+}
+
+async function handleSetPersonaActive(args: {
+  id: string;
+  active: boolean;
+}): Promise<RawPersona> {
+  const persona = mockPersonas.find((candidate) => candidate.id === args.id);
+  if (!persona) {
+    throw new Error(`Persona ${args.id} not found.`);
+  }
+  if (!persona.is_builtin) {
+    throw new Error(
+      "Only built-in personas can be added to or removed from My Agents.",
+    );
+  }
+  if (
+    !args.active &&
+    mockManagedAgents.some((agent) => agent.persona_id === args.id)
+  ) {
+    throw new Error(
+      `${persona.display_name} is still assigned to a managed agent. Remove or reassign those agents first.`,
+    );
+  }
+  if (
+    !args.active &&
+    mockTeams.some((team) => team.persona_ids.includes(args.id))
+  ) {
+    throw new Error(
+      `${persona.display_name} is still referenced by a team. Remove it from those teams first.`,
+    );
+  }
+
+  persona.is_active = args.active;
+  persona.updated_at = new Date().toISOString();
+  return { ...persona };
+}
+
+function ensureMockPersonaIsActive(personaId: string) {
+  const persona = mockPersonas.find((candidate) => candidate.id === personaId);
+  if (!persona) {
+    throw new Error(`persona ${personaId} not found`);
+  }
+  if (!persona.is_active) {
+    throw new Error(
+      `${persona.display_name} is not in My Agents. Choose it from Persona Catalog first.`,
+    );
+  }
+}
+
+function ensureMockPersonaIdsAreActive(personaIds: string[]) {
+  for (const personaId of personaIds) {
+    ensureMockPersonaIsActive(personaId);
+  }
+}
+
+async function handleListTeams(): Promise<RawTeam[]> {
+  return mockTeams.map((team) => ({
+    ...team,
+    persona_ids: [...team.persona_ids],
+  }));
+}
+
+async function handleCreateTeam(args: {
+  input: {
+    name: string;
+    description?: string;
+    personaIds: string[];
+  };
+}): Promise<RawTeam> {
+  ensureMockPersonaIdsAreActive(args.input.personaIds);
+  const now = new Date().toISOString();
+  const team: RawTeam = {
+    id: crypto.randomUUID(),
+    name: args.input.name.trim(),
+    description: args.input.description?.trim() || null,
+    persona_ids: [...args.input.personaIds],
+    created_at: now,
+    updated_at: now,
+  };
+  mockTeams.push(team);
+  return { ...team, persona_ids: [...team.persona_ids] };
+}
+
+async function handleUpdateTeam(args: {
+  input: {
+    id: string;
+    name: string;
+    description?: string;
+    personaIds: string[];
+  };
+}): Promise<RawTeam> {
+  const team = mockTeams.find((candidate) => candidate.id === args.input.id);
+  if (!team) {
+    throw new Error(`Team ${args.input.id} not found.`);
+  }
+
+  ensureMockPersonaIdsAreActive(args.input.personaIds);
+  team.name = args.input.name.trim();
+  team.description = args.input.description?.trim() || null;
+  team.persona_ids = [...args.input.personaIds];
+  team.updated_at = new Date().toISOString();
+
+  return { ...team, persona_ids: [...team.persona_ids] };
+}
+
+async function handleDeleteTeam(args: { id: string }): Promise<void> {
+  mockTeams = mockTeams.filter((candidate) => candidate.id !== args.id);
+}
+
+async function handleExportTeamToJson(args: { id: string }): Promise<boolean> {
+  const team = mockTeams.find((candidate) => candidate.id === args.id);
+  if (!team) {
+    throw new Error(`Team ${args.id} not found.`);
+  }
+
+  const missingPersonaIds = team.persona_ids.filter(
+    (personaId) =>
+      !mockPersonas.some((candidate) => candidate.id === personaId),
+  );
+  if (missingPersonaIds.length > 0) {
+    throw new Error(
+      `Team ${team.name} references missing personas: ${missingPersonaIds.join(", ")}. Repair the team before exporting.`,
+    );
+  }
+
+  return true;
+}
+
+async function handleParseTeamFile(): Promise<{
+  name: string;
+  description: string | null;
+  personas: Array<{
+    display_name: string;
+    system_prompt: string;
+    avatar_url: string | null;
+  }>;
+}> {
+  return {
+    name: "Imported Team",
+    description: null,
+    personas: [],
+  };
 }
 
 async function handleParsePersonaFiles(args: {
@@ -2828,6 +3326,9 @@ async function handleCreateManagedAgent(args: {
       | { type: "provider"; id: string; config: Record<string, unknown> };
   };
 }): Promise<RawCreateManagedAgentResponse> {
+  if (args.input.personaId) {
+    ensureMockPersonaIsActive(args.input.personaId);
+  }
   const name = args.input.name.trim();
   const now = new Date().toISOString();
   const pubkey = crypto
@@ -3005,11 +3506,15 @@ async function handleGetManagedAgentLog(args: {
 async function handleUpdateManagedAgent(args: {
   input: {
     pubkey: string;
+    name?: string;
     model?: string | null;
     systemPrompt?: string | null;
   };
-}): Promise<RawManagedAgent> {
+}): Promise<{ agent: RawManagedAgent; profile_sync_error: string | null }> {
   const agent = getMockManagedAgent(args.input.pubkey);
+  if (args.input.name !== undefined) {
+    agent.name = args.input.name;
+  }
   if (args.input.model !== undefined) {
     agent.model = args.input.model;
   }
@@ -3017,7 +3522,7 @@ async function handleUpdateManagedAgent(args: {
     agent.system_prompt = args.input.systemPrompt;
   }
   agent.updated_at = new Date().toISOString();
-  return cloneManagedAgent(agent);
+  return { agent: cloneManagedAgent(agent), profile_sync_error: null };
 }
 
 async function handleSearchMessages(
@@ -3076,6 +3581,16 @@ async function handleSearchMessages(
         channel_name: "watercooler",
         created_at: now - 90 * 60,
         score: 5.8,
+      },
+      {
+        event_id: "mock-forum-release-reply",
+        content: "Looks good to me. We should ship it.",
+        kind: 45003,
+        pubkey: ALICE_PUBKEY,
+        channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+        channel_name: "watercooler",
+        created_at: now - 80 * 60,
+        score: 5.2,
       },
     ];
 
@@ -3281,6 +3796,21 @@ async function handleGetEvent(
         content: "Release checklist: async feedback thread.",
         sig: "mocksig".repeat(20).slice(0, 128),
       },
+      {
+        id: "mock-forum-release-reply",
+        pubkey: ALICE_PUBKEY,
+        created_at: Math.floor(Date.now() / 1000) - 80 * 60,
+        kind: 45003,
+        tags: buildReplyMessageTags(
+          "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+          ALICE_PUBKEY,
+          "mock-forum-release-thread",
+          "mock-forum-release-thread",
+          undefined,
+        ),
+        content: "Looks good to me. We should ship it.",
+        sig: "mocksig".repeat(20).slice(0, 128),
+      },
     ];
     const event = knownEvents.find((item) => item.id === args.eventId);
     if (!event) {
@@ -3469,6 +3999,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockTokens(config);
   resetMockManagedAgents();
   resetMockPersonas();
+  resetMockTeams();
   resetMockWorkflows();
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
@@ -3497,13 +4028,23 @@ export function maybeInstallE2eTauriMocks() {
 
     return emitMockTypingIndicator(channel.id, pubkey ?? CHARLIE_PUBKEY);
   };
+  window.__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__ = ({ channelName }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+
+    return hasMockLiveSubscription(channel.id);
+  };
   window.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__ = (item) => {
     const category = item.category === "mention" ? "mentions" : item.category;
     mockFeedOverrides[category].unshift(item);
     window.dispatchEvent(new CustomEvent("sprout:e2e-home-feed-updated"));
     return item;
   };
-  mockIPC(async (command, payload) => {
+  const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
     const identity = getIdentity(activeConfig);
     window.__SPROUT_E2E_COMMANDS__?.push(command);
@@ -3533,6 +4074,11 @@ export function maybeInstallE2eTauriMocks() {
       case "get_users_batch":
         return handleGetUsersBatch(
           payload as Parameters<typeof handleGetUsersBatch>[0],
+          activeConfig,
+        );
+      case "get_user_notes":
+        return handleGetUserNotes(
+          payload as Parameters<typeof handleGetUserNotes>[0],
           activeConfig,
         );
       case "search_users":
@@ -3603,6 +4149,28 @@ export function maybeInstallE2eTauriMocks() {
         return handleDeletePersona(
           payload as Parameters<typeof handleDeletePersona>[0],
         );
+      case "set_persona_active":
+        return handleSetPersonaActive(
+          payload as Parameters<typeof handleSetPersonaActive>[0],
+        );
+      case "list_teams":
+        return handleListTeams();
+      case "create_team":
+        return handleCreateTeam(
+          payload as Parameters<typeof handleCreateTeam>[0],
+        );
+      case "update_team":
+        return handleUpdateTeam(
+          payload as Parameters<typeof handleUpdateTeam>[0],
+        );
+      case "delete_team":
+        return handleDeleteTeam(
+          payload as Parameters<typeof handleDeleteTeam>[0],
+        );
+      case "export_team_to_json":
+        return handleExportTeamToJson(payload as { id: string });
+      case "parse_team_file":
+        return handleParseTeamFile();
       case "parse_persona_files":
         return handleParsePersonaFiles(
           payload as { fileBytes: number[]; fileName: string },
@@ -3734,6 +4302,14 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleSearchMessages>[0],
           activeConfig,
         );
+      case "get_forum_posts":
+        return handleGetForumPosts(
+          payload as Parameters<typeof handleGetForumPosts>[0],
+        );
+      case "get_forum_thread":
+        return handleGetForumThread(
+          payload as Parameters<typeof handleGetForumThread>[0],
+        );
       case "send_channel_message":
         return handleSendChannelMessage(
           payload as Parameters<typeof handleSendChannelMessage>[0],
@@ -3810,6 +4386,11 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return disconnectMockSocket((payload as { id: number }).id);
+      case "plugin:window|show":
+      case "plugin:window|unminimize":
+      case "plugin:window|set_focus":
+      case "plugin:window|set_badge_count":
+        return null;
       case "get_channel_workflows":
         return handleGetChannelWorkflows(
           payload as Parameters<typeof handleGetChannelWorkflows>[0],
@@ -3850,7 +4431,10 @@ export function maybeInstallE2eTauriMocks() {
       default:
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }
-  });
+  };
+  window.__SPROUT_E2E_INVOKE_MOCK_COMMAND__ = (command, payload) =>
+    handleMockCommand(command, payload ?? null);
+  mockIPC(handleMockCommand);
 
   installed = true;
 }

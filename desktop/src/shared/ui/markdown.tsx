@@ -3,18 +3,22 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
+import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import type { Channel } from "@/shared/api/types";
+import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
-import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
-import type { Channel } from "@/shared/api/types";
+
+type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
 
 type MarkdownProps = {
   channelNames?: string[];
   className?: string;
   compact?: boolean;
   content: string;
+  imetaByUrl?: ImetaLookup;
   mentionNames?: string[];
   tight?: boolean;
 };
@@ -25,6 +29,7 @@ function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
   onOpenChannel: (channelId: string) => void,
+  imetaByUrl?: ImetaLookup,
 ): Components {
   const paragraphClassName =
     variant === "tight"
@@ -104,13 +109,35 @@ function createMarkdownComponents(
       <h3 className="font-semibold tracking-tight">{children}</h3>
     ),
     hr: () => <hr className="border-border/80" />,
-    img: ({ alt, src }) => (
-      <img
-        alt={alt}
-        className="max-h-96 rounded-2xl border border-border/70 object-cover"
-        src={src ? rewriteRelayUrl(src) : src}
-      />
-    ),
+    img: ({ alt, src }) => {
+      const resolvedSrc = src ? rewriteRelayUrl(src) : src;
+      if (resolvedSrc?.endsWith(".mp4")) {
+        // Look up poster frame from imeta tags (NIP-71 `image` field).
+        // Fall back to `thumb` for compatibility with older events.
+        const entry = src ? imetaByUrl?.get(src) : undefined;
+        const posterUrl = entry?.image ?? entry?.thumb;
+        const resolvedPoster = posterUrl
+          ? rewriteRelayUrl(posterUrl)
+          : undefined;
+        return (
+          // biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available
+          <video
+            controls
+            preload="metadata"
+            poster={resolvedPoster}
+            className="max-h-96 rounded-2xl border border-border/70"
+            src={resolvedSrc}
+          />
+        );
+      }
+      return (
+        <img
+          alt={alt}
+          className="max-h-96 rounded-2xl border border-border/70 object-cover"
+          src={resolvedSrc}
+        />
+      );
+    },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
     ol: ({ children }) => (
       <ol className={cn("list-decimal", listClassName)}>{children}</ol>
@@ -197,6 +224,7 @@ function MarkdownInner({
   className,
   compact = false,
   content,
+  imetaByUrl,
   mentionNames,
   tight = false,
 }: MarkdownProps) {
@@ -205,11 +233,20 @@ function MarkdownInner({
     : compact
       ? "compact"
       : "default";
-  const { channels, onOpenChannel } = useChannelNavigation();
+  const { channels } = useChannelNavigation();
+  const { goChannel } = useAppNavigation();
 
   const components = React.useMemo(
-    () => createMarkdownComponents(variant, channels, onOpenChannel),
-    [variant, channels, onOpenChannel],
+    () =>
+      createMarkdownComponents(
+        variant,
+        channels,
+        (channelId) => {
+          void goChannel(channelId);
+        },
+        imetaByUrl,
+      ),
+    [goChannel, variant, channels, imetaByUrl],
   );
 
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
@@ -259,7 +296,8 @@ export const Markdown = React.memo(
     prev.compact === next.compact &&
     prev.tight === next.tight &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
-    shallowArrayEqual(prev.channelNames, next.channelNames),
+    shallowArrayEqual(prev.channelNames, next.channelNames) &&
+    prev.imetaByUrl === next.imetaByUrl,
 );
 
 Markdown.displayName = "Markdown";

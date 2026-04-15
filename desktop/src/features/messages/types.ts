@@ -21,6 +21,8 @@ export type TimelineMessage = {
   author: string;
   avatarUrl?: string | null;
   role?: string;
+  /** For bot messages, the display name of the persona this bot was created from. */
+  personaDisplayName?: string;
   time: string;
   body: string;
   parentId?: string | null;

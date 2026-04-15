@@ -1,6 +1,9 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
-import { getChannelIdFromTags } from "@/features/messages/lib/threading";
+import {
+  getChannelIdFromTags,
+  getThreadReference,
+} from "@/features/messages/lib/threading";
 import { relayClient } from "@/shared/api/relayClient";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import {
@@ -9,7 +12,18 @@ import {
   KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
 
-type TypingState = Record<string, number>;
+export type TypingIndicatorEntry = {
+  pubkey: string;
+  threadHeadId: string | null;
+};
+
+type TypingEntry = {
+  expiresAt: number;
+  firstSeenAt: number;
+  pubkey: string;
+  threadHeadId: string | null;
+};
+type TypingState = Record<string, TypingEntry>;
 
 const TYPING_INDICATOR_TTL_MS = 8_000;
 const TYPING_PRUNE_INTERVAL_MS = 1_000;
@@ -19,9 +33,9 @@ function pruneTypingState(state: TypingState, now = Date.now()) {
   let changed = false;
   const next: TypingState = {};
 
-  for (const [pubkey, expiresAt] of Object.entries(state)) {
-    if (expiresAt > now) {
-      next[pubkey] = expiresAt;
+  for (const [pubkey, entry] of Object.entries(state)) {
+    if (entry.expiresAt > now) {
+      next[pubkey] = entry;
       continue;
     }
 
@@ -40,6 +54,14 @@ function isTypingCompletionEvent(event: RelayEvent | null | undefined) {
     event.kind === KIND_STREAM_MESSAGE ||
     event.kind === KIND_STREAM_MESSAGE_DIFF
   );
+}
+
+function getTypingScopeId(event: RelayEvent) {
+  return getThreadReference(event.tags).parentId ?? null;
+}
+
+function getTypingStateKey(pubkey: string, threadHeadId: string | null) {
+  return `${pubkey}:${threadHeadId ?? "channel"}`;
 }
 
 export function useChannelTyping(
@@ -64,29 +86,41 @@ export function useChannelTyping(
     }
 
     const typingPubkey = event.pubkey.toLowerCase();
+    const threadHeadId = getTypingScopeId(event);
+    const typingKey = getTypingStateKey(typingPubkey, threadHeadId);
     if (normalizedCurrentPubkey && typingPubkey === normalizedCurrentPubkey) {
       return;
     }
 
     const suppressUntil =
-      typingSuppressUntilByPubkeyRef.current[typingPubkey] ?? 0;
+      typingSuppressUntilByPubkeyRef.current[typingKey] ?? 0;
     if (suppressUntil > Date.now()) {
       return;
     }
     if (suppressUntil > 0) {
-      delete typingSuppressUntilByPubkeyRef.current[typingPubkey];
+      delete typingSuppressUntilByPubkeyRef.current[typingKey];
     }
 
     const latestMessageCreatedAt =
-      latestMessageCreatedAtByPubkeyRef.current[typingPubkey] ?? 0;
+      latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0;
     if (event.created_at <= latestMessageCreatedAt) {
       return;
     }
 
-    setTypingByPubkey((current) => ({
-      ...pruneTypingState(current),
-      [typingPubkey]: Date.now() + TYPING_INDICATOR_TTL_MS,
-    }));
+    const now = Date.now();
+    setTypingByPubkey((current) => {
+      const pruned = pruneTypingState(current, now);
+      const existing = pruned[typingKey];
+      return {
+        ...pruned,
+        [typingKey]: {
+          expiresAt: now + TYPING_INDICATOR_TTL_MS,
+          firstSeenAt: existing?.firstSeenAt ?? now,
+          pubkey: typingPubkey,
+          threadHeadId,
+        },
+      };
+    });
   });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: channel changes should clear local typing state
@@ -110,20 +144,22 @@ export function useChannelTyping(
     }
 
     const authorPubkey = latestMessageEvent.pubkey.toLowerCase();
-    latestMessageCreatedAtByPubkeyRef.current[authorPubkey] = Math.max(
-      latestMessageCreatedAtByPubkeyRef.current[authorPubkey] ?? 0,
+    const threadHeadId = getTypingScopeId(latestMessageEvent);
+    const typingKey = getTypingStateKey(authorPubkey, threadHeadId);
+    latestMessageCreatedAtByPubkeyRef.current[typingKey] = Math.max(
+      latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0,
       latestMessageEvent.created_at,
     );
-    typingSuppressUntilByPubkeyRef.current[authorPubkey] =
+    typingSuppressUntilByPubkeyRef.current[typingKey] =
       Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
     setTypingByPubkey((current) => {
       const next = pruneTypingState(current);
-      if (!(authorPubkey in next)) {
+      if (!(typingKey in next)) {
         return next;
       }
 
       const updated = { ...next };
-      delete updated[authorPubkey];
+      delete updated[typingKey];
       return updated;
     });
   }, [channelId, latestMessageEvent]);
@@ -184,9 +220,9 @@ export function useChannelTyping(
 
   return useMemo(
     () =>
-      Object.entries(typingByPubkey)
-        .sort((left, right) => right[1] - left[1])
-        .map(([pubkey]) => pubkey),
+      Object.values(typingByPubkey)
+        .sort((left, right) => left.firstSeenAt - right.firstSeenAt)
+        .map(({ pubkey, threadHeadId }) => ({ pubkey, threadHeadId })),
     [typingByPubkey],
   );
 }

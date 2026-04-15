@@ -1,12 +1,23 @@
 import * as React from "react";
 import { AtSign, CircleAlert, RefreshCcw } from "lucide-react";
 
+import { useRelayAgentsQuery } from "@/features/agents/hooks";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { useContactListQuery, useTimelineQuery } from "@/features/pulse/hooks";
 import type { HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { FeedSection } from "./FeedSection";
+
+const FeedSection = React.lazy(async () => {
+  const module = await import("./FeedSection");
+  return { default: module.FeedSection };
+});
+
+const RecentNotesSection = React.lazy(async () => {
+  const module = await import("./RecentNotesSection");
+  return { default: module.RecentNotesSection };
+});
 
 type FeedFilter = "all" | "mention" | "needs_action";
 
@@ -44,6 +55,7 @@ type HomeViewProps = {
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
   onOpenChannel: (channelId: string) => void;
+  onOpenPulse: () => void;
   onRefresh: () => void;
 };
 
@@ -54,10 +66,43 @@ export function HomeView({
   currentPubkey,
   availableChannelIds,
   onOpenChannel,
+  onOpenPulse,
   onRefresh,
 }: HomeViewProps) {
   const [filter, setFilter] = React.useState<FeedFilter>("all");
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
+
+  // Recent notes for the Pulse widget
+  const contactListQuery = useContactListQuery(currentPubkey);
+  const contactPubkeys = React.useMemo(
+    () => (contactListQuery.data?.contacts ?? []).map((c) => c.pubkey),
+    [contactListQuery.data],
+  );
+  const notesPubkeys = React.useMemo(
+    () =>
+      currentPubkey
+        ? [...new Set([currentPubkey, ...contactPubkeys])]
+        : contactPubkeys,
+    [currentPubkey, contactPubkeys],
+  );
+  const notesTimelineQuery = useTimelineQuery(
+    notesPubkeys,
+    notesPubkeys.length > 0,
+  );
+  const recentNotes = notesTimelineQuery.data?.notes?.slice(0, 5) ?? [];
+  const noteAuthorPubkeys = React.useMemo(
+    () => [...new Set(recentNotes.map((n) => n.pubkey))],
+    [recentNotes],
+  );
+  const noteProfilesQuery = useUsersBatchQuery(noteAuthorPubkeys, {
+    enabled: noteAuthorPubkeys.length > 0,
+  });
+  const noteProfiles = noteProfilesQuery.data?.profiles ?? {};
+  const relayAgentsQuery = useRelayAgentsQuery();
+  const agentPubkeySet = React.useMemo(
+    () => new Set((relayAgentsQuery.data ?? []).map((a) => a.pubkey)),
+    [relayAgentsQuery.data],
+  );
 
   const feedItems = feed
     ? [...feed.feed.mentions, ...feed.feed.needsAction]
@@ -117,42 +162,55 @@ export function HomeView({
           ))}
         </div>
 
-        <div className={`grid gap-5 ${singleColumn ? "" : "xl:grid-cols-2"}`}>
-          {showMentions ? (
-            <FeedSection
-              availableChannelIds={availableChannelIds}
-              currentPubkey={currentPubkey}
-              profiles={feedProfiles}
-              doneSet={doneSet}
-              emptyDescription="When someone mentions you, it will land here."
-              emptyTitle="No mentions right now"
-              icon={AtSign}
-              items={feed.feed.mentions}
-              onMarkDone={markDone}
-              onOpenChannel={onOpenChannel}
-              onUndoDone={undoDone}
-              showDoneAction={false}
-              title="Mentions"
+        {recentNotes.length > 0 ? (
+          <React.Suspense fallback={null}>
+            <RecentNotesSection
+              agentPubkeys={agentPubkeySet}
+              notes={recentNotes}
+              onOpenPulse={onOpenPulse}
+              profiles={noteProfiles}
             />
-          ) : null}
-          {showNeedsAction ? (
-            <FeedSection
-              availableChannelIds={availableChannelIds}
-              currentPubkey={currentPubkey}
-              profiles={feedProfiles}
-              doneSet={doneSet}
-              emptyDescription="Approval requests and reminders will appear here."
-              emptyTitle="Nothing needs action"
-              icon={CircleAlert}
-              items={feed.feed.needsAction}
-              onMarkDone={markDone}
-              onOpenChannel={onOpenChannel}
-              onUndoDone={undoDone}
-              showDoneAction={true}
-              title="Needs Action"
-            />
-          ) : null}
-        </div>
+          </React.Suspense>
+        ) : null}
+
+        <React.Suspense fallback={null}>
+          <div className={`grid gap-5 ${singleColumn ? "" : "xl:grid-cols-2"}`}>
+            {showMentions ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="When someone mentions you, it will land here."
+                emptyTitle="No mentions right now"
+                icon={AtSign}
+                items={feed.feed.mentions}
+                onMarkDone={markDone}
+                onOpenChannel={onOpenChannel}
+                onUndoDone={undoDone}
+                showDoneAction={false}
+                title="Mentions"
+              />
+            ) : null}
+            {showNeedsAction ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="Approval requests and reminders will appear here."
+                emptyTitle="Nothing needs action"
+                icon={CircleAlert}
+                items={feed.feed.needsAction}
+                onMarkDone={markDone}
+                onOpenChannel={onOpenChannel}
+                onUndoDone={undoDone}
+                showDoneAction={true}
+                title="Needs Action"
+              />
+            ) : null}
+          </div>
+        </React.Suspense>
       </div>
     </div>
   );

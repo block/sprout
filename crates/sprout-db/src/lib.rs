@@ -216,6 +216,19 @@ impl Db {
         event::query_events(&self.pool, q).await
     }
 
+    /// Fetch the latest replaceable event for a (kind, pubkey) pair.
+    ///
+    /// Uses canonical NIP-16 ordering: `created_at DESC, id ASC`.
+    /// This matches the write path in [`replace_addressable_event`] and handles
+    /// historical duplicate survivors correctly.
+    pub async fn get_latest_global_replaceable(
+        &self,
+        kind: i32,
+        pubkey_bytes: &[u8],
+    ) -> Result<Option<StoredEvent>> {
+        event::get_latest_global_replaceable(&self.pool, kind, pubkey_bytes).await
+    }
+
     /// Fetches a single non-deleted event by its raw ID bytes.
     ///
     /// Returns `None` if the event does not exist or has been soft-deleted.
@@ -298,6 +311,7 @@ impl Db {
         visibility: channel::ChannelVisibility,
         description: Option<&str>,
         created_by: &[u8],
+        ttl_seconds: Option<i32>,
     ) -> Result<channel::ChannelRecord> {
         channel::create_channel(
             &self.pool,
@@ -306,6 +320,7 @@ impl Db {
             visibility,
             description,
             created_by,
+            ttl_seconds,
         )
         .await
     }
@@ -313,6 +328,7 @@ impl Db {
     /// Creates a channel with a client-supplied UUID.
     ///
     /// Returns `(record, true)` if newly created, `(record, false)` if already exists.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_channel_with_id(
         &self,
         channel_id: Uuid,
@@ -321,6 +337,7 @@ impl Db {
         visibility: channel::ChannelVisibility,
         description: Option<&str>,
         created_by: &[u8],
+        ttl_seconds: Option<i32>,
     ) -> Result<(channel::ChannelRecord, bool)> {
         channel::create_channel_with_id(
             &self.pool,
@@ -330,6 +347,7 @@ impl Db {
             visibility,
             description,
             created_by,
+            ttl_seconds,
         )
         .await
     }
@@ -465,6 +483,16 @@ impl Db {
         channel::get_member_role(&self.pool, channel_id, pubkey).await
     }
 
+    /// Bump the TTL deadline for an ephemeral channel after a new message.
+    pub async fn bump_ttl_deadline(&self, channel_id: Uuid) -> Result<()> {
+        channel::bump_ttl_deadline(&self.pool, channel_id).await
+    }
+
+    /// Archive ephemeral channels whose TTL deadline has passed.
+    pub async fn reap_expired_ephemeral_channels(&self) -> Result<Vec<Uuid>> {
+        channel::reap_expired_ephemeral_channels(&self.pool).await
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
 
     /// Ensure a user record exists (upsert).
@@ -527,6 +555,11 @@ impl Db {
         pubkey: &[u8],
     ) -> Result<Option<(String, Option<Vec<u8>>)>> {
         user::get_agent_channel_policy(&self.pool, pubkey).await
+    }
+
+    /// Check whether `actor_pubkey` is the agent owner of `target_pubkey`.
+    pub async fn is_agent_owner(&self, target_pubkey: &[u8], actor_pubkey: &[u8]) -> Result<bool> {
+        user::is_agent_owner(&self.pool, target_pubkey, actor_pubkey).await
     }
 
     /// Set the channel_add_policy for a user.

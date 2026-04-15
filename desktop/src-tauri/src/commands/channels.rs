@@ -5,7 +5,7 @@ use crate::{
     app_state::AppState,
     events,
     models::{ChannelDetailInfo, ChannelInfo, ChannelMembersResponse},
-    relay::{build_authed_request, send_json_request, submit_event},
+    relay::{api_path, build_authed_request, send_json_request, submit_event},
 };
 
 // ── Reads (unchanged) ────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ pub async fn get_channel_details(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelDetailInfo, String> {
-    let path = format!("/api/channels/{channel_id}");
+    let path = api_path(&["channels", &channel_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -31,7 +31,7 @@ pub async fn get_channel_members(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<ChannelMembersResponse, String> {
-    let path = format!("/api/channels/{channel_id}/members");
+    let path = api_path(&["channels", &channel_id, "members"]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -48,6 +48,7 @@ pub async fn create_channel(
     channel_type: String,
     visibility: String,
     description: Option<String>,
+    ttl_seconds: Option<i32>,
     state: State<'_, AppState>,
 ) -> Result<ChannelInfo, String> {
     let channel_uuid = uuid::Uuid::new_v4();
@@ -61,12 +62,19 @@ pub async fn create_channel(
         other => return Err(format!("invalid channel_type: {other}")),
     };
 
-    let builder =
-        events::build_create_channel(channel_uuid, &name, vis, ct, description.as_deref())?;
+    let builder = events::build_create_channel(
+        channel_uuid,
+        &name,
+        vis,
+        ct,
+        description.as_deref(),
+        ttl_seconds,
+    )?;
     submit_event(builder, &state).await?;
 
     // Follow-up GET to return the full ChannelInfo the frontend expects.
-    let path = format!("/api/channels/{channel_uuid}");
+    let channel_uuid_string = channel_uuid.to_string();
+    let path = api_path(&["channels", &channel_uuid_string]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -83,7 +91,7 @@ pub async fn update_channel(
     submit_event(builder, &state).await?;
 
     // Follow-up GET to return the full ChannelDetailInfo.
-    let path = format!("/api/channels/{channel_id}");
+    let path = api_path(&["channels", &channel_id]);
     let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
     send_json_request(request).await
 }
@@ -183,6 +191,26 @@ pub async fn remove_channel_member(
 ) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
     let builder = events::build_remove_member(uuid, &pubkey)?;
+    submit_event(builder, &state).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn change_channel_member_role(
+    channel_id: String,
+    pubkey: String,
+    role: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let uuid = parse_channel_uuid(&channel_id)?;
+    // Only allow permission-tier roles for humans and bot/guest for bots.
+    // Owner changes require a dedicated transfer-ownership flow.
+    let role_str = match role.as_str() {
+        "admin" | "member" | "guest" | "bot" => role.as_str(),
+        "owner" => return Err("cannot assign owner role — use transfer ownership".into()),
+        other => return Err(format!("invalid role: {other}")),
+    };
+    let builder = events::build_add_member(uuid, &pubkey, Some(role_str))?;
     submit_event(builder, &state).await?;
     Ok(())
 }

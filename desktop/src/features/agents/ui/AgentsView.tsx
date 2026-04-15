@@ -15,13 +15,14 @@ import {
   usePersonasQuery,
   useRelayAgentsQuery,
   useSetManagedAgentStartOnAppLaunchMutation,
+  useSetPersonaActiveMutation,
   useStartManagedAgentMutation,
   useStopManagedAgentMutation,
   useUpdatePersonaMutation,
 } from "@/features/agents/hooks";
+import { getPersonaLibraryState } from "@/features/agents/lib/catalog";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
-import { sendChannelMessage } from "@/shared/api/tauri";
 import {
   parsePersonaFiles,
   type ParsePersonaFilesResult,
@@ -41,24 +42,35 @@ import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { BatchImportDialog } from "./BatchImportDialog";
 import { CreateAgentDialog } from "./CreateAgentDialog";
 import { ManagedAgentsSection } from "./ManagedAgentsSection";
+import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDialog } from "./PersonaDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
+import { PersonaImportUpdateDialog } from "./PersonaImportUpdateDialog";
 import { PersonasSection } from "./PersonasSection";
 import { RelayDirectorySection } from "./RelayDirectorySection";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { TeamDeleteDialog } from "./TeamDeleteDialog";
 import { TeamDialog } from "./TeamDialog";
 import { TeamImportDialog } from "./TeamImportDialog";
+import { TeamImportUpdateDialog } from "./TeamImportUpdateDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
+import {
+  createPersonaDialogState,
+  duplicatePersonaDialogState,
+  editPersonaDialogState,
+  importPersonaDialogState,
+  type PersonaDialogState,
+} from "./personaDialogState";
+import { usePersonaImportActions } from "./usePersonaImportActions";
 import { useTeamActions } from "./useTeamActions";
+import {
+  deleteManagedAgentWithRules,
+  startManagedAgentWithRules,
+  stopManagedAgentWithRules,
+} from "../lib/managedAgentControlActions";
 
-type PersonaDialogState = {
-  description: string;
-  initialValues: CreatePersonaInput | UpdatePersonaInput;
-  submitLabel: string;
-  title: string;
-} | null;
+type PersonaFeedbackSurface = "catalog" | "library";
 
 export function AgentsView() {
   const queryClient = useQueryClient();
@@ -75,10 +87,11 @@ export function AgentsView() {
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
+  const setPersonaActiveMutation = useSetPersonaActiveMutation();
   const exportPersonaJsonMutation = useExportPersonaJsonMutation();
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [personaDialogState, setPersonaDialogState] =
-    React.useState<PersonaDialogState>(null);
+    React.useState<PersonaDialogState | null>(null);
   const [personaToDelete, setPersonaToDelete] =
     React.useState<AgentPersona | null>(null);
   const [agentToAddToChannel, setAgentToAddToChannel] =
@@ -95,6 +108,14 @@ export function AgentsView() {
   const [actionErrorMessage, setActionErrorMessage] = React.useState<
     string | null
   >(null);
+  const [personaNoticeMessage, setPersonaNoticeMessage] = React.useState<
+    string | null
+  >(null);
+  const [personaErrorMessage, setPersonaErrorMessage] = React.useState<
+    string | null
+  >(null);
+  const [personaFeedbackSurface, setPersonaFeedbackSurface] =
+    React.useState<PersonaFeedbackSurface>("library");
 
   const teamActions = useTeamActions(
     { setActionNoticeMessage, setActionErrorMessage },
@@ -103,9 +124,19 @@ export function AgentsView() {
       refetchRelayAgents: () => void relayAgentsQuery.refetch(),
     },
   );
+  const personaImportActions = usePersonaImportActions(
+    personasQuery.data ?? [],
+    {
+      clearPersonaFeedback: () => clearPersonaFeedback("library"),
+      setPersonaNoticeMessage,
+      setPersonaErrorMessage,
+      setPersonaDialogState,
+    },
+  );
   const [batchImportResult, setBatchImportResult] =
     React.useState<ParsePersonaFilesResult | null>(null);
   const [batchImportFileName, setBatchImportFileName] = React.useState("");
+  const [isCatalogDialogOpen, setIsCatalogDialogOpen] = React.useState(false);
   const managedAgents = React.useMemo(
     () =>
       [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
@@ -121,11 +152,8 @@ export function AgentsView() {
     [managedAgentsQuery.data],
   );
   const personas = personasQuery.data ?? [];
-  const personaLabelsById = React.useMemo(
-    () =>
-      Object.fromEntries(
-        personas.map((persona) => [persona.id, persona.displayName]),
-      ),
+  const { catalogPersonas, libraryPersonas, personaLabelsById } = React.useMemo(
+    () => getPersonaLibraryState(personas),
     [personas],
   );
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
@@ -141,27 +169,15 @@ export function AgentsView() {
     [managedAgents],
   );
   const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
-
-  /** Resolve a relay-agent's first channel UUID for sending !shutdown. */
-  function resolveAgentChannelId(pubkey: string): string | null {
-    const relayAgents = relayAgentsQuery.data ?? [];
-    const relayAgent = relayAgents.find((ra) => ra.pubkey === pubkey);
-    // Prefer channelIds (new relay with json_agg). Fall back to resolving
-    // channel names via the channels query (old relay without channel_ids).
-    if (relayAgent?.channelIds?.length) {
-      return relayAgent.channelIds[0];
+  const channelsByPubkey = React.useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const ra of relayAgentsQuery.data ?? []) {
+      if (ra.channels.length > 0) {
+        map[ra.pubkey] = ra.channels;
+      }
     }
-    // Fallback: resolve channel name → UUID via the channels query.
-    // Only use this when the match is unambiguous — if multiple channels
-    // share the same name (e.g. across teams), we can't be sure which one
-    // the agent is in, and sending !shutdown to the wrong channel would
-    // silently miss the agent. Return null to surface the error to the user.
-    const channelName = relayAgent?.channels?.[0];
-    if (!channelName) return null;
-    const channels = channelsQuery.data ?? [];
-    const matches = channels.filter((ch) => ch.name === channelName);
-    return matches.length === 1 ? matches[0].id : null;
-  }
+    return map;
+  }, [relayAgentsQuery.data]);
 
   // Clear log selection if the agent was removed
   React.useEffect(() => {
@@ -173,12 +189,32 @@ export function AgentsView() {
     }
   }, [managedAgents, logAgentPubkey]);
 
-  async function handleStart(pubkey: string) {
+  function clearActionFeedback() {
     setActionNoticeMessage(null);
     setActionErrorMessage(null);
+  }
+
+  function clearPersonaFeedback(
+    surface: PersonaFeedbackSurface = personaFeedbackSurface,
+  ) {
+    setPersonaFeedbackSurface(surface);
+    setPersonaNoticeMessage(null);
+    setPersonaErrorMessage(null);
+  }
+
+  async function handleStart(pubkey: string) {
+    clearActionFeedback();
 
     try {
-      await startMutation.mutateAsync(pubkey);
+      const agent = managedAgents.find(
+        (candidate) => candidate.pubkey === pubkey,
+      );
+      if (!agent) return;
+
+      await startManagedAgentWithRules({
+        agent,
+        startManagedAgent: startMutation.mutateAsync,
+      });
     } catch (error) {
       setActionErrorMessage(
         error instanceof Error ? error.message : "Failed to start agent.",
@@ -187,29 +223,20 @@ export function AgentsView() {
   }
 
   async function handleStop(pubkey: string) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
       if (!agent) return;
 
-      if (agent.backend.type === "provider") {
-        // Remote agent: send !shutdown mention via relay REST API.
-        const channelId = resolveAgentChannelId(pubkey);
-        if (!channelId) {
-          setActionErrorMessage("Cannot stop: agent is not in any channel");
-          return;
-        }
-        await sendChannelMessage(channelId, "!shutdown", undefined, undefined, [
-          pubkey,
-        ]);
-        setActionNoticeMessage(
-          "Shutdown command sent. Agent will stop shortly.",
-        );
-      } else {
-        // Local agent: existing stop flow
-        await stopMutation.mutateAsync(pubkey);
+      const result = await stopManagedAgentWithRules({
+        agent,
+        channels: channelsQuery.data ?? [],
+        relayAgents: relayAgentsQuery.data ?? [],
+        stopManagedAgent: stopMutation.mutateAsync,
+      });
+      if (result.noticeMessage) {
+        setActionNoticeMessage(result.noticeMessage);
       }
     } catch (error) {
       setActionErrorMessage(
@@ -219,63 +246,21 @@ export function AgentsView() {
   }
 
   async function handleDelete(pubkey: string) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
-      // For remote agents, send !shutdown before deleting to avoid orphaning.
       const agent = managedAgents.find((a) => a.pubkey === pubkey);
-      if (agent?.backend.type === "provider" && agent.backendAgentId) {
-        const presence =
-          managedPresenceQuery.data?.[pubkey.trim().toLowerCase()];
-        const channelId = resolveAgentChannelId(pubkey);
-        if (channelId) {
-          // If the agent is still online, send !shutdown and warn that
-          // deletion proceeds without waiting for confirmed exit.
-          if (presence === "online" || presence === "away") {
-            await sendChannelMessage(
-              channelId,
-              "!shutdown",
-              undefined,
-              undefined,
-              [pubkey],
-            );
-            // eslint-disable-next-line no-alert
-            const confirmed = window.confirm(
-              "Shutdown command sent, but the agent may still be running. " +
-                "Deleting now removes the local record — the remote deployment " +
-                "will be orphaned if shutdown hasn't completed. Continue?",
-            );
-            if (!confirmed) return;
-          } else {
-            // Offline presence means the process isn't connected, but the
-            // remote infrastructure (VM/container) may still exist. Confirm
-            // before removing the local record — it's the only management handle.
-            // eslint-disable-next-line no-alert
-            const confirmed = window.confirm(
-              "This agent is offline but the remote deployment may still exist. " +
-                "Deleting removes the local management record. Continue?",
-            );
-            if (!confirmed) return;
-          }
-        } else {
-          // Can't send shutdown — warn user about orphaning.
-          // eslint-disable-next-line no-alert
-          const confirmed = window.confirm(
-            "This agent is deployed but not in any channel. " +
-              "Deleting will orphan the remote deployment (it will keep running). Continue?",
-          );
-          if (!confirmed) return;
-        }
-      }
-      // Pass forceRemoteDelete for deployed provider agents — the backend
-      // rejects deletion of deployed remote agents without this flag.
-      const isDeployedRemote =
-        agent?.backend.type === "provider" && agent?.backendAgentId;
-      await deleteMutation.mutateAsync({
-        pubkey,
-        forceRemoteDelete: isDeployedRemote ? true : undefined,
+      if (!agent) return;
+
+      const result = await deleteManagedAgentWithRules({
+        agent,
+        channels: channelsQuery.data ?? [],
+        deleteManagedAgent: deleteMutation.mutateAsync,
+        presenceLookup: managedPresenceQuery.data,
+        relayAgents: relayAgentsQuery.data ?? [],
       });
+      if (result.cancelled) return;
+
       if (logAgentPubkey === pubkey) {
         setLogAgentPubkey(null);
       }
@@ -290,8 +275,7 @@ export function AgentsView() {
     pubkey: string,
     startOnAppLaunch: boolean,
   ) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       const updated = await startOnLaunchMutation.mutateAsync({
@@ -313,8 +297,7 @@ export function AgentsView() {
   }
 
   async function handleMintToken(pubkey: string, name: string) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearActionFeedback();
 
     try {
       const result = await mintTokenMutation.mutateAsync({
@@ -335,36 +318,62 @@ export function AgentsView() {
   async function handlePersonaSubmit(
     input: CreatePersonaInput | UpdatePersonaInput,
   ) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearPersonaFeedback("library");
 
     try {
       if ("id" in input) {
         await updatePersonaMutation.mutateAsync(input);
-        setActionNoticeMessage(`Updated ${input.displayName}.`);
+        setPersonaNoticeMessage(`Updated ${input.displayName}.`);
       } else {
         await createPersonaMutation.mutateAsync(input);
-        setActionNoticeMessage(`Created ${input.displayName}.`);
+        setPersonaNoticeMessage(`Created ${input.displayName}.`);
       }
       setPersonaDialogState(null);
     } catch (error) {
-      setActionErrorMessage(
+      setPersonaErrorMessage(
         error instanceof Error ? error.message : "Failed to save persona.",
       );
     }
   }
 
   async function handleDeletePersona(persona: AgentPersona) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearPersonaFeedback("library");
 
     try {
       await deletePersonaMutation.mutateAsync(persona.id);
-      setActionNoticeMessage(`Deleted ${persona.displayName}.`);
+      setPersonaNoticeMessage(`Deleted ${persona.displayName}.`);
       setPersonaToDelete(null);
     } catch (error) {
-      setActionErrorMessage(
+      setPersonaErrorMessage(
         error instanceof Error ? error.message : "Failed to delete persona.",
+      );
+    }
+  }
+
+  async function handleSetPersonaActive(
+    persona: AgentPersona,
+    active: boolean,
+    surface: PersonaFeedbackSurface,
+  ) {
+    clearPersonaFeedback(surface);
+
+    try {
+      await setPersonaActiveMutation.mutateAsync({
+        id: persona.id,
+        active,
+      });
+      setPersonaNoticeMessage(
+        active
+          ? `Selected ${persona.displayName} for My Agents.`
+          : `Deselected ${persona.displayName} from My Agents.`,
+      );
+    } catch (error) {
+      setPersonaErrorMessage(
+        error instanceof Error
+          ? error.message
+          : active
+            ? "Failed to select persona for My Agents."
+            : "Failed to deselect persona from My Agents.",
       );
     }
   }
@@ -397,32 +406,19 @@ export function AgentsView() {
     fileBytes: number[],
     fileName: string,
   ) {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
+    clearPersonaFeedback("library");
     try {
       const result = await parsePersonaFiles(fileBytes, fileName);
       if (isSingleItemFile(fileBytes) && result.personas.length === 1) {
-        const p = result.personas[0];
-        setPersonaDialogState({
-          title: `Import ${p.displayName}`,
-          description: "Review and save this imported persona.",
-          submitLabel: "Create persona",
-          initialValues: {
-            displayName: p.displayName,
-            avatarUrl: p.avatarDataUrl ?? "",
-            systemPrompt: p.systemPrompt,
-            provider: p.provider ?? undefined,
-            model: p.model ?? undefined,
-          },
-        });
+        setPersonaDialogState(importPersonaDialogState(result.personas[0]));
       } else if (result.personas.length > 0) {
         setBatchImportResult(result);
         setBatchImportFileName(fileName);
       } else {
-        setActionErrorMessage("No valid personas found in file.");
+        setPersonaErrorMessage("No valid personas found in file.");
       }
     } catch (err) {
-      setActionErrorMessage(
+      setPersonaErrorMessage(
         err instanceof Error ? err.message : "Failed to parse persona file.",
       );
     }
@@ -437,6 +433,7 @@ export function AgentsView() {
     createPersonaMutation.isPending ||
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
+    setPersonaActiveMutation.isPending ||
     exportPersonaJsonMutation.isPending ||
     teamActions.exportTeamJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
@@ -449,84 +446,68 @@ export function AgentsView() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           <div className="flex flex-col gap-6">
             <PersonasSection
+              canChooseCatalog={catalogPersonas.length > 0}
               error={
                 personasQuery.error instanceof Error
                   ? personasQuery.error
+                  : null
+              }
+              feedbackErrorMessage={
+                personaFeedbackSurface === "library"
+                  ? personaErrorMessage
+                  : null
+              }
+              feedbackNoticeMessage={
+                personaFeedbackSurface === "library"
+                  ? personaNoticeMessage
                   : null
               }
               isLoading={personasQuery.isLoading}
               isPending={
                 createPersonaMutation.isPending ||
                 updatePersonaMutation.isPending ||
-                deletePersonaMutation.isPending
+                deletePersonaMutation.isPending ||
+                setPersonaActiveMutation.isPending ||
+                exportPersonaJsonMutation.isPending
               }
-              onCreate={() => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setPersonaDialogState({
-                  title: "Create persona",
-                  description:
-                    "Save a reusable role, prompt, and optional avatar for future agent deployments.",
-                  submitLabel: "Create persona",
-                  initialValues: {
-                    displayName: "",
-                    avatarUrl: "",
-                    systemPrompt: "",
-                    provider: undefined,
-                    model: undefined,
-                  },
-                });
+              onChooseCatalog={() => {
+                clearPersonaFeedback("catalog");
+                setIsCatalogDialogOpen(true);
               }}
-              onDelete={setPersonaToDelete}
+              onCreate={() => {
+                clearPersonaFeedback("library");
+                setPersonaDialogState(createPersonaDialogState());
+              }}
+              onDelete={(persona) => {
+                clearPersonaFeedback("library");
+                setPersonaToDelete(persona);
+              }}
+              onDeactivate={(persona) => {
+                void handleSetPersonaActive(persona, false, "library");
+              }}
               onDuplicate={(persona) => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setPersonaDialogState({
-                  title: `Duplicate ${persona.displayName}`,
-                  description:
-                    "Create a new persona by copying this template and adjusting it as needed.",
-                  submitLabel: "Create persona",
-                  initialValues: {
-                    displayName: `${persona.displayName} copy`,
-                    avatarUrl: persona.avatarUrl ?? "",
-                    systemPrompt: persona.systemPrompt,
-                    provider: persona.provider ?? undefined,
-                    model: persona.model ?? undefined,
-                  },
-                });
+                clearPersonaFeedback("library");
+                setPersonaDialogState(duplicatePersonaDialogState(persona));
               }}
               onEdit={(persona) => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setPersonaDialogState({
-                  title: `Edit ${persona.displayName}`,
-                  description:
-                    "Update this saved persona. New deployments will use the updated values.",
-                  submitLabel: "Save changes",
-                  initialValues: {
-                    id: persona.id,
-                    displayName: persona.displayName,
-                    avatarUrl: persona.avatarUrl ?? "",
-                    systemPrompt: persona.systemPrompt,
-                    provider: persona.provider ?? undefined,
-                    model: persona.model ?? undefined,
-                  },
-                });
+                clearPersonaFeedback("library");
+                setPersonaDialogState(editPersonaDialogState(persona));
               }}
               onImportFile={(fileBytes, fileName) => {
                 void handlePersonaImportFile(fileBytes, fileName);
               }}
               onExport={(persona) => {
+                clearPersonaFeedback("library");
                 exportPersonaJsonMutation.mutate(persona.id, {
                   onSuccess: (saved) => {
                     if (saved) {
-                      setActionNoticeMessage(
+                      setPersonaNoticeMessage(
                         `Exported ${persona.displayName}.`,
                       );
                     }
                   },
                   onError: (error) => {
-                    setActionErrorMessage(
+                    setPersonaErrorMessage(
                       error instanceof Error
                         ? error.message
                         : "Failed to export persona.",
@@ -534,7 +515,7 @@ export function AgentsView() {
                   },
                 });
               }}
-              personas={personas}
+              personas={libraryPersonas}
             />
 
             <TeamsSection
@@ -556,7 +537,7 @@ export function AgentsView() {
               onExport={teamActions.handleExportTeam}
               onImportFile={teamActions.handleImportFile}
               onAddToChannel={teamActions.setTeamToAddToChannel}
-              personas={personas}
+              personas={libraryPersonas}
               teams={teamActions.teams}
             />
 
@@ -564,6 +545,7 @@ export function AgentsView() {
               actionErrorMessage={actionErrorMessage}
               actionNoticeMessage={actionNoticeMessage}
               agents={managedAgents}
+              channelsByPubkey={channelsByPubkey}
               error={
                 managedAgentsQuery.error instanceof Error
                   ? managedAgentsQuery.error
@@ -666,11 +648,15 @@ export function AgentsView() {
               : null
         }
         initialValues={personaDialogState?.initialValues ?? null}
+        isImportPending={personaImportActions.isApplyingPersonaImportUpdate}
         isPending={
           createPersonaMutation.isPending || updatePersonaMutation.isPending
         }
         providers={acpProvidersQuery.data ?? []}
         providersLoading={acpProvidersQuery.isLoading}
+        onImportUpdateFile={
+          personaImportActions.handleEditDialogImportUpdateFile
+        }
         onOpenChange={(open) => {
           if (!open) {
             setPersonaDialogState(null);
@@ -693,6 +679,28 @@ export function AgentsView() {
         open={personaToDelete !== null}
         persona={personaToDelete}
       />
+      <PersonaCatalogDialog
+        error={
+          personasQuery.error instanceof Error ? personasQuery.error : null
+        }
+        feedbackErrorMessage={
+          personaFeedbackSurface === "catalog" ? personaErrorMessage : null
+        }
+        feedbackNoticeMessage={
+          personaFeedbackSurface === "catalog" ? personaNoticeMessage : null
+        }
+        isLoading={personasQuery.isLoading}
+        isPending={setPersonaActiveMutation.isPending}
+        onClearFeedback={() => {
+          clearPersonaFeedback("catalog");
+        }}
+        onOpenChange={setIsCatalogDialogOpen}
+        onSelectPersona={(persona, active) => {
+          void handleSetPersonaActive(persona, active, "catalog");
+        }}
+        open={isCatalogDialogOpen}
+        personas={catalogPersonas}
+      />
       <TeamDialog
         description={teamActions.teamDialogState?.description ?? ""}
         error={
@@ -703,18 +711,21 @@ export function AgentsView() {
               : null
         }
         initialValues={teamActions.teamDialogState?.initialValues ?? null}
+        isImportPending={teamActions.isApplyingTeamImportUpdate}
         isPending={
           teamActions.createTeamMutation.isPending ||
           teamActions.updateTeamMutation.isPending
         }
+        onImportUpdateFile={teamActions.handleEditDialogImportUpdateFile}
         onOpenChange={(open) => {
           if (!open) {
             teamActions.setTeamDialogState(null);
           }
         }}
+        onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
         onSubmit={teamActions.handleTeamSubmit}
         open={teamActions.teamDialogState !== null}
-        personas={personas}
+        personas={libraryPersonas}
         submitLabel={teamActions.teamDialogState?.submitLabel ?? "Save"}
         title={teamActions.teamDialogState?.title ?? "Team"}
       />
@@ -738,14 +749,15 @@ export function AgentsView() {
           }
         }}
         open={teamActions.teamToAddToChannel !== null}
-        personas={personas}
+        personas={libraryPersonas}
         team={teamActions.teamToAddToChannel}
       />
       <BatchImportDialog
         fileName={batchImportFileName}
         onComplete={(count) => {
+          clearPersonaFeedback("library");
           setBatchImportResult(null);
-          setActionNoticeMessage(
+          setPersonaNoticeMessage(
             `Imported ${count} persona${count !== 1 ? "s" : ""}.`,
           );
           void queryClient.invalidateQueries({ queryKey: personasQueryKey });
@@ -768,6 +780,45 @@ export function AgentsView() {
         }}
         open={teamActions.teamImportPreview !== null}
         preview={teamActions.teamImportPreview?.preview ?? null}
+      />
+      <TeamImportUpdateDialog
+        fileName={teamActions.teamImportTargetPreview?.fileName ?? ""}
+        isPending={
+          teamActions.isApplyingTeamImportUpdate ||
+          teamActions.updateTeamMutation.isPending
+        }
+        onApply={teamActions.handleTeamImportUpdateApply}
+        onClear={teamActions.clearImportUpdateAndReturnToEdit}
+        onOpenChange={(open) => {
+          if (!open) {
+            teamActions.closeImportUpdateDialog();
+          }
+        }}
+        open={teamActions.teamImportTarget !== null}
+        personas={libraryPersonas}
+        preview={teamActions.teamImportTargetPreview?.preview ?? null}
+        team={teamActions.teamImportTarget}
+      />
+      <PersonaImportUpdateDialog
+        fileName={
+          personaImportActions.personaImportTargetPreview?.fileName ?? ""
+        }
+        isPending={
+          personaImportActions.isApplyingPersonaImportUpdate ||
+          updatePersonaMutation.isPending
+        }
+        onApply={personaImportActions.handleImportUpdateApply}
+        onClear={personaImportActions.clearImportUpdateAndReturnToEdit}
+        onOpenChange={(open) => {
+          if (!open) {
+            personaImportActions.closeImportUpdateDialog();
+          }
+        }}
+        open={personaImportActions.personaImportTarget !== null}
+        persona={personaImportActions.personaImportTarget}
+        preview={
+          personaImportActions.personaImportTargetPreview?.preview ?? null
+        }
       />
     </>
   );

@@ -15,6 +15,7 @@ function updateHeaders(
 type WorkflowWebhookHeadersEditorProps = {
   disabled?: boolean;
   headers: HeaderFormState[];
+  hideLabel?: boolean;
   onChange: (headers: HeaderFormState[]) => void;
   stepId: string;
 };
@@ -22,13 +23,14 @@ type WorkflowWebhookHeadersEditorProps = {
 export function WorkflowWebhookHeadersEditor({
   disabled,
   headers,
+  hideLabel = false,
   onChange,
   stepId,
 }: WorkflowWebhookHeadersEditorProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <FieldLabel>Headers (optional)</FieldLabel>
+        {!hideLabel ? <FieldLabel>Headers</FieldLabel> : <div />}
         <Button
           className="h-7 gap-1 text-xs"
           disabled={disabled}

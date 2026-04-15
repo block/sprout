@@ -18,6 +18,10 @@ chrono      = { workspace = true }
 tracing     = { workspace = true }
 thiserror   = { workspace = true }
 jsonwebtoken = { workspace = true }
-hmac        = { workspace = true }
-sha2        = { workspace = true }
-hex         = { workspace = true }
+hmac        = { workspace = true, optional = true }
+sha2        = { workspace = true, optional = true }
+hex         = { workspace = true, optional = true }
+
+[features]
+default = []
+webhook = ["hmac", "sha2", "hex"]

@@ -6,5 +6,7 @@
     <string>Sprout</string>
     <key>CFBundleName</key>
     <string>Sprout</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Sprout needs microphone access for voice huddles.</string>
 </dict>
 </plist>

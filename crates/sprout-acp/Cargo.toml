@@ -15,6 +15,7 @@ path = "src/main.rs"
 # Internal
 sprout-core = { workspace = true }
 sprout-sdk = { workspace = true }
+sprout-persona = { path = "../sprout-persona" }
 
 # Nostr
 nostr = { workspace = true }
@@ -59,7 +60,7 @@ anyhow = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 
 # Config file
-toml = "0.8"
+toml = "0.9"
 
 # Filter expressions
 evalexpr = { workspace = true }

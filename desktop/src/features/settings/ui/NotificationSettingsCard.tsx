@@ -102,10 +102,7 @@ export function NotificationSettingsCard({
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
 }) {
   return (
-    <section
-      className="rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm"
-      data-testid="settings-notifications"
-    >
+    <section className="min-w-0" data-testid="settings-notifications">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold tracking-tight">

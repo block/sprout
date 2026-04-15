@@ -3,6 +3,7 @@ use std::{collections::HashMap, io::Write, sync::Mutex};
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, Manager};
 
+use crate::huddle::HuddleState;
 use crate::managed_agents::ManagedAgentProcess;
 
 pub struct AppState {
@@ -12,6 +13,13 @@ pub struct AppState {
     pub session_token: Mutex<Option<String>>,
     pub managed_agents_store_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<String, ManagedAgentProcess>>,
+    pub huddle_state: Mutex<HuddleState>,
+    /// Tauri app handle — stored after setup so huddle commands can emit
+    /// `huddle-state-changed` events without needing the handle threaded
+    /// through every call site.
+    ///
+    /// Set once during `setup()` in `lib.rs`; never cleared.
+    pub app_handle: Mutex<Option<AppHandle>>,
 }
 
 pub fn build_app_state() -> AppState {
@@ -55,6 +63,37 @@ pub fn build_app_state() -> AppState {
         session_token: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
+        huddle_state: Mutex::new(HuddleState::default()),
+        app_handle: Mutex::new(None),
+    }
+}
+
+impl AppState {
+    /// Lock the huddle state mutex, converting a poisoned-lock error to a String.
+    ///
+    /// Convenience wrapper — replaces 15+ instances of
+    /// `state.huddle_state.lock().map_err(|e| e.to_string())?` throughout the
+    /// huddle module.
+    pub fn huddle(&self) -> Result<std::sync::MutexGuard<'_, crate::huddle::HuddleState>, String> {
+        self.huddle_state.lock().map_err(|e| e.to_string())
+    }
+
+    /// Emit the current huddle state to the frontend via Tauri event.
+    ///
+    /// Acquires both locks (app_handle + huddle_state), clones a snapshot,
+    /// releases both, then emits. Best-effort — no-op if either lock is
+    /// poisoned or the app_handle hasn't been set yet.
+    pub fn emit_huddle_state_changed(&self) {
+        let app = match self.app_handle.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => return,
+        };
+        let Some(app) = app else { return };
+        let snapshot = match self.huddle_state.lock() {
+            Ok(hs) => hs.clone(),
+            Err(_) => return,
+        };
+        crate::huddle::state::emit_huddle_state(&app, &snapshot);
     }
 }
 

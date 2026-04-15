@@ -30,11 +30,16 @@ use crate::state::AppState;
 /// own `RequestBodyLimitLayer` before merging; the outer layer adds tracing and
 /// CORS once over the combined router.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    // ── Media routes: body limit derived from config ─────────────────────────
-    // Transport limit is max_image_bytes (50MB). GIFs have a stricter app-level cap (10MB)
-    // enforced in validation.rs after MIME detection. This means GIF uploads up to 50MB are
-    // buffered before rejection — acceptable for V1; streaming validation deferred to V2.
-    let media_body_limit = state.config.media.max_image_bytes as usize;
+    // ── Media routes: body limit covers both images and video ────────────────
+    // Transport cap is the larger of image and video limits. Video uploads stream
+    // to disk (never fully buffered); images collect to bytes within this limit.
+    // Per-MIME app-level limits (GIF: 10 MB) are enforced in sprout-media
+    // validation after MIME detection.
+    let media_body_limit = state
+        .config
+        .media
+        .max_image_bytes
+        .max(state.config.media.max_video_bytes) as usize;
     let media_router = Router::new()
         .route("/media/upload", put(api::media::upload_blob))
         .route(
@@ -46,6 +51,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
+        // ── Internal routes (not exposed through the public API gateway) ─────
+        // LiveKit fires this on participant_joined/left (including crashes),
+        // providing authoritative presence tracking for crash-orphan recovery.
+        .route(
+            "/internal/livekit/webhook",
+            post(api::handle_livekit_webhook),
+        )
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
@@ -99,6 +111,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/approvals/by-hash/{hash}/deny",
             post(api::deny_approval_by_hash),
         )
+        // Huddle routes
+        .route("/api/huddles/{channel_id}/token", post(api::huddle_token))
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes
@@ -137,6 +151,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/users/search", get(api::search_users))
         .route("/api/users/{pubkey}/profile", get(api::get_user_profile))
+        .route("/api/users/{pubkey}/notes", get(api::get_user_notes))
+        .route(
+            "/api/users/{pubkey}/contact-list",
+            get(api::get_contact_list),
+        )
         .route("/api/users/batch", post(api::get_users_batch))
         // Feed route
         .route("/api/feed", get(api::feed_handler))

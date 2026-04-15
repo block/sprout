@@ -23,16 +23,12 @@
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "dragDropEnabled": false,
-        "trafficLightPosition": { "x": 12, "y": 22 }
+        "trafficLightPosition": { "x": 12, "y": 22 },
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
       "csp": null
-    }
-  },
-  "plugins": {
-    "updater": {
-      "endpoints": []
     }
   },
   "bundle": {
@@ -46,7 +42,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist"
     }
   }
 }

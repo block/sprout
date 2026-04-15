@@ -1,0 +1,32 @@
+import 'package:flutter/material.dart';
+
+@immutable
+class AppColors extends ThemeExtension<AppColors> {
+  final Color success;
+  final Color warning;
+  final Color accent;
+
+  const AppColors({
+    required this.success,
+    required this.warning,
+    required this.accent,
+  });
+
+  @override
+  AppColors copyWith({Color? success, Color? warning, Color? accent}) =>
+      AppColors(
+        success: success ?? this.success,
+        warning: warning ?? this.warning,
+        accent: accent ?? this.accent,
+      );
+
+  @override
+  AppColors lerp(ThemeExtension<AppColors>? other, double t) {
+    if (other is! AppColors) return this;
+    return AppColors(
+      success: Color.lerp(success, other.success, t)!,
+      warning: Color.lerp(warning, other.warning, t)!,
+      accent: Color.lerp(accent, other.accent, t)!,
+    );
+  }
+}

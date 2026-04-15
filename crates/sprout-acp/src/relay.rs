@@ -564,10 +564,30 @@ impl HarnessRelay {
     }
 
     /// Build a typing indicator event (kind:20002) for a channel.
-    pub fn build_typing_event(&self, channel_id: Uuid) -> Result<Event, RelayError> {
+    pub fn build_typing_event(
+        &self,
+        channel_id: Uuid,
+        root_event_id: Option<&str>,
+        parent_event_id: Option<&str>,
+    ) -> Result<Event, RelayError> {
         let h_tag = Tag::parse(&["h", &channel_id.to_string()])
             .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
-        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", [h_tag])
+        let mut tags = vec![h_tag];
+        if let Some(parent) = parent_event_id {
+            if let Some(root) = root_event_id {
+                if root != parent {
+                    tags.push(
+                        Tag::parse(&["e", root, "", "root"])
+                            .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
+                    );
+                }
+            }
+            tags.push(
+                Tag::parse(&["e", parent, "", "reply"])
+                    .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
+            );
+        }
+        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", tags)
             .sign_with_keys(&self.keys)?;
         Ok(event)
     }

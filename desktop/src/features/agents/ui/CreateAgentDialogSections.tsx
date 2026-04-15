@@ -22,6 +22,7 @@ export function CreateAgentBasicsFields({
         Agent name
       </label>
       <Input
+        aria-describedby="help-agent-name"
         autoCapitalize="none"
         autoCorrect="off"
         data-testid="agent-name-input"
@@ -31,7 +32,7 @@ export function CreateAgentBasicsFields({
         spellCheck={false}
         value={name}
       />
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground" id="help-agent-name">
         Used as the local label and synced to the agent profile display name
         when the relay accepts the create-time auth.
       </p>
@@ -99,6 +100,7 @@ export function CreateAgentRuntimeFields({
   agentArgs,
   agentCommand,
   mcpCommand,
+  mcpToolsets,
   parallelism,
   relayUrl,
   selectedProviderId,
@@ -108,6 +110,7 @@ export function CreateAgentRuntimeFields({
   onAgentArgsChange,
   onAgentCommandChange,
   onMcpCommandChange,
+  onMcpToolsetsChange,
   onParallelismChange,
   onRelayUrlChange,
   onSystemPromptChange,
@@ -117,6 +120,7 @@ export function CreateAgentRuntimeFields({
   agentArgs: string;
   agentCommand: string;
   mcpCommand: string;
+  mcpToolsets: string;
   parallelism: string;
   relayUrl: string;
   selectedProviderId: string;
@@ -126,6 +130,7 @@ export function CreateAgentRuntimeFields({
   onAgentArgsChange: (value: string) => void;
   onAgentCommandChange: (value: string) => void;
   onMcpCommandChange: (value: string) => void;
+  onMcpToolsetsChange: (value: string) => void;
   onParallelismChange: (value: string) => void;
   onRelayUrlChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
@@ -139,11 +144,19 @@ export function CreateAgentRuntimeFields({
             Relay URL
           </label>
           <Input
+            aria-describedby="help-agent-relay-url"
             id="agent-relay-url"
             onChange={(event) => onRelayUrlChange(event.target.value)}
             placeholder="Leave blank to use the desktop relay"
             value={relayUrl}
           />
+          <p
+            className="text-xs text-muted-foreground"
+            id="help-agent-relay-url"
+          >
+            WebSocket URL of the relay this agent connects to. Leave blank to
+            use the built-in desktop relay.
+          </p>
         </div>
 
         <div className="space-y-1.5">
@@ -151,10 +164,18 @@ export function CreateAgentRuntimeFields({
             ACP command
           </label>
           <Input
+            aria-describedby="help-agent-acp-command"
             id="agent-acp-command"
             onChange={(event) => onAcpCommandChange(event.target.value)}
             value={acpCommand}
           />
+          <p
+            className="text-xs text-muted-foreground"
+            id="help-agent-acp-command"
+          >
+            The sprout-acp binary path or alias used to launch the ACP harness
+            process.
+          </p>
         </div>
       </div>
 
@@ -167,10 +188,18 @@ export function CreateAgentRuntimeFields({
             Custom agent runtime command
           </label>
           <Input
+            aria-describedby="help-agent-runtime-command"
             id="agent-runtime-command"
             onChange={(event) => onAgentCommandChange(event.target.value)}
             value={agentCommand}
           />
+          <p
+            className="text-xs text-muted-foreground"
+            id="help-agent-runtime-command"
+          >
+            Full path or shell command for the agent binary when no known ACP
+            runtime was detected.
+          </p>
         </div>
       ) : null}
 
@@ -180,13 +209,17 @@ export function CreateAgentRuntimeFields({
             Agent runtime args
           </label>
           <Input
+            aria-describedby="help-agent-runtime-args"
             id="agent-runtime-args"
             onChange={(event) => onAgentArgsChange(event.target.value)}
             placeholder="Comma-separated"
             value={agentArgs}
           />
-          <p className="text-xs text-muted-foreground">
-            `sprout-acp` splits args on commas, matching the testing guide.
+          <p
+            className="text-xs text-muted-foreground"
+            id="help-agent-runtime-args"
+          >
+            sprout-acp splits args on commas, matching the testing guide.
           </p>
         </div>
 
@@ -195,10 +228,18 @@ export function CreateAgentRuntimeFields({
             MCP command
           </label>
           <Input
+            aria-describedby="help-agent-mcp-command"
             id="agent-mcp-command"
             onChange={(event) => onMcpCommandChange(event.target.value)}
             value={mcpCommand}
           />
+          <p
+            className="text-xs text-muted-foreground"
+            id="help-agent-mcp-command"
+          >
+            Command the ACP harness uses to start the MCP tool server for this
+            agent.
+          </p>
         </div>
 
         <div className="space-y-1.5">
@@ -206,11 +247,15 @@ export function CreateAgentRuntimeFields({
             Turn timeout
           </label>
           <Input
+            aria-describedby="help-agent-timeout"
             id="agent-timeout"
             onChange={(event) => onTurnTimeoutChange(event.target.value)}
             placeholder="300"
             value={turnTimeoutSeconds}
           />
+          <p className="text-xs text-muted-foreground" id="help-agent-timeout">
+            Seconds before an agent turn is cancelled. Defaults to 300.
+          </p>
         </div>
 
         <div className="space-y-1.5">
@@ -218,6 +263,7 @@ export function CreateAgentRuntimeFields({
             Parallelism
           </label>
           <Input
+            aria-describedby="help-agent-parallelism"
             data-testid="agent-parallelism-input"
             id="agent-parallelism"
             inputMode="numeric"
@@ -229,10 +275,30 @@ export function CreateAgentRuntimeFields({
             type="number"
             value={parallelism}
           />
-          <p className="text-xs text-muted-foreground">
-            Number of ACP worker subprocesses. `sprout-acp` allows 1-32.
+          <p
+            className="text-xs text-muted-foreground"
+            id="help-agent-parallelism"
+          >
+            Number of ACP worker subprocesses. sprout-acp allows 1-32.
           </p>
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-sm font-medium" htmlFor="agent-mcp-toolsets">
+          MCP toolsets
+        </label>
+        <Input
+          id="agent-mcp-toolsets"
+          onChange={(event) => onMcpToolsetsChange(event.target.value)}
+          placeholder="default"
+          value={mcpToolsets}
+        />
+        <p className="text-xs text-muted-foreground">
+          Comma-separated list of toolsets to expose via SPROUT_TOOLSETS.
+          Available: default, channel_admin, dms, canvas, workflow_admin,
+          identity, forums, social. Leave blank for the default toolset only.
+        </p>
       </div>
 
       <div className="space-y-1.5">
@@ -240,15 +306,18 @@ export function CreateAgentRuntimeFields({
           System prompt override
         </label>
         <Textarea
+          aria-describedby="help-agent-system-prompt"
           data-testid="agent-system-prompt-input"
           id="agent-system-prompt"
           onChange={(event) => onSystemPromptChange(event.target.value)}
           placeholder="Leave blank to send no ACP system prompt"
           value={systemPrompt}
         />
-        <p className="text-xs text-muted-foreground">
-          Blank means no override. `sprout-acp` will not add a `[System]`
-          prompt.
+        <p
+          className="text-xs text-muted-foreground"
+          id="help-agent-system-prompt"
+        >
+          Blank means no override. sprout-acp will not add a [System] prompt.
         </p>
       </div>
     </>
@@ -302,7 +371,7 @@ export function CreateAgentOptionToggles({
         <p className="mt-1 text-sm text-foreground/70">
           {prereqs !== null && !isMintSupported
             ? `Unavailable until ${prereqs.admin.command} is installed.`
-            : "Use `sprout-admin` to create a bearer token for this agent."}
+            : "Use sprout-admin to create a bearer token for this agent."}
         </p>
       </button>
 

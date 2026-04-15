@@ -27,8 +27,23 @@ pub struct PersonaRecord {
     /// Passed to the agent at creation time when deploying from this persona.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Pool of short, thematic names for bot instances created from this persona.
+    /// When a new copy is added to a channel, a random unused name is picked from this pool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub name_pool: Vec<String>,
     #[serde(default)]
     pub is_builtin: bool,
+    #[serde(default = "default_record_active")]
+    pub is_active: bool,
+    /// Pack ID if this persona was imported from a persona pack.
+    /// Pack personas are non-editable (system_prompt, model locked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pack: Option<String>,
+    /// Internal persona slug within the pack (e.g., "lep", "pip").
+    /// Used by ACP's `resolve_persona_by_name()` to find the right persona.
+    /// Validated: `[a-zA-Z0-9_-]+`, max 64 chars (safe for env vars and paths).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_pack_persona_slug: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,6 +54,8 @@ pub struct RelayAgentInfo {
     pub name: String,
     pub agent_type: String,
     pub channels: Vec<String>,
+    #[serde(default)]
+    pub channel_ids: Vec<String>,
     pub capabilities: Vec<String>,
     pub status: String,
 }
@@ -71,6 +88,10 @@ pub struct ManagedAgentRecord {
     /// creation by matching this ID against the fresh session/new response.
     #[serde(default)]
     pub model: Option<String>,
+    /// Comma-separated toolset string forwarded as SPROUT_TOOLSETS to the MCP subprocess.
+    /// When None, the MCP server uses its own default ("default" toolset).
+    #[serde(default)]
+    pub mcp_toolsets: Option<String>,
     #[serde(default = "default_start_on_app_launch")]
     pub start_on_app_launch: bool,
     #[serde(default)]
@@ -81,6 +102,12 @@ pub struct ManagedAgentRecord {
     pub backend_agent_id: Option<String>,
     #[serde(default)]
     pub provider_binary_path: Option<String>,
+    /// Installed pack path (absolute). Set when agent was created from a pack persona.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona_pack_path: Option<PathBuf>,
+    /// Persona name within the pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona_name_in_pack: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_started_at: Option<String>,
@@ -111,6 +138,7 @@ pub struct ManagedAgentSummary {
     pub parallelism: u32,
     pub system_prompt: Option<String>,
     pub model: Option<String>,
+    pub mcp_toolsets: Option<String>,
     pub has_api_token: bool,
     pub backend: BackendKind,
     pub backend_agent_id: Option<String>,
@@ -145,6 +173,7 @@ pub struct CreateManagedAgentRequest {
     pub system_prompt: Option<String>,
     pub avatar_url: Option<String>,
     pub model: Option<String>,
+    pub mcp_toolsets: Option<String>,
     #[serde(default)]
     pub mint_token: bool,
     #[serde(default)]
@@ -177,6 +206,8 @@ pub struct CreatePersonaRequest {
     pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub name_pool: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +221,8 @@ pub struct UpdatePersonaRequest {
     pub provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub name_pool: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,11 +286,36 @@ pub struct ManagedAgentPrereqsInfo {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateManagedAgentRequest {
     pub pubkey: String,
+    /// Absent = don't touch. Present = rename the agent.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Absent = don't touch. null = clear to agent default. "id" = set.
     #[serde(default)]
     pub model: Option<Option<String>>,
     #[serde(default)]
     pub system_prompt: Option<Option<String>>,
+    #[serde(default)]
+    pub mcp_toolsets: Option<Option<String>>,
+    #[serde(default)]
+    pub parallelism: Option<u32>,
+    #[serde(default)]
+    pub turn_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub relay_url: Option<String>,
+    #[serde(default)]
+    pub acp_command: Option<String>,
+    #[serde(default)]
+    pub agent_command: Option<String>,
+    #[serde(default)]
+    pub agent_args: Option<Vec<String>>,
+    #[serde(default)]
+    pub mcp_command: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateManagedAgentResponse {
+    pub agent: ManagedAgentSummary,
+    pub profile_sync_error: Option<String>,
 }
 
 /// Response from `get_agent_models` — normalized model info for the frontend.
@@ -331,4 +389,34 @@ fn default_agent_parallelism() -> u32 {
 
 fn default_start_on_app_launch() -> bool {
     true
+}
+
+fn default_record_active() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PersonaRecord;
+
+    #[test]
+    fn persona_record_defaults_active_when_field_is_missing() {
+        let record: PersonaRecord = serde_json::from_str(
+            r#"{
+                "id": "builtin:solo",
+                "display_name": "Solo",
+                "avatar_url": null,
+                "system_prompt": "Prompt",
+                "created_at": "2026-03-19T00:00:00Z",
+                "updated_at": "2026-03-19T00:00:00Z"
+            }"#,
+        )
+        .expect("legacy persona payload should deserialize");
+
+        assert!(record.is_active);
+        assert!(!record.is_builtin);
+        assert_eq!(record.provider, None);
+        assert_eq!(record.model, None);
+        assert!(record.name_pool.is_empty());
+    }
 }

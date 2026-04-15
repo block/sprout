@@ -19,24 +19,31 @@ export function useChannelPaneHandlers({
   deleteMessageMutation,
   editMessageMutation,
   editTargetId,
-  replyTargetId,
+  openThreadHeadId,
   sendMessageMutation,
   setEditTargetId,
-  setReplyTargetId,
+  setThreadHeadPath,
+  setThreadReplyTargetId,
+  threadReplyTargetId,
   toggleReactionMutation,
 }: {
   deleteMessageMutation: ReturnType<typeof useDeleteMessageMutation>;
   editMessageMutation: ReturnType<typeof useEditMessageMutation>;
   editTargetId: string | null;
-  replyTargetId: string | null;
+  openThreadHeadId: string | null;
   sendMessageMutation: ReturnType<typeof useSendMessageMutation>;
   setEditTargetId: React.Dispatch<React.SetStateAction<string | null>>;
-  setReplyTargetId: React.Dispatch<React.SetStateAction<string | null>>;
+  setThreadHeadPath: React.Dispatch<React.SetStateAction<string[]>>;
+  setThreadReplyTargetId: React.Dispatch<React.SetStateAction<string | null>>;
+  threadReplyTargetId: string | null;
   toggleReactionMutation: ReturnType<typeof useToggleReactionMutation>;
 }) {
   // Keep mutable values in refs so callbacks never need to list them as deps.
-  const replyTargetIdRef = React.useRef(replyTargetId);
-  replyTargetIdRef.current = replyTargetId;
+  const openThreadHeadIdRef = React.useRef(openThreadHeadId);
+  openThreadHeadIdRef.current = openThreadHeadId;
+
+  const threadReplyTargetIdRef = React.useRef(threadReplyTargetId);
+  threadReplyTargetIdRef.current = threadReplyTargetId;
 
   const editTargetIdRef = React.useRef(editTargetId);
   editTargetIdRef.current = editTargetId;
@@ -53,9 +60,25 @@ export function useChannelPaneHandlers({
   const toggleMutateRef = React.useRef(toggleReactionMutation.mutateAsync);
   toggleMutateRef.current = toggleReactionMutation.mutateAsync;
 
-  const handleCancelReply = React.useCallback(() => {
-    setReplyTargetId(null);
-  }, [setReplyTargetId]);
+  const handleCancelThreadReply = React.useCallback(() => {
+    setThreadReplyTargetId(openThreadHeadIdRef.current);
+  }, [setThreadReplyTargetId]);
+
+  const handleCloseThread = React.useCallback(() => {
+    setThreadHeadPath([]);
+    setThreadReplyTargetId(null);
+  }, [setThreadHeadPath, setThreadReplyTargetId]);
+
+  const handleBackThread = React.useCallback(() => {
+    setThreadHeadPath((current) => {
+      if (current.length <= 1) {
+        return current;
+      }
+      const nextPath = current.slice(0, -1);
+      setThreadReplyTargetId(nextPath[nextPath.length - 1] ?? null);
+      return nextPath;
+    });
+  }, [setThreadHeadPath, setThreadReplyTargetId]);
 
   const handleCancelEdit = React.useCallback(() => {
     setEditTargetId(null);
@@ -70,10 +93,9 @@ export function useChannelPaneHandlers({
       setEditTargetId((current) =>
         current === message.id ? null : message.id,
       );
-      // Clear reply when entering edit mode.
-      setReplyTargetId(null);
+      setThreadReplyTargetId(openThreadHeadIdRef.current);
     },
-    [setEditTargetId, setReplyTargetId],
+    [setEditTargetId, setThreadReplyTargetId],
   );
 
   const handleEditSave = React.useCallback(
@@ -89,18 +111,37 @@ export function useChannelPaneHandlers({
     [setEditTargetId],
   );
 
-  const handleReply = React.useCallback(
+  const handleOpenThread = React.useCallback(
     (message: { id: string }) => {
-      setReplyTargetId((current) =>
-        current === message.id ? null : message.id,
-      );
-      // Clear edit when entering reply mode.
+      if (openThreadHeadIdRef.current === message.id) {
+        setThreadHeadPath([]);
+        setThreadReplyTargetId(null);
+        setEditTargetId(null);
+        return;
+      }
+
+      setThreadHeadPath([message.id]);
+      setThreadReplyTargetId(message.id);
       setEditTargetId(null);
     },
-    [setReplyTargetId, setEditTargetId],
+    [setEditTargetId, setThreadHeadPath, setThreadReplyTargetId],
   );
 
-  const handleSend = React.useCallback(
+  const handleOpenNestedThread = React.useCallback(
+    (message: { id: string }) => {
+      setThreadHeadPath((current) => {
+        if (current[current.length - 1] === message.id) {
+          return current;
+        }
+        return [...current, message.id];
+      });
+      setThreadReplyTargetId(message.id);
+      setEditTargetId(null);
+    },
+    [setEditTargetId, setThreadHeadPath, setThreadReplyTargetId],
+  );
+
+  const handleSendMessage = React.useCallback(
     async (
       content: string,
       mentionPubkeys: string[],
@@ -109,12 +150,33 @@ export function useChannelPaneHandlers({
       await sendMutateRef.current({
         content,
         mentionPubkeys,
-        parentEventId: replyTargetIdRef.current,
         mediaTags,
       });
-      setReplyTargetId(null);
     },
-    [setReplyTargetId],
+    [],
+  );
+
+  const handleSendThreadReply = React.useCallback(
+    async (
+      content: string,
+      mentionPubkeys: string[],
+      mediaTags?: string[][],
+    ) => {
+      const parentEventId =
+        threadReplyTargetIdRef.current ?? openThreadHeadIdRef.current;
+      if (!parentEventId) {
+        return;
+      }
+
+      await sendMutateRef.current({
+        content,
+        mentionPubkeys,
+        parentEventId,
+        mediaTags,
+      });
+      setThreadReplyTargetId(openThreadHeadIdRef.current);
+    },
+    [setThreadReplyTargetId],
   );
 
   const handleToggleReaction = React.useCallback(
@@ -130,12 +192,16 @@ export function useChannelPaneHandlers({
 
   return {
     handleCancelEdit,
-    handleCancelReply,
+    handleCancelThreadReply,
+    handleBackThread,
+    handleCloseThread,
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleReply,
-    handleSend,
+    handleOpenNestedThread,
+    handleOpenThread,
+    handleSendMessage,
+    handleSendThreadReply,
     handleToggleReaction,
   };
 }

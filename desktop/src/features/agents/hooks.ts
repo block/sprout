@@ -19,12 +19,14 @@ import {
   mintManagedAgentToken,
   startManagedAgent,
   stopManagedAgent,
+  updateManagedAgent,
 } from "@/shared/api/tauri";
 import {
   createPersona,
   deletePersona,
   exportPersonaToJson,
   listPersonas,
+  setPersonaActive,
   updatePersona,
 } from "@/shared/api/tauriPersonas";
 import { setManagedAgentStartOnAppLaunch } from "@/shared/api/tauriManagedAgents";
@@ -42,6 +44,7 @@ import type {
   CreateTeamInput,
   ManagedAgent,
   MintManagedAgentTokenInput,
+  UpdateManagedAgentInput,
   UpdatePersonaInput,
   UpdateTeamInput,
 } from "@/shared/api/types";
@@ -194,6 +197,29 @@ export function useCreateManagedAgentMutation() {
   });
 }
 
+export function useUpdateManagedAgentMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input: UpdateManagedAgentInput) => updateManagedAgent(input),
+    onSuccess: (result) => {
+      queryClient.setQueryData<ManagedAgent[]>(
+        managedAgentsQueryKey,
+        (current) => {
+          if (!current) return current;
+          return current.map((agent) =>
+            agent.pubkey === result.agent.pubkey ? result.agent : agent,
+          );
+        },
+      );
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
+    },
+  });
+}
+
 export function useCreatePersonaMutation() {
   const queryClient = useQueryClient();
 
@@ -237,6 +263,21 @@ export function useDeletePersonaMutation() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: personasQueryKey }),
         queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey }),
+      ]);
+    },
+  });
+}
+
+export function useSetPersonaActiveMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      setPersonaActive(id, active),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: personasQueryKey }),
+        queryClient.invalidateQueries({ queryKey: teamsQueryKey }),
       ]);
     },
   });

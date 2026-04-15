@@ -103,6 +103,8 @@ type RawChannel = {
   participants: string[];
   participant_pubkeys: string[];
   is_member?: boolean;
+  ttl_seconds: number | null;
+  ttl_deadline: string | null;
 };
 
 type RawChannelDetail = RawChannel & {
@@ -238,6 +240,7 @@ export type RawManagedAgent = {
   parallelism: number;
   system_prompt: string | null;
   model: string | null;
+  mcp_toolsets: string | null;
   has_api_token: boolean;
   status: ManagedAgent["status"];
   pid: number | null;
@@ -353,6 +356,8 @@ function fromRawChannel(channel: RawChannel): Channel {
     participants: channel.participants,
     participantPubkeys: channel.participant_pubkeys,
     isMember: channel.is_member ?? true,
+    ttlSeconds: channel.ttl_seconds,
+    ttlDeadline: channel.ttl_deadline,
   };
 }
 
@@ -610,6 +615,14 @@ export async function removeChannelMember(
   await invokeTauri("remove_channel_member", { channelId, pubkey });
 }
 
+export async function changeChannelMemberRole(
+  channelId: string,
+  pubkey: string,
+  role: string,
+): Promise<void> {
+  await invokeTauri("change_channel_member_role", { channelId, pubkey, role });
+}
+
 export async function joinChannel(channelId: string): Promise<void> {
   await invokeTauri("join_channel", { channelId });
 }
@@ -719,6 +732,8 @@ export type BlobDescriptor = {
   dim?: string;
   blurhash?: string;
   thumb?: string;
+  duration?: number;
+  image?: string;
 };
 
 export async function uploadMedia(
@@ -825,6 +840,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     parallelism: agent.parallelism,
     systemPrompt: agent.system_prompt,
     model: agent.model,
+    mcpToolsets: agent.mcp_toolsets,
     hasApiToken: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
@@ -921,6 +937,7 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         agentCommand: input.agentCommand,
         agentArgs: input.agentArgs,
         mcpCommand: input.mcpCommand,
+        mcpToolsets: input.mcpToolsets,
         turnTimeoutSeconds: input.turnTimeoutSeconds,
         idleTimeoutSeconds: input.idleTimeoutSeconds,
         maxTurnDurationSeconds: input.maxTurnDurationSeconds,
@@ -1037,13 +1054,22 @@ export async function getAgentModels(pubkey: string) {
   return invokeTauri<AgentModelsResponse>("get_agent_models", { pubkey });
 }
 
+type RawUpdateManagedAgentResponse = {
+  agent: RawManagedAgent;
+  profile_sync_error: string | null;
+};
+
 export async function updateManagedAgent(
   input: UpdateManagedAgentInput,
-): Promise<ManagedAgent> {
-  const response = await invokeTauri<RawManagedAgent>("update_managed_agent", {
-    input,
-  });
-  return fromRawManagedAgent(response);
+): Promise<{ agent: ManagedAgent; profileSyncError: string | null }> {
+  const response = await invokeTauri<RawUpdateManagedAgentResponse>(
+    "update_managed_agent",
+    { input },
+  );
+  return {
+    agent: fromRawManagedAgent(response.agent),
+    profileSyncError: response.profile_sync_error,
+  };
 }
 
 // ── Backend provider discovery ────────────────────────────────────────────────

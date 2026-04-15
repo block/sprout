@@ -19,13 +19,8 @@ import type {
   ManagedAgentBackend,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/shared/ui/dialog";
+import { Dialog } from "@/shared/ui/dialog";
+import { ChooserDialogContent } from "@/shared/ui/chooser-dialog-content";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,6 +36,8 @@ import {
   collectProviderWarnings,
   resolvePersonaProvider,
 } from "@/features/agents/lib/resolvePersonaProvider";
+import { getActivePersonas } from "@/features/agents/lib/catalog";
+import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
 
 type AddChannelBotDialogProps = {
   backendProviders?: BackendProviderCandidate[];
@@ -108,8 +105,14 @@ export function AddChannelBotDialog({
     open && channelId !== null,
   );
   const createBotsMutation = useCreateChannelManagedAgentsMutation(channelId);
-  const personas = personasQuery.data ?? [];
-  const teams = teamsQuery.data ?? [];
+  const personas = React.useMemo(
+    () => getActivePersonas(personasQuery.data ?? []),
+    [personasQuery.data],
+  );
+  const teams = React.useMemo(
+    () => getUsableTeams(teamsQuery.data ?? [], personas),
+    [personas, teamsQuery.data],
+  );
   const [selectedProviderId, setSelectedProviderId] = React.useState("");
   const [selectedPersonaIds, setSelectedPersonaIds] = React.useState<string[]>(
     [],
@@ -401,198 +404,12 @@ export function AddChannelBotDialog({
 
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
-      <DialogContent className="max-w-3xl overflow-hidden p-0">
-        <div className="flex max-h-[85vh] flex-col">
-          <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
-            <DialogTitle>Add agents</DialogTitle>
-            <DialogDescription>
-              Select any combination of saved personas, or turn on Generic for a
-              one-off custom agent.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-5 px-6 py-5">
-            {resolvedBackendProviders.length > 0 ? (
-              <div className="space-y-1.5">
-                <div className="text-sm font-medium">Run on</div>
-                <select
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
-                  disabled={createBotsMutation.isPending}
-                  onChange={(e) => handleRunOnChange(e.target.value)}
-                  value={runOn}
-                >
-                  <option value="local">This computer</option>
-                  {resolvedBackendProviders.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.id}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-
-            {isProviderMode && selectedBackendProvider ? (
-              <div className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                <p className="text-sm text-warning">
-                  This provider at{" "}
-                  <span className="font-mono font-medium">
-                    {selectedBackendProvider.binaryPath}
-                  </span>{" "}
-                  will receive your agent&apos;s private key. Only use providers
-                  from trusted sources.
-                </p>
-              </div>
-            ) : null}
-
-            {probeError ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                Could not probe provider: {probeError}
-              </p>
-            ) : null}
-
-            {isProviderMode && probedProvider?.config_schema ? (
-              <ProviderConfigFields
-                config={providerConfig}
-                onChange={setProviderConfig}
-                schema={probedProvider.config_schema}
-              />
-            ) : null}
-
-            <div className="space-y-1.5">
-              <div className="text-sm font-medium">Runtime</div>
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    className="h-9 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-3 text-sm font-medium text-foreground shadow-none hover:bg-muted/70"
-                    disabled={!canChooseProvider}
-                    size="default"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <span className="truncate">{providerTriggerLabel}</span>
-                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="min-w-40"
-                  onCloseAutoFocus={(event) => event.preventDefault()}
-                >
-                  <DropdownMenuRadioGroup
-                    onValueChange={setSelectedProviderId}
-                    value={selectedProvider?.id ?? ""}
-                  >
-                    {providers.map((provider) => (
-                      <DropdownMenuRadioItem
-                        key={provider.id}
-                        value={provider.id}
-                      >
-                        {provider.label}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-
-            {teams.length > 0 ? (
-              <AddChannelBotTeamsSection
-                canToggleSelections={canToggleSelections}
-                inChannelPersonaIds={inChannelPersonaIds}
-                isLoading={teamsQuery.isLoading}
-                onToggleTeam={handleToggleTeam}
-                personas={personas}
-                selectedPersonaIds={selectedPersonaIds}
-                teams={teams}
-              />
-            ) : null}
-
-            <AddChannelBotPersonasSection
-              canToggleSelections={canToggleSelections}
-              inChannelPersonaIds={inChannelPersonaIds}
-              includeGeneric={includeGeneric}
-              isLoading={personasQuery.isLoading}
-              onToggleGeneric={() => {
-                setIncludeGeneric((current) => !current);
-                setSubmissionNotice(null);
-                setSubmissionError(null);
-              }}
-              onTogglePersona={(personaId) => {
-                setSelectedPersonaIds((current) =>
-                  toggleValue(current, personaId),
-                );
-                setSubmissionNotice(null);
-                setSubmissionError(null);
-              }}
-              personas={personas}
-              selectedPersonaIds={selectedPersonaIds}
-            />
-
-            {includeGeneric ? (
-              <AddChannelBotGenericSection
-                disabled={createBotsMutation.isPending}
-                name={customName}
-                onNameChange={(value) => {
-                  setHasEditedCustomName(true);
-                  setCustomName(value);
-                }}
-                onPromptChange={setCustomPrompt}
-                prompt={customPrompt}
-              />
-            ) : null}
-
-            {selectedCount === 0 ? (
-              <div className="rounded-2xl border border-dashed border-border/70 bg-muted/15 px-4 py-4 text-sm text-muted-foreground">
-                Pick one or more personas, or enable Generic to add a custom
-                agent.
-              </div>
-            ) : null}
-
-            {providersErrorMessage ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {providersErrorMessage}
-              </p>
-            ) : null}
-
-            {providerWarnings.length > 0
-              ? providerWarnings.map((warning) => (
-                  <div
-                    className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3"
-                    key={warning}
-                  >
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
-                    <p className="text-sm text-warning">{warning}</p>
-                  </div>
-                ))
-              : null}
-
-            {personasQuery.error instanceof Error ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {personasQuery.error.message}
-              </p>
-            ) : null}
-
-            {submissionNotice ? (
-              <p className="rounded-2xl border border-border/70 bg-muted/25 px-4 py-3 text-sm text-foreground">
-                {submissionNotice}
-              </p>
-            ) : null}
-
-            {submissionError ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {submissionError}
-              </p>
-            ) : null}
-
-            {createBotsMutation.error instanceof Error ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {createBotsMutation.error.message}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="flex justify-end gap-2 border-t border-border/60 px-6 py-4">
+      <ChooserDialogContent
+        className="max-w-3xl"
+        data-testid="add-channel-bot-dialog"
+        description="Select any combination of saved personas, or turn on Generic for a one-off custom agent."
+        footer={
+          <>
             <Button
               onClick={() => handleOpenChange(false)}
               size="sm"
@@ -609,9 +426,188 @@ export function AddChannelBotDialog({
             >
               {addButtonLabel}
             </Button>
+          </>
+        }
+        footerClassName="justify-end gap-2"
+        footerTestId="add-channel-bot-dialog-footer"
+        headerTestId="add-channel-bot-dialog-header"
+        scrollAreaClassName="space-y-5"
+        scrollAreaTestId="add-channel-bot-dialog-scroll-area"
+        title="Add agents"
+      >
+        {resolvedBackendProviders.length > 0 ? (
+          <div className="space-y-1.5">
+            <div className="text-sm font-medium">Run on</div>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+              disabled={createBotsMutation.isPending}
+              onChange={(e) => handleRunOnChange(e.target.value)}
+              value={runOn}
+            >
+              <option value="local">This computer</option>
+              {resolvedBackendProviders.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.id}
+                </option>
+              ))}
+            </select>
           </div>
+        ) : null}
+
+        {isProviderMode && selectedBackendProvider ? (
+          <div className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <p className="text-sm text-warning">
+              This provider at{" "}
+              <span className="font-mono font-medium">
+                {selectedBackendProvider.binaryPath}
+              </span>{" "}
+              will receive your agent&apos;s private key. Only use providers
+              from trusted sources.
+            </p>
+          </div>
+        ) : null}
+
+        {probeError ? (
+          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            Could not probe provider: {probeError}
+          </p>
+        ) : null}
+
+        {isProviderMode && probedProvider?.config_schema ? (
+          <ProviderConfigFields
+            config={providerConfig}
+            onChange={setProviderConfig}
+            schema={probedProvider.config_schema}
+          />
+        ) : null}
+
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium">Runtime</div>
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                className="h-9 max-w-full justify-start gap-1.5 rounded-full border border-border/50 bg-muted/45 px-3 text-sm font-medium text-foreground shadow-none hover:bg-muted/70"
+                disabled={!canChooseProvider}
+                size="default"
+                type="button"
+                variant="ghost"
+              >
+                <span className="truncate">{providerTriggerLabel}</span>
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="min-w-40"
+              onCloseAutoFocus={(event) => event.preventDefault()}
+            >
+              <DropdownMenuRadioGroup
+                onValueChange={setSelectedProviderId}
+                value={selectedProvider?.id ?? ""}
+              >
+                {providers.map((provider) => (
+                  <DropdownMenuRadioItem key={provider.id} value={provider.id}>
+                    {provider.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </DialogContent>
+
+        {teams.length > 0 ? (
+          <AddChannelBotTeamsSection
+            canToggleSelections={canToggleSelections}
+            inChannelPersonaIds={inChannelPersonaIds}
+            isLoading={teamsQuery.isLoading}
+            onToggleTeam={handleToggleTeam}
+            personas={personas}
+            selectedPersonaIds={selectedPersonaIds}
+            teams={teams}
+          />
+        ) : null}
+
+        <AddChannelBotPersonasSection
+          canToggleSelections={canToggleSelections}
+          inChannelPersonaIds={inChannelPersonaIds}
+          includeGeneric={includeGeneric}
+          isLoading={personasQuery.isLoading}
+          onToggleGeneric={() => {
+            setIncludeGeneric((current) => !current);
+            setSubmissionNotice(null);
+            setSubmissionError(null);
+          }}
+          onTogglePersona={(personaId) => {
+            setSelectedPersonaIds((current) => toggleValue(current, personaId));
+            setSubmissionNotice(null);
+            setSubmissionError(null);
+          }}
+          personas={personas}
+          selectedPersonaIds={selectedPersonaIds}
+        />
+
+        {includeGeneric ? (
+          <AddChannelBotGenericSection
+            disabled={createBotsMutation.isPending}
+            name={customName}
+            onNameChange={(value) => {
+              setHasEditedCustomName(true);
+              setCustomName(value);
+            }}
+            onPromptChange={setCustomPrompt}
+            prompt={customPrompt}
+          />
+        ) : null}
+
+        {selectedCount === 0 ? (
+          <div className="rounded-2xl border border-dashed border-border/70 bg-muted/15 px-4 py-4 text-sm text-muted-foreground">
+            Pick one or more personas, or enable Generic to add a custom agent.
+          </div>
+        ) : null}
+
+        {providersErrorMessage ? (
+          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {providersErrorMessage}
+          </p>
+        ) : null}
+
+        {providerWarnings.length > 0
+          ? providerWarnings.map((warning) => (
+              <div
+                className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3"
+                key={warning}
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <p className="text-sm text-warning">{warning}</p>
+              </div>
+            ))
+          : null}
+
+        {personasQuery.error instanceof Error ? (
+          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {personasQuery.error.message}
+          </p>
+        ) : null}
+
+        {submissionNotice ? (
+          <p className="rounded-2xl border border-border/70 bg-muted/25 px-4 py-3 text-sm text-foreground">
+            {submissionNotice}
+          </p>
+        ) : null}
+
+        {submissionError ? (
+          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {submissionError}
+          </p>
+        ) : null}
+
+        {createBotsMutation.error instanceof Error ? (
+          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {createBotsMutation.error.message}
+          </p>
+        ) : null}
+      </ChooserDialogContent>
     </Dialog>
   );
 }

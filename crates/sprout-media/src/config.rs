@@ -1,5 +1,9 @@
 //! Media storage configuration.
 
+fn default_max_video_bytes() -> u64 {
+    524_288_000 // 500 MB
+}
+
 /// Configuration for media storage (S3/MinIO).
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MediaConfig {
@@ -15,6 +19,9 @@ pub struct MediaConfig {
     pub max_image_bytes: u64,
     /// Maximum upload size for animated GIFs (bytes). Default: 10 MB.
     pub max_gif_bytes: u64,
+    /// Maximum upload size for video files (bytes). Default: 500 MB.
+    #[serde(default = "default_max_video_bytes")]
+    pub max_video_bytes: u64,
     /// Public base URL for media URLs in BlobDescriptor (must include `/media` path).
     pub public_base_url: String,
     /// Server authority for BUD-11 server tag validation.
@@ -45,6 +52,9 @@ impl MediaConfig {
         }
         if self.max_gif_bytes == 0 || self.max_gif_bytes > self.max_image_bytes {
             return Err("max_gif_bytes must be > 0 and <= max_image_bytes".to_string());
+        }
+        if self.max_video_bytes == 0 {
+            return Err("max_video_bytes must be > 0".to_string());
         }
         Ok(())
     }

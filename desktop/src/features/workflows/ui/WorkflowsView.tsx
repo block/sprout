@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { allWorkflowsQueryKey } from "@/features/workflows/hooks";
 import { WorkflowCard } from "@/features/workflows/ui/WorkflowCard";
+import { WorkflowCreatePromptPanel } from "@/features/workflows/ui/WorkflowCreatePromptPanel";
 import { WorkflowDeleteDialog } from "@/features/workflows/ui/WorkflowDeleteDialog";
 import { WorkflowDetailPanel } from "@/features/workflows/ui/WorkflowDetailPanel";
 import { WorkflowDialog } from "@/features/workflows/ui/WorkflowDialog";
@@ -15,9 +16,14 @@ import {
 } from "@/shared/api/tauriWorkflows";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { Skeleton } from "@/shared/ui/skeleton";
+import { draftWorkflowYamlFromPrompt } from "./workflowPromptScaffold";
 
 type WorkflowsViewProps = {
   channels: Channel[];
+  onCloseWorkflow: () => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  selectedWorkflowId: string | null;
 };
 
 type WorkflowWithChannel = {
@@ -27,18 +33,57 @@ type WorkflowWithChannel = {
 
 type DialogState =
   | { mode: "closed" }
-  | { mode: "create" }
   | { mode: "edit"; workflow: Workflow }
   | { mode: "duplicate"; workflow: Workflow };
 
-export function WorkflowsView({ channels }: WorkflowsViewProps) {
+function WorkflowsListSkeleton() {
+  return (
+    <div className="space-y-2">
+      {["first", "second", "third", "fourth"].map((card) => (
+        <div
+          className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
+          key={card}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-5 w-44" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-full max-w-2xl" />
+              <div className="flex flex-wrap gap-2">
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-16 rounded-full" />
+              </div>
+            </div>
+            <div className="hidden shrink-0 gap-2 sm:flex">
+              <Skeleton className="h-8 w-8 rounded-lg" />
+              <Skeleton className="h-8 w-8 rounded-lg" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function WorkflowsView({
+  channels,
+  onCloseWorkflow,
+  onSelectWorkflow,
+  selectedWorkflowId,
+}: WorkflowsViewProps) {
   const [dialogState, setDialogState] = React.useState<DialogState>({
     mode: "closed",
   });
+  const [createPrompt, setCreatePrompt] = React.useState("");
+  const [createPromptOpen, setCreatePromptOpen] = React.useState(false);
+  const [createDraftSeed, setCreateDraftSeed] = React.useState<{
+    prompt: string;
+    yaml: string;
+  } | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<Workflow | null>(null);
-  const [selectedWorkflowId, setSelectedWorkflowId] = React.useState<
-    string | null
-  >(null);
   const queryClient = useQueryClient();
 
   const memberChannels = channels.filter((c) => c.isMember);
@@ -83,9 +128,9 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const deleteMutation = useMutation({
     mutationFn: (workflowId: string) => deleteWorkflow(workflowId),
     onSuccess: (_data, workflowId) => {
-      setSelectedWorkflowId((current) =>
-        current === workflowId ? null : current,
-      );
+      if (selectedWorkflowId === workflowId) {
+        onCloseWorkflow();
+      }
       void queryClient.invalidateQueries({
         predicate: (query) =>
           query.queryKey[0] === "workflows" ||
@@ -94,10 +139,11 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     },
   });
 
-  const triggerOne = triggerMutation.mutate;
   const handleTrigger = React.useCallback(
-    (workflowId: string) => triggerOne(workflowId),
-    [triggerOne],
+    (workflowId: string) => {
+      triggerMutation.mutate(workflowId);
+    },
+    [triggerMutation],
   );
 
   const handleDelete = React.useCallback(
@@ -105,13 +151,12 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
     [],
   );
 
-  const deleteOne = deleteMutation.mutate;
   const handleConfirmDelete = React.useCallback(
     (workflow: Workflow) => {
-      deleteOne(workflow.id);
+      deleteMutation.mutate(workflow.id);
       setDeleteTarget(null);
     },
-    [deleteOne],
+    [deleteMutation],
   );
 
   const handleEdit = React.useCallback(
@@ -127,27 +172,54 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
   const handleDialogOpenChange = React.useCallback((open: boolean) => {
     if (!open) {
       setDialogState({ mode: "closed" });
+      setCreateDraftSeed(null);
     }
   }, []);
+
+  const handleStartCreate = React.useCallback(() => {
+    setCreatePrompt("");
+    setCreatePromptOpen(true);
+  }, []);
+
+  const handleCancelCreatePrompt = React.useCallback(() => {
+    setCreatePromptOpen(false);
+    setCreatePrompt("");
+  }, []);
+
+  const handleDraftCreatePrompt = React.useCallback(() => {
+    const trimmedPrompt = createPrompt.trim();
+    if (!trimmedPrompt) {
+      return;
+    }
+
+    const defaultChannelId = memberChannels[0]?.id ?? "";
+    setCreateDraftSeed({
+      prompt: trimmedPrompt,
+      yaml: draftWorkflowYamlFromPrompt(trimmedPrompt, {
+        defaultChannelId: defaultChannelId || undefined,
+      }),
+    });
+    setCreatePromptOpen(false);
+  }, [createPrompt, memberChannels]);
+
+  const showDetailPane = selectedWorkflowId !== null || createPromptOpen;
+  const showCreateSetupDialog = createDraftSeed !== null;
 
   return (
     <div
       className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row"
       data-testid="workflows-view"
     >
-      {/* Workflow list only on overview — hidden while viewing a workflow (nav + full-width editor) */}
       <div
         className={cn(
           "flex min-h-0 flex-col overflow-y-auto p-4",
-          selectedWorkflowId
+          showDetailPane
             ? "hidden"
-            : "min-h-0 w-full flex-1 lg:w-52 lg:max-w-xs lg:shrink-0 lg:border-border lg:border-r",
+            : "min-h-0 w-full flex-1 lg:w-52 lg:max-w-xs lg:shrink-0 lg:border-r lg:border-border",
         )}
+        data-scroll-restoration-id="workflows-list"
       >
-        <div
-          className="mb-4 flex items-center justify-between"
-          data-tauri-drag-region
-        >
+        <div className="mb-4 flex items-center justify-between" data-tauri-drag-region>
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold">Workflows</h2>
             <Button
@@ -162,18 +234,14 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
               />
             </Button>
           </div>
-          <Button onClick={() => setDialogState({ mode: "create" })} size="sm">
+          <Button onClick={handleStartCreate} size="sm">
             <Plus className="mr-1 h-4 w-4" />
             Create Workflow
           </Button>
         </div>
 
         {allWorkflowsQuery.isLoading ? (
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              Loading workflows...
-            </p>
-          </div>
+          <WorkflowsListSkeleton />
         ) : allWorkflowsQuery.isError ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-muted-foreground">
             <p className="text-sm text-red-400">Failed to load workflows</p>
@@ -190,7 +258,7 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             <Zap className="h-10 w-10 opacity-30" />
             <p className="text-sm">No workflows yet</p>
             <Button
-              onClick={() => setDialogState({ mode: "create" })}
+              onClick={handleStartCreate}
               size="sm"
               variant="outline"
             >
@@ -203,13 +271,13 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
             {allWorkflows.map(({ workflow, channelName }) => (
               <WorkflowCard
                 channelName={channelName}
+                isActive={selectedWorkflowId === workflow.id}
                 key={workflow.id}
                 onDelete={handleDelete}
                 onDuplicate={handleDuplicate}
                 onEdit={handleEdit}
-                onSelect={setSelectedWorkflowId}
+                onSelect={onSelectWorkflow}
                 onTrigger={handleTrigger}
-                selected={selectedWorkflowId === workflow.id}
                 workflow={workflow}
               />
             ))}
@@ -222,18 +290,31 @@ export function WorkflowsView({ channels }: WorkflowsViewProps) {
           <WorkflowDetailPanel
             key={selectedWorkflowId}
             channelName={selectedChannelName}
-            onClose={() => setSelectedWorkflowId(null)}
-            onEdit={handleEdit}
+            onClose={onCloseWorkflow}
             workflowId={selectedWorkflowId}
+          />
+        </div>
+      ) : createPromptOpen ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <WorkflowCreatePromptPanel
+            onCancel={handleCancelCreatePrompt}
+            onChange={setCreatePrompt}
+            onSubmit={handleDraftCreatePrompt}
+            prompt={createPrompt}
           />
         </div>
       ) : null}
 
       <WorkflowDialog
         channels={memberChannels}
-        mode={dialogState.mode === "closed" ? "create" : dialogState.mode}
+        initialCreateDraft={createDraftSeed}
+        mode={
+          dialogState.mode === "closed"
+            ? "create"
+            : dialogState.mode
+        }
         onOpenChange={handleDialogOpenChange}
-        open={dialogState.mode !== "closed"}
+        open={showCreateSetupDialog || dialogState.mode !== "closed"}
         workflow={
           dialogState.mode === "edit" || dialogState.mode === "duplicate"
             ? dialogState.workflow

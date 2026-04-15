@@ -15,6 +15,7 @@ use sprout_audit::AuditService;
 use sprout_auth::AuthService;
 use sprout_core::event::StoredEvent;
 use sprout_db::Db;
+use sprout_huddle::HuddleService;
 use sprout_media::MediaStorage;
 use sprout_pubsub::PubSubManager;
 use sprout_search::SearchService;
@@ -22,7 +23,7 @@ use sprout_workflow::WorkflowEngine;
 
 use crate::api::tokens::MintRateLimiter;
 use crate::config::Config;
-use crate::connection::SLOW_CLIENT_GRACE_LIMIT;
+use crate::connection::{ConnectionSubscriptions, SLOW_CLIENT_GRACE_LIMIT};
 use crate::subscription::SubscriptionRegistry;
 
 /// Per-connection entry in the connection manager.
@@ -32,6 +33,8 @@ struct ConnEntry {
     /// Shared with `ConnectionState` — both direct sends and fan-out
     /// broadcasts track the same consecutive-full counter.
     backpressure_count: Arc<AtomicU8>,
+    subscriptions: ConnectionSubscriptions,
+    authenticated_pubkey: Arc<std::sync::RwLock<Option<Vec<u8>>>>,
 }
 
 /// Tracks active WebSocket connections and provides message routing by connection ID.
@@ -48,13 +51,14 @@ impl ConnectionManager {
     }
 
     /// Registers a connection with its outbound sender, cancellation token,
-    /// and shared backpressure counter (same `Arc` as `ConnectionState`).
+    /// shared backpressure counter, and mutable subscription map.
     pub fn register(
         &self,
         conn_id: Uuid,
         tx: mpsc::Sender<WsMessage>,
         cancel: CancellationToken,
         backpressure_count: Arc<AtomicU8>,
+        subscriptions: ConnectionSubscriptions,
     ) {
         self.connections.insert(
             conn_id,
@@ -62,6 +66,8 @@ impl ConnectionManager {
                 tx,
                 cancel,
                 backpressure_count,
+                subscriptions,
+                authenticated_pubkey: Arc::new(std::sync::RwLock::new(None)),
             },
         );
     }
@@ -69,6 +75,42 @@ impl ConnectionManager {
     /// Removes a connection from the registry.
     pub fn deregister(&self, conn_id: Uuid) {
         self.connections.remove(&conn_id);
+    }
+
+    /// Record the authenticated pubkey for a connection after NIP-42 succeeds.
+    pub fn set_authenticated_pubkey(&self, conn_id: Uuid, pubkey_bytes: Vec<u8>) {
+        if let Some(entry) = self.connections.get(&conn_id) {
+            if let Ok(mut slot) = entry.authenticated_pubkey.write() {
+                *slot = Some(pubkey_bytes);
+            }
+        }
+    }
+
+    /// Return all live connection IDs authenticated as `pubkey_bytes`.
+    pub fn connection_ids_for_pubkey(&self, pubkey_bytes: &[u8]) -> Vec<Uuid> {
+        self.connections
+            .iter()
+            .filter_map(|entry| {
+                let matches = entry
+                    .authenticated_pubkey
+                    .read()
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .as_ref()
+                            .map(|stored| stored.as_slice() == pubkey_bytes)
+                    })
+                    .unwrap_or(false);
+                matches.then_some(*entry.key())
+            })
+            .collect()
+    }
+
+    /// Return the subscription map for a connection, if it is still live.
+    pub fn subscriptions_for(&self, conn_id: Uuid) -> Option<ConnectionSubscriptions> {
+        self.connections
+            .get(&conn_id)
+            .map(|entry| Arc::clone(&entry.subscriptions))
     }
 
     /// Sends a text message to the given connection.
@@ -161,6 +203,10 @@ pub struct AppState {
     pub search_index_tx: mpsc::Sender<StoredEvent>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
+    /// LiveKit huddle service — `None` when LiveKit is not configured.
+    pub huddle_service: Option<Arc<HuddleService>>,
+    /// LiveKit server URL — populated when `huddle_service` is `Some`.
+    pub livekit_url: Option<String>,
     /// Set to `true` on SIGTERM — readiness probe returns 503.
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
@@ -181,6 +227,7 @@ impl AppState {
         workflow_engine: Arc<WorkflowEngine>,
         relay_keypair: nostr::Keys,
         media_storage: MediaStorage,
+        huddle_service: Option<(HuddleService, String)>,
     ) -> Self {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
@@ -239,6 +286,8 @@ impl AppState {
 
             search_index_tx,
             media_storage: Arc::new(media_storage),
+            livekit_url: huddle_service.as_ref().map(|(_, url)| url.clone()),
+            huddle_service: huddle_service.map(|(svc, _)| Arc::new(svc)),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
         }
@@ -285,7 +334,13 @@ mod tests {
         let (tx, rx) = mpsc::channel(buffer_size);
         let cancel = CancellationToken::new();
         let bp = Arc::new(AtomicU8::new(0));
-        mgr.register(conn_id, tx, cancel.clone(), Arc::clone(&bp));
+        mgr.register(
+            conn_id,
+            tx,
+            cancel.clone(),
+            Arc::clone(&bp),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
         (mgr, conn_id, rx, cancel, bp)
     }
 
@@ -351,7 +406,7 @@ mod tests {
             conn_id,
             remote_addr: "127.0.0.1:1234".parse().unwrap(),
             auth_state: RwLock::new(AuthState::Failed),
-            subscriptions: Mutex::new(HashMap::new()),
+            subscriptions: Arc::new(Mutex::new(HashMap::new())),
             send_tx: tx.clone(),
             ctrl_tx,
             cancel: cancel.clone(),
@@ -359,7 +414,13 @@ mod tests {
         };
 
         let mgr = ConnectionManager::new();
-        mgr.register(conn_id, tx, cancel.clone(), Arc::clone(&bp));
+        mgr.register(
+            conn_id,
+            tx,
+            cancel.clone(),
+            Arc::clone(&bp),
+            Arc::clone(&conn.subscriptions),
+        );
 
         // Fill the buffer via direct send.
         assert!(conn.send("fill".into()));
@@ -383,5 +444,22 @@ mod tests {
             cancel.is_cancelled(),
             "shared counter reached limit via mixed path"
         );
+    }
+
+    #[tokio::test]
+    async fn tracks_connections_by_authenticated_pubkey() {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        mgr.register(conn_id, tx, cancel, bp, Arc::clone(&subscriptions));
+
+        let pubkey = vec![7u8; 32];
+        mgr.set_authenticated_pubkey(conn_id, pubkey.clone());
+
+        assert_eq!(mgr.connection_ids_for_pubkey(&pubkey), vec![conn_id]);
+        assert!(mgr.subscriptions_for(conn_id).is_some());
     }
 }

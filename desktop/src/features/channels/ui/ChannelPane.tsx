@@ -1,13 +1,11 @@
 import * as React from "react";
 
-import { ChannelThreadPanel } from "@/features/messages/ui/ChannelThreadPanel";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
-import type {
-  ThreadConversationHint,
-  TimelineMessage,
-} from "@/features/messages/types";
+import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 
@@ -26,36 +24,42 @@ type ChannelPaneProps = {
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
   onCancelEdit?: () => void;
-  onCancelReply: () => void;
-  onCloseThread?: () => void;
+  onBackThread: () => void;
+  onCancelThreadReply: () => void;
+  onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
-  onReply: (message: TimelineMessage) => void;
-  onSendChannel: (
+  onOpenNestedThread: (message: TimelineMessage) => void;
+  onOpenThread: (message: TimelineMessage) => void;
+  onSendMessage: (
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
   ) => Promise<void>;
-  onSendThread: (
+  onSendThreadReply: (
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
   ) => Promise<void>;
-  onTargetReached: (messageId: string) => void;
+  onTargetReached?: (messageId: string) => void;
   onToggleReaction?: (
     message: TimelineMessage,
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  /** Map from lowercase pubkey → persona display name for bot members. */
+  personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
-  replyTargetId: string | null;
-  replyTargetMessage: TimelineMessage | null;
+  canGoBackThread: boolean;
+  openThreadHeadId: string | null;
+  threadHeadMessage: TimelineMessage | null;
+  threadMessages: MainTimelineEntry[];
+  threadTypingPubkeys: string[];
+  threadTotalReplyCount: number;
+  threadReplyTargetId: string | null;
+  threadReplyTargetMessage: TimelineMessage | null;
   targetMessageId: string | null;
-  threadHintsByAnchorId: Map<string, ThreadConversationHint>;
-  /** Message id to anchor the thread panel header on (the row that opened the thread). */
-  threadFocusEventId: string | null;
-  threadRootId: string | null;
   typingPubkeys: string[];
 };
 
@@ -69,57 +73,51 @@ export const ChannelPane = React.memo(function ChannelPane({
   isSending,
   isTimelineLoading,
   messages,
+  onBackThread,
   onCancelEdit,
-  onCancelReply,
+  onCancelThreadReply,
   onCloseThread,
   onDelete,
   onEdit,
   onEditSave,
-  onReply,
-  onSendChannel,
-  onSendThread,
+  onOpenNestedThread,
+  onOpenThread,
+  onSendMessage,
+  onSendThreadReply,
   onTargetReached,
   onToggleReaction,
+  canGoBackThread,
+  personaLookup,
   profiles,
-  replyTargetId,
-  replyTargetMessage,
+  openThreadHeadId,
   targetMessageId,
-  threadHintsByAnchorId,
-  threadFocusEventId,
-  threadRootId,
+  threadHeadMessage,
+  threadMessages,
+  threadTypingPubkeys,
+  threadTotalReplyCount,
+  threadReplyTargetId,
+  threadReplyTargetMessage,
   typingPubkeys,
 }: ChannelPaneProps) {
-  const composerDisabled =
+  const isComposerDisabled =
     !activeChannel ||
     !activeChannel.isMember ||
     activeChannel.archivedAt !== null ||
     activeChannel.channelType === "forum" ||
     isSending;
 
-  const mainPlaceholder = activeChannel?.archivedAt
-    ? "Archived channels are read-only."
-    : activeChannel && !activeChannel.isMember
-      ? "Join this channel to message."
-      : activeChannel?.channelType === "forum"
-        ? "Forum posting is not wired in this pass."
-        : activeChannel
-          ? `Message #${activeChannel.name}`
-          : "Select a channel";
-
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <MessageTimeline
-          activeThreadRootId={threadFocusEventId ?? threadRootId}
           channelId={activeChannel?.id}
-          activeReplyTargetId={replyTargetId}
+          activeReplyTargetId={openThreadHeadId}
           currentPubkey={currentPubkey}
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
           isFetchingOlder={isFetchingOlder}
-          onOpenThread={onReply}
+          personaLookup={personaLookup}
           profiles={profiles}
-          threadHintsByAnchorId={threadHintsByAnchorId}
           emptyDescription={
             activeChannel?.channelType === "forum"
               ? "Select a stream or DM to load real message history in this first integration pass."
@@ -136,57 +134,63 @@ export const ChannelPane = React.memo(function ChannelPane({
           messages={messages}
           onDelete={onDelete}
           onEdit={onEdit}
-          onReply={onReply}
+          onReply={onOpenThread}
           onTargetReached={onTargetReached}
           onToggleReaction={onToggleReaction}
           targetMessageId={targetMessageId}
         />
-        <div className="relative z-10 -mt-10 shrink-0">
-          <TypingIndicatorRow
-            channel={activeChannel}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-            typingPubkeys={typingPubkeys}
-          />
-          <MessageComposer
-            channelId={activeChannel?.id ?? null}
-            channelName={activeChannel?.name ?? "channel"}
-            disabled={composerDisabled}
-            editTarget={threadRootId ? null : editTarget}
-            isSending={isSending}
-            onCancelEdit={onCancelEdit}
-            onCancelReply={threadRootId ? undefined : onCancelReply}
-            onEditSave={onEditSave}
-            onSend={onSendChannel}
-            placeholder={mainPlaceholder}
-            replyTarget={
-              threadRootId || !replyTargetMessage
-                ? null
-                : {
-                    author: replyTargetMessage.author,
-                    body: replyTargetMessage.body,
-                    id: replyTargetMessage.id,
-                  }
-            }
-          />
-        </div>
-      </div>
-
-      {threadRootId && activeChannel && onCloseThread ? (
-        <ChannelThreadPanel
+        <TypingIndicatorRow
           channel={activeChannel}
           currentPubkey={currentPubkey}
-          disabledComposer={composerDisabled}
+          profiles={profiles}
+          typingPubkeys={typingPubkeys}
+        />
+        <MessageComposer
+          channelId={activeChannel?.id ?? null}
+          channelName={activeChannel?.name ?? "channel"}
+          disabled={isComposerDisabled}
           editTarget={editTarget}
-          focusEventId={threadFocusEventId}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
-          onCancelReply={onCancelReply}
-          onClose={onCloseThread}
           onEditSave={onEditSave}
-          onSend={onSendThread}
+          onSend={onSendMessage}
+          placeholder={
+            activeChannel?.archivedAt
+              ? "Archived channels are read-only."
+              : activeChannel && !activeChannel.isMember
+                ? "Join this channel to message."
+                : activeChannel?.channelType === "forum"
+                  ? "Forum posting is not wired in this pass."
+                  : activeChannel
+                    ? `Message #${activeChannel.name}`
+                    : "Select a channel"
+          }
+        />
+      </div>
+
+      {threadHeadMessage ? (
+        <MessageThreadPanel
+          canGoBack={canGoBackThread}
+          channel={activeChannel}
+          channelId={activeChannel?.id ?? null}
+          channelName={activeChannel?.name ?? "channel"}
+          currentPubkey={currentPubkey}
+          disabled={isComposerDisabled}
+          isSending={isSending}
+          onBack={onBackThread}
+          onCancelReply={onCancelThreadReply}
+          onClose={onCloseThread}
+          onDelete={onDelete}
+          onOpenNestedThread={onOpenNestedThread}
+          onSend={onSendThreadReply}
+          onToggleReaction={onToggleReaction}
           profiles={profiles}
-          rootEventId={threadRootId}
+          replyTargetId={threadReplyTargetId}
+          replyTargetMessage={threadReplyTargetMessage}
+          threadHead={threadHeadMessage}
+          threadReplies={threadMessages}
+          threadTypingPubkeys={threadTypingPubkeys}
+          totalReplyCount={threadTotalReplyCount}
         />
       ) : null}
     </div>

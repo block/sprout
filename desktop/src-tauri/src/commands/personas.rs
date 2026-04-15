@@ -5,9 +5,12 @@ use super::export_util::save_json_with_dialog;
 use crate::{
     app_state::AppState,
     managed_agents::{
-        encode_persona_json, load_managed_agents, load_personas, parse_json_persona,
-        parse_png_persona, parse_zip_personas, save_managed_agents, save_personas,
-        CreatePersonaRequest, ParsePersonaFilesResult, PersonaRecord, UpdatePersonaRequest,
+        encode_persona_json, import_persona_pack, list_installed_packs, load_managed_agents,
+        load_personas, load_teams, parse_json_persona, parse_md_persona, parse_png_persona,
+        parse_zip_personas, save_managed_agents, save_personas,
+        uninstall_persona_pack as do_uninstall_persona_pack, validate_persona_activation_change,
+        validate_persona_deletion, CreatePersonaRequest, PackSummary, ParsePersonaFilesResult,
+        PersonaRecord, UpdatePersonaRequest,
     },
     util::now_iso,
 };
@@ -57,6 +60,12 @@ pub fn create_persona(
         .lock()
         .map_err(|error| error.to_string())?;
     let mut personas = load_personas(&app)?;
+    let name_pool: Vec<String> = input
+        .name_pool
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     let persona = PersonaRecord {
         id: Uuid::new_v4().to_string(),
         display_name,
@@ -64,7 +73,11 @@ pub fn create_persona(
         system_prompt,
         provider,
         model,
+        name_pool,
         is_builtin: false,
+        is_active: true,
+        source_pack: None,
+        source_pack_persona_slug: None,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -98,12 +111,17 @@ pub fn update_persona(
     if persona.is_builtin {
         return Err("Built-in personas cannot be edited.".to_string());
     }
-
     persona.display_name = display_name;
     persona.avatar_url = avatar_url;
     persona.system_prompt = system_prompt;
     persona.provider = provider;
     persona.model = model;
+    persona.name_pool = input
+        .name_pool
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
     persona.updated_at = now_iso();
 
     save_personas(&app, &personas)?;
@@ -128,9 +146,12 @@ pub fn delete_persona(
         .iter()
         .find(|record| record.id == id)
         .ok_or_else(|| format!("persona {id} not found"))?;
-    if persona.is_builtin {
-        return Err("Built-in personas cannot be deleted.".to_string());
-    }
+    let referenced_by_team = load_teams(&app)?.iter().any(|team| {
+        team.persona_ids
+            .iter()
+            .any(|persona_id| persona_id == id.as_str())
+    });
+    validate_persona_deletion(persona, referenced_by_team)?;
 
     let original_len = personas.len();
     personas.retain(|record| record.id != id);
@@ -154,6 +175,53 @@ pub fn delete_persona(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn set_persona_active(
+    id: String,
+    active: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PersonaRecord, String> {
+    let _store_guard = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut personas = load_personas(&app)?;
+    let persona = personas
+        .iter_mut()
+        .find(|record| record.id == id)
+        .ok_or_else(|| format!("persona {id} not found"))?;
+
+    let referenced_by_managed_agent = !active
+        && load_managed_agents(&app)?
+            .iter()
+            .any(|agent| agent.persona_id.as_deref() == Some(id.as_str()));
+    let referenced_by_team = !active
+        && load_teams(&app)?.iter().any(|team| {
+            team.persona_ids
+                .iter()
+                .any(|persona_id| persona_id == id.as_str())
+        });
+
+    validate_persona_activation_change(
+        persona,
+        active,
+        referenced_by_managed_agent,
+        referenced_by_team,
+    )?;
+
+    if persona.is_active == active {
+        return Ok(persona.clone());
+    }
+
+    persona.is_active = active;
+    persona.updated_at = now_iso();
+
+    let updated = persona.clone();
+    save_personas(&app, &personas)?;
+    Ok(updated)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +284,31 @@ pub fn parse_persona_files(
         });
     }
 
-    Err("Unsupported file format. Expected .persona.png, .persona.json, or .zip".to_string())
+    // .persona.md: YAML frontmatter starts with "---"
+    let lower_name = file_name.to_ascii_lowercase();
+    if lower_name.ends_with(".persona.md") {
+        if file_bytes.len() > MAX_JSON_BYTES {
+            return Err("Markdown file is too large (max 5 MB).".to_string());
+        }
+        let mut preview = parse_md_persona(&file_bytes)?;
+        preview.source_file = file_name;
+        return Ok(ParsePersonaFilesResult {
+            personas: vec![preview],
+            skipped: vec![],
+        });
+    }
+
+    // If it's a .md file but not .persona.md, give a specific hint.
+    if lower_name.ends_with(".md") {
+        return Err(
+            "Only .persona.md files are supported. Rename to <name>.persona.md".to_string(),
+        );
+    }
+
+    Err(
+        "Unsupported file format. Expected .persona.md, .persona.png, .persona.json, or .zip"
+            .to_string(),
+    )
 }
 
 #[tauri::command]
@@ -226,7 +318,7 @@ pub async fn export_persona_to_json(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     // Load persona data under lock, then drop lock before dialog.
-    let (display_name, system_prompt, avatar_url, provider, model) = {
+    let (display_name, system_prompt, avatar_url, provider, model, name_pool) = {
         let _store_guard = state
             .managed_agents_store_lock
             .lock()
@@ -242,6 +334,7 @@ pub async fn export_persona_to_json(
             persona.avatar_url.clone(),
             persona.provider.clone(),
             persona.model.clone(),
+            persona.name_pool.clone(),
         )
     };
 
@@ -251,9 +344,47 @@ pub async fn export_persona_to_json(
         avatar_url.as_deref(),
         provider.as_deref(),
         model.as_deref(),
+        &name_pool,
     )?;
 
     let slug = crate::util::slugify(&display_name, "persona", 50);
     let filename = format!("{slug}.persona.json");
     save_json_with_dialog(&app, &filename, &json_bytes).await
+}
+
+// ── Pack management commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn install_persona_pack(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<PersonaRecord>, String> {
+    let _lock = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let source = std::path::PathBuf::from(&path);
+    if !source.is_dir() {
+        return Err(format!("pack path is not a directory: {path}"));
+    }
+    import_persona_pack(&app, &source)
+}
+
+#[tauri::command]
+pub fn uninstall_persona_pack(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pack_id: String,
+) -> Result<(), String> {
+    let _lock = state
+        .managed_agents_store_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    do_uninstall_persona_pack(&app, &pack_id)
+}
+
+#[tauri::command]
+pub fn list_persona_packs(app: AppHandle) -> Result<Vec<PackSummary>, String> {
+    list_installed_packs(&app)
 }

@@ -26,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// LiveKit huddle token endpoint.
+pub mod huddles;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.
@@ -44,6 +46,8 @@ pub mod search;
 pub mod tokens;
 /// User profile endpoints.
 pub mod users;
+/// LiveKit webhook handler for server-side presence tracking.
+pub mod webhooks;
 /// Shared helpers for workflow API handlers.
 pub mod workflow_helpers;
 /// Workflow CRUD, trigger, and webhook endpoints.
@@ -58,14 +62,17 @@ pub use channels_metadata::get_channel_handler;
 pub use dms::{add_dm_member_handler, hide_dm_handler, list_dms_handler, open_dm_handler};
 pub use events::get_event;
 pub use feed::feed_handler;
+pub use huddles::huddle_token;
 pub use members::list_members;
 pub use messages::{get_thread, list_messages, validate_imeta_tags, verify_imeta_blobs};
 pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::list_reactions_handler;
 pub use search::search_handler;
 pub use users::{
-    get_profile, get_user_profile, get_users_batch, put_channel_add_policy, search_users,
+    get_contact_list, get_profile, get_user_notes, get_user_profile, get_users_batch,
+    put_channel_add_policy, search_users,
 };
+pub use webhooks::handle_livekit_webhook;
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_run_approvals,
     list_workflow_runs, trigger_workflow, update_workflow, workflow_webhook,

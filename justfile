@@ -43,7 +43,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check mobile-check
 
 # Format all Rust code
 fmt:
@@ -105,7 +105,7 @@ desktop-e2e-integration:
     cd {{desktop_dir}} && pnpm test:e2e:integration
 
 # Run all checks suitable for CI / pre-push (no infra needed)
-ci: check test-unit desktop-build desktop-tauri-check
+ci: check test-unit desktop-build desktop-tauri-check mobile-test
 
 # ─── Test ─────────────────────────────────────────────────────────────────────
 
@@ -139,17 +139,35 @@ proxy:
 proxy-release:
     cargo run -p sprout-proxy --release
 
-# Run the desktop Tauri app in dev mode (uses dev identifier for side-by-side with production)
+# Run the desktop Tauri app in dev mode (ports and identity derived from worktree)
 dev *ARGS:
-    cd {{desktop_dir}} && pnpm tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{desktop_dir}}
+    [[ -d node_modules ]] || pnpm install
+    source ../scripts/instance-env.sh
+    echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
+    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
-# Run the desktop frontend dev server
+# Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
+staging *ARGS:
+    cd {{desktop_dir}} && pnpm install
+    cargo build --release -p sprout-acp -p sprout-mcp
+    cd {{desktop_dir}} && SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co" pnpm exec tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
+
+# Run the desktop frontend dev server (port derived from worktree)
 desktop-dev:
-    cd {{desktop_dir}} && pnpm dev
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{desktop_dir}}
+    [[ -d node_modules ]] || pnpm install
+    source ../scripts/instance-env.sh
+    echo "Starting frontend dev server on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
+    pnpm exec vite --port "${SPROUT_VITE_PORT}" --strictPort
 
-# Run the desktop Tauri app (uses dev identifier for side-by-side with production)
+# Run the desktop Tauri app (alias for dev)
 desktop-app *ARGS:
-    cd {{desktop_dir}} && pnpm tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
+    just dev {{ARGS}}
 
 # ─── Desktop Release ──────────────────────────────────────────────────────────
 
@@ -176,6 +194,22 @@ desktop-release-build version="" target="aarch64-apple-darwin" *args:
         just desktop-set-version "{{version}}"
     fi
     cd {{desktop_dir}} && pnpm exec tauri build --target {{target}} --config src-tauri/tauri.release.conf.json {{args}}
+
+# ─── Mobile ──────────────────────────────────────────────────────────────────
+
+mobile_dir := "mobile"
+
+# Install mobile Flutter dependencies
+mobile-install:
+    cd {{mobile_dir}} && flutter pub get
+
+# Run mobile lint and format checks
+mobile-check:
+    cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
+
+# Run mobile tests
+mobile-test:
+    cd {{mobile_dir}} && flutter test
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

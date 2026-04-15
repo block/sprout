@@ -10,19 +10,26 @@ const WorkflowsView = React.lazy(async () => {
 
 type WorkflowsScreenProps = {
   channels: Channel[];
+  onCloseWorkflow: () => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  selectedWorkflowId: string | null;
 };
 
-/**
- * Full height below the app sidebar — no duplicate page header (the list column
- * shows “Workflows”). Matches a 3-column wireframe: list | diagram | properties.
- */
-export function WorkflowsScreen({ channels }: WorkflowsScreenProps) {
+export function WorkflowsScreen({
+  channels,
+  onCloseWorkflow,
+  onSelectWorkflow,
+  selectedWorkflowId,
+}: WorkflowsScreenProps) {
   return (
-    <React.Suspense
-      fallback={<ViewLoadingFallback label="Loading workflows..." />}
-    >
+    <React.Suspense fallback={<ViewLoadingFallback kind="workflows" />}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pt-2">
-        <WorkflowsView channels={channels} />
+        <WorkflowsView
+          channels={channels}
+          onCloseWorkflow={onCloseWorkflow}
+          onSelectWorkflow={onSelectWorkflow}
+          selectedWorkflowId={selectedWorkflowId}
+        />
       </div>
     </React.Suspense>
   );

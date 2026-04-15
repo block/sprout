@@ -1,11 +1,16 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-
+import { useAppShell } from "@/app/AppShellContext";
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
+import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
+import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
+import {
+  useManagedAgentsQuery,
+  usePersonasQuery,
+} from "@/features/agents/hooks";
 import {
   mergeMessages,
   useChannelMessagesQuery,
@@ -15,40 +20,23 @@ import {
   useSendMessageMutation,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
-import type {
-  ThreadConversationHint,
-  TimelineMessage,
-} from "@/features/messages/types";
-import {
-  channelMessagesKey,
-  channelThreadKey,
-} from "@/features/messages/lib/messageQueryKeys";
 import {
   collectMessageAuthorPubkeys,
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
-import { threadHintAnchorIdForNestedMessage } from "@/features/messages/lib/threadHintAnchor";
-import {
-  getChannelIdFromTags,
-  getThreadReference,
-} from "@/features/messages/lib/threading";
+import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
+import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
-import {
-  mergeCurrentProfileIntoLookup,
-  resolveUserLabel,
-} from "@/features/profile/lib/identity";
-import { getEventById } from "@/shared/api/tauri";
+import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type {
   Channel,
   Identity,
   Profile,
   RelayEvent,
-  SearchHit,
 } from "@/shared/api/types";
-import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 const ChannelPane = React.lazy(async () => {
@@ -65,39 +53,35 @@ type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
   currentProfile?: Profile;
-  onManageChannel: () => void;
-  onMarkChannelRead: (
-    channelId: string,
-    readAt: string | null | undefined,
-  ) => void;
-  onTargetReached: (messageId: string) => void;
-  searchAnchor: SearchHit | null;
-  searchAnchorChannelId: string | null;
-  searchAnchorEvent: RelayEvent | null;
+  onCloseForumPost: () => void;
+  onSelectForumPost: (postId: string) => void;
+  selectedForumPostId: string | null;
+  targetForumReplyId: string | null;
+  targetMessageEvent: RelayEvent | null;
+  targetMessageId: string | null;
 };
 
 export function ChannelScreen({
   activeChannel,
   currentIdentity,
   currentProfile,
-  onManageChannel,
-  onMarkChannelRead,
-  onTargetReached,
-  searchAnchor,
-  searchAnchorChannelId,
-  searchAnchorEvent,
+  onCloseForumPost,
+  onSelectForumPost,
+  selectedForumPostId,
+  targetForumReplyId,
+  targetMessageEvent,
+  targetMessageId,
 }: ChannelScreenProps) {
-  const queryClient = useQueryClient();
+  const { markChannelRead, openChannelManagement } = useAppShell();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
-  const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
-  const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
-  const [threadRootId, setThreadRootId] = React.useState<string | null>(null);
-  /** Event id of the message row used to open the thread (Reply / thread hint). */
-  const [threadFocusEventId, setThreadFocusEventId] = React.useState<
+  const [threadHeadPath, setThreadHeadPath] = React.useState<string[]>([]);
+  const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
     string | null
   >(null);
+  const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
+  const openThreadHeadId = threadHeadPath[threadHeadPath.length - 1] ?? null;
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -114,13 +98,14 @@ export function ChannelScreen({
       return;
     }
 
-    onMarkChannelRead(activeChannelId, activeReadAt);
-  }, [activeChannelId, activeReadAt, onMarkChannelRead]);
+    markChannelRead(activeChannelId, activeReadAt);
+  }, [activeChannelId, activeReadAt, markChannelRead]);
 
-  const { activeChannelTitle, activeDmPresenceStatus } = useActiveChannelHeader(
-    activeChannel,
-    currentPubkey,
-  );
+  const {
+    activeChannelTitle,
+    activeDmPresenceStatus,
+    activeChannelEphemeralDisplay,
+  } = useActiveChannelHeader(activeChannel, currentPubkey);
   const sendMessageMutation = useSendMessageMutation(
     activeChannel,
     currentIdentity,
@@ -132,21 +117,12 @@ export function ChannelScreen({
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
 
-    if (
-      !activeChannel ||
-      !searchAnchorEvent ||
-      searchAnchorChannelId !== activeChannel.id
-    ) {
+    if (!activeChannel || !targetMessageEvent) {
       return currentMessages;
     }
 
-    return mergeMessages(currentMessages, searchAnchorEvent);
-  }, [
-    activeChannel,
-    messagesQuery.data,
-    searchAnchorChannelId,
-    searchAnchorEvent,
-  ]);
+    return mergeMessages(currentMessages, targetMessageEvent);
+  }, [activeChannel, messagesQuery.data, targetMessageEvent]);
   const messageAuthorPubkeys = React.useMemo(
     () => collectMessageAuthorPubkeys(resolvedMessages),
     [resolvedMessages],
@@ -155,26 +131,81 @@ export function ChannelScreen({
     () => resolvedMessages[resolvedMessages.length - 1] ?? null,
     [resolvedMessages],
   );
-  const typingPubkeys = useChannelTyping(
+  const typingEntries = useChannelTyping(
     activeChannel,
     currentPubkey,
     latestMessageEvent,
   );
+  const mainTypingPubkeys = React.useMemo(
+    () =>
+      typingEntries
+        .filter((entry) => entry.threadHeadId === null)
+        .map((entry) => entry.pubkey),
+    [typingEntries],
+  );
+  const threadTypingPubkeys = React.useMemo(
+    () =>
+      typingEntries
+        .filter((entry) => entry.threadHeadId === openThreadHeadId)
+        .map((entry) => entry.pubkey),
+    [openThreadHeadId, typingEntries],
+  );
   const messageProfilePubkeys = React.useMemo(
-    () => [...new Set([...messageAuthorPubkeys, ...typingPubkeys])],
-    [messageAuthorPubkeys, typingPubkeys],
+    () => [
+      ...new Set([
+        ...messageAuthorPubkeys,
+        ...typingEntries.map((entry) => entry.pubkey),
+      ]),
+    ],
+    [messageAuthorPubkeys, typingEntries],
   );
   const messageProfilesQuery = useUsersBatchQuery(messageProfilePubkeys, {
     enabled: messageProfilePubkeys.length > 0,
   });
-  const messageProfiles = React.useMemo(
-    () =>
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const messageProfiles = React.useMemo(() => {
+    const base =
       mergeCurrentProfileIntoLookup(
         messageProfilesQuery.data?.profiles,
         currentProfile,
-      ),
-    [currentProfile, messageProfilesQuery.data?.profiles],
-  );
+      ) ?? {};
+    const agents = managedAgentsQuery.data ?? [];
+    const merged = { ...base };
+    for (const agent of agents) {
+      const key = agent.pubkey.toLowerCase();
+      if (!merged[key]?.displayName) {
+        merged[key] = {
+          ...merged[key],
+          displayName: agent.name,
+          avatarUrl: null,
+          nip05Handle: null,
+        };
+      }
+    }
+    return merged;
+  }, [
+    currentProfile,
+    managedAgentsQuery.data,
+    messageProfilesQuery.data?.profiles,
+  ]);
+  const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
+  const channelMembers = channelMembersQuery.data;
+  const personasQuery = usePersonasQuery();
+  const personaLookup = React.useMemo(() => {
+    const agents = managedAgentsQuery.data ?? [];
+    const personas = personasQuery.data ?? [];
+    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
+    const lookup = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.personaId) {
+        const personaName = personaById.get(agent.personaId);
+        if (personaName) {
+          lookup.set(agent.pubkey.toLowerCase(), personaName);
+        }
+      }
+    }
+    return lookup;
+  }, [managedAgentsQuery.data, personasQuery.data]);
   const timelineMessages = React.useMemo(
     () =>
       formatTimelineMessages(
@@ -183,106 +214,32 @@ export function ChannelScreen({
         currentPubkey,
         currentProfile?.avatarUrl ?? null,
         messageProfiles,
+        channelMembers,
+        personaLookup,
       ),
     [
       activeChannel,
+      channelMembers,
       currentProfile?.avatarUrl,
       currentPubkey,
       messageProfiles,
+      personaLookup,
       resolvedMessages,
     ],
   );
-
-  /**
-   * Main channel: top-level posts plus **direct** replies to the thread root only
-   * (`parentId === rootId` in NIP-10 e-tags). Nested replies (`parentId !== rootId`)
-   * stay sidebar-only — they must not appear in the main stream even if depth is wrong.
-   */
-  const mainTimelineMessages = React.useMemo(
+  const threadPanelData = React.useMemo(
     () =>
-      timelineMessages.filter((message) => {
-        if (message.kind === KIND_SYSTEM_MESSAGE) {
-          return true;
-        }
-
-        const { parentId, rootId } = message;
-        if (!parentId) {
-          return true;
-        }
-
-        if (rootId && parentId === rootId) {
-          return true;
-        }
-
-        return false;
-      }),
-    [timelineMessages],
+      buildThreadPanelData(
+        timelineMessages,
+        openThreadHeadId,
+        threadReplyTargetId,
+      ),
+    [openThreadHeadId, threadReplyTargetId, timelineMessages],
   );
-
-  /**
-   * Reply counts keyed by **main-timeline anchor** (prefer the direct reply to
-   * the thread root — e.g. agent message — over the user's root post).
-   */
-  const threadHintsByAnchorId = React.useMemo(() => {
-    const messageById = new Map<string, TimelineMessage>(
-      timelineMessages.map((m) => [m.id, m]),
-    );
-    const mainIds = new Set(mainTimelineMessages.map((m) => m.id));
-
-    const aggregates = new Map<
-      string,
-      { replyCount: number; pubkeys: string[] }
-    >();
-
-    for (const m of timelineMessages) {
-      if (m.kind === KIND_SYSTEM_MESSAGE) {
-        continue;
-      }
-      const { parentId, rootId } = m;
-      if (!parentId || !rootId || parentId === rootId) {
-        continue;
-      }
-
-      const anchorId = threadHintAnchorIdForNestedMessage(
-        m,
-        messageById,
-        mainIds,
-      );
-      const agg = aggregates.get(anchorId) ?? { replyCount: 0, pubkeys: [] };
-      agg.replyCount += 1;
-      if (m.pubkey) {
-        const pk = m.pubkey.toLowerCase();
-        if (!agg.pubkeys.some((p) => p.toLowerCase() === pk)) {
-          agg.pubkeys.push(m.pubkey);
-        }
-      }
-      aggregates.set(anchorId, agg);
-    }
-
-    const out = new Map<string, ThreadConversationHint>();
-    for (const [anchorId, agg] of aggregates) {
-      const participantPubkeys = agg.pubkeys.slice(0, 5);
-      const participantLabels = participantPubkeys.map((pk) =>
-        resolveUserLabel({
-          pubkey: pk,
-          currentPubkey,
-          profiles: messageProfiles,
-          preferResolvedSelfLabel: true,
-        }),
-      );
-      out.set(anchorId, {
-        replyCount: agg.replyCount,
-        participantPubkeys,
-        participantLabels,
-      });
-    }
-    return out;
-  }, [currentPubkey, mainTimelineMessages, messageProfiles, timelineMessages]);
-  const replyTargetMessage = React.useMemo(
-    () =>
-      timelineMessages.find((message) => message.id === replyTargetId) ?? null,
-    [replyTargetId, timelineMessages],
-  );
+  const openThreadHeadMessage = threadPanelData.threadHead;
+  const threadMessages = threadPanelData.visibleReplies;
+  const threadReplyTargetMessage = threadPanelData.replyTargetMessage;
+  const threadTotalReplyCount = threadPanelData.totalReplyCount;
   const editTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
@@ -291,100 +248,29 @@ export function ChannelScreen({
 
   const {
     handleCancelEdit,
-    handleCancelReply,
+    handleCancelThreadReply,
+    handleBackThread,
+    handleCloseThread,
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleReply,
+    handleOpenNestedThread,
+    handleOpenThread,
+    handleSendMessage,
+    handleSendThreadReply,
     handleToggleReaction,
   } = useChannelPaneHandlers({
     deleteMessageMutation,
     editMessageMutation,
     editTargetId,
-    replyTargetId,
+    openThreadHeadId,
     sendMessageMutation,
     setEditTargetId,
-    setReplyTargetId,
+    setThreadHeadPath,
+    setThreadReplyTargetId,
+    threadReplyTargetId,
     toggleReactionMutation,
   });
-
-  const handleReplyOpenThread = React.useCallback(
-    (message: TimelineMessage) => {
-      setThreadRootId(message.rootId ?? message.id);
-      setThreadFocusEventId(message.id);
-      handleReply(message);
-    },
-    [handleReply],
-  );
-
-  const handleCloseThread = React.useCallback(() => {
-    setThreadRootId(null);
-    setThreadFocusEventId(null);
-    setReplyTargetId(null);
-  }, []);
-
-  /** Main channel composer — always posts to the channel timeline (not the open thread). */
-  const handleSendChannel = React.useCallback(
-    async (
-      content: string,
-      mentionPubkeys: string[],
-      mediaTags?: string[][],
-    ) => {
-      const parentEventId = threadRootId ? null : replyTargetId;
-
-      await sendMessageMutation.mutateAsync({
-        content,
-        mentionPubkeys,
-        parentEventId,
-        mediaTags,
-      });
-
-      if (!threadRootId) {
-        setReplyTargetId(null);
-      }
-    },
-    [replyTargetId, sendMessageMutation, threadRootId],
-  );
-
-  /** Thread sidebar composer — replies inside the active thread. */
-  const handleSendThread = React.useCallback(
-    async (
-      content: string,
-      mentionPubkeys: string[],
-      mediaTags?: string[][],
-    ) => {
-      if (!threadRootId) {
-        return;
-      }
-
-      // Prefer explicit reply chain, then the message that opened the thread (e.g. agent).
-      // Never fall back to thread root alone when focus exists — that would create a depth-1
-      // reply to the root and duplicate the message in the main channel.
-      const parentEventId = replyTargetId ?? threadFocusEventId ?? threadRootId;
-
-      const result = await sendMessageMutation.mutateAsync({
-        content,
-        mentionPubkeys,
-        parentEventId,
-        mediaTags,
-      });
-
-      setReplyTargetId(result.id);
-      if (activeChannelId) {
-        void queryClient.invalidateQueries({
-          queryKey: channelThreadKey(activeChannelId, threadRootId),
-        });
-      }
-    },
-    [
-      activeChannelId,
-      queryClient,
-      replyTargetId,
-      sendMessageMutation,
-      threadFocusEventId,
-      threadRootId,
-    ],
-  );
 
   const canReact = activeChannel !== null && activeChannel.archivedAt === null;
   const effectiveToggleReaction = React.useMemo(
@@ -392,25 +278,31 @@ export function ChannelScreen({
     [canReact, handleToggleReaction],
   );
 
+  const channelDescription = activeChannel
+    ? [
+        activeChannel.archivedAt ? "Archived." : null,
+        !activeChannel.isMember
+          ? "Read-only until you join this open channel."
+          : null,
+        activeChannel.topic,
+        activeChannel.description,
+        activeChannel.purpose,
+        null,
+      ]
+        .filter((value) => value && value.trim().length > 0)
+        .join(" ") || "Channel details and activity."
+    : "Connect to the relay to browse channels and read messages.";
   const shouldLoadTimeline =
     activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
     shouldLoadTimeline &&
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
-  const requestedAncestorIdsRef = React.useRef<Set<string>>(new Set());
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
-      setReplyTargetId(null);
+      setThreadHeadPath([]);
+      setThreadReplyTargetId(null);
       setEditTargetId(null);
-      setThreadRootId(null);
-      setThreadFocusEventId(null);
-    },
-    [],
-  );
-  const resetRequestedAncestors = React.useCallback(
-    (_channelId: string | null) => {
-      requestedAncestorIdsRef.current.clear();
     },
     [],
   );
@@ -420,11 +312,18 @@ export function ChannelScreen({
   }, [activeChannelId, resetComposerTargets]);
 
   React.useEffect(() => {
-    // While the thread panel is open, keep replyTargetId even if the target is not in the
-    // current timeline slice momentarily — clearing it would make thread sends fall back to
-    // the thread root and surface replies in the main channel.
-    if (replyTargetId && !replyTargetMessage && !threadRootId) {
-      setReplyTargetId(null);
+    if (openThreadHeadId && !openThreadHeadMessage) {
+      setThreadHeadPath((current) => current.slice(0, -1));
+      return;
+    }
+
+    if (openThreadHeadMessage && !threadReplyTargetId) {
+      setThreadReplyTargetId(openThreadHeadMessage.id);
+      return;
+    }
+
+    if (threadReplyTargetId && !threadReplyTargetMessage) {
+      setThreadReplyTargetId(openThreadHeadMessage?.id ?? null);
     }
     if (editTargetId && !editTargetMessage) {
       setEditTargetId(null);
@@ -432,187 +331,122 @@ export function ChannelScreen({
   }, [
     editTargetId,
     editTargetMessage,
-    replyTargetId,
-    replyTargetMessage,
-    threadRootId,
+    openThreadHeadId,
+    openThreadHeadMessage,
+    threadReplyTargetId,
+    threadReplyTargetMessage,
   ]);
 
-  React.useEffect(() => {
-    resetRequestedAncestors(activeChannelId);
-  }, [activeChannelId, resetRequestedAncestors]);
+  useLoadMissingAncestors(activeChannel, resolvedMessages);
 
-  React.useEffect(() => {
-    if (!activeChannel || activeChannel.channelType === "forum") {
-      return;
-    }
+  const activeChannelEphemeralBadge = activeChannelEphemeralDisplay ? (
+    <EphemeralChannelBadge
+      display={activeChannelEphemeralDisplay}
+      testId="chat-ephemeral-badge"
+      variant="header"
+    />
+  ) : null;
 
-    const knownEvents = new Map(
-      resolvedMessages.map((message) => [message.id, message]),
+  const headerStatusBadge =
+    activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
+      <>
+        <PresenceBadge
+          data-testid="chat-presence-badge"
+          status={activeDmPresenceStatus}
+        />
+        {activeChannelEphemeralBadge}
+      </>
+    ) : (
+      activeChannelEphemeralBadge
     );
-    const missingAncestorIds = new Set<string>();
-
-    for (const message of resolvedMessages) {
-      const thread = getThreadReference(message.tags);
-
-      for (const eventId of [thread.parentId, thread.rootId]) {
-        if (
-          !eventId ||
-          knownEvents.has(eventId) ||
-          requestedAncestorIdsRef.current.has(eventId)
-        ) {
-          continue;
-        }
-
-        missingAncestorIds.add(eventId);
-      }
-    }
-
-    if (missingAncestorIds.size === 0) {
-      return;
-    }
-
-    for (const eventId of missingAncestorIds) {
-      requestedAncestorIdsRef.current.add(eventId);
-    }
-
-    const maxRequestedAncestors = 500;
-    if (requestedAncestorIdsRef.current.size > maxRequestedAncestors) {
-      const excess =
-        requestedAncestorIdsRef.current.size - maxRequestedAncestors;
-      let removed = 0;
-      for (const id of requestedAncestorIdsRef.current) {
-        if (removed >= excess) {
-          break;
-        }
-        requestedAncestorIdsRef.current.delete(id);
-        removed++;
-      }
-    }
-
-    let isCancelled = false;
-
-    void Promise.all(
-      [...missingAncestorIds].map(async (eventId) => {
-        try {
-          const event = await getEventById(eventId);
-
-          if (
-            isCancelled ||
-            getChannelIdFromTags(event.tags) !== activeChannel.id
-          ) {
-            return;
-          }
-
-          queryClient.setQueryData<RelayEvent[]>(
-            channelMessagesKey(activeChannel.id),
-            (current = []) => mergeMessages(current, event),
-          );
-        } catch (error) {
-          console.error("Failed to load ancestor event", eventId, error);
-        }
-      }),
-    );
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [activeChannel, queryClient, resolvedMessages]);
 
   return (
     <>
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <ChatHeader
-          actions={
-            activeChannel ? (
-              <ChannelMembersBar
+      <ChatHeader
+        actions={
+          activeChannel ? (
+            <ChannelMembersBar
+              channel={activeChannel}
+              currentPubkey={currentPubkey}
+              onManageChannel={openChannelManagement}
+              onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
+            />
+          ) : null
+        }
+        channelType={activeChannel?.channelType}
+        visibility={activeChannel?.visibility}
+        description={channelDescription}
+        statusBadge={headerStatusBadge}
+        title={activeChannelTitle}
+      />
+
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {activeChannel ? (
+          activeChannel.channelType === "forum" ? (
+            <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
+              <ForumView
                 channel={activeChannel}
                 currentPubkey={currentPubkey}
-                onManageChannel={onManageChannel}
-                onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
+                onClosePost={onCloseForumPost}
+                onSelectPost={onSelectForumPost}
+                selectedPostId={selectedForumPostId}
+                targetReplyId={targetForumReplyId}
               />
-            ) : null
-          }
-          channelType={activeChannel?.channelType}
-          visibility={activeChannel?.visibility}
-          statusBadge={
-            activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
-              <PresenceBadge
-                data-testid="chat-presence-badge"
-                status={activeDmPresenceStatus}
-              />
-            ) : null
-          }
-          title={activeChannelTitle}
-        />
-
-        <div className="relative z-0 -mt-8 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {activeChannel ? (
-            activeChannel.channelType === "forum" ? (
-              <React.Suspense
-                fallback={<ViewLoadingFallback label="Loading forum..." />}
-              >
-                <ForumView
-                  channel={activeChannel}
-                  currentPubkey={currentPubkey}
-                />
-              </React.Suspense>
-            ) : (
-              <React.Suspense
-                fallback={<ViewLoadingFallback label="Loading channel..." />}
-              >
-                <ChannelPane
-                  activeChannel={activeChannel}
-                  currentPubkey={currentPubkey}
-                  fetchOlder={fetchOlder}
-                  hasOlderMessages={hasOlderMessages}
-                  isFetchingOlder={isFetchingOlder}
-                  editTarget={
-                    editTargetMessage
-                      ? {
-                          author: editTargetMessage.author,
-                          body: editTargetMessage.body,
-                          id: editTargetMessage.id,
-                        }
-                      : null
-                  }
-                  isSending={sendMessageMutation.isPending}
-                  isTimelineLoading={isTimelineLoading}
-                  messages={mainTimelineMessages}
-                  onCancelEdit={handleCancelEdit}
-                  onCancelReply={handleCancelReply}
-                  onCloseThread={handleCloseThread}
-                  onDelete={handleDelete}
-                  onEdit={handleEdit}
-                  onEditSave={handleEditSave}
-                  onReply={handleReplyOpenThread}
-                  onSendChannel={handleSendChannel}
-                  onSendThread={handleSendThread}
-                  onTargetReached={onTargetReached}
-                  onToggleReaction={effectiveToggleReaction}
-                  profiles={messageProfiles}
-                  replyTargetId={replyTargetId}
-                  replyTargetMessage={replyTargetMessage}
-                  threadFocusEventId={threadFocusEventId}
-                  threadHintsByAnchorId={threadHintsByAnchorId}
-                  threadRootId={threadRootId}
-                  targetMessageId={
-                    activeChannel &&
-                    searchAnchor?.channelId === activeChannel.id
-                      ? searchAnchor.eventId
-                      : null
-                  }
-                  typingPubkeys={typingPubkeys}
-                />
-              </React.Suspense>
-            )
+            </React.Suspense>
           ) : (
-            <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
-              <p className="text-sm text-muted-foreground">
-                Select a channel to view messages.
-              </p>
-            </div>
-          )}
-        </div>
+            <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
+              <ChannelPane
+                activeChannel={activeChannel}
+                currentPubkey={currentPubkey}
+                fetchOlder={fetchOlder}
+                hasOlderMessages={hasOlderMessages}
+                isFetchingOlder={isFetchingOlder}
+                editTarget={
+                  editTargetMessage
+                    ? {
+                        author: editTargetMessage.author,
+                        body: editTargetMessage.body,
+                        id: editTargetMessage.id,
+                      }
+                    : null
+                }
+                isSending={sendMessageMutation.isPending}
+                isTimelineLoading={isTimelineLoading}
+                messages={timelineMessages}
+                onCancelEdit={handleCancelEdit}
+                onCancelThreadReply={handleCancelThreadReply}
+                onBackThread={handleBackThread}
+                onCloseThread={handleCloseThread}
+                onDelete={handleDelete}
+                onEdit={handleEdit}
+                onEditSave={handleEditSave}
+                onOpenNestedThread={handleOpenNestedThread}
+                onOpenThread={handleOpenThread}
+                onSendMessage={handleSendMessage}
+                onSendThreadReply={handleSendThreadReply}
+                onToggleReaction={effectiveToggleReaction}
+                canGoBackThread={threadHeadPath.length > 1}
+                openThreadHeadId={openThreadHeadId}
+                personaLookup={personaLookup}
+                profiles={messageProfiles}
+                targetMessageId={targetMessageId}
+                threadHeadMessage={openThreadHeadMessage}
+                threadMessages={threadMessages}
+                threadTypingPubkeys={threadTypingPubkeys}
+                threadTotalReplyCount={threadTotalReplyCount}
+                threadReplyTargetId={threadReplyTargetId}
+                threadReplyTargetMessage={threadReplyTargetMessage}
+                typingPubkeys={mainTypingPubkeys}
+              />
+            </React.Suspense>
+          )
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
+            <p className="text-sm text-muted-foreground">
+              Select a channel to view messages.
+            </p>
+          </div>
+        )}
       </div>
 
       <MembersSidebar

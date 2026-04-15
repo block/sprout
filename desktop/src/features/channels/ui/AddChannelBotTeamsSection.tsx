@@ -4,6 +4,7 @@ import type * as React from "react";
 import type { AgentPersona, AgentTeam } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
+import { resolveTeamPersonas } from "@/features/agents/lib/teamPersonas";
 import {
   Tooltip,
   TooltipContent,
@@ -30,10 +31,10 @@ function SelectionChipButton({
     <button
       aria-pressed={selected}
       className={cn(
-        "inline-flex min-h-9 items-center gap-2 rounded-full border py-1.5 px-3 text-sm font-medium transition-colors",
+        "inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         selected
-          ? "border-foreground bg-foreground text-background shadow-sm"
-          : "border-border/70 bg-muted/25 text-foreground hover:bg-muted/55",
+          ? "border-primary bg-primary/10 text-foreground"
+          : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
         disabled && "cursor-not-allowed opacity-50",
       )}
       disabled={disabled}
@@ -43,15 +44,6 @@ function SelectionChipButton({
       {children}
     </button>
   );
-}
-
-function resolveTeamPersonas(
-  team: AgentTeam,
-  personas: AgentPersona[],
-): AgentPersona[] {
-  return team.personaIds
-    .map((id) => personas.find((p) => p.id === id))
-    .filter((p): p is AgentPersona => p !== undefined);
 }
 
 type AddChannelBotTeamsSectionProps = {
@@ -89,8 +81,8 @@ export function AddChannelBotTeamsSection({
       <TooltipProvider delayDuration={150}>
         <div className="flex flex-wrap gap-2">
           {teams.map((team) => {
-            const resolved = resolveTeamPersonas(team, personas);
-            const validIds = resolved.map((p) => p.id);
+            const resolution = resolveTeamPersonas(team, personas);
+            const validIds = resolution.resolvedPersonaIds;
             const allSelected =
               validIds.length > 0 &&
               validIds.every((id) => selectedPersonaIds.includes(id));
@@ -107,7 +99,7 @@ export function AddChannelBotTeamsSection({
                     <SelectionChipButton
                       disabled={
                         !canToggleSelections ||
-                        validIds.length === 0 ||
+                        !resolution.isUsable ||
                         allInChannel
                       }
                       label={team.name}
@@ -117,18 +109,14 @@ export function AddChannelBotTeamsSection({
                       <Users
                         className={cn(
                           "h-4 w-4",
-                          allSelected
-                            ? "text-background/70"
-                            : "text-muted-foreground",
+                          allSelected ? "text-primary" : "text-current",
                         )}
                       />
                       {team.name}
                       <span
                         className={cn(
                           "text-xs",
-                          allSelected
-                            ? "text-background/60"
-                            : "text-muted-foreground",
+                          allSelected ? "text-primary/70" : "text-current/70",
                         )}
                       >
                         ({validIds.length})
@@ -138,7 +126,7 @@ export function AddChannelBotTeamsSection({
                           className={cn(
                             "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
                             allSelected
-                              ? "bg-background/20 text-background/80"
+                              ? "bg-primary/15 text-primary"
                               : "bg-muted/60 text-muted-foreground",
                           )}
                         >
@@ -160,7 +148,7 @@ export function AddChannelBotTeamsSection({
                       </p>
                     ) : null}
                     <div className="flex flex-wrap gap-1">
-                      {resolved.map((persona) => {
+                      {resolution.resolvedPersonas.map((persona) => {
                         const personaInChannel =
                           inChannelPersonaIds?.has(persona.id) ?? false;
                         return (

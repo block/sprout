@@ -16,6 +16,8 @@ export type Channel = {
   participants: string[];
   participantPubkeys: string[];
   isMember: boolean;
+  ttlSeconds: number | null;
+  ttlDeadline: string | null;
 };
 
 export type ChannelDetail = Channel & {
@@ -43,6 +45,7 @@ export type CreateChannelInput = {
   channelType: Exclude<ChannelType, "dm">;
   visibility: ChannelVisibility;
   description?: string;
+  ttlSeconds?: number;
 };
 
 export type OpenDmInput = {
@@ -291,6 +294,7 @@ export type ManagedAgent = {
   parallelism: number;
   systemPrompt: string | null;
   model: string | null;
+  mcpToolsets: string | null;
   hasApiToken: boolean;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
@@ -334,6 +338,7 @@ export type CreateManagedAgentInput = {
   systemPrompt?: string;
   avatarUrl?: string;
   model?: string;
+  mcpToolsets?: string;
   mintToken?: boolean;
   tokenScopes?: TokenScope[];
   tokenName?: string;
@@ -386,8 +391,6 @@ export type ManagedAgentPrereqs = {
   mcp: CommandAvailability;
 };
 
-// ── Model discovery types ─────────────────────────────────────────────────────
-
 export type AgentModelsResponse = {
   agentName: string;
   agentVersion: string;
@@ -396,19 +399,25 @@ export type AgentModelsResponse = {
   selectedModel: string | null;
   supportsSwitching: boolean;
 };
-
 export type AgentModelInfo = {
   id: string;
   name: string | null;
   description: string | null;
 };
-
 export type UpdateManagedAgentInput = {
   pubkey: string;
+  name?: string;
   model?: string | null;
   systemPrompt?: string | null;
+  mcpToolsets?: string | null;
+  parallelism?: number;
+  turnTimeoutSeconds?: number;
+  relayUrl?: string;
+  acpCommand?: string;
+  agentCommand?: string;
+  agentArgs?: string[];
+  mcpCommand?: string;
 };
-
 export type AgentPersona = {
   id: string;
   displayName: string;
@@ -418,7 +427,11 @@ export type AgentPersona = {
   provider: string | null;
   /** Preferred model ID (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
   model: string | null;
+  namePool: string[];
   isBuiltIn: boolean;
+  isActive: boolean;
+  /** Pack ID if this persona was imported from a persona pack. Pack personas are non-editable. */
+  sourcePack?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -429,6 +442,7 @@ export type CreatePersonaInput = {
   systemPrompt: string;
   provider?: string;
   model?: string;
+  namePool?: string[];
 };
 
 export type UpdatePersonaInput = {
@@ -438,10 +452,10 @@ export type UpdatePersonaInput = {
   systemPrompt: string;
   provider?: string;
   model?: string;
+  namePool?: string[];
 };
 
 // ── Team types ────────────────────────────────────────────────────────────────
-
 export type AgentTeam = {
   id: string;
   name: string;
@@ -463,8 +477,6 @@ export type UpdateTeamInput = {
   description?: string;
   personaIds: string[];
 };
-
-// ── Workflow types (re-exported from workflowTypes.ts) ────────────────────
 export type {
   ApprovalActionResponse,
   Workflow,
@@ -477,8 +489,14 @@ export type {
   TraceEntry,
   TriggerWorkflowResponse,
 } from "@/shared/api/workflowTypes";
-
-// ── Forum types ───────────────────────────────────────────────────────────────
+export type {
+  ContactEntry,
+  ContactListResponse,
+  PublishNoteResult,
+  UserNote,
+  UserNotesCursor,
+  UserNotesResponse,
+} from "./socialTypes";
 
 export type ThreadSummary = {
   replyCount: number;

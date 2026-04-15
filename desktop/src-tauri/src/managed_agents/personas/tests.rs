@@ -1,0 +1,293 @@
+use super::{
+    ensure_persona_ids_are_active, ensure_persona_is_active, merge_personas, validate_pack_id,
+    validate_persona_activation_change, validate_persona_deletion, BUILT_IN_PERSONAS,
+};
+use crate::managed_agents::PersonaRecord;
+
+fn custom_persona(id: &str, display_name: &str) -> PersonaRecord {
+    PersonaRecord {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        avatar_url: Some("https://example.com/avatar.png".to_string()),
+        system_prompt: "Custom prompt".to_string(),
+        provider: None,
+        model: None,
+        name_pool: Vec::new(),
+        is_builtin: false,
+        is_active: true,
+        source_pack: None,
+        source_pack_persona_slug: None,
+        created_at: "2026-03-19T00:00:00Z".to_string(),
+        updated_at: "2026-03-19T00:00:00Z".to_string(),
+    }
+}
+
+#[test]
+fn merge_personas_adds_missing_built_ins() {
+    let (records, changed) = merge_personas(Vec::new(), "2026-03-19T00:00:00Z");
+
+    assert!(changed);
+    assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
+    assert!(records.iter().all(|record| record.is_builtin));
+    assert!(records.iter().all(|record| !record.is_active));
+    let display_names: Vec<&str> = records
+        .iter()
+        .map(|record| record.display_name.as_str())
+        .collect();
+    assert_eq!(display_names, vec!["Solo", "Ralph", "Scout", "Reviewer"]);
+}
+
+#[test]
+fn merge_personas_preserves_custom_records() {
+    let custom = custom_persona("custom:test", "Custom");
+    let (records, changed) = merge_personas(vec![custom.clone()], "2026-03-19T00:00:00Z");
+
+    assert!(changed);
+    assert!(records.iter().any(|record| record.id == custom.id));
+}
+
+#[test]
+fn merge_personas_restores_builtin_defaults() {
+    let mut edited_builtin = custom_persona("builtin:reviewer", "My Reviewer");
+    edited_builtin.is_builtin = true;
+    edited_builtin.is_active = true;
+    let original_created_at = edited_builtin.created_at.clone();
+    let original_updated_at = edited_builtin.updated_at.clone();
+
+    let (records, changed) = merge_personas(vec![edited_builtin], "2026-03-19T00:00:00Z");
+
+    assert!(changed);
+    let reviewer = records
+        .iter()
+        .find(|record| record.id == "builtin:reviewer")
+        .expect("reviewer built-in should exist");
+    assert_eq!(reviewer.display_name, "Reviewer");
+    assert_eq!(reviewer.avatar_url, None);
+    assert_eq!(reviewer.created_at, original_created_at);
+    assert_eq!(reviewer.updated_at, original_updated_at);
+    assert!(reviewer.is_active);
+}
+
+#[test]
+fn merge_personas_restores_builtin_name_pool_and_preserves_is_active() {
+    let mut solo = custom_persona("builtin:solo", "Solo");
+    solo.is_builtin = true;
+    solo.avatar_url = None;
+    solo.is_active = true;
+    solo.name_pool = vec!["Definitely Not Solo".to_string()];
+
+    let (records, changed) = merge_personas(vec![solo], "2026-03-19T00:00:00Z");
+
+    assert!(changed);
+    let solo = records
+        .iter()
+        .find(|record| record.id == "builtin:solo")
+        .expect("solo built-in should exist");
+    let expected_name_pool = BUILT_IN_PERSONAS
+        .iter()
+        .find(|persona| persona.id == "builtin:solo")
+        .expect("solo built-in definition should exist")
+        .name_pool
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(solo.name_pool, expected_name_pool);
+    assert!(solo.is_active);
+}
+
+#[test]
+fn merge_personas_backfills_new_builtins_for_existing_store() {
+    let mut legacy_builtins = vec![custom_persona("builtin:reviewer", "Reviewer")];
+    for persona in &mut legacy_builtins {
+        persona.is_builtin = true;
+        persona.avatar_url = None;
+    }
+
+    let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
+
+    assert!(changed);
+    assert!(records.iter().any(|record| record.id == "builtin:reviewer"));
+    assert!(records.iter().any(|record| record.id == "builtin:ralph"));
+    assert!(records.iter().any(|record| record.id == "builtin:scout"));
+    assert!(records.iter().any(|record| record.id == "builtin:solo"));
+    assert!(
+        records
+            .iter()
+            .find(|record| record.id == "builtin:reviewer")
+            .expect("reviewer built-in should exist")
+            .is_active
+    );
+    assert!(
+        !records
+            .iter()
+            .find(|record| record.id == "builtin:solo")
+            .expect("solo built-in should exist")
+            .is_active
+    );
+}
+
+#[test]
+fn ensure_persona_is_active_rejects_missing_personas() {
+    let err = ensure_persona_is_active(&[], "missing").unwrap_err();
+
+    assert_eq!(err, "persona missing not found");
+}
+
+#[test]
+fn ensure_persona_is_active_rejects_inactive_personas() {
+    let mut persona = custom_persona("builtin:solo", "Solo");
+    persona.is_builtin = true;
+    persona.is_active = false;
+
+    let err = ensure_persona_is_active(&[persona], "builtin:solo").unwrap_err();
+
+    assert_eq!(
+        err,
+        "Solo is not in My Agents. Choose it from Persona Catalog first."
+    );
+}
+
+#[test]
+fn ensure_persona_ids_are_active_checks_each_requested_id() {
+    let personas = vec![
+        custom_persona("custom:alpha", "Alpha"),
+        custom_persona("custom:beta", "Beta"),
+    ];
+
+    assert!(ensure_persona_ids_are_active(
+        &personas,
+        &["custom:alpha".to_string(), "custom:beta".to_string()],
+    )
+    .is_ok());
+}
+
+#[test]
+fn validate_persona_activation_change_rejects_non_builtins() {
+    let persona = custom_persona("custom:alpha", "Alpha");
+
+    let err = validate_persona_activation_change(&persona, false, false, false).unwrap_err();
+
+    assert_eq!(
+        err,
+        "Only built-in personas can be added to or removed from My Agents."
+    );
+}
+
+#[test]
+fn validate_persona_activation_change_rejects_managed_agent_references() {
+    let mut persona = custom_persona("builtin:solo", "Solo");
+    persona.is_builtin = true;
+
+    let err = validate_persona_activation_change(&persona, false, true, false).unwrap_err();
+
+    assert_eq!(
+        err,
+        "Solo is still assigned to a managed agent. Remove or reassign those agents first."
+    );
+}
+
+#[test]
+fn validate_persona_activation_change_rejects_team_references() {
+    let mut persona = custom_persona("builtin:solo", "Solo");
+    persona.is_builtin = true;
+
+    let err = validate_persona_activation_change(&persona, false, false, true).unwrap_err();
+
+    assert_eq!(
+        err,
+        "Solo is still referenced by a team. Remove it from those teams first."
+    );
+}
+
+#[test]
+fn validate_persona_activation_change_allows_safe_builtin_updates() {
+    let mut persona = custom_persona("builtin:solo", "Solo");
+    persona.is_builtin = true;
+
+    assert!(validate_persona_activation_change(&persona, true, false, false).is_ok());
+    assert!(validate_persona_activation_change(&persona, false, false, false).is_ok());
+}
+
+#[test]
+fn validate_persona_deletion_rejects_builtins() {
+    let mut persona = custom_persona("builtin:solo", "Solo");
+    persona.is_builtin = true;
+
+    let err = validate_persona_deletion(&persona, false).unwrap_err();
+
+    assert_eq!(err, "Built-in personas cannot be deleted.");
+}
+
+#[test]
+fn validate_persona_deletion_rejects_team_references() {
+    let persona = custom_persona("custom:alpha", "Alpha");
+
+    let err = validate_persona_deletion(&persona, true).unwrap_err();
+
+    assert_eq!(
+        err,
+        "Alpha is still referenced by a team. Remove it from those teams first."
+    );
+}
+
+#[test]
+fn validate_persona_deletion_allows_safe_custom_personas() {
+    let persona = custom_persona("custom:alpha", "Alpha");
+
+    assert!(validate_persona_deletion(&persona, false).is_ok());
+}
+
+// ── validate_pack_id ──────────────────────────────────────────────────────────
+
+#[test]
+fn pack_id_valid_reverse_dns() {
+    assert!(validate_pack_id("com.example.security-team").is_ok());
+}
+
+#[test]
+fn pack_id_valid_simple() {
+    assert!(validate_pack_id("my-pack").is_ok());
+}
+
+#[test]
+fn pack_id_rejects_empty() {
+    assert!(validate_pack_id("").is_err());
+}
+
+#[test]
+fn pack_id_rejects_dot_dot_path_traversal() {
+    // Critical regression test: ".." must never pass validation.
+    // A pack with id ".." would write into the parent directory.
+    assert!(validate_pack_id("..").is_err());
+}
+
+#[test]
+fn pack_id_rejects_single_dot() {
+    assert!(validate_pack_id(".").is_err());
+}
+
+#[test]
+fn pack_id_rejects_leading_dot() {
+    assert!(validate_pack_id(".hidden").is_err());
+}
+
+#[test]
+fn pack_id_rejects_slashes() {
+    assert!(validate_pack_id("../etc/passwd").is_err());
+    assert!(validate_pack_id("foo/bar").is_err());
+}
+
+#[test]
+fn pack_id_rejects_no_alphanumeric() {
+    assert!(validate_pack_id("---").is_err());
+    assert!(validate_pack_id("___").is_err());
+}
+
+#[test]
+fn pack_id_rejects_too_long() {
+    let long_id = "a".repeat(129);
+    assert!(validate_pack_id(&long_id).is_err());
+    // 128 chars is fine
+    let max_id = "a".repeat(128);
+    assert!(validate_pack_id(&max_id).is_ok());
+}

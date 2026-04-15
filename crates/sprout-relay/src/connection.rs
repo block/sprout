@@ -24,6 +24,9 @@ use crate::state::AppState;
 /// Prevents transient read stalls from hard-disconnecting agents mid-inference.
 pub(crate) const SLOW_CLIENT_GRACE_LIMIT: u8 = 3;
 
+/// Shared mutable subscription map for a single WebSocket connection.
+pub(crate) type ConnectionSubscriptions = Arc<Mutex<HashMap<String, Vec<Filter>>>>;
+
 /// NIP-42 authentication state for a single connection.
 #[derive(Debug, Clone)]
 pub enum AuthState {
@@ -50,7 +53,7 @@ pub struct ConnectionState {
     /// Current NIP-42 authentication state.
     pub auth_state: RwLock<AuthState>,
     /// Active subscriptions keyed by subscription ID.
-    pub subscriptions: Mutex<HashMap<String, Vec<Filter>>>,
+    pub subscriptions: ConnectionSubscriptions,
     /// Sender for outbound data messages (EVENT, NOTICE, OK, etc.).
     pub send_tx: mpsc::Sender<WsMessage>,
     /// Sender for outbound control frames (Pong, Close).
@@ -120,6 +123,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     let (ctrl_tx, ctrl_rx) = mpsc::channel::<WsMessage>(8);
 
     let backpressure_count = Arc::new(AtomicU8::new(0));
+    let subscriptions = Arc::new(Mutex::new(HashMap::new()));
 
     let conn = Arc::new(ConnectionState {
         conn_id,
@@ -127,7 +131,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
         auth_state: RwLock::new(AuthState::Pending {
             challenge: challenge.clone(),
         }),
-        subscriptions: Mutex::new(HashMap::new()),
+        subscriptions: Arc::clone(&subscriptions),
         send_tx: tx.clone(),
         ctrl_tx: ctrl_tx.clone(),
         cancel: cancel.clone(),
@@ -157,6 +161,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
         tx.clone(),
         cancel.clone(),
         Arc::clone(&backpressure_count),
+        subscriptions,
     );
 
     let (ws_send, ws_recv) = socket.split();

@@ -69,8 +69,19 @@ test("updates presence from the profile menu", async ({ page }) => {
 test("notification settings drive the Home badge and desktop alerts", async ({
   page,
 }) => {
+  async function getAppBadgeCount() {
+    return page.evaluate(() => {
+      const win = window as Window & {
+        __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+      };
+
+      return win.__SPROUT_E2E_APP_BADGE_COUNT__ ?? 0;
+    });
+  }
+
   await page.goto("/");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
+  await expect.poll(getAppBadgeCount).toBe(0);
 
   await openSettings(page, "notifications");
   await expect(page.getByTestId("settings-notifications")).toBeVisible();
@@ -122,6 +133,7 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   });
 
   await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
+  await expect.poll(getAppBadgeCount).toBe(1);
 
   await expect
     .poll(() =>
@@ -156,32 +168,126 @@ test("notification settings drive the Home badge and desktop alerts", async ({
     },
   ]);
 
+  const clickedNotification = await page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
+    };
+
+    return win.__SPROUT_E2E_CLICK_NOTIFICATION__?.(0) ?? false;
+  });
+  expect(clickedNotification).toBe(true);
+
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Please review the rollout checklist.",
+  );
+
   await openSettings(page, "notifications");
   await page.getByTestId("notifications-home-badge-toggle").click();
   await page.getByTestId("settings-close").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("chat-title")).toHaveText("engineering");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
+  await expect.poll(getAppBadgeCount).toBe(0);
 
   await openSettings(page, "notifications");
   await page.getByTestId("notifications-home-badge-toggle").click();
   await page.getByTestId("settings-close").click();
   await expect(page.getByTestId("sidebar-home-count")).toHaveText("1");
+  await expect.poll(getAppBadgeCount).toBe(1);
 
   await page.getByRole("button", { name: "Home" }).click();
   await expect(page.getByTestId("chat-title")).toHaveText("Home");
   await expect(page.getByTestId("sidebar-home-count")).toHaveCount(0);
+  await expect.poll(getAppBadgeCount).toBe(0);
+});
+
+test("desktop notification clicks open the matching forum thread", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await openSettings(page, "notifications");
+  await page.getByTestId("notifications-desktop-toggle").click();
+  await expect(page.getByTestId("notifications-desktop-state")).toContainText(
+    "On",
+  );
+  await page.getByTestId("settings-close").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
+
+  await page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+        category: "mention" | "needs_action" | "activity" | "agent_activity";
+        channel_id: string | null;
+        channel_name: string;
+        content: string;
+        created_at: number;
+        id: string;
+        kind: number;
+        pubkey: string;
+        tags: string[][];
+      }) => unknown;
+    };
+
+    win.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?.({
+      category: "mention",
+      channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+      channel_name: "watercooler",
+      content: "Release checklist: async feedback thread.",
+      created_at: Math.floor(Date.now() / 1000) + 5,
+      id: "mock-forum-release-thread",
+      kind: 45001,
+      pubkey:
+        "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+      tags: [["h", "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"]],
+    });
+  });
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const win = window as Window & {
+          __SPROUT_E2E_NOTIFICATIONS__?: Array<{
+            body: string | null;
+            title: string;
+          }>;
+        };
+
+        return win.__SPROUT_E2E_NOTIFICATIONS__?.length ?? 0;
+      }),
+    )
+    .toBe(1);
+
+  const clickedNotification = await page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
+    };
+
+    return win.__SPROUT_E2E_CLICK_NOTIFICATION__?.(0) ?? false;
+  });
+  expect(clickedNotification).toBe(true);
+
+  await expect(page.getByTestId("chat-title")).toHaveText("watercooler");
+  await expect(
+    page.getByRole("button", { name: "Back to posts" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Release checklist: async feedback thread."),
+  ).toBeVisible();
 });
 
 test("opens settings with the keyboard shortcut and updates theme", async ({
   page,
 }) => {
   await page.goto("/");
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
 
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+," : "Control+,",
   );
 
   await expect(page.getByTestId("settings-view")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-appearance")).toBeVisible();
   await page.getByTestId("settings-nav-appearance").click();
 
   // Default theme is catppuccin-macchiato (dark)
@@ -243,6 +349,7 @@ test("opens settings with the keyboard shortcut and updates theme", async ({
 
 test("supports webview zoom keyboard shortcuts", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByTestId("chat-title")).toHaveText("Home");
 
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+Shift+Equal" : "Control+Shift+Equal",

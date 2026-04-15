@@ -1,11 +1,11 @@
 import { ArrowLeft, MessageSquare, MoreHorizontal, Trash2 } from "lucide-react";
 import * as React from "react";
 
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { ForumThreadResponse, ThreadReply } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
@@ -44,8 +44,10 @@ type ForumThreadPanelProps = {
   onReply: (content: string, mentionPubkeys: string[]) => void;
   onDeletePost?: (eventId: string) => void;
   onDeleteReply?: (eventId: string) => void;
+  onTargetReached?: (eventId: string) => void;
   canDeletePost?: boolean;
   isDeletingPost?: boolean;
+  targetEventId?: string | null;
 };
 
 function canDeleteReply(
@@ -119,13 +121,12 @@ function ReplyRow({
   const replyMentionNames = resolveMentionNames(reply.tags, profiles);
 
   return (
-    <div className="group px-4 py-3">
+    <div className="group px-4 py-3" data-forum-event-id={reply.eventId}>
       <div className="flex items-center gap-2">
-        <ProfileAvatar
+        <UserAvatar
           avatarUrl={replyAvatarUrl}
-          className="h-6 w-6 rounded-full text-[10px]"
-          iconClassName="h-3 w-3"
-          label={replyAuthorLabel}
+          displayName={replyAuthorLabel}
+          size="sm"
         />
         <span className="text-sm font-medium text-foreground">
           {replyAuthorLabel}
@@ -187,8 +188,10 @@ export function ForumThreadPanel({
   onReply,
   onDeletePost,
   onDeleteReply,
+  onTargetReached,
   canDeletePost,
   isDeletingPost,
+  targetEventId,
 }: ForumThreadPanelProps) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [isDeletePostOpen, setIsDeletePostOpen] = React.useState(false);
@@ -197,6 +200,23 @@ export function ForumThreadPanel({
     () => channels.filter((c) => c.channelType !== "dm").map((c) => c.name),
     [channels],
   );
+
+  React.useEffect(() => {
+    if (!thread || !targetEventId) {
+      return;
+    }
+
+    const targetElement =
+      scrollRef.current?.querySelector<HTMLElement>(
+        `[data-forum-event-id="${targetEventId}"]`,
+      ) ?? null;
+    if (!targetElement) {
+      return;
+    }
+
+    targetElement.scrollIntoView({ block: "center" });
+    onTargetReached?.(targetEventId);
+  }, [onTargetReached, targetEventId, thread]);
 
   if (isLoading || !thread) {
     return (
@@ -246,20 +266,23 @@ export function ForumThreadPanel({
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto" ref={scrollRef}>
+      <div
+        className="flex-1 overflow-y-auto"
+        data-scroll-restoration-id={`forum-thread:${channelId}`}
+        ref={scrollRef}
+      >
         {/* Original post */}
         <div
           className={cn(
             "group border-b border-border/60 p-4",
             isDeletingPost && "pointer-events-none opacity-50",
           )}
+          data-forum-event-id={post.eventId}
         >
           <div className="flex items-center gap-2">
-            <ProfileAvatar
+            <UserAvatar
               avatarUrl={postAvatarUrl}
-              className="h-8 w-8 rounded-full text-xs"
-              iconClassName="h-4 w-4"
-              label={postAuthorLabel}
+              displayName={postAuthorLabel}
             />
             <div>
               <span className="text-sm font-semibold text-foreground">

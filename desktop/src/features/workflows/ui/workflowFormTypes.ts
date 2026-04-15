@@ -97,6 +97,21 @@ function hasNonEmptyText(value: string | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function optionalPositiveIntegerString(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value > 0 ? String(value) : undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return /^\d+$/.test(trimmed) && Number(trimmed) > 0 ? trimmed : undefined;
+  }
+  return undefined;
+}
+
 function toHeaderRows(
   headers: unknown,
   stepId: string,
@@ -160,7 +175,9 @@ function actionFieldsForStep(step: StepFormState): Record<string, unknown> {
       break;
     case "call_webhook":
       if (step.url) fields.url = step.url;
-      fields.method = step.method || "POST";
+      if (step.method?.trim() && step.method !== "POST") {
+        fields.method = step.method;
+      }
       {
         const headers = headersToRecord(step.headers);
         if (headers) fields.headers = headers;
@@ -272,10 +289,10 @@ export function yamlToFormState(
     }
     const trigger: TriggerConfig = {
       on: (triggerOn as TriggerType) ?? TRIGGER_TYPES[0],
-      filter: parsed.trigger?.filter ?? undefined,
-      emoji: parsed.trigger?.emoji ?? undefined,
-      cron: parsed.trigger?.cron ?? undefined,
-      interval: parsed.trigger?.interval ?? undefined,
+      filter: optionalString(parsed.trigger?.filter),
+      emoji: optionalString(parsed.trigger?.emoji),
+      cron: optionalString(parsed.trigger?.cron),
+      interval: optionalString(parsed.trigger?.interval),
     };
 
     const rawSteps = parsed.steps ?? [];
@@ -295,29 +312,26 @@ export function yamlToFormState(
     const steps: StepFormState[] = rawSteps.map(
       (step: Record<string, unknown>, index: number) => ({
         id: (step.id as string) ?? `step_${index + 1}`,
-        name: step.name as string | undefined,
+        name: optionalString(step.name),
         action: (step.action as ActionType) ?? ACTION_TYPES[0],
-        condition: step.if as string | undefined,
-        timeoutSecs:
-          step.timeout_secs !== undefined
-            ? String(step.timeout_secs)
-            : undefined,
-        duration: step.duration as string | undefined,
-        text: step.text as string | undefined,
-        channel: step.channel as string | undefined,
-        to: step.to as string | undefined,
-        url: step.url as string | undefined,
-        method: step.method as string | undefined,
+        condition: optionalString(step.if),
+        timeoutSecs: optionalPositiveIntegerString(step.timeout_secs),
+        duration: optionalString(step.duration),
+        text: optionalString(step.text),
+        channel: optionalString(step.channel),
+        to: optionalString(step.to),
+        url: optionalString(step.url),
+        method: optionalString(step.method),
         headers: toHeaderRows(
           step.headers,
           (step.id as string) ?? `step_${index + 1}`,
         ),
-        body: step.body as string | undefined,
-        emoji: step.emoji as string | undefined,
-        topic: step.topic as string | undefined,
-        from: step.from as string | undefined,
-        message: step.message as string | undefined,
-        timeout: step.timeout as string | undefined,
+        body: optionalString(step.body),
+        emoji: optionalString(step.emoji),
+        topic: optionalString(step.topic),
+        from: optionalString(step.from),
+        message: optionalString(step.message),
+        timeout: optionalString(step.timeout),
       }),
     );
 
@@ -325,7 +339,7 @@ export function yamlToFormState(
       ok: true,
       state: {
         name: (parsed.name as string) ?? "",
-        description: (parsed.description as string) ?? "",
+        description: optionalString(parsed.description) ?? "",
         enabled: parsed.enabled !== false,
         trigger,
         steps,

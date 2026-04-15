@@ -6,6 +6,7 @@ import {
   MonitorCog,
   Moon,
   Search,
+  Smartphone,
   Stethoscope,
   Sun,
   UserRound,
@@ -20,6 +21,7 @@ import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
+import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 
@@ -28,6 +30,7 @@ export type SettingsSection =
   | "notifications"
   | "appearance"
   | "tokens"
+  | "mobile"
   | "doctor";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
@@ -73,6 +76,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     icon: KeyRound,
   },
   {
+    value: "mobile",
+    label: "Mobile",
+    icon: Smartphone,
+  },
+  {
     value: "doctor",
     label: "Doctor",
     icon: Stethoscope,
@@ -104,10 +112,7 @@ function ThemeSettingsCard() {
   }, [search]);
 
   return (
-    <section
-      className="rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm"
-      data-testid="settings-theme"
-    >
+    <section className="min-w-0" data-testid="settings-theme">
       <div className="mb-3 min-w-0">
         <h2 className="text-sm font-semibold tracking-tight">Appearance</h2>
         <p className="text-sm text-muted-foreground">
@@ -231,6 +236,8 @@ export function renderSettingsSection(
       return <ThemeSettingsCard />;
     case "tokens":
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
+    case "mobile":
+      return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "doctor":
       return <DoctorSettingsPanel />;
     default: {

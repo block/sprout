@@ -27,7 +27,7 @@ import {
 type WorkflowCardProps = {
   workflow: Workflow;
   channelName?: string;
-  selected?: boolean;
+  isActive?: boolean;
   onSelect: (workflowId: string) => void;
   onTrigger: (workflowId: string) => void;
   onEdit: (workflow: Workflow) => void;
@@ -35,12 +35,12 @@ type WorkflowCardProps = {
   onDelete: (workflow: Workflow) => void;
 };
 
-function StatusBadge({ status }: { status: Workflow["status"] }) {
+function StatusBadge({ status }: { status: Workflow["status"] | "disabled" }) {
   const colors = {
     active: "bg-green-500/15 text-green-500",
     disabled: "bg-muted text-muted-foreground",
     archived: "bg-amber-500/15 text-amber-500",
-  };
+  } as const;
 
   return (
     <span
@@ -54,7 +54,7 @@ function StatusBadge({ status }: { status: Workflow["status"] }) {
 export function WorkflowCard({
   workflow,
   channelName,
-  selected = false,
+  isActive = false,
   onSelect,
   onTrigger,
   onEdit,
@@ -70,7 +70,7 @@ export function WorkflowCard({
     <div
       className={cn(
         "relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50",
-        selected && "border-primary/45 ring-2 ring-primary/15",
+        isActive ? "border-primary/45 ring-2 ring-primary/15" : "",
       )}
       data-testid={`workflow-card-${workflow.id}`}
     >

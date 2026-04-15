@@ -53,29 +53,29 @@ function GraphNodeLabel({
   nodeWidth: number;
 }) {
   /** Scales with canvas-derived node width (cap keeps type readable). */
-  const rootPx = Math.max(6, Math.min(8, 5.1 + nodeWidth * 0.018));
+  const rootPx = Math.max(5, Math.min(6.4, 4.6 + nodeWidth * 0.012));
 
   return (
     <div
-      className="min-w-0 w-full max-w-full px-[0.55em] py-[0.58em] text-left"
-      style={{ fontSize: `${rootPx}px`, lineHeight: 1.32 }}
+      className="min-w-0 w-full max-w-full px-[0.5em] py-[0.5em] text-left"
+      style={{ fontSize: `${rootPx}px`, lineHeight: 1.22 }}
     >
-      <p className="text-[0.86em] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
+      <p className="text-[0.78em] font-semibold uppercase tracking-[0.11em] text-muted-foreground">
         {eyebrow}
       </p>
-      <p className="mt-[0.32em] text-[1.05em] font-semibold leading-tight text-foreground">
+      <p className="mt-[0.22em] text-[0.96em] font-semibold leading-tight text-foreground">
         {title}
       </p>
       {subtitle ? (
-        <p className="mt-[0.32em] font-mono text-[0.9em] leading-tight text-muted-foreground">
+        <p className="mt-[0.2em] font-mono text-[0.78em] leading-tight text-muted-foreground">
           {subtitle}
         </p>
       ) : null}
       {details.length > 0 ? (
-        <div className="mt-[0.5em] space-y-[0.18em]">
+        <div className="mt-[0.34em] space-y-[0.1em]">
           {details.map((detail) => (
             <p
-              className="text-[0.94em] leading-snug text-muted-foreground"
+              className="text-[0.8em] leading-snug text-muted-foreground"
               key={detail}
             >
               {detail}
@@ -298,7 +298,12 @@ export function WorkflowDefinitionGraph({
         selectNodesOnDrag={false}
       >
         <RefitWhenLayoutChanges layoutKey={refitLayoutKey} />
-        <Background gap={20} size={1} variant={BackgroundVariant.Dots} />
+        <Background
+          color="hsl(var(--border) / 0.3)"
+          gap={20}
+          size={0.7}
+          variant={BackgroundVariant.Dots}
+        />
         <Controls position={controlsPosition} showInteractive={false} />
       </ReactFlow>
     </div>

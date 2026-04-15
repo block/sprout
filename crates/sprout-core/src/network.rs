@@ -16,6 +16,7 @@
 /// - IPv4 CGNAT          100.64.0.0/10 (RFC 6598) — cloud metadata risk
 /// - IPv4 benchmarking   198.18.0.0/15 (RFC 2544)
 /// - IPv6 loopback       ::1
+/// - IPv6 unspecified    ::
 /// - IPv6 ULA            fc00::/7
 /// - IPv6 link-local     fe80::/10
 /// - IPv6 multicast      ff00::/8
@@ -42,6 +43,7 @@ pub fn is_private_ip(ip: &std::net::IpAddr) -> bool {
                 return is_private_ip(&std::net::IpAddr::V4(v4));
             }
             v6.is_loopback()
+                || v6.is_unspecified()
                 || v6.segments()[0] & 0xfe00 == 0xfc00 // fc00::/7 ULA
                 || v6.segments()[0] & 0xffc0 == 0xfe80 // fe80::/10 link-local
                 || v6.segments()[0] & 0xff00 == 0xff00 // ff00::/8 multicast
@@ -91,6 +93,10 @@ mod tests {
     #[test]
     fn test_loopback_v6() {
         assert!(is_private_ip(&"::1".parse::<IpAddr>().unwrap()));
+    }
+    #[test]
+    fn test_unspecified_v6() {
+        assert!(is_private_ip(&"::".parse::<IpAddr>().unwrap()));
     }
     #[test]
     fn test_ula_v6() {

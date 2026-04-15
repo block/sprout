@@ -127,6 +127,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     // API token users have already proven authorization via their token —
                     // the pubkey allowlist does not apply here.
                     *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+                    state
+                        .conn_manager
+                        .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
                     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 }
                 Err(e) => {
@@ -180,6 +183,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             }
             info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
             *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+            state
+                .conn_manager
+                .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
         Err(e) => {

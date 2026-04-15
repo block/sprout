@@ -13,6 +13,7 @@ use sprout_core::kind::{
 use sprout_db::channel::MemberRole;
 
 use super::event::dispatch_persistent_event;
+use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
 /// Check if a kind is an admin kind (9000-9022) that needs pre-storage validation.
@@ -27,6 +28,37 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
     matches!(kind, 0 | 5 | 9000..=9022 | 41001..=41003 | 40099)
+}
+
+async fn evict_live_channel_subscriptions(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+    target_pubkey: &[u8],
+) {
+    let conn_ids = state.conn_manager.connection_ids_for_pubkey(target_pubkey);
+
+    for conn_id in conn_ids {
+        let removed = state
+            .sub_registry
+            .remove_channel_subscriptions(conn_id, channel_id);
+        if removed.is_empty() {
+            continue;
+        }
+
+        if let Some(subscriptions) = state.conn_manager.subscriptions_for(conn_id) {
+            let mut conn_subscriptions = subscriptions.lock().await;
+            for sub_id in &removed {
+                conn_subscriptions.remove(sub_id);
+            }
+        }
+
+        for sub_id in removed {
+            let _ = state.conn_manager.send_to(
+                conn_id,
+                RelayMessage::closed(&sub_id, "restricted: channel access revoked"),
+            );
+        }
+    }
 }
 
 /// Dispatch side effects for a stored event.
@@ -205,6 +237,20 @@ pub async fn validate_admin_event(
                 let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
+                    Some(_) => {
+                        if state
+                            .db
+                            .is_agent_owner(&target_pubkey, &actor_bytes)
+                            .await?
+                        {
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!("actor not authorized"))
+                        }
+                    }
+                    // Non-members fall here. We intentionally do NOT check
+                    // is_agent_owner for non-members — you must be in the channel
+                    // to remove anyone, even your own bot.
                     _ => Err(anyhow::anyhow!("actor not authorized")),
                 }
             }
@@ -710,6 +756,7 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
         .db
         .remove_member(channel_id, &target_pubkey, &actor_bytes)
         .await?;
+    evict_live_channel_subscriptions(state, channel_id, &target_pubkey).await;
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     let target_hex = nostr::util::hex::encode(&target_pubkey);
@@ -948,6 +995,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 
     let actor_bytes = event.pubkey.serialize().to_vec();
     let description = extract_tag_value(event, "about");
+    let ttl_seconds = super::resolve_ttl(event, state.config.ephemeral_ttl_override);
 
     // If the event has an h-tag UUID, ingest_event() already created the channel
     // via create_channel_with_id(). Fetch it rather than creating a duplicate.
@@ -966,6 +1014,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
                         visibility,
                         description.as_deref(),
                         &actor_bytes,
+                        ttl_seconds,
                     )
                     .await?
             }
@@ -979,6 +1028,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
                 visibility,
                 description.as_deref(),
                 &actor_bytes,
+                ttl_seconds,
             )
             .await?
     };
@@ -1141,6 +1191,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
         .db
         .remove_member(channel_id, &actor_bytes, &actor_bytes)
         .await?;
+    evict_live_channel_subscriptions(state, channel_id, &actor_bytes).await;
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
