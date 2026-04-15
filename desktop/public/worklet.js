@@ -1,6 +1,11 @@
 // AudioWorklet processor — runs in the AudioWorklet thread.
 // Accumulates PCM Float32 samples and sends 20ms batches to the main thread.
 //
+// ASSUMPTION: AudioContext runs at 48 kHz (Tauri WebView default on desktop).
+// The 960-sample buffer = exactly one 20ms Opus frame at 48 kHz. If the
+// sample rate differs (e.g. 44.1 kHz), frames will be slightly misaligned
+// with the Opus encoder. getUserMedia should request sampleRate: 48000.
+//
 // Supports push-to-talk (PTT) gating: when `this.transmitting` is false,
 // incoming audio frames are discarded and the buffer is reset. The main thread
 // sends `{ type: 'ptt', active: boolean }` messages to toggle transmission.

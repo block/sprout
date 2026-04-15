@@ -240,20 +240,12 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
    * may have local variables that differ from the refs mid-flight.
    */
   const cleanupFailedStart = React.useCallback(
-    async (
-      worklet: AudioWorkletHandle | null,
-      stream: MediaStream | null,
-      isCreator: boolean,
-    ) => {
+    async (worklet: AudioWorkletHandle | null, isCreator: boolean) => {
       try {
         worklet?.stop();
       } catch {
         /* best-effort */
       }
-      if (stream)
-        stream.getTracks().forEach((t) => {
-          t.stop();
-        });
       setLocalAudioTrack(null);
       setMicConnected(false);
       setEphemeralChannelId(null);
@@ -302,9 +294,14 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
       if (tokenRef.current !== myToken) throw new Error("superseded");
 
-      // Get mic — Rust backend owns the audio WS connection
+      // Get mic — Rust backend owns the audio WS connection.
+      // Request 48 kHz to match the Opus encoder and worklet buffer size (960 samples = 20ms).
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 48000,
+        },
       });
       const audioTrack = stream.getAudioTracks()[0];
 
@@ -370,7 +367,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           await connectAndSetupMedia(joinInfo, myToken);
         } catch (e) {
           if (e instanceof Error && e.message === "superseded") {
-            await cleanupFailedStart(workletRef.current, null, true);
+            await cleanupFailedStart(workletRef.current, true);
             return;
           }
           throw e;
@@ -378,7 +375,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       } catch (e) {
         const w = workletRef.current;
         workletRef.current = null;
-        await cleanupFailedStart(w, null, true);
+        await cleanupFailedStart(w, true);
         const msg = e instanceof Error ? e.message : String(e);
         setHuddleError(msg);
         console.error("Failed to start huddle:", e);
@@ -412,7 +409,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           await connectAndSetupMedia(joinInfo, myToken);
         } catch (e) {
           if (e instanceof Error && e.message === "superseded") {
-            await cleanupFailedStart(workletRef.current, null, false);
+            await cleanupFailedStart(workletRef.current, false);
             return;
           }
           throw e;
@@ -420,7 +417,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       } catch (e) {
         const w = workletRef.current;
         workletRef.current = null;
-        await cleanupFailedStart(w, null, false);
+        await cleanupFailedStart(w, false);
         const msg = e instanceof Error ? e.message : String(e);
         setHuddleError(msg);
         console.error("Failed to join huddle:", e);
@@ -588,6 +585,25 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     return () => {
       void leaveHuddleRef.current();
+    };
+  }, []);
+
+  // Auto-disconnect when the audio relay WS drops unexpectedly.
+  // Replaces the old LiveKit onDisconnected callback — the Rust backend emits
+  // this event when the relay pipeline exits (server crash, network drop, etc).
+  // Uses leaveHuddleRef (defined above) to avoid stale closure capture.
+  React.useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen("huddle-audio-disconnected", () => {
+      if (!cancelled) void leaveHuddleRef.current();
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 

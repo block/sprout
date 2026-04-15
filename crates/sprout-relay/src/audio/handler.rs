@@ -38,6 +38,9 @@ use crate::state::AppState;
 /// Maximum binary frame size: 4 KB is generous for a single Opus packet.
 const MAX_AUDIO_FRAME_BYTES: usize = 4096;
 
+/// Maximum text frame size: 8 KB bounds auth/control JSON parsing.
+const MAX_TEXT_FRAME_BYTES: usize = 8192;
+
 /// Heartbeat interval.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -89,6 +92,10 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let auth_result = tokio::time::timeout(AUTH_TIMEOUT, async {
         while let Some(Ok(msg)) = ws_recv.next().await {
             if let WsMessage::Text(text) = msg {
+                if text.len() > MAX_TEXT_FRAME_BYTES {
+                    warn!(channel_id = %channel_id, "auth text frame too large — dropping");
+                    continue;
+                }
                 if let Ok(auth) = serde_json::from_str::<AuthMsg>(&text) {
                     if auth.msg_type == "auth" {
                         return Some(auth);
@@ -289,9 +296,13 @@ async fn recv_loop(
                             warn!(peer_id = %peer_id, bytes = data.len(), "audio frame too large — dropping");
                             continue;
                         }
-                        room.broadcast_frame(peer_id, Bytes::copy_from_slice(&data));
+                        room.broadcast_frame(peer_id, data);
                     }
                     Some(Ok(WsMessage::Text(text))) => {
+                        if text.len() > MAX_TEXT_FRAME_BYTES {
+                            warn!(peer_id = %peer_id, bytes = text.len(), "control text frame too large — dropping");
+                            continue;
+                        }
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                             if v.get("type").and_then(|t| t.as_str()) == Some("leave") {
                                 break;
@@ -402,9 +413,10 @@ async fn heartbeat_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let missed = missed_pongs.fetch_add(1, Ordering::Relaxed);
-                if missed >= MAX_MISSED_PONGS - 1 {
-                    warn!("audio: 3 missed pongs — closing connection");
+                // fetch_add returns the previous value; +1 gives the current count.
+                let missed = missed_pongs.fetch_add(1, Ordering::Relaxed) + 1;
+                if missed >= MAX_MISSED_PONGS {
+                    warn!("audio: {missed} missed pongs — closing connection");
                     cancel.cancel();
                     break;
                 }
@@ -449,11 +461,14 @@ async fn ensure_membership(
     }
 
     // Auto-add path: private ephemeral channel + caller is member of parent.
-    // Note: parent_channel_id is client-supplied. We don't verify it's the
-    // *actual* parent of this ephemeral channel. This is acceptable because
-    // the ephemeral UUID is random and only discoverable via the kind:48100
-    // event in the real parent channel — which requires parent membership.
-    // A future hardening pass could verify the linkage via the 48100 event.
+    //
+    // TODO(security): parent_channel_id is client-supplied and unverified.
+    // We don't confirm it's the *actual* parent of this ephemeral channel.
+    // Security relies on the ephemeral UUID being unguessable (UUIDv4) and
+    // only discoverable via the kind:48100 event in the real parent channel
+    // — which requires parent membership. A future hardening pass should
+    // verify the parent→ephemeral linkage by checking that a kind:48100
+    // event exists in the claimed parent channel referencing this channel ID.
     if channel.ttl_seconds.is_some() {
         if let Some(parent_id) = parent_channel_id {
             let parent_member = state
@@ -493,11 +508,21 @@ async fn emit_participant_event(
 ) {
     let content = serde_json::json!({"ephemeral_channel_id": channel_id.to_string()}).to_string();
 
-    let tags = vec![
-        Tag::parse(&["h", &parent_channel_id.to_string()])
-            .unwrap_or_else(|_| Tag::parse(&["h", ""]).unwrap()),
-        Tag::parse(&["p", participant_pubkey]).unwrap_or_else(|_| Tag::parse(&["p", ""]).unwrap()),
-    ];
+    let h_tag = match Tag::parse(&["h", &parent_channel_id.to_string()]) {
+        Ok(t) => t,
+        Err(e) => {
+            warn!("audio: failed to parse h tag: {e}");
+            return;
+        }
+    };
+    let p_tag = match Tag::parse(&["p", participant_pubkey]) {
+        Ok(t) => t,
+        Err(e) => {
+            warn!("audio: failed to parse p tag: {e}");
+            return;
+        }
+    };
+    let tags = vec![h_tag, p_tag];
 
     let event = match EventBuilder::new(kind, content, tags).sign_with_keys(&state.relay_keypair) {
         Ok(e) => e,

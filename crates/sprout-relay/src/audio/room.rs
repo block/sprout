@@ -37,8 +37,15 @@ pub enum PeerCtrl {
 
 /// Audio channel capacity per peer: 8 frames = 160ms at 20ms/frame.
 const AUDIO_CHANNEL_CAPACITY: usize = 8;
-/// Control channel capacity per peer: 4 slots (joined/left are rare).
-const CTRL_CHANNEL_CAPACITY: usize = 4;
+/// Control channel capacity per peer: 32 slots — must never drop joined/left
+/// messages, which are state-bearing (they maintain the client's peer_index →
+/// pubkey map). Sized generously: even 30 simultaneous join/leave events fit.
+const CTRL_CHANNEL_CAPACITY: usize = 32;
+
+/// Defense-in-depth cap on peers per room. A room with N peers generates
+/// N×(N−1) frame copies per 20ms tick — 25 peers = 600 copies/tick, which
+/// is reasonable. The 255 index space is the hard limit; this is the soft one.
+const MAX_PEERS_PER_ROOM: usize = 25;
 
 /// A single audio room for one channel.
 pub struct Room {
@@ -92,11 +99,14 @@ impl Room {
     }
 
     /// Add a peer. Returns `(peer_id, peer_index, audio_rx, ctrl_rx)`, or
-    /// `None` if the room has exhausted the 0–254 peer index space.
+    /// `None` if the room has hit the peer cap or exhausted the 0–254 index space.
     pub fn add_peer(
         &self,
         pubkey: String,
     ) -> Option<(Uuid, u8, mpsc::Receiver<Bytes>, mpsc::Receiver<PeerCtrl>)> {
+        if self.peers.len() >= MAX_PEERS_PER_ROOM {
+            return None;
+        }
         let peer_id = Uuid::new_v4();
         let peer_index = self.index_pool.lock().ok()?.alloc()?;
         let (audio_tx, audio_rx) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
@@ -147,9 +157,22 @@ impl Room {
 
     /// Send a JSON control message to all peers via the control channel.
     /// Separate from audio so control is never starved by audio backpressure.
+    /// Control messages (joined/left) are state-bearing — the client's
+    /// peer_index→pubkey map depends on receiving every one. The channel is
+    /// sized generously (32 slots) so drops should never happen in practice;
+    /// if they do, we log a warning so the issue is visible.
     pub fn broadcast_control(&self, json: String) {
         for entry in self.peers.iter() {
-            let _ = entry.ctrl_tx.try_send(PeerCtrl::Json(json.clone()));
+            if entry
+                .ctrl_tx
+                .try_send(PeerCtrl::Json(json.clone()))
+                .is_err()
+            {
+                tracing::warn!(
+                    peer_id = %entry.key(),
+                    "control channel full — dropped state-bearing message (peer map may desync)"
+                );
+            }
         }
     }
 

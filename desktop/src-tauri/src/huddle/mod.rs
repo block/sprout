@@ -256,7 +256,22 @@ pub async fn start_huddle(
 
             // 7. Hydrate members, download models, start pipelines (incl. audio relay).
             // Audio relay failure is fatal — no point in a huddle without audio.
-            post_connect_setup(&state, &ephemeral_channel_id).await?;
+            if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
+                // Rollback: audio relay failed after state was committed.
+                // Archive the ephemeral channel and reset state.
+                if let Ok(archive_builder) = events::build_archive(ephemeral_uuid) {
+                    if let Err(ae) = submit_event(archive_builder, &state).await {
+                        eprintln!(
+                            "sprout-desktop: rollback archive of {ephemeral_channel_id} failed: {ae}"
+                        );
+                    }
+                }
+                if let Ok(mut hs) = state.huddle_state.lock() {
+                    hs.reset_preserving_generation();
+                }
+                state.emit_huddle_state_changed();
+                return Err(e);
+            }
 
             Ok(HuddleJoinInfo {
                 ephemeral_channel_id,
@@ -332,7 +347,16 @@ pub async fn join_huddle(
 
     // Hydrate members, download models, start pipelines (incl. audio relay).
     // Audio relay failure is fatal — no point in a huddle without audio.
-    post_connect_setup(&state, &ephemeral_channel_id).await?;
+    if let Err(e) = post_connect_setup(&state, &ephemeral_channel_id).await {
+        // Rollback: audio relay failed after state was committed.
+        // Reset state to Idle so the user can retry. The ephemeral channel
+        // has a TTL and will expire — no manual archive needed for joiners.
+        if let Ok(mut hs) = state.huddle_state.lock() {
+            hs.reset_preserving_generation();
+        }
+        state.emit_huddle_state_changed();
+        return Err(e);
+    }
 
     Ok(HuddleJoinInfo {
         ephemeral_channel_id,
@@ -347,7 +371,7 @@ fn teardown_huddle(state: &AppState) -> Result<(), String> {
     // Take pipeline handles out of state and drop the lock before shutdown.
     // Pipeline Drop impls join worker threads — this avoids blocking while
     // the mutex is held (ONNX inference can take ~200ms).
-    let (old_stt, old_tts, audio_cancel) = {
+    let (old_stt, old_tts, _audio_cancel) = {
         let mut hs = state.huddle()?;
         // Increment generation first — this immediately invalidates any
         // in-flight transcription task, even before pipelines shut down.
@@ -355,14 +379,17 @@ fn teardown_huddle(state: &AppState) -> Result<(), String> {
         let stt = hs.stt_pipeline.take();
         let tts = hs.tts_pipeline.take();
         let cancel = hs.audio_ws_cancel.take();
+        // Cancel the relay token BEFORE dropping the sender. If we drop
+        // pcm_tx first, the send task sees None from recv() and can exit
+        // the pipeline before is_cancelled() is true — causing a spurious
+        // huddle-audio-disconnected event on intentional teardown.
+        if let Some(ref c) = cancel {
+            c.cancel();
+        }
         hs.audio_relay_pcm_tx.take(); // Drop sender — signals the relay task.
         hs.reset_preserving_generation();
         (stt, tts, cancel)
     };
-    // Cancel audio relay WS task.
-    if let Some(cancel) = audio_cancel {
-        cancel.cancel();
-    }
     // Shut down STT/TTS outside the lock — thread joins happen here.
     if let Some(ref p) = old_stt {
         p.shutdown();

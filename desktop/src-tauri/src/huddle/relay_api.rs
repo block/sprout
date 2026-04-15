@@ -41,6 +41,10 @@ pub(crate) fn parse_channel_uuid(channel_id: &str) -> Result<Uuid, String> {
     Uuid::parse_str(channel_id).map_err(|_| format!("invalid channel UUID: {channel_id}"))
 }
 
+/// Handshake timeout: max time to wait for challenge/joined from the relay.
+/// Matches the server's AUTH_TIMEOUT so both sides give up at roughly the same time.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Connect to the relay's audio WebSocket and run the Opus encode/decode pipeline.
 ///
 /// Returns `(cancel_token, pcm_sender)` — caller stores both in `HuddleState`.
@@ -67,25 +71,30 @@ pub(crate) async fn connect_audio_relay(
         .map_err(|e| format!("audio WS connect failed: {e}"))?;
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
-    // Receive challenge.
-    let challenge = loop {
-        match ws_rx.next().await {
-            Some(Ok(WsMsg::Text(text))) => {
-                let v: serde_json::Value =
-                    serde_json::from_str(&text).map_err(|e| format!("bad challenge JSON: {e}"))?;
-                if v["type"] == "challenge" {
-                    break v["challenge"]
-                        .as_str()
-                        .ok_or("missing challenge string")?
-                        .to_string();
+    // Receive challenge (with timeout — don't hang on a half-open socket).
+    let challenge = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+        loop {
+            match ws_rx.next().await {
+                Some(Ok(WsMsg::Text(text))) => {
+                    let v: serde_json::Value = serde_json::from_str(&text)
+                        .map_err(|e| format!("bad challenge JSON: {e}"))?;
+                    if v["type"] == "challenge" {
+                        break v["challenge"]
+                            .as_str()
+                            .ok_or_else(|| "missing challenge string".to_string())
+                            .map(|s| s.to_string());
+                    }
                 }
+                Some(Ok(WsMsg::Close(_))) | None => {
+                    break Err("connection closed before challenge".into());
+                }
+                _ => continue,
             }
-            Some(Ok(WsMsg::Close(_))) | None => {
-                return Err("connection closed before challenge".into())
-            }
-            _ => continue,
         }
-    };
+    })
+    .await
+    .map_err(|_| "timeout waiting for challenge from relay".to_string())?
+    .map_err(|e: String| e)?;
 
     // Sign NIP-42 auth event (kind:22242).
     let tags = vec![
@@ -98,10 +107,11 @@ pub(crate) async fn connect_audio_relay(
         .map_err(|e| format!("sign: {e}"))?;
 
     // Send auth message.
+    let event_json: serde_json::Value = serde_json::from_str(&event.as_json())
+        .map_err(|e| format!("failed to serialize auth event: {e}"))?;
     let auth_msg = serde_json::json!({
         "type": "auth",
-        "event": serde_json::from_str::<serde_json::Value>(&event.as_json())
-            .unwrap_or_default(),
+        "event": event_json,
         "parent_channel_id": parent_channel_id,
     });
     ws_tx
@@ -109,40 +119,45 @@ pub(crate) async fn connect_audio_relay(
         .await
         .map_err(|e| format!("send auth: {e}"))?;
 
-    // Wait for joined — capture initial peer map.
-    let initial_peers: Vec<(u8, String)> = loop {
-        match ws_rx.next().await {
-            Some(Ok(WsMsg::Text(text))) => {
-                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                match v["type"].as_str() {
-                    Some("joined") => {
-                        let peers = v["peers"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|p| {
-                                        Some((
-                                            p["peer_index"].as_u64()? as u8,
-                                            p["pubkey"].as_str()?.to_string(),
-                                        ))
-                                    })
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        break peers;
+    // Wait for joined — capture initial peer map (with timeout).
+    let initial_peers: Vec<(u8, String)> = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+        loop {
+            match ws_rx.next().await {
+                Some(Ok(WsMsg::Text(text))) => {
+                    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                    match v["type"].as_str() {
+                        Some("joined") => {
+                            let peers = v["peers"]
+                                .as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|p| {
+                                            Some((
+                                                p["peer_index"].as_u64()? as u8,
+                                                p["pubkey"].as_str()?.to_string(),
+                                            ))
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            break Ok(peers);
+                        }
+                        Some("error") => {
+                            break Err(format!("audio relay auth error: {}", v["message"]));
+                        }
+                        _ => continue,
                     }
-                    Some("error") => {
-                        return Err(format!("audio relay auth error: {}", v["message"]))
-                    }
-                    _ => continue,
                 }
+                Some(Ok(WsMsg::Close(_))) | None => {
+                    break Err("connection closed before joined".into());
+                }
+                _ => continue,
             }
-            Some(Ok(WsMsg::Close(_))) | None => {
-                return Err("connection closed before joined".into())
-            }
-            _ => continue,
         }
-    };
+    })
+    .await
+    .map_err(|_| "timeout waiting for joined from relay".to_string())?
+    .map_err(|e: String| e)?;
 
     // ── Handshake succeeded — spawn background encode/decode loops ────────────
     let cancel = CancellationToken::new();
@@ -155,44 +170,41 @@ pub(crate) async fn connect_audio_relay(
             ws_tx,
             ws_rx,
             pcm_rx,
-            cancel_clone,
-            app_handle,
+            cancel_clone.clone(),
+            app_handle.clone(),
             initial_peers,
         )
         .await
         {
             eprintln!("sprout-desktop: audio relay pipeline exited: {e}");
         }
+
+        // Only emit the disconnect event for UNEXPECTED exits.
+        // If teardown_huddle intentionally cancelled the pipeline, the token
+        // is already cancelled when we get here — skip the event to avoid a
+        // duplicate leaveHuddle() racing with the in-progress teardown.
+        if !cancel_clone.is_cancelled() {
+            cancel_clone.cancel();
+            // Notify the frontend so it can trigger leaveHuddle() — replaces
+            // the old LiveKit onDisconnected callback removed in this PR.
+            if let Some(ref app) = app_handle {
+                use tauri::Emitter;
+                let _ = app.emit("huddle-audio-disconnected", ());
+            }
+        }
     });
 
     Ok((cancel, pcm_tx))
 }
 
-/// Opus encode/decode pipeline over the relay audio WebSocket.
-///
-/// Protocol:
-///   server → { "type": "challenge", "challenge": "..." }
-///   client → { "type": "auth", "event": <NIP-42 kind:22242>, "parent_channel_id": "..." }
-///   server → { "type": "joined", ... }
-///   client → binary frames: raw Opus bytes (relay prepends peer_index)
-///   server → binary frames: [peer_id: u8][opus_bytes...]
-/// Background pipeline: Opus encode/decode + WS send/recv loops.
-///
-/// Called AFTER the handshake (connect + auth + joined) succeeds in
-/// `connect_audio_relay`. Receives the already-split WS halves and the
-/// initial peer map from the joined message.
+/// Background Opus encode/decode pipeline. Called after the handshake succeeds
+/// in `connect_audio_relay` with the already-split WS halves and initial peer map.
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
 async fn audio_relay_pipeline(
-    ws_tx: futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        WsMsg,
-    >,
-    mut ws_rx: futures_util::stream::SplitStream<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-    >,
+    ws_tx: futures_util::stream::SplitSink<WsStream, WsMsg>,
+    mut ws_rx: futures_util::stream::SplitStream<WsStream>,
     mut pcm_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     cancel: CancellationToken,
     app_handle: Option<tauri::AppHandle>,
@@ -208,9 +220,7 @@ async fn audio_relay_pipeline(
         .set_dtx(true)
         .map_err(|e| format!("opus dtx: {e}"))?;
 
-    // ── 7. Setup rodio output for decoded remote audio ────────────────────────
-    // DeviceSinkBuilder is the rodio 0.22 API (same as tts.rs).
-    // Persistent player — created once, reused for all decoded packets.
+    // Persistent rodio player — created once, reused for all decoded packets.
     let sink_handle =
         rodio::DeviceSinkBuilder::open_default_sink().map_err(|e| format!("audio output: {e}"))?;
     let player = rodio::Player::connect_new(&sink_handle.mixer());
@@ -223,11 +233,7 @@ async fn audio_relay_pipeline(
     // Output buffer for decoded PCM (f32).
     let decode_buf = vec![0f32; FRAME_SAMPLES];
 
-    // ── 8. Run send/recv loops concurrently ──────────────────────────────────
-    // Split into two tasks sharing the WS sender via a tokio Mutex.
-    // The send task encodes PCM → Opus → WS binary.
-    // The recv task decodes WS binary → Opus → rodio.
-    // Both tasks exit when their respective channels close or cancel fires.
+    // Run send/recv loops concurrently, sharing the WS sender via a tokio Mutex.
     use std::sync::Arc as StdArc;
     let ws_tx = StdArc::new(tokio::sync::Mutex::new(ws_tx));
     let ws_tx_send = StdArc::clone(&ws_tx);
@@ -262,12 +268,19 @@ async fn audio_relay_pipeline(
 
             let mut tx = ws_tx_send.lock().await;
             for chunk in samples.chunks(FRAME_SAMPLES) {
-                let n = if chunk.len() == FRAME_SAMPLES {
-                    encoder.encode_float(chunk, &mut out_buf).unwrap_or(0)
+                let encode_result = if chunk.len() == FRAME_SAMPLES {
+                    encoder.encode_float(chunk, &mut out_buf)
                 } else {
                     let mut padded = chunk.to_vec();
                     padded.resize(FRAME_SAMPLES, 0.0);
-                    encoder.encode_float(&padded, &mut out_buf).unwrap_or(0)
+                    encoder.encode_float(&padded, &mut out_buf)
+                };
+                let n = match encode_result {
+                    Ok(n) => n,
+                    Err(e) => {
+                        eprintln!("sprout-desktop: opus encode error: {e}");
+                        continue;
+                    }
                 };
                 if n > 0 {
                     // Send raw Opus bytes — the relay prepends the peer_index.
