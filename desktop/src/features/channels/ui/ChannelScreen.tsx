@@ -32,6 +32,11 @@ import { useLocalFileDiffs } from "@/features/messages/useLocalFileDiffs";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
+import {
+  getProjectDir,
+  startFileWatcher,
+  stopFileWatcher,
+} from "@/shared/api/tauri";
 import type {
   Channel,
   Identity,
@@ -108,9 +113,6 @@ export function ChannelScreen({
     let cancelled = false;
     void (async () => {
       try {
-        const { getProjectDir, startFileWatcher } = await import(
-          "@/shared/api/tauri"
-        );
         const dir = await getProjectDir(activeChannelId);
         if (dir && !cancelled) {
           await startFileWatcher(activeChannelId);
@@ -121,6 +123,8 @@ export function ChannelScreen({
     })();
     return () => {
       cancelled = true;
+      // Stop the backend watcher so we don't leak one per channel visited.
+      void stopFileWatcher(activeChannelId).catch(() => {});
     };
   }, [activeChannelId]);
 

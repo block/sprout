@@ -35,7 +35,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 infer = "0.19"
 hex = "0.4"
-tokio = { version = "1", features = ["fs", "sync", "rt"] }
+tokio = { version = "1", features = ["fs", "sync", "rt", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nostr = "0.37"

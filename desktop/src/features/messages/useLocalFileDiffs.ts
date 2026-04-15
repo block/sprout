@@ -52,7 +52,7 @@ export function useLocalFileDiffs(channelId: string | null) {
           return;
         }
 
-        const syntheticId = `local-diff-${payload.timestamp}-${payload.filePath}`;
+        const syntheticId = `local-diff-${crypto.randomUUID()}`;
 
         const message: TimelineMessage = {
           id: syntheticId,

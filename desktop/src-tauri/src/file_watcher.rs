@@ -43,6 +43,8 @@ pub struct ProjectDirConfig {
 /// Runtime state for an active file watcher.
 struct WatcherRuntime {
     _watcher: RecommendedWatcher,
+    /// Dropping the sender signals the debounce loop to exit.
+    _shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 /// App-level state that holds all active file watchers.
@@ -227,6 +229,9 @@ fn start_watcher(
     let project_dir_owned = project_dir.to_path_buf();
     let snapshots_ref = Arc::clone(&fw_state.snapshots);
 
+    // Shutdown signal: when the sender is dropped the loop exits.
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
     // Debounce state: track last event time per file.
     let pending: Arc<Mutex<HashMap<PathBuf, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
     let pending_clone = Arc::clone(&pending);
@@ -240,7 +245,11 @@ fn start_watcher(
     tauri::async_runtime::spawn(async move {
         let debounce_delay = Duration::from_millis(500);
         loop {
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            // Exit when the WatcherRuntime (and its shutdown_tx) is dropped.
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+            }
 
             let ready_paths: Vec<PathBuf> = {
                 let mut pending_guard = match pending_clone.lock() {
@@ -369,6 +378,7 @@ fn start_watcher(
 
     Ok(WatcherRuntime {
         _watcher: watcher,
+        _shutdown_tx: shutdown_tx,
     })
 }
 
