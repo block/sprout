@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Sprout uses the camera to scan pairing QR codes so you can link this device to your account.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sprout does not record audio. The system may request microphone access while the camera is in use for QR scanning.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Sprout connects to your Sprout relay on the local network to sync messages in real time.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

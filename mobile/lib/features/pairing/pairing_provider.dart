@@ -133,9 +133,11 @@ class PairingNotifier extends Notifier<PairingState> {
       return;
     }
 
-    // Block private and link-local IPs.
+    // Block private and link-local IPs in production. In debug mode we
+    // intentionally allow them so developers can pair to a relay running on
+    // their LAN (e.g. http://192.168.1.23:3000) from a physical device.
     final ip = Uri.tryParse('http://$host')?.host ?? host;
-    if (_isPrivateHost(ip)) {
+    if (_isPrivateHost(ip) && !kDebugMode) {
       throw const FormatException(
         'Relay URL cannot target private network addresses',
       );
