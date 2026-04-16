@@ -19,13 +19,16 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       _unsubscribe = null;
     });
 
-    if (sessionState.status != SessionStatus.connected) {
-      return const AsyncLoading();
-    }
-
     // Reset pagination state on rebuild (e.g. after reconnect).
     _reachedOldest = false;
-    _init();
+
+    if (sessionState.status == SessionStatus.connected) {
+      _init();
+    } else {
+      // WebSocket not connected yet (e.g. first-time pairing).
+      // Fetch messages via HTTP so the user sees content immediately.
+      _fetchViaHttp();
+    }
     return const AsyncLoading();
   }
 
@@ -60,6 +63,55 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       state = AsyncData(history);
     } catch (e, st) {
       state = AsyncError(e, st);
+    }
+  }
+
+  /// Fetch messages via HTTP REST API as a fallback when the WebSocket
+  /// session isn't connected yet. Once the WebSocket connects,
+  /// build() will re-run and switch to the full WebSocket flow.
+  Future<void> _fetchViaHttp() async {
+    try {
+      final client = ref.read(relayClientProvider);
+      final json =
+          await client.get('/api/channels/$channelId/messages')
+              as Map<String, dynamic>;
+      final messagesJson = json['messages'] as List<dynamic>? ?? [];
+      final messages = messagesJson
+          .cast<Map<String, dynamic>>()
+          .map(_httpMessageToNostrEvent)
+          .whereType<NostrEvent>()
+          .toList();
+      messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      state = AsyncData(messages);
+    } catch (e, st) {
+      state = AsyncError(e, st);
+    }
+  }
+
+  /// Convert an HTTP API message object to a NostrEvent for display.
+  static NostrEvent? _httpMessageToNostrEvent(Map<String, dynamic> msg) {
+    try {
+      return NostrEvent(
+        id: msg['event_id'] as String? ?? msg['id'] as String? ?? '',
+        pubkey: msg['pubkey'] as String? ?? '',
+        createdAt: msg['created_at'] is int
+            ? msg['created_at'] as int
+            : (DateTime.tryParse(
+                        msg['created_at']?.toString() ?? '',
+                      )?.millisecondsSinceEpoch ??
+                      0) ~/
+                  1000,
+        kind: msg['kind'] as int? ?? EventKind.streamMessage,
+        tags:
+            (msg['tags'] as List<dynamic>?)
+                ?.map((t) => (t as List<dynamic>).cast<String>().toList())
+                .toList() ??
+            [],
+        content: msg['content'] as String? ?? '',
+        sig: msg['sig'] as String? ?? '',
+      );
+    } catch (_) {
+      return null;
     }
   }
 
