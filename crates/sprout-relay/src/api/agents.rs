@@ -13,7 +13,7 @@ use nostr::util::hex as nostr_hex;
 
 use crate::state::AppState;
 
-use super::{extract_auth_context, internal_error};
+use super::{constrain_accessible_channels, extract_auth_context, internal_error};
 
 /// Returns all bot/agent members visible to the authenticated user, with presence status.
 ///
@@ -28,14 +28,17 @@ pub async fn agents_handler(
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
     // Get requester's accessible channels to filter bot channel visibility.
-    let accessible_channels = state
-        .db
-        .get_accessible_channels(&pubkey_bytes, None, None)
-        .await
-        .map_err(|e| {
-            tracing::error!("agents: failed to load accessible channels: {e}");
-            internal_error("presence lookup failed")
-        })?;
+    let accessible_channels = constrain_accessible_channels(
+        state
+            .db
+            .get_accessible_channels(&pubkey_bytes, None, None)
+            .await
+            .map_err(|e| {
+                tracing::error!("agents: failed to load accessible channels: {e}");
+                internal_error("presence lookup failed")
+            })?,
+        ctx.channel_ids.as_deref(),
+    );
     let accessible_ids: std::collections::HashSet<String> = accessible_channels
         .iter()
         .map(|ac| ac.channel.id.to_string())

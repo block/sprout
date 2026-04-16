@@ -17,7 +17,7 @@ use sprout_db::channel::ChannelRecord;
 
 use crate::state::AppState;
 
-use super::{extract_auth_context, internal_error};
+use super::{constrain_accessible_channels, extract_auth_context, internal_error};
 
 /// Query parameters for `GET /api/channels`.
 #[derive(Debug, Deserialize)]
@@ -41,11 +41,14 @@ pub async fn channels_handler(
         .map_err(super::scope_error)?;
     let pubkey_bytes = ctx.pubkey_bytes.clone();
 
-    let channels = state
-        .db
-        .get_accessible_channels(&pubkey_bytes, params.visibility.as_deref(), params.member)
-        .await
-        .map_err(|e| internal_error(&format!("db error: {e}")))?;
+    let channels = constrain_accessible_channels(
+        state
+            .db
+            .get_accessible_channels(&pubkey_bytes, params.visibility.as_deref(), params.member)
+            .await
+            .map_err(|e| internal_error(&format!("db error: {e}")))?,
+        ctx.channel_ids.as_deref(),
+    );
 
     // Bulk-fetch member counts and last-message timestamps in two queries
     // instead of 2N queries (one per channel per metric).

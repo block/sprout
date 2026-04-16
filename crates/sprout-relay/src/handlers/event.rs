@@ -158,7 +158,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     // ── Extract auth from WS connection state ────────────────────────────
-    let (conn_id, pubkey_bytes, auth_pubkey, scopes) = {
+    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => (
@@ -166,6 +166,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 ctx.pubkey.serialize().to_vec(),
                 ctx.pubkey,
                 ctx.scopes.clone(),
+                ctx.channel_ids.clone(),
             ),
             _ => {
                 reject("auth");
@@ -241,6 +242,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let ingest_auth = IngestAuth::Nip42 {
         pubkey: auth_pubkey,
         scopes,
+        channel_ids,
         conn_id,
     };
 
