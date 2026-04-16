@@ -20,7 +20,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     });
 
     if (sessionState.status != SessionStatus.connected) {
-      return const AsyncData([]);
+      return const AsyncLoading();
     }
 
     // Reset pagination state on rebuild (e.g. after reconnect).
