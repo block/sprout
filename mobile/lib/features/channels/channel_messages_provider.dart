@@ -7,6 +7,7 @@ import '../../shared/relay/relay.dart';
 class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   final String channelId;
   void Function()? _unsubscribe;
+  bool _reachedOldest = false;
 
   ChannelMessagesNotifier(this.channelId);
 
@@ -22,6 +23,8 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       return const AsyncData([]);
     }
 
+    // Reset pagination state on rebuild (e.g. after reconnect).
+    _reachedOldest = false;
     _init();
     return const AsyncLoading();
   }
@@ -75,10 +78,16 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     return updated;
   }
 
+  /// Whether all history has been loaded (no more older messages).
+  bool get reachedOldest => _reachedOldest;
+
   /// Fetch older messages (pagination). Call this when the user scrolls up.
-  Future<void> fetchOlder() async {
+  /// Returns `true` if new messages were loaded.
+  Future<bool> fetchOlder() async {
+    if (_reachedOldest) return false;
+
     final currentEvents = state.value;
-    if (currentEvents == null || currentEvents.isEmpty) return;
+    if (currentEvents == null || currentEvents.isEmpty) return false;
 
     final oldest = currentEvents.first.createdAt;
     final session = ref.read(relaySessionProvider.notifier);
@@ -94,15 +103,28 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       ),
     );
 
-    if (older.isEmpty) return;
+    if (older.isEmpty) {
+      _reachedOldest = true;
+      return false;
+    }
+
+    // Dedup against existing events. If nothing new remains after dedup
+    // (e.g. all returned events share the boundary timestamp), mark as
+    // exhausted to avoid an infinite fetch loop.
+    final currentIds = state.value?.map((e) => e.id).toSet() ?? {};
+    final deduped = older.where((e) => !currentIds.contains(e.id)).toList();
+
+    if (deduped.isEmpty) {
+      _reachedOldest = true;
+      return false;
+    }
 
     state = state.whenData((events) {
-      final ids = events.map((e) => e.id).toSet();
-      final deduped = older.where((e) => !ids.contains(e.id)).toList();
       final merged = [...deduped, ...events];
       merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       return merged;
     });
+    return true;
   }
 }
 

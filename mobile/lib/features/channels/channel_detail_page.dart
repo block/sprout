@@ -18,6 +18,7 @@ import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
 import 'message_content.dart';
 import 'send_message_provider.dart';
+import 'thread_detail_page.dart';
 import 'timeline_message.dart';
 
 /// Fetch channel members and preload their profiles into the user cache.
@@ -51,7 +52,11 @@ class ChannelDetailPage extends HookConsumerWidget {
     final detailsAsync = ref.watch(channelDetailsProvider(channel.id));
     final channelsAsync = ref.watch(channelsProvider);
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
-    final typingEntries = ref.watch(channelTypingProvider(channel.id));
+    // Only show channel-level typing (exclude thread-scoped entries).
+    final typingEntries = ref
+        .watch(channelTypingProvider(channel.id))
+        .where((e) => e.threadHeadId == null)
+        .toList();
     final currentPubkey = ref
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
@@ -148,10 +153,14 @@ class ChannelDetailPage extends HookConsumerWidget {
                         events,
                         currentPubkey: currentPubkey,
                       );
+                      final entries = buildMainTimelineEntries(messages);
                       return _MessageList(
-                        messages: messages,
+                        entries: entries,
+                        allMessages: messages,
                         channelId: channel.id,
                         currentPubkey: currentPubkey,
+                        isMember: resolvedChannel.isMember,
+                        isArchived: resolvedChannel.isArchived,
                       );
                     },
                   ),
@@ -172,20 +181,49 @@ class ChannelDetailPage extends HookConsumerWidget {
   }
 }
 
-class _MessageList extends ConsumerWidget {
-  final List<TimelineMessage> messages;
+class _MessageList extends HookConsumerWidget {
+  final List<MainTimelineEntry> entries;
+  final List<TimelineMessage> allMessages;
   final String channelId;
   final String? currentPubkey;
+  final bool isMember;
+  final bool isArchived;
 
   const _MessageList({
-    required this.messages,
+    required this.entries,
+    required this.allMessages,
     required this.channelId,
     required this.currentPubkey,
+    required this.isMember,
+    required this.isArchived,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (messages.isEmpty) {
+    // Pagination: fetch older messages when scrolling near the top.
+    final scrollController = useScrollController();
+    final isLoadingOlder = useState(false);
+
+    useEffect(() {
+      void onScroll() {
+        if (isLoadingOlder.value) return;
+        final notifier = ref.read(channelMessagesProvider(channelId).notifier);
+        if (notifier.reachedOldest) return;
+        // In a reversed ListView, maxScrollExtent is the oldest messages.
+        final pos = scrollController.position;
+        if (pos.pixels >= pos.maxScrollExtent - 200) {
+          isLoadingOlder.value = true;
+          notifier.fetchOlder().whenComplete(
+            () => isLoadingOlder.value = false,
+          );
+        }
+      }
+
+      scrollController.addListener(onScroll);
+      return () => scrollController.removeListener(onScroll);
+    }, [scrollController]);
+
+    if (entries.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -224,35 +262,70 @@ class _MessageList extends ConsumerWidget {
     });
 
     return ListView.builder(
+      controller: scrollController,
       reverse: true,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.xxs,
       ),
-      itemCount: messages.length,
+      itemCount: entries.length + (isLoadingOlder.value ? 1 : 0),
       itemBuilder: (context, index) {
+        // Loading indicator at the top (last index in reversed list).
+        if (index >= entries.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: Grid.xs),
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+
         // Reversed list: index 0 = newest (bottom of screen).
-        final chronIdx = messages.length - 1 - index;
-        final message = messages[chronIdx];
+        final chronIdx = entries.length - 1 - index;
+        final entry = entries[chronIdx];
+        final message = entry.message;
 
         if (message.isSystem) {
           return _SystemMessageRow(message: message);
         }
 
         // The message visually above is the one earlier in time.
-        final prevMessage = chronIdx > 0 ? messages[chronIdx - 1] : null;
+        final prevEntry = chronIdx > 0 ? entries[chronIdx - 1] : null;
+        final prevMessage = prevEntry?.message;
         final showAuthor =
             prevMessage == null ||
             prevMessage.isSystem ||
             prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
             (message.createdAt - prevMessage.createdAt) > 300;
 
-        return _MessageBubble(
-          message: message,
-          showAuthor: showAuthor,
-          channelNames: channelNamesMap,
-          currentChannelId: channelId,
-          currentPubkey: currentPubkey,
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _MessageBubble(
+              message: message,
+              showAuthor: showAuthor,
+              channelNames: channelNamesMap,
+              currentChannelId: channelId,
+              currentPubkey: currentPubkey,
+              allMessages: allMessages,
+              isMember: isMember,
+              isArchived: isArchived,
+            ),
+            if (entry.summary != null)
+              _ThreadSummaryRow(
+                summary: entry.summary!,
+                message: message,
+                allMessages: allMessages,
+                channelId: channelId,
+                currentPubkey: currentPubkey,
+                isMember: isMember,
+                isArchived: isArchived,
+              ),
+          ],
         );
       },
     );
@@ -324,6 +397,134 @@ class _SystemMessageRow extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Thread summary row (shown below messages that have replies)
+// ---------------------------------------------------------------------------
+
+class _ThreadSummaryRow extends ConsumerWidget {
+  final ThreadSummary summary;
+  final TimelineMessage message;
+  final List<TimelineMessage> allMessages;
+  final String channelId;
+  final String? currentPubkey;
+  final bool isMember;
+  final bool isArchived;
+
+  const _ThreadSummaryRow({
+    required this.summary,
+    required this.message,
+    required this.allMessages,
+    required this.channelId,
+    required this.currentPubkey,
+    required this.isMember,
+    required this.isArchived,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final userCache = ref.watch(userCacheProvider);
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ThreadDetailPage(
+              threadHead: message,
+              allMessages: allMessages,
+              channelId: channelId,
+              currentPubkey: currentPubkey,
+              isMember: isMember,
+              isArchived: isArchived,
+            ),
+          ),
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.only(
+          left: 36,
+          top: Grid.half,
+          bottom: Grid.half,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Stacked participant avatars.
+            SizedBox(
+              width: 20.0 + (summary.participantPubkeys.length - 1) * 12.0,
+              height: 20,
+              child: Stack(
+                children: [
+                  for (var i = 0; i < summary.participantPubkeys.length; i++)
+                    Positioned(
+                      left: i * 12.0,
+                      child: _SmallAvatar(
+                        pubkey: summary.participantPubkeys[i],
+                        userCache: userCache,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: Grid.xxs),
+            Text(
+              '${summary.replyCount} ${summary.replyCount == 1 ? 'reply' : 'replies'}',
+              style: context.textTheme.labelMedium?.copyWith(
+                color: context.colors.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: Grid.half),
+            Icon(
+              LucideIcons.chevronRight,
+              size: 14,
+              color: context.colors.primary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SmallAvatar extends StatelessWidget {
+  final String pubkey;
+  final Map<String, UserProfile> userCache;
+
+  const _SmallAvatar({required this.pubkey, required this.userCache});
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = userCache[pubkey.toLowerCase()];
+    final avatarUrl = profile?.avatarUrl;
+    final initial =
+        profile?.initial ?? (pubkey.isNotEmpty ? pubkey[0].toUpperCase() : '?');
+
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: context.colors.surface, width: 1.5),
+      ),
+      child: CircleAvatar(
+        radius: 9,
+        backgroundColor: context.colors.primaryContainer,
+        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+        child: avatarUrl == null
+            ? Text(
+                initial,
+                style: TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w600,
+                  color: context.colors.onPrimaryContainer,
+                ),
+              )
+            : null,
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // User message bubble
 // ---------------------------------------------------------------------------
 
@@ -333,6 +534,9 @@ class _MessageBubble extends ConsumerWidget {
   final Map<String, String> channelNames;
   final String currentChannelId;
   final String? currentPubkey;
+  final List<TimelineMessage>? allMessages;
+  final bool isMember;
+  final bool isArchived;
 
   const _MessageBubble({
     required this.message,
@@ -340,6 +544,9 @@ class _MessageBubble extends ConsumerWidget {
     required this.channelNames,
     required this.currentChannelId,
     required this.currentPubkey,
+    this.allMessages,
+    this.isMember = false,
+    this.isArchived = false,
   });
 
   @override
@@ -370,6 +577,10 @@ class _MessageBubble extends ConsumerWidget {
         channelId: currentChannelId,
         isOwnMessage:
             currentPubkey?.toLowerCase() == message.pubkey.toLowerCase(),
+        allMessages: allMessages,
+        currentPubkey: currentPubkey,
+        isMember: isMember,
+        isArchived: isArchived,
       ),
       child: Padding(
         padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.quarter),
@@ -576,6 +787,10 @@ void _showMessageActions({
   required TimelineMessage message,
   required String channelId,
   required bool isOwnMessage,
+  List<TimelineMessage>? allMessages,
+  String? currentPubkey,
+  bool isMember = false,
+  bool isArchived = false,
 }) {
   showModalBottomSheet<void>(
     context: context,
@@ -614,6 +829,26 @@ void _showMessageActions({
               ],
             ),
             const SizedBox(height: Grid.xs),
+            if (allMessages != null)
+              ListTile(
+                leading: const Icon(LucideIcons.messageSquareReply),
+                title: const Text('Reply in thread'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => ThreadDetailPage(
+                        threadHead: message,
+                        allMessages: allMessages,
+                        channelId: channelId,
+                        currentPubkey: currentPubkey,
+                        isMember: isMember,
+                        isArchived: isArchived,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(LucideIcons.copy),
               title: const Text('Copy text'),

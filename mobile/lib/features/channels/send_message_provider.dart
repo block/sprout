@@ -18,19 +18,36 @@ class SendMessage {
        _readUserCache = readUserCache;
 
   /// Send a text message to a channel.
+  ///
+  /// For thread replies, pass [parentEventId] and optionally [rootEventId].
+  /// If [rootEventId] is null it defaults to [parentEventId] (direct reply to
+  /// thread head). Tags are built to match the desktop's `buildReplyTags`
+  /// convention with `root` / `reply` markers.
   Future<void> call({
     required String channelId,
     required String content,
     String? parentEventId,
+    String? rootEventId,
     List<String>? mentionPubkeys,
   }) async {
     // Resolve @mentions in the message content to pubkeys.
     final resolvedMentions = mentionPubkeys ?? _resolveMentions(content);
+    final authorPubkey = _signedEventRelay.pubkey;
+
+    // Normalize mentions: lowercase, deduplicate, exclude self (matching
+    // the desktop's normalizeMentionPubkeys).
+    final selfLower = authorPubkey?.toLowerCase();
+    final seenMentions = <String>{?selfLower};
+    final normalizedMentions = <String>[
+      for (final pk in resolvedMentions)
+        if (seenMentions.add(pk.toLowerCase())) pk,
+    ];
 
     final tags = <List<String>>[
+      if (authorPubkey != null) ['p', authorPubkey],
       ['h', channelId],
-      if (parentEventId != null) ['e', parentEventId],
-      for (final pk in resolvedMentions) ['p', pk],
+      if (parentEventId != null) ..._buildReplyTags(parentEventId, rootEventId),
+      for (final pk in normalizedMentions) ['p', pk],
     ];
 
     await _signedEventRelay.submit(
@@ -69,6 +86,25 @@ class SendMessage {
     }
 
     return pubkeys.toList();
+  }
+
+  /// Build `e`-tags for a thread reply, matching the desktop convention:
+  /// - Direct reply to thread head: `["e", id, "", "reply"]`
+  /// - Nested reply: `["e", rootId, "", "root"]` + `["e", parentId, "", "reply"]`
+  static List<List<String>> _buildReplyTags(
+    String parentEventId,
+    String? rootEventId,
+  ) {
+    final root = rootEventId ?? parentEventId;
+    if (parentEventId == root) {
+      return [
+        ['e', root, '', 'reply'],
+      ];
+    }
+    return [
+      ['e', root, '', 'root'],
+      ['e', parentEventId, '', 'reply'],
+    ];
   }
 }
 
