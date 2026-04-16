@@ -143,6 +143,12 @@ class TimelineMessage {
   /// Aggregated reactions on this message.
   final List<TimelineReaction> reactions;
 
+  /// Direct parent event ID (null for top-level messages).
+  final String? parentId;
+
+  /// Root event ID of the thread (null for top-level messages).
+  final String? rootId;
+
   const TimelineMessage({
     required this.id,
     required this.pubkey,
@@ -153,7 +159,37 @@ class TimelineMessage {
     this.systemEvent,
     this.mentionPubkeys = const [],
     this.reactions = const [],
+    this.parentId,
+    this.rootId,
   });
+}
+
+// ---------------------------------------------------------------------------
+// ThreadSummary — inline thread indicator on the main timeline
+// ---------------------------------------------------------------------------
+
+@immutable
+class ThreadSummary {
+  final String threadHeadId;
+  final int replyCount;
+
+  /// Up to 3 most recent unique participant pubkeys.
+  final List<String> participantPubkeys;
+
+  const ThreadSummary({
+    required this.threadHeadId,
+    required this.replyCount,
+    required this.participantPubkeys,
+  });
+}
+
+/// A main-timeline entry: a root message with an optional thread summary.
+@immutable
+class MainTimelineEntry {
+  final TimelineMessage message;
+  final ThreadSummary? summary;
+
+  const MainTimelineEntry({required this.message, this.summary});
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +303,8 @@ List<TimelineMessage> formatTimeline(
             ),
       ];
 
+      final threadRef = event.threadReference;
+
       result.add(
         TimelineMessage(
           id: event.id,
@@ -276,12 +314,61 @@ List<TimelineMessage> formatTimeline(
           edited: edit != null,
           mentionPubkeys: mentions,
           reactions: reactions,
+          parentId: threadRef.parentId,
+          rootId: threadRef.rootId,
         ),
       );
     }
   }
 
   return result;
+}
+
+/// Build main-timeline entries: only root messages (parentId == null),
+/// each with an optional [ThreadSummary] when replies exist.
+///
+/// Mirrors the desktop's `buildMainTimelineEntries`.
+List<MainTimelineEntry> buildMainTimelineEntries(
+  List<TimelineMessage> messages,
+) {
+  // Index direct children by parentId.
+  final childrenByParent = <String, List<TimelineMessage>>{};
+  for (final msg in messages) {
+    final pid = msg.parentId;
+    if (pid == null) continue;
+    childrenByParent.putIfAbsent(pid, () => []).add(msg);
+  }
+
+  return [
+    for (final msg in messages)
+      if (msg.parentId == null)
+        MainTimelineEntry(
+          message: msg,
+          summary: _buildSummary(msg.id, childrenByParent),
+        ),
+  ];
+}
+
+ThreadSummary? _buildSummary(
+  String messageId,
+  Map<String, List<TimelineMessage>> childrenByParent,
+) {
+  final replies = childrenByParent[messageId];
+  if (replies == null || replies.isEmpty) return null;
+
+  // Up to 3 most recent unique participants (walk backwards).
+  final seen = <String>{};
+  final participants = <String>[];
+  for (var i = replies.length - 1; i >= 0 && participants.length < 3; i--) {
+    final pk = replies[i].pubkey.toLowerCase();
+    if (seen.add(pk)) participants.add(pk);
+  }
+
+  return ThreadSummary(
+    threadHeadId: messageId,
+    replyCount: replies.length,
+    participantPubkeys: participants.reversed.toList(),
+  );
 }
 
 // ---------------------------------------------------------------------------
