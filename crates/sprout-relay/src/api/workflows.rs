@@ -399,7 +399,7 @@ pub async fn list_workflow_runs(
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
     }
-    require_workflow_owner(&workflow, &pubkey_bytes, "trigger")?;
+    require_workflow_owner(&workflow, &pubkey_bytes, "view runs for")?;
 
     let limit = params.limit.unwrap_or(20).min(100) as i64;
     let runs = state
@@ -439,9 +439,8 @@ pub async fn list_run_approvals(
     if let Some(channel_id) = workflow.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if workflow.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "view approvals for")?;
 
     let approvals = state
         .db
@@ -478,9 +477,8 @@ pub async fn trigger_workflow(
     if let Some(channel_id) = workflow.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if workflow.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "trigger")?;
 
     let trigger_ctx = sprout_workflow::executor::TriggerContext {
         channel_id: workflow
