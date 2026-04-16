@@ -23,6 +23,7 @@
 //! `&`, `=`, `%`, and space) are percent-encoded.
 
 use nostr::PublicKey;
+use zeroize::Zeroize;
 
 use super::PairingError;
 
@@ -41,10 +42,11 @@ pub struct QrPayload {
     pub relays: Vec<String>,
 }
 
-/// Zero the session secret on drop to prevent it lingering in freed memory.
+/// Zero the session secret on drop using `zeroize` to prevent dead-store
+/// elimination by the compiler (plain `fill(0)` can be optimized away).
 impl Drop for QrPayload {
     fn drop(&mut self) {
-        self.session_secret.fill(0);
+        self.session_secret.zeroize();
     }
 }
 
@@ -202,8 +204,12 @@ fn url_encode(s: &str) -> String {
 }
 
 /// Percent-decode a query parameter value (general-purpose).
+///
+/// Decodes into raw bytes first, then converts to a UTF-8 string.
+/// Falls back to lossy conversion for non-UTF-8 sequences (which
+/// shouldn't appear in valid relay URLs, but we handle it safely).
 fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -211,15 +217,15 @@ fn url_decode(s: &str) -> String {
             let hi = hex_nibble(bytes[i + 1]);
             let lo = hex_nibble(bytes[i + 2]);
             if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h << 4 | l) as char);
+                out.push(h << 4 | l);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i] as char);
+        out.push(bytes[i]);
         i += 1;
     }
-    out
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Parse a single hex nibble (case-insensitive).

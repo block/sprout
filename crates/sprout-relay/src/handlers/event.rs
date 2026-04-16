@@ -389,6 +389,18 @@ async fn handle_ephemeral_event(
                 "fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
             );
         }
+    } else {
+        // Channel-less ephemeral events (e.g., NIP-AB pairing kind:24134).
+        // Fan out to any local subscriber whose filter matches, without
+        // requiring channel membership.
+        let stored_event = StoredEvent::new(event.clone(), None);
+        let matches = state.sub_registry.fan_out(&stored_event);
+        let event_json = serde_json::to_string(&event)
+            .expect("nostr::Event serialization is infallible for well-formed events");
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            state.conn_manager.send_to(*target_conn_id, msg);
+        }
     }
 
     conn.send(RelayMessage::ok(event_id_hex, true, ""));

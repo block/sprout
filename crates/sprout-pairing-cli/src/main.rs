@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, Keys, SecretKey, ToBech32};
+use nostr::{Event, EventBuilder, Keys, SecretKey, ToBech32};
 use sprout_core::kind::KIND_PAIRING;
 use sprout_core::pairing::session::PairingSession;
 use sprout_core::pairing::{
@@ -130,9 +130,11 @@ async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliEr
     println!("{qr_uri}");
     println!("Waiting for target to scan QR code...");
 
-    // Connect to relay.
+    // Connect to relay and handle NIP-42 auth if required.
+    // Auth uses the session's ephemeral keys so the relay accepts our events.
     let (ws, _) = connect_async(&relay_url).await?;
     let (mut write, mut read) = ws.split();
+    handle_nip42_auth(&mut read, &mut write, &session, &relay_url).await?;
 
     // Subscribe for events tagged to our ephemeral pubkey.
     let our_pk = session.pubkey().to_hex();
@@ -227,14 +229,13 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
     // Create target session + offer event.
     let (mut session, offer_event) = PairingSession::new_target(&qr)?;
 
-    // Connect to relay.
+    // Connect to relay and handle NIP-42 auth if required.
     let (ws, _) = connect_async(&relay_url).await?;
     let (mut write, mut read) = ws.split();
+    handle_nip42_auth(&mut read, &mut write, &session, &relay_url).await?;
 
-    // Publish offer event.
-    publish_event(&mut write, &offer_event).await?;
-
-    // Subscribe for events tagged to our ephemeral pubkey.
+    // Subscribe BEFORE publishing the offer so we don't miss a fast
+    // sas-confirm from the source (fixes a race condition).
     let our_pk = session.pubkey().to_hex();
     let sub_msg = serde_json::json!([
         "REQ",
@@ -244,6 +245,14 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
     write
         .send(Message::Text(sub_msg.to_string().into()))
         .await?;
+
+    // Wait for EOSE to confirm the subscription is registered on the relay
+    // before publishing the offer. Without this, the relay may process our
+    // EVENT before our REQ, causing us to miss the source's response.
+    wait_for_eose(&mut read, "pair", Duration::from_secs(10)).await?;
+
+    // Now publish the offer event.
+    publish_event(&mut write, &offer_event).await?;
 
     // Target already knows the SAS from the QR scan — display it now so
     // the user can compare while the source is also displaying its code.
@@ -397,6 +406,86 @@ fn check_for_abort(session: &mut PairingSession, event: &Event) -> Result<(), Cl
     }
 }
 
+// ── NIP-42 auth helper ────────────────────────────────────────────────────────
+
+/// Handle NIP-42 authentication if the relay requires it.
+///
+/// Uses the pairing session's ephemeral keys to authenticate, ensuring the
+/// relay accepts events signed by those same keys.
+async fn handle_nip42_auth<R, W>(
+    read: &mut R,
+    write: &mut W,
+    session: &PairingSession,
+    relay_url: &str,
+) -> Result<(), CliError>
+where
+    R: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+    W: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    // Wait up to 3 seconds for an AUTH challenge. Many relays don't require
+    // auth at all, so a timeout here is normal (not an error).
+    let auth_result = timeout(Duration::from_secs(3), async {
+        loop {
+            let msg = read
+                .next()
+                .await
+                .ok_or_else(|| CliError::Other("relay closed during auth".into()))??;
+
+            if let Message::Text(text) = msg {
+                if let Some(challenge) = parse_auth_challenge(text.as_str()) {
+                    return Ok(challenge);
+                }
+            }
+        }
+    })
+    .await;
+
+    let challenge = match auth_result {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Ok(()), // No AUTH challenge — relay doesn't require it
+    };
+
+    // Build and send the NIP-42 auth response using the session's ephemeral keys.
+    let relay_url_parsed: url::Url = relay_url
+        .parse()
+        .map_err(|e| CliError::Other(format!("invalid relay URL: {e}")))?;
+    let auth_event = session
+        .sign_event(EventBuilder::auth(challenge, relay_url_parsed))
+        .map_err(|e| CliError::Other(format!("failed to sign auth event: {e}")))?;
+
+    let msg = serde_json::json!(["AUTH", auth_event]);
+    write.send(Message::Text(msg.to_string().into())).await?;
+
+    // Wait for OK response (up to 5 seconds).
+    let _ = timeout(Duration::from_secs(5), async {
+        loop {
+            let msg = read
+                .next()
+                .await
+                .ok_or_else(|| CliError::Other("relay closed during auth".into()))??;
+            if let Message::Text(text) = msg {
+                if text.contains("\"OK\"") || text.contains("[\"OK\"") {
+                    return Ok::<(), CliError>(());
+                }
+            }
+        }
+    })
+    .await;
+
+    Ok(())
+}
+
+/// Parse an `["AUTH", "<challenge>"]` relay message.
+fn parse_auth_challenge(text: &str) -> Option<String> {
+    let arr: serde_json::Value = serde_json::from_str(text).ok()?;
+    let arr = arr.as_array()?;
+    if arr.len() >= 2 && arr[0].as_str()? == "AUTH" {
+        return arr[1].as_str().map(|s| s.to_string());
+    }
+    None
+}
+
 // ── WebSocket helpers ─────────────────────────────────────────────────────────
 
 /// Publish a Nostr event to the relay.
@@ -427,6 +516,38 @@ where
             if let Message::Text(text) = msg {
                 if let Some(event) = parse_relay_event(text.as_str(), sub_id) {
                     return Ok(event);
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| CliError::Timeout)?
+}
+
+/// Wait for an EOSE message from the relay for the given subscription ID.
+///
+/// EOSE (`["EOSE", "<sub_id>"]`) confirms the subscription is registered and
+/// all historical events have been delivered. Skips non-EOSE messages.
+async fn wait_for_eose<S>(read: &mut S, sub_id: &str, dur: Duration) -> Result<(), CliError>
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    timeout(dur, async {
+        loop {
+            let msg = read
+                .next()
+                .await
+                .ok_or_else(|| CliError::Other("relay closed while waiting for EOSE".into()))??;
+            if let Message::Text(text) = msg {
+                if let Ok(arr) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
+                    if let Some(arr) = arr.as_array() {
+                        if arr.len() >= 2
+                            && arr[0].as_str() == Some("EOSE")
+                            && arr[1].as_str() == Some(sub_id)
+                        {
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }

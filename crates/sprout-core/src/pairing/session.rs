@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 
 use nostr::nips::nip44;
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
+use zeroize::Zeroize;
 
 use super::crypto::{ct_eq, derive_sas, derive_session_id, derive_transcript_hash, format_sas};
 use super::qr::{self, QrPayload};
@@ -171,7 +172,7 @@ impl PairingSession {
         // Compute ECDH and SAS. Zero the ECDH shared secret after derivation.
         let mut ecdh = nostr::util::generate_shared_key(self.keys.secret_key(), &peer);
         let (code, sas_input) = derive_sas(&ecdh, &self.session_secret);
-        ecdh.fill(0);
+        ecdh.zeroize();
         self.sas_code = Some(code);
         self.sas_input = Some(sas_input);
         self.state = SessionState::Confirming;
@@ -265,7 +266,7 @@ impl PairingSession {
         // Zero the ECDH shared secret after derivation.
         let mut ecdh = nostr::util::generate_shared_key(keys.secret_key(), &qr.source_pubkey);
         let (code, sas_input) = derive_sas(&ecdh, &qr.session_secret);
-        ecdh.fill(0);
+        ecdh.zeroize();
 
         let mut session = Self {
             role: Role::Target,
@@ -469,6 +470,17 @@ impl PairingSession {
         self.sas_code.map(format_sas)
     }
 
+    /// Sign an arbitrary event builder with this session's ephemeral keys.
+    ///
+    /// Useful for relay-level operations like NIP-42 authentication, where
+    /// the relay requires events to be signed by the same key that
+    /// authenticated the connection.
+    pub fn sign_event(&self, builder: EventBuilder) -> Result<Event, PairingError> {
+        builder
+            .sign_with_keys(&self.keys)
+            .map_err(|e| PairingError::SigningError(e.to_string()))
+    }
+
     /// The QR URI for this session (source only).
     pub fn qr_uri(&self) -> Option<String> {
         if self.role != Role::Source {
@@ -605,13 +617,15 @@ impl PairingSession {
     }
 }
 
-/// Zero sensitive fields on drop.
+/// Zero sensitive fields on drop using `zeroize` to prevent dead-store
+/// elimination by the compiler. Ephemeral private keys are separately
+/// zeroed by `nostr::SecretKey::Drop` (which uses `write_volatile`).
 impl Drop for PairingSession {
     fn drop(&mut self) {
-        self.session_secret.fill(0);
-        self.session_id.fill(0);
+        self.session_secret.zeroize();
+        self.session_id.zeroize();
         if let Some(ref mut input) = self.sas_input {
-            input.fill(0);
+            input.zeroize();
         }
     }
 }
