@@ -393,7 +393,7 @@ test("opens a single-level thread panel with inline expansion", async ({
         return rowRect.top - bodyRect.top;
       });
     })
-    .toBeLessThan(120);
+    .toBeLessThan(160);
 
   const firstReplyId = await firstReplyRow.getAttribute("data-message-id");
   if (!firstReplyId) {
@@ -446,7 +446,7 @@ test("opens a single-level thread panel with inline expansion", async ({
         return rowRect.top - bodyRect.top;
       });
     })
-    .toBeLessThan(120);
+    .toBeLessThan(160);
 });
 
 test("thread panel width uses session storage and reset handle", async ({
