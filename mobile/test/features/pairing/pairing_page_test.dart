@@ -117,6 +117,12 @@ class _ErrorPairingNotifier extends Notifier<PairingState>
 
   @override
   void reset() {}
+
+  @override
+  void confirmSas() {}
+
+  @override
+  void denySas() {}
 }
 
 class _ConnectingPairingNotifier extends Notifier<PairingState>
@@ -129,4 +135,10 @@ class _ConnectingPairingNotifier extends Notifier<PairingState>
 
   @override
   void reset() {}
+
+  @override
+  void confirmSas() {}
+
+  @override
+  void denySas() {}
 }

@@ -35,7 +35,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 infer = "0.19"
 hex = "0.4"
-tokio = { version = "1", features = ["fs", "sync", "rt"] }
+tokio = { version = "1", features = ["fs", "sync", "rt", "macros", "time"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"
@@ -43,6 +43,8 @@ opus = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nostr = "0.37"
+nostr-compat = { package = "nostr", version = "0.36" }
+zeroize = "1"
 reqwest = { version = "0.13", features = ["json", "query"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
