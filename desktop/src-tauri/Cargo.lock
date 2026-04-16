@@ -5252,6 +5252,7 @@ dependencies = [
  "chrono",
  "hex",
  "nostr 0.36.0",
+ "percent-encoding",
  "rand 0.10.1",
  "serde",
  "serde_json",

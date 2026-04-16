@@ -22,3 +22,4 @@ url = { workspace = true }
 hex = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 thiserror = { workspace = true }
+zeroize = { workspace = true }

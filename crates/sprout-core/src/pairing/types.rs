@@ -6,6 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_version() -> u32 {
+    1
+}
+
 /// The set of messages exchanged during a NIP-AB device-pairing session.
 ///
 /// Serialized with `"type"` as the tag field (kebab-case). Example:
@@ -19,6 +23,11 @@ pub enum PairingMessage {
     Offer {
         /// Hex-encoded 32-byte session ID derived via HKDF from the session secret.
         session_id: String,
+        /// Protocol version. Always `1` for this implementation.
+        ///
+        /// Defaults to `1` when absent (backward compat with pre-versioned implementations).
+        #[serde(default = "default_version")]
+        version: u32,
     },
 
     /// Either party → other. Confirms the Short Authentication String matches.
@@ -94,14 +103,34 @@ mod tests {
     fn offer_round_trip() {
         let msg = PairingMessage::Offer {
             session_id: "deadbeef".repeat(8),
+            version: 1,
         };
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(
             json.contains(r#""type":"offer""#),
             "tag field present: {json}"
         );
+        assert!(
+            json.contains(r#""version":1"#),
+            "version field present: {json}"
+        );
         let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn offer_version_defaults_to_1_when_absent() {
+        // Simulate a legacy offer message without the version field.
+        let json = r#"{"type":"offer","session_id":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}"#;
+        let msg: PairingMessage = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(
+            msg,
+            PairingMessage::Offer {
+                session_id: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                    .to_string(),
+                version: 1,
+            }
+        );
     }
 
     #[test]

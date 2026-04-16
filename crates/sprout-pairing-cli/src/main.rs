@@ -28,6 +28,7 @@ use sprout_core::pairing::{
 };
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use zeroize::Zeroizing;
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
@@ -321,7 +322,7 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
     };
     println!("Received {kind_label} payload!");
     if show_secret {
-        println!("{kind_label}: {payload}");
+        println!("{kind_label}: {}", &*payload);
     } else {
         println!("(use --show-secret to display the received secret)");
     }
@@ -590,12 +591,12 @@ fn parse_relay_event(text: &str, sub_id: &str) -> Option<Event> {
 ///
 /// If `nsec` is provided, parse it as bech32 and return the raw nsec string.
 /// Otherwise generate a fresh test key and return its nsec.
-fn resolve_payload(nsec: Option<String>) -> Result<(String, PayloadType), CliError> {
+fn resolve_payload(nsec: Option<String>) -> Result<(Zeroizing<String>, PayloadType), CliError> {
     match nsec {
         Some(s) => {
             // Validate it parses as a secret key.
             let _sk = SecretKey::parse(&s).map_err(|e| CliError::InvalidNsec(e.to_string()))?;
-            Ok((s, PayloadType::Nsec))
+            Ok((Zeroizing::new(s), PayloadType::Nsec))
         }
         None => {
             let keys = Keys::generate();
@@ -604,7 +605,7 @@ fn resolve_payload(nsec: Option<String>) -> Result<(String, PayloadType), CliErr
                 .to_bech32()
                 .map_err(|e| CliError::InvalidNsec(e.to_string()))?;
             println!("(no --nsec provided; using generated test key)");
-            Ok((nsec_str, PayloadType::Nsec))
+            Ok((Zeroizing::new(nsec_str), PayloadType::Nsec))
         }
     }
 }

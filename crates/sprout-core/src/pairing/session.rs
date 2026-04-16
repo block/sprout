@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use nostr::nips::nip44;
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, Tag};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::crypto::{ct_eq, derive_sas, derive_session_id, derive_transcript_hash, format_sas};
 use super::qr::{self, QrPayload};
@@ -117,6 +117,7 @@ impl PairingSession {
         let session_id = derive_session_id(&session_secret);
 
         let qr = QrPayload {
+            version: 1,
             source_pubkey: keys.public_key(),
             session_secret,
             relays: vec![relay_url.clone()],
@@ -151,10 +152,21 @@ impl PairingSession {
         self.validate_event_basics(event)?;
 
         let msg = self.decrypt_message(event)?;
-        let session_id_hex = match &msg {
-            PairingMessage::Offer { session_id } => session_id.clone(),
+        let (session_id_hex, version) = match &msg {
+            PairingMessage::Offer {
+                session_id,
+                version,
+            } => (session_id.clone(), *version),
             other => return Err(unexpected("offer", other)),
         };
+
+        // Reject unsupported protocol versions (NIP-AB §Versions).
+        if version != 1 {
+            return Err(PairingError::UnexpectedMessage {
+                expected: "version 1".into(),
+                got: format!("version {version}"),
+            });
+        }
 
         // Verify session_id matches our derivation (constant-time).
         let received_id = hex::decode(&session_id_hex)
@@ -212,17 +224,25 @@ impl PairingSession {
     pub fn send_payload(
         &mut self,
         payload_type: PayloadType,
-        payload: String,
+        payload: Zeroizing<String>,
     ) -> Result<Event, PairingError> {
         self.check_expired()?;
         self.expect_state(SessionState::Transferring)?;
         self.expect_role(Role::Source)?;
 
-        let msg = PairingMessage::Payload {
+        let mut msg = PairingMessage::Payload {
             payload_type,
-            payload,
+            payload: (*payload).clone(),
         };
-        let event = self.build_event(&msg)?;
+        // Defer `?` so the transient clone is zeroized on both success and error.
+        let result = self.build_event(&msg);
+        if let PairingMessage::Payload {
+            ref mut payload, ..
+        } = msg
+        {
+            payload.zeroize();
+        }
+        let event = result?;
         self.state = SessionState::PayloadExchanged;
         Ok(event)
     }
@@ -285,6 +305,7 @@ impl PairingSession {
         // Build and return the offer event.
         let msg = PairingMessage::Offer {
             session_id: hex::encode(session_id),
+            version: 1,
         };
         let event = session.build_event(&msg)?;
         session.state = SessionState::Confirming;
@@ -356,7 +377,10 @@ impl PairingSession {
     ///
     /// Only one payload is accepted per session — after this call the state
     /// advances to [`SessionState::PayloadExchanged`].
-    pub fn handle_payload(&mut self, event: &Event) -> Result<(PayloadType, String), PairingError> {
+    pub fn handle_payload(
+        &mut self,
+        event: &Event,
+    ) -> Result<(PayloadType, Zeroizing<String>), PairingError> {
         self.check_expired()?;
         self.expect_state(SessionState::Transferring)?;
         self.expect_role(Role::Target)?;
@@ -369,7 +393,7 @@ impl PairingSession {
                 payload,
             } => {
                 self.state = SessionState::PayloadExchanged;
-                Ok((payload_type, payload))
+                Ok((payload_type, Zeroizing::new(payload)))
             }
             other => Err(unexpected("payload", &other)),
         }
@@ -487,6 +511,7 @@ impl PairingSession {
             return None;
         }
         Some(qr::encode_qr(&QrPayload {
+            version: 1,
             source_pubkey: self.keys.public_key(),
             session_secret: self.session_secret,
             relays: self.relay_urls.clone(),
@@ -498,23 +523,37 @@ impl PairingSession {
 
 impl PairingSession {
     /// Encrypt a message and wrap it in a signed kind:24134 event.
+    ///
+    /// # Secret handling
+    ///
+    /// The serialized JSON plaintext is explicitly zeroized after encryption.
+    /// The caller's `Zeroizing<String>` zeros on drop. The transient clone
+    /// inside `PairingMessage::Payload` is zeroized by `send_payload` after
+    /// this method returns.
+    ///
+    /// Residual transient copies that cannot be zeroized:
+    /// 1. `serde_json::to_string` may create intermediate buffers during serialization
+    /// 2. `nip44::encrypt` reads the plaintext but does not zero its internal copy
+    ///
+    /// These are inherent to Rust's heap allocator and third-party crate internals.
     fn build_event(&self, message: &PairingMessage) -> Result<Event, PairingError> {
         let peer = self
             .peer_pubkey
             .ok_or_else(|| PairingError::InvalidPubkey("no peer pubkey set".into()))?;
 
-        let plaintext = serde_json::to_string(message)?;
+        let mut plaintext = serde_json::to_string(message)?;
         let encrypted = nip44::encrypt(
             self.keys.secret_key(),
             &peer,
             &plaintext,
             nip44::Version::V2,
         )?;
+        plaintext.zeroize(); // Zero serialized JSON before drop
 
         // NIP-AB §: Implementations SHOULD set created_at to the current time
-        // minus a random value between 0 and 60 seconds for metadata privacy.
+        // minus a random value between 0 and 30 seconds for metadata privacy.
         let now = nostr::Timestamp::now().as_u64();
-        let jitter = rand::random::<u64>() % 61;
+        let jitter = rand::random::<u64>() % 31; // 0-30s jitter per NIP-AB §Metadata Privacy
         let ts = nostr::Timestamp::from(now.saturating_sub(jitter));
 
         EventBuilder::new(
@@ -529,12 +568,15 @@ impl PairingSession {
 
     /// Decrypt and parse a NIP-44 encrypted pairing message from an event.
     fn decrypt_message(&self, event: &Event) -> Result<PairingMessage, PairingError> {
-        let decrypted = nip44::decrypt(
+        let mut decrypted = nip44::decrypt(
             self.keys.secret_key(),
             &event.pubkey,
             event.content.as_str(),
         )?;
-        Ok(serde_json::from_str(&decrypted)?)
+        // Defer `?` so decrypted plaintext is zeroized on both success and parse failure.
+        let result = serde_json::from_str(&decrypted);
+        decrypted.zeroize();
+        Ok(result?)
     }
 
     /// Validate basic event properties: kind and p-tag.
@@ -692,7 +734,7 @@ mod tests {
 
         // Source sends payload.
         let payload_event = source
-            .send_payload(PayloadType::Nsec, "nsec1test".into())
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1test".into()))
             .expect("send payload");
         assert_eq!(source.state(), SessionState::PayloadExchanged);
 
@@ -701,7 +743,7 @@ mod tests {
             .handle_payload(&payload_event)
             .expect("handle payload");
         assert_eq!(pt, PayloadType::Nsec);
-        assert_eq!(data, "nsec1test");
+        assert_eq!(*data, "nsec1test");
         assert_eq!(target.state(), SessionState::PayloadExchanged);
 
         // Target sends complete.
@@ -725,7 +767,7 @@ mod tests {
 
         // Can't send payload before confirming SAS.
         assert!(source
-            .send_payload(PayloadType::Nsec, "nsec1x".into())
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1x".into()))
             .is_err());
     }
 
@@ -772,7 +814,7 @@ mod tests {
             .expect("sas-confirm");
         target.confirm_target_sas().expect("target confirm");
         let payload = source
-            .send_payload(PayloadType::Nsec, "x".into())
+            .send_payload(PayloadType::Nsec, Zeroizing::new("x".into()))
             .expect("payload");
         let _ = target.handle_payload(&payload).expect("handle payload");
         let complete = target.send_complete().expect("complete");
@@ -838,7 +880,7 @@ mod tests {
             .expect("sas-confirm");
         target.confirm_target_sas().expect("target confirm");
         let payload = source
-            .send_payload(PayloadType::Nsec, "nsec1test".into())
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1test".into()))
             .expect("payload");
         let _ = target.handle_payload(&payload).expect("handle payload");
         let complete = target.send_complete().expect("complete");
@@ -970,7 +1012,7 @@ mod tests {
 
         // Source sends payload.
         let payload_event = source
-            .send_payload(PayloadType::Nsec, "nsec1test".into())
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1test".into()))
             .expect("payload");
 
         // Target tries to handle payload WITHOUT confirming SAS first → error.
@@ -1003,11 +1045,11 @@ mod tests {
 
         // First payload succeeds.
         let payload1 = source
-            .send_payload(PayloadType::Nsec, "nsec1first".into())
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1first".into()))
             .expect("first payload");
 
         // Second payload from source is rejected (state already advanced).
-        let result = source.send_payload(PayloadType::Nsec, "nsec1second".into());
+        let result = source.send_payload(PayloadType::Nsec, Zeroizing::new("nsec1second".into()));
         assert!(result.is_err(), "duplicate send_payload should fail");
 
         // Target receives first payload.

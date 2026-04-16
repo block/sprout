@@ -6,6 +6,34 @@ Device Pairing
 
 `draft` `optional`
 
+## Versions
+
+This NIP is versioned to allow future algorithm upgrades without breaking existing implementations.
+
+Currently defined versions:
+
+| Version | Status | Description |
+|---------|--------|-------------|
+| `1` | Active | secp256k1 ECDH, HKDF-SHA256, SAS-6digit, NIP-44 v2 encryption |
+
+The version is communicated in two places:
+
+1. **QR URI**: `nostrpair://<pubkey>?secret=<hex>&relay=<url>&v=1`
+   - The `v` parameter defaults to `1` if absent (backward compatibility).
+   - _target_ MUST reject URIs with an unrecognized `v` value and display a human-readable error: "This QR code requires a newer version of [App]. Please update."
+
+2. **Offer message**: the `offer` JSON MUST include a `version` field:
+   ```jsonc
+   {
+     "type": "offer",
+     "version": 1,
+     "session_id": "<hex, 32 bytes>"
+   }
+   ```
+   _source_ MUST reject offers with a `version` it does not support.
+
+Implementations MUST NOT silently ignore an unrecognized version — they MUST surface an error to the user.
+
 This NIP defines a protocol for securely transferring secrets between two devices over standard Nostr relays using QR-code-initiated, end-to-end encrypted channels with visual confirmation.
 
 ## Motivation
@@ -39,6 +67,21 @@ This NIP provides a secure, authenticated channel between two devices that can c
 
 All events use ephemeral keypairs that are discarded after the session. The relay sees only opaque ciphertext addressed to throwaway public keys.
 
+## Limitations
+
+This NIP provides a secure one-time transfer channel. It does not provide:
+
+- **No ongoing security**: once the payload is transferred, this NIP's security guarantees end. The transferred key's security depends entirely on the receiving device's storage and the user's operational security.
+- **No key revocation**: there is no mechanism to invalidate a completed pairing. If the _target_ device is later compromised, the transferred key is compromised.
+- **No multi-device coordination**: this NIP transfers a key to one device at a time. Managing keys across N devices requires N separate pairing sessions.
+- **No relay confidentiality**: the pairing relay learns the timing and approximate frequency of pairing events, even though it cannot read the payload. For high-risk users, a private relay is recommended.
+- **No post-quantum security**: the ECDH key exchange is vulnerable to a sufficiently powerful quantum computer. The NIP-44 encryption layer inherits the same limitation.
+- **Physical presence assumption**: SAS verification requires the user to visually compare codes on two physical screens. An attacker with physical access to both devices simultaneously can bypass this check.
+- **QR code window**: the session secret is exposed in the QR code for up to 120 seconds. Screen capture, shoulder surfing, or a compromised camera can expose it.
+- **Single-use only**: this protocol is not designed for repeated or automated transfers. Each transfer requires a new QR scan and user confirmation.
+
+For ongoing remote signing without key transfer, use [NIP-46](46.md) instead.
+
 ## QR Code Format
 
 The _source_ generates:
@@ -49,12 +92,31 @@ The _source_ generates:
 The QR code encodes a URI:
 
 ```
-nostrpair://<source_ephemeral_pubkey_hex>?secret=<session_secret_hex>&relay=<wss://relay.example.com>
+nostrpair://<source_ephemeral_pubkey_hex>?secret=<session_secret_hex>&relay=<wss://relay.example.com>&v=1
 ```
 
 - `source_ephemeral_pubkey_hex`: 64-character lowercase hex-encoded 32-byte x-only public key (as used throughout Nostr per [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki))
 - `session_secret_hex`: 64-character lowercase hex-encoded 32 random bytes
-- `relay`: percent-encoded WebSocket URL of the pairing relay. SHOULD appear at least once. MAY appear multiple times for redundancy. When multiple relays are specified, _target_ SHOULD attempt them in order and use the first that connects successfully.
+- `relay`: percent-encoded WebSocket URL of the pairing relay. SHOULD appear at least once. MAY appear multiple times for redundancy. The QR URI SHOULD include 1–3 relay URLs. More than 3 relays increases QR code size and connection overhead without proportional benefit.
+- `v`: protocol version integer (see §Versions). Defaults to `1` if absent.
+
+The total URI length MUST NOT exceed 2048 characters. Reject any URI that exceeds this limit (prevents DoS via QR scanning).
+
+Implementations MUST validate the QR URI before processing:
+- `source_ephemeral_pubkey_hex` MUST be exactly 64 lowercase hex characters (32 bytes). Reject if not.
+- `session_secret_hex` MUST be exactly 64 lowercase hex characters (32 bytes). Reject if not.
+- `relay` MUST be a valid WebSocket URL beginning with `wss://` or `ws://`. Reject if not.
+- Implementations MUST NOT process a `nostrpair://` URI that fails any of the above checks.
+
+When multiple `relay` parameters are specified:
+
+**Source behavior**: _source_ MUST subscribe to **all** listed relays simultaneously. This ensures _target_ can reach _source_ regardless of which relay _target_ connects to first. Subscribing to all relays has no privacy cost since all events use ephemeral pubkeys.
+
+**Target behavior**: _target_ SHOULD attempt to connect to listed relays in parallel. _target_ SHOULD use the first relay that both (a) accepts the WebSocket connection and (b) successfully delivers the subscription (confirmed by receiving an `EOSE` or the first event). If a relay connection fails after the session is underway, _target_ MAY attempt the next relay in the list; however, _target_ MUST NOT construct a new `offer` event. If _target_ needs to reach _source_ via a different relay, _target_ SHOULD re-publish the **same signed `offer` event** (identical bytes, same event ID) to the new relay. This is safe because the event is already signed and addressed to `source_ephemeral_pubkey`; _source_ will deduplicate by event ID if it receives the offer on multiple relays.
+
+**Cross-relay delivery**: Because _source_ subscribes to all listed relays, events published by _target_ to any listed relay will be received by _source_. The protocol is relay-agnostic: _source_ and _target_ do not need to be connected to the same relay simultaneously.
+
+**No relay discovery fallback**: If all listed relays fail, the session MUST be aborted. There is no relay discovery mechanism; the QR code is the authoritative relay list.
 
 The QR code MUST NOT contain any private key material. If intercepted, an attacker obtains only an ephemeral public key and a session secret, which are useless without completing the handshake within the session timeout.
 
@@ -86,7 +148,9 @@ All `kind:24134` events follow this structure:
 }
 ```
 
-The `content` field is always [NIP-44](44.md) encrypted using the conversation key derived from the sender's ephemeral private key and the recipient's ephemeral public key, as specified in NIP-44.
+The `content` field is always encrypted using **NIP-44 version 2** (the `0x02` algorithm: secp256k1 ECDH, HKDF, padding, ChaCha20, HMAC-SHA256), as specified in [NIP-44](44.md). The conversation key is derived from the sender's ephemeral private key and the recipient's ephemeral public key. Implementations MUST use NIP-44 v2 and MUST reject events whose NIP-44 version byte is not `0x02`.
+
+NIP-AB does not negotiate encryption versions. If a future NIP-44 version is required, this NIP will be updated with a new version indicator. Implementations MUST NOT silently fall back to an older NIP-44 version.
 
 The encrypted plaintext is always a JSON object containing a `type` field that identifies the message:
 
@@ -112,10 +176,34 @@ Before processing any `kind:24134` event, implementations MUST:
    - _source_ expects events from `target_ephemeral_pubkey` (learned from the first valid `offer`).
    - _target_ expects events from `source_ephemeral_pubkey` (learned from the QR code).
    - Before the first valid `offer`, _source_ accepts events from any `pubkey` (since `target_ephemeral_pubkey` is not yet known), but MUST lock to that pubkey after accepting.
-5. Decrypt `content` per [NIP-44](44.md).
+5. Decrypt `content` per [NIP-44](44.md). The `content` field MUST be a valid NIP-44 v2 payload (base64, 132–87472 characters per NIP-44). Events with `content` outside this range MUST be silently discarded.
 6. Parse the decrypted JSON and validate the `type` field against the expected message for the current state.
+7. **Out-of-order messages**: A message whose `type` does not match the expected message for the current protocol state is considered out-of-order. Out-of-order messages MUST be silently discarded; the session state MUST NOT advance. Implementations MUST NOT send an `abort` in response to an out-of-order message, as doing so would allow a relay to probe session state.
+
+   The valid `type` for each state is:
+
+   | State | Role | Expected `type` |
+   |-------|------|-----------------|
+   | `Waiting` | Source | `offer` |
+   | `Confirming` | Source | *(awaiting user; no inbound expected)* |
+   | `Confirming` | Target | `sas-confirm` |
+   | `AwaitingConfirmation` | Target | *(awaiting user; no inbound expected)* |
+   | `Transferring` | Target | `payload` |
+   | `PayloadExchanged` | Source | `complete` |
+
+   `abort` is valid in any non-terminal state from a known peer (see §Abort). All other combinations are out-of-order and MUST be discarded.
 
 Events that fail any validation step MUST be silently discarded. Implementations MUST NOT reveal validation failure details to the relay or to the sender.
+
+### Duplicate Event Handling
+
+Relays MAY deliver the same event more than once (e.g., on reconnect or when multiple relay connections are active). Implementations MUST handle duplicate delivery idempotently.
+
+An event is a duplicate if its `id` matches an event already successfully processed in the current session. Implementations MUST track the `id` of each successfully processed event and MUST silently discard any event whose `id` has already been processed.
+
+Implementations SHOULD maintain a per-session set of processed event IDs. This set need not persist beyond the session lifetime (120 seconds maximum).
+
+A duplicate `offer` event (same `id`) received after the source has already accepted an offer MUST be discarded, not treated as a new session attempt. A duplicate `payload` event received after the target has already imported the payload MUST be discarded; the target MUST NOT re-import or re-send `complete`.
 
 ## Pairing Protocol
 
@@ -147,6 +235,7 @@ Encrypted plaintext:
 ```jsonc
 {
   "type": "offer",
+  "version": 1,
   "session_id": "<hex, 32 bytes>"
 }
 ```
@@ -232,7 +321,7 @@ transcript_hash = HKDF-SHA256(
 )
 ```
 
-_target_ MUST compute the same `transcript_hash` and verify it matches before proceeding. A mismatch indicates a MITM attack or protocol error; _target_ MUST abort.
+_target_ MUST compute the same `transcript_hash` and verify it matches before proceeding. Implementations MUST use constant-time comparison when checking `transcript_hash` to prevent timing side-channels. A mismatch indicates a MITM attack or protocol error; _target_ MUST send `abort` with reason `"sas_mismatch"` and terminate the session.
 
 ### Step 4: Payload Transfer
 
@@ -255,24 +344,119 @@ Defined payload types:
 | `nsec` | Private key transfer | [NIP-49](49.md) `ncryptsec1...` string (recommended) or `nsec1...` bech32 |
 | `bunker` | NIP-46 signer-initiated session | `bunker://...` URI as defined in [NIP-46](46.md) |
 | `connect` | NIP-46 client-initiated session | `nostrconnect://...` URI as defined in [NIP-46](46.md) |
-| `custom` | Application-specific data | Any string; interpretation is application-defined |
+| `custom` | Application-specific data | String (see §Custom Payloads) |
+
+**Payload size limits**: The total serialized JSON plaintext of a `kind:24134` event's decrypted content MUST NOT exceed 65,535 bytes (the NIP-44 v2 plaintext limit). For `payload` messages, this means the `payload` field plus JSON envelope overhead (typically 50–80 bytes depending on `payload_type` and JSON escaping) must fit within this limit. In practice, `payload` values up to 65,400 bytes are safe. Implementations MUST reject (silently discard) `payload` events where the decrypted plaintext JSON exceeds 65,535 bytes.
+
+For the defined payload types (`nsec`, `bunker`, `connect`), payloads are expected to be well under 1,024 bytes. Implementations MAY enforce a stricter limit of 4,096 bytes for these types and SHOULD document any custom limit for `custom` payloads.
+
+_Source_ implementations MUST NOT construct a `payload` event whose plaintext JSON exceeds 65,535 bytes; doing so will cause NIP-44 encryption to fail.
+
+### Custom Payloads
+
+The `custom` payload type carries application-defined data. The `payload` field MUST be a string. Applications that need to transfer structured data SHOULD encode it as JSON and then serialize the JSON object to a string (i.e., JSON-in-string, consistent with Nostr convention).
+
+To prevent cross-application misinterpretation, applications using `custom` payloads SHOULD include an application identifier in the payload. The RECOMMENDED format is:
+
+```jsonc
+{
+  "type": "payload",
+  "payload_type": "custom",
+  "payload": "{\"app\":\"com.example.myapp\",\"version\":1,\"data\":\"...\"}"
+}
+```
+
+The `app` field SHOULD use reverse-DNS notation to namespace the payload. Implementations that receive a `custom` payload with an unrecognized `app` value SHOULD surface this to the user rather than silently discarding it.
+
+`custom` payloads are subject to the general 65,535-byte plaintext limit (65,400 bytes is a safe practical bound for the `payload` field). Applications SHOULD document their expected payload size. Applications with payloads larger than 4,096 bytes SHOULD consider whether NIP-AB is the appropriate transport — NIP-AB is designed for short secrets, not bulk data transfer.
+
+NIP-AB does not provide a mechanism for _target_ to reject a `custom` payload based on its content. If _target_ does not understand the payload, it SHOULD send `complete` with `success: false` and inform the user.
 
 For `nsec` payloads using [NIP-49](49.md) `ncryptsec` format, clients SHOULD set `KEY_SECURITY_BYTE = 0x02` (client does not track provenance) unless the client can positively assert the key has never been handled insecurely, in which case `0x01` MAY be used.
 
 ### Step 5: Completion
 
-_target_ decrypts the payload, imports the secret into secure storage, and publishes a `complete` event:
-
-Encrypted plaintext:
+_target_ decrypts the payload, imports the secret into secure storage, and SHOULD publish a `complete` event:
 
 ```jsonc
-{
-  "type": "complete",
-  "success": true
-}
+{ "type": "complete", "success": true }
 ```
 
-Both devices close their subscriptions and discard their ephemeral keypairs. Implementations MUST zero the ephemeral private keys and session secret from memory before freeing.
+**`complete` is advisory, not required for security.** The payload transfer is complete when _target_ successfully decrypts and stores the payload. `complete` is a best-effort acknowledgment that allows _source_ to display a success confirmation to the user.
+
+**If _target_ crashes or disconnects after importing but before sending `complete`**: The import has succeeded. _target_ MUST NOT re-request the payload. On next launch, _target_ SHOULD display a success state (the key is present in storage). _source_ will time out waiting for `complete` and MAY display an ambiguous state ("Transfer may have succeeded — check your other device").
+
+**`success: false`**: _target_ SHOULD send `complete` with `success: false` if it successfully received and decrypted the payload but failed to import it into secure storage (e.g., keychain write failed). This allows _source_ to inform the user of a partial failure. _source_ MUST NOT retry sending the payload in response to `success: false` — the session is over. The user must initiate a new pairing.
+
+**Source timeout for `complete`**: _source_ SHOULD wait up to 30 seconds for `complete` after sending `payload`. If `complete` is not received within this window, _source_ SHOULD display an ambiguous confirmation ("Transfer sent — verify on your other device") rather than an error. _source_ MUST NOT re-send `payload`.
+
+_source_ MUST process at most one `complete` event per session. Subsequent `complete` events MUST be silently discarded.
+
+Both devices MUST close their subscriptions and discard their ephemeral keypairs after either (a) receiving `complete`, (b) the per-step timeout expires, or (c) the session timeout (120 seconds) expires. Implementations MUST zero the ephemeral private keys and session secret from memory before freeing.
+
+### Implementation Pseudocode
+
+The following Python-like pseudocode is normative. Implementations MUST produce identical outputs for identical inputs.
+
+```python
+# --- Key Derivation ---
+
+def derive_session_id(session_secret: bytes) -> bytes:
+    # session_secret: 32 bytes from QR code
+    assert len(session_secret) == 32
+    return hkdf_sha256(IKM=session_secret, salt=b"", info=b"nostr-pair-session-id", L=32)
+
+def derive_sas_input(ecdh_shared: bytes, session_secret: bytes) -> bytes:
+    # ecdh_shared: 32-byte x-coordinate of secp256k1 shared point (unhashed)
+    assert len(ecdh_shared) == 32
+    assert len(session_secret) == 32
+    return hkdf_sha256(IKM=ecdh_shared, salt=session_secret, info=b"nostr-pair-sas-v1", L=32)
+
+def derive_sas_code(sas_input: bytes) -> str:
+    # Returns zero-padded 6-digit decimal string
+    n = int.from_bytes(sas_input[0:4], byteorder='big')
+    return str(n % 1_000_000).zfill(6)
+
+def derive_transcript_hash(
+    session_id: bytes,
+    source_pubkey: bytes,   # 32-byte x-coordinate
+    target_pubkey: bytes,   # 32-byte x-coordinate
+    sas_input: bytes,
+    session_secret: bytes
+) -> bytes:
+    assert all(len(x) == 32 for x in [session_id, source_pubkey, target_pubkey, sas_input, session_secret])
+    transcript = session_id + source_pubkey + target_pubkey + sas_input  # 128 bytes
+    return hkdf_sha256(IKM=transcript, salt=session_secret, info=b"nostr-pair-transcript-v1", L=32)
+
+# --- Message Encryption (wraps NIP-44) ---
+
+def encrypt_message(msg: dict, sender_privkey: bytes, recipient_pubkey: bytes) -> str:
+    # msg: dict with "type" field and type-specific fields
+    plaintext = json_encode(msg)  # UTF-8 JSON, no trailing whitespace
+    conversation_key = nip44_get_conversation_key(sender_privkey, recipient_pubkey)
+    nonce = secure_random_bytes(32)
+    return nip44_encrypt(plaintext, conversation_key, nonce)
+
+def decrypt_message(ciphertext: str, recipient_privkey: bytes, sender_pubkey: bytes) -> dict:
+    conversation_key = nip44_get_conversation_key(recipient_privkey, sender_pubkey)
+    plaintext = nip44_decrypt(ciphertext, conversation_key)
+    return json_decode(plaintext)
+
+# --- Usage example ---
+# session_secret = secure_random_bytes(32)
+# session_id = derive_session_id(session_secret)
+# ecdh_shared = secp256k1_ecdh(own_privkey, peer_pubkey)  # x-coordinate, unhashed
+# sas_input = derive_sas_input(ecdh_shared, session_secret)
+# sas_code = derive_sas_code(sas_input)  # display to user, e.g. "047291"
+# transcript_hash = derive_transcript_hash(session_id, source_pub, target_pub, sas_input, session_secret)
+
+# --- Transcript Verification (target side) ---
+# After receiving sas-confirm:
+# expected = derive_transcript_hash(session_id, source_pub, target_pub, sas_input, session_secret)
+# if not constant_time_equal(received_hash, expected):
+#     send_abort(reason="sas_mismatch")
+#     raise TranscriptMismatchError
+```
 
 ### Abort
 
@@ -367,11 +551,11 @@ The QR code contains only an ephemeral public key and a session secret. If an at
 
 The defense is **user verification against their physical device**, not cryptographic impossibility. This is the same security model as Bluetooth Secure Simple Pairing and ZRTP: the SAS step converts a network-level MITM into a physical-presence requirement.
 
-The _source_ MUST reject additional `offer` events after accepting one. If the legitimate _target_'s offer arrives after an attacker's, the _target_ will receive no response and should time out.
+The _source_ MUST reject additional `offer` events after accepting one. If the legitimate _target_'s offer arrives after an attacker's, the _target_ will receive no response and SHOULD time out.
 
 ### Session Timeout
 
-Implementations MUST enforce a session timeout (recommended: 120 seconds from QR display). After timeout, the _source_ MUST discard the ephemeral keypair and session secret. A new QR code must be generated for a new attempt.
+Implementations MUST enforce a session timeout (recommended: 120 seconds from QR display). After timeout, the _source_ MUST discard the ephemeral keypair and session secret. A new QR code MUST be generated for a new attempt.
 
 ### Key Material on Two Devices
 
@@ -379,23 +563,86 @@ After an `nsec` transfer, the private key exists on both devices. This is an inh
 
 ### Replay Protection
 
-Session secrets are random and single-use. Ephemeral keypairs are generated per session. Replaying captured events to a different session will fail because the ECDH shared secret — and therefore the NIP-44 conversation key — will differ.
+Session secrets are random and single-use. Ephemeral keypairs are generated per session. Two independent mechanisms prevent cross-session replay:
+
+**1. `p` tag binding**: Every event carries a `p` tag containing the recipient's ephemeral public key. The recipient validates that this tag matches their own ephemeral public key (§Event Validation, step 3). A replayed event from session A has `p` = `source_A_ephemeral_pubkey`; session B's source has a different ephemeral key and will reject it at the `p` tag check, before any decryption is attempted.
+
+**2. NIP-44 key binding**: Even if the `p` tag check were bypassed, NIP-44 decryption would fail. The conversation key is derived from `ECDH(own_ephemeral_privkey, sender_pubkey)`. A replayed event encrypted for session A's keypair cannot be decrypted by session B's keypair.
+
+These two mechanisms are independent; either alone is sufficient to prevent cross-session replay. Together they provide defense in depth.
+
+**Within-session replay**: The state machine provides within-session replay protection. Once a message type has been processed and the state has advanced, a replayed copy of the same message is out-of-order and MUST be discarded (§Event Validation, item 7). The duplicate event ID check (§Duplicate Event Handling) provides an additional layer.
 
 ### Metadata Privacy
 
 All pairing events use ephemeral pubkeys that are unlinked to the user's real Nostr identity. The relay cannot determine which real user is pairing devices.
 
-Implementations SHOULD set `created_at` to the current time minus a random value between 0 and 60 seconds. Implementations MUST NOT set `created_at` to a future time, as some relays reject future-dated events.
+Implementations SHOULD set `created_at` to the current time minus a random value between 0 and 30 seconds. This provides metadata privacy (obscuring the exact time of each protocol step) while remaining within the timestamp acceptance window of all known relay implementations.
 
-## HKDF Construction
+Implementations MUST NOT set `created_at` to a future time. Implementations MUST NOT set `created_at` more than 60 seconds in the past, as some relays enforce a `created_at_lower_limit` (per NIP-11) and may reject events with timestamps too far in the past.
 
-This NIP uses HKDF-SHA256 as defined in [RFC 5869](https://datatracker.ietf.org/doc/html/rfc5869). All HKDF calls in this NIP use:
+If a relay rejects an event with an `invalid: event creation date` error (NIP-01 `OK` message), the implementation SHOULD retry with `created_at` set to the current time (no jitter). The privacy benefit of jitter is secondary to successful delivery.
 
-- **Hash**: SHA-256
+## Design Rationale
+
+### Why HKDF for `session_id` instead of a direct hash?
+
+`session_id = HKDF(session_secret, ...)` rather than `SHA256(session_secret)` provides domain separation. Using HKDF with a labeled `info` string ensures that the `session_id` output is cryptographically independent from any other value derived from `session_secret` (e.g., `sas_input`). This prevents cross-protocol attacks where an attacker tricks one derivation path into producing a value valid for another.
+
+### Why 6-digit decimal SAS?
+
+6 decimal digits provide ~20 bits of entropy (10^6 = ~2^20). An attacker who can race the legitimate target has a 1-in-1,000,000 chance of a matching SAS per attempt. The session timeout (120 seconds) and single-offer acceptance limit make brute force infeasible. Decimal was chosen over emoji (Matrix) for cross-client compatibility — emoji sets vary by platform and font, causing display inconsistencies. Decimal was chosen over 4-digit (Bluetooth) because 4 digits (1-in-10,000) is considered insufficient against targeted attacks.
+
+### Why `session_secret` in the QR code instead of deriving it from the ephemeral keypair?
+
+The `session_secret` is independent of the ephemeral keypair. This means that even if an attacker somehow learns the ephemeral private key (e.g., via a side-channel), they cannot compute the `session_id` or `sas_input` without also knowing `session_secret`. The QR code is a separate out-of-band channel; requiring knowledge of both the QR code AND the ECDH handshake provides defense-in-depth.
+
+### Why transcript binding (`transcript_hash`)?
+
+The `transcript_hash` in `sas-confirm` commits the source to the exact session parameters: the `session_id`, both ephemeral public keys, and the `sas_input`. Without this, a MITM could potentially replay a `sas-confirm` from a different session. The transcript hash ensures that the source's confirmation is bound to this specific session and cannot be replayed.
+
+### Why NIP-44 for event encryption instead of a custom scheme?
+
+NIP-44 is the Nostr standard for authenticated encryption. Using it here means NIP-AB inherits NIP-44's security audit, test vectors, and broad implementation support. A custom scheme would require separate review and implementation work in every client.
+
+### Audit
+
+An independent security audit of this protocol is planned. Until an audit is completed, implementations in high-security contexts should treat this NIP as `draft` and conduct their own review.
+
+## Cryptographic Primitives
+
+### ECDH
+
+`secp256k1_ecdh(priv, pub)` is scalar multiplication of point `pub` by scalar `priv`, as defined in [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki). The result is the shared point `P`; this function returns the 32-byte x-coordinate of `P` using BIP-340's `bytes(P)` encoding. The result is **not hashed**.
+
+⚠️ **Implementation warning**: many secp256k1 libraries (including some bindings to libsecp256k1) hash the ECDH output with SHA-256 by default. This NIP requires the **unhashed** x-coordinate. Verify your library's behavior before shipping.
+
+Private keys MUST be validated as scalars in range `[1, secp256k1_order - 1]`. Public keys MUST be validated as valid, non-zero curve points per BIP-340.
+
+### HKDF-SHA256
+
+[RFC 5869](https://datatracker.ietf.org/doc/html/rfc5869) with SHA-256.
+
 - **Extract**: `PRK = HMAC-SHA256(salt, IKM)`. When `salt` is specified as `""` (empty string), use a zero-length byte array (not the string literal).
 - **Expand**: `OKM = HKDF-Expand(PRK, info, L)` where `info` is the UTF-8 encoding of the specified string and `L` is the output length in bytes.
 
-All byte array concatenations (`||`) are simple concatenation with no length prefixes or delimiters.
+### Operators and Notation
+
+- `||` denotes byte array concatenation with no length prefixes or delimiters.
+- `x[i:j]` where `x` is a byte array returns bytes `i` (inclusive) through `j` (exclusive).
+- `be_u32(x)` interprets the first 4 bytes of `x` as a big-endian unsigned 32-bit integer.
+
+### Constants
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `SESSION_TIMEOUT` | 120 seconds | Maximum time from QR display to session completion |
+| `STEP_TIMEOUT` | 30 seconds | Maximum time to wait for each protocol step |
+| `SAS_DIGITS` | 6 | Number of decimal digits in SAS code |
+| `SAS_MODULUS` | 1,000,000 | `10^SAS_DIGITS` |
+| `SESSION_SECRET_LEN` | 32 bytes | Length of session secret |
+| `MAX_URI_LEN` | 2048 characters | Maximum total length of the `nostrpair://` URI |
+| `MAX_PAYLOAD_LEN` | 65,400 bytes | Safe practical maximum for the `payload` field (65,535-byte NIP-44 limit minus JSON envelope overhead) |
 
 ## Test Vectors
 
@@ -435,6 +682,19 @@ transcript_hash = HKDF-SHA256(IKM=transcript, salt=session_secret, info="nostr-p
 
 Implementations MUST validate against these vectors. They can be reproduced with `sprout-pair test-vectors`.
 
+A future external vector file (`nip-ab.vectors.json`) with a sha256 checksum committed in this document is planned. When published, it will include categorized intermediate-value vectors for each derivation step and negative/invalid test cases. The sha256 checksum will be the canonical commitment; implementations MUST verify against the checksum before using the file.
+
+Implementations MUST also test rejection of invalid inputs. Examples of what to test:
+
+- `session_secret` with wrong length (< 32 or > 32 bytes) → MUST be rejected
+- `session_secret` that is all zeros → MUST be rejected
+- `offer` with `session_id` that does not match the derived value → MUST be silently discarded
+- `sas-confirm` with a mismatched `transcript_hash` → MUST trigger `abort` with reason `"sas_mismatch"`
+- NIP-44 ciphertext with version byte ≠ `0x02` → MUST be silently discarded
+- `content` field outside the 132–87472 character range → MUST be silently discarded
+- decrypted plaintext JSON exceeding 65,535 bytes → MUST be silently discarded
+- Duplicate event `id` within a session → MUST be silently discarded
+
 ## Implementation Notes
 
 ### Choosing a Pairing Relay
@@ -461,9 +721,19 @@ After importing a key, clients MUST store it in platform-secure storage:
 
 If _source_ receives an `offer` with an invalid `session_id`, it MUST silently ignore it and continue waiting for a valid offer (up to the session timeout).
 
-If either device receives an event with an unexpected `type` for the current state, it SHOULD send an `abort` with reason `"protocol_error"` and terminate the session.
+If either device receives an event with an unexpected `type` for the current state, it MUST silently discard it (see §Event Validation, item 7 — out-of-order messages). Implementations MUST NOT send `abort` in response to an out-of-order message.
 
 If either device does not receive the expected next message within a reasonable time (recommended: 30 seconds per step), it SHOULD send an `abort` with reason `"timeout"` and terminate the session.
+
+### Concurrent Sessions
+
+**Source**: A _source_ implementation MAY run multiple pairing sessions simultaneously. Each session MUST use a distinct ephemeral keypair and session secret, and therefore a distinct QR code. Sessions are fully independent — an event addressed to one session's ephemeral pubkey cannot affect another session. Implementations SHOULD limit the number of concurrent active sessions to a small number (recommended: 3) to prevent resource exhaustion.
+
+**Target**: A _target_ implementation MAY scan multiple QR codes and run multiple pairing sessions simultaneously. Each session is independent. However, importing the same payload type (e.g., `nsec`) from two concurrent sessions is application-defined behavior; implementations SHOULD prompt the user to confirm each import individually.
+
+**Session isolation**: Because each session uses independent ephemeral keypairs, there is no cryptographic interaction between concurrent sessions. A compromised or malicious session cannot affect the security of other sessions.
+
+**UX recommendation**: Implementations SHOULD display each active session distinctly (e.g., by SAS code) so the user can match the correct QR code to the correct device.
 
 ## Relation to Other NIPs
 

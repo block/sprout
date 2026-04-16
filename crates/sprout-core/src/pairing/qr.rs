@@ -6,17 +6,18 @@
 //! - The source device's ephemeral public key (hex, 64 chars)
 //! - A 32-byte session secret shared between both devices (hex, 64 chars)
 //! - One or more relay URLs where the pairing messages will be exchanged
+//! - A protocol version (`v=1`)
 //!
 //! # URI format
 //!
 //! ```text
-//! nostrpair://<source_pubkey_hex>?secret=<session_secret_hex>&relay=<url-encoded-relay>
+//! nostrpair://<source_pubkey_hex>?secret=<session_secret_hex>&relay=<url-encoded-relay>&v=1
 //! ```
 //!
 //! Multiple relays are represented as repeated `relay=` parameters:
 //!
 //! ```text
-//! nostrpair://abc123...?secret=def456...&relay=wss%3A%2F%2Frelay1.example.com&relay=wss%3A%2F%2Frelay2.example.com
+//! nostrpair://abc123...?secret=def456...&relay=wss%3A%2F%2Frelay1.example.com&relay=wss%3A%2F%2Frelay2.example.com&v=1
 //! ```
 //!
 //! All characters unsafe in a query-parameter value (`:`, `/`, `?`, `#`,
@@ -41,6 +42,11 @@ pub struct QrPayload {
     pub session_secret: [u8; 32],
     /// One or more relay URLs where pairing messages will be exchanged.
     pub relays: Vec<String>,
+    /// Protocol version. Always `1` for this implementation.
+    ///
+    /// Encoded as `v=1` in the URI. Absent in legacy URIs; defaults to `1`
+    /// on decode for backward compatibility. Values > 1 are rejected.
+    pub version: u32,
 }
 
 /// Zero the session secret on drop using `zeroize` to prevent dead-store
@@ -69,6 +75,7 @@ impl Drop for QrPayload {
 ///     source_pubkey: keys.public_key(),
 ///     session_secret: [0u8; 32],
 ///     relays: vec!["wss://relay.example.com".to_string()],
+///     version: 1,
 /// };
 /// let uri = encode_qr(&payload);
 /// assert!(uri.starts_with("nostrpair://"));
@@ -83,6 +90,8 @@ pub fn encode_qr(payload: &QrPayload) -> String {
         uri.push_str("&relay=");
         uri.push_str(&url_encode(relay));
     }
+
+    uri.push_str("&v=1");
 
     uri
 }
@@ -99,6 +108,14 @@ pub fn encode_qr(payload: &QrPayload) -> String {
 /// - The `secret` parameter is missing or not a valid 64-char hex string
 /// - No `relay` parameters are present
 pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
+    // NIP-AB §QR Code Format: URI length MUST NOT exceed 2048 characters.
+    if uri.len() > 2048 {
+        return Err(PairingError::InvalidQr(format!(
+            "URI exceeds 2048-character limit ({} chars)",
+            uri.len()
+        )));
+    }
+
     // Split scheme from the rest.
     let rest = uri
         .strip_prefix("nostrpair://")
@@ -127,15 +144,25 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
     // Parse query parameters.
     let mut secret_hex: Option<&str> = None;
     let mut relays: Vec<String> = Vec::new();
+    let mut version: Option<u32> = None;
 
     for pair in query.split('&') {
         if let Some((key, value)) = pair.split_once('=') {
             match key {
                 "secret" => secret_hex = Some(value),
                 "relay" => relays.push(url_decode(value)),
+                "v" => version = value.parse::<u32>().ok(),
                 _ => {} // ignore unknown params
             }
         }
+    }
+
+    // Default to version 1 if absent (backward compat); reject unsupported versions.
+    let version = version.unwrap_or(1);
+    if version != 1 {
+        return Err(PairingError::InvalidQr(format!(
+            "unsupported protocol version {version}, expected 1"
+        )));
     }
 
     // Validate secret: must be exactly 64 hex chars.
@@ -177,6 +204,7 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
         source_pubkey,
         session_secret,
         relays,
+        version,
     })
 }
 
@@ -213,6 +241,7 @@ mod tests {
             source_pubkey: keys.public_key(),
             session_secret: [0xab; 32],
             relays,
+            version: 1,
         }
     }
 
@@ -456,5 +485,40 @@ mod tests {
         assert!(!encoded.contains('#'), "# must be encoded");
         let decoded = url_decode(&encoded);
         assert_eq!(decoded, "wss://relay.com/path?a=1&b=2#frag");
+    }
+
+    // Version field tests
+
+    #[test]
+    fn round_trip_with_version() {
+        let original = make_payload(vec!["wss://relay.example.com".to_string()]);
+        let uri = encode_qr(&original);
+        assert!(uri.contains("&v=1"), "URI must contain &v=1: {uri}");
+        let decoded = decode_qr(&uri).expect("decode should succeed");
+        assert_eq!(decoded.version, 1);
+        assert_eq!(original.source_pubkey, decoded.source_pubkey);
+        assert_eq!(original.session_secret, decoded.session_secret);
+        assert_eq!(original.relays, decoded.relays);
+    }
+
+    #[test]
+    fn reject_unsupported_version() {
+        let payload = make_payload(vec!["wss://relay.example.com".to_string()]);
+        // Build a URI with v=2 manually.
+        let uri = encode_qr(&payload).replace("&v=1", "&v=2");
+        let err = decode_qr(&uri).unwrap_err();
+        assert!(
+            matches!(err, PairingError::InvalidQr(ref msg) if msg.contains("unsupported protocol version 2")),
+            "expected unsupported version error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn default_version_when_absent() {
+        // Strip the &v=1 from a well-formed URI to simulate a legacy QR code.
+        let payload = make_payload(vec!["wss://relay.example.com".to_string()]);
+        let uri = encode_qr(&payload).replace("&v=1", "");
+        let decoded = decode_qr(&uri).expect("legacy URI without v= should decode as version 1");
+        assert_eq!(decoded.version, 1, "missing v= should default to version 1");
     }
 }
