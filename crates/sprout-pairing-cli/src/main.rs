@@ -148,16 +148,17 @@ async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliEr
         .send(Message::Text(sub_msg.to_string().into()))
         .await?;
 
-    // Wait for a valid offer event (skip junk; exit on peer abort).
+    // Wait for EOSE to confirm the subscription is registered on the relay
+    // before the target can race us with an offer we'd miss.
+    wait_for_eose(&mut read, "pair", Duration::from_secs(10)).await?;
+
+    // Wait for a valid offer event (silently discard junk per NIP-AB §Event Validation).
     let sas = loop {
         let event = wait_for_event(&mut read, "pair", Duration::from_secs(120)).await?;
         check_for_abort(&mut session, &event)?;
         match session.handle_offer(&event) {
             Ok(sas) => break sas,
-            Err(e) => {
-                eprintln!("(ignoring invalid event: {e})");
-                continue;
-            }
+            Err(_) => continue, // silently discard per NIP-AB §Event Validation item 7
         }
     };
     println!("Offer received from target.");
@@ -191,10 +192,7 @@ async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliEr
         check_for_abort(&mut session, &event)?;
         match session.handle_complete(&event) {
             Ok(()) => break,
-            Err(e) => {
-                eprintln!("(ignoring invalid event: {e})");
-                continue;
-            }
+            Err(_) => continue, // silently discard per NIP-AB §Event Validation item 7
         }
     }
 
@@ -273,15 +271,19 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
         match session.handle_sas_confirm(&event) {
             Ok(_) => break,
             Err(PairingError::TranscriptMismatch) => {
+                // NIP-AB §Step 3: target MUST send abort with reason
+                // "sas_mismatch" on transcript hash mismatch.
+                if let Ok(Some(abort_event)) =
+                    session.abort(sprout_core::pairing::types::AbortReason::SasMismatch)
+                {
+                    let _ = publish_event(&mut write, &abort_event).await;
+                }
                 return Err(CliError::Other(
                     "SECURITY: transcript hash mismatch — possible MITM attack. Session aborted."
                         .into(),
                 ));
             }
-            Err(e) => {
-                eprintln!("(ignoring invalid event: {e})");
-                continue;
-            }
+            Err(_) => continue, // silently discard per NIP-AB §Event Validation item 7
         }
     }
 
@@ -300,16 +302,13 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
     session.confirm_target_sas()?;
     println!("SAS confirmed. Waiting for payload...");
 
-    // Wait for a valid payload event (skip junk; exit on peer abort).
+    // Wait for a valid payload event (silently discard junk; exit on peer abort).
     let (payload_type, payload) = loop {
         let event = wait_for_event(&mut read, "pair", Duration::from_secs(60)).await?;
         check_for_abort(&mut session, &event)?;
         match session.handle_payload(&event) {
             Ok(result) => break result,
-            Err(e) => {
-                eprintln!("(ignoring invalid event: {e})");
-                continue;
-            }
+            Err(_) => continue, // silently discard per NIP-AB §Event Validation item 7
         }
     };
 

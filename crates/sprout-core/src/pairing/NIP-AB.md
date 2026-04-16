@@ -97,7 +97,7 @@ nostrpair://<source_ephemeral_pubkey_hex>?secret=<session_secret_hex>&relay=<wss
 
 - `source_ephemeral_pubkey_hex`: 64-character lowercase hex-encoded 32-byte x-only public key (as used throughout Nostr per [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki))
 - `session_secret_hex`: 64-character lowercase hex-encoded 32 random bytes
-- `relay`: percent-encoded WebSocket URL of the pairing relay. SHOULD appear at least once. MAY appear multiple times for redundancy. The QR URI SHOULD include 1–3 relay URLs. More than 3 relays increases QR code size and connection overhead without proportional benefit.
+- `relay`: percent-encoded WebSocket URL of the pairing relay. MUST appear at least once. MAY appear multiple times (see §Multi-Relay Considerations).
 - `v`: protocol version integer (see §Versions). Defaults to `1` if absent.
 
 The total URI length MUST NOT exceed 2048 characters. Reject any URI that exceeds this limit (prevents DoS via QR scanning).
@@ -108,15 +108,7 @@ Implementations MUST validate the QR URI before processing:
 - `relay` MUST be a valid WebSocket URL beginning with `wss://` or `ws://`. Reject if not.
 - Implementations MUST NOT process a `nostrpair://` URI that fails any of the above checks.
 
-When multiple `relay` parameters are specified:
-
-**Source behavior**: _source_ MUST subscribe to **all** listed relays simultaneously. This ensures _target_ can reach _source_ regardless of which relay _target_ connects to first. Subscribing to all relays has no privacy cost since all events use ephemeral pubkeys.
-
-**Target behavior**: _target_ SHOULD attempt to connect to listed relays in parallel. _target_ SHOULD use the first relay that both (a) accepts the WebSocket connection and (b) successfully delivers the subscription (confirmed by receiving an `EOSE` or the first event). If a relay connection fails after the session is underway, _target_ MAY attempt the next relay in the list; however, _target_ MUST NOT construct a new `offer` event. If _target_ needs to reach _source_ via a different relay, _target_ SHOULD re-publish the **same signed `offer` event** (identical bytes, same event ID) to the new relay. This is safe because the event is already signed and addressed to `source_ephemeral_pubkey`; _source_ will deduplicate by event ID if it receives the offer on multiple relays.
-
-**Cross-relay delivery**: Because _source_ subscribes to all listed relays, events published by _target_ to any listed relay will be received by _source_. The protocol is relay-agnostic: _source_ and _target_ do not need to be connected to the same relay simultaneously.
-
-**No relay discovery fallback**: If all listed relays fail, the session MUST be aborted. There is no relay discovery mechanism; the QR code is the authoritative relay list.
+Both _source_ and _target_ connect to the relay specified in the QR URI. If the relay is unreachable, the session MUST be aborted. There is no relay discovery mechanism; the QR code is the authoritative relay list.
 
 The QR code MUST NOT contain any private key material. If intercepted, an attacker obtains only an ephemeral public key and a session secret, which are useless without completing the handshake within the session timeout.
 
@@ -734,6 +726,20 @@ If either device does not receive the expected next message within a reasonable 
 **Session isolation**: Because each session uses independent ephemeral keypairs, there is no cryptographic interaction between concurrent sessions. A compromised or malicious session cannot affect the security of other sessions.
 
 **UX recommendation**: Implementations SHOULD display each active session distinctly (e.g., by SAS code) so the user can match the correct QR code to the correct device.
+
+## Multi-Relay Considerations
+
+The QR URI format supports multiple `relay` parameters for redundancy. Multi-relay support is OPTIONAL — implementations that use a single relay are fully conformant. The guidance below is for implementations that choose to support multiple relays.
+
+**Recommended relay count**: 1–3 relay URLs. More than 3 increases QR code size and connection overhead without proportional benefit.
+
+**Source behavior**: _source_ SHOULD subscribe to **all** listed relays simultaneously. This ensures _target_ can reach _source_ regardless of which relay _target_ connects to first. Subscribing to all relays has no privacy cost since all events use ephemeral pubkeys.
+
+**Target behavior**: _target_ SHOULD attempt to connect to listed relays in parallel and use the first relay that both (a) accepts the WebSocket connection and (b) successfully delivers the subscription (confirmed by receiving an `EOSE` or the first event). If a relay connection fails after the session is underway, _target_ MAY attempt the next relay in the list; however, _target_ MUST NOT construct a new `offer` event. If _target_ needs to reach _source_ via a different relay, _target_ SHOULD re-publish the **same signed `offer` event** (identical bytes, same event ID) to the new relay. This is safe because the event is already signed and addressed to `source_ephemeral_pubkey`; _source_ will deduplicate by event ID if it receives the offer on multiple relays.
+
+**Cross-relay delivery**: Because _source_ subscribes to all listed relays, events published by _target_ to any listed relay will be received by _source_. The protocol is relay-agnostic: _source_ and _target_ do not need to be connected to the same relay simultaneously.
+
+**Fallback**: If all listed relays fail, the session MUST be aborted. There is no relay discovery mechanism; the QR code is the authoritative relay list.
 
 ## Relation to Other NIPs
 

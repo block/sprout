@@ -27,6 +27,7 @@
 //! handle_complete(&event)              → complete_event
 //! ```
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use nostr::nips::nip44;
@@ -98,6 +99,9 @@ pub struct PairingSession {
     sas_code: Option<u32>,
     /// Raw SAS input bytes (needed for transcript hash).
     sas_input: Option<[u8; 32]>,
+    /// Event IDs already processed in this session (NIP-AB §Duplicate Event Handling).
+    /// Duplicates are silently discarded to handle relay re-delivery.
+    processed_ids: HashSet<[u8; 32]>,
     /// When the session was created.
     created_at: Instant,
     /// Maximum session lifetime.
@@ -133,6 +137,7 @@ impl PairingSession {
             session_id,
             sas_code: None,
             sas_input: None,
+            processed_ids: HashSet::new(),
             created_at: Instant::now(),
             timeout: DEFAULT_TIMEOUT,
         };
@@ -188,6 +193,7 @@ impl PairingSession {
         self.sas_code = Some(code);
         self.sas_input = Some(sas_input);
         self.state = SessionState::Confirming;
+        self.record_event(event);
 
         Ok(format_sas(code))
     }
@@ -258,10 +264,14 @@ impl PairingSession {
         match msg {
             PairingMessage::Complete { success: true } => {
                 self.state = SessionState::Completed;
+                self.record_event(event);
                 Ok(())
             }
             PairingMessage::Complete { success: false } => {
                 self.state = SessionState::Aborted;
+                // Not recorded: the message was received but not "successfully
+                // processed" per NIP-AB §Duplicate Event Handling. The session
+                // is terminal (Aborted) so no future handler can accept events.
                 Err(PairingError::UnexpectedMessage {
                     expected: "complete(success=true)".into(),
                     got: "complete(success=false)".into(),
@@ -298,6 +308,7 @@ impl PairingSession {
             session_id,
             sas_code: Some(code),
             sas_input: Some(sas_input),
+            processed_ids: HashSet::new(),
             created_at: Instant::now(),
             timeout: DEFAULT_TIMEOUT,
         };
@@ -359,6 +370,7 @@ impl PairingSession {
         }
 
         self.state = SessionState::AwaitingConfirmation;
+        self.record_event(event);
         let code = self.sas_code.ok_or(PairingError::SasMismatch)?;
         Ok(format_sas(code))
     }
@@ -393,6 +405,7 @@ impl PairingSession {
                 payload,
             } => {
                 self.state = SessionState::PayloadExchanged;
+                self.record_event(event);
                 Ok((payload_type, Zeroizing::new(payload)))
             }
             other => Err(unexpected("payload", &other)),
@@ -458,6 +471,7 @@ impl PairingSession {
         match msg {
             PairingMessage::Abort { reason } => {
                 self.state = SessionState::Aborted;
+                self.record_event(event);
                 Ok(reason)
             }
             other => Err(unexpected("abort", &other)),
@@ -516,6 +530,19 @@ impl PairingSession {
             session_secret: self.session_secret,
             relays: self.relay_urls.clone(),
         }))
+    }
+}
+
+// ── Test-only accessors ───────────────────────────────────────────────────────
+
+#[cfg(test)]
+impl PairingSession {
+    /// Returns `true` if the given event ID has been recorded as processed.
+    ///
+    /// Test-only: allows assertions about the dedup set without exposing
+    /// `processed_ids` through the public API.
+    fn has_processed(&self, event: &Event) -> bool {
+        self.processed_ids.contains(&event.id.to_bytes())
     }
 }
 
@@ -579,12 +606,27 @@ impl PairingSession {
         Ok(result?)
     }
 
-    /// Validate basic event properties: kind and p-tag.
+    /// Validate basic event properties: kind, p-tag, and duplicate ID.
+    ///
+    /// NIP-AB §Duplicate Event Handling: silently discard events whose `id`
+    /// has already been processed in this session. The set is bounded by the
+    /// session lifetime (120 s max, ~6 events in a normal flow).
+    ///
+    /// This method only *checks* for duplicates — it does not record the ID.
+    /// Call [`record_event`] after the message is fully accepted.
     fn validate_event_basics(&self, event: &Event) -> Result<(), PairingError> {
         // NIP-01 §: Validate the event id and sig.
         event
             .verify()
             .map_err(|e| PairingError::InvalidPubkey(format!("event verification failed: {e}")))?;
+
+        // Duplicate event ID check (NIP-AB §Duplicate Event Handling).
+        if self.processed_ids.contains(&event.id.to_bytes()) {
+            return Err(PairingError::UnexpectedMessage {
+                expected: "new event".into(),
+                got: "duplicate event id".into(),
+            });
+        }
 
         if event.kind != Kind::Custom(PAIRING_KIND) {
             return Err(PairingError::UnexpectedMessage {
@@ -609,6 +651,16 @@ impl PairingSession {
         }
 
         Ok(())
+    }
+
+    /// Record an event ID as successfully processed.
+    ///
+    /// Called by each handler only after the message has been fully validated,
+    /// decrypted, type-checked, and accepted. This ensures that speculative
+    /// probes (e.g., `handle_abort` used to detect aborts) do not poison the
+    /// duplicate set for subsequent handlers.
+    fn record_event(&mut self, event: &Event) {
+        self.processed_ids.insert(event.id.to_bytes());
     }
 
     /// Validate that the event is from the expected peer.
@@ -1067,5 +1119,181 @@ mod tests {
         // We can't directly inspect after drop, but we verify the Drop impl
         // compiles and runs without panic.
         drop(session);
+    }
+
+    /// Duplicate event IDs are silently discarded (NIP-AB §Duplicate Event Handling).
+    #[test]
+    fn duplicate_event_id_is_rejected() {
+        let (mut source, qr) = PairingSession::new_source("wss://relay.test".into());
+        let (mut target, offer_event) = PairingSession::new_target(&qr).expect("target");
+
+        // First offer succeeds.
+        let _ = source.handle_offer(&offer_event).expect("first offer");
+
+        // Run through the rest of the protocol so we can test duplicate
+        // complete events on the source side.
+        let sas_confirm = source.confirm_sas().expect("confirm");
+        let _ = target
+            .handle_sas_confirm(&sas_confirm)
+            .expect("sas-confirm");
+        target.confirm_target_sas().expect("target confirm");
+        let payload = source
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1test".into()))
+            .expect("payload");
+        let _ = target.handle_payload(&payload).expect("handle payload");
+        let complete_event = target.send_complete().expect("complete");
+
+        // First complete succeeds.
+        source
+            .handle_complete(&complete_event)
+            .expect("first complete");
+
+        // Second delivery of the same complete event (same event ID) — must
+        // be rejected because the state has already advanced to Completed.
+        let result = source.handle_complete(&complete_event);
+        assert!(result.is_err(), "duplicate event ID must be rejected");
+    }
+
+    /// Speculative `handle_abort` on a non-abort event must NOT poison the
+    /// duplicate set — the real handler must still accept the event.
+    ///
+    /// This mirrors the CLI's `check_for_abort()` pattern: every inbound
+    /// event is first probed via `handle_abort()`, which fails for non-abort
+    /// messages. The subsequent real handler must still see the event as new.
+    #[test]
+    fn speculative_abort_does_not_poison_dedup() {
+        let (mut source, qr) = PairingSession::new_source("wss://relay.test".into());
+        let (mut target, offer_event) = PairingSession::new_target(&qr).expect("target");
+
+        // Source accepts the offer (learns peer).
+        let _ = source.handle_offer(&offer_event).expect("offer");
+        let sas_confirm = source.confirm_sas().expect("confirm");
+
+        // Target: speculative abort probe on the sas-confirm event.
+        // This must fail (it's not an abort) WITHOUT recording the event ID.
+        let probe = target.handle_abort(&sas_confirm);
+        assert!(probe.is_err(), "sas-confirm is not an abort");
+
+        // Target: real handler must still accept the same event.
+        let sas = target
+            .handle_sas_confirm(&sas_confirm)
+            .expect("sas-confirm must succeed after speculative abort probe");
+        assert_eq!(sas.len(), 6);
+    }
+
+    /// A wrong-type message that passes validation but fails at type-dispatch
+    /// must NOT be recorded, so the event ID remains available for future use.
+    ///
+    /// Scenario: target is in `Transferring` (waiting for payload). Source
+    /// accidentally sends a `complete` message instead. The target's
+    /// `handle_payload` rejects it (wrong type), but the event ID must not
+    /// be poisoned — the session should still accept the real payload.
+    #[test]
+    fn wrong_type_message_not_recorded() {
+        let (mut source, qr) = PairingSession::new_source("wss://relay.test".into());
+        let (mut target, offer_event) = PairingSession::new_target(&qr).expect("target");
+
+        // Drive to Transferring on both sides.
+        let _ = source.handle_offer(&offer_event).expect("offer");
+        let sas_confirm = source.confirm_sas().expect("confirm");
+        let _ = target
+            .handle_sas_confirm(&sas_confirm)
+            .expect("sas-confirm");
+        target.confirm_target_sas().expect("target confirm");
+
+        // Source sends the real payload (we'll use it later).
+        let payload_event = source
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1test".into()))
+            .expect("payload");
+
+        // Build a wrong-type event: a `complete` message from source to target.
+        // This passes kind/p-tag/peer validation but fails at type-dispatch
+        // inside handle_payload (expects "payload", gets "complete").
+        let wrong_type_msg = PairingMessage::Complete { success: true };
+        let wrong_plaintext = serde_json::to_string(&wrong_type_msg).unwrap();
+        let wrong_encrypted = nip44::encrypt(
+            source.keys.secret_key(),
+            &target.pubkey(),
+            &wrong_plaintext,
+            nip44::Version::V2,
+        )
+        .unwrap();
+        let wrong_event = EventBuilder::new(
+            Kind::Custom(PAIRING_KIND),
+            &wrong_encrypted,
+            [Tag::public_key(target.pubkey())],
+        )
+        .sign_with_keys(&source.keys)
+        .unwrap();
+
+        // Target tries to handle as payload — fails (wrong type).
+        let result = target.handle_payload(&wrong_event);
+        assert!(result.is_err(), "wrong-type message must be rejected");
+        assert_eq!(
+            target.state(),
+            SessionState::Transferring,
+            "state must not advance on wrong-type"
+        );
+
+        // The real payload must still be accepted (its ID was never recorded).
+        let (pt, data) = target
+            .handle_payload(&payload_event)
+            .expect("real payload must succeed after wrong-type rejection");
+        assert_eq!(pt, PayloadType::Nsec);
+        assert_eq!(*data, "nsec1test");
+    }
+
+    /// `complete(success: false)` transitions to Aborted and does NOT
+    /// record the event ID (the message was not "successfully processed"
+    /// per NIP-AB §Duplicate Event Handling).
+    #[test]
+    fn complete_failure_aborts_without_recording() {
+        let (mut source, qr) = PairingSession::new_source("wss://relay.test".into());
+        let (mut target, offer_event) = PairingSession::new_target(&qr).expect("target");
+
+        // Drive to PayloadExchanged on source side.
+        let _ = source.handle_offer(&offer_event).expect("offer");
+        let sas_confirm = source.confirm_sas().expect("confirm");
+        let _ = target
+            .handle_sas_confirm(&sas_confirm)
+            .expect("sas-confirm");
+        target.confirm_target_sas().expect("target confirm");
+        let payload = source
+            .send_payload(PayloadType::Nsec, Zeroizing::new("nsec1test".into()))
+            .expect("payload");
+        let _ = target.handle_payload(&payload).expect("handle payload");
+
+        // Build a complete(success: false) event from target to source.
+        let fail_msg = PairingMessage::Complete { success: false };
+        let fail_plaintext = serde_json::to_string(&fail_msg).unwrap();
+        let fail_encrypted = nip44::encrypt(
+            target.keys.secret_key(),
+            &source.pubkey(),
+            &fail_plaintext,
+            nip44::Version::V2,
+        )
+        .unwrap();
+        let fail_event = EventBuilder::new(
+            Kind::Custom(PAIRING_KIND),
+            &fail_encrypted,
+            [Tag::public_key(source.pubkey())],
+        )
+        .sign_with_keys(&target.keys)
+        .unwrap();
+
+        // Source handles complete(false) — should error and abort.
+        let result = source.handle_complete(&fail_event);
+        assert!(result.is_err(), "complete(false) must return error");
+        assert_eq!(
+            source.state(),
+            SessionState::Aborted,
+            "state must be Aborted after complete(false)"
+        );
+
+        // The failed event must NOT be in the processed set.
+        assert!(
+            !source.has_processed(&fail_event),
+            "complete(false) must not record the event ID"
+        );
     }
 }

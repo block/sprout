@@ -131,10 +131,10 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
         }
     };
 
-    // Validate pubkey: must be exactly 64 hex chars.
-    if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+    // Validate pubkey: must be exactly 64 lowercase hex chars (NIP-AB §QR Code Format).
+    if pubkey_hex.len() != 64 || !pubkey_hex.chars().all(is_lowercase_hex) {
         return Err(PairingError::InvalidQr(format!(
-            "pubkey must be 64 hex chars, got {:?}",
+            "pubkey must be 64 lowercase hex chars, got {:?}",
             pubkey_hex
         )));
     }
@@ -169,9 +169,9 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
     let secret_str = secret_hex
         .ok_or_else(|| PairingError::InvalidQr("missing 'secret' query parameter".into()))?;
 
-    if secret_str.len() != 64 || !secret_str.chars().all(|c| c.is_ascii_hexdigit()) {
+    if secret_str.len() != 64 || !secret_str.chars().all(is_lowercase_hex) {
         return Err(PairingError::InvalidQr(format!(
-            "secret must be 64 hex chars, got {:?}",
+            "secret must be 64 lowercase hex chars, got {:?}",
             secret_str
         )));
     }
@@ -180,6 +180,13 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
     let session_secret: [u8; 32] = secret_bytes
         .try_into()
         .map_err(|_| PairingError::InvalidQr("secret must be exactly 32 bytes".into()))?;
+
+    // NIP-AB §Test Vectors: all-zeros session_secret MUST be rejected.
+    if session_secret == [0u8; 32] {
+        return Err(PairingError::InvalidQr(
+            "session_secret must not be all zeros".into(),
+        ));
+    }
 
     // Must have at least one relay.
     if relays.is_empty() {
@@ -226,6 +233,11 @@ fn url_encode(s: &str) -> String {
 /// shouldn't appear in valid relay URLs, but we handle it safely).
 fn url_decode(s: &str) -> String {
     percent_decode_str(s).decode_utf8_lossy().into_owned()
+}
+
+/// NIP-AB §QR Code Format requires lowercase hex only (`0-9`, `a-f`).
+fn is_lowercase_hex(c: char) -> bool {
+    c.is_ascii_digit() || ('a'..='f').contains(&c)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -520,5 +532,61 @@ mod tests {
         let uri = encode_qr(&payload).replace("&v=1", "");
         let decoded = decode_qr(&uri).expect("legacy URI without v= should decode as version 1");
         assert_eq!(decoded.version, 1, "missing v= should default to version 1");
+    }
+
+    // ── All-zeros session_secret rejection ────────────────────────────────
+
+    #[test]
+    fn reject_all_zeros_session_secret() {
+        let keys = Keys::generate();
+        let pubkey = keys.public_key().to_hex();
+        let zero_secret = "00".repeat(32); // 64 hex chars, all zeros
+        let relay_encoded = url_encode("wss://relay.example.com");
+        let uri = format!(
+            "nostrpair://{}?secret={}&relay={}&v=1",
+            pubkey, zero_secret, relay_encoded
+        );
+        let err = decode_qr(&uri).unwrap_err();
+        assert!(
+            matches!(err, PairingError::InvalidQr(ref msg) if msg.contains("all zeros")),
+            "expected all-zeros rejection, got {err:?}"
+        );
+    }
+
+    // ── Lowercase hex enforcement ─────────────────────────────────────────
+
+    #[test]
+    fn reject_uppercase_hex_in_pubkey() {
+        let keys = Keys::generate();
+        // Force uppercase in the pubkey hex
+        let pubkey_upper = keys.public_key().to_hex().to_uppercase();
+        let secret = hex::encode([0xab; 32]);
+        let relay_encoded = url_encode("wss://relay.example.com");
+        let uri = format!(
+            "nostrpair://{}?secret={}&relay={}&v=1",
+            pubkey_upper, secret, relay_encoded
+        );
+        let err = decode_qr(&uri).unwrap_err();
+        assert!(
+            matches!(err, PairingError::InvalidQr(ref msg) if msg.contains("lowercase")),
+            "expected lowercase rejection for pubkey, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn reject_uppercase_hex_in_secret() {
+        let keys = Keys::generate();
+        let pubkey = keys.public_key().to_hex();
+        let secret_upper = hex::encode([0xab; 32]).to_uppercase();
+        let relay_encoded = url_encode("wss://relay.example.com");
+        let uri = format!(
+            "nostrpair://{}?secret={}&relay={}&v=1",
+            pubkey, secret_upper, relay_encoded
+        );
+        let err = decode_qr(&uri).unwrap_err();
+        assert!(
+            matches!(err, PairingError::InvalidQr(ref msg) if msg.contains("lowercase")),
+            "expected lowercase rejection for secret, got {err:?}"
+        );
     }
 }
