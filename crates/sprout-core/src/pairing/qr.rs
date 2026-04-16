@@ -195,13 +195,23 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
         ));
     }
 
-    // Validate relay URL schemes — only WebSocket schemes are acceptable.
-    // Accepting arbitrary schemes would let a malicious QR induce outbound
-    // connections to attacker-chosen hosts (SSRF / transport downgrade).
+    // Validate relay URLs — parse fully and require WebSocket scheme + host.
+    // Prefix-matching alone would accept malformed URLs that crash downstream.
     for relay in &relays {
-        if !relay.starts_with("wss://") && !relay.starts_with("ws://") {
+        let parsed = url::Url::parse(relay)
+            .map_err(|e| PairingError::InvalidQr(format!("invalid relay URL {:?}: {e}", relay)))?;
+        match parsed.scheme() {
+            "wss" | "ws" => {}
+            other => {
+                return Err(PairingError::InvalidQr(format!(
+                    "relay URL must use wss:// or ws:// scheme, got {:?}",
+                    other
+                )));
+            }
+        }
+        if parsed.host().is_none() {
             return Err(PairingError::InvalidQr(format!(
-                "relay URL must use wss:// or ws:// scheme, got {:?}",
+                "relay URL has no host: {:?}",
                 relay
             )));
         }

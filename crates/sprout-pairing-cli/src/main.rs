@@ -187,11 +187,19 @@ async fn cmd_source(relay_url: String, nsec: Option<String>) -> Result<(), CliEr
     publish_event(&mut write, &payload_event).await?;
 
     // Wait for a valid complete event (skip junk; exit on peer abort).
+    // Surface complete(success=false) explicitly instead of swallowing it.
     loop {
         let event = wait_for_event(&mut read, "pair", Duration::from_secs(60)).await?;
         check_for_abort(&mut session, &event)?;
         match session.handle_complete(&event) {
             Ok(()) => break,
+            Err(PairingError::UnexpectedMessage { ref got, .. })
+                if got.contains("success=false") =>
+            {
+                return Err(CliError::Other(
+                    "target reported failure importing the key — check the other device".into(),
+                ));
+            }
             Err(_) => continue, // silently discard per NIP-AB §Event Validation item 7
         }
     }

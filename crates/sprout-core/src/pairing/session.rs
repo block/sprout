@@ -544,6 +544,11 @@ impl PairingSession {
     fn has_processed(&self, event: &Event) -> bool {
         self.processed_ids.contains(&event.id.to_bytes())
     }
+
+    /// Override the session timeout for testing.
+    fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -594,12 +599,34 @@ impl PairingSession {
     }
 
     /// Decrypt and parse a NIP-44 encrypted pairing message from an event.
+    ///
+    /// NIP-AB §Event Validation: `content` MUST be a valid NIP-44 v2 payload
+    /// (base64, 132–87472 characters). Reject before attempting decryption.
     fn decrypt_message(&self, event: &Event) -> Result<PairingMessage, PairingError> {
+        // NIP-AB §Event Validation step 5: reject content outside NIP-44 size range.
+        let content_len = event.content.len();
+        if !(132..=87472).contains(&content_len) {
+            return Err(PairingError::UnexpectedMessage {
+                expected: "NIP-44 content (132–87472 chars)".into(),
+                got: format!("{content_len} chars"),
+            });
+        }
+
         let mut decrypted = nip44::decrypt(
             self.keys.secret_key(),
             &event.pubkey,
             event.content.as_str(),
         )?;
+
+        // NIP-AB §Payload: decrypted plaintext MUST NOT exceed 65,535 bytes.
+        if decrypted.len() > 65_535 {
+            decrypted.zeroize();
+            return Err(PairingError::UnexpectedMessage {
+                expected: "plaintext ≤ 65535 bytes".into(),
+                got: format!("{} bytes", decrypted.len()),
+            });
+        }
+
         // Defer `?` so decrypted plaintext is zeroized on both success and parse failure.
         let result = serde_json::from_str(&decrypted);
         decrypted.zeroize();
@@ -1119,6 +1146,24 @@ mod tests {
         // We can't directly inspect after drop, but we verify the Drop impl
         // compiles and runs without panic.
         drop(session);
+    }
+
+    /// Expired sessions reject all operations with `SessionExpired`.
+    #[test]
+    fn expired_session_rejects_operations() {
+        let (mut source, qr) = PairingSession::new_source("wss://relay.test".into());
+        source.set_timeout(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(5));
+
+        assert!(source.is_expired());
+
+        // Every handler that calls check_expired should fail.
+        let (_, offer_event) = PairingSession::new_target(&qr).expect("target");
+        let result = source.handle_offer(&offer_event);
+        assert!(
+            matches!(result, Err(PairingError::SessionExpired)),
+            "expected SessionExpired, got {result:?}"
+        );
     }
 
     /// Duplicate event IDs are silently discarded (NIP-AB §Duplicate Event Handling).
