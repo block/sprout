@@ -63,6 +63,8 @@ const overrides = new Map([
   ["src-tauri/src/huddle/models.rs", 850], // model download manager for Moonshine STT + Kokoro TTS with streaming downloads + SHA-256 verification + Rust-native tar extraction + version manifest + atomic swap + hot-start signaling
   ["src-tauri/src/huddle/stt.rs", 580], // STT pipeline + PTT edge-detection flush + PTT gating (is_speech AND ptt_active) + barge-in for VAD mode + rubato resampler + earshot VAD + sherpa-onnx transcription
   ["src-tauri/src/huddle/preprocessing.rs", 670], // TTS text preprocessing pipeline + unified split_sentences + int_to_words 0-999999 + URL trailing punctuation preservation + 23 unit tests
+  ["src-tauri/src/huddle/relay_api.rs", 510], // audio relay recv task + per-peer frame counting for remote human TTS interrupt
+  ["src-tauri/src/huddle/tts.rs", 1010], // TTS pipeline + cancel/shutdown handling + apply_fades + 18 unit tests for remote interrupt mechanism
 ]);
 
 async function walkFiles(directory) {

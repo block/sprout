@@ -3,21 +3,20 @@
 //! Thin wrappers around the relay REST API for channel membership queries,
 //! human participant counting, and the audio relay WebSocket connection.
 //!
-//! Mental model:
-//!
 //! ```text
 //! connect_audio_relay(channel_id)
-//!   → WS /huddle/{id}/audio
-//!   → recv challenge → sign NIP-42 kind:22242 → send auth
-//!   → recv joined
-//!   → spawn audio_relay_task:
-//!       send loop: pcm_rx → Opus encode → WS binary frame
-//!       recv loop: WS binary frame → Opus decode (per-peer) → rodio playback
+//!   → WS /huddle/{id}/audio → challenge → NIP-42 auth → joined
+//!   → send loop: pcm_rx → Opus encode → WS binary frame
+//!   → recv loop: WS binary frame → Opus decode (per-peer) → rodio playback
 //! ```
 
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Method;
 use serde::Deserialize;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMsg};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -27,6 +26,9 @@ use crate::relay::{api_path, build_authed_request, send_json_request};
 
 /// Maximum number of agents that can be invited to a single huddle.
 pub(crate) const MAX_HUDDLE_AGENTS: usize = 20;
+
+/// Per-peer frame threshold: speech ≈ 25 frames/500ms, DTX noise ≈ 1.
+pub(crate) const REMOTE_SPEECH_THRESHOLD: u16 = 5;
 
 /// Validate that a string looks like a Nostr pubkey hex (64 hex chars).
 pub(crate) fn validate_pubkey_hex(pubkey: &str) -> Result<(), String> {
@@ -41,8 +43,7 @@ pub(crate) fn parse_channel_uuid(channel_id: &str) -> Result<Uuid, String> {
     Uuid::parse_str(channel_id).map_err(|_| format!("invalid channel UUID: {channel_id}"))
 }
 
-/// Handshake timeout: max time to wait for challenge/joined from the relay.
-/// Matches the server's AUTH_TIMEOUT so both sides give up at roughly the same time.
+/// Handshake timeout — matches the server's AUTH_TIMEOUT (5 s).
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Connect to the relay's audio WebSocket and run the Opus encode/decode pipeline.
@@ -61,17 +62,19 @@ pub(crate) async fn connect_audio_relay(
 
     let keys = state.keys.lock().map_err(|e| e.to_string())?.clone();
 
-    // Grab app handle for emitting active-speaker events to the frontend.
+    // TTS interrupt flags — recv task cancels TTS when remote humans speak.
+    let (tts_cancel, tts_active) = {
+        let hs = state.huddle()?;
+        (Arc::clone(&hs.tts_cancel), Arc::clone(&hs.tts_active))
+    };
+
     let app_handle = state.app_handle.lock().ok().and_then(|g| g.clone());
 
-    // ── Synchronous handshake: connect + auth + wait for joined ──────────────
-    // This runs BEFORE returning, so callers get a real error on failure.
     let (ws_stream, _) = connect_async(&ws_url)
         .await
         .map_err(|e| format!("audio WS connect failed: {e}"))?;
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
-    // Receive challenge (with timeout — don't hang on a half-open socket).
     let challenge = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             match ws_rx.next().await {
@@ -96,7 +99,6 @@ pub(crate) async fn connect_audio_relay(
     .map_err(|_| "timeout waiting for challenge from relay".to_string())?
     .map_err(|e: String| e)?;
 
-    // Sign NIP-42 auth event (kind:22242).
     let tags = vec![
         nostr::Tag::parse(["relay", &relay_url]).map_err(|e| format!("tag relay: {e}"))?,
         nostr::Tag::parse(["challenge", &challenge]).map_err(|e| format!("tag challenge: {e}"))?,
@@ -106,7 +108,6 @@ pub(crate) async fn connect_audio_relay(
         .sign_with_keys(&keys)
         .map_err(|e| format!("sign: {e}"))?;
 
-    // Send auth message.
     let event_json: serde_json::Value = serde_json::from_str(&event.as_json())
         .map_err(|e| format!("failed to serialize auth event: {e}"))?;
     let auth_msg = serde_json::json!({
@@ -119,7 +120,6 @@ pub(crate) async fn connect_audio_relay(
         .await
         .map_err(|e| format!("send auth: {e}"))?;
 
-    // Wait for joined — capture initial peer map (with timeout).
     let initial_peers: Vec<(u8, String)> = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             match ws_rx.next().await {
@@ -159,10 +159,8 @@ pub(crate) async fn connect_audio_relay(
     .map_err(|_| "timeout waiting for joined from relay".to_string())?
     .map_err(|e: String| e)?;
 
-    // ── Handshake succeeded — spawn background encode/decode loops ────────────
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
-
     let (pcm_tx, pcm_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(50);
 
     tokio::spawn(async move {
@@ -173,6 +171,8 @@ pub(crate) async fn connect_audio_relay(
             cancel_clone.clone(),
             app_handle.clone(),
             initial_peers,
+            tts_cancel,
+            tts_active,
         )
         .await
         {
@@ -180,13 +180,9 @@ pub(crate) async fn connect_audio_relay(
         }
 
         // Only emit the disconnect event for UNEXPECTED exits.
-        // If teardown_huddle intentionally cancelled the pipeline, the token
-        // is already cancelled when we get here — skip the event to avoid a
-        // duplicate leaveHuddle() racing with the in-progress teardown.
+        // Skip if already cancelled (teardown_huddle in progress).
         if !cancel_clone.is_cancelled() {
             cancel_clone.cancel();
-            // Notify the frontend so it can trigger leaveHuddle() — replaces
-            // the old LiveKit onDisconnected callback removed in this PR.
             if let Some(ref app) = app_handle {
                 use tauri::Emitter;
                 let _ = app.emit("huddle-audio-disconnected", ());
@@ -197,8 +193,7 @@ pub(crate) async fn connect_audio_relay(
     Ok((cancel, pcm_tx))
 }
 
-/// Background Opus encode/decode pipeline. Called after the handshake succeeds
-/// in `connect_audio_relay` with the already-split WS halves and initial peer map.
+/// Background Opus encode/decode pipeline spawned by `connect_audio_relay`.
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -209,8 +204,9 @@ async fn audio_relay_pipeline(
     cancel: CancellationToken,
     app_handle: Option<tauri::AppHandle>,
     initial_peers: Vec<(u8, String)>,
+    tts_cancel: Arc<AtomicBool>,
+    tts_active: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    // ── Setup Opus encoder (48 kHz mono, VOIP application) ───────────────────
     let mut encoder = opus::Encoder::new(48000, opus::Channels::Mono, opus::Application::Voip)
         .map_err(|e| format!("opus encoder: {e}"))?;
     encoder
@@ -220,33 +216,25 @@ async fn audio_relay_pipeline(
         .set_dtx(true)
         .map_err(|e| format!("opus dtx: {e}"))?;
 
-    // Persistent rodio player — created once, reused for all decoded packets.
     let sink_handle =
         rodio::DeviceSinkBuilder::open_default_sink().map_err(|e| format!("audio output: {e}"))?;
     let player = rodio::Player::connect_new(&sink_handle.mixer());
 
-    // Per-peer decoders: peer_id (u8) → opus::Decoder
     let decoders: std::collections::HashMap<u8, opus::Decoder> = std::collections::HashMap::new();
-
-    // Opus frame size: 20 ms at 48 kHz = 960 samples.
-    const FRAME_SAMPLES: usize = 960;
-    // Output buffer for decoded PCM (f32).
+    const FRAME_SAMPLES: usize = 960; // 20 ms at 48 kHz
     let decode_buf = vec![0f32; FRAME_SAMPLES];
 
-    // Run send/recv loops concurrently, sharing the WS sender via a tokio Mutex.
     use std::sync::Arc as StdArc;
     let ws_tx = StdArc::new(tokio::sync::Mutex::new(ws_tx));
     let ws_tx_send = StdArc::clone(&ws_tx);
     let cancel_send = cancel.clone();
 
-    // Send task: PCM → Opus encode → WS binary frame.
     let send_task = tokio::spawn(async move {
         let mut encoder = encoder; // Move encoder into task.
         const FRAME_SAMPLES: usize = 960;
         let mut out_buf = vec![0u8; 4000];
 
         loop {
-            // Poll cancel and pcm_rx together using futures_util::future::select.
             let pcm_bytes = {
                 use futures_util::future::Either;
                 let cancelled = std::pin::pin!(cancel_send.cancelled());
@@ -294,23 +282,25 @@ async fn audio_relay_pipeline(
                 }
             }
         }
-        // Send close on clean exit.
         let mut tx = ws_tx_send.lock().await;
         let _ = tx.send(WsMsg::Close(None)).await;
     });
 
-    // Recv task: WS binary frame → Opus decode → rodio playback + active speakers.
     let recv_task = tokio::spawn(async move {
         let mut decoders = decoders;
         let mut decode_buf = decode_buf;
         let cancel_recv = cancel;
         let ws_tx_recv = ws_tx;
 
-        // Active speaker tracking (client-side): map peer_index → pubkey,
-        // track which indices sent audio recently, emit Tauri event every 500ms.
+        // Active speaker tracking: peer_index → pubkey, emit every 500ms.
         let mut index_to_pubkey: std::collections::HashMap<u8, String> =
             initial_peers.into_iter().collect();
         let mut active_indices: std::collections::HashSet<u8> = std::collections::HashSet::new();
+        // Per-peer frame counter with Instant-based window (starvation-proof).
+        let mut frame_counts: std::collections::HashMap<u8, u16> = std::collections::HashMap::new();
+        let mut last_frame_reset = tokio::time::Instant::now();
+        const FRAME_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+        let mut tts_was_active = false;
         let mut speaker_tick = tokio::time::interval(std::time::Duration::from_millis(500));
         speaker_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -321,7 +311,6 @@ async fn audio_relay_pipeline(
             let tick = std::pin::pin!(speaker_tick.tick());
 
             // Three-way select: cancel, WS message, or speaker tick.
-            // Use nested select since futures_util doesn't have select3.
             let ws_or_tick = std::pin::pin!(futures_util::future::select(next, tick));
             match futures_util::future::select(cancelled, ws_or_tick).await {
                 Either::Left(_) => break, // Cancelled.
@@ -348,6 +337,15 @@ async fn audio_relay_pipeline(
                             let peer_idx = data[0];
                             let opus_bytes = &data[1..];
                             active_indices.insert(peer_idx);
+
+                            // Track TTS transitions at frame level (not decode level).
+                            let tts_now = tts_active.load(Ordering::Acquire);
+                            if tts_now && !tts_was_active {
+                                frame_counts.clear();
+                                last_frame_reset = tokio::time::Instant::now();
+                            }
+                            tts_was_active = tts_now;
+
                             let decoder = match decoders.entry(peer_idx) {
                                 std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
                                 std::collections::hash_map::Entry::Vacant(e) => {
@@ -362,6 +360,17 @@ async fn audio_relay_pipeline(
                             };
                             match decoder.decode_float(opus_bytes, &mut decode_buf, false) {
                                 Ok(n) if n > 0 => {
+                                    if tts_now {
+                                        if last_frame_reset.elapsed() >= FRAME_WINDOW {
+                                            frame_counts.clear();
+                                            last_frame_reset = tokio::time::Instant::now();
+                                        }
+                                        let count = frame_counts.entry(peer_idx).or_insert(0);
+                                        *count = count.saturating_add(1);
+                                        if *count >= REMOTE_SPEECH_THRESHOLD {
+                                            tts_cancel.store(true, Ordering::Release);
+                                        }
+                                    }
                                     use rodio::buffer::SamplesBuffer;
                                     use std::num::NonZero;
                                     let channels = NonZero::new(1u16).unwrap();
@@ -372,32 +381,40 @@ async fn audio_relay_pipeline(
                                         decode_buf[..n].to_vec(),
                                     ));
                                 }
-                                Ok(_) => {} // DTX silence.
+                                Ok(_) => {} // DTX silence — not counted.
                                 Err(e) => {
                                     eprintln!("sprout-desktop: opus decode peer {peer_idx}: {e}");
                                 }
                             }
                         }
                         WsMsg::Text(text) => {
-                            // Parse control messages to build index→pubkey map.
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                                 match v["type"].as_str() {
                                     Some("joined") => {
-                                        // Build/update the peer index → pubkey map from the peers array.
                                         if let Some(peers) = v["peers"].as_array() {
                                             for p in peers {
                                                 if let (Some(pk), Some(idx)) =
                                                     (p["pubkey"].as_str(), p["peer_index"].as_u64())
                                                 {
-                                                    index_to_pubkey
-                                                        .insert(idx as u8, pk.to_string());
+                                                    let key = idx as u8;
+                                                    if index_to_pubkey.get(&key).map(|s| s.as_str())
+                                                        != Some(pk)
+                                                    {
+                                                        decoders.remove(&key);
+                                                        frame_counts.remove(&key);
+                                                        active_indices.remove(&key);
+                                                    }
+                                                    index_to_pubkey.insert(key, pk.to_string());
                                                 }
                                             }
                                         }
                                     }
                                     Some("left") => {
                                         if let Some(idx) = v["peer_index"].as_u64() {
-                                            index_to_pubkey.remove(&(idx as u8));
+                                            let key = idx as u8;
+                                            index_to_pubkey.remove(&key);
+                                            frame_counts.remove(&key);
+                                            decoders.remove(&key);
                                         }
                                     }
                                     _ => {}
@@ -419,8 +436,6 @@ async fn audio_relay_pipeline(
     });
 
     // Wait for either task to finish, then abort the survivor.
-    // Without this, the send_task can sit forever on pcm_rx.recv() after
-    // the recv_task exits (WS closed), leaking resources.
     use futures_util::future::Either;
     match futures_util::future::select(std::pin::pin!(send_task), std::pin::pin!(recv_task)).await {
         Either::Left((_, recv_handle)) => recv_handle.abort(),
@@ -430,9 +445,7 @@ async fn audio_relay_pipeline(
     Ok(())
 }
 
-/// Fetch channel members with their roles from the relay.
-/// Returns (pubkey, role) tuples — the authoritative source for both
-/// `fetch_channel_members` (filtered by role) and `count_human_members`.
+/// Fetch channel members with roles from the relay. Returns (pubkey, role) tuples.
 pub(crate) async fn fetch_channel_members_with_roles(
     channel_id: &str,
     state: &AppState,
@@ -461,8 +474,7 @@ pub(crate) async fn fetch_channel_members_with_roles(
         .collect())
 }
 
-/// Fetch channel members from the relay. If `role_filter` is Some, only return
-/// members with that role (e.g., "bot" for agents). Returns all members if None.
+/// Fetch channel members, optionally filtered by role (e.g., "bot" for agents).
 pub(crate) async fn fetch_channel_members(
     channel_id: &str,
     role_filter: Option<&str>,
@@ -477,7 +489,6 @@ pub(crate) async fn fetch_channel_members(
 }
 
 /// Count human (non-bot) members remaining in a channel.
-/// Built on `fetch_channel_members_with_roles` — fetches all members then counts non-bots.
 pub(crate) async fn count_human_members(
     channel_id: &str,
     state: &AppState,
