@@ -183,7 +183,7 @@ export function MembersSidebar({
         data-testid="members-sidebar"
         side="right"
       >
-        <SheetHeader className="space-y-2 border-b border-border/80 bg-muted/20 px-6 py-6 text-left">
+        <SheetHeader className="relative z-10 space-y-2 bg-background/25 px-6 py-6 text-left shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
           <SheetTitle>Members</SheetTitle>
           <SheetDescription>
             People and bots in {channel.name}.

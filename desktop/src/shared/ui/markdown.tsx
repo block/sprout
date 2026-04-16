@@ -227,7 +227,7 @@ function createMarkdownComponents(
       return <p className={paragraphClassName}>{children}</p>;
     },
     pre: ({ children }) => (
-      <pre className="overflow-x-auto rounded-2xl border border-border/70 bg-muted/60 px-4 py-3 shadow-sm">
+      <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 shadow-sm">
         {children}
       </pre>
     ),

@@ -1,5 +1,7 @@
 import * as React from "react";
 
+const STICKY_DAY_TRIGGER_OFFSET_PX = 64;
+
 /**
  * Tracks the day label of the topmost visible day-divider in the scroll
  * container so a floating header can mirror it.
@@ -27,13 +29,14 @@ export function useStickyDayHeader(
     }
 
     const containerTop = container.getBoundingClientRect().top;
+    const stickyTriggerTop = containerTop + STICKY_DAY_TRIGGER_OFFSET_PX;
 
-    // Walk dividers from the end — the last one whose top is at or above the
-    // container's top edge is the "current" day.
+    // Walk dividers from the end — the last one whose top has reached the
+    // floating label's visual zone is the "current" day.
     let current: string | null = null;
     for (let i = dividers.length - 1; i >= 0; i--) {
       const rect = dividers[i].getBoundingClientRect();
-      if (rect.top <= containerTop + 4) {
+      if (rect.top <= stickyTriggerTop) {
         current = dividers[i].getAttribute("data-day-label");
         break;
       }

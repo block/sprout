@@ -95,23 +95,23 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {stickyDayLabel && !isAtBottom ? (
           <div
-            className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-1 sm:px-6"
+            className="pointer-events-none absolute inset-x-0 top-16 z-10 flex justify-center px-4 pt-1 sm:px-6"
             data-testid="message-timeline-sticky-day"
           >
-            <p className="rounded-md bg-muted/60 px-2 py-0.5 text-[11px] font-medium leading-none tracking-normal text-muted-foreground/75 shadow-sm backdrop-blur-sm">
+            <p className="rounded-md border border-border/35 bg-background/45 px-2 py-0.5 text-[10px] font-medium leading-none tracking-[0.02em] text-muted-foreground/65 backdrop-blur-sm">
               {stickyDayLabel}
             </p>
           </div>
         ) : null}
         <div
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-3 pt-1 [overflow-anchor:none] sm:px-6"
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-12 pt-1 [overflow-anchor:none] sm:px-6"
           data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
           ref={scrollContainerRef}
         >
           <div
-            className="mx-auto flex w-full max-w-4xl flex-col gap-2 pb-36 pt-10"
+            className="mx-auto flex w-full max-w-4xl flex-col gap-2 pb-8 pt-14"
             ref={contentRef}
           >
             <div ref={topSentinelRef} aria-hidden className="h-px" />

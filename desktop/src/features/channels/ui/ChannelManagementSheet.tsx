@@ -38,7 +38,6 @@ import {
 } from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { Separator } from "@/shared/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -214,7 +213,7 @@ export function ChannelManagementSheet({
         data-testid="channel-management-sheet"
         side="right"
       >
-        <SheetHeader className="space-y-4 border-b border-border/80 bg-muted/20 px-6 py-6 text-left">
+        <SheetHeader className="relative z-10 space-y-4 bg-background/25 px-6 py-6 text-left shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
           <div className="space-y-2">
             <SheetTitle className="pr-8">{channel.name}</SheetTitle>
             <SheetDescription>
@@ -314,8 +313,6 @@ export function ChannelManagementSheet({
                   </p>
                 ) : null}
               </Section>
-
-              <Separator />
             </>
           ) : null}
 
@@ -329,8 +326,6 @@ export function ChannelManagementSheet({
               isArchived={isArchived}
             />
           </Section>
-
-          <Separator />
 
           <Section
             description="Topic and purpose show the current context for the channel."
@@ -415,8 +410,6 @@ export function ChannelManagementSheet({
             </form>
           </Section>
 
-          <Separator />
-
           <Section
             description="Name and description are owner/admin actions."
             title="Details"
@@ -481,8 +474,6 @@ export function ChannelManagementSheet({
 
           {resolvedChannel.channelType !== "dm" ? (
             <>
-              <Separator />
-
               <Section
                 description="Archiving keeps history but blocks new changes."
                 title="Channel state"
@@ -541,8 +532,6 @@ export function ChannelManagementSheet({
 
           {isOwner && resolvedChannel.channelType !== "dm" ? (
             <>
-              <Separator />
-
               <Section
                 description="Deleting removes the channel from the workspace list."
                 title="Danger zone"

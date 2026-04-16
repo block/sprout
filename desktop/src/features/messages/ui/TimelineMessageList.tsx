@@ -74,6 +74,34 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           time={message.time}
         />,
       );
+    } else if (summary && onReply) {
+      elements.push(
+        <div key={message.id} className="flex flex-col gap-0">
+          <MessageRow
+            activeReplyTargetId={activeReplyTargetId}
+            highlighted={message.id === highlightedMessageId}
+            message={message}
+            onDelete={
+              onDelete && currentPubkey && message.pubkey === currentPubkey
+                ? onDelete
+                : undefined
+            }
+            onEdit={
+              onEdit && currentPubkey && message.pubkey === currentPubkey
+                ? onEdit
+                : undefined
+            }
+            onToggleReaction={onToggleReaction}
+            onReply={onReply}
+            profiles={profiles}
+          />
+          <MessageThreadSummaryRow
+            message={message}
+            onOpenThread={onReply}
+            summary={summary}
+          />
+        </div>,
+      );
     } else {
       elements.push(
         <MessageRow
@@ -96,17 +124,6 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           profiles={profiles}
         />,
       );
-
-      if (summary && onReply) {
-        elements.push(
-          <MessageThreadSummaryRow
-            key={`thread-summary-${message.id}`}
-            message={message}
-            onOpenThread={onReply}
-            summary={summary}
-          />,
-        );
-      }
     }
   }
 
