@@ -1,6 +1,6 @@
 # sprout-pair
 
-CLI tool for testing the [NIP-AB device pairing protocol](../../PLANS/NIP_AB_DEVICE_PAIRING_SPEC.md) end-to-end. Exercises the full protocol over a live Nostr relay — designed for interop testing and NIP submission, not production use.
+CLI tool for testing the [NIP-AB device pairing protocol](../sprout-core/src/pairing/NIP-AB.md) end-to-end. Exercises the full protocol over a live Nostr relay — designed for interop testing and NIP submission, not production use.
 
 ## Quick Start
 
