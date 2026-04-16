@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -143,10 +144,14 @@ class ChannelDetailPage extends HookConsumerWidget {
                       ),
                     ),
                     data: (events) {
-                      final messages = formatTimeline(events);
+                      final messages = formatTimeline(
+                        events,
+                        currentPubkey: currentPubkey,
+                      );
                       return _MessageList(
                         messages: messages,
                         channelId: channel.id,
+                        currentPubkey: currentPubkey,
                       );
                     },
                   ),
@@ -170,8 +175,13 @@ class ChannelDetailPage extends HookConsumerWidget {
 class _MessageList extends ConsumerWidget {
   final List<TimelineMessage> messages;
   final String channelId;
+  final String? currentPubkey;
 
-  const _MessageList({required this.messages, required this.channelId});
+  const _MessageList({
+    required this.messages,
+    required this.channelId,
+    required this.currentPubkey,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -242,6 +252,7 @@ class _MessageList extends ConsumerWidget {
           showAuthor: showAuthor,
           channelNames: channelNamesMap,
           currentChannelId: channelId,
+          currentPubkey: currentPubkey,
         );
       },
     );
@@ -321,12 +332,14 @@ class _MessageBubble extends ConsumerWidget {
   final bool showAuthor;
   final Map<String, String> channelNames;
   final String currentChannelId;
+  final String? currentPubkey;
 
   const _MessageBubble({
     required this.message,
     required this.showAuthor,
     required this.channelNames,
     required this.currentChannelId,
+    required this.currentPubkey,
   });
 
   @override
@@ -348,84 +361,112 @@ class _MessageBubble extends ConsumerWidget {
       }
     }
 
-    return Padding(
-      padding: EdgeInsets.only(top: showAuthor ? Grid.xxs : Grid.quarter),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showAuthor)
-            _UserAvatar(profile: profile, pubkey: message.pubkey)
-          else
-            const SizedBox(width: 28),
-          const SizedBox(width: Grid.xxs),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (showAuthor)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: Grid.quarter),
-                    child: Row(
-                      children: [
-                        Text(
-                          displayName,
-                          style: context.textTheme.labelMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: context.colors.onSurface,
-                          ),
-                        ),
-                        const SizedBox(width: Grid.xxs),
-                        Text(
-                          _formatTime(message.createdAt),
-                          style: context.textTheme.labelSmall?.copyWith(
-                            color: context.colors.outline,
-                          ),
-                        ),
-                        if (message.edited) ...[
-                          const SizedBox(width: Grid.half),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () => _showMessageActions(
+        context: context,
+        ref: ref,
+        message: message,
+        channelId: currentChannelId,
+        isOwnMessage:
+            currentPubkey?.toLowerCase() == message.pubkey.toLowerCase(),
+      ),
+      child: Padding(
+        padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.quarter),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showAuthor)
+              _UserAvatar(profile: profile, pubkey: message.pubkey)
+            else
+              const SizedBox(width: 28),
+            const SizedBox(width: Grid.xxs),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (showAuthor)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: Grid.quarter),
+                      child: Row(
+                        children: [
                           Text(
-                            '(edited)',
-                            style: context.textTheme.labelSmall?.copyWith(
-                              color: context.colors.outline,
-                              fontStyle: FontStyle.italic,
+                            displayName,
+                            style: context.textTheme.labelMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: context.colors.onSurface,
                             ),
                           ),
+                          const SizedBox(width: Grid.xxs),
+                          Text(
+                            _formatTime(message.createdAt),
+                            style: context.textTheme.labelSmall?.copyWith(
+                              color: context.colors.outline,
+                            ),
+                          ),
+                          if (message.edited) ...[
+                            const SizedBox(width: Grid.half),
+                            Text(
+                              '(edited)',
+                              style: context.textTheme.labelSmall?.copyWith(
+                                color: context.colors.outline,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                  ),
-                MessageContent(
-                  content: message.content,
-                  mentionNames: mentionNames,
-                  channelNames: channelNames,
-                  onChannelTap: (channelId) {
-                    if (channelId == currentChannelId) {
-                      return;
-                    }
-                    final channelsAsync = ref.read(channelsProvider);
-                    final channels = channelsAsync.hasValue
-                        ? channelsAsync.value
-                        : null;
-                    Channel? targetChannel;
-                    for (final channel in channels ?? const <Channel>[]) {
-                      if (channel.id == channelId) {
-                        targetChannel = channel;
-                        break;
-                      }
-                    }
-                    if (targetChannel == null) return;
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) =>
-                            ChannelDetailPage(channel: targetChannel!),
                       ),
-                    );
-                  },
-                ),
-              ],
+                    ),
+                  MessageContent(
+                    content: message.content,
+                    mentionNames: mentionNames,
+                    channelNames: channelNames,
+                    onChannelTap: (channelId) {
+                      if (channelId == currentChannelId) return;
+                      final channelsAsync = ref.read(channelsProvider);
+                      final channels = channelsAsync.hasValue
+                          ? channelsAsync.value
+                          : null;
+                      Channel? targetChannel;
+                      for (final channel in channels ?? const <Channel>[]) {
+                        if (channel.id == channelId) {
+                          targetChannel = channel;
+                          break;
+                        }
+                      }
+                      if (targetChannel == null) return;
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              ChannelDetailPage(channel: targetChannel!),
+                        ),
+                      );
+                    },
+                  ),
+                  if (message.reactions.isNotEmpty)
+                    _ReactionRow(
+                      reactions: message.reactions,
+                      onToggle: (emoji) {
+                        final actions = ref.read(channelActionsProvider);
+                        final reaction = message.reactions.firstWhere(
+                          (r) => r.emoji == emoji,
+                        );
+                        if (reaction.reactedByCurrentUser &&
+                            reaction.currentUserReactionId != null) {
+                          actions.removeReaction(
+                            reaction.currentUserReactionId!,
+                            emoji,
+                          );
+                        } else {
+                          actions.addReaction(message.id, emoji);
+                        }
+                      },
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -458,6 +499,267 @@ class _UserAvatar extends StatelessWidget {
           : null,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reaction pills row
+// ---------------------------------------------------------------------------
+
+class _ReactionRow extends StatelessWidget {
+  final List<TimelineReaction> reactions;
+  final void Function(String emoji) onToggle;
+
+  const _ReactionRow({required this.reactions, required this.onToggle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: Grid.half),
+      child: Wrap(
+        spacing: Grid.half,
+        runSpacing: Grid.half,
+        children: [
+          for (final reaction in reactions)
+            GestureDetector(
+              onTap: () => onToggle(reaction.emoji),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Grid.xxs,
+                  vertical: Grid.quarter,
+                ),
+                decoration: BoxDecoration(
+                  color: reaction.reactedByCurrentUser
+                      ? context.colors.primary.withValues(alpha: 0.12)
+                      : context.colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(Radii.lg),
+                  border: Border.all(
+                    color: reaction.reactedByCurrentUser
+                        ? context.colors.primary.withValues(alpha: 0.4)
+                        : context.colors.outlineVariant,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(reaction.emoji, style: const TextStyle(fontSize: 14)),
+                    if (reaction.count > 1) ...[
+                      const SizedBox(width: Grid.quarter),
+                      Text(
+                        '${reaction.count}',
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: reaction.reactedByCurrentUser
+                              ? context.colors.primary
+                              : context.colors.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Message actions (long-press sheet)
+// ---------------------------------------------------------------------------
+
+const _quickEmojis = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
+
+void _showMessageActions({
+  required BuildContext context,
+  required WidgetRef ref,
+  required TimelineMessage message,
+  required String channelId,
+  required bool isOwnMessage,
+}) {
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(Grid.xs, 0, Grid.xs, Grid.xs),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Quick emoji row
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                for (final emoji in _quickEmojis)
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      ref
+                          .read(channelActionsProvider)
+                          .addReaction(message.id, emoji);
+                    },
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          sheetContext,
+                        ).colorScheme.surfaceContainerHighest,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(emoji, style: const TextStyle(fontSize: 20)),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: Grid.xs),
+            ListTile(
+              leading: const Icon(LucideIcons.copy),
+              title: const Text('Copy text'),
+              onTap: () {
+                Navigator.of(sheetContext).pop();
+                // Copy to clipboard
+                final data = ClipboardData(text: message.content);
+                Clipboard.setData(data);
+              },
+            ),
+            if (isOwnMessage) ...[
+              ListTile(
+                leading: const Icon(LucideIcons.pencil),
+                title: const Text('Edit message'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _showEditSheet(
+                    context: context,
+                    ref: ref,
+                    message: message,
+                    channelId: channelId,
+                  );
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                  LucideIcons.trash2,
+                  color: Theme.of(sheetContext).colorScheme.error,
+                ),
+                title: Text(
+                  'Delete message',
+                  style: TextStyle(
+                    color: Theme.of(sheetContext).colorScheme.error,
+                  ),
+                ),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _confirmDelete(
+                    context: context,
+                    ref: ref,
+                    messageId: message.id,
+                  );
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+void _showEditSheet({
+  required BuildContext context,
+  required WidgetRef ref,
+  required TimelineMessage message,
+  required String channelId,
+}) {
+  final controller = TextEditingController(text: message.content);
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) => Padding(
+      padding: EdgeInsets.fromLTRB(
+        Grid.xs,
+        0,
+        Grid.xs,
+        MediaQuery.viewInsetsOf(sheetContext).bottom + Grid.xs,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              minLines: 1,
+              maxLines: 5,
+              decoration: const InputDecoration(hintText: 'Edit message'),
+            ),
+            const SizedBox(height: Grid.xxs),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(sheetContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: Grid.half),
+                FilledButton(
+                  onPressed: () {
+                    final text = controller.text.trim();
+                    if (text.isEmpty || text == message.content) {
+                      Navigator.of(sheetContext).pop();
+                      return;
+                    }
+                    ref
+                        .read(channelActionsProvider)
+                        .editMessage(
+                          channelId: channelId,
+                          eventId: message.id,
+                          content: text,
+                        );
+                    Navigator.of(sheetContext).pop();
+                  },
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+void _confirmDelete({
+  required BuildContext context,
+  required WidgetRef ref,
+  required String messageId,
+}) {
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Delete message'),
+      content: const Text('This cannot be undone.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            Navigator.of(dialogContext).pop();
+            ref.read(channelActionsProvider).deleteMessage(messageId);
+          },
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(dialogContext).colorScheme.error,
+          ),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +865,17 @@ class _MembersSheet extends HookConsumerWidget {
     final membersAsync = ref.watch(channelMembersProvider(channel.id));
     final allMembers = membersAsync.asData?.value ?? const <ChannelMember>[];
     final people = allMembers.where((member) => !member.isBot).toList();
+    final userCache = ref.watch(userCacheProvider);
+
+    // Preload profiles for all members so avatars appear.
+    useEffect(() {
+      if (people.isNotEmpty) {
+        ref
+            .read(userCacheProvider.notifier)
+            .preload(people.map((m) => m.pubkey).toList());
+      }
+      return null;
+    }, [people.length]);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -614,18 +927,25 @@ class _MembersSheet extends HookConsumerWidget {
                           shrinkWrap: true,
                           children: [
                             for (final member in people)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: CircleAvatar(
-                                  child: Text(
-                                    member
-                                        .labelFor(currentPubkey)
-                                        .substring(0, 1)
-                                        .toUpperCase(),
-                                  ),
-                                ),
-                                title: Text(member.labelFor(currentPubkey)),
-                                subtitle: Text(member.role),
+                              Builder(
+                                builder: (context) {
+                                  final profile =
+                                      userCache[member.pubkey.toLowerCase()];
+                                  final avatarUrl = profile?.avatarUrl;
+                                  final label = member.labelFor(currentPubkey);
+                                  final initial = label
+                                      .substring(0, 1)
+                                      .toUpperCase();
+                                  return ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: _MemberAvatar(
+                                      avatarUrl: avatarUrl,
+                                      initial: initial,
+                                    ),
+                                    title: Text(label),
+                                    subtitle: Text(member.role),
+                                  );
+                                },
                               ),
                           ],
                         ),
@@ -645,6 +965,33 @@ class _MembersSheet extends HookConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _MemberAvatar extends HookWidget {
+  final String? avatarUrl;
+  final String initial;
+
+  const _MemberAvatar({required this.avatarUrl, required this.initial});
+
+  @override
+  Widget build(BuildContext context) {
+    final failed = useState(false);
+
+    useEffect(() {
+      failed.value = false;
+      return null;
+    }, [avatarUrl]);
+
+    final url = avatarUrl;
+    if (url == null || failed.value) {
+      return CircleAvatar(child: Text(initial));
+    }
+    return CircleAvatar(
+      backgroundImage: NetworkImage(url),
+      onBackgroundImageError: (_, _) => failed.value = true,
+      child: null,
     );
   }
 }

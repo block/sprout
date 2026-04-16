@@ -298,6 +298,51 @@ class ChannelActions {
         '${hex.substring(20, 32)}';
   }
 
+  Future<void> addReaction(String eventId, String emoji) async {
+    await _signedEventRelay.submit(
+      kind: EventKind.reaction,
+      content: emoji,
+      tags: [
+        ['e', eventId],
+      ],
+    );
+  }
+
+  Future<void> removeReaction(String reactionEventId, String emoji) async {
+    await _signedEventRelay.submit(
+      kind: EventKind.deletion,
+      content: '',
+      tags: [
+        ['e', reactionEventId],
+      ],
+    );
+  }
+
+  Future<void> editMessage({
+    required String channelId,
+    required String eventId,
+    required String content,
+  }) async {
+    await _signedEventRelay.submit(
+      kind: EventKind.streamMessageEdit,
+      content: content,
+      tags: [
+        ['h', channelId],
+        ['e', eventId],
+      ],
+    );
+  }
+
+  Future<void> deleteMessage(String eventId) async {
+    await _signedEventRelay.submit(
+      kind: EventKind.deletion,
+      content: '',
+      tags: [
+        ['e', eventId],
+      ],
+    );
+  }
+
   static final Random _random = Random.secure();
 }
 

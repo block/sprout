@@ -101,6 +101,29 @@ class SystemEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Reaction — aggregated emoji reaction on a message
+// ---------------------------------------------------------------------------
+
+@immutable
+class TimelineReaction {
+  final String emoji;
+  final int count;
+  final bool reactedByCurrentUser;
+  final List<String> userPubkeys;
+
+  /// The event ID of the current user's reaction, for deletion.
+  final String? currentUserReactionId;
+
+  const TimelineReaction({
+    required this.emoji,
+    required this.count,
+    required this.reactedByCurrentUser,
+    required this.userPubkeys,
+    this.currentUserReactionId,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // TimelineMessage — a processed, display-ready message
 // ---------------------------------------------------------------------------
 
@@ -117,6 +140,9 @@ class TimelineMessage {
   /// Pubkeys mentioned in this message (from p-tags).
   final List<String> mentionPubkeys;
 
+  /// Aggregated reactions on this message.
+  final List<TimelineReaction> reactions;
+
   const TimelineMessage({
     required this.id,
     required this.pubkey,
@@ -126,6 +152,7 @@ class TimelineMessage {
     this.edited = false,
     this.systemEvent,
     this.mentionPubkeys = const [],
+    this.reactions = const [],
   });
 }
 
@@ -134,10 +161,15 @@ class TimelineMessage {
 // ---------------------------------------------------------------------------
 
 /// Process a chronologically-sorted list of [NostrEvent]s into a list of
-/// [TimelineMessage]s, applying deletions, edits, and system event parsing.
+/// [TimelineMessage]s, applying deletions, edits, reactions, and system event
+/// parsing.
 ///
 /// Mirrors the desktop's `formatTimelineMessages` logic.
-List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
+/// [currentPubkey] is used to determine if the current user has reacted.
+List<TimelineMessage> formatTimeline(
+  List<NostrEvent> events, {
+  String? currentPubkey,
+}) {
   // 1. Collect deletion targets.
   final deletedIds = <String>{};
   for (final event in events) {
@@ -167,7 +199,27 @@ List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
     }
   }
 
-  // 3. Filter to visible content events and build TimelineMessages.
+  // 3. Aggregate reactions: targetId → { emoji → { pubkey → eventId } }.
+  final reactionMap = <String, Map<String, Map<String, String>>>{};
+  for (final event in events) {
+    if (event.kind != EventKind.reaction) continue;
+    if (deletedIds.contains(event.id)) continue;
+
+    final targetId = _lastETag(event.tags);
+    if (targetId == null || deletedIds.contains(targetId)) continue;
+
+    final emoji = event.content.trim();
+    if (emoji.isEmpty) continue;
+
+    reactionMap
+            .putIfAbsent(targetId, () => {})
+            .putIfAbsent(emoji, () => {})[event.pubkey.toLowerCase()] =
+        event.id;
+  }
+
+  final normalizedCurrentPubkey = currentPubkey?.toLowerCase();
+
+  // 4. Filter to visible content events and build TimelineMessages.
   final result = <TimelineMessage>[];
   for (final event in events) {
     if (deletedIds.contains(event.id)) continue;
@@ -197,6 +249,24 @@ List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
         for (final tag in event.tags)
           if (tag.length >= 2 && tag[0] == 'p') tag[1],
       ];
+
+      final emojiMap = reactionMap[event.id];
+      final reactions = <TimelineReaction>[
+        if (emojiMap != null)
+          for (final entry in emojiMap.entries)
+            TimelineReaction(
+              emoji: entry.key,
+              count: entry.value.length,
+              reactedByCurrentUser:
+                  normalizedCurrentPubkey != null &&
+                  entry.value.containsKey(normalizedCurrentPubkey),
+              userPubkeys: entry.value.keys.toList(),
+              currentUserReactionId: normalizedCurrentPubkey != null
+                  ? entry.value[normalizedCurrentPubkey]
+                  : null,
+            ),
+      ];
+
       result.add(
         TimelineMessage(
           id: event.id,
@@ -205,6 +275,7 @@ List<TimelineMessage> formatTimeline(List<NostrEvent> events) {
           content: edit?.content ?? event.content,
           edited: edit != null,
           mentionPubkeys: mentions,
+          reactions: reactions,
         ),
       );
     }

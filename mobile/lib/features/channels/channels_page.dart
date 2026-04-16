@@ -10,16 +10,15 @@ import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/profile_avatar.dart';
 import '../profile/profile_provider.dart';
+import '../settings/settings_page.dart';
 import 'channel.dart';
 import 'channel_detail_page.dart';
 import 'channel_management_provider.dart';
 import 'channels_provider.dart';
 
-enum _BrowseMode { channels, forums }
-
 enum _QuickAction { createChannel, createForum, newDm }
 
-class ChannelsPage extends ConsumerWidget {
+class ChannelsPage extends HookConsumerWidget {
   const ChannelsPage({super.key});
 
   @override
@@ -30,6 +29,14 @@ class ChannelsPage extends ConsumerWidget {
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
         .value;
+
+    // Cache the last successfully loaded channels so the UI never flashes
+    // back to a loading state when the provider rebuilds.
+    final cachedChannels = useRef<List<Channel>?>(null);
+    if (channelsAsync.asData?.value case final data?) {
+      cachedChannels.value = data;
+    }
+    final channels = cachedChannels.value;
 
     Future<void> openChannel(Channel channel) async {
       if (!context.mounted) return;
@@ -100,45 +107,78 @@ class ChannelsPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sprout'),
-        actions: [
-          IconButton(
-            onPressed: channelsAsync.hasValue ? browseChannels : null,
-            tooltip: 'Browse channels',
-            icon: const Icon(LucideIcons.search),
-          ),
-          IconButton(
-            onPressed: openQuickActions,
-            tooltip: 'Create or start conversation',
-            icon: const Icon(LucideIcons.plus),
-          ),
-          const ProfileAvatar(),
-        ],
-      ),
-      body: Column(
-        children: [
-          _ConnectionBanner(status: sessionState.status),
-          Expanded(
-            child: channelsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, _) => _ErrorView(
-                error: error,
-                onRetry: () => ref.read(channelsProvider.notifier).refresh(),
-              ),
-              data: (channels) => _ChannelsList(
-                channels: channels,
-                currentPubkey: currentPubkey,
-                onSelectChannel: openChannel,
+        titleSpacing: Grid.xs,
+        title: Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: channelsAsync.hasValue ? browseChannels : null,
+                child: Container(
+                  height: 36,
+                  padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
+                  decoration: BoxDecoration(
+                    color: context.colors.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(Radii.lg),
+                    border: Border.all(color: context.colors.outlineVariant),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        LucideIcons.search,
+                        size: 16,
+                        color: context.colors.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: Grid.xxs),
+                      Text(
+                        'Search',
+                        style: context.textTheme.bodyMedium?.copyWith(
+                          color: context.colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: Grid.twelve),
+            ProfileAvatar(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+              ),
+            ),
+          ],
+        ),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: openQuickActions,
+        tooltip: 'Create or start conversation',
+        shape: const CircleBorder(),
+        child: const Icon(LucideIcons.plus),
+      ),
+      body: channels != null
+          ? Column(
+              children: [
+                _ConnectionBanner(status: sessionState.status),
+                Expanded(
+                  child: _ChannelsList(
+                    channels: channels,
+                    currentPubkey: currentPubkey,
+                    onSelectChannel: openChannel,
+                  ),
+                ),
+              ],
+            )
+          : channelsAsync.hasError
+          ? _ErrorView(
+              error: channelsAsync.error!,
+              onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+            )
+          : const _ConnectionBanner(status: SessionStatus.connecting),
     );
   }
 }
 
-class _ChannelsList extends ConsumerWidget {
+class _ChannelsList extends HookConsumerWidget {
   final List<Channel> channels;
   final String? currentPubkey;
   final Future<void> Function(Channel channel) onSelectChannel;
@@ -164,16 +204,23 @@ class _ChannelsList extends ConsumerWidget {
         .where((channel) => channel.isDm)
         .toList();
 
+    final channelsExpanded = useState(true);
+    final forumsExpanded = useState(true);
+    final dmsExpanded = useState(true);
+
     return RefreshIndicator(
       onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
       child: ListView(
-        padding: const EdgeInsets.only(top: Grid.xxs, bottom: Grid.xs),
+        padding: const EdgeInsets.only(top: Grid.xxs, bottom: 80),
         children: [
           if (visibleChannels.isEmpty)
             const _EmptyState()
           else ...[
             _ChannelSection(
               title: 'Channels',
+              icon: LucideIcons.hash,
+              expanded: channelsExpanded.value,
+              onToggle: () => channelsExpanded.value = !channelsExpanded.value,
               channels: streamChannels,
               currentPubkey: currentPubkey,
               emptyLabel: 'No stream channels yet',
@@ -181,6 +228,9 @@ class _ChannelsList extends ConsumerWidget {
             ),
             _ChannelSection(
               title: 'Forums',
+              icon: LucideIcons.messageSquareText,
+              expanded: forumsExpanded.value,
+              onToggle: () => forumsExpanded.value = !forumsExpanded.value,
               channels: forumChannels,
               currentPubkey: currentPubkey,
               emptyLabel: 'No forums yet',
@@ -188,6 +238,9 @@ class _ChannelsList extends ConsumerWidget {
             ),
             _ChannelSection(
               title: 'DMs',
+              icon: LucideIcons.messagesSquare,
+              expanded: dmsExpanded.value,
+              onToggle: () => dmsExpanded.value = !dmsExpanded.value,
               channels: dmChannels,
               currentPubkey: currentPubkey,
               emptyLabel: 'No direct messages yet',
@@ -202,6 +255,9 @@ class _ChannelsList extends ConsumerWidget {
 
 class _ChannelSection extends StatelessWidget {
   final String title;
+  final IconData icon;
+  final bool expanded;
+  final VoidCallback onToggle;
   final List<Channel> channels;
   final String? currentPubkey;
   final String emptyLabel;
@@ -209,6 +265,9 @@ class _ChannelSection extends StatelessWidget {
 
   const _ChannelSection({
     required this.title,
+    required this.icon,
+    required this.expanded,
+    required this.onToggle,
     required this.channels,
     required this.currentPubkey,
     required this.emptyLabel,
@@ -220,27 +279,36 @@ class _ChannelSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(label: title, count: channels.length),
-        if (channels.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Grid.xs,
-              vertical: Grid.half,
-            ),
-            child: Text(
-              emptyLabel,
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+        _SectionHeader(
+          label: title,
+          icon: icon,
+          expanded: expanded,
+          onToggle: onToggle,
+        ),
+        if (expanded) ...[
+          if (channels.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: Grid.xs + Grid.xxs,
+                right: Grid.xs,
+                top: Grid.half,
+                bottom: Grid.half,
               ),
-            ),
-          )
-        else
-          for (final channel in channels)
-            _ChannelTile(
-              channel: channel,
-              currentPubkey: currentPubkey,
-              onTap: () => onSelectChannel(channel),
-            ),
+              child: Text(
+                emptyLabel,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.outline,
+                ),
+              ),
+            )
+          else
+            for (final channel in channels)
+              _ChannelTile(
+                channel: channel,
+                currentPubkey: currentPubkey,
+                onTap: () => onSelectChannel(channel),
+              ),
+        ],
       ],
     );
   }
@@ -278,34 +346,49 @@ class _EmptyState extends StatelessWidget {
 
 class _SectionHeader extends StatelessWidget {
   final String label;
-  final int count;
+  final IconData icon;
+  final bool expanded;
+  final VoidCallback onToggle;
 
-  const _SectionHeader({required this.label, required this.count});
+  const _SectionHeader({
+    required this.label,
+    required this.icon,
+    required this.expanded,
+    required this.onToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xs,
-        vertical: Grid.xxs,
-      ),
-      child: Row(
-        children: [
-          Text(
-            label,
-            style: context.textTheme.labelMedium?.copyWith(
-              color: context.colors.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
+    return GestureDetector(
+      onTap: onToggle,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Grid.xs,
+          Grid.twelve,
+          Grid.xs,
+          Grid.half,
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 14, color: context.colors.outline),
+            const SizedBox(width: Grid.half),
+            Text(
+              label.toUpperCase(),
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.outline,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
             ),
-          ),
-          const SizedBox(width: Grid.xxs),
-          Text(
-            '$count',
-            style: context.textTheme.labelSmall?.copyWith(
+            const Spacer(),
+            Icon(
+              expanded ? LucideIcons.chevronDown : LucideIcons.chevronRight,
+              size: 14,
               color: context.colors.outline,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -330,9 +413,11 @@ class _ChannelTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(Radii.md),
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: Grid.xs,
-          vertical: Grid.xxs + Grid.quarter,
+        padding: const EdgeInsets.only(
+          left: Grid.xs + Grid.xxs,
+          right: Grid.xs,
+          top: Grid.xxs + Grid.quarter,
+          bottom: Grid.xxs + Grid.quarter,
         ),
         child: Row(
           children: [
@@ -395,15 +480,6 @@ class _ChannelTile extends StatelessWidget {
               const SizedBox(width: Grid.xxs),
               _EphemeralBadge(channel: channel),
             ],
-            if (channel.lastMessageAt != null) ...[
-              const SizedBox(width: Grid.xxs),
-              Text(
-                _relativeTime(channel.lastMessageAt!),
-                style: context.textTheme.labelSmall?.copyWith(
-                  color: context.colors.outline,
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -411,16 +487,6 @@ class _ChannelTile extends StatelessWidget {
   }
 
   IconData _iconFor(Channel channel) => channelIcon(channel);
-
-  static String _relativeTime(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
-    if (diff.inDays < 7) return '${diff.inDays}d';
-    if (diff.inDays < 365) return '${(diff.inDays / 7).floor()}w';
-    return '${(diff.inDays / 365).floor()}y';
-  }
 }
 
 class _QuickActionsSheet extends StatelessWidget {
@@ -435,8 +501,6 @@ class _QuickActionsSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('New', style: context.textTheme.titleMedium),
-            const SizedBox(height: Grid.xxs),
             ListTile(
               leading: const Icon(LucideIcons.hash),
               title: const Text('Create channel'),
@@ -475,8 +539,6 @@ class _CreateChannelSheet extends HookConsumerWidget {
     final visibility = useState('open');
     final isSubmitting = useState(false);
     final errorMessage = useState<String?>(null);
-
-    final kindLabel = channelType == 'forum' ? 'forum' : 'channel';
 
     Future<void> submit() async {
       final name = nameController.text.trim();
@@ -518,17 +580,6 @@ class _CreateChannelSheet extends HookConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Create $kindLabel', style: context.textTheme.titleMedium),
-            const SizedBox(height: Grid.xxs),
-            Text(
-              channelType == 'forum'
-                  ? 'Forums organize threaded discussions around a topic.'
-                  : 'Channels are real-time streams for team conversation.',
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: Grid.xs),
             TextField(
               controller: nameController,
               enabled: !isSubmitting.value,
@@ -552,15 +603,13 @@ class _CreateChannelSheet extends HookConsumerWidget {
               maxLines: 3,
             ),
             const SizedBox(height: Grid.xxs),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment<String>(value: 'open', label: Text('Open')),
-                ButtonSegment<String>(value: 'private', label: Text('Private')),
-              ],
-              selected: {visibility.value},
-              onSelectionChanged: isSubmitting.value
+            SwitchListTile(
+              title: const Text('Private'),
+              contentPadding: EdgeInsets.zero,
+              value: visibility.value == 'private',
+              onChanged: isSubmitting.value
                   ? null
-                  : (selection) => visibility.value = selection.first,
+                  : (on) => visibility.value = on ? 'private' : 'open',
             ),
             if (errorMessage.value case final error?) ...[
               const SizedBox(height: Grid.xxs),
@@ -602,30 +651,17 @@ class _BrowseChannelsSheet extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final mode = useState(_BrowseMode.channels);
     final query = useState('');
     final busyChannelId = useState<String?>(null);
 
     final normalizedQuery = query.value.trim().toLowerCase();
     final browsableChannels = channels.where((channel) {
-      if (channel.isDm) {
-        return false;
-      }
-      if (mode.value == _BrowseMode.channels && !channel.isStream) {
-        return false;
-      }
-      if (mode.value == _BrowseMode.forums && !channel.isForum) {
-        return false;
-      }
+      if (channel.isDm) return false;
       final visible = channel.isArchived
           ? channel.isMember
           : channel.visibility == 'open' || channel.isMember;
-      if (!visible) {
-        return false;
-      }
-      if (normalizedQuery.isEmpty) {
-        return true;
-      }
+      if (!visible) return false;
+      if (normalizedQuery.isEmpty) return true;
       return channel.name.toLowerCase().contains(normalizedQuery) ||
           channel.description.toLowerCase().contains(normalizedQuery);
     }).toList();
@@ -638,9 +674,7 @@ class _BrowseChannelsSheet extends HookConsumerWidget {
         .toList();
 
     Future<void> openOrJoin(Channel channel) async {
-      if (busyChannelId.value != null) {
-        return;
-      }
+      if (busyChannelId.value != null) return;
 
       if (channel.isMember) {
         Navigator.of(context).pop(channel);
@@ -668,93 +702,99 @@ class _BrowseChannelsSheet extends HookConsumerWidget {
       }
     }
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        Grid.xs,
-        0,
-        Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              mode.value == _BrowseMode.forums
-                  ? 'Browse forums'
-                  : 'Browse channels',
-              style: context.textTheme.titleMedium,
+    return DraggableScrollableSheet(
+      initialChildSize: 0.75,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (context, scrollController) => Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Grid.xs,
+              Grid.twelve,
+              Grid.xs,
+              Grid.xxs,
             ),
-            const SizedBox(height: Grid.xxs),
-            SegmentedButton<_BrowseMode>(
-              segments: const [
-                ButtonSegment<_BrowseMode>(
-                  value: _BrowseMode.channels,
-                  label: Text('Channels'),
+            child: GestureDetector(
+              onTap: () {},
+              child: Container(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
+                decoration: BoxDecoration(
+                  color: context.colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(Radii.lg),
+                  border: Border.all(color: context.colors.outlineVariant),
                 ),
-                ButtonSegment<_BrowseMode>(
-                  value: _BrowseMode.forums,
-                  label: Text('Forums'),
-                ),
-              ],
-              selected: {mode.value},
-              onSelectionChanged: (selection) => mode.value = selection.first,
-            ),
-            const SizedBox(height: Grid.xxs),
-            TextField(
-              decoration: InputDecoration(
-                prefixIcon: const Icon(LucideIcons.search),
-                hintText: mode.value == _BrowseMode.forums
-                    ? 'Search forums by name or description'
-                    : 'Search channels by name or description',
-              ),
-              onChanged: (value) => query.value = value,
-            ),
-            const SizedBox(height: Grid.xs),
-            SizedBox(
-              height: 360,
-              child: browsableChannels.isEmpty
-                  ? Padding(
-                      padding: const EdgeInsets.symmetric(vertical: Grid.sm),
-                      child: Center(
-                        child: Text(
-                          'No matching spaces',
-                          style: context.textTheme.bodyMedium?.copyWith(
+                child: Row(
+                  children: [
+                    Icon(
+                      LucideIcons.search,
+                      size: 16,
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: Grid.xxs),
+                    Expanded(
+                      child: TextField(
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          hintText: 'Search channels, forums…',
+                          hintStyle: context.textTheme.bodyMedium?.copyWith(
                             color: context.colors.onSurfaceVariant,
                           ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          isDense: true,
+                          contentPadding: EdgeInsets.zero,
                         ),
+                        style: context.textTheme.bodyMedium,
+                        onChanged: (value) => query.value = value,
                       ),
-                    )
-                  : ListView(
-                      shrinkWrap: true,
-                      children: [
-                        if (notJoined.isNotEmpty) ...[
-                          _MiniHeader(
-                            label: '${notJoined.length} available to join',
-                          ),
-                          for (final channel in notJoined)
-                            _BrowseTile(
-                              channel: channel,
-                              isBusy: busyChannelId.value == channel.id,
-                              onTap: () => openOrJoin(channel),
-                            ),
-                        ],
-                        if (joined.isNotEmpty) ...[
-                          _MiniHeader(label: '${joined.length} joined'),
-                          for (final channel in joined)
-                            _BrowseTile(
-                              channel: channel,
-                              isBusy: false,
-                              onTap: () => openOrJoin(channel),
-                            ),
-                        ],
-                      ],
                     ),
+                  ],
+                ),
+              ),
             ),
-          ],
-        ),
+          ),
+          Expanded(
+            child: browsableChannels.isEmpty
+                ? Center(
+                    child: Text(
+                      'No matching results',
+                      style: context.textTheme.bodyMedium?.copyWith(
+                        color: context.colors.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                : ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.only(top: Grid.xxs),
+                    children: [
+                      if (notJoined.isNotEmpty) ...[
+                        _MiniHeader(
+                          label: '${notJoined.length} available to join',
+                        ),
+                        for (final channel in notJoined)
+                          _BrowseTile(
+                            channel: channel,
+                            isBusy: busyChannelId.value == channel.id,
+                            onTap: () => openOrJoin(channel),
+                          ),
+                      ],
+                      if (joined.isNotEmpty) ...[
+                        _MiniHeader(label: '${joined.length} joined'),
+                        for (final channel in joined)
+                          _BrowseTile(
+                            channel: channel,
+                            isBusy: false,
+                            onTap: () => openOrJoin(channel),
+                          ),
+                      ],
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -879,15 +919,6 @@ class _NewDirectMessageSheet extends HookConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('New direct message', style: context.textTheme.titleMedium),
-            const SizedBox(height: Grid.xxs),
-            Text(
-              'Pick 1 to 8 people. If the conversation already exists, mobile will reopen it.',
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: Grid.xs),
             TextField(
               controller: queryController,
               decoration: const InputDecoration(
@@ -1016,7 +1047,10 @@ class _MiniHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: Grid.half, bottom: Grid.half),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Grid.xs,
+        vertical: Grid.half,
+      ),
       child: Text(
         label,
         style: context.textTheme.labelSmall?.copyWith(
