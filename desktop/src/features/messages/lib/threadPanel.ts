@@ -31,11 +31,13 @@ function normalizeHeadMessage(message: TimelineMessage): TimelineMessage {
   };
 }
 
-function normalizeBranchReply(message: TimelineMessage): TimelineMessage {
+function normalizeInlineReplyMessage(
+  message: TimelineMessage,
+  depth: number,
+): TimelineMessage {
   return {
     ...message,
-    // Thread-panel replies render flat like Slack's side thread view.
-    depth: 0,
+    depth,
   };
 }
 
@@ -100,6 +102,60 @@ function buildSummaryForDirectReplies(
   };
 }
 
+function appendExpandedReplies(params: {
+  entries: MainTimelineEntry[];
+  parentId: string;
+  depth: number;
+  directChildrenByParentId: Map<string, TimelineMessage[]>;
+  expandedReplyIds: ReadonlySet<string>;
+}) {
+  const {
+    entries,
+    parentId,
+    depth,
+    directChildrenByParentId,
+    expandedReplyIds,
+  } = params;
+  const directReplies = directChildrenByParentId.get(parentId) ?? [];
+
+  for (const reply of directReplies) {
+    entries.push({
+      message: normalizeInlineReplyMessage(reply, depth),
+      summary: buildSummaryForDirectReplies(reply.id, directChildrenByParentId),
+    });
+
+    if (expandedReplyIds.has(reply.id)) {
+      appendExpandedReplies({
+        entries,
+        parentId: reply.id,
+        depth: depth + 1,
+        directChildrenByParentId,
+        expandedReplyIds,
+      });
+    }
+  }
+}
+
+function buildVisibleThreadReplies(params: {
+  openThreadHeadId: string;
+  directChildrenByParentId: Map<string, TimelineMessage[]>;
+  expandedReplyIds: ReadonlySet<string>;
+}) {
+  const { openThreadHeadId, directChildrenByParentId, expandedReplyIds } =
+    params;
+  const entries: MainTimelineEntry[] = [];
+
+  appendExpandedReplies({
+    entries,
+    parentId: openThreadHeadId,
+    depth: 1,
+    directChildrenByParentId,
+    expandedReplyIds,
+  });
+
+  return entries;
+}
+
 export function buildMainTimelineEntries(
   messages: TimelineMessage[],
 ): MainTimelineEntry[] {
@@ -122,6 +178,7 @@ export function buildThreadPanelData(
   messages: TimelineMessage[],
   openThreadHeadId: string | null,
   threadReplyTargetId: string | null,
+  expandedReplyIds: ReadonlySet<string>,
 ): ThreadPanelData {
   if (!openThreadHeadId) {
     return {
@@ -146,13 +203,11 @@ export function buildThreadPanelData(
 
   const directChildrenByParentId = buildDirectChildrenByParentId(messages);
   const normalizedThreadHead = normalizeHeadMessage(threadHead);
-  const directReplies = (
-    directChildrenByParentId.get(openThreadHeadId) ?? []
-  ).map((message) => normalizeBranchReply(message));
-  const visibleReplies = directReplies.map((message) => ({
-    message,
-    summary: buildSummaryForDirectReplies(message.id, directChildrenByParentId),
-  }));
+  const visibleReplies = buildVisibleThreadReplies({
+    openThreadHeadId,
+    directChildrenByParentId,
+    expandedReplyIds,
+  });
 
   const replyTargetInBranch =
     threadReplyTargetId === threadHead.id
@@ -161,7 +216,7 @@ export function buildThreadPanelData(
 
   return {
     threadHead: normalizedThreadHead,
-    totalReplyCount: directReplies.length,
+    totalReplyCount: directChildrenByParentId.get(openThreadHeadId)?.length ?? 0,
     visibleReplies,
     replyTargetMessage: replyTargetInBranch ?? normalizedThreadHead,
   };

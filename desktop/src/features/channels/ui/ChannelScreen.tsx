@@ -74,14 +74,22 @@ export function ChannelScreen({
 }: ChannelScreenProps) {
   const { markChannelRead, openChannelManagement } = useAppShell();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
-  const [threadHeadPath, setThreadHeadPath] = React.useState<string[]>([]);
+  const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
+    null,
+  );
+  const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState<
+    Set<string>
+  >(new Set());
+  const [threadScrollTargetId, setThreadScrollTargetId] = React.useState<
+    string | null
+  >(null);
+  const [threadPanelOpenKey, setThreadPanelOpenKey] = React.useState(0);
   const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
     string | null
   >(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
-  const openThreadHeadId = threadHeadPath[threadHeadPath.length - 1] ?? null;
 
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
@@ -229,14 +237,42 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
+  const directReplyIdsByParentId = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+
+    for (const message of timelineMessages) {
+      if (!message.parentId) {
+        continue;
+      }
+
+      const currentReplies = map.get(message.parentId) ?? [];
+      currentReplies.push(message.id);
+      map.set(message.parentId, currentReplies);
+    }
+
+    return map;
+  }, [timelineMessages]);
+  const getFirstReplyIdForMessage = React.useCallback(
+    (messageId: string) => directReplyIdsByParentId.get(messageId)?.[0] ?? null,
+    [directReplyIdsByParentId],
+  );
+  const handleThreadPanelOpen = React.useCallback(() => {
+    setThreadPanelOpenKey((current) => current + 1);
+  }, []);
   const threadPanelData = React.useMemo(
     () =>
       buildThreadPanelData(
         timelineMessages,
         openThreadHeadId,
         threadReplyTargetId,
+        expandedThreadReplyIds,
       ),
-    [openThreadHeadId, threadReplyTargetId, timelineMessages],
+    [
+      expandedThreadReplyIds,
+      openThreadHeadId,
+      threadReplyTargetId,
+      timelineMessages,
+    ],
   );
   const openThreadHeadMessage = threadPanelData.threadHead;
   const threadMessages = threadPanelData.visibleReplies;
@@ -251,25 +287,30 @@ export function ChannelScreen({
   const {
     handleCancelEdit,
     handleCancelThreadReply,
-    handleBackThread,
     handleCloseThread,
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleOpenNestedThread,
+    handleExpandThreadReplies,
     handleOpenThread,
     handleSendMessage,
     handleSendThreadReply,
+    handleSelectThreadReplyTarget,
     handleToggleReaction,
   } = useChannelPaneHandlers({
     deleteMessageMutation,
     editMessageMutation,
     editTargetId,
+    expandedThreadReplyIds,
+    getFirstReplyIdForMessage,
+    onThreadPanelOpen: handleThreadPanelOpen,
     openThreadHeadId,
     sendMessageMutation,
+    setExpandedThreadReplyIds,
     setEditTargetId,
-    setThreadHeadPath,
+    setOpenThreadHeadId,
     setThreadReplyTargetId,
+    setThreadScrollTargetId,
     threadReplyTargetId,
     toggleReactionMutation,
   });
@@ -302,12 +343,17 @@ export function ChannelScreen({
       (messagesQuery.isFetching && resolvedMessages.length === 0));
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
-      setThreadHeadPath([]);
+      setOpenThreadHeadId(null);
+      setExpandedThreadReplyIds(new Set());
+      setThreadScrollTargetId(null);
       setThreadReplyTargetId(null);
       setEditTargetId(null);
     },
     [],
   );
+  const handleThreadScrollTargetResolved = React.useCallback(() => {
+    setThreadScrollTargetId(null);
+  }, []);
 
   React.useEffect(() => {
     resetComposerTargets(activeChannelId);
@@ -315,7 +361,9 @@ export function ChannelScreen({
 
   React.useEffect(() => {
     if (openThreadHeadId && !openThreadHeadMessage) {
-      setThreadHeadPath((current) => current.slice(0, -1));
+      setOpenThreadHeadId(null);
+      setExpandedThreadReplyIds(new Set());
+      setThreadScrollTargetId(null);
       return;
     }
 
@@ -335,6 +383,9 @@ export function ChannelScreen({
     editTargetMessage,
     openThreadHeadId,
     openThreadHeadMessage,
+    setExpandedThreadReplyIds,
+    setThreadScrollTargetId,
+    setOpenThreadHeadId,
     threadReplyTargetId,
     threadReplyTargetMessage,
   ]);
@@ -417,17 +468,17 @@ export function ChannelScreen({
                 messages={timelineMessages}
                 onCancelEdit={handleCancelEdit}
                 onCancelThreadReply={handleCancelThreadReply}
-                onBackThread={handleBackThread}
                 onCloseThread={handleCloseThread}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onEditSave={handleEditSave}
-                onOpenNestedThread={handleOpenNestedThread}
+                onExpandThreadReplies={handleExpandThreadReplies}
                 onOpenThread={handleOpenThread}
+                onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
                 onSendMessage={handleSendMessage}
                 onSendThreadReply={handleSendThreadReply}
+                onThreadScrollTargetResolved={handleThreadScrollTargetResolved}
                 onToggleReaction={effectiveToggleReaction}
-                canGoBackThread={threadHeadPath.length > 1}
                 openThreadHeadId={openThreadHeadId}
                 personaLookup={personaLookup}
                 profiles={messageProfiles}
@@ -438,6 +489,8 @@ export function ChannelScreen({
                 threadTotalReplyCount={threadTotalReplyCount}
                 threadReplyTargetId={threadReplyTargetId}
                 threadReplyTargetMessage={threadReplyTargetMessage}
+                threadPanelOpenKey={threadPanelOpenKey}
+                threadScrollTargetId={threadScrollTargetId}
                 typingPubkeys={mainTypingPubkeys}
               />
             </React.Suspense>

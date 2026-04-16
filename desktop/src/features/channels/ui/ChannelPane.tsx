@@ -24,14 +24,14 @@ type ChannelPaneProps = {
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
   onCancelEdit?: () => void;
-  onBackThread: () => void;
   onCancelThreadReply: () => void;
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
-  onOpenNestedThread: (message: TimelineMessage) => void;
+  onExpandThreadReplies: (message: TimelineMessage) => void;
   onOpenThread: (message: TimelineMessage) => void;
+  onSelectThreadReplyTarget: (message: TimelineMessage) => void;
   onSendMessage: (
     content: string,
     mentionPubkeys: string[],
@@ -48,10 +48,10 @@ type ChannelPaneProps = {
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  onThreadScrollTargetResolved: () => void;
   /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
-  canGoBackThread: boolean;
   openThreadHeadId: string | null;
   threadHeadMessage: TimelineMessage | null;
   threadMessages: MainTimelineEntry[];
@@ -59,6 +59,8 @@ type ChannelPaneProps = {
   threadTotalReplyCount: number;
   threadReplyTargetId: string | null;
   threadReplyTargetMessage: TimelineMessage | null;
+  threadPanelOpenKey: number;
+  threadScrollTargetId: string | null;
   targetMessageId: string | null;
   typingPubkeys: string[];
 };
@@ -73,26 +75,28 @@ export const ChannelPane = React.memo(function ChannelPane({
   isSending,
   isTimelineLoading,
   messages,
-  onBackThread,
   onCancelEdit,
   onCancelThreadReply,
   onCloseThread,
   onDelete,
   onEdit,
   onEditSave,
-  onOpenNestedThread,
+  onExpandThreadReplies,
   onOpenThread,
+  onSelectThreadReplyTarget,
   onSendMessage,
   onSendThreadReply,
+  onThreadScrollTargetResolved,
   onTargetReached,
   onToggleReaction,
-  canGoBackThread,
   personaLookup,
   profiles,
   openThreadHeadId,
   targetMessageId,
   threadHeadMessage,
   threadMessages,
+  threadPanelOpenKey,
+  threadScrollTargetId,
   threadTypingPubkeys,
   threadTotalReplyCount,
   threadReplyTargetId,
@@ -170,23 +174,25 @@ export const ChannelPane = React.memo(function ChannelPane({
 
       {threadHeadMessage ? (
         <MessageThreadPanel
-          canGoBack={canGoBackThread}
           channel={activeChannel}
           channelId={activeChannel?.id ?? null}
           channelName={activeChannel?.name ?? "channel"}
           currentPubkey={currentPubkey}
           disabled={isComposerDisabled}
           isSending={isSending}
-          onBack={onBackThread}
           onCancelReply={onCancelThreadReply}
           onClose={onCloseThread}
           onDelete={onDelete}
-          onOpenNestedThread={onOpenNestedThread}
+          onExpandReplies={onExpandThreadReplies}
+          onSelectReplyTarget={onSelectThreadReplyTarget}
           onSend={onSendThreadReply}
+          onScrollTargetResolved={onThreadScrollTargetResolved}
           onToggleReaction={onToggleReaction}
+          openKey={threadPanelOpenKey}
           profiles={profiles}
           replyTargetId={threadReplyTargetId}
           replyTargetMessage={threadReplyTargetMessage}
+          scrollTargetId={threadScrollTargetId}
           threadHead={threadHeadMessage}
           threadReplies={threadMessages}
           threadTypingPubkeys={threadTypingPubkeys}
