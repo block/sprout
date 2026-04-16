@@ -24,6 +24,8 @@ export type AudioWorkletHandle = {
   /** Switch voice input mode. In VAD mode, always transmitting (PTT events ignored).
    *  In PTT mode, gated by Ctrl+Space. */
   setMode: (mode: "push_to_talk" | "voice_activity") => void;
+  /** Set mic input gain (0–1). Adjusts the GainNode between source and worklet. */
+  setGain: (value: number) => void;
 };
 
 /**
@@ -65,11 +67,15 @@ export async function setupAudioWorklet(
     new MediaStream([audioTrack]),
   );
 
+  // Create gain node for volume control
+  const gainNode = audioContext.createGain();
+
   // Create worklet node
   const workletNode = new AudioWorkletNode(audioContext, "stt-tap-processor");
 
-  // Connect: mic → worklet (tap only — no playback)
-  source.connect(workletNode);
+  // Connect: mic → gain → worklet (tap only — no playback)
+  source.connect(gainNode);
+  gainNode.connect(workletNode);
 
   // Set initial PTT state (worklet defaults to transmitting=true).
   // In PTT mode, immediately gate audio until the user presses the key.
@@ -122,6 +128,7 @@ export async function setupAudioWorklet(
       workletNode.port.onmessage = null;
       pttUnlisten?.();
       source.disconnect();
+      gainNode.disconnect();
       workletNode.disconnect();
       void audioContext.close();
     },
@@ -136,6 +143,9 @@ export async function setupAudioWorklet(
         type: "ptt",
         active: mode === "voice_activity",
       });
+    },
+    setGain: (value: number) => {
+      gainNode.gain.value = value;
     },
   };
 }

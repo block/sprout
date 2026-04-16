@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { Headphones } from "lucide-react";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -163,6 +164,29 @@ export function HuddleIndicator({
       setActiveHuddle(null);
     };
   }, [channelId]);
+
+  // When the local user ends/leaves a huddle, the backend transitions to idle
+  // and emits huddle-state-changed. Clear the indicator immediately rather than
+  // waiting for the relay's 48103 event (which may arrive late or not at all
+  // if the relay connection tears down first).
+  React.useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+
+    listen<{ phase: string }>("huddle-state-changed", (event) => {
+      if (!cancelled && event.payload.phase === "idle") {
+        setActiveHuddle(null);
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // No active huddle — render the start button (if onStart provided).
   if (!activeHuddle) {
