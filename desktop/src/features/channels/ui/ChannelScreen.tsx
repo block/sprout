@@ -4,6 +4,7 @@ import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { getChannelDescription } from "@/features/channels/lib/channelDescription";
 import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
@@ -83,7 +84,6 @@ export function ChannelScreen({
   const [threadScrollTargetId, setThreadScrollTargetId] = React.useState<
     string | null
   >(null);
-  const [threadPanelOpenKey, setThreadPanelOpenKey] = React.useState(0);
   const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
     string | null
   >(null);
@@ -256,9 +256,6 @@ export function ChannelScreen({
     (messageId: string) => directReplyIdsByParentId.get(messageId)?.[0] ?? null,
     [directReplyIdsByParentId],
   );
-  const handleThreadPanelOpen = React.useCallback(() => {
-    setThreadPanelOpenKey((current) => current + 1);
-  }, []);
   const threadPanelData = React.useMemo(
     () =>
       buildThreadPanelData(
@@ -303,7 +300,6 @@ export function ChannelScreen({
     editTargetId,
     expandedThreadReplyIds,
     getFirstReplyIdForMessage,
-    onThreadPanelOpen: handleThreadPanelOpen,
     openThreadHeadId,
     sendMessageMutation,
     setExpandedThreadReplyIds,
@@ -321,20 +317,7 @@ export function ChannelScreen({
     [canReact, handleToggleReaction],
   );
 
-  const channelDescription = activeChannel
-    ? [
-        activeChannel.archivedAt ? "Archived." : null,
-        !activeChannel.isMember
-          ? "Read-only until you join this open channel."
-          : null,
-        activeChannel.topic,
-        activeChannel.description,
-        activeChannel.purpose,
-        null,
-      ]
-        .filter((value) => value && value.trim().length > 0)
-        .join(" ") || "Channel details and activity."
-    : "Connect to the relay to browse channels and read messages.";
+  const channelDescription = getChannelDescription(activeChannel);
   const shouldLoadTimeline =
     activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
@@ -383,9 +366,6 @@ export function ChannelScreen({
     editTargetMessage,
     openThreadHeadId,
     openThreadHeadMessage,
-    setExpandedThreadReplyIds,
-    setThreadScrollTargetId,
-    setOpenThreadHeadId,
     threadReplyTargetId,
     threadReplyTargetMessage,
   ]);
@@ -489,7 +469,6 @@ export function ChannelScreen({
                 threadTotalReplyCount={threadTotalReplyCount}
                 threadReplyTargetId={threadReplyTargetId}
                 threadReplyTargetMessage={threadReplyTargetMessage}
-                threadPanelOpenKey={threadPanelOpenKey}
                 threadScrollTargetId={threadScrollTargetId}
                 typingPubkeys={mainTypingPubkeys}
               />

@@ -25,7 +25,6 @@ type MessageThreadPanelProps = {
   onExpandReplies: (message: TimelineMessage) => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
-  openKey: number;
   onScrollTargetResolved: () => void;
   onSelectReplyTarget: (message: TimelineMessage) => void;
   onSend: (
@@ -74,7 +73,6 @@ export function MessageThreadPanel({
   onExpandReplies,
   onResetWidth,
   onResizeStart,
-  openKey,
   onScrollTargetResolved,
   onSelectReplyTarget,
   onSend,
@@ -122,7 +120,7 @@ export function MessageThreadPanel({
       cancelAnimationFrame(frame);
       window.clearTimeout(timeoutId);
     };
-  }, [openKey, threadHeadId]);
+  }, [threadHeadId]);
 
   React.useEffect(() => {
     if (!scrollTargetId) {
@@ -152,7 +150,7 @@ export function MessageThreadPanel({
     return () => {
       cancelAnimationFrame(frame);
     };
-  }, [onScrollTargetResolved, scrollTargetId, threadReplies]);
+  }, [onScrollTargetResolved, scrollTargetId]);
 
   if (!threadHead) {
     return null;
@@ -232,7 +230,8 @@ export function MessageThreadPanel({
                       layoutVariant="thread-reply"
                       message={entry.message}
                       onDelete={
-                        onDelete && canManageMessage(entry.message, currentPubkey)
+                        onDelete &&
+                        canManageMessage(entry.message, currentPubkey)
                           ? onDelete
                           : undefined
                       }

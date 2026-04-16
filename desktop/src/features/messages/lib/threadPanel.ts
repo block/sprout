@@ -164,7 +164,10 @@ function appendExpandedReplies(params: {
   for (const reply of directReplies) {
     entries.push({
       message: normalizeInlineReplyMessage(reply, depth),
-      summary: buildSummaryForDirectReplies(reply.id, descendantStatsByMessageId),
+      summary: buildSummaryForDirectReplies(
+        reply.id,
+        descendantStatsByMessageId,
+      ),
     });
 
     if (expandedReplyIds.has(reply.id)) {

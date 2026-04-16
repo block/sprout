@@ -296,7 +296,9 @@ test("opens a single-level thread panel with inline expansion", async ({
   if (!rootMessageId) {
     throw new Error("Expected root message row to have a data-message-id.");
   }
-  const rootSummaryRow = timeline.locator(`[data-thread-head-id="${rootMessageId}"]`);
+  const rootSummaryRow = timeline.locator(
+    `[data-thread-head-id="${rootMessageId}"]`,
+  );
 
   await rootMessage.hover();
   await rootMessage.getByRole("button", { name: "Reply" }).click();
@@ -454,7 +456,10 @@ test("thread panel width uses session storage and reset handle", async ({
   const defaultWidthPx = 380;
 
   await page.addInitScript((width) => {
-    window.sessionStorage.setItem("sprout.desktop.thread-panel-width", String(width));
+    window.sessionStorage.setItem(
+      "sprout.desktop.thread-panel-width",
+      String(width),
+    );
   }, customWidthPx);
 
   await page.goto("/");

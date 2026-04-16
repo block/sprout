@@ -69,7 +69,10 @@ export const MessageRow = React.memo(
     const visibleDepth = Math.min(message.depth, 6);
     const indentPx = visibleDepth * 28;
     const depthGuideOffsets = React.useMemo(() => {
-      return Array.from({ length: visibleDepth }, (_, index) => 14 + index * 28);
+      return Array.from(
+        { length: visibleDepth },
+        (_, index) => 14 + index * 28,
+      );
     }, [visibleDepth]);
     const getTag = (name: string) =>
       message.tags?.find((tag) => tag[0] === name)?.[1];
@@ -156,7 +159,9 @@ export const MessageRow = React.memo(
     const avatarSizeClass = isThreadReplyLayout
       ? "!h-5 !w-5 !rounded-md"
       : "!h-[42px] !w-[42px]";
-    const avatarButtonRadiusClass = isThreadReplyLayout ? "rounded-md" : "rounded-xl";
+    const avatarButtonRadiusClass = isThreadReplyLayout
+      ? "rounded-md"
+      : "rounded-xl";
 
     const avatarNode = message.pubkey ? (
       <UserProfilePopover
@@ -234,7 +239,10 @@ export const MessageRow = React.memo(
           </p>
         ) : null}
         {message.edited ? (
-          <p className="text-muted-foreground/70" title="This message has been edited">
+          <p
+            className="text-muted-foreground/70"
+            title="This message has been edited"
+          >
             (edited)
           </p>
         ) : null}
@@ -257,7 +265,9 @@ export const MessageRow = React.memo(
           }}
         />
         {reactionErrorMessage ? (
-          <p className="mt-1.5 text-xs text-destructive">{reactionErrorMessage}</p>
+          <p className="mt-1.5 text-xs text-destructive">
+            {reactionErrorMessage}
+          </p>
         ) : null}
         {expandedDiffId === message.id ? (
           <React.Suspense

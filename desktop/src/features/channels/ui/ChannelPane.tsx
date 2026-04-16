@@ -93,7 +93,6 @@ type ChannelPaneProps = {
   threadTotalReplyCount: number;
   threadReplyTargetId: string | null;
   threadReplyTargetMessage: TimelineMessage | null;
-  threadPanelOpenKey: number;
   threadScrollTargetId: string | null;
   targetMessageId: string | null;
   typingPubkeys: string[];
@@ -129,7 +128,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   targetMessageId,
   threadHeadMessage,
   threadMessages,
-  threadPanelOpenKey,
   threadScrollTargetId,
   threadTypingPubkeys,
   threadTotalReplyCount,
@@ -194,8 +192,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     threadPanelWidthPx !== THREAD_PANEL_DEFAULT_WIDTH_PX;
 
   const isComposerDisabled =
-    !activeChannel ||
-    !activeChannel.isMember ||
+    !activeChannel?.isMember ||
     activeChannel.archivedAt !== null ||
     activeChannel.channelType === "forum" ||
     isSending;
@@ -278,7 +275,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           onSend={onSendThreadReply}
           onScrollTargetResolved={onThreadScrollTargetResolved}
           onToggleReaction={onToggleReaction}
-          openKey={threadPanelOpenKey}
           profiles={profiles}
           replyTargetId={threadReplyTargetId}
           replyTargetMessage={threadReplyTargetMessage}

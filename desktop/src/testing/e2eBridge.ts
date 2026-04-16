@@ -1669,7 +1669,8 @@ function emitMockChannelMessage(
   }
 
   const history = getMockMessageStore(channelId);
-  const parentEvent = history.find((event) => event.id === parentEventId) ?? null;
+  const parentEvent =
+    history.find((event) => event.id === parentEventId) ?? null;
   const parentThread = parentEvent
     ? getThreadReferenceFromTags(parentEvent.tags)
     : {

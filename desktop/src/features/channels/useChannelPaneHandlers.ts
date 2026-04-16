@@ -21,7 +21,6 @@ export function useChannelPaneHandlers({
   editTargetId,
   expandedThreadReplyIds,
   getFirstReplyIdForMessage,
-  onThreadPanelOpen,
   openThreadHeadId,
   sendMessageMutation,
   setExpandedThreadReplyIds,
@@ -37,7 +36,6 @@ export function useChannelPaneHandlers({
   editTargetId: string | null;
   expandedThreadReplyIds: ReadonlySet<string>;
   getFirstReplyIdForMessage: (messageId: string) => string | null;
-  onThreadPanelOpen: () => void;
   openThreadHeadId: string | null;
   sendMessageMutation: ReturnType<typeof useSendMessageMutation>;
   setExpandedThreadReplyIds: React.Dispatch<React.SetStateAction<Set<string>>>;
@@ -132,7 +130,6 @@ export function useChannelPaneHandlers({
       }
 
       setOpenThreadHeadId(message.id);
-      onThreadPanelOpen();
       setThreadReplyTargetId(message.id);
       setThreadScrollTargetId(null);
       setExpandedThreadReplyIds(new Set());
@@ -141,7 +138,6 @@ export function useChannelPaneHandlers({
     [
       setEditTargetId,
       setExpandedThreadReplyIds,
-      onThreadPanelOpen,
       setOpenThreadHeadId,
       setThreadReplyTargetId,
       setThreadScrollTargetId,
@@ -204,7 +200,8 @@ export function useChannelPaneHandlers({
       mediaTags?: string[][],
     ) => {
       const activeThreadHeadId = openThreadHeadIdRef.current;
-      const parentEventId = threadReplyTargetIdRef.current ?? activeThreadHeadId;
+      const parentEventId =
+        threadReplyTargetIdRef.current ?? activeThreadHeadId;
       if (!parentEventId) {
         return;
       }
@@ -232,7 +229,11 @@ export function useChannelPaneHandlers({
         setThreadScrollTargetId(sentMessage.id);
       }
     },
-    [setExpandedThreadReplyIds, setThreadReplyTargetId, setThreadScrollTargetId],
+    [
+      setExpandedThreadReplyIds,
+      setThreadReplyTargetId,
+      setThreadScrollTargetId,
+    ],
   );
 
   const handleToggleReaction = React.useCallback(
