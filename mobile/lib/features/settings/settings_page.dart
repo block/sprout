@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:nostr/nostr.dart' as nostr;
 
 import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
@@ -36,6 +38,47 @@ class SettingsPage extends HookConsumerWidget {
               side: BorderSide(color: context.colors.outlineVariant),
             ),
           ),
+          if (config.nsec != null && config.nsec!.isNotEmpty) ...[
+            const SizedBox(height: Grid.xxs),
+            Builder(
+              builder: (context) {
+                final privHex = nostr.Nip19.decodePrivkey(config.nsec!);
+                final pubkey = privHex.isNotEmpty
+                    ? nostr.Keychain(privHex).public
+                    : 'unknown';
+                return ListTile(
+                  leading: const Icon(LucideIcons.key),
+                  title: const Text('Identity (pubkey)'),
+                  subtitle: Text(
+                    pubkey,
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                      fontFamily: 'GeistMono',
+                      fontSize: 11,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(LucideIcons.copy, size: 16),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: pubkey));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Pubkey copied'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(Radii.md),
+                    side: BorderSide(color: context.colors.outlineVariant),
+                  ),
+                );
+              },
+            ),
+          ],
           const SizedBox(height: Grid.twelve),
           OutlinedButton.icon(
             onPressed: () => _confirmSignOut(context, ref),
@@ -128,7 +171,10 @@ class SettingsPage extends HookConsumerWidget {
           ),
           FilledButton(
             onPressed: () {
-              Navigator.of(ctx).pop();
+              Navigator.of(ctx).pop(); // close dialog
+              // Pop all pushed routes back to root so MaterialApp.home
+              // rebuilds to PairingPage when auth state changes.
+              Navigator.of(context).popUntil((route) => route.isFirst);
               ref.read(authProvider.notifier).signOut();
             },
             style: FilledButton.styleFrom(

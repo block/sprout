@@ -44,7 +44,6 @@ class SendMessage {
     ];
 
     final tags = <List<String>>[
-      if (authorPubkey != null) ['p', authorPubkey],
       ['h', channelId],
       if (parentEventId != null) ..._buildReplyTags(parentEventId, rootEventId),
       for (final pk in normalizedMentions) ['p', pk],
