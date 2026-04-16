@@ -1,18 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Headphones, PhoneOff, Plus, Volume2, VolumeX } from "lucide-react";
+import { Headphones, PhoneOff, Plus } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { useHuddle } from "../HuddleContext";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
-import { MicControls } from "./MicControls";
+import { MicControls, SpeakerControls } from "./MicControls";
 import { ParticipantList } from "./ParticipantList";
 
-// Shape returned by the `get_huddle_state` Tauri command.
-// NOTE: This mirrors the HuddleState struct in the Rust backend (src-tauri/src/huddle/mod.rs).
-// If you add/remove fields here, update the Rust struct (and vice versa).
+// Mirrors HuddleState in src-tauri/src/huddle/mod.rs.
 type HuddleState = {
   phase:
     | "idle"
@@ -39,6 +37,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
     localAudioTrack,
     leaveHuddle,
     endHuddle,
+    isStarting,
     micConnected,
     micLevel,
     pttActive,
@@ -60,8 +59,6 @@ export function HuddleBar({ className }: HuddleBarProps) {
   const isPttMode = voiceInputMode === "push_to_talk";
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
-  // Derive TTS enabled from backend state (single source of truth).
-  // Fall back to true if state hasn't loaded yet.
   const ttsEnabled = state?.tts_enabled ?? true;
   const [isLeaving, setIsLeaving] = React.useState(false);
   const [showAddAgent, setShowAddAgent] = React.useState(false);
@@ -70,8 +67,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
     moonshine: string;
     kokoro: string;
   } | null>(null);
-
-  // Huddle state: event-driven primary path + 10s fallback poll.
+  // Huddle state: event-driven + 10s fallback poll.
   React.useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -113,15 +109,12 @@ export function HuddleBar({ className }: HuddleBarProps) {
     };
   }, []);
 
-  // Poll model download status while huddle is active
   const huddlePhase = state?.phase;
   React.useEffect(() => {
     if (huddlePhase !== "active" && huddlePhase !== "connected") return;
 
     let cancelled = false;
 
-    // ModelStatus serializes as: "ready" | "not_downloaded" (strings)
-    // or { downloading: { progress_percent: N } } | { error: "msg" } (objects).
     const fmt = (s: unknown): string => {
       if (typeof s === "string") return s === "ready" ? "ready" : "pending";
       if (typeof s === "object" && s !== null) {
@@ -162,7 +155,6 @@ export function HuddleBar({ className }: HuddleBarProps) {
     };
   }, [huddlePhase]);
 
-  // Sync mute state to the audio track
   React.useEffect(() => {
     if (localAudioTrack) {
       localAudioTrack.enabled = !isMuted;
@@ -180,8 +172,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
       if (backendClean) {
         setState(null);
       }
-      // If backend cleanup failed, keep the bar visible so the user can retry.
-      // leaveHuddle retains rustActiveRef=true for the next attempt.
+      // If cleanup failed, keep the bar visible so the user can retry.
     } catch (e) {
       console.error("Failed to leave huddle:", e);
     } finally {
@@ -201,7 +192,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
       if (backendClean) {
         setState(null);
       }
-      // If backend cleanup failed, keep the bar visible so the user can retry.
+      // If cleanup failed, keep the bar visible so the user can retry.
     } catch (e) {
       console.error("Failed to end huddle:", e);
     } finally {
@@ -216,7 +207,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
         className,
       )}
     >
-      {/* Error banner — dismissible, shown when start/join fails */}
+      {/* Error banner */}
       {huddleError && (
         <div
           role="alert"
@@ -351,7 +342,15 @@ export function HuddleBar({ className }: HuddleBarProps) {
           )}
         </>
       ) : (
-        <span className="text-xs text-destructive/70">No mic</span>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div
+            className={cn(
+              "h-2 w-2 rounded-full",
+              isStarting ? "animate-pulse bg-green-500" : "bg-destructive/70",
+            )}
+          />
+          {isStarting ? "Connecting…" : "No mic"}
+        </span>
       )}
 
       {agentAddError && (
@@ -395,36 +394,23 @@ export function HuddleBar({ className }: HuddleBarProps) {
         onSelectDevice={setSelectedDeviceId}
         micGain={micGain}
         onGainChange={setMicGain}
-        outputDevices={outputDevices}
-        selectedOutputDevice={selectedOutputDevice}
-        onSelectOutputDevice={setSelectedOutputDevice}
       />
 
-      {/* TTS toggle */}
-      <Button
-        aria-label={ttsEnabled ? "Mute agent speech" : "Unmute agent speech"}
-        aria-pressed={!ttsEnabled}
-        className="h-8 w-8"
-        onClick={async () => {
-          const next = !ttsEnabled;
+      <SpeakerControls
+        ttsEnabled={ttsEnabled}
+        onToggleTts={async () => {
           try {
-            await invoke("set_tts_enabled", { enabled: next });
-            // Refresh state immediately so the UI reflects the change
+            await invoke("set_tts_enabled", { enabled: !ttsEnabled });
             const s = await invoke<HuddleState>("get_huddle_state");
             setState(s);
           } catch (e) {
             console.error("Failed to toggle TTS:", e);
           }
         }}
-        size="icon"
-        variant={ttsEnabled ? "secondary" : "destructive"}
-      >
-        {ttsEnabled ? (
-          <Volume2 className="h-4 w-4" />
-        ) : (
-          <VolumeX className="h-4 w-4" />
-        )}
-      </Button>
+        outputDevices={outputDevices}
+        selectedOutputDevice={selectedOutputDevice}
+        onSelectOutputDevice={setSelectedOutputDevice}
+      />
 
       {/* Leave / End buttons — pushed to the right */}
       <div className="ml-auto flex items-center gap-2">

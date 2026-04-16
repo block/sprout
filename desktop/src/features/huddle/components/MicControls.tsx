@@ -1,10 +1,8 @@
-import { Check, ChevronUp, Mic, MicOff } from "lucide-react";
+import { Check, ChevronUp, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
-
-type OutputDevice = { name: string; is_default: boolean };
 
 type MicControlsProps = {
   isMuted: boolean;
@@ -17,9 +15,6 @@ type MicControlsProps = {
   onSelectDevice: (id: string) => void;
   micGain: number;
   onGainChange: (value: number) => void;
-  outputDevices: OutputDevice[];
-  selectedOutputDevice: string;
-  onSelectOutputDevice: (name: string) => void;
 };
 
 export function MicControls({
@@ -33,13 +28,18 @@ export function MicControls({
   onSelectDevice,
   micGain,
   onGainChange,
-  outputDevices,
-  selectedOutputDevice,
-  onSelectOutputDevice,
 }: MicControlsProps) {
   return (
     <Popover>
-      <div className="flex items-center">
+      <div
+        className={cn(
+          "flex items-center rounded-md",
+          isPttMode &&
+            pttActive &&
+            !isMuted &&
+            "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
+        )}
+      >
         <Button
           aria-label={
             isMuted
@@ -49,13 +49,7 @@ export function MicControls({
                 : "Mute microphone"
           }
           aria-pressed={isMuted}
-          className={cn(
-            "h-8 w-8 rounded-r-none",
-            isPttMode &&
-              pttActive &&
-              !isMuted &&
-              "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
-          )}
+          className="h-8 w-8 rounded-r-none"
           onClick={onToggleMute}
           size="icon"
           variant={isMuted ? "destructive" : "secondary"}
@@ -112,25 +106,69 @@ export function MicControls({
               </span>
             </div>
           </div>
-          {outputDevices.length > 0 && (
-            <DeviceList
-              label="Speaker"
-              devices={outputDevices.map((d) => ({
-                id: d.name,
-                label: d.name,
-              }))}
-              selectedId={selectedOutputDevice}
-              onSelect={onSelectOutputDevice}
-              showChangeHint={!!selectedOutputDevice && micConnected}
-            />
-          )}
         </div>
       </PopoverContent>
     </Popover>
   );
 }
 
-function DeviceList({
+type SpeakerControlsProps = {
+  ttsEnabled: boolean;
+  onToggleTts: () => void;
+  outputDevices: { name: string; is_default: boolean }[];
+  selectedOutputDevice: string;
+  onSelectOutputDevice: (name: string) => void;
+};
+
+export function SpeakerControls({
+  ttsEnabled,
+  onToggleTts,
+  outputDevices,
+  selectedOutputDevice,
+  onSelectOutputDevice,
+}: SpeakerControlsProps) {
+  return (
+    <Popover>
+      <div className="flex items-center">
+        <Button
+          aria-label={ttsEnabled ? "Mute agent speech" : "Unmute agent speech"}
+          aria-pressed={!ttsEnabled}
+          className="h-8 w-8 rounded-r-none"
+          onClick={onToggleTts}
+          size="icon"
+          variant={ttsEnabled ? "secondary" : "destructive"}
+        >
+          {ttsEnabled ? (
+            <Volume2 className="h-4 w-4" />
+          ) : (
+            <VolumeX className="h-4 w-4" />
+          )}
+        </Button>
+        <PopoverTrigger asChild>
+          <Button
+            aria-label="Speaker settings"
+            className="h-8 w-5 rounded-l-none border-l px-0"
+            size="icon"
+            variant="secondary"
+          >
+            <ChevronUp className="h-3 w-3" />
+          </Button>
+        </PopoverTrigger>
+      </div>
+      <PopoverContent side="top" className="w-64">
+        <DeviceList
+          label="Speaker"
+          devices={outputDevices.map((d) => ({ id: d.name, label: d.name }))}
+          selectedId={selectedOutputDevice}
+          onSelect={onSelectOutputDevice}
+          showChangeHint={!!selectedOutputDevice}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function DeviceList({
   label,
   devices,
   selectedId,
