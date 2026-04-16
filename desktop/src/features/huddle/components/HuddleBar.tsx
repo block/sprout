@@ -52,6 +52,9 @@ export function HuddleBar({ className }: HuddleBarProps) {
     setSelectedDeviceId,
     micGain,
     setMicGain,
+    outputDevices,
+    selectedOutputDevice,
+    setSelectedOutputDevice,
   } = useHuddle();
 
   const isPttMode = voiceInputMode === "push_to_talk";
@@ -392,6 +395,9 @@ export function HuddleBar({ className }: HuddleBarProps) {
         onSelectDevice={setSelectedDeviceId}
         micGain={micGain}
         onGainChange={setMicGain}
+        outputDevices={outputDevices}
+        selectedOutputDevice={selectedOutputDevice}
+        onSelectOutputDevice={setSelectedOutputDevice}
       />
 
       {/* TTS toggle */}

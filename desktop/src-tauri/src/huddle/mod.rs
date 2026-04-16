@@ -24,6 +24,7 @@
 //!    and drops them outside the lock (thread joins can block ~200ms).
 
 pub mod agents;
+pub mod audio_output;
 pub mod kokoro;
 pub mod models;
 pub mod pipeline;

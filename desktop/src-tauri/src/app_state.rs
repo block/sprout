@@ -20,6 +20,9 @@ pub struct AppState {
     ///
     /// Set once during `setup()` in `lib.rs`; never cleared.
     pub app_handle: Mutex<Option<AppHandle>>,
+    /// Selected audio output device name. `None` = system default.
+    /// Used by `connect_audio_relay` and TTS pipeline when opening sinks.
+    pub audio_output_device: Mutex<Option<String>>,
 }
 
 pub fn build_app_state() -> AppState {
@@ -65,6 +68,7 @@ pub fn build_app_state() -> AppState {
         managed_agent_processes: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),
         app_handle: Mutex::new(None),
+        audio_output_device: Mutex::new(None),
     }
 }
 

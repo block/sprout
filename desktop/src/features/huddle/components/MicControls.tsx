@@ -4,6 +4,8 @@ import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 
+type OutputDevice = { name: string; is_default: boolean };
+
 type MicControlsProps = {
   isMuted: boolean;
   onToggleMute: () => void;
@@ -15,6 +17,9 @@ type MicControlsProps = {
   onSelectDevice: (id: string) => void;
   micGain: number;
   onGainChange: (value: number) => void;
+  outputDevices: OutputDevice[];
+  selectedOutputDevice: string;
+  onSelectOutputDevice: (name: string) => void;
 };
 
 export function MicControls({
@@ -28,6 +33,9 @@ export function MicControls({
   onSelectDevice,
   micGain,
   onGainChange,
+  outputDevices,
+  selectedOutputDevice,
+  onSelectOutputDevice,
 }: MicControlsProps) {
   return (
     <Popover>
@@ -60,7 +68,7 @@ export function MicControls({
         </Button>
         <PopoverTrigger asChild>
           <Button
-            aria-label="Mic settings"
+            aria-label="Audio settings"
             className="h-8 w-5 rounded-l-none border-l px-0"
             size="icon"
             variant="secondary"
@@ -71,59 +79,22 @@ export function MicControls({
       </div>
       <PopoverContent side="top" className="w-64">
         <div className="flex flex-col gap-3">
-          <div>
-            <span className="mb-1 block text-xs font-medium">Microphone</span>
-            <ul className="flex flex-col">
-              <li>
-                <button
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-                  onClick={() => onSelectDevice("")}
-                  type="button"
-                >
-                  <Check
-                    className={cn(
-                      "h-3 w-3 shrink-0",
-                      selectedDeviceId && "invisible",
-                    )}
-                  />
-                  System default
-                </button>
-              </li>
-              {audioDevices.map((d) => {
-                const isSelected = selectedDeviceId === d.deviceId;
-                return (
-                  <li key={d.deviceId}>
-                    <button
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-                      onClick={() => onSelectDevice(d.deviceId)}
-                      type="button"
-                    >
-                      <Check
-                        className={cn(
-                          "h-3 w-3 shrink-0",
-                          !isSelected && "invisible",
-                        )}
-                      />
-                      <span className="truncate">
-                        {d.label || `Mic ${d.deviceId.slice(0, 8)}`}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {selectedDeviceId && micConnected && (
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                Change takes effect on next huddle
-              </p>
-            )}
-          </div>
+          <DeviceList
+            label="Microphone"
+            devices={audioDevices.map((d) => ({
+              id: d.deviceId,
+              label: d.label || `Mic ${d.deviceId.slice(0, 8)}`,
+            }))}
+            selectedId={selectedDeviceId}
+            onSelect={onSelectDevice}
+            showChangeHint={!!selectedDeviceId && micConnected}
+          />
           <div>
             <label
               htmlFor="mic-volume"
               className="mb-1 block text-xs font-medium"
             >
-              Volume
+              Input Volume
             </label>
             <div className="flex items-center gap-2">
               <input
@@ -141,8 +112,76 @@ export function MicControls({
               </span>
             </div>
           </div>
+          {outputDevices.length > 0 && (
+            <DeviceList
+              label="Speaker"
+              devices={outputDevices.map((d) => ({
+                id: d.name,
+                label: d.name,
+              }))}
+              selectedId={selectedOutputDevice}
+              onSelect={onSelectOutputDevice}
+              showChangeHint={!!selectedOutputDevice && micConnected}
+            />
+          )}
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function DeviceList({
+  label,
+  devices,
+  selectedId,
+  onSelect,
+  showChangeHint,
+}: {
+  label: string;
+  devices: { id: string; label: string }[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  showChangeHint: boolean;
+}) {
+  return (
+    <div>
+      <span className="mb-1 block text-xs font-medium">{label}</span>
+      <ul className="flex flex-col">
+        <li>
+          <button
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+            onClick={() => onSelect("")}
+            type="button"
+          >
+            <Check
+              className={cn("h-3 w-3 shrink-0", selectedId && "invisible")}
+            />
+            System default
+          </button>
+        </li>
+        {devices.map((d) => {
+          const isSelected = selectedId === d.id;
+          return (
+            <li key={d.id}>
+              <button
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                onClick={() => onSelect(d.id)}
+                type="button"
+              >
+                <Check
+                  className={cn("h-3 w-3 shrink-0", !isSelected && "invisible")}
+                />
+                <span className="truncate">{d.label}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {showChangeHint && (
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          Change takes effect on next huddle
+        </p>
+      )}
+    </div>
   );
 }

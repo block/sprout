@@ -52,6 +52,12 @@ interface HuddleContextValue {
   micGain: number;
   /** Adjust mic input gain — applied immediately to the active audio graph */
   setMicGain: (value: number) => void;
+  /** Available audio output devices */
+  outputDevices: { name: string; is_default: boolean }[];
+  /** Currently selected output device name (empty = system default) */
+  selectedOutputDevice: string;
+  /** Select a different speaker — takes effect on next huddle start/join */
+  setSelectedOutputDevice: (name: string) => void;
   /** Start a new huddle — calls Rust start_huddle, then connects mic + AudioWorklet */
   startHuddle: (
     parentChannelId: string,
@@ -108,6 +114,33 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     micGain,
     setMicGain,
   } = useAudioDevices(workletRef);
+  /** Audio output devices from Rust backend */
+  const [outputDevices, setOutputDevices] = React.useState<
+    { name: string; is_default: boolean }[]
+  >([]);
+  const [selectedOutputDevice, setSelectedOutputDeviceState] =
+    React.useState("");
+  const setSelectedOutputDevice = React.useCallback((name: string) => {
+    setSelectedOutputDeviceState(name);
+    invoke("set_audio_output_device", { name }).catch(() => {
+      /* best-effort */
+    });
+  }, []);
+
+  // Fetch output devices on mount.
+  React.useEffect(() => {
+    invoke<{ name: string; is_default: boolean }[]>("list_audio_output_devices")
+      .then(setOutputDevices)
+      .catch(() => {
+        /* best-effort */
+      });
+    invoke<string>("get_audio_output_device")
+      .then(setSelectedOutputDeviceState)
+      .catch(() => {
+        /* best-effort */
+      });
+  }, []);
+
   /** Ref tracking latest micGain — read inside connectAndSetupMedia to
    *  avoid stale closure capture. */
   const micGainRef = React.useRef(1);
@@ -558,6 +591,9 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         setSelectedDeviceId,
         micGain,
         setMicGain,
+        outputDevices,
+        selectedOutputDevice,
+        setSelectedOutputDevice,
         startHuddle,
         joinHuddle,
         leaveHuddle,
