@@ -147,10 +147,92 @@ test("opens a mocked channel from the home feed", async ({ page }) => {
 
   await mentionsSection.getByRole("button", { name: "Open general" }).click();
 
+  await expect(page).toHaveURL(
+    /#\/channels\/9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50\?messageId=mock-feed-mention$/,
+  );
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("message-timeline")).toContainText(
-    "Welcome to #general",
+    "Please review the release checklist.",
   );
+});
+
+test("home feed shows channel and agent activity sections", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: "Channel Activity" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Agent Updates" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Engineering shipped the desktop build."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Agent progress: channel index complete."),
+  ).toBeVisible();
+
+  await page.getByTestId("home-feed-open-mock-feed-agent").click();
+  await expect(page).toHaveURL(
+    /#\/channels\/94a444a4-c0a3-5966-ab05-530c6ddc2301\?messageId=mock-feed-agent$/,
+  );
+  await expect(page.getByTestId("chat-title")).toHaveText("agents");
+  await expect(page.getByTestId("message-timeline")).toContainText(
+    "Agent progress: channel index complete.",
+  );
+});
+
+test("opens a mocked forum activity item from the home feed", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "Channel Activity" }),
+  ).toBeVisible();
+
+  await page.evaluate(() => {
+    const win = window as Window & {
+      __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+        category: "mention" | "needs_action" | "activity" | "agent_activity";
+        channel_id: string | null;
+        channel_name: string;
+        content: string;
+        created_at: number;
+        id: string;
+        kind: number;
+        pubkey: string;
+        tags: string[][];
+      }) => unknown;
+    };
+
+    win.__SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?.({
+      category: "activity",
+      channel_id: "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11",
+      channel_name: "watercooler",
+      content: "Release checklist: async feedback thread.",
+      created_at: Math.floor(Date.now() / 1000) + 5,
+      id: "mock-forum-release-thread",
+      kind: 45001,
+      pubkey:
+        "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
+      tags: [["h", "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"]],
+    });
+  });
+
+  await expect(
+    page.getByTestId("home-feed-open-mock-forum-release-thread"),
+  ).toBeVisible();
+  await page.getByTestId("home-feed-open-mock-forum-release-thread").click();
+
+  await expect(page).toHaveURL(
+    /#\/channels\/a27e1ee9-76a6-5bdf-a5d5-1d85610dad11\/posts\/mock-forum-release-thread$/,
+  );
+  await expect(page.getByTestId("chat-title")).toHaveText("watercooler");
+  await expect(
+    page.getByText("Release checklist: async feedback thread."),
+  ).toBeVisible();
 });
 
 test("home feed renders resolved author labels", async ({ page }) => {
@@ -224,7 +306,10 @@ test("opens accessible unjoined channels from search in read-only mode", async (
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Design critique notes for the browse flow.",
   );
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
 
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
@@ -285,19 +370,21 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   await expect(page.getByTestId("chat-title")).toHaveText("general");
   await expect(page.getByTestId("send-message")).toContainText("Send");
   const initialInputHeight = await input.evaluate(
-    (element) => (element as HTMLTextAreaElement).clientHeight,
+    (element) => (element as HTMLElement).clientHeight,
   );
   expect(initialInputHeight).toBeLessThan(40);
   await input.fill(firstLine);
   for (const line of restOfLines) {
-    await input.press("Control+Enter");
-    await input.type(line);
+    await input.press("Shift+Enter");
+    await input.pressSequentially(line);
   }
-  await expect(input).toHaveValue([firstLine, ...restOfLines].join("\n"));
+  for (const line of [firstLine, ...restOfLines]) {
+    await expect(input).toContainText(line);
+  }
   const expandedInputHeight = await input.evaluate(
-    (element) => (element as HTMLTextAreaElement).clientHeight,
+    (element) => (element as HTMLElement).clientHeight,
   );
-  expect(expandedInputHeight).toBeLessThanOrEqual(100);
+  expect(expandedInputHeight).toBeLessThanOrEqual(130);
   await expect(page.getByTestId("message-timeline")).not.toContainText(
     firstLine,
   );
@@ -332,12 +419,12 @@ test("does not shift the timeline when the composer grows", async ({
   const before = await getTimelineMetrics(page);
 
   await input.fill("Composer growth line one");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line two");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line three");
-  await input.press("Control+Enter");
-  await input.type("Composer growth line four");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line two");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line three");
+  await input.press("Shift+Enter");
+  await input.pressSequentially("Composer growth line four");
 
   await page.waitForTimeout(1200);
 

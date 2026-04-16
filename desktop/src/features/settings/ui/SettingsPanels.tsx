@@ -6,6 +6,7 @@ import {
   MonitorCog,
   Moon,
   Search,
+  Smartphone,
   Stethoscope,
   Sun,
   UserRound,
@@ -20,6 +21,7 @@ import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
+import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 
@@ -28,6 +30,7 @@ export type SettingsSection =
   | "notifications"
   | "appearance"
   | "tokens"
+  | "mobile"
   | "doctor";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
@@ -71,6 +74,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "tokens",
     label: "Tokens",
     icon: KeyRound,
+  },
+  {
+    value: "mobile",
+    label: "Mobile",
+    icon: Smartphone,
   },
   {
     value: "doctor",
@@ -228,6 +236,8 @@ export function renderSettingsSection(
       return <ThemeSettingsCard />;
     case "tokens":
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
+    case "mobile":
+      return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "doctor":
       return <DoctorSettingsPanel />;
     default: {

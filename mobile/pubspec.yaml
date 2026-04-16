@@ -12,6 +12,15 @@ dependencies:
   hooks_riverpod: ^3.0.3
   flutter_hooks: ^0.21.3
   lucide_icons_flutter: ^3.1.0
+  http: ^1.4.0
+  flutter_secure_storage: ^9.2.4
+  mobile_scanner: ^6.0.2
+  shared_preferences: ^2.5.5
+  web_socket_channel: ^3.0.1
+  connectivity_plus: ^6.1.4
+  nostr: ^1.5.0
+  url_launcher: ^6.3.2
+  gpt_markdown: ^1.1.6
 
 dev_dependencies:
   flutter_test:
@@ -23,3 +32,14 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/Geist-Variable.ttf
+        - asset: assets/fonts/Geist-Italic-Variable.ttf
+          style: italic
+    - family: GeistMono
+      fonts:
+        - asset: assets/fonts/GeistMono-Variable.ttf
+        - asset: assets/fonts/GeistMono-Italic-Variable.ttf
+          style: italic

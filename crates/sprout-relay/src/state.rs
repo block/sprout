@@ -21,6 +21,7 @@ use sprout_search::SearchService;
 use sprout_workflow::WorkflowEngine;
 
 use crate::api::tokens::MintRateLimiter;
+use crate::audio::AudioRoomManager;
 use crate::config::Config;
 use crate::connection::{ConnectionSubscriptions, SLOW_CLIENT_GRACE_LIMIT};
 use crate::subscription::SubscriptionRegistry;
@@ -202,6 +203,8 @@ pub struct AppState {
     pub search_index_tx: mpsc::Sender<StoredEvent>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
+    /// Audio relay room manager — tracks active huddle audio rooms.
+    pub audio_rooms: Arc<AudioRoomManager>,
     /// Set to `true` on SIGTERM — readiness probe returns 503.
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
@@ -280,6 +283,7 @@ impl AppState {
 
             search_index_tx,
             media_storage: Arc::new(media_storage),
+            audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
         }

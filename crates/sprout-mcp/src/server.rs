@@ -1020,7 +1020,9 @@ Default kind is 9 (stream message)."
     /// Send a code diff to a Sprout channel as kind:40008.
     #[tool(
         name = "send_diff_message",
-        description = "Send a code diff to a Sprout channel with syntax highlighting and structured metadata. The diff is rendered with GitHub-quality visualization in the desktop client."
+        description = "Send a code diff to a Sprout channel with syntax highlighting and structured metadata. \
+Include `parent_event_id` to post the diff as a thread reply. \
+The diff is rendered with GitHub-quality visualization in the desktop client."
     )]
     pub async fn send_diff_message(
         &self,

@@ -5,6 +5,18 @@ import {
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
 import type { FeedItem } from "@/shared/api/types";
+import {
+  KIND_APPROVAL_REQUEST,
+  KIND_FORUM_COMMENT,
+  KIND_FORUM_POST,
+  KIND_JOB_ACCEPTED,
+  KIND_JOB_CANCEL,
+  KIND_JOB_ERROR,
+  KIND_JOB_PROGRESS,
+  KIND_JOB_REQUEST,
+  KIND_JOB_RESULT,
+  KIND_REMINDER,
+} from "@/shared/constants/kinds";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
@@ -46,25 +58,25 @@ function formatRelativeTime(unixSeconds: number) {
 
 function feedHeadline(item: FeedItem) {
   switch (item.kind) {
-    case 40007:
+    case KIND_REMINDER:
       return "Reminder";
-    case 43001:
+    case KIND_JOB_REQUEST:
       return "Job requested";
-    case 43002:
+    case KIND_JOB_ACCEPTED:
       return "Job accepted";
-    case 43003:
+    case KIND_JOB_PROGRESS:
       return "Progress update";
-    case 43004:
+    case KIND_JOB_RESULT:
       return "Job result";
-    case 43005:
+    case KIND_JOB_CANCEL:
       return "Job cancelled";
-    case 43006:
+    case KIND_JOB_ERROR:
       return "Job failed";
-    case 45001:
+    case KIND_FORUM_POST:
       return "Forum post";
-    case 45003:
+    case KIND_FORUM_COMMENT:
       return "Forum reply";
-    case 46010:
+    case KIND_APPROVAL_REQUEST:
       return "Approval requested";
     default:
       if (item.category === "mention") {
@@ -85,11 +97,11 @@ function feedContent(item: FeedItem) {
     return content;
   }
 
-  if (item.kind === 46010) {
+  if (item.kind === KIND_APPROVAL_REQUEST) {
     return "A workflow is waiting for approval.";
   }
 
-  if (item.kind === 40007) {
+  if (item.kind === KIND_REMINDER) {
     return "A reminder is waiting for you.";
   }
 
@@ -107,7 +119,7 @@ type FeedSectionProps = {
   availableChannelIds: ReadonlySet<string>;
   doneSet: ReadonlySet<string>;
   showDoneAction: boolean;
-  onOpenChannel: (channelId: string) => void;
+  onOpenItem: (item: FeedItem) => void;
   onMarkDone: (id: string) => void;
   onUndoDone: (id: string) => void;
 };
@@ -123,7 +135,7 @@ export function FeedSection({
   availableChannelIds,
   doneSet,
   showDoneAction,
-  onOpenChannel,
+  onOpenItem,
   onMarkDone,
   onUndoDone,
 }: FeedSectionProps) {
@@ -164,10 +176,9 @@ export function FeedSection({
                   <button
                     aria-label={`Open ${item.channelName || "channel"}`}
                     className="absolute inset-0"
+                    data-testid={`home-feed-open-${item.id}`}
                     onClick={() => {
-                      if (channelId) {
-                        onOpenChannel(channelId);
-                      }
+                      onOpenItem(item);
                     }}
                     type="button"
                   />
@@ -197,12 +208,14 @@ export function FeedSection({
                   </span>
                 </div>
 
-                <Markdown
-                  className="pointer-events-none relative mt-0.5 max-w-none text-[13px] leading-snug text-muted-foreground"
-                  compact
-                  content={feedContent(item)}
-                  mentionNames={mentionNames}
-                />
+                <div className="pointer-events-none relative mt-0.5 line-clamp-2">
+                  <Markdown
+                    className="max-w-none text-[13px] leading-snug text-muted-foreground"
+                    compact
+                    content={feedContent(item)}
+                    mentionNames={mentionNames}
+                  />
+                </div>
 
                 {showDoneAction ? (
                   <Button

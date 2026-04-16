@@ -18,6 +18,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::api;
 use crate::api::tokens;
+use crate::audio;
 use crate::connection::handle_connection;
 use crate::metrics::track_metrics;
 use crate::nip11::{relay_info_handler, RelayInfo};
@@ -103,6 +104,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/approvals/by-hash/{hash}/deny",
             post(api::deny_approval_by_hash),
+        )
+        // Huddle audio WebSocket route
+        .route(
+            "/huddle/{channel_id}/audio",
+            get(audio::handler::ws_audio_handler),
         )
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))

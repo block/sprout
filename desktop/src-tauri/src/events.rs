@@ -357,6 +357,71 @@ pub fn build_profile(
     Ok(EventBuilder::new(Kind::Custom(0), content))
 }
 
+// ── Huddles ──────────────────────────────────────────────────────────────────
+
+/// Validate that a string is a valid UUID (defense-in-depth for `&str` channel IDs).
+fn validate_channel_id(id: &str) -> Result<(), String> {
+    uuid::Uuid::parse_str(id).map_err(|_| format!("invalid channel UUID: {id}"))?;
+    Ok(())
+}
+
+/// Shared builder for huddle lifecycle events (kinds 48100–48103).
+/// All huddle events share: validate two channel IDs, JSON content with
+/// `ephemeral_channel_id`, an `["h", parent_channel_id]` tag, and an
+/// optional `["p", participant_pubkey]` tag for join/leave identity.
+fn build_huddle_event(
+    kind: u16,
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+    extra_fields: &[(&str, &str)],
+    participant_pubkey: Option<&str>,
+) -> Result<EventBuilder, String> {
+    validate_channel_id(parent_channel_id)?;
+    validate_channel_id(ephemeral_channel_id)?;
+    let mut content = serde_json::json!({
+        "ephemeral_channel_id": ephemeral_channel_id,
+    });
+    for (k, v) in extra_fields {
+        content[*k] = serde_json::Value::String(v.to_string());
+    }
+    let mut tags = vec![tag(vec!["h", parent_channel_id])?];
+    if let Some(pk) = participant_pubkey {
+        tags.push(tag(vec!["p", pk])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(kind), content.to_string()).tags(tags))
+}
+
+/// Kind 48100 — huddle started advisory posted to the parent channel.
+pub fn build_huddle_started(
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+) -> Result<EventBuilder, String> {
+    build_huddle_event(48100, parent_channel_id, ephemeral_channel_id, &[], None)
+}
+
+/// Kind 48103 — huddle ended, posted to the parent channel.
+pub fn build_huddle_ended(
+    parent_channel_id: &str,
+    ephemeral_channel_id: &str,
+) -> Result<EventBuilder, String> {
+    build_huddle_event(48103, parent_channel_id, ephemeral_channel_id, &[], None)
+}
+
+/// Kind 48106 — voice-mode guidelines for agents in a huddle.
+///
+/// Posted to the **ephemeral** channel (not the parent) so agents see it
+/// via EOSE replay when they subscribe. Uses a dedicated kind so the TTS
+/// pipeline can filter it out without fragile content-prefix matching.
+pub fn build_huddle_guidelines(
+    ephemeral_channel_id: &str,
+    guidelines_text: &str,
+) -> Result<EventBuilder, String> {
+    validate_channel_id(ephemeral_channel_id)?;
+    check_content(guidelines_text)?;
+    let tags = vec![tag(vec!["h", ephemeral_channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(48106), guidelines_text).tags(tags))
+}
+
 // ── Social notes ────────────────────────────────────────────────────────────
 
 /// Kind 1 — NIP-01 short text note (global, no channel scope).
@@ -400,4 +465,43 @@ pub fn build_contact_list(
         }
     }
     Ok(EventBuilder::new(Kind::ContactList, "").tags(tags))
+}
+
+// ── Transport ────────────────────────────────────────────────────────────────
+
+/// Post a pre-signed event to the relay.
+///
+/// Standalone helper for async tasks that don't have access to `&AppState`.
+/// The caller pre-captures `http_client`, `api_token`, and `pubkey_hex` at
+/// spawn time and passes them here.
+///
+/// Returns `Err` on transport failure OR non-2xx HTTP status.
+pub async fn post_event_raw(
+    http_client: &reqwest::Client,
+    api_token: Option<&str>,
+    pubkey_hex: &str,
+    event_json: String,
+) -> Result<(), String> {
+    let url = format!("{}/api/events", crate::relay::relay_api_base_url());
+    let req = match api_token {
+        Some(token) => http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {token}")),
+        None => http_client.post(&url).header("X-Pubkey", pubkey_hex),
+    };
+    let response = req
+        .header("Content-Type", "application/json")
+        .body(event_json)
+        .send()
+        .await
+        .map_err(|e| format!("event POST failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "event POST HTTP {}: {}",
+            response.status().as_u16(),
+            response.status().canonical_reason().unwrap_or("unknown"),
+        ));
+    }
+    Ok(())
 }
