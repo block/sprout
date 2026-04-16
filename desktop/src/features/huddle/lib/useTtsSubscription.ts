@@ -11,7 +11,7 @@ import { relayClient } from "@/shared/api/relayClient";
  */
 export function useTtsSubscription(
   ephemeralChannelId: string | null,
-  selfPubkey: string | null,
+  selfPubkeyRef: React.RefObject<string | null>,
 ) {
   React.useEffect(() => {
     if (!ephemeralChannelId) return;
@@ -80,7 +80,7 @@ export function useTtsSubscription(
         if (!agentsLoaded) return;
         // Only speak agent messages — skip human STT transcripts.
         if (!agentPubkeys.has(event.pubkey)) return;
-        if (event.pubkey === selfPubkey) return;
+        if (event.pubkey === selfPubkeyRef.current) return;
         if (event.content.trim().length <= 1) return;
         // Legacy: skip [System]-prefixed messages from before kind:48106.
         if (event.content.startsWith("[System]")) return;
@@ -107,5 +107,5 @@ export function useTtsSubscription(
       cleanup?.();
       window.clearInterval(agentRefreshId);
     };
-  }, [ephemeralChannelId, selfPubkey]);
+  }, [ephemeralChannelId, selfPubkeyRef]);
 }

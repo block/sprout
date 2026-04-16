@@ -127,18 +127,33 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  // Fetch output devices on mount.
+  // Fetch output devices on mount and when system devices change.
   React.useEffect(() => {
-    invoke<{ name: string; is_default: boolean }[]>("list_audio_output_devices")
-      .then(setOutputDevices)
-      .catch(() => {
-        /* best-effort */
-      });
+    function refreshOutputDevices() {
+      invoke<{ name: string; is_default: boolean }[]>(
+        "list_audio_output_devices",
+      )
+        .then(setOutputDevices)
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+    refreshOutputDevices();
     invoke<string>("get_audio_output_device")
       .then(setSelectedOutputDeviceState)
       .catch(() => {
         /* best-effort */
       });
+    navigator.mediaDevices.addEventListener(
+      "devicechange",
+      refreshOutputDevices,
+    );
+    return () => {
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        refreshOutputDevices,
+      );
+    };
   }, []);
 
   /** Ref tracking latest micGain — read inside connectAndSetupMedia to
@@ -493,7 +508,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     [cleanupFailedStart, connectAndSetupMedia],
   );
 
-  useTtsSubscription(ephemeralChannelId, selfPubkeyRef.current);
+  useTtsSubscription(ephemeralChannelId, selfPubkeyRef);
 
   // Pipeline hot-start — check if voice models finished downloading mid-huddle
   React.useEffect(() => {
