@@ -23,6 +23,7 @@
 //! `&`, `=`, `%`, and space) are percent-encoded.
 
 use nostr::PublicKey;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use zeroize::Zeroize;
 
 use super::PairingError;
@@ -183,59 +184,20 @@ pub fn decode_qr(uri: &str) -> Result<QrPayload, PairingError> {
 
 /// Percent-encode a relay URL for use as a query parameter value.
 ///
-/// Encodes all characters that are unsafe in a query-parameter value:
-/// `:`, `/`, `?`, `#`, `&`, `=`, `%`, and space.
+/// Uses `percent-encoding` crate's `NON_ALPHANUMERIC` set, which encodes
+/// everything except ASCII alphanumerics. This is a strict superset of the
+/// characters unsafe in query-parameter values (`:`, `/`, `?`, `#`, `&`,
+/// `=`, `%`, space) — safe by construction.
 fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 16);
-    for b in s.bytes() {
-        match b {
-            b':' => out.push_str("%3A"),
-            b'/' => out.push_str("%2F"),
-            b'?' => out.push_str("%3F"),
-            b'#' => out.push_str("%23"),
-            b'&' => out.push_str("%26"),
-            b'=' => out.push_str("%3D"),
-            b'%' => out.push_str("%25"),
-            b' ' => out.push_str("%20"),
-            _ => out.push(b as char),
-        }
-    }
-    out
+    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
-/// Percent-decode a query parameter value (general-purpose).
+/// Percent-decode a query parameter value.
 ///
-/// Decodes into raw bytes first, then converts to a UTF-8 string.
-/// Falls back to lossy conversion for non-UTF-8 sequences (which
+/// Falls back to lossy UTF-8 conversion for non-UTF-8 sequences (which
 /// shouldn't appear in valid relay URLs, but we handle it safely).
 fn url_decode(s: &str) -> String {
-    let mut out: Vec<u8> = Vec::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = hex_nibble(bytes[i + 1]);
-            let lo = hex_nibble(bytes[i + 2]);
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push(h << 4 | l);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
-}
-
-/// Parse a single hex nibble (case-insensitive).
-fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+    percent_decode_str(s).decode_utf8_lossy().into_owned()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -286,7 +248,8 @@ mod tests {
     fn url_encoding_round_trip() {
         let relay = "wss://relay.example.com/path";
         let encoded = url_encode(relay);
-        assert_eq!(encoded, "wss%3A%2F%2Frelay.example.com%2Fpath");
+        // NON_ALPHANUMERIC encodes dots too — stricter than necessary but safe.
+        assert_eq!(encoded, "wss%3A%2F%2Frelay%2Eexample%2Ecom%2Fpath");
         let decoded = url_decode(&encoded);
         assert_eq!(decoded, relay);
     }

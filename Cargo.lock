@@ -3724,6 +3724,7 @@ dependencies = [
  "chrono",
  "hex",
  "nostr",
+ "percent-encoding",
  "rand 0.10.0",
  "schemars",
  "serde",

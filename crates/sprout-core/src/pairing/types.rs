@@ -63,6 +63,10 @@ pub enum PayloadType {
 }
 
 /// Machine-readable reason a pairing session was aborted.
+///
+/// The spec allows implementations to define additional reason strings.
+/// Unknown reasons are deserialized as [`Unknown`](AbortReason::Unknown)
+/// and SHOULD be treated as `protocol_error` per NIP-AB §Abort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AbortReason {
@@ -74,6 +78,12 @@ pub enum AbortReason {
     Timeout,
     /// An unexpected or malformed message was received.
     ProtocolError,
+    /// An unrecognized abort reason from a future or extended implementation.
+    /// Produced only by deserialization of unknown reason strings.
+    /// Callers MUST NOT use this variant for outbound aborts — use a
+    /// spec-defined reason instead. Treat as `ProtocolError` per NIP-AB §Abort.
+    #[serde(other)]
+    Unknown,
 }
 
 #[cfg(test)]
@@ -159,6 +169,27 @@ mod tests {
             let back: PairingMessage = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(msg, back);
         }
+    }
+
+    #[test]
+    fn unknown_abort_reason_deserializes_to_unknown() {
+        // NIP-AB §Abort: "unknown reasons SHOULD be treated as protocol_error"
+        let json = r#"{"type":"abort","reason":"solar_flare"}"#;
+        let msg: PairingMessage = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(
+            msg,
+            PairingMessage::Abort {
+                reason: AbortReason::Unknown
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_abort_reason_is_not_protocol_error_variant() {
+        // Unknown is a distinct variant — callers should never construct it
+        // for outbound use, but if they do it serializes distinctly from
+        // ProtocolError so we can catch the mistake.
+        assert_ne!(AbortReason::Unknown, AbortReason::ProtocolError);
     }
 
     #[test]

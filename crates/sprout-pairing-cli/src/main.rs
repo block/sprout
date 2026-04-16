@@ -264,11 +264,19 @@ async fn cmd_target(relay_override: Option<String>, show_secret: bool) -> Result
     println!("Offer sent. Waiting for source to confirm SAS...");
 
     // Wait for a valid sas-confirm event (skip junk; exit on peer abort).
+    // TranscriptMismatch is a hard security failure (possible MITM) —
+    // surface it immediately rather than swallowing it in the generic handler.
     loop {
         let event = wait_for_event(&mut read, "pair", Duration::from_secs(120)).await?;
         check_for_abort(&mut session, &event)?;
         match session.handle_sas_confirm(&event) {
             Ok(_) => break,
+            Err(PairingError::TranscriptMismatch) => {
+                return Err(CliError::Other(
+                    "SECURITY: transcript hash mismatch — possible MITM attack. Session aborted."
+                        .into(),
+                ));
+            }
             Err(e) => {
                 eprintln!("(ignoring invalid event: {e})");
                 continue;
