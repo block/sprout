@@ -495,6 +495,50 @@ pub enum StepResult {
 
 // ── Action dispatch ───────────────────────────────────────────────────────────
 
+fn resolve_send_message_channel(
+    explicit_channel: Option<&str>,
+    trigger_channel: &str,
+    workflow_channel_id: Option<Uuid>,
+) -> Result<String, WorkflowError> {
+    let explicit_channel = explicit_channel
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if let Some(workflow_channel_id) = workflow_channel_id {
+        if let Some(explicit_channel) = explicit_channel {
+            let override_channel_id = explicit_channel.parse::<Uuid>().map_err(|e| {
+                WorkflowError::InvalidDefinition(format!(
+                    "SendMessage: invalid channel override UUID: {e}"
+                ))
+            })?;
+            if override_channel_id != workflow_channel_id {
+                return Err(WorkflowError::InvalidDefinition(format!(
+                    "SendMessage: channel override must match the workflow channel ({workflow_channel_id})"
+                )));
+            }
+        }
+        return Ok(workflow_channel_id.to_string());
+    }
+
+    if let Some(explicit_channel) = explicit_channel {
+        let override_channel_id = explicit_channel.parse::<Uuid>().map_err(|e| {
+            WorkflowError::InvalidDefinition(format!(
+                "SendMessage: invalid channel override UUID: {e}"
+            ))
+        })?;
+        return Ok(override_channel_id.to_string());
+    }
+
+    if trigger_channel.trim().is_empty() {
+        return Err(WorkflowError::InvalidDefinition(
+            "SendMessage: no channel_id available (trigger has no channel context and no channel override was specified)"
+                .into(),
+        ));
+    }
+
+    Ok(trigger_channel.trim().to_string())
+}
+
 /// Dispatch a resolved action and return its output.
 ///
 /// For MVP, most actions log their intent and return a success output.
@@ -513,29 +557,7 @@ pub async fn dispatch_action(
 
     match action {
         SendMessage { text, channel } => {
-            // Use explicit channel override if provided; otherwise fall back to
-            // the channel that triggered this workflow run.
-            let channel_id = channel
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&trigger_ctx.channel_id);
-
-            info!(
-                run_id = %run_id,
-                step = step_id,
-                channel = %channel_id,
-                "SendMessage → {channel_id}: {text}"
-            );
-
-            if channel_id.is_empty() {
-                return Err(WorkflowError::InvalidDefinition(
-                    "SendMessage: no channel_id available (trigger has no channel context and \
-                     no channel override was specified)"
-                        .into(),
-                ));
-            }
-
-            // Look up workflow owner for message attribution.
+            // Look up workflow metadata for destination validation and attribution.
             let wf_run = engine.db.get_workflow_run(run_id).await.map_err(|e| {
                 WorkflowError::WebhookError(format!(
                     "SendMessage: failed to load workflow run {run_id}: {e}"
@@ -551,11 +573,23 @@ pub async fn dispatch_action(
                         wf_run.workflow_id
                     ))
                 })?;
+            let channel_id = resolve_send_message_channel(
+                channel.as_deref(),
+                &trigger_ctx.channel_id,
+                workflow.channel_id,
+            )?;
             let owner_pubkey_hex = hex::encode(&workflow.owner_pubkey);
+
+            info!(
+                run_id = %run_id,
+                step = step_id,
+                channel = %channel_id,
+                "SendMessage → {channel_id}: {text}"
+            );
 
             let event_id = engine
                 .action_sink()?
-                .send_message(channel_id, text, &owner_pubkey_hex)
+                .send_message(&channel_id, text, &owner_pubkey_hex)
                 .await
                 .map_err(WorkflowError::from)?;
 
@@ -1786,5 +1820,39 @@ mod tests {
         assert_eq!(ctx.emoji, "");
         assert_eq!(ctx.message_id, "");
         assert!(ctx.webhook_fields.is_empty());
+    }
+
+    #[test]
+    fn send_message_uses_bound_workflow_channel_by_default() {
+        let workflow_channel_id = Uuid::new_v4();
+        let resolved = resolve_send_message_channel(None, "", Some(workflow_channel_id))
+            .expect("bound channel should be used");
+        assert_eq!(resolved, workflow_channel_id.to_string());
+    }
+
+    #[test]
+    fn send_message_rejects_cross_channel_override_for_bound_workflow() {
+        let workflow_channel_id = Uuid::new_v4();
+        let other_channel_id = Uuid::new_v4();
+        let err = resolve_send_message_channel(
+            Some(&other_channel_id.to_string()),
+            "",
+            Some(workflow_channel_id),
+        )
+        .unwrap_err();
+        assert!(matches!(err, WorkflowError::InvalidDefinition(_)));
+        assert!(
+            err.to_string().contains("channel override must match"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn send_message_canonicalizes_valid_explicit_override_for_global_workflow() {
+        let override_channel_id = Uuid::new_v4();
+        let resolved =
+            resolve_send_message_channel(Some(&override_channel_id.to_string()), "", None)
+                .expect("override should be accepted");
+        assert_eq!(resolved, override_channel_id.to_string());
     }
 }

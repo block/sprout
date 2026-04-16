@@ -84,13 +84,29 @@ impl ActionSink for RelayActionSink {
                 ));
             }
 
+            let author_pubkey = nostr::PublicKey::from_hex(&author_pubkey).map_err(|e| {
+                ActionSinkError::InvalidInput(format!("invalid author pubkey: {e}"))
+            })?;
+            let author_pubkey_bytes = author_pubkey.serialize().to_vec();
+            let author_pubkey_hex = author_pubkey.to_hex();
+            let is_member = state
+                .db
+                .is_member(channel_uuid, &author_pubkey_bytes)
+                .await
+                .map_err(|e| ActionSinkError::Database(e.to_string()))?;
+            if !is_member && channel.visibility != "open" {
+                return Err(ActionSinkError::InvalidInput(
+                    "workflow owner does not have access to destination channel".into(),
+                ));
+            }
+
             // 3. Build kind:9 Nostr event
             //    - Signed by relay keypair (event.pubkey = relay pubkey)
             //    - `p` tag attributes the message to the workflow owner
             //    - `h` tag scopes to the channel (NIP-29, canonical UUID)
             //    - `sprout:workflow` tag prevents recursive workflow triggering
             let tags = vec![
-                Tag::parse(&["p", &author_pubkey])
+                Tag::parse(&["p", &author_pubkey_hex])
                     .map_err(|e| ActionSinkError::EventBuild(format!("p tag: {e}")))?,
                 Tag::parse(&["h", &channel_id_canonical])
                     .map_err(|e| ActionSinkError::EventBuild(format!("h tag: {e}")))?,
@@ -142,8 +158,9 @@ impl ActionSink for RelayActionSink {
             // 5. Post-persist side effects (fan-out, search, audit)
             //    Only if actually inserted (idempotency guard).
             if was_inserted {
-                let _ = dispatch_persistent_event(&state, &stored_event, kind_u32, &author_pubkey)
-                    .await;
+                let _ =
+                    dispatch_persistent_event(&state, &stored_event, kind_u32, &author_pubkey_hex)
+                        .await;
             }
 
             Ok(event_id_hex)

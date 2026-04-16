@@ -39,18 +39,31 @@ void main() {
     ),
     Channel(
       id: '2',
-      name: 'secret',
-      channelType: 'stream',
-      visibility: 'private',
-      description: 'Private channel',
+      name: 'design-forum',
+      channelType: 'forum',
+      visibility: 'open',
+      description: 'Discuss designs',
       createdBy: 'abc',
       createdAt: DateTime(2025),
       memberCount: 3,
-      isMember: false,
+      isMember: true,
+    ),
+    Channel(
+      id: '3',
+      name: 'dm-alice',
+      channelType: 'dm',
+      visibility: 'open',
+      description: 'Direct message',
+      createdBy: 'abc',
+      createdAt: DateTime(2025),
+      memberCount: 2,
+      participants: const ['Test', 'Alice'],
+      participantPubkeys: const ['aabb', 'alice'],
+      isMember: true,
     ),
   ];
 
-  testWidgets('shows channel list when data loads', (tester) async {
+  testWidgets('shows grouped channel list when data loads', (tester) async {
     await tester.pumpWidget(
       buildTestable(
         overrides: [
@@ -61,9 +74,63 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('general'), findsOneWidget);
-    expect(find.text('secret'), findsOneWidget);
-    // Section header shows channel count
-    expect(find.text('2'), findsOneWidget);
+    expect(find.text('design-forum'), findsOneWidget);
+    expect(find.text('Alice'), findsOneWidget);
+    expect(find.text('CHANNELS'), findsOneWidget);
+    expect(find.text('FORUMS'), findsOneWidget);
+    expect(find.text('DMS'), findsOneWidget);
+    expect(find.text('Search'), findsOneWidget);
+    expect(find.byTooltip('Create or start conversation'), findsOneWidget);
+  });
+
+  testWidgets('hides unjoined and archived channels from the main list', (
+    tester,
+  ) async {
+    final channels = [
+      ...testChannels,
+      Channel(
+        id: '4',
+        name: 'open-stream',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'Available to join',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 8,
+        isMember: false,
+      ),
+      Channel(
+        id: '5',
+        name: 'archived-stream',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'Archived channel',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 4,
+        isMember: true,
+        archivedAt: DateTime(2025, 1, 2),
+      ),
+    ];
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('general'), findsOneWidget);
+    expect(find.text('open-stream'), findsNothing);
+    expect(find.text('archived-stream'), findsNothing);
+
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('open-stream'), findsOneWidget);
+    expect(find.text('archived-stream'), findsOneWidget);
   });
 
   testWidgets('shows empty state when no channels', (tester) async {
@@ -74,7 +141,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('No channels yet'), findsOneWidget);
+    expect(find.text('No conversations yet'), findsOneWidget);
   });
 
   testWidgets('shows error view with retry button', (tester) async {

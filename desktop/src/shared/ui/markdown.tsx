@@ -255,7 +255,10 @@ function createMarkdownComponents(
       <ul className={cn("list-disc", listClassName)}>{children}</ul>
     ),
     mention: ({ children }: { children?: React.ReactNode }) => (
-      <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary">
+      <span
+        data-mention=""
+        className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-semibold text-primary"
+      >
         {children}
       </span>
     ),
@@ -272,6 +275,7 @@ function createMarkdownComponents(
         return (
           <button
             type="button"
+            data-channel-link=""
             aria-label={`Open channel ${channelName}`}
             className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
             onClick={() => {
@@ -284,7 +288,10 @@ function createMarkdownComponents(
       }
 
       return (
-        <span className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary">
+        <span
+          data-channel-link=""
+          className="rounded-md bg-primary/15 px-1 py-0.5 text-sm text-primary"
+        >
           {children}
         </span>
       );

@@ -10,6 +10,10 @@ import {
   useMediaUpload,
 } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
+import {
+  hasMentionClipboardHtml,
+  normalizeMentionClipboardHtml,
+} from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { cn } from "@/shared/lib/cn";
@@ -431,17 +435,46 @@ export function MessageComposer({
       editorProps: {
         ...richText.editor.options.editorProps,
         handlePaste: (_view, event) => {
+          // --- Media paste ---
           const items = Array.from(event.clipboardData?.items ?? []);
           const mediaItem = items.find((item) =>
             ALLOWED_MEDIA_TYPES.includes(item.type),
           );
-          if (!mediaItem) return false;
-
-          const file = mediaItem.getAsFile();
-          if (file) {
-            void uploadFileRef.current(file);
+          if (mediaItem) {
+            const file = mediaItem.getAsFile();
+            if (file) {
+              void uploadFileRef.current(file);
+            }
+            return true;
           }
-          return true;
+
+          // --- Mention / channel-link normalization ---
+          // When copying from the chat area the browser puts styled HTML
+          // on the clipboard. TipTap's DOMParser doesn't understand our
+          // custom `data-mention` / `data-channel-link` spans, so the
+          // pasted text can arrive with stale formatting and without the
+          // `@` / `#` prefix.  Detect this case, flatten the HTML to
+          // plain text and insert directly — bypassing TipTap's Bold
+          // extension which would otherwise wrap the mention in `**`.
+          // NOTE: This flattens *all* formatting in the pasted fragment
+          // when mentions are present. Acceptable for the primary use
+          // case (pasting a mention chip); a future refinement could
+          // preserve non-mention formatting.
+          const html = event.clipboardData?.getData("text/html");
+          if (html && hasMentionClipboardHtml(html)) {
+            const cleanText = normalizeMentionClipboardHtml(html);
+            event.preventDefault();
+            _view.dispatch(
+              _view.state.tr.insertText(
+                cleanText,
+                _view.state.selection.from,
+                _view.state.selection.to,
+              ),
+            );
+            return true;
+          }
+
+          return false;
         },
       },
     });

@@ -7,7 +7,7 @@ import {
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
-import { escapeRegExp } from "@/shared/lib/mentionPattern";
+import { hasMention } from "./hasMention";
 
 const MENTION_DEBOUNCE_MS = 120;
 
@@ -219,17 +219,8 @@ export function useMentions(channelId: string | null) {
     (text: string): string[] => {
       const pubkeys: string[] = [];
 
-      const hasMention = (name: string): boolean => {
-        const escaped = escapeRegExp(name);
-        const pattern = new RegExp(
-          `(?:^|\\s)@${escaped}(?=[\\s,;.!?:)\\]}]|$)`,
-          "i",
-        );
-        return pattern.test(text);
-      };
-
       for (const [displayName, pubkey] of mentionMapRef.current) {
-        if (hasMention(displayName)) {
+        if (hasMention(text, displayName)) {
           pubkeys.push(pubkey);
         }
       }
@@ -241,7 +232,7 @@ export function useMentions(channelId: string | null) {
         const name =
           member.displayName ??
           managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
-        if (name && hasMention(name)) {
+        if (name && hasMention(text, name)) {
           pubkeys.push(member.pubkey);
         }
       }
