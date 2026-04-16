@@ -110,9 +110,10 @@ impl TtsPipeline {
         model_dir: PathBuf,
         tts_active: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
+        output_device: Option<String>,
     ) -> Result<Self, String> {
         use super::kokoro::DEFAULT_VOICE;
-        Self::new_with_voice(model_dir, tts_active, cancel, DEFAULT_VOICE)
+        Self::new_with_voice(model_dir, tts_active, cancel, DEFAULT_VOICE, output_device)
     }
 
     /// Spawn the TTS pipeline thread with a specific voice name (e.g. `"af_heart"`, `"am_michael"`).
@@ -121,6 +122,7 @@ impl TtsPipeline {
         tts_active: Arc<AtomicBool>,
         cancel: Arc<AtomicBool>,
         voice: &str,
+        output_device: Option<String>,
     ) -> Result<Self, String> {
         let (text_tx, text_rx) = mpsc::sync_channel::<String>(TEXT_QUEUE_DEPTH);
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -142,6 +144,7 @@ impl TtsPipeline {
                     tts_active_worker,
                     shutdown_worker,
                     cancel_worker,
+                    output_device,
                 )
             })
             .map_err(|e| format!("failed to spawn tts-worker thread: {e}"))?;
@@ -199,6 +202,7 @@ fn tts_worker(
     tts_active: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
+    output_device: Option<String>,
 ) {
     // ── 1. Initialise Kokoro engine ───────────────────────────────────────────
     let model_dir_str = model_dir.to_string_lossy().to_string();
@@ -229,9 +233,10 @@ fn tts_worker(
     };
 
     // ── 3. Initialise rodio output device ─────────────────────────────────────
-    use rodio::{DeviceSinkBuilder, Player};
+    use rodio::Player;
 
-    let sink_handle = match DeviceSinkBuilder::open_default_sink() {
+    let sink_handle = match super::audio_output::open_output_sink_by_name(output_device.as_deref())
+    {
         Ok(h) => h,
         Err(e) => {
             eprintln!("sprout-desktop: TTS audio output failed: {e}. TTS disabled.");

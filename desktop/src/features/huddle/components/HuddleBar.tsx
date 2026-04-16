@@ -1,25 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import {
-  Mic,
-  MicOff,
-  PhoneOff,
-  Plus,
-  Users,
-  Volume2,
-  VolumeX,
-} from "lucide-react";
+import { Headphones, PhoneOff, Plus } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { useHuddle } from "../HuddleContext";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
+import { MicControls, SpeakerControls } from "./MicControls";
 import { ParticipantList } from "./ParticipantList";
 
-// Shape returned by the `get_huddle_state` Tauri command.
-// NOTE: This mirrors the HuddleState struct in the Rust backend (src-tauri/src/huddle/mod.rs).
-// If you add/remove fields here, update the Rust struct (and vice versa).
+// Mirrors HuddleState in src-tauri/src/huddle/mod.rs.
 type HuddleState = {
   phase:
     | "idle"
@@ -46,6 +37,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
     localAudioTrack,
     leaveHuddle,
     endHuddle,
+    isStarting,
     micConnected,
     micLevel,
     pttActive,
@@ -54,13 +46,19 @@ export function HuddleBar({ className }: HuddleBarProps) {
     activeSpeakers,
     huddleError,
     clearHuddleError,
+    audioDevices,
+    selectedDeviceId,
+    setSelectedDeviceId,
+    micGain,
+    setMicGain,
+    outputDevices,
+    selectedOutputDevice,
+    setSelectedOutputDevice,
   } = useHuddle();
 
   const isPttMode = voiceInputMode === "push_to_talk";
   const [state, setState] = React.useState<HuddleState | null>(null);
   const [isMuted, setIsMuted] = React.useState(false);
-  // Derive TTS enabled from backend state (single source of truth).
-  // Fall back to true if state hasn't loaded yet.
   const ttsEnabled = state?.tts_enabled ?? true;
   const [isLeaving, setIsLeaving] = React.useState(false);
   const [showAddAgent, setShowAddAgent] = React.useState(false);
@@ -69,8 +67,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
     moonshine: string;
     kokoro: string;
   } | null>(null);
-
-  // Huddle state: event-driven primary path + 10s fallback poll.
+  // Huddle state: event-driven + 10s fallback poll.
   React.useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -112,15 +109,12 @@ export function HuddleBar({ className }: HuddleBarProps) {
     };
   }, []);
 
-  // Poll model download status while huddle is active
   const huddlePhase = state?.phase;
   React.useEffect(() => {
     if (huddlePhase !== "active" && huddlePhase !== "connected") return;
 
     let cancelled = false;
 
-    // ModelStatus serializes as: "ready" | "not_downloaded" (strings)
-    // or { downloading: { progress_percent: N } } | { error: "msg" } (objects).
     const fmt = (s: unknown): string => {
       if (typeof s === "string") return s === "ready" ? "ready" : "pending";
       if (typeof s === "object" && s !== null) {
@@ -161,7 +155,6 @@ export function HuddleBar({ className }: HuddleBarProps) {
     };
   }, [huddlePhase]);
 
-  // Sync mute state to the audio track
   React.useEffect(() => {
     if (localAudioTrack) {
       localAudioTrack.enabled = !isMuted;
@@ -179,8 +172,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
       if (backendClean) {
         setState(null);
       }
-      // If backend cleanup failed, keep the bar visible so the user can retry.
-      // leaveHuddle retains rustActiveRef=true for the next attempt.
+      // If cleanup failed, keep the bar visible so the user can retry.
     } catch (e) {
       console.error("Failed to leave huddle:", e);
     } finally {
@@ -200,7 +192,7 @@ export function HuddleBar({ className }: HuddleBarProps) {
       if (backendClean) {
         setState(null);
       }
-      // If backend cleanup failed, keep the bar visible so the user can retry.
+      // If cleanup failed, keep the bar visible so the user can retry.
     } catch (e) {
       console.error("Failed to end huddle:", e);
     } finally {
@@ -211,13 +203,11 @@ export function HuddleBar({ className }: HuddleBarProps) {
   return (
     <div
       className={cn(
-        "fixed bottom-4 left-1/2 z-50 -translate-x-1/2",
-        "flex items-center gap-3 rounded-xl px-4 py-2",
-        "bg-background/95 shadow-lg ring-1 ring-border backdrop-blur-sm",
+        "flex items-center gap-3 border-t bg-background px-4 py-2",
         className,
       )}
     >
-      {/* Error banner — dismissible, shown when start/join fails */}
+      {/* Error banner */}
       {huddleError && (
         <div
           role="alert"
@@ -235,15 +225,6 @@ export function HuddleBar({ className }: HuddleBarProps) {
         </div>
       )}
 
-      {/* Room label */}
-      <span className="text-xs font-medium text-foreground">Huddle</span>
-
-      {/* Huddle status */}
-      <div className="flex items-center gap-1 text-xs text-muted-foreground">
-        <Users className="h-3 w-3" />
-        <span>In huddle</span>
-      </div>
-
       {/* Model download progress */}
       {modelStatus &&
         (modelStatus.moonshine !== "ready" ||
@@ -260,89 +241,117 @@ export function HuddleBar({ className }: HuddleBarProps) {
           </output>
         )}
 
-      {/* Participant avatars */}
-      {state.participants.length > 0 && (
+      {/* Participants */}
+      <div className="flex items-center gap-2">
+        <Headphones className="h-4 w-4 text-muted-foreground" />
         <ParticipantList
           participants={state.participants}
           activeSpeakers={activeSpeakers}
           agentPubkeys={state.agent_pubkeys}
+          onRemoveAgent={async (pubkey) => {
+            if (!state.ephemeral_channel_id) return;
+            const confirmed = window.confirm(
+              "Remove this agent from the huddle?",
+            );
+            if (!confirmed) return;
+            try {
+              await invoke("remove_channel_member", {
+                channelId: state.ephemeral_channel_id,
+                pubkey,
+              });
+              // Optimistically remove from local state — the backend's
+              // 15s membership poll will eventually converge.
+              setState((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  participants: prev.participants.filter((p) => p !== pubkey),
+                  agent_pubkeys: prev.agent_pubkeys.filter((p) => p !== pubkey),
+                };
+              });
+            } catch (e) {
+              console.error("Failed to remove agent from huddle:", e);
+            }
+          }}
         />
-      )}
-
-      {/* Voice input mode indicator */}
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        {micConnected ? (
-          isPttMode ? (
-            <>
-              <div
-                className={cn(
-                  "h-2.5 w-2.5 rounded-full transition-colors",
-                  pttActive && !isMuted
-                    ? "bg-green-500 animate-pulse"
-                    : "bg-zinc-500",
-                )}
-                title={
-                  isMuted
-                    ? "Muted (PTT overridden)"
-                    : pttActive
-                      ? "Transmitting"
-                      : "Push Ctrl+Space to talk"
-                }
-              />
-              <span>PTT</span>
-              <span className="text-[10px] opacity-60">Ctrl+Space</span>
-            </>
-          ) : (
-            <>
-              <div
-                className="h-2.5 w-2.5 rounded-full transition-colors"
-                style={{
-                  backgroundColor:
-                    micLevel > 0.05
-                      ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
-                      : "rgba(100, 116, 139, 0.4)",
-                }}
-                title={`Mic level: ${Math.round(micLevel * 100)}%`}
-              />
-              <span>VAD</span>
-            </>
-          )
-        ) : (
-          <span className="text-destructive/70">no mic</span>
-        )}
+        <Button
+          aria-label="Add agent to huddle"
+          className="h-7 w-7"
+          onClick={() => setShowAddAgent(true)}
+          size="icon"
+          variant="ghost"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
-      {/* Voice input mode toggle */}
-      <Button
-        aria-label={
-          isPttMode
-            ? "Switch to voice activity mode"
-            : "Switch to push-to-talk mode"
-        }
-        aria-pressed={isPttMode}
-        className="h-6 px-1.5 text-[10px]"
-        onClick={() =>
-          void setVoiceInputMode(isPttMode ? "voice_activity" : "push_to_talk")
-        }
-        size="sm"
-        variant="ghost"
-        title={
-          isPttMode ? "Switch to Voice Activity" : "Switch to Push-to-Talk"
-        }
-      >
-        {isPttMode ? "→ VAD" : "→ PTT"}
-      </Button>
-
-      {/* Add agent button */}
-      <Button
-        aria-label="Add agent to huddle"
-        className="h-8 w-8"
-        onClick={() => setShowAddAgent(true)}
-        size="icon"
-        variant="secondary"
-      >
-        <Plus className="h-4 w-4" />
-      </Button>
+      {/* Voice input mode — single toggle combining indicator + switch */}
+      {micConnected ? (
+        <>
+          <Button
+            aria-label={
+              isPttMode
+                ? "Push to Talk mode — click to switch to Auto"
+                : "Auto mode — click to switch to Push to Talk"
+            }
+            className="h-7 gap-1.5 px-2 text-xs"
+            onClick={() =>
+              void setVoiceInputMode(
+                isPttMode ? "voice_activity" : "push_to_talk",
+              )
+            }
+            size="sm"
+            variant="ghost"
+            title={
+              isPttMode
+                ? "Push to Talk — hold Ctrl+Space to transmit. Click to switch to Auto."
+                : "Auto — mic is always live. Click to switch to Push to Talk."
+            }
+          >
+            {isPttMode ? (
+              <>
+                <div
+                  className={cn(
+                    "h-2 w-2 rounded-full transition-colors",
+                    pttActive && !isMuted
+                      ? "animate-pulse bg-green-500"
+                      : "bg-zinc-500",
+                  )}
+                />
+                Push to Talk
+              </>
+            ) : (
+              <>
+                <div
+                  className="h-2 w-2 rounded-full transition-colors"
+                  style={{
+                    backgroundColor:
+                      micLevel > 0.05
+                        ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
+                        : "rgba(100, 116, 139, 0.4)",
+                  }}
+                />
+                Auto
+              </>
+            )}
+          </Button>
+          {isPttMode && (
+            <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {navigator.platform?.includes("Mac") ? "⌃Space" : "Ctrl+Space"}
+            </kbd>
+          )}
+        </>
+      ) : (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div
+            className={cn(
+              "h-2 w-2 rounded-full",
+              isStarting ? "animate-pulse bg-green-500" : "bg-destructive/70",
+            )}
+          />
+          {isStarting ? "Connecting…" : "No mic"}
+        </span>
+      )}
 
       {agentAddError && (
         <span className="max-w-[180px] truncate rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
@@ -357,9 +366,14 @@ export function HuddleBar({ className }: HuddleBarProps) {
           onAdd={async (pubkey: string): Promise<AgentAddResult> => {
             setAgentAddError(null);
             try {
-              return await invoke<AgentAddResult>("add_agent_to_huddle", {
-                agentPubkey: pubkey,
-              });
+              const result = await invoke<AgentAddResult>(
+                "add_agent_to_huddle",
+                { agentPubkey: pubkey },
+              );
+              // Refresh huddle state so the participant list updates immediately.
+              const s = await invoke<HuddleState>("get_huddle_state");
+              setState(s);
+              return result;
             } catch (e: unknown) {
               const msg = e instanceof Error ? e.message : String(e);
               setAgentAddError(`Failed to add agent: ${msg}`);
@@ -369,83 +383,65 @@ export function HuddleBar({ className }: HuddleBarProps) {
         />
       )}
 
-      {/* Mute toggle — in PTT mode acts as hard mute override (even PTT won't transmit) */}
-      <Button
-        aria-label={
-          isMuted
-            ? "Unmute microphone"
-            : isPttMode
-              ? "Force mute (overrides PTT)"
-              : "Mute microphone"
-        }
-        aria-pressed={isMuted}
-        className={cn(
-          "h-8 w-8",
-          isPttMode &&
-            pttActive &&
-            !isMuted &&
-            "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
-        )}
-        onClick={() => setIsMuted((m) => !m)}
-        size="icon"
-        variant={isMuted ? "destructive" : "secondary"}
-      >
-        {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-      </Button>
+      <MicControls
+        isMuted={isMuted}
+        onToggleMute={() => setIsMuted((m) => !m)}
+        isPttMode={isPttMode}
+        pttActive={pttActive}
+        micConnected={micConnected}
+        audioDevices={audioDevices}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={setSelectedDeviceId}
+        micGain={micGain}
+        onGainChange={setMicGain}
+      />
 
-      {/* TTS toggle */}
-      <Button
-        aria-label={ttsEnabled ? "Mute agent speech" : "Unmute agent speech"}
-        aria-pressed={!ttsEnabled}
-        className="h-8 w-8"
-        onClick={async () => {
-          const next = !ttsEnabled;
+      <SpeakerControls
+        ttsEnabled={ttsEnabled}
+        onToggleTts={async () => {
           try {
-            await invoke("set_tts_enabled", { enabled: next });
-            // Refresh state immediately so the UI reflects the change
+            await invoke("set_tts_enabled", { enabled: !ttsEnabled });
             const s = await invoke<HuddleState>("get_huddle_state");
             setState(s);
           } catch (e) {
             console.error("Failed to toggle TTS:", e);
           }
         }}
-        size="icon"
-        variant={ttsEnabled ? "secondary" : "destructive"}
-      >
-        {ttsEnabled ? (
-          <Volume2 className="h-4 w-4" />
-        ) : (
-          <VolumeX className="h-4 w-4" />
-        )}
-      </Button>
+        outputDevices={outputDevices}
+        selectedOutputDevice={selectedOutputDevice}
+        onSelectOutputDevice={setSelectedOutputDevice}
+      />
 
-      {/* Leave / End buttons — available to all participants */}
-      <Button
-        aria-label="Leave huddle"
-        className="h-8 w-8"
-        disabled={isLeaving}
-        aria-busy={isLeaving}
-        onClick={() => void handleLeave()}
-        size="icon"
-        variant="destructive"
-        title="Leave huddle (press Escape to dismiss dialogs first)"
-      >
-        <PhoneOff className="h-4 w-4" />
-      </Button>
-
-      {state?.is_creator && (
+      {/* Leave / End buttons — pushed to the right */}
+      <div className="ml-auto flex items-center gap-2">
         <Button
-          aria-label="End huddle for everyone"
-          className="h-6 px-1.5 text-[10px]"
+          aria-label="Leave huddle"
+          className="h-8 gap-1.5 px-3"
           disabled={isLeaving}
-          onClick={() => void handleEnd()}
+          aria-busy={isLeaving}
+          onClick={() => void handleLeave()}
           size="sm"
-          variant="ghost"
-          title="End huddle for everyone (archives channel)"
+          variant="destructive"
+          title="Leave huddle"
         >
-          End all
+          <PhoneOff className="h-4 w-4" />
+          Leave
         </Button>
-      )}
+        {state?.is_creator && (
+          <Button
+            aria-label="End huddle for everyone"
+            className="h-8 gap-1.5 px-3"
+            disabled={isLeaving}
+            onClick={() => void handleEnd()}
+            size="sm"
+            variant="destructive"
+            title="End huddle for everyone"
+          >
+            <PhoneOff className="h-4 w-4" />
+            End for all
+          </Button>
+        )}
+      </div>
 
       {/* Screen reader announcements for huddle state changes */}
       <output aria-live="polite" className="sr-only">

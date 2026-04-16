@@ -193,7 +193,12 @@ pub(crate) async fn maybe_start_tts_pipeline(state: &AppState) -> Result<bool, S
 
     // Construct outside the lock — this spawns the TTS worker thread and
     // loads ONNX sessions (~200ms). If this fails, clear the sentinel.
-    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active, tts_cancel) {
+    let output_device = state
+        .audio_output_device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active, tts_cancel, output_device) {
         Ok(p) => Arc::new(p),
         Err(e) => {
             let hs = state.huddle()?;
