@@ -590,6 +590,21 @@ pub fn load_text_to_speech(model_dir: &str) -> Result<KokoroTTS, String> {
         .find(|p| p.exists())
         .ok_or_else(|| format!("no model.onnx found in {model_dir}"))?;
 
+    // ── Session threading options ────────────────────────────────────────
+    //
+    // parallel_execution — runs independent graph operators concurrently.
+    //   Kokoro's graph is mostly sequential, so the benefit is modest, but
+    //   it's safe and free to enable.
+    // intra_threads(0) — lets ONNX Runtime use all available CPU cores for
+    //   parallelism within individual operators (e.g., large matmuls).
+    //
+    // NOTE: GraphOptimizationLevel::All is already the ort default — no
+    // need to set it explicitly. Accuracy-altering flags (approximate_gelu,
+    // flush_to_zero) are intentionally omitted — they need A/B audio
+    // validation before enabling for a TTS model. memory_pattern is omitted
+    // because Kokoro input lengths vary per sentence and the ORT docs warn
+    // against it for variable-size inputs.
+
     // Try CoreML first (zero binary cost — macOS system framework).
     // If the model has ops CoreML can't handle (common with quantized models),
     // the EP registers fine but commit_from_file fails. Catch that and retry
@@ -597,6 +612,10 @@ pub fn load_text_to_speech(model_dir: &str) -> Result<KokoroTTS, String> {
     let session = {
         let mut builder_with_coreml = Session::builder()
             .map_err(|e| format!("session builder: {e}"))?
+            .with_parallel_execution(true)
+            .map_err(|e| format!("parallel execution: {e}"))?
+            .with_intra_threads(0)
+            .map_err(|e| format!("intra threads: {e}"))?
             .with_execution_providers([ort::ep::CoreML::default()
                 .with_compute_units(ort::ep::coreml::ComputeUnits::All)
                 .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
@@ -617,6 +636,10 @@ pub fn load_text_to_speech(model_dir: &str) -> Result<KokoroTTS, String> {
                 // Retry without any execution providers — pure CPU.
                 Session::builder()
                     .map_err(|e| format!("session builder (CPU fallback): {e}"))?
+                    .with_parallel_execution(true)
+                    .map_err(|e| format!("parallel execution (CPU): {e}"))?
+                    .with_intra_threads(0)
+                    .map_err(|e| format!("intra threads (CPU): {e}"))?
                     .commit_from_file(&model_path)
                     .map_err(|e| format!("load model {} (CPU): {e}", model_path.display()))?
             }
