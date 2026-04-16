@@ -601,6 +601,51 @@ NIP-44 is the Nostr standard for authenticated encryption. Using it here means N
 
 An independent security audit of this protocol is planned. Until an audit is completed, implementations in high-security contexts should treat this NIP as `draft` and conduct their own review.
 
+## Formal Verification
+
+A Tamarin model of the protocol lives at [NIP-AB.spthy](NIP-AB.spthy). The model focuses on the security-critical core of the protocol:
+
+- QR distribution of `session_secret` and `source_ephemeral_pubkey`
+- `offer` authentication via possession of the QR secret
+- SAS comparison as an explicit user-mediated gate
+- `sas-confirm` transcript binding
+- encrypted `payload` delivery
+- advisory `complete` acknowledgment
+
+The model treats the relay and network as a full **Dolev-Yao attacker**: the adversary can intercept, reorder, replay, drop, and fabricate messages. It also includes explicit compromise rules for:
+
+- QR-code exposure (`session_secret` leaks out-of-band)
+- source-session compromise
+- target-session compromise
+
+Under those assumptions, the proved lemmas are:
+
+- **Executability**: the happy-path protocol completes.
+- **SAS gate**: an honest source can only send `payload` after a successful SAS match.
+- **No MITM**: every SAS match — and therefore every payload send — is bound to a pkT that a real target actually generated. A network adversary that substitutes the offer's ephemeral with an attacker-chosen key can never cause the SAS-match rule to fire.
+- **Payload secrecy**: the payload remains unknown to the attacker unless one endpoint session is compromised. QR-code exposure alone does not break secrecy, because the SAS gate still pins delivery to a real target.
+- **Target agreement**: if the target completes, then the source previously sent that exact payload in the same session.
+- **Source completion soundness**: under the same no-compromise assumptions, if the source accepts `complete`, the target previously completed the same session.
+- **Dual consent**: the target never decrypts the payload without an explicit user-approval step after transcript verification.
+
+The model also includes sanity `exists-trace` lemmas that each compromise rule is reachable and that endpoint compromise genuinely enables payload recovery, so the no-compromise guarantees are not vacuous.
+
+The Tamarin model intentionally abstracts away wire-format details that are orthogonal to the cryptographic proof:
+
+- exact NIP-01 event IDs / Schnorr signatures
+- exact NIP-44 ciphertext framing and padding
+- timeout and abort branches
+- duplicate-event bookkeeping
+- payload typing (`nsec` / `bunker` / `connect` / `custom`)
+
+Those behaviors remain normative in this document and in the Rust implementation; they are simply not the focus of the symbolic proof.
+
+Run the proof with:
+
+```bash
+tamarin-prover --prove crates/sprout-core/src/pairing/NIP-AB.spthy
+```
+
 ## Cryptographic Primitives
 
 ### ECDH
