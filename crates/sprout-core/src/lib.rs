@@ -17,6 +17,8 @@ pub mod filter;
 pub mod kind;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
+/// NIP-AB device pairing — crypto primitives, message types, and errors.
+pub mod pairing;
 /// Presence status types shared across crates.
 pub mod presence;
 /// Schnorr signature and event ID verification.

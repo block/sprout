@@ -20,5 +20,10 @@ uuid       = { workspace = true }
 chrono     = { workspace = true }
 hex        = { workspace = true }
 schemars   = { workspace = true, optional = true }
+rand              = { workspace = true }
+subtle            = { workspace = true }
+zeroize           = { workspace = true }
+percent-encoding  = "2.3"
+url               = { workspace = true }
 
 # NO tokio, NO sqlx, NO redis, NO axum — zero I/O dependencies

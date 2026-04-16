@@ -178,6 +178,12 @@ pub async fn create_channel_with_id(
         )));
     }
 
+    if channel_id.is_nil() {
+        return Err(DbError::InvalidData(
+            "channel_id must not be nil (reserved for global fan-out)".into(),
+        ));
+    }
+
     let mut tx = pool.begin().await?;
 
     let rows_affected = sqlx::query(
