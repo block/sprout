@@ -17,28 +17,28 @@ pub async fn list_tokens(state: State<'_, AppState>) -> Result<ListTokensRespons
     send_json_request(request).await
 }
 
-#[tauri::command]
-pub async fn mint_token(
-    name: String,
-    scopes: Vec<String>,
-    channel_ids: Option<Vec<String>>,
+/// Internal token minting logic, callable from other modules (e.g. pairing).
+pub async fn mint_token_internal(
+    state: &AppState,
+    name: &str,
+    scopes: &[String],
+    channel_ids: Option<&[String]>,
     expires_in_days: Option<u32>,
-    state: State<'_, AppState>,
 ) -> Result<MintTokenResponse, String> {
     let body = MintTokenBody {
-        name: &name,
-        scopes: &scopes,
-        channel_ids: channel_ids.as_deref(),
+        name,
+        scopes,
+        channel_ids,
         expires_in_days,
-        owner_pubkey: None, // User-minted tokens don't set agent owner
+        owner_pubkey: None,
     };
     let request = if state.configured_api_token.is_some() {
-        build_authed_request(&state.http_client, Method::POST, "/api/tokens", &state)?.json(&body)
+        build_authed_request(&state.http_client, Method::POST, "/api/tokens", state)?.json(&body)
     } else {
         let url = format!("{}{}", relay_api_base_url(), "/api/tokens");
         let body_bytes =
             serde_json::to_vec(&body).map_err(|error| format!("serialize failed: {error}"))?;
-        let auth_header = build_nip98_auth_header(&Method::POST, &url, &body_bytes, &state)?;
+        let auth_header = build_nip98_auth_header(&Method::POST, &url, &body_bytes, state)?;
 
         state
             .http_client
@@ -58,6 +58,24 @@ pub async fn mint_token(
     }
 
     Ok(response)
+}
+
+#[tauri::command]
+pub async fn mint_token(
+    name: String,
+    scopes: Vec<String>,
+    channel_ids: Option<Vec<String>>,
+    expires_in_days: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<MintTokenResponse, String> {
+    mint_token_internal(
+        &state,
+        &name,
+        &scopes,
+        channel_ids.as_deref(),
+        expires_in_days,
+    )
+    .await
 }
 
 #[tauri::command]
