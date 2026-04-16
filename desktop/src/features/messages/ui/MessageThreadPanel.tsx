@@ -12,6 +12,7 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 
 type MessageThreadPanelProps = {
+  canResetWidth: boolean;
   channel: Channel | null;
   channelId: string | null;
   channelName: string;
@@ -22,6 +23,8 @@ type MessageThreadPanelProps = {
   onClose: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onExpandReplies: (message: TimelineMessage) => void;
+  onResetWidth: () => void;
+  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   openKey: number;
   onScrollTargetResolved: () => void;
   onSelectReplyTarget: (message: TimelineMessage) => void;
@@ -43,6 +46,7 @@ type MessageThreadPanelProps = {
   threadReplies: MainTimelineEntry[];
   threadTypingPubkeys: string[];
   totalReplyCount: number;
+  widthPx: number;
 };
 
 function canManageMessage(
@@ -57,6 +61,7 @@ function canManageMessage(
 }
 
 export function MessageThreadPanel({
+  canResetWidth,
   channel,
   channelId,
   channelName,
@@ -67,6 +72,8 @@ export function MessageThreadPanel({
   onClose,
   onDelete,
   onExpandReplies,
+  onResetWidth,
+  onResizeStart,
   openKey,
   onScrollTargetResolved,
   onSelectReplyTarget,
@@ -79,6 +86,7 @@ export function MessageThreadPanel({
   threadHead,
   threadReplies,
   threadTypingPubkeys,
+  widthPx,
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
   const threadHeadId = threadHead?.id ?? null;
@@ -152,9 +160,26 @@ export function MessageThreadPanel({
 
   return (
     <aside
-      className="hidden h-full w-[380px] shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
+      className="relative hidden h-full shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
       data-testid="message-thread-panel"
+      style={{ width: `${widthPx}px` }}
     >
+      <button
+        aria-label="Resize thread panel"
+        className="group absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize"
+        data-testid="message-thread-resize-handle"
+        onDoubleClick={canResetWidth ? onResetWidth : undefined}
+        onPointerDown={onResizeStart}
+        title={
+          canResetWidth
+            ? "Drag to resize. Double-click to reset width."
+            : "Drag to resize."
+        }
+        type="button"
+      >
+        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border/80" />
+      </button>
+
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold tracking-tight">Thread</h2>

@@ -402,6 +402,7 @@ declare global {
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
+      parentEventId?: string | null;
       pubkey?: string;
     }) => RelayEvent;
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
@@ -1657,9 +1658,38 @@ function recordMockMessage(channelId: string, event: RelayEvent) {
 function emitMockChannelMessage(
   channelId: string,
   content: string,
+  parentEventId?: string | null,
   pubkey?: string,
 ) {
-  const event = createMockEvent(9, content, [["h", channelId]], pubkey);
+  if (!parentEventId) {
+    const event = createMockEvent(9, content, [["h", channelId]], pubkey);
+    recordMockMessage(channelId, event);
+    emitMockLiveEvent(channelId, event);
+    return event;
+  }
+
+  const history = getMockMessageStore(channelId);
+  const parentEvent = history.find((event) => event.id === parentEventId) ?? null;
+  const parentThread = parentEvent
+    ? getThreadReferenceFromTags(parentEvent.tags)
+    : {
+        parentEventId: null,
+        rootEventId: null,
+      };
+  const rootEventId = parentThread.rootEventId ?? parentEventId;
+  const authorPubkey = pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey;
+  const event = createMockEvent(
+    9,
+    content,
+    buildReplyMessageTags(
+      channelId,
+      authorPubkey,
+      parentEventId,
+      rootEventId,
+      undefined,
+    ),
+    authorPubkey,
+  );
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
   return event;
@@ -4007,6 +4037,7 @@ export function maybeInstallE2eTauriMocks() {
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
+    parentEventId,
     pubkey,
   }) => {
     const channel = mockChannels.find(
@@ -4016,7 +4047,7 @@ export function maybeInstallE2eTauriMocks() {
       throw new Error(`Mock channel ${channelName} not found.`);
     }
 
-    return emitMockChannelMessage(channel.id, content, pubkey);
+    return emitMockChannelMessage(channel.id, content, parentEventId, pubkey);
   };
   window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
     const channel = mockChannels.find(

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 
 test.beforeEach(async ({ page }) => {
@@ -271,6 +271,7 @@ test("opens a single-level thread panel with inline expansion", async ({
   const firstReply = `First threaded reply ${timestamp}`;
   const siblingReply = `Sibling threaded reply ${timestamp}`;
   const nestedReply = `Nested threaded reply ${timestamp}`;
+  const nestedReplyFromBob = `Nested reply from Bob ${timestamp}`;
   const fillerReplies = Array.from(
     { length: 14 },
     (_, index) => `Thread filler reply ${index} ${timestamp}`,
@@ -291,6 +292,11 @@ test("opens a single-level thread panel with inline expansion", async ({
   const threadSendButton = threadPanel.getByTestId("send-message");
   const threadReplies = threadPanel.getByTestId("message-thread-replies");
   const rootMessage = timelineRows.first();
+  const rootMessageId = await rootMessage.getAttribute("data-message-id");
+  if (!rootMessageId) {
+    throw new Error("Expected root message row to have a data-message-id.");
+  }
+  const rootSummaryRow = timeline.locator(`[data-thread-head-id="${rootMessageId}"]`);
 
   await rootMessage.hover();
   await rootMessage.getByRole("button", { name: "Reply" }).click();
@@ -329,8 +335,10 @@ test("opens a single-level thread panel with inline expansion", async ({
     timeline.getByTestId("message-row").filter({ hasText: siblingReply }),
   ).toHaveCount(0);
 
-  const rootSummaryRow = timeline.getByTestId("message-thread-summary").first();
-  await expect(rootSummaryRow).toContainText("replies");
+  await expect(rootSummaryRow).toContainText("16 replies");
+  await expect(
+    rootSummaryRow.getByTestId("message-thread-summary-participant"),
+  ).toHaveCount(1);
 
   await threadPanel.getByTestId("message-thread-close").click();
   await expect(threadPanel).toBeHidden();
@@ -390,10 +398,36 @@ test("opens a single-level thread panel with inline expansion", async ({
     throw new Error("Expected first reply row to have a data-message-id.");
   }
 
+  await page.evaluate(
+    ({ content, parentEventId, pubkey }) => {
+      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content,
+        parentEventId,
+        pubkey,
+      });
+    },
+    {
+      content: nestedReplyFromBob,
+      parentEventId: firstReplyId,
+      pubkey: TEST_IDENTITIES.bob.pubkey,
+    },
+  );
+  const nestedReplyFromBobRow = threadReplies
+    .getByTestId("message-row")
+    .filter({ hasText: nestedReplyFromBob })
+    .first();
+  await expect(nestedReplyFromBobRow).toBeVisible();
+
   const firstReplySummaryRow = threadReplies.locator(
     `[data-thread-head-id="${firstReplyId}"]`,
   );
   await expect(firstReplySummaryRow).toHaveCount(0);
+
+  await expect(rootSummaryRow).toContainText("18 replies");
+  await expect(
+    rootSummaryRow.getByTestId("message-thread-summary-participant"),
+  ).toHaveCount(2);
 
   await expect
     .poll(async () => {
@@ -411,4 +445,64 @@ test("opens a single-level thread panel with inline expansion", async ({
       });
     })
     .toBeLessThan(120);
+});
+
+test("thread panel width uses session storage and reset handle", async ({
+  page,
+}) => {
+  const customWidthPx = 520;
+  const defaultWidthPx = 380;
+
+  await page.addInitScript((width) => {
+    window.sessionStorage.setItem("sprout.desktop.thread-panel-width", String(width));
+  }, customWidthPx);
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const timeline = page.getByTestId("message-timeline");
+  const rootMessage = timeline.getByTestId("message-row").first();
+  const threadPanel = page.getByTestId("message-thread-panel");
+  const resizeHandle = threadPanel.getByTestId("message-thread-resize-handle");
+
+  await rootMessage.hover();
+  await rootMessage.getByRole("button", { name: "Reply" }).click();
+  await expect(threadPanel).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      return threadPanel.evaluate((panel) => {
+        const element = panel as HTMLElement;
+        return Math.round(element.getBoundingClientRect().width);
+      });
+    })
+    .toBe(customWidthPx);
+
+  await resizeHandle.dblclick();
+
+  await expect
+    .poll(async () => {
+      return threadPanel.evaluate((panel) => {
+        const element = panel as HTMLElement;
+        return Math.round(element.getBoundingClientRect().width);
+      });
+    })
+    .toBe(defaultWidthPx);
+
+  await threadPanel.getByTestId("message-thread-close").click();
+  await expect(threadPanel).toBeHidden();
+
+  await rootMessage.hover();
+  await rootMessage.getByRole("button", { name: "Reply" }).click();
+  await expect(threadPanel).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      return threadPanel.evaluate((panel) => {
+        const element = panel as HTMLElement;
+        return Math.round(element.getBoundingClientRect().width);
+      });
+    })
+    .toBe(defaultWidthPx);
 });
