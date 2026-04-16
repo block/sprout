@@ -83,8 +83,9 @@ class PairingNotifier extends Notifier<PairingState> {
     // Nothing to send — the source will send the payload after we confirm.
   }
 
-  /// Deny the SAS code. Abort the session.
+  /// Deny the SAS code. Send abort and terminate.
   void denySas() {
+    _sendAbort('sas_mismatch');
     _cleanup();
     state = PairingState(
       status: PairingStatus.error,
@@ -102,6 +103,8 @@ class PairingNotifier extends Notifier<PairingState> {
     _sessionTimeout = null;
     _socket?.dispose();
     _socket = null;
+    _processedEventIds.clear();
+    _sasConfirmReceived = false;
   }
 
   // ── NIP-AB pairing flow ─────────────────────────────────────────────────
@@ -115,6 +118,7 @@ class PairingNotifier extends Notifier<PairingState> {
   Uint8List? _sasInput;
   Uint8List? _conversationKey;
   bool _sasConfirmReceived = false;
+  final Set<String> _processedEventIds = {}; // NIP-AB §Duplicate Event Handling
 
   Future<void> _pairNipAb(String uri) async {
     state = const PairingState(status: PairingStatus.connecting);
@@ -224,12 +228,21 @@ class PairingNotifier extends Notifier<PairingState> {
 
   void _handlePairingEvent(Map<String, dynamic> eventJson) {
     try {
-      // Verify the event is from the expected source.
+      // NIP-AB §Event Validation: validate kind.
+      final kind = eventJson['kind'] as int?;
+      if (kind != 24134) return;
+
+      // NIP-AB §Event Validation: validate pubkey is from expected source.
       final eventPubkey = eventJson['pubkey'] as String?;
       if (eventPubkey == null) return;
       if (_sourcePubkey != null && eventPubkey != _sourcePubkey) return;
 
-      // Check p-tag points to us.
+      // NIP-AB §Duplicate Event Handling: discard already-processed events.
+      final eventId = eventJson['id'] as String?;
+      if (eventId == null) return;
+      if (_processedEventIds.contains(eventId)) return;
+
+      // NIP-AB §Event Validation: check p-tag points to us.
       final tags = (eventJson['tags'] as List<dynamic>?) ?? [];
       final hasOurPTag = tags.any((t) {
         if (t is List && t.length >= 2) {
@@ -239,13 +252,20 @@ class PairingNotifier extends Notifier<PairingState> {
       });
       if (!hasOurPTag) return;
 
-      // Decrypt content.
+      // NIP-AB §Event Validation: verify event signature (NIP-01).
+      // The nostr package's Event.fromJson verifies id + sig on construction.
+      try {
+        final event = nostr.Event.fromJson(eventJson);
+        if (event.id != eventId) return; // id mismatch
+      } catch (_) {
+        return; // invalid signature or malformed event
+      }
+
+      // Decrypt NIP-44 content.
       final content = eventJson['content'] as String?;
       if (content == null || content.isEmpty) return;
 
-      // Compute conversation key for decryption (source → us).
       final decryptKey = getConversationKey(_ephemeralPrivkey!, eventPubkey);
-
       final decrypted = nip44Decrypt(decryptKey, content);
       final msg = jsonDecode(decrypted) as Map<String, dynamic>;
       final msgType = msg['type'] as String?;
@@ -253,13 +273,16 @@ class PairingNotifier extends Notifier<PairingState> {
       switch (msgType) {
         case 'sas-confirm':
           _handleSasConfirm(msg);
+          _processedEventIds.add(eventId); // record after successful processing
         case 'payload':
           _handlePayload(msg);
+          _processedEventIds.add(eventId);
         case 'abort':
           _handleAbort(msg);
+          _processedEventIds.add(eventId);
       }
     } catch (e) {
-      // Silently discard invalid events per NIP-AB spec.
+      // Silently discard invalid events per NIP-AB §Event Validation.
     }
   }
 
@@ -280,6 +303,8 @@ class PairingNotifier extends Notifier<PairingState> {
 
     final receivedBytes = hexToBytes(receivedHash);
     if (!constantTimeEquals(receivedBytes, expectedHash)) {
+      // NIP-AB §Step 3: target MUST send abort with reason "sas_mismatch".
+      _sendAbort('sas_mismatch');
       _cleanup();
       state = const PairingState(
         status: PairingStatus.error,
@@ -290,20 +315,14 @@ class PairingNotifier extends Notifier<PairingState> {
     }
 
     _sasConfirmReceived = true;
-    // Stay in confirmingSas — user must still explicitly confirm.
-    // If user already confirmed (confirmSas was called), transition.
-    if (state.status == PairingStatus.transferring) {
-      // User already confirmed — we're now truly waiting for payload.
-    }
+    // Stay in confirmingSas — user must still explicitly confirm via confirmSas().
   }
 
   void _handlePayload(Map<String, dynamic> msg) {
-    // Accept payload only after SAS confirm has been received and user confirmed.
+    // Only accept payload after BOTH the transcript hash was verified AND
+    // the user explicitly confirmed the SAS codes match (C3 fix).
     if (!_sasConfirmReceived) return;
-    if (state.status != PairingStatus.confirmingSas &&
-        state.status != PairingStatus.transferring) {
-      return;
-    }
+    if (state.status != PairingStatus.transferring) return;
 
     state = state.copyWith(status: PairingStatus.storing);
 
@@ -378,6 +397,21 @@ class PairingNotifier extends Notifier<PairingState> {
         status: PairingStatus.error,
         errorMessage: 'Failed to import credentials: $e',
       );
+    }
+  }
+
+  void _sendAbort(String reason) {
+    try {
+      final content = _encryptMessage({'type': 'abort', 'reason': reason});
+      _publishEvent(
+        kind: 24134,
+        content: content,
+        tags: [
+          ['p', _sourcePubkey!],
+        ],
+      );
+    } catch (_) {
+      // Best-effort.
     }
   }
 

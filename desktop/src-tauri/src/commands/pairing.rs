@@ -55,8 +55,9 @@ pub struct PairingHandle {
     cancel: std::sync::Mutex<Option<CancellationToken>>,
     /// Send JSON-serialized events to the background WS task for relay publication.
     outbound_tx: std::sync::Mutex<Option<mpsc::Sender<String>>>,
-    /// Pre-built payload string to send after SAS confirmation.
-    payload: std::sync::Mutex<Option<String>>,
+    /// Pre-built payload string (contains nsec) to send after SAS confirmation.
+    /// Wrapped in Zeroizing so the nsec is cleared from memory on drop.
+    payload: std::sync::Mutex<Option<Zeroizing<String>>>,
 }
 
 impl PairingHandle {
@@ -73,6 +74,9 @@ impl PairingHandle {
         *self.cancel.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.outbound_tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.payload.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        // Note: session is in an Arc<tokio::sync::Mutex> and is cleared
+        // by the background task on exit. For immediate cleanup, callers
+        // should also lock and clear the session explicitly.
     }
 }
 
@@ -144,7 +148,8 @@ pub async fn start_pairing(
         let mut s = pairing.session.lock().await;
         *s = Some(session);
     }
-    *pairing.payload.lock().map_err(|e| e.to_string())? = Some(payload_json.to_string());
+    *pairing.payload.lock().map_err(|e| e.to_string())? =
+        Some(Zeroizing::new(payload_json.to_string()));
 
     // 7. Create channel + cancellation token.
     let (outbound_tx, outbound_rx) = mpsc::channel::<String>(16);
@@ -188,8 +193,8 @@ pub async fn confirm_pairing_sas(pairing: State<'_, PairingHandle>) -> Result<()
         .await
         .map_err(|_| "failed to send sas-confirm")?;
 
-    // 2. Send payload.
-    let payload_str = pairing
+    // 2. Send payload (contains nsec — Zeroizing ensures cleanup).
+    let payload = pairing
         .payload
         .lock()
         .map_err(|e| e.to_string())?
@@ -200,7 +205,7 @@ pub async fn confirm_pairing_sas(pairing: State<'_, PairingHandle>) -> Result<()
         let mut guard = pairing.session.lock().await;
         let session = guard.as_mut().ok_or("no active pairing session")?;
         let event = session
-            .send_payload(PayloadType::Custom, Zeroizing::new(payload_str))
+            .send_payload(PayloadType::Custom, payload)
             .map_err(|e| e.to_string())?;
         event_to_relay_json(&event)
     };
