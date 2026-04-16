@@ -232,6 +232,25 @@ fn tts_worker(
         }
     };
 
+    // ── 2b. Warmup inference ─────────────────────────────────────────────────
+    // The first ONNX inference on any session is significantly slower than
+    // subsequent ones — it triggers JIT compilation, memory pool allocation,
+    // and (on CoreML) lazy model compilation. Run a short dummy synthesis and
+    // discard the output so the first real utterance runs at warm-session speed.
+    {
+        let t = std::time::Instant::now();
+        match engine.synth_chunk("warmup", "en", &style, SYNTH_STEPS, SYNTH_SPEED) {
+            Ok(_) => eprintln!(
+                "sprout-desktop: TTS warmup completed in {:.0}ms",
+                t.elapsed().as_millis()
+            ),
+            Err(e) => eprintln!(
+                "sprout-desktop: TTS warmup failed after {:.0}ms: {e} — first utterance may be slow",
+                t.elapsed().as_millis()
+            ),
+        }
+    }
+
     // ── 3. Initialise rodio output device ─────────────────────────────────────
     use rodio::Player;
 
