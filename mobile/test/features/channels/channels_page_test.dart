@@ -76,11 +76,10 @@ void main() {
     expect(find.text('general'), findsOneWidget);
     expect(find.text('design-forum'), findsOneWidget);
     expect(find.text('Alice'), findsOneWidget);
-    expect(find.text('Channels'), findsOneWidget);
-    expect(find.text('Forums'), findsOneWidget);
-    expect(find.text('DMs'), findsOneWidget);
-    expect(find.text('1'), findsNWidgets(3));
-    expect(find.byTooltip('Browse channels'), findsOneWidget);
+    expect(find.text('CHANNELS'), findsOneWidget);
+    expect(find.text('FORUMS'), findsOneWidget);
+    expect(find.text('DMS'), findsOneWidget);
+    expect(find.text('Search'), findsOneWidget);
     expect(find.byTooltip('Create or start conversation'), findsOneWidget);
   });
 
@@ -127,7 +126,7 @@ void main() {
     expect(find.text('open-stream'), findsNothing);
     expect(find.text('archived-stream'), findsNothing);
 
-    await tester.tap(find.byTooltip('Browse channels'));
+    await tester.tap(find.text('Search'));
     await tester.pumpAndSettle();
 
     expect(find.text('open-stream'), findsOneWidget);
