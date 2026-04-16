@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { EditorContent } from "@tiptap/react";
+import { X } from "lucide-react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
@@ -565,13 +566,14 @@ export function MessageComposer({
                 </p>
               </div>
               <Button
-                className="shrink-0"
+                aria-label="Cancel reply"
+                className="h-7 w-7 shrink-0 px-0"
                 onClick={onCancelReply}
-                size="sm"
+                size="icon"
                 type="button"
                 variant="ghost"
               >
-                Cancel
+                <X className="h-4 w-4" />
               </Button>
             </div>
           ) : null}
