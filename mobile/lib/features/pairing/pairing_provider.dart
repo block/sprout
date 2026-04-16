@@ -79,8 +79,15 @@ class PairingNotifier extends Notifier<PairingState> {
   void confirmSas() {
     if (state.status != PairingStatus.confirmingSas) return;
     state = state.copyWith(status: PairingStatus.transferring);
-    // The session is already waiting for the payload event from the source.
-    // Nothing to send — the source will send the payload after we confirm.
+
+    // The source sends sas-confirm + payload back-to-back. The payload may
+    // have arrived while we were still in confirmingSas (before the user
+    // tapped "Codes Match"). Process the buffered payload now.
+    final pending = _pendingPayload;
+    if (pending != null) {
+      _pendingPayload = null;
+      _handlePayload(pending);
+    }
   }
 
   /// Deny the SAS code. Send abort and terminate.
@@ -105,6 +112,7 @@ class PairingNotifier extends Notifier<PairingState> {
     _socket = null;
     _processedEventIds.clear();
     _sasConfirmReceived = false;
+    _pendingPayload = null;
   }
 
   // ── NIP-AB pairing flow ─────────────────────────────────────────────────
@@ -118,6 +126,7 @@ class PairingNotifier extends Notifier<PairingState> {
   Uint8List? _sasInput;
   Uint8List? _conversationKey;
   bool _sasConfirmReceived = false;
+  Map<String, dynamic>? _pendingPayload; // buffered until user confirms SAS
   final Set<String> _processedEventIds = {}; // NIP-AB §Duplicate Event Handling
 
   Future<void> _pairNipAb(String uri) async {
@@ -319,9 +328,15 @@ class PairingNotifier extends Notifier<PairingState> {
   }
 
   void _handlePayload(Map<String, dynamic> msg) {
-    // Only accept payload after BOTH the transcript hash was verified AND
-    // the user explicitly confirmed the SAS codes match (C3 fix).
+    // Only accept payload after the transcript hash was verified.
     if (!_sasConfirmReceived) return;
+
+    // If the user hasn't confirmed SAS yet, buffer the payload.
+    // It will be processed when confirmSas() is called.
+    if (state.status == PairingStatus.confirmingSas) {
+      _pendingPayload = msg;
+      return;
+    }
     if (state.status != PairingStatus.transferring) return;
 
     state = state.copyWith(status: PairingStatus.storing);
