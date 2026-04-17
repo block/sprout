@@ -3,6 +3,8 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:nostr/nostr.dart' as nostr;
+
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
@@ -350,6 +352,12 @@ class ComposeBar extends HookConsumerWidget {
 
 const _typingThrottleMs = 3000;
 
+/// Send a typing indicator over the WebSocket (fire-and-forget).
+///
+/// Desktop sends these as `["EVENT", signedEvent]` over the WebSocket — not
+/// via HTTP. Ephemeral events like typing indicators are broadcast-only and
+/// the relay doesn't persist them, so the HTTP `/api/events` endpoint may
+/// silently discard them.
 void _sendTypingIndicator(
   WidgetRef ref, {
   required String channelId,
@@ -358,10 +366,12 @@ void _sendTypingIndicator(
 }) {
   try {
     final config = ref.read(relayConfigProvider);
-    final relay = SignedEventRelay(
-      client: ref.read(relayClientProvider),
-      nsec: config.nsec,
-    );
+    final nsec = config.nsec;
+    if (nsec == null || nsec.isEmpty) return;
+
+    final privkeyHex = nostr.Nip19.decodePrivkey(nsec);
+    if (privkeyHex.isEmpty) return;
+
     final tags = <List<String>>[
       ['h', channelId],
       if (threadHeadId != null && rootId != null && rootId != threadHeadId) ...[
@@ -370,7 +380,18 @@ void _sendTypingIndicator(
       ] else if (threadHeadId != null)
         ['e', threadHeadId, '', 'reply'],
     ];
-    relay.submit(kind: EventKind.typingIndicator, content: '', tags: tags);
+
+    final event = nostr.Event.from(
+      kind: EventKind.typingIndicator,
+      content: '',
+      tags: tags,
+      privkey: privkeyHex,
+      verify: false,
+    );
+
+    // Send directly over WebSocket — fire-and-forget, matching desktop.
+    final session = ref.read(relaySessionProvider.notifier);
+    session.sendRaw(['EVENT', event.toJson()]);
   } catch (_) {
     // Fire-and-forget — typing indicator failure is non-fatal.
   }
