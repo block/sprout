@@ -193,6 +193,12 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     return completer.future;
   }
 
+  /// Send a raw message over the WebSocket without waiting for acknowledgement.
+  /// Used for ephemeral events like typing indicators.
+  void sendRaw(List<dynamic> payload) {
+    _socket?.send(payload);
+  }
+
   /// Force a reconnect (e.g., returning from background).
   Future<void> reconnect() async {
     await _socket?.disconnect();

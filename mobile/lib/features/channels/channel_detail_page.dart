@@ -17,6 +17,7 @@ import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
+import 'compose_bar.dart';
 import 'message_content.dart';
 import 'send_message_provider.dart';
 import 'thread_detail_page.dart';
@@ -178,7 +179,17 @@ class ChannelDetailPage extends HookConsumerWidget {
           if (!resolvedChannel.isForum &&
               resolvedChannel.isMember &&
               !resolvedChannel.isArchived)
-            _ComposeBar(channelId: channel.id)
+            ComposeBar(
+              channelId: channel.id,
+              channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
+              onSend: (content, mentionPubkeys) => ref
+                  .read(sendMessageProvider)
+                  .call(
+                    channelId: channel.id,
+                    content: content,
+                    mentionPubkeys: mentionPubkeys,
+                  ),
+            )
           else if (!resolvedChannel.isForum &&
               !resolvedChannel.isDm &&
               (!resolvedChannel.isMember || resolvedChannel.isArchived))
@@ -1717,98 +1728,6 @@ class _TypingIndicator extends ConsumerWidget {
 
 // ---------------------------------------------------------------------------
 // Compose bar
-// ---------------------------------------------------------------------------
-
-class _ComposeBar extends HookConsumerWidget {
-  final String channelId;
-
-  const _ComposeBar({required this.channelId});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final controller = useTextEditingController();
-    final isSending = useState(false);
-
-    Future<void> send() async {
-      final text = controller.text.trim();
-      if (text.isEmpty || isSending.value) return;
-
-      isSending.value = true;
-      try {
-        await ref
-            .read(sendMessageProvider)
-            .call(channelId: channelId, content: text);
-        if (context.mounted) controller.clear();
-      } finally {
-        if (context.mounted) isSending.value = false;
-      }
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: context.colors.outlineVariant)),
-        color: context.colors.surface,
-      ),
-      padding: EdgeInsets.only(
-        left: Grid.xs,
-        right: Grid.xxs,
-        top: Grid.xxs,
-        bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => send(),
-              minLines: 1,
-              maxLines: 5,
-              decoration: InputDecoration(
-                hintText: 'Message…',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.outlineVariant),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.outlineVariant),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.primary),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: Grid.twelve,
-                  vertical: Grid.xxs,
-                ),
-                isDense: true,
-              ),
-            ),
-          ),
-          const SizedBox(width: Grid.half),
-          IconButton(
-            onPressed: isSending.value ? null : send,
-            icon: isSending.value
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: context.colors.primary,
-                    ),
-                  )
-                : Icon(
-                    LucideIcons.sendHorizontal,
-                    color: context.colors.primary,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------

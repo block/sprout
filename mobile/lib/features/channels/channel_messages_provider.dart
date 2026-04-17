@@ -1,6 +1,7 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
+import 'channel_management_provider.dart';
 
 /// Provides the message list for a specific channel. Fetches history on init,
 /// then subscribes to live events via the websocket session.
@@ -65,6 +66,19 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
 
   void _handleLiveEvent(NostrEvent event) {
     state = state.whenData((events) => _mergeEvent(events, event));
+
+    // When a membership system event arrives, refresh the channel member list
+    // so the @mention autocomplete picks up new members without a restart.
+    if (event.kind == EventKind.systemMessage &&
+        _isMembershipEvent(event.content)) {
+      ref.invalidate(channelMembersProvider(channelId));
+    }
+  }
+
+  static bool _isMembershipEvent(String content) {
+    return content.contains('member_joined') ||
+        content.contains('member_left') ||
+        content.contains('member_removed');
   }
 
   /// Merge a new event into the sorted list, deduplicating by ID.
