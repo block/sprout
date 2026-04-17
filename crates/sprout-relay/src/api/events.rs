@@ -65,6 +65,12 @@ pub async fn get_event(
             .await
             .map_err(|_| not_found("event not found"))?;
     } else {
+        // Channel-restricted tokens must not access global events — they are
+        // scoped to specific channels and global events fall outside that scope.
+        if ctx.channel_ids.is_some() {
+            return Err(not_found("event not found"));
+        }
+
         // Global event — scope-aware allowlist.
         let event_kind = event_kind_u32(&stored_event.event);
 

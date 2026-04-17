@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show InternetAddress, InternetAddressType;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -596,34 +597,77 @@ class PairingNotifier extends Notifier<PairingState> {
     }
 
     final host = uri.host.toLowerCase();
-    if (host == 'localhost' || host == '127.0.0.1' || host == '::1') {
+
+    // Localhost check: allow in debug, block in production.
+    // DNS rebinding is mitigated by the HTTPS requirement in production —
+    // the TLS certificate pins the hostname to the server, so a rebind to a
+    // private address will fail the certificate check before any data is sent.
+    if (host == 'localhost') {
       if (!kDebugMode) {
         throw const FormatException('Relay URL cannot target localhost');
       }
       return;
     }
 
-    final ip = Uri.tryParse('http://$host')?.host ?? host;
-    if (_isPrivateHost(ip)) {
+    if (_isPrivateHost(host)) {
       throw const FormatException(
         'Relay URL cannot target private network addresses',
       );
     }
   }
 
+  /// Returns true if [host] resolves to a private, loopback, link-local,
+  /// or unspecified address that must not be reachable from a relay URL.
+  ///
+  /// Uses [InternetAddress.tryParse] to normalise all IP representations
+  /// (dotted-quad, decimal, octal, hex, IPv6, IPv4-mapped IPv6) before
+  /// checking ranges, so alternative encodings cannot bypass the filter.
   static bool _isPrivateHost(String host) {
-    final parts = host.split('.');
-    if (parts.length != 4) return false;
-    final octets = parts.map(int.tryParse).toList();
-    if (octets.any((o) => o == null)) return false;
+    // Strip IPv6 brackets if present (e.g. "[::1]" → "::1").
+    final bare = host.startsWith('[') && host.endsWith(']')
+        ? host.substring(1, host.length - 1)
+        : host;
 
-    final a = octets[0]!;
-    final b = octets[1]!;
+    final addr = InternetAddress.tryParse(bare);
+    if (addr == null) {
+      // Not a bare IP literal — it's a hostname; let DNS + TLS handle it.
+      return false;
+    }
 
-    if (a == 10) return true;
-    if (a == 172 && b >= 16 && b <= 31) return true;
-    if (a == 192 && b == 168) return true;
-    if (a == 169 && b == 254) return true;
+    if (addr.type == InternetAddressType.IPv4) {
+      return _isPrivateIPv4(addr.rawAddress);
+    }
+
+    // IPv6
+    final raw = addr.rawAddress; // 16 bytes, big-endian
+    // Unspecified: ::
+    if (raw.every((b) => b == 0)) return true;
+    // Loopback: ::1
+    if (addr.isLoopback) return true;
+    // Link-local: fe80::/10 — first 10 bits are 1111 1110 10
+    if (raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80) return true;
+    // Unique local: fc00::/7 — first 7 bits are 1111 110
+    if ((raw[0] & 0xfe) == 0xfc) return true;
+    // IPv4-mapped: ::ffff:x.x.x.x — bytes 0-9 are 0, bytes 10-11 are 0xff
+    if (raw[10] == 0xff &&
+        raw[11] == 0xff &&
+        raw.sublist(0, 10).every((b) => b == 0)) {
+      return _isPrivateIPv4(raw.sublist(12));
+    }
+
+    return false;
+  }
+
+  /// Checks whether a 4-byte big-endian IPv4 address is private/reserved.
+  static bool _isPrivateIPv4(List<int> raw) {
+    final a = raw[0];
+    final b = raw[1];
+    if (a == 0) return true; // 0.0.0.0/8 unspecified
+    if (a == 10) return true; // 10.0.0.0/8
+    if (a == 127) return true; // 127.0.0.0/8 loopback
+    if (a == 169 && b == 254) return true; // 169.254.0.0/16 link-local
+    if (a == 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a == 192 && b == 168) return true; // 192.168.0.0/16
     return false;
   }
 }

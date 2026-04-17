@@ -142,6 +142,16 @@ pub async fn handle_req(
         }
     }
 
+    // Channel-restricted tokens must not open global subscriptions — they would
+    // receive events outside the token's channel allowlist.
+    if channel_id.is_none() && token_channel_ids.is_some() {
+        conn.send(RelayMessage::closed(
+            &sub_id,
+            "restricted: channel-scoped tokens cannot open global subscriptions",
+        ));
+        return;
+    }
+
     // Check channel access BEFORE registering the subscription.
     if let Some(ch_id) = channel_id {
         if !accessible_channels.contains(&ch_id) {

@@ -8,10 +8,10 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
-import '../profile/presence_cache_provider.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import 'dm_presence_avatar.dart';
 import 'channel.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
@@ -1761,37 +1761,8 @@ class _DmAppBarTitle extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profiles = ref.watch(userCacheProvider);
-    final presenceMap = ref.watch(presenceCacheProvider);
-    final normalizedCurrent = currentPubkey?.toLowerCase();
-
-    String? otherPubkey;
-    for (final pk in channel.participantPubkeys) {
-      if (pk.toLowerCase() != normalizedCurrent) {
-        otherPubkey = pk.toLowerCase();
-        break;
-      }
-    }
-
-    final profile = otherPubkey != null ? profiles[otherPubkey] : null;
-
-    if (otherPubkey != null) {
-      if (profile == null) {
-        ref.read(userCacheProvider.notifier).preload([otherPubkey]);
-      }
-      ref.read(presenceCacheProvider.notifier).track([otherPubkey]);
-    }
-
-    final avatarUrl = profile?.avatarUrl;
-    final initial =
-        profile?.initial ??
-        (channel.participants.isNotEmpty
-            ? channel.participants.first[0].toUpperCase()
-            : '?');
-    final presence = otherPubkey != null
-        ? (presenceMap[otherPubkey] ?? 'offline')
-        : 'offline';
-    final presenceLabel = switch (presence) {
+    final data = resolveDmPresence(ref, channel, currentPubkey);
+    final presenceLabel = switch (data.presence) {
       'online' => 'Online',
       'away' => 'Away',
       _ => 'Offline',
@@ -1799,52 +1770,11 @@ class _DmAppBarTitle extends ConsumerWidget {
 
     return Row(
       children: [
-        SizedBox(
-          width: 30,
-          height: 30,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              CircleAvatar(
-                radius: 14,
-                backgroundColor: context.colors.primaryContainer,
-                backgroundImage: avatarUrl != null
-                    ? NetworkImage(avatarUrl)
-                    : null,
-                child: avatarUrl == null
-                    ? Text(
-                        initial,
-                        style: context.textTheme.labelSmall?.copyWith(
-                          color: context.colors.onPrimaryContainer,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      )
-                    : null,
-              ),
-              Positioned(
-                right: -1,
-                bottom: -1,
-                child: Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: switch (presence) {
-                      'online' => context.appColors.success,
-                      'away' => context.appColors.warning,
-                      _ => context.colors.outline,
-                    },
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color:
-                          context.theme.appBarTheme.backgroundColor ??
-                          context.theme.scaffoldBackgroundColor,
-                      width: 1.5,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+        DmPresenceAvatar(
+          channel: channel,
+          currentPubkey: currentPubkey,
+          size: 30,
+          dotSize: 10,
         ),
         const SizedBox(width: Grid.xxs),
         Expanded(
