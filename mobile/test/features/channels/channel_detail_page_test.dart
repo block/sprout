@@ -201,7 +201,9 @@ void main() {
       expect(find.text('Message…'), findsNothing);
     });
 
-    testWidgets('members sheet stays read-only on mobile', (tester) async {
+    testWidgets('members sheet shows roles and manage controls for owners', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         _buildTestable(
           messages: const [],
@@ -226,12 +228,9 @@ void main() {
       await tester.tap(find.byTooltip('View members'));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('Member and bot management stay on desktop.'),
-        findsOneWidget,
-      );
       expect(find.text('Alice'), findsOneWidget);
-      expect(find.byKey(const Key('members-search-field')), findsNothing);
+      expect(find.text('Member'), findsOneWidget);
+      expect(find.text('Owner'), findsOneWidget);
     });
 
     testWidgets('hides composer for archived channels', (tester) async {
