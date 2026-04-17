@@ -48,6 +48,8 @@ jobs:
 
       - name: Build Tauri app
         run: cd desktop && pnpm tauri build
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
       - name: Codesign and Notarize
         if: ${{ inputs.signing }}

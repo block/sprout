@@ -85,6 +85,7 @@ jobs:
         working-directory: desktop
         env:
           SPROUT_RELAY_URL: ${{ secrets.SPROUT_RELAY_URL }}
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
         run: pnpm tauri build --config src-tauri/tauri.release.conf.json
 
       - name: Codesign and Notarize
