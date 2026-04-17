@@ -7,12 +7,14 @@ type ChannelAutocompleteProps = {
   suggestions: ChannelSuggestion[];
   selectedIndex: number;
   onSelect: (suggestion: ChannelSuggestion) => void;
+  position?: "above" | "below";
 };
 
 export const ChannelAutocomplete = React.memo(function ChannelAutocomplete({
   suggestions,
   selectedIndex,
   onSelect,
+  position = "above",
 }: ChannelAutocompleteProps) {
   const listRef = React.useRef<HTMLDivElement>(null);
 
@@ -28,7 +30,12 @@ export const ChannelAutocomplete = React.memo(function ChannelAutocomplete({
   }
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 px-3 sm:px-4">
+    <div
+      className={cn(
+        "absolute left-0 right-0 z-50 px-3 sm:px-4",
+        position === "below" ? "top-full mt-1" : "bottom-full mb-1",
+      )}
+    >
       <div
         className="max-h-48 overflow-y-auto rounded-xl border bg-popover p-1 shadow-lg"
         ref={listRef}

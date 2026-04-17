@@ -49,9 +49,11 @@ export function useCreateForumPostMutation(channel: Channel | null) {
     mutationFn: async ({
       content,
       mentionPubkeys,
+      mediaTags,
     }: {
       content: string;
       mentionPubkeys?: string[];
+      mediaTags?: string[][];
     }) => {
       if (!channel) {
         throw new Error("No channel selected.");
@@ -61,7 +63,7 @@ export function useCreateForumPostMutation(channel: Channel | null) {
         channel.id,
         content,
         null,
-        undefined,
+        mediaTags,
         mentionPubkeys,
         KIND_FORUM_POST,
       );
@@ -126,10 +128,12 @@ export function useCreateForumReplyMutation(channel: Channel | null) {
       content,
       parentEventId,
       mentionPubkeys,
+      mediaTags,
     }: {
       content: string;
       parentEventId: string;
       mentionPubkeys?: string[];
+      mediaTags?: string[][];
     }) => {
       if (!channel) {
         throw new Error("No channel selected.");
@@ -139,7 +143,7 @@ export function useCreateForumReplyMutation(channel: Channel | null) {
         channel.id,
         content,
         parentEventId,
-        undefined,
+        mediaTags,
         mentionPubkeys,
         KIND_FORUM_COMMENT,
       );

@@ -41,7 +41,11 @@ type ForumThreadPanelProps = {
   currentPubkey?: string;
   profiles?: UserProfileLookup;
   onBack: () => void;
-  onReply: (content: string, mentionPubkeys: string[]) => void;
+  onReply: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) => void;
   onDeletePost?: (eventId: string) => void;
   onDeleteReply?: (eventId: string) => void;
   onTargetReached?: (eventId: string) => void;
@@ -366,7 +370,6 @@ export function ForumThreadPanel({
           isSending={isSendingReply}
           onSubmit={onReply}
           placeholder="Reply to this post..."
-          submitLabel="Reply"
         />
       </div>
     </div>

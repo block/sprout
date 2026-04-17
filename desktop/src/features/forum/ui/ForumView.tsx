@@ -126,11 +126,12 @@ export function ForumView({
           deleteReplyMutation.mutate({ eventId });
         }}
         channelId={channel.id}
-        onReply={(content, mentionPubkeys) => {
+        onReply={(content, mentionPubkeys, mediaTags) => {
           createReplyMutation.mutate({
             content,
             parentEventId: selectedPostId,
             mentionPubkeys,
+            mediaTags,
           });
         }}
         onTargetReached={onTargetReached}
@@ -147,12 +148,13 @@ export function ForumView({
       <div className="border-b border-border/60 p-4">
         {isComposerOpen ? (
           <ForumComposer
+            autocompleteBelow
             channelId={channel.id}
             isSending={createPostMutation.isPending}
             onCancel={() => setIsComposerOpen(false)}
-            onSubmit={(content, mentionPubkeys) => {
+            onSubmit={(content, mentionPubkeys, mediaTags) => {
               createPostMutation.mutate(
-                { content, mentionPubkeys },
+                { content, mentionPubkeys, mediaTags },
                 {
                   onSuccess: () => {
                     setIsComposerOpen(false);
@@ -161,7 +163,6 @@ export function ForumView({
               );
             }}
             placeholder="Write your post..."
-            submitLabel="Post"
           />
         ) : (
           <button

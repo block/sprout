@@ -25,6 +25,7 @@ export const MessageComposerToolbar = React.memo(
   function MessageComposerToolbar({
     composerDisabled,
     editor,
+    extraActions,
     formattingDisabled,
     isEmojiPickerOpen,
     isFormattingOpen,
@@ -40,6 +41,7 @@ export const MessageComposerToolbar = React.memo(
   }: {
     composerDisabled: boolean;
     editor: Editor | null;
+    extraActions?: React.ReactNode;
     formattingDisabled: boolean;
     isEmojiPickerOpen: boolean;
     isFormattingOpen: boolean;
@@ -202,16 +204,19 @@ export const MessageComposerToolbar = React.memo(
           </AnimatePresence>
         </div>
 
-        <Button
-          className="gap-2"
-          data-testid="send-message"
-          disabled={sendDisabled || isSending}
-          title="Send (Enter)"
-          type="submit"
-        >
-          <SendHorizontal className="h-4 w-4" />
-          {isSending ? "Sending" : "Send"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {extraActions}
+          <Button
+            className="gap-2"
+            data-testid="send-message"
+            disabled={sendDisabled || isSending}
+            title="Send (Enter)"
+            type="submit"
+          >
+            <SendHorizontal className="h-4 w-4" />
+            {isSending ? "Sending" : "Send"}
+          </Button>
+        </div>
       </div>
     );
   },

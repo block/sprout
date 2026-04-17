@@ -1,176 +1,402 @@
-import { Send } from "lucide-react";
 import * as React from "react";
 
+import { EditorContent } from "@tiptap/react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
+import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
+import {
+  ALLOWED_MEDIA_TYPES,
+  useMediaUpload,
+} from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
+import {
+  hasMentionClipboardHtml,
+  normalizeMentionClipboardHtml,
+} from "@/features/messages/lib/normalizeMentionClipboard";
+import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { ChannelAutocomplete } from "@/features/messages/ui/ChannelAutocomplete";
-import { MentionAutocomplete } from "@/features/messages/ui/MentionAutocomplete";
+import { ComposerAttachments } from "@/features/messages/ui/ComposerAttachments";
+import {
+  MentionAutocomplete,
+  type MentionSuggestion,
+} from "@/features/messages/ui/MentionAutocomplete";
+import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
 import { Button } from "@/shared/ui/button";
-import { Textarea } from "@/shared/ui/textarea";
 
 type ForumComposerProps = {
   channelId?: string | null;
   placeholder: string;
-  submitLabel: string;
   disabled?: boolean;
   isSending?: boolean;
   onCancel?: () => void;
-  onSubmit: (content: string, mentionPubkeys: string[]) => void;
+  onSubmit: (
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) => void;
+  /** When true, autocomplete renders below the input (for top-of-view composers). */
+  autocompleteBelow?: boolean;
 };
 
 export function ForumComposer({
   channelId = null,
   placeholder,
-  submitLabel,
   disabled,
   isSending,
   onCancel,
   onSubmit,
+  autocompleteBelow = false,
 }: ForumComposerProps) {
-  const [value, setValue] = React.useState("");
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const [content, setContent] = React.useState("");
+  const contentRef = React.useRef(content);
+  contentRef.current = content;
+
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
+  const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
+
+  const handleFormattingToggle = React.useCallback((pressed: boolean) => {
+    if (pressed) setIsEmojiPickerOpen(false);
+    setIsFormattingOpen(pressed);
+  }, []);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
+  const media = useMediaUpload();
 
-  function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    const pubkeys = mentions.extractMentionPubkeys(trimmed);
-    onSubmit(trimmed, pubkeys);
-    setValue("");
-    mentions.clearMentions();
-    channelLinks.clearChannels();
-  }
+  const disabledRef = React.useRef(disabled);
+  const isSendingRef = React.useRef(isSending);
+  const onSubmitRef = React.useRef(onSubmit);
+  disabledRef.current = disabled;
+  isSendingRef.current = isSending;
+  onSubmitRef.current = onSubmit;
 
-  function handleChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
-    const next = event.target.value;
-    setValue(next);
-    mentions.updateMentionQuery(next, event.target.selectionStart);
-    channelLinks.updateChannelQuery(next, event.target.selectionStart);
-  }
+  const isAutocompleteOpenRef = React.useRef(false);
+  isAutocompleteOpenRef.current =
+    mentions.isMentionOpen || channelLinks.isChannelOpen;
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    const channelResult = channelLinks.handleChannelKeyDown(event);
-    if (channelResult.handled) {
-      if (channelResult.suggestion) {
-        const textarea = textareaRef.current;
-        const result = channelLinks.insertChannel(
-          channelResult.suggestion,
-          value,
-          textarea?.selectionEnd ?? value.length,
-        );
-        setValue(result.nextContent);
-        requestAnimationFrame(() => {
-          textarea?.setSelectionRange(result.nextCursor, result.nextCursor);
-        });
-      }
+  const submitMessageRef = React.useRef<() => void>(() => {});
+
+  const richText = useRichTextEditor({
+    placeholder,
+    editable: !disabled,
+    mentionNames: mentions.knownNames,
+    channelNames: channelLinks.knownChannelNames,
+    onSubmit: () => submitMessageRef.current(),
+    isAutocompleteOpen: isAutocompleteOpenRef,
+    onUpdate: ({ markdown, text }) => {
+      setContent(markdown);
+      contentRef.current = markdown;
+
+      const { cursor } = richText.getTextAndCursor();
+      mentions.updateMentionQuery(text, cursor);
+      channelLinks.updateChannelQuery(text, cursor);
+    },
+  });
+
+  // ── Mention / channel autocomplete insertion ────────────────────────
+  const applyMentionInsert = React.useCallback(
+    (suggestion: MentionSuggestion) => {
+      const { text, cursor } = richText.getTextAndCursor();
+      const result = mentions.insertMention(suggestion, text, cursor);
+      richText.setContentWithTrailingSpace(result.nextContent);
+      setContent(result.nextContent);
+      contentRef.current = result.nextContent;
+    },
+    [
+      mentions.insertMention,
+      richText.getTextAndCursor,
+      richText.setContentWithTrailingSpace,
+    ],
+  );
+
+  const applyChannelInsert = React.useCallback(
+    (suggestion: ChannelSuggestion) => {
+      const { text, cursor } = richText.getTextAndCursor();
+      const result = channelLinks.insertChannel(suggestion, text, cursor);
+      richText.setContentWithTrailingSpace(result.nextContent);
+      setContent(result.nextContent);
+      contentRef.current = result.nextContent;
+    },
+    [
+      channelLinks.insertChannel,
+      richText.getTextAndCursor,
+      richText.setContentWithTrailingSpace,
+    ],
+  );
+
+  // ── Emoji insertion ─────────────────────────────────────────────────
+  const insertEmoji = React.useCallback(
+    (emoji: string) => {
+      if (!richText.editor) return;
+      richText.editor.chain().focus().insertContent(emoji).run();
+      setIsEmojiPickerOpen(false);
+      mentions.clearMentions();
+    },
+    [richText.editor, mentions.clearMentions],
+  );
+
+  // ── @ mention picker (toolbar button) ───────────────────────────────
+  const openMentionPicker = React.useCallback(() => {
+    if (!richText.editor) return;
+    const { text, cursor } = richText.getTextAndCursor();
+
+    const beforeCursor = text.slice(0, cursor);
+    if (/(?:^|[\s])@[^\s]*$/.test(beforeCursor)) {
+      mentions.updateMentionQuery(text, cursor);
+      richText.focus();
       return;
     }
 
-    const { handled, suggestion } = mentions.handleMentionKeyDown(event);
-    if (handled) {
-      if (suggestion) {
-        const textarea = textareaRef.current;
-        const result = mentions.insertMention(
-          suggestion,
-          value,
-          textarea?.selectionEnd ?? value.length,
-        );
-        setValue(result.nextContent);
-        requestAnimationFrame(() => {
-          textarea?.setSelectionRange(result.nextCursor, result.nextCursor);
-        });
-      }
-      return;
-    }
+    const previousChar = text.slice(0, cursor).slice(-1);
+    const prefix =
+      cursor > 0 && previousChar && !/\s/.test(previousChar) ? " @" : "@";
+    richText.editor.chain().focus().insertContent(prefix).run();
+    setIsEmojiPickerOpen(false);
+
+    const updatedText = richText.editor.state.doc.textContent;
+    const { cursor: updatedCursor } = richText.getTextAndCursor();
+    mentions.updateMentionQuery(updatedText, updatedCursor);
+  }, [
+    richText.editor,
+    richText.getTextAndCursor,
+    richText.focus,
+    mentions.updateMentionQuery,
+  ]);
+
+  // ── Submit ──────────────────────────────────────────────────────────
+  const submitMessage = React.useCallback(() => {
+    const trimmed = contentRef.current.trim();
+    const currentPendingImeta = media.pendingImetaRef.current;
+    const hasMedia = currentPendingImeta.length > 0;
 
     if (
-      event.key === "Enter" &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.nativeEvent.isComposing
+      (!trimmed && !hasMedia) ||
+      disabledRef.current ||
+      isSendingRef.current
     ) {
-      event.preventDefault();
-      const trimmed = value.trim();
-      if (trimmed) {
-        const pubkeys = mentions.extractMentionPubkeys(trimmed);
-        onSubmit(trimmed, pubkeys);
-        setValue("");
-        mentions.clearMentions();
-        channelLinks.clearChannels();
-      }
+      return;
     }
-  }
+
+    const pubkeys = mentions.extractMentionPubkeys(trimmed);
+
+    const mediaTags =
+      currentPendingImeta.length > 0
+        ? currentPendingImeta.map((d) => [
+            "imeta",
+            `url ${d.url}`,
+            `m ${d.type}`,
+            `x ${d.sha256}`,
+            `size ${d.size}`,
+            ...(d.dim ? [`dim ${d.dim}`] : []),
+            ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
+            ...(d.thumb ? [`thumb ${d.thumb}`] : []),
+            ...(d.duration != null ? [`duration ${d.duration}`] : []),
+            ...(d.image ? [`image ${d.image}`] : []),
+          ])
+        : undefined;
+
+    let finalContent = trimmed;
+    for (const d of currentPendingImeta) {
+      const isVideo = d.type.startsWith("video/");
+      finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
+    }
+
+    setContent("");
+    contentRef.current = "";
+    richText.clearContent();
+    media.setPendingImeta([]);
+    mentions.clearMentions();
+    channelLinks.clearChannels();
+    setIsEmojiPickerOpen(false);
+
+    onSubmitRef.current(finalContent, pubkeys, mediaTags);
+  }, [
+    media.pendingImetaRef,
+    media.setPendingImeta,
+    mentions.extractMentionPubkeys,
+    mentions.clearMentions,
+    channelLinks.clearChannels,
+    richText.clearContent,
+  ]);
+  submitMessageRef.current = submitMessage;
+
+  const handleSubmit = React.useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      submitMessage();
+    },
+    [submitMessage],
+  );
+
+  // ── Keyboard handling ───────────────────────────────────────────────
+  const handleEditorKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const channelResult = channelLinks.handleChannelKeyDown(event);
+      if (channelResult.handled) {
+        if (channelResult.suggestion) {
+          applyChannelInsert(channelResult.suggestion);
+        }
+        return;
+      }
+
+      const { handled, suggestion } = mentions.handleMentionKeyDown(event);
+      if (handled) {
+        if (suggestion) {
+          applyMentionInsert(suggestion);
+        }
+        return;
+      }
+    },
+    [
+      channelLinks.handleChannelKeyDown,
+      applyChannelInsert,
+      mentions.handleMentionKeyDown,
+      applyMentionInsert,
+    ],
+  );
+
+  // ── Media paste ─────────────────────────────────────────────────────
+  const uploadFileRef = React.useRef(media.uploadFile);
+  uploadFileRef.current = media.uploadFile;
+
+  React.useEffect(() => {
+    if (!richText.editor) return;
+
+    richText.editor.setOptions({
+      editorProps: {
+        ...richText.editor.options.editorProps,
+        handlePaste: (_view, event) => {
+          const items = Array.from(event.clipboardData?.items ?? []);
+          const mediaItem = items.find((item) =>
+            ALLOWED_MEDIA_TYPES.includes(item.type),
+          );
+          if (mediaItem) {
+            const file = mediaItem.getAsFile();
+            if (file) {
+              void uploadFileRef.current(file);
+            }
+            return true;
+          }
+
+          const html = event.clipboardData?.getData("text/html");
+          if (html && hasMentionClipboardHtml(html)) {
+            const cleanText = normalizeMentionClipboardHtml(html);
+            event.preventDefault();
+            _view.dispatch(
+              _view.state.tr.insertText(
+                cleanText,
+                _view.state.selection.from,
+                _view.state.selection.to,
+              ),
+            );
+            return true;
+          }
+
+          return false;
+        },
+      },
+    });
+  }, [richText.editor]);
+
+  // ── Send button state ───────────────────────────────────────────────
+  const sendDisabled = React.useMemo(
+    () =>
+      disabled ||
+      (content.trim().length === 0 && media.pendingImeta.length === 0),
+    [disabled, content, media.pendingImeta.length],
+  );
+
+  const handlePaperclipClick = React.useCallback(() => {
+    void media.handlePaperclip();
+  }, [media.handlePaperclip]);
+
+  // ── Render ──────────────────────────────────────────────────────────
+  const autocompletePosition = autocompleteBelow ? "below" : "above";
 
   return (
-    <form className="relative flex flex-col gap-2" onSubmit={handleSubmit}>
+    <form
+      className="relative rounded-2xl border border-input bg-card px-3 py-2 sm:px-4"
+      onDragOver={media.handleDragOver}
+      onDrop={(e) => {
+        void media.handleDrop(e);
+      }}
+      onSubmit={handleSubmit}
+    >
       <ChannelAutocomplete
-        onSelect={(suggestion) => {
-          const textarea = textareaRef.current;
-          const result = channelLinks.insertChannel(
-            suggestion,
-            value,
-            textarea?.selectionEnd ?? value.length,
-          );
-          setValue(result.nextContent);
-          requestAnimationFrame(() => {
-            textarea?.setSelectionRange(result.nextCursor, result.nextCursor);
-            textarea?.focus();
-          });
-        }}
+        onSelect={applyChannelInsert}
+        position={autocompletePosition}
         selectedIndex={channelLinks.channelSelectedIndex}
         suggestions={
           channelLinks.isChannelOpen ? channelLinks.channelSuggestions : []
         }
       />
       <MentionAutocomplete
-        onSelect={(suggestion) => {
-          const textarea = textareaRef.current;
-          const result = mentions.insertMention(
-            suggestion,
-            value,
-            textarea?.selectionEnd ?? value.length,
-          );
-          setValue(result.nextContent);
-          requestAnimationFrame(() => {
-            textarea?.setSelectionRange(result.nextCursor, result.nextCursor);
-            textarea?.focus();
-          });
-        }}
+        onSelect={applyMentionInsert}
+        position={autocompletePosition}
         selectedIndex={mentions.mentionSelectedIndex}
         suggestions={mentions.isMentionOpen ? mentions.suggestions : []}
       />
-      <Textarea
-        className="min-h-[100px] resize-none bg-background/80"
-        disabled={disabled || isSending}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        ref={textareaRef}
-        value={value}
-      />
-      <div className="flex justify-end gap-2">
-        {onCancel ? (
-          <Button
-            disabled={isSending}
-            onClick={onCancel}
-            size="sm"
+
+      {media.uploadState.status === "error" ? (
+        <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          Upload failed: {media.uploadState.message}
+          <button
+            className="ml-2 underline"
+            onClick={() => media.setUploadState({ status: "idle" })}
             type="button"
-            variant="ghost"
           >
-            Cancel
-          </Button>
-        ) : null}
-        <Button
-          disabled={disabled || isSending || value.trim().length === 0}
-          size="sm"
-          type="submit"
-        >
-          <Send className="mr-1.5 h-3.5 w-3.5" />
-          {isSending ? "Sending..." : submitLabel}
-        </Button>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
+      {(media.pendingImeta.length > 0 || media.isUploading) && (
+        <div className="mb-2 flex items-center gap-2">
+          <ComposerAttachments
+            attachments={media.pendingImeta}
+            isUploading={media.isUploading}
+            uploadingCount={media.uploadingCount}
+            onRemove={media.removeAttachment}
+          />
+        </div>
+      )}
+
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
+      <div
+        className="rich-text-composer max-h-32 overflow-y-auto"
+        onKeyDown={handleEditorKeyDown}
+      >
+        <EditorContent editor={richText.editor} />
       </div>
+
+      <MessageComposerToolbar
+        composerDisabled={disabled ?? false}
+        editor={richText.editor}
+        extraActions={
+          onCancel ? (
+            <Button
+              disabled={isSending}
+              onClick={onCancel}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Cancel
+            </Button>
+          ) : undefined
+        }
+        formattingDisabled={disabled ?? false}
+        isEmojiPickerOpen={isEmojiPickerOpen}
+        isFormattingOpen={isFormattingOpen}
+        isSending={isSending ?? false}
+        isUploading={media.isUploading}
+        onCaptureSelection={() => {}}
+        onEmojiPickerOpenChange={setIsEmojiPickerOpen}
+        onEmojiSelect={insertEmoji}
+        onFormattingToggle={handleFormattingToggle}
+        onOpenMentionPicker={openMentionPicker}
+        onPaperclip={handlePaperclipClick}
+        sendDisabled={sendDisabled}
+      />
     </form>
   );
 }
