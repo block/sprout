@@ -8,18 +8,20 @@ import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_management_provider.dart';
 
-/// Rich compose bar with @mention autocomplete and a markdown formatting
-/// toolbar. Used in both channel and thread views — the caller provides an
-/// [onSend] callback that handles actual message submission.
+/// Rich compose bar with @mention autocomplete, emoji picker, and a markdown
+/// formatting toolbar. Used in both channel and thread views — the caller
+/// provides an [onSend] callback that handles actual message submission.
 class ComposeBar extends HookConsumerWidget {
   final String channelId;
-  final String hintText;
+  final String channelName;
+  final String? hintText;
   final Future<void> Function(String content) onSend;
 
   const ComposeBar({
     super.key,
     required this.channelId,
-    this.hintText = 'Message\u2026',
+    this.channelName = '',
+    this.hintText,
     required this.onSend,
   });
 
@@ -29,6 +31,10 @@ class ComposeBar extends HookConsumerWidget {
     final focusNode = useFocusNode();
     final isSending = useState(false);
     final showFormatting = useState(false);
+
+    final resolvedHint =
+        hintText ??
+        (channelName.isNotEmpty ? 'Message #$channelName' : 'Message\u2026');
 
     // Mention state --------------------------------------------------------
     final mentionQuery = useState<String?>(null);
@@ -143,6 +149,21 @@ class ComposeBar extends HookConsumerWidget {
       }
     }
 
+    // Insert an emoji at the cursor.
+    void insertEmoji(String emoji) {
+      final text = controller.text;
+      final cursor = controller.selection.isValid
+          ? controller.selection.baseOffset
+          : text.length;
+      final before = text.substring(0, cursor);
+      final after = text.substring(cursor);
+      controller.text = '$before$emoji$after';
+      controller.selection = TextSelection.collapsed(
+        offset: cursor + emoji.length,
+      );
+      focusNode.requestFocus();
+    }
+
     // Wrap (or insert) markdown formatting around the current selection.
     void applyFormat(String prefix, [String? suffix]) {
       suffix ??= prefix;
@@ -226,7 +247,7 @@ class ComposeBar extends HookConsumerWidget {
                 maxLines: 5,
                 style: context.textTheme.bodyMedium,
                 decoration: InputDecoration(
-                  hintText: hintText,
+                  hintText: resolvedHint,
                   hintStyle: context.textTheme.bodyMedium?.copyWith(
                     color: context.colors.onSurfaceVariant,
                   ),
@@ -252,7 +273,10 @@ class ComposeBar extends HookConsumerWidget {
                   ),
                   _ComposeAction(
                     icon: LucideIcons.smilePlus,
-                    onTap: () {}, // emoji placeholder
+                    onTap: () => _showEmojiPicker(
+                      context: context,
+                      onSelect: insertEmoji,
+                    ),
                   ),
                   _ComposeAction(
                     icon: LucideIcons.atSign,
@@ -271,6 +295,264 @@ class ComposeBar extends HookConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Emoji picker
+// ---------------------------------------------------------------------------
+
+void _showEmojiPicker({
+  required BuildContext context,
+  required void Function(String emoji) onSelect,
+}) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+    builder: (sheetContext) => _EmojiPickerSheet(
+      onSelect: (emoji) {
+        Navigator.of(sheetContext).pop();
+        onSelect(emoji);
+      },
+    ),
+  );
+}
+
+/// Emoji categories for the picker. System Unicode emoji — no packages needed.
+const _emojiCategories = <({String label, IconData icon, List<String> emoji})>[
+  (
+    label: 'Recent',
+    icon: LucideIcons.clock,
+    emoji: [
+      '\u{1F44D}',
+      '\u{2764}\u{FE0F}',
+      '\u{1F602}',
+      '\u{1F389}',
+      '\u{1F440}',
+      '\u{1F64F}',
+      '\u{1F525}',
+      '\u{2705}',
+    ],
+  ),
+  (
+    label: 'Smileys',
+    icon: LucideIcons.smile,
+    emoji: [
+      '\u{1F600}',
+      '\u{1F603}',
+      '\u{1F604}',
+      '\u{1F601}',
+      '\u{1F605}',
+      '\u{1F602}',
+      '\u{1F923}',
+      '\u{1F607}',
+      '\u{1F60A}',
+      '\u{1F60D}',
+      '\u{1F618}',
+      '\u{1F617}',
+      '\u{1F61A}',
+      '\u{1F619}',
+      '\u{1F60B}',
+      '\u{1F61B}',
+      '\u{1F61D}',
+      '\u{1F61C}',
+      '\u{1F911}',
+      '\u{1F917}',
+      '\u{1F914}',
+      '\u{1F910}',
+      '\u{1F928}',
+      '\u{1F610}',
+      '\u{1F611}',
+      '\u{1F636}',
+      '\u{1F60F}',
+      '\u{1F612}',
+      '\u{1F644}',
+      '\u{1F62C}',
+      '\u{1F925}',
+      '\u{1F60C}',
+      '\u{1F614}',
+      '\u{1F62A}',
+      '\u{1F924}',
+      '\u{1F634}',
+      '\u{1F637}',
+      '\u{1F912}',
+      '\u{1F915}',
+      '\u{1F922}',
+      '\u{1F92E}',
+      '\u{1F927}',
+      '\u{1F975}',
+      '\u{1F976}',
+      '\u{1F974}',
+      '\u{1F635}',
+      '\u{1F92F}',
+      '\u{1F920}',
+      '\u{1F973}',
+      '\u{1F978}',
+    ],
+  ),
+  (
+    label: 'Gestures',
+    icon: LucideIcons.hand,
+    emoji: [
+      '\u{1F44D}',
+      '\u{1F44E}',
+      '\u{1F44A}',
+      '\u{270A}',
+      '\u{1F91B}',
+      '\u{1F91C}',
+      '\u{1F44F}',
+      '\u{1F64C}',
+      '\u{1F450}',
+      '\u{1F64F}',
+      '\u{1F91D}',
+      '\u{270C}\u{FE0F}',
+      '\u{1F91E}',
+      '\u{1F91F}',
+      '\u{1F918}',
+      '\u{1F448}',
+      '\u{1F449}',
+      '\u{1F446}',
+      '\u{1F447}',
+      '\u{261D}\u{FE0F}',
+      '\u{1F4AA}',
+      '\u{1F44B}',
+      '\u{1F590}\u{FE0F}',
+    ],
+  ),
+  (
+    label: 'Objects',
+    icon: LucideIcons.lightbulb,
+    emoji: [
+      '\u{2764}\u{FE0F}',
+      '\u{1F525}',
+      '\u{2B50}',
+      '\u{1F31F}',
+      '\u{1F4A5}',
+      '\u{1F389}',
+      '\u{1F38A}',
+      '\u{1F3C6}',
+      '\u{1F947}',
+      '\u{1F4A1}',
+      '\u{1F4AF}',
+      '\u{2705}',
+      '\u{274C}',
+      '\u{26A0}\u{FE0F}',
+      '\u{1F6A8}',
+      '\u{1F4DD}',
+      '\u{1F4CB}',
+      '\u{1F4CC}',
+      '\u{1F517}',
+      '\u{1F4E3}',
+      '\u{1F514}',
+      '\u{1F3B5}',
+      '\u{1F3B6}',
+      '\u{1F680}',
+    ],
+  ),
+  (
+    label: 'Nature',
+    icon: LucideIcons.sprout,
+    emoji: [
+      '\u{1F331}',
+      '\u{1F332}',
+      '\u{1F333}',
+      '\u{1F334}',
+      '\u{1F335}',
+      '\u{1F33B}',
+      '\u{1F33A}',
+      '\u{1F337}',
+      '\u{1F339}',
+      '\u{1F340}',
+      '\u{1F341}',
+      '\u{1F343}',
+      '\u{1F31E}',
+      '\u{1F308}',
+      '\u{2600}\u{FE0F}',
+      '\u{1F327}\u{FE0F}',
+      '\u{26A1}',
+      '\u{2744}\u{FE0F}',
+      '\u{1F30A}',
+      '\u{1F436}',
+      '\u{1F431}',
+      '\u{1F98A}',
+      '\u{1F42C}',
+      '\u{1F985}',
+    ],
+  ),
+];
+
+class _EmojiPickerSheet extends StatefulWidget {
+  final void Function(String emoji) onSelect;
+
+  const _EmojiPickerSheet({required this.onSelect});
+
+  @override
+  State<_EmojiPickerSheet> createState() => _EmojiPickerSheetState();
+}
+
+class _EmojiPickerSheetState extends State<_EmojiPickerSheet> {
+  int _selectedCategory = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final category = _emojiCategories[_selectedCategory];
+    final textTheme = Theme.of(context).textTheme;
+
+    return SizedBox(
+      height: 340,
+      child: Column(
+        children: [
+          // Category tabs.
+          SizedBox(
+            height: 44,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
+              itemCount: _emojiCategories.length,
+              itemBuilder: (context, index) {
+                final cat = _emojiCategories[index];
+                final selected = index == _selectedCategory;
+                return Padding(
+                  padding: const EdgeInsets.only(right: Grid.half),
+                  child: FilterChip(
+                    selected: selected,
+                    showCheckmark: false,
+                    avatar: Icon(cat.icon, size: 16),
+                    label: Text(cat.label, style: textTheme.labelSmall),
+                    onSelected: (_) =>
+                        setState(() => _selectedCategory = index),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: Grid.xxs),
+          // Emoji grid.
+          Expanded(
+            child: GridView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 8,
+                mainAxisSpacing: Grid.half,
+                crossAxisSpacing: Grid.half,
+              ),
+              itemCount: category.emoji.length,
+              itemBuilder: (context, index) {
+                final emoji = category.emoji[index];
+                return GestureDetector(
+                  onTap: () => widget.onSelect(emoji),
+                  child: Center(
+                    child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

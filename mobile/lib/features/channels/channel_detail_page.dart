@@ -181,6 +181,7 @@ class ChannelDetailPage extends HookConsumerWidget {
               !resolvedChannel.isArchived)
             ComposeBar(
               channelId: channel.id,
+              channelName: resolvedChannel.name,
               onSend: (content) => ref
                   .read(sendMessageProvider)
                   .call(channelId: channel.id, content: content),

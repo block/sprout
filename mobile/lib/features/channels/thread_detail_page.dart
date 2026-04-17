@@ -180,7 +180,7 @@ class ThreadDetailPage extends HookConsumerWidget {
           if (isMember && !isArchived)
             ComposeBar(
               channelId: channelId,
-              hintText: 'Reply\u2026',
+              hintText: 'Reply in thread\u2026',
               onSend: (content) => ref
                   .read(sendMessageProvider)
                   .call(
