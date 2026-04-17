@@ -206,8 +206,11 @@ rule Source_Sends_Payload:
 // both transcript_hash is verified AND the user confirms SAS on the target.
 //
 // We model this as two rules:
-//   1. Target_Buffers_Payload — receives the raw ciphertext into a holding
-//      fact WITHOUT decrypting. The buffer stores the opaque senc() term.
+//   1. Target_Buffers_Payload — receives ciphertext into a holding fact
+//      WITHOUT extracting the plaintext. The rule validates that the
+//      ciphertext is encrypted under the session's DH-derived key
+//      (h(< 'pair-key', pkS^xt >)), matching the spec's requirement that
+//      invalid events are silently discarded without advancing state.
 //      Only fires after transcript verification (linear TgtCanBuffer),
 //      matching the spec's state table where `payload` is valid only in
 //      AwaitingConfirmation or Transferring (both post-transcript-verify).
@@ -220,13 +223,13 @@ rule Source_Sends_Payload:
 
 rule Target_Buffers_Payload:
   [ TgtCanBuffer(qr, pkS, xt),
-    In(< 'payload_evt', cipher >)
+    In(< 'payload_evt', senc(msg, h(< 'pair-key', pkS^xt >)) >)
   ]
   --[
       TargetBufferedPayload(h(< 'session-id', qr >), pkS, 'g'^xt)
     ]->
   [
-      TgtPayloadBuffer(qr, pkS, xt, cipher)
+      TgtPayloadBuffer(qr, pkS, xt, senc(msg, h(< 'pair-key', pkS^xt >)))
   ]
 
 // Target decrypts the payload only after entering Transferring state
