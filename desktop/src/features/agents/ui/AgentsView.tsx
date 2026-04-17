@@ -1,42 +1,3 @@
-import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-
-import {
-  type AttachManagedAgentToChannelResult,
-  personasQueryKey,
-  useAcpProvidersQuery,
-  useCreatePersonaMutation,
-  useDeletePersonaMutation,
-  useDeleteManagedAgentMutation,
-  useExportPersonaJsonMutation,
-  useManagedAgentLogQuery,
-  useManagedAgentsQuery,
-  useMintManagedAgentTokenMutation,
-  usePersonasQuery,
-  useRelayAgentsQuery,
-  useSetManagedAgentStartOnAppLaunchMutation,
-  useSetPersonaActiveMutation,
-  useStartManagedAgentMutation,
-  useStopManagedAgentMutation,
-  useUpdatePersonaMutation,
-} from "@/features/agents/hooks";
-import { getPersonaLibraryState } from "@/features/agents/lib/catalog";
-import { useChannelsQuery } from "@/features/channels/hooks";
-import { usePresenceQuery } from "@/features/presence/hooks";
-import {
-  parsePersonaFiles,
-  type ParsePersonaFilesResult,
-} from "@/shared/api/tauriPersonas";
-import { isSingleItemFile } from "@/shared/lib/fileMagic";
-
-import type {
-  AgentPersona,
-  Channel,
-  CreatePersonaInput,
-  CreateManagedAgentResponse,
-  ManagedAgent,
-  UpdatePersonaInput,
-} from "@/shared/api/types";
 import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { BatchImportDialog } from "./BatchImportDialog";
@@ -55,386 +16,27 @@ import { TeamImportDialog } from "./TeamImportDialog";
 import { TeamImportUpdateDialog } from "./TeamImportUpdateDialog";
 import { TeamsSection } from "./TeamsSection";
 import { TokenRevealDialog } from "./TokenRevealDialog";
-import {
-  createPersonaDialogState,
-  duplicatePersonaDialogState,
-  editPersonaDialogState,
-  importPersonaDialogState,
-  type PersonaDialogState,
-} from "./personaDialogState";
-import { usePersonaImportActions } from "./usePersonaImportActions";
+import { useManagedAgentActions } from "./useManagedAgentActions";
+import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
-import {
-  deleteManagedAgentWithRules,
-  startManagedAgentWithRules,
-  stopManagedAgentWithRules,
-} from "../lib/managedAgentControlActions";
-
-type PersonaFeedbackSurface = "catalog" | "library";
 
 export function AgentsView() {
-  const queryClient = useQueryClient();
-  const relayAgentsQuery = useRelayAgentsQuery();
-  const managedAgentsQuery = useManagedAgentsQuery();
-  const channelsQuery = useChannelsQuery();
-  const personasQuery = usePersonasQuery();
-  const acpProvidersQuery = useAcpProvidersQuery();
-  const startMutation = useStartManagedAgentMutation();
-  const stopMutation = useStopManagedAgentMutation();
-  const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
-  const deleteMutation = useDeleteManagedAgentMutation();
-  const mintTokenMutation = useMintManagedAgentTokenMutation();
-  const createPersonaMutation = useCreatePersonaMutation();
-  const updatePersonaMutation = useUpdatePersonaMutation();
-  const deletePersonaMutation = useDeletePersonaMutation();
-  const setPersonaActiveMutation = useSetPersonaActiveMutation();
-  const exportPersonaJsonMutation = useExportPersonaJsonMutation();
-  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
-  const [personaDialogState, setPersonaDialogState] =
-    React.useState<PersonaDialogState | null>(null);
-  const [personaToDelete, setPersonaToDelete] =
-    React.useState<AgentPersona | null>(null);
-  const [agentToAddToChannel, setAgentToAddToChannel] =
-    React.useState<ManagedAgent | null>(null);
-  const [createdAgent, setCreatedAgent] =
-    React.useState<CreateManagedAgentResponse | null>(null);
-  const [revealedToken, setRevealedToken] = React.useState<{
-    name: string;
-    token: string;
-  } | null>(null);
-  const [actionNoticeMessage, setActionNoticeMessage] = React.useState<
-    string | null
-  >(null);
-  const [actionErrorMessage, setActionErrorMessage] = React.useState<
-    string | null
-  >(null);
-  const [personaNoticeMessage, setPersonaNoticeMessage] = React.useState<
-    string | null
-  >(null);
-  const [personaErrorMessage, setPersonaErrorMessage] = React.useState<
-    string | null
-  >(null);
-  const [personaFeedbackSurface, setPersonaFeedbackSurface] =
-    React.useState<PersonaFeedbackSurface>("library");
-
+  const agents = useManagedAgentActions();
+  const personas = usePersonaActions();
   const teamActions = useTeamActions(
-    { setActionNoticeMessage, setActionErrorMessage },
     {
-      refetchManagedAgents: () => void managedAgentsQuery.refetch(),
-      refetchRelayAgents: () => void relayAgentsQuery.refetch(),
+      setActionNoticeMessage: agents.setActionNoticeMessage,
+      setActionErrorMessage: agents.setActionErrorMessage,
+    },
+    {
+      refetchManagedAgents: agents.refetchManagedAgents,
+      refetchRelayAgents: agents.refetchRelayAgents,
     },
   );
-  const personaImportActions = usePersonaImportActions(
-    personasQuery.data ?? [],
-    {
-      clearPersonaFeedback: () => clearPersonaFeedback("library"),
-      setPersonaNoticeMessage,
-      setPersonaErrorMessage,
-      setPersonaDialogState,
-    },
-  );
-  const [batchImportResult, setBatchImportResult] =
-    React.useState<ParsePersonaFilesResult | null>(null);
-  const [batchImportFileName, setBatchImportFileName] = React.useState("");
-  const [isCatalogDialogOpen, setIsCatalogDialogOpen] = React.useState(false);
-  const managedAgents = React.useMemo(
-    () =>
-      [...(managedAgentsQuery.data ?? [])].sort((left, right) => {
-        // Active agents (running or deployed) sort before inactive ones.
-        // Both "running" and "deployed" are equivalent for sorting purposes.
-        const activeScore = (s: string) =>
-          s === "running" || s === "deployed" ? 1 : 0;
-        const diff = activeScore(right.status) - activeScore(left.status);
-        if (diff !== 0) return diff;
-
-        return left.name.localeCompare(right.name);
-      }),
-    [managedAgentsQuery.data],
-  );
-  const personas = personasQuery.data ?? [];
-  const { catalogPersonas, libraryPersonas, personaLabelsById } = React.useMemo(
-    () => getPersonaLibraryState(personas),
-    [personas],
-  );
-  const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
-    null,
-  );
-  const managedAgentLogQuery = useManagedAgentLogQuery(logAgentPubkey);
-  const managedPubkeys = React.useMemo(
-    () => new Set(managedAgents.map((agent) => agent.pubkey)),
-    [managedAgents],
-  );
-  const managedPubkeyList = React.useMemo(
-    () => managedAgents.map((agent) => agent.pubkey),
-    [managedAgents],
-  );
-  const managedPresenceQuery = usePresenceQuery(managedPubkeyList);
-  const channelsByPubkey = React.useMemo(() => {
-    const map: Record<string, string[]> = {};
-    for (const ra of relayAgentsQuery.data ?? []) {
-      if (ra.channels.length > 0) {
-        map[ra.pubkey] = ra.channels;
-      }
-    }
-    return map;
-  }, [relayAgentsQuery.data]);
-
-  // Clear log selection if the agent was removed
-  React.useEffect(() => {
-    if (
-      logAgentPubkey &&
-      !managedAgents.some((agent) => agent.pubkey === logAgentPubkey)
-    ) {
-      setLogAgentPubkey(null);
-    }
-  }, [managedAgents, logAgentPubkey]);
-
-  function clearActionFeedback() {
-    setActionNoticeMessage(null);
-    setActionErrorMessage(null);
-  }
-
-  function clearPersonaFeedback(
-    surface: PersonaFeedbackSurface = personaFeedbackSurface,
-  ) {
-    setPersonaFeedbackSurface(surface);
-    setPersonaNoticeMessage(null);
-    setPersonaErrorMessage(null);
-  }
-
-  async function handleStart(pubkey: string) {
-    clearActionFeedback();
-
-    try {
-      const agent = managedAgents.find(
-        (candidate) => candidate.pubkey === pubkey,
-      );
-      if (!agent) return;
-
-      await startManagedAgentWithRules({
-        agent,
-        startManagedAgent: startMutation.mutateAsync,
-      });
-    } catch (error) {
-      setActionErrorMessage(
-        error instanceof Error ? error.message : "Failed to start agent.",
-      );
-    }
-  }
-
-  async function handleStop(pubkey: string) {
-    clearActionFeedback();
-
-    try {
-      const agent = managedAgents.find((a) => a.pubkey === pubkey);
-      if (!agent) return;
-
-      const result = await stopManagedAgentWithRules({
-        agent,
-        channels: channelsQuery.data ?? [],
-        relayAgents: relayAgentsQuery.data ?? [],
-        stopManagedAgent: stopMutation.mutateAsync,
-      });
-      if (result.noticeMessage) {
-        setActionNoticeMessage(result.noticeMessage);
-      }
-    } catch (error) {
-      setActionErrorMessage(
-        error instanceof Error ? error.message : "Failed to stop agent.",
-      );
-    }
-  }
-
-  async function handleDelete(pubkey: string) {
-    clearActionFeedback();
-
-    try {
-      const agent = managedAgents.find((a) => a.pubkey === pubkey);
-      if (!agent) return;
-
-      const result = await deleteManagedAgentWithRules({
-        agent,
-        channels: channelsQuery.data ?? [],
-        deleteManagedAgent: deleteMutation.mutateAsync,
-        presenceLookup: managedPresenceQuery.data,
-        relayAgents: relayAgentsQuery.data ?? [],
-      });
-      if (result.cancelled) return;
-
-      if (logAgentPubkey === pubkey) {
-        setLogAgentPubkey(null);
-      }
-    } catch (error) {
-      setActionErrorMessage(
-        error instanceof Error ? error.message : "Failed to delete agent.",
-      );
-    }
-  }
-
-  async function handleToggleStartOnAppLaunch(
-    pubkey: string,
-    startOnAppLaunch: boolean,
-  ) {
-    clearActionFeedback();
-
-    try {
-      const updated = await startOnLaunchMutation.mutateAsync({
-        pubkey,
-        startOnAppLaunch,
-      });
-      setActionNoticeMessage(
-        updated.startOnAppLaunch
-          ? `Will start ${updated.name} automatically when the desktop app opens.`
-          : `${updated.name} will stay manual-start only.`,
-      );
-    } catch (error) {
-      setActionErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Failed to update startup preference.",
-      );
-    }
-  }
-
-  async function handleMintToken(pubkey: string, name: string) {
-    clearActionFeedback();
-
-    try {
-      const result = await mintTokenMutation.mutateAsync({
-        pubkey,
-        tokenName: `${name}-token`,
-      });
-      setRevealedToken({
-        name,
-        token: result.token,
-      });
-    } catch (error) {
-      setActionErrorMessage(
-        error instanceof Error ? error.message : "Failed to mint token.",
-      );
-    }
-  }
-
-  async function handlePersonaSubmit(
-    input: CreatePersonaInput | UpdatePersonaInput,
-  ) {
-    clearPersonaFeedback("library");
-
-    try {
-      if ("id" in input) {
-        await updatePersonaMutation.mutateAsync(input);
-        setPersonaNoticeMessage(`Updated ${input.displayName}.`);
-      } else {
-        await createPersonaMutation.mutateAsync(input);
-        setPersonaNoticeMessage(`Created ${input.displayName}.`);
-      }
-      setPersonaDialogState(null);
-    } catch (error) {
-      setPersonaErrorMessage(
-        error instanceof Error ? error.message : "Failed to save persona.",
-      );
-    }
-  }
-
-  async function handleDeletePersona(persona: AgentPersona) {
-    clearPersonaFeedback("library");
-
-    try {
-      await deletePersonaMutation.mutateAsync(persona.id);
-      setPersonaNoticeMessage(`Deleted ${persona.displayName}.`);
-      setPersonaToDelete(null);
-    } catch (error) {
-      setPersonaErrorMessage(
-        error instanceof Error ? error.message : "Failed to delete persona.",
-      );
-    }
-  }
-
-  async function handleSetPersonaActive(
-    persona: AgentPersona,
-    active: boolean,
-    surface: PersonaFeedbackSurface,
-  ) {
-    clearPersonaFeedback(surface);
-
-    try {
-      await setPersonaActiveMutation.mutateAsync({
-        id: persona.id,
-        active,
-      });
-      setPersonaNoticeMessage(
-        active
-          ? `Selected ${persona.displayName} for My Agents.`
-          : `Deselected ${persona.displayName} from My Agents.`,
-      );
-    } catch (error) {
-      setPersonaErrorMessage(
-        error instanceof Error
-          ? error.message
-          : active
-            ? "Failed to select persona for My Agents."
-            : "Failed to deselect persona from My Agents.",
-      );
-    }
-  }
-
-  function handleAddedToChannel(
-    channel: Channel,
-    result: AttachManagedAgentToChannelResult,
-  ) {
-    setActionErrorMessage(null);
-    setActionNoticeMessage(() => {
-      if (result.restarted) {
-        return `Added ${result.agent.name} to ${channel.name} and restarted it so the new channel subscription is live.`;
-      }
-
-      if (result.started) {
-        return `Added ${result.agent.name} to ${channel.name} and spawned it.`;
-      }
-
-      if (result.membershipAdded) {
-        return `Added ${result.agent.name} to ${channel.name}.`;
-      }
-
-      return `${result.agent.name} is already in ${channel.name}.`;
-    });
-    void managedAgentsQuery.refetch();
-    void relayAgentsQuery.refetch();
-  }
-
-  async function handlePersonaImportFile(
-    fileBytes: number[],
-    fileName: string,
-  ) {
-    clearPersonaFeedback("library");
-    try {
-      const result = await parsePersonaFiles(fileBytes, fileName);
-      if (isSingleItemFile(fileBytes) && result.personas.length === 1) {
-        setPersonaDialogState(importPersonaDialogState(result.personas[0]));
-      } else if (result.personas.length > 0) {
-        setBatchImportResult(result);
-        setBatchImportFileName(fileName);
-      } else {
-        setPersonaErrorMessage("No valid personas found in file.");
-      }
-    } catch (err) {
-      setPersonaErrorMessage(
-        err instanceof Error ? err.message : "Failed to parse persona file.",
-      );
-    }
-  }
 
   const isActionPending =
-    startMutation.isPending ||
-    stopMutation.isPending ||
-    startOnLaunchMutation.isPending ||
-    deleteMutation.isPending ||
-    mintTokenMutation.isPending ||
-    createPersonaMutation.isPending ||
-    updatePersonaMutation.isPending ||
-    deletePersonaMutation.isPending ||
-    setPersonaActiveMutation.isPending ||
-    exportPersonaJsonMutation.isPending ||
+    agents.isPending ||
+    personas.isPending ||
     teamActions.exportTeamJsonMutation.isPending ||
     teamActions.createTeamMutation.isPending ||
     teamActions.updateTeamMutation.isPending ||
@@ -446,76 +48,37 @@ export function AgentsView() {
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           <div className="flex flex-col gap-6">
             <PersonasSection
-              canChooseCatalog={catalogPersonas.length > 0}
+              canChooseCatalog={personas.catalogPersonas.length > 0}
               error={
-                personasQuery.error instanceof Error
-                  ? personasQuery.error
+                personas.personasQuery.error instanceof Error
+                  ? personas.personasQuery.error
                   : null
               }
               feedbackErrorMessage={
-                personaFeedbackSurface === "library"
-                  ? personaErrorMessage
+                personas.personaFeedbackSurface === "library"
+                  ? personas.personaErrorMessage
                   : null
               }
               feedbackNoticeMessage={
-                personaFeedbackSurface === "library"
-                  ? personaNoticeMessage
+                personas.personaFeedbackSurface === "library"
+                  ? personas.personaNoticeMessage
                   : null
               }
-              isLoading={personasQuery.isLoading}
-              isPending={
-                createPersonaMutation.isPending ||
-                updatePersonaMutation.isPending ||
-                deletePersonaMutation.isPending ||
-                setPersonaActiveMutation.isPending ||
-                exportPersonaJsonMutation.isPending
-              }
-              onChooseCatalog={() => {
-                clearPersonaFeedback("catalog");
-                setIsCatalogDialogOpen(true);
-              }}
-              onCreate={() => {
-                clearPersonaFeedback("library");
-                setPersonaDialogState(createPersonaDialogState());
-              }}
-              onDelete={(persona) => {
-                clearPersonaFeedback("library");
-                setPersonaToDelete(persona);
-              }}
+              isLoading={personas.personasQuery.isLoading}
+              isPending={personas.isPending}
+              onChooseCatalog={personas.openCatalog}
+              onCreate={personas.openCreate}
+              onDelete={personas.openDelete}
               onDeactivate={(persona) => {
-                void handleSetPersonaActive(persona, false, "library");
+                void personas.handleSetActive(persona, false, "library");
               }}
-              onDuplicate={(persona) => {
-                clearPersonaFeedback("library");
-                setPersonaDialogState(duplicatePersonaDialogState(persona));
-              }}
-              onEdit={(persona) => {
-                clearPersonaFeedback("library");
-                setPersonaDialogState(editPersonaDialogState(persona));
-              }}
+              onDuplicate={personas.openDuplicate}
+              onEdit={personas.openEdit}
               onImportFile={(fileBytes, fileName) => {
-                void handlePersonaImportFile(fileBytes, fileName);
+                void personas.handleImportFile(fileBytes, fileName);
               }}
-              onExport={(persona) => {
-                clearPersonaFeedback("library");
-                exportPersonaJsonMutation.mutate(persona.id, {
-                  onSuccess: (saved) => {
-                    if (saved) {
-                      setPersonaNoticeMessage(
-                        `Exported ${persona.displayName}.`,
-                      );
-                    }
-                  },
-                  onError: (error) => {
-                    setPersonaErrorMessage(
-                      error instanceof Error
-                        ? error.message
-                        : "Failed to export persona.",
-                    );
-                  },
-                });
-              }}
-              personas={libraryPersonas}
+              onExport={personas.handleExport}
+              personas={personas.libraryPersonas}
             />
 
             <TeamsSection
@@ -537,67 +100,70 @@ export function AgentsView() {
               onExport={teamActions.handleExportTeam}
               onImportFile={teamActions.handleImportFile}
               onAddToChannel={teamActions.setTeamToAddToChannel}
-              personas={libraryPersonas}
+              personas={personas.libraryPersonas}
               teams={teamActions.teams}
             />
 
             <ManagedAgentsSection
-              actionErrorMessage={actionErrorMessage}
-              actionNoticeMessage={actionNoticeMessage}
-              agents={managedAgents}
-              channelsByPubkey={channelsByPubkey}
+              actionErrorMessage={agents.actionErrorMessage}
+              actionNoticeMessage={agents.actionNoticeMessage}
+              agents={agents.managedAgents}
+              channelsByPubkey={agents.channelsByPubkey}
               error={
-                managedAgentsQuery.error instanceof Error
-                  ? managedAgentsQuery.error
+                agents.managedAgentsQuery.error instanceof Error
+                  ? agents.managedAgentsQuery.error
                   : null
               }
               isActionPending={isActionPending}
-              isLoading={managedAgentsQuery.isLoading}
-              logContent={managedAgentLogQuery.data?.content ?? null}
+              isLoading={agents.managedAgentsQuery.isLoading}
+              logContent={agents.managedAgentLogQuery.data?.content ?? null}
               logError={
-                managedAgentLogQuery.error instanceof Error
-                  ? managedAgentLogQuery.error
+                agents.managedAgentLogQuery.error instanceof Error
+                  ? agents.managedAgentLogQuery.error
                   : null
               }
-              logLoading={managedAgentLogQuery.isLoading}
-              personaLabelsById={personaLabelsById}
-              presenceLookup={managedPresenceQuery.data ?? {}}
+              logLoading={agents.managedAgentLogQuery.isLoading}
+              personaLabelsById={personas.personaLabelsById}
+              presenceLookup={agents.managedPresenceQuery.data ?? {}}
               onAddToChannel={(agent) => {
-                setActionNoticeMessage(null);
-                setActionErrorMessage(null);
-                setAgentToAddToChannel(agent);
+                agents.setActionNoticeMessage(null);
+                agents.setActionErrorMessage(null);
+                agents.setAgentToAddToChannel(agent);
               }}
               onCreate={() => {
-                setIsCreateOpen(true);
+                agents.setIsCreateOpen(true);
               }}
               onDelete={(pubkey) => {
-                void handleDelete(pubkey);
+                void agents.handleDelete(pubkey);
               }}
               onMintToken={(pubkey, name) => {
-                void handleMintToken(pubkey, name);
+                void agents.handleMintToken(pubkey, name);
               }}
-              onSelectLogAgent={setLogAgentPubkey}
+              onSelectLogAgent={agents.setLogAgentPubkey}
               onStart={(pubkey) => {
-                void handleStart(pubkey);
+                void agents.handleStart(pubkey);
               }}
               onStop={(pubkey) => {
-                void handleStop(pubkey);
+                void agents.handleStop(pubkey);
               }}
               onToggleStartOnAppLaunch={(pubkey, startOnAppLaunch) => {
-                void handleToggleStartOnAppLaunch(pubkey, startOnAppLaunch);
+                void agents.handleToggleStartOnAppLaunch(
+                  pubkey,
+                  startOnAppLaunch,
+                );
               }}
-              selectedLogAgentPubkey={logAgentPubkey}
+              selectedLogAgentPubkey={agents.logAgentPubkey}
             />
 
             <RelayDirectorySection
               error={
-                relayAgentsQuery.error instanceof Error
-                  ? relayAgentsQuery.error
+                agents.relayAgentsQuery.error instanceof Error
+                  ? agents.relayAgentsQuery.error
                   : null
               }
-              isLoading={relayAgentsQuery.isLoading}
-              managedPubkeys={managedPubkeys}
-              relayAgents={relayAgentsQuery.data ?? []}
+              isLoading={agents.relayAgentsQuery.isLoading}
+              managedPubkeys={agents.managedPubkeys}
+              relayAgents={agents.relayAgentsQuery.data ?? []}
             />
           </div>
         </div>
@@ -605,101 +171,110 @@ export function AgentsView() {
 
       <CreateAgentDialog
         onCreated={(result) => {
-          setLogAgentPubkey(result.agent.pubkey);
-          setCreatedAgent(result);
+          agents.setLogAgentPubkey(result.agent.pubkey);
+          agents.setCreatedAgent(result);
         }}
-        onOpenChange={setIsCreateOpen}
-        open={isCreateOpen}
+        onOpenChange={agents.setIsCreateOpen}
+        open={agents.isCreateOpen}
       />
       <AddAgentToChannelDialog
-        agent={agentToAddToChannel}
-        onAdded={handleAddedToChannel}
+        agent={agents.agentToAddToChannel}
+        onAdded={agents.handleAddedToChannel}
         onOpenChange={(open) => {
           if (!open) {
-            setAgentToAddToChannel(null);
+            agents.setAgentToAddToChannel(null);
           }
         }}
-        open={agentToAddToChannel !== null}
+        open={agents.agentToAddToChannel !== null}
       />
       <SecretRevealDialog
-        created={createdAgent}
+        created={agents.createdAgent}
         onOpenChange={(open) => {
           if (!open) {
-            setCreatedAgent(null);
+            agents.setCreatedAgent(null);
           }
         }}
       />
       <TokenRevealDialog
-        name={revealedToken?.name ?? null}
+        name={agents.revealedToken?.name ?? null}
         onOpenChange={(open) => {
           if (!open) {
-            setRevealedToken(null);
+            agents.setRevealedToken(null);
           }
         }}
-        token={revealedToken?.token ?? null}
+        token={agents.revealedToken?.token ?? null}
       />
       <PersonaDialog
-        description={personaDialogState?.description ?? ""}
+        description={personas.personaDialogState?.description ?? ""}
         error={
-          updatePersonaMutation.error instanceof Error
-            ? updatePersonaMutation.error
-            : createPersonaMutation.error instanceof Error
-              ? createPersonaMutation.error
+          personas.updatePersonaMutation.error instanceof Error
+            ? personas.updatePersonaMutation.error
+            : personas.createPersonaMutation.error instanceof Error
+              ? personas.createPersonaMutation.error
               : null
         }
-        initialValues={personaDialogState?.initialValues ?? null}
-        isImportPending={personaImportActions.isApplyingPersonaImportUpdate}
-        isPending={
-          createPersonaMutation.isPending || updatePersonaMutation.isPending
+        initialValues={personas.personaDialogState?.initialValues ?? null}
+        isImportPending={
+          personas.personaImportActions.isApplyingPersonaImportUpdate
         }
-        providers={acpProvidersQuery.data ?? []}
-        providersLoading={acpProvidersQuery.isLoading}
+        isPending={
+          personas.createPersonaMutation.isPending ||
+          personas.updatePersonaMutation.isPending
+        }
+        providers={personas.acpProvidersQuery.data ?? []}
+        providersLoading={personas.acpProvidersQuery.isLoading}
         onImportUpdateFile={
-          personaImportActions.handleEditDialogImportUpdateFile
+          personas.personaImportActions.handleEditDialogImportUpdateFile
         }
         onOpenChange={(open) => {
           if (!open) {
-            setPersonaDialogState(null);
+            personas.setPersonaDialogState(null);
           }
         }}
-        onSubmit={handlePersonaSubmit}
-        open={personaDialogState !== null}
-        submitLabel={personaDialogState?.submitLabel ?? "Save"}
-        title={personaDialogState?.title ?? "Persona"}
+        onSubmit={personas.handleSubmit}
+        open={personas.personaDialogState !== null}
+        submitLabel={personas.personaDialogState?.submitLabel ?? "Save"}
+        title={personas.personaDialogState?.title ?? "Persona"}
       />
       <PersonaDeleteDialog
         onConfirm={(persona) => {
-          void handleDeletePersona(persona);
+          void personas.handleDelete(persona);
         }}
         onOpenChange={(open) => {
           if (!open) {
-            setPersonaToDelete(null);
+            personas.setPersonaToDelete(null);
           }
         }}
-        open={personaToDelete !== null}
-        persona={personaToDelete}
+        open={personas.personaToDelete !== null}
+        persona={personas.personaToDelete}
       />
       <PersonaCatalogDialog
         error={
-          personasQuery.error instanceof Error ? personasQuery.error : null
+          personas.personasQuery.error instanceof Error
+            ? personas.personasQuery.error
+            : null
         }
         feedbackErrorMessage={
-          personaFeedbackSurface === "catalog" ? personaErrorMessage : null
+          personas.personaFeedbackSurface === "catalog"
+            ? personas.personaErrorMessage
+            : null
         }
         feedbackNoticeMessage={
-          personaFeedbackSurface === "catalog" ? personaNoticeMessage : null
+          personas.personaFeedbackSurface === "catalog"
+            ? personas.personaNoticeMessage
+            : null
         }
-        isLoading={personasQuery.isLoading}
-        isPending={setPersonaActiveMutation.isPending}
+        isLoading={personas.personasQuery.isLoading}
+        isPending={personas.setPersonaActiveMutation.isPending}
         onClearFeedback={() => {
-          clearPersonaFeedback("catalog");
+          personas.clearFeedback("catalog");
         }}
-        onOpenChange={setIsCatalogDialogOpen}
+        onOpenChange={personas.setIsCatalogDialogOpen}
         onSelectPersona={(persona, active) => {
-          void handleSetPersonaActive(persona, active, "catalog");
+          void personas.handleSetActive(persona, active, "catalog");
         }}
-        open={isCatalogDialogOpen}
-        personas={catalogPersonas}
+        open={personas.isCatalogDialogOpen}
+        personas={personas.catalogPersonas}
       />
       <TeamDialog
         description={teamActions.teamDialogState?.description ?? ""}
@@ -725,7 +300,7 @@ export function AgentsView() {
         onDeleteRemovedPersonas={teamActions.handleDeleteRemovedPersonas}
         onSubmit={teamActions.handleTeamSubmit}
         open={teamActions.teamDialogState !== null}
-        personas={libraryPersonas}
+        personas={personas.libraryPersonas}
         submitLabel={teamActions.teamDialogState?.submitLabel ?? "Save"}
         title={teamActions.teamDialogState?.title ?? "Team"}
       />
@@ -749,26 +324,19 @@ export function AgentsView() {
           }
         }}
         open={teamActions.teamToAddToChannel !== null}
-        personas={libraryPersonas}
+        personas={personas.libraryPersonas}
         team={teamActions.teamToAddToChannel}
       />
       <BatchImportDialog
-        fileName={batchImportFileName}
-        onComplete={(count) => {
-          clearPersonaFeedback("library");
-          setBatchImportResult(null);
-          setPersonaNoticeMessage(
-            `Imported ${count} persona${count !== 1 ? "s" : ""}.`,
-          );
-          void queryClient.invalidateQueries({ queryKey: personasQueryKey });
-        }}
+        fileName={personas.batchImportFileName}
+        onComplete={personas.handleBatchImportComplete}
         onOpenChange={(open) => {
           if (!open) {
-            setBatchImportResult(null);
+            personas.setBatchImportResult(null);
           }
         }}
-        open={batchImportResult !== null}
-        result={batchImportResult}
+        open={personas.batchImportResult !== null}
+        result={personas.batchImportResult}
       />
       <TeamImportDialog
         fileName={teamActions.teamImportPreview?.fileName ?? ""}
@@ -795,29 +363,31 @@ export function AgentsView() {
           }
         }}
         open={teamActions.teamImportTarget !== null}
-        personas={libraryPersonas}
+        personas={personas.libraryPersonas}
         preview={teamActions.teamImportTargetPreview?.preview ?? null}
         team={teamActions.teamImportTarget}
       />
       <PersonaImportUpdateDialog
         fileName={
-          personaImportActions.personaImportTargetPreview?.fileName ?? ""
+          personas.personaImportActions.personaImportTargetPreview?.fileName ??
+          ""
         }
         isPending={
-          personaImportActions.isApplyingPersonaImportUpdate ||
-          updatePersonaMutation.isPending
+          personas.personaImportActions.isApplyingPersonaImportUpdate ||
+          personas.updatePersonaMutation.isPending
         }
-        onApply={personaImportActions.handleImportUpdateApply}
-        onClear={personaImportActions.clearImportUpdateAndReturnToEdit}
+        onApply={personas.personaImportActions.handleImportUpdateApply}
+        onClear={personas.personaImportActions.clearImportUpdateAndReturnToEdit}
         onOpenChange={(open) => {
           if (!open) {
-            personaImportActions.closeImportUpdateDialog();
+            personas.personaImportActions.closeImportUpdateDialog();
           }
         }}
-        open={personaImportActions.personaImportTarget !== null}
-        persona={personaImportActions.personaImportTarget}
+        open={personas.personaImportActions.personaImportTarget !== null}
+        persona={personas.personaImportActions.personaImportTarget}
         preview={
-          personaImportActions.personaImportTargetPreview?.preview ?? null
+          personas.personaImportActions.personaImportTargetPreview?.preview ??
+          null
         }
       />
     </>
