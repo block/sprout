@@ -35,21 +35,25 @@ class PairingState {
   final PairingStatus status;
   final String? errorMessage;
   final String? sasCode;
+  final bool userConfirmedSas;
 
   const PairingState({
     this.status = PairingStatus.idle,
     this.errorMessage,
     this.sasCode,
+    this.userConfirmedSas = false,
   });
 
   PairingState copyWith({
     PairingStatus? status,
     String? errorMessage,
     String? sasCode,
+    bool? userConfirmedSas,
   }) => PairingState(
     status: status ?? this.status,
     errorMessage: errorMessage ?? this.errorMessage,
     sasCode: sasCode ?? this.sasCode,
+    userConfirmedSas: userConfirmedSas ?? this.userConfirmedSas,
   );
 }
 
@@ -78,16 +82,23 @@ class PairingNotifier extends Notifier<PairingState> {
   /// Confirm that the SAS code matches. Called by the UI after user approval.
   void confirmSas() {
     if (state.status != PairingStatus.confirmingSas) return;
-    state = state.copyWith(status: PairingStatus.transferring);
 
-    // The source sends sas-confirm + payload back-to-back. The payload may
-    // have arrived while we were still in confirmingSas (before the user
-    // tapped "Codes Match"). Process the buffered payload now.
-    final pending = _pendingPayload;
-    if (pending != null) {
-      _pendingPayload = null;
-      _handlePayload(pending);
+    // If the desktop's sas-confirm has already arrived and been verified,
+    // transition immediately and process any buffered payload.
+    if (_sasConfirmReceived) {
+      state = state.copyWith(status: PairingStatus.transferring);
+      final pending = _pendingPayload;
+      if (pending != null) {
+        _pendingPayload = null;
+        _handlePayload(pending);
+      }
+      return;
     }
+
+    // Desktop hasn't confirmed yet — record intent and wait. The transition
+    // will happen in _handleSasConfirm() once the transcript hash is verified.
+    _userConfirmedSas = true;
+    state = state.copyWith(userConfirmedSas: true);
   }
 
   /// Deny the SAS code. Send abort and terminate.
@@ -112,6 +123,7 @@ class PairingNotifier extends Notifier<PairingState> {
     _socket = null;
     _processedEventIds.clear();
     _sasConfirmReceived = false;
+    _userConfirmedSas = false;
     _pendingPayload = null;
   }
 
@@ -126,6 +138,7 @@ class PairingNotifier extends Notifier<PairingState> {
   Uint8List? _sasInput;
   Uint8List? _conversationKey;
   bool _sasConfirmReceived = false;
+  bool _userConfirmedSas = false;
   Map<String, dynamic>? _pendingPayload; // buffered until user confirms SAS
   final Set<String> _processedEventIds = {}; // NIP-AB §Duplicate Event Handling
 
@@ -324,7 +337,19 @@ class PairingNotifier extends Notifier<PairingState> {
     }
 
     _sasConfirmReceived = true;
-    // Stay in confirmingSas — user must still explicitly confirm via confirmSas().
+
+    // If the user already tapped "Codes Match", complete the transition now
+    // that the transcript hash is verified.
+    if (_userConfirmedSas) {
+      _userConfirmedSas = false;
+      state = state.copyWith(status: PairingStatus.transferring);
+      final pending = _pendingPayload;
+      if (pending != null) {
+        _pendingPayload = null;
+        _handlePayload(pending);
+      }
+    }
+    // Otherwise stay in confirmingSas — user must still confirm via confirmSas().
   }
 
   void _handlePayload(Map<String, dynamic> msg) {
@@ -376,8 +401,8 @@ class PairingNotifier extends Notifier<PairingState> {
         throw const FormatException('Missing relayUrl or token in payload');
       }
 
-      // Send complete event.
-      _sendComplete(true);
+      // Validate relay URL to prevent SSRF via private network addresses.
+      _validateRelayUrl(relayUrl);
 
       // Validate credentials against the relay.
       final client = RelayClient(
@@ -390,6 +415,9 @@ class PairingNotifier extends Notifier<PairingState> {
       } finally {
         client.dispose();
       }
+
+      // Send complete only after credentials are validated.
+      _sendComplete(true);
 
       // Store credentials.
       await ref

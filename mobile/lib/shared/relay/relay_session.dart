@@ -92,6 +92,10 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     final config = ref.watch(relayConfigProvider);
     final authState = ref.watch(authProvider);
 
+    // Reset disposed flag — build() may re-run on the same Notifier instance
+    // after a provider dependency changes (e.g. auth completing).
+    _disposed = false;
+
     ref.onDispose(_dispose);
 
     // Auto-connect when authenticated and we have credentials.

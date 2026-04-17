@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../profile/presence_cache_provider.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
@@ -82,22 +83,29 @@ class ChannelDetailPage extends HookConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(
-              channelIcon(resolvedChannel),
-              size: 18,
-              color: context.colors.onSurfaceVariant,
-            ),
-            const SizedBox(width: Grid.half),
-            Expanded(
-              child: Text(
-                resolvedChannel.displayLabel(currentPubkey: currentPubkey),
-                overflow: TextOverflow.ellipsis,
+        title: resolvedChannel.isDm
+            ? _DmAppBarTitle(
+                channel: resolvedChannel,
+                currentPubkey: currentPubkey,
+              )
+            : Row(
+                children: [
+                  Icon(
+                    channelIcon(resolvedChannel),
+                    size: 18,
+                    color: context.colors.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: Grid.half),
+                  Expanded(
+                    child: Text(
+                      resolvedChannel.displayLabel(
+                        currentPubkey: currentPubkey,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
         actions: [
           IconButton(
             onPressed: () {
@@ -1102,6 +1110,16 @@ class _MembersSheet extends HookConsumerWidget {
     final people = allMembers.where((member) => !member.isBot).toList();
     final userCache = ref.watch(userCacheProvider);
 
+    // Determine if the current user can manage members.
+    final currentMember = allMembers.cast<ChannelMember?>().firstWhere(
+      (m) => m!.pubkey.toLowerCase() == currentPubkey?.toLowerCase(),
+      orElse: () => null,
+    );
+    final canManage =
+        currentMember != null &&
+        currentMember.isElevated &&
+        !channel.isArchived;
+
     // Preload profiles for all members so avatars appear.
     useEffect(() {
       if (people.isNotEmpty) {
@@ -1134,17 +1152,6 @@ class _MembersSheet extends HookConsumerWidget {
                   color: context.colors.onSurfaceVariant,
                 ),
               ),
-              if (!channel.isDm) ...[
-                const SizedBox(height: Grid.xxs),
-                Text(
-                  channel.isArchived
-                      ? 'Archived channels are read-only on mobile. Member and bot management stay on desktop.'
-                      : 'Member and bot management stay on desktop.',
-                  style: context.textTheme.bodySmall?.copyWith(
-                    color: context.colors.outline,
-                  ),
-                ),
-              ],
               if (!channel.isDm) ...[const Divider(height: Grid.sm)],
               SizedBox(
                 height: 280,
@@ -1162,25 +1169,15 @@ class _MembersSheet extends HookConsumerWidget {
                           shrinkWrap: true,
                           children: [
                             for (final member in people)
-                              Builder(
-                                builder: (context) {
-                                  final profile =
-                                      userCache[member.pubkey.toLowerCase()];
-                                  final avatarUrl = profile?.avatarUrl;
-                                  final label = member.labelFor(currentPubkey);
-                                  final initial = label
-                                      .substring(0, 1)
-                                      .toUpperCase();
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: _MemberAvatar(
-                                      avatarUrl: avatarUrl,
-                                      initial: initial,
-                                    ),
-                                    title: Text(label),
-                                    subtitle: Text(member.role),
-                                  );
-                                },
+                              _MemberTile(
+                                member: member,
+                                currentPubkey: currentPubkey,
+                                profile: userCache[member.pubkey.toLowerCase()],
+                                canManage: canManage,
+                                isSelf:
+                                    member.pubkey.toLowerCase() ==
+                                    currentPubkey?.toLowerCase(),
+                                channelId: channel.id,
                               ),
                           ],
                         ),
@@ -1198,6 +1195,156 @@ class _MembersSheet extends HookConsumerWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+const _changeableRoles = ['admin', 'member', 'guest'];
+
+class _MemberTile extends ConsumerWidget {
+  final ChannelMember member;
+  final String? currentPubkey;
+  final UserProfile? profile;
+  final bool canManage;
+  final bool isSelf;
+  final String channelId;
+
+  const _MemberTile({
+    required this.member,
+    required this.currentPubkey,
+    required this.profile,
+    required this.canManage,
+    required this.isSelf,
+    required this.channelId,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final label = member.labelFor(currentPubkey);
+    final initial = label.substring(0, 1).toUpperCase();
+    final showMenu = canManage && !isSelf && !member.isOwner;
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: _MemberAvatar(avatarUrl: profile?.avatarUrl, initial: initial),
+      title: Text(label),
+      subtitle: Text(
+        _roleLabel(member.role),
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colors.outline,
+        ),
+      ),
+      trailing: showMenu
+          ? IconButton(
+              icon: const Icon(LucideIcons.ellipsis, size: 18),
+              onPressed: () => _showMemberActions(context, ref),
+              visualDensity: VisualDensity.compact,
+            )
+          : null,
+    );
+  }
+
+  String _roleLabel(String role) {
+    if (role.isEmpty) return 'Member';
+    return '${role[0].toUpperCase()}${role.substring(1)}';
+  }
+
+  void _showMemberActions(BuildContext context, WidgetRef ref) {
+    final label = member.labelFor(currentPubkey);
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+              child: Text(label, style: context.textTheme.titleSmall),
+            ),
+            const SizedBox(height: Grid.xxs),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+              child: Text(
+                'Change role',
+                style: context.textTheme.labelMedium?.copyWith(
+                  color: context.colors.outline,
+                ),
+              ),
+            ),
+            const SizedBox(height: Grid.half),
+            for (final role in _changeableRoles)
+              ListTile(
+                title: Text(_roleLabel(role)),
+                trailing: role == member.role
+                    ? Icon(
+                        LucideIcons.check,
+                        size: 16,
+                        color: context.colors.primary,
+                      )
+                    : null,
+                enabled: role != member.role,
+                onTap: role == member.role
+                    ? null
+                    : () async {
+                        Navigator.of(context).pop();
+                        await ref
+                            .read(channelActionsProvider)
+                            .changeMemberRole(
+                              channelId: channelId,
+                              pubkey: member.pubkey,
+                              role: role,
+                            );
+                      },
+              ),
+            const Divider(),
+            ListTile(
+              leading: Icon(
+                LucideIcons.userMinus,
+                size: 18,
+                color: context.colors.error,
+              ),
+              title: Text(
+                'Remove from channel',
+                style: TextStyle(color: context.colors.error),
+              ),
+              onTap: () async {
+                Navigator.of(context).pop();
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Remove member'),
+                    content: Text('Remove $label from this channel?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        child: Text(
+                          'Remove',
+                          style: TextStyle(color: context.colors.error),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await ref
+                      .read(channelActionsProvider)
+                      .removeMember(
+                        channelId: channelId,
+                        pubkey: member.pubkey,
+                      );
+                }
+              },
+            ),
+            const SizedBox(height: Grid.xxs),
+          ],
         ),
       ),
     );
@@ -1686,3 +1833,121 @@ String _formatTime(int createdAt) {
 }
 
 String _pad(int n) => n.toString().padLeft(2, '0');
+
+class _DmAppBarTitle extends ConsumerWidget {
+  final Channel channel;
+  final String? currentPubkey;
+
+  const _DmAppBarTitle({required this.channel, required this.currentPubkey});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profiles = ref.watch(userCacheProvider);
+    final presenceMap = ref.watch(presenceCacheProvider);
+    final normalizedCurrent = currentPubkey?.toLowerCase();
+
+    String? otherPubkey;
+    for (final pk in channel.participantPubkeys) {
+      if (pk.toLowerCase() != normalizedCurrent) {
+        otherPubkey = pk.toLowerCase();
+        break;
+      }
+    }
+
+    final profile = otherPubkey != null ? profiles[otherPubkey] : null;
+
+    if (otherPubkey != null) {
+      if (profile == null) {
+        ref.read(userCacheProvider.notifier).preload([otherPubkey]);
+      }
+      ref.read(presenceCacheProvider.notifier).track([otherPubkey]);
+    }
+
+    final avatarUrl = profile?.avatarUrl;
+    final initial =
+        profile?.initial ??
+        (channel.participants.isNotEmpty
+            ? channel.participants.first[0].toUpperCase()
+            : '?');
+    final presence = otherPubkey != null
+        ? (presenceMap[otherPubkey] ?? 'offline')
+        : 'offline';
+    final presenceLabel = switch (presence) {
+      'online' => 'Online',
+      'away' => 'Away',
+      _ => 'Offline',
+    };
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 30,
+          height: 30,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: context.colors.primaryContainer,
+                backgroundImage: avatarUrl != null
+                    ? NetworkImage(avatarUrl)
+                    : null,
+                child: avatarUrl == null
+                    ? Text(
+                        initial,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colors.onPrimaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : null,
+              ),
+              Positioned(
+                right: -1,
+                bottom: -1,
+                child: Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: switch (presence) {
+                      'online' => context.appColors.success,
+                      'away' => context.appColors.warning,
+                      _ => context.colors.outline,
+                    },
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color:
+                          context.theme.appBarTheme.backgroundColor ??
+                          context.theme.scaffoldBackgroundColor,
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Grid.xxs),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                channel.displayLabel(currentPubkey: currentPubkey),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.textTheme.titleSmall,
+              ),
+              Text(
+                presenceLabel,
+                style: context.textTheme.labelSmall?.copyWith(
+                  color: context.colors.outline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
