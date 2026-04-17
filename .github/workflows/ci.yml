@@ -87,6 +87,8 @@ jobs:
         run: cd desktop && pnpm exec playwright test --project=smoke
       - name: Desktop Tauri check
         run: just desktop-tauri-check
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload desktop e2e artifacts
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
