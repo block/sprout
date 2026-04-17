@@ -444,19 +444,6 @@ pub fn run() {
                 .build()
         });
 
-    // Only register the updater in release builds that were compiled with a
-    // real updater configuration. Local unsigned builds omit that config and
-    // should still launch for debugging.
-    #[cfg(sprout_updater_enabled)]
-    let builder = if cfg!(debug_assertions) {
-        builder
-    } else {
-        builder.plugin(tauri_plugin_updater::Builder::new().build())
-    };
-
-    #[cfg(not(sprout_updater_enabled))]
-    let builder = builder;
-
     let shutdown_started = Arc::new(AtomicBool::new(false));
     let restore_shutdown_started = Arc::clone(&shutdown_started);
     let app = builder
