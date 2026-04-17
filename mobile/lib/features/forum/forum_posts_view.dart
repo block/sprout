@@ -90,11 +90,13 @@ class ForumPostsView extends HookConsumerWidget {
                         post: post,
                         currentPubkey: currentPubkey,
                         onTap: () => _openThread(context, post),
-                        onDelete: (eventId) => deleteForumEvent(
-                          ref,
-                          channelId: channel.id,
-                          eventId: eventId,
-                        ),
+                        onDelete: (eventId) async {
+                          await deleteForumEvent(
+                            ref,
+                            channelId: channel.id,
+                            eventId: eventId,
+                          );
+                        },
                       );
                     },
                   ),
@@ -126,7 +128,7 @@ class ForumPostsView extends HookConsumerWidget {
                 content: content,
                 mentionPubkeys: mentionPubkeys,
               );
-              isComposing.value = false;
+              if (context.mounted) isComposing.value = false;
             },
           ),
         ],

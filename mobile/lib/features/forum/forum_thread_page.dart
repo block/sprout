@@ -475,9 +475,9 @@ class _ReplyRow extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(dialogContext).pop();
-              deleteForumEvent(
+              await deleteForumEvent(
                 ref,
                 channelId: channelId,
                 eventId: reply.eventId,
