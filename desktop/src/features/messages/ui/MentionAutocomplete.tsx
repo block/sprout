@@ -13,12 +13,14 @@ type MentionAutocompleteProps = {
   suggestions: MentionSuggestion[];
   selectedIndex: number;
   onSelect: (suggestion: MentionSuggestion) => void;
+  position?: "above" | "below";
 };
 
 export const MentionAutocomplete = React.memo(function MentionAutocomplete({
   suggestions,
   selectedIndex,
   onSelect,
+  position = "above",
 }: MentionAutocompleteProps) {
   const listRef = React.useRef<HTMLDivElement>(null);
 
@@ -34,7 +36,12 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
   }
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 px-3 sm:px-4">
+    <div
+      className={cn(
+        "absolute left-0 right-0 z-50 px-3 sm:px-4",
+        position === "below" ? "top-full mt-1" : "bottom-full mb-1",
+      )}
+    >
       <div
         className="max-h-48 overflow-y-auto rounded-xl border bg-popover p-1 shadow-lg"
         ref={listRef}
