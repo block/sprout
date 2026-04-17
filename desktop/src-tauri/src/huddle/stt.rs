@@ -56,12 +56,6 @@ pub struct SttPipeline {
     shutdown: Arc<AtomicBool>,
     /// Worker thread handle — taken on drop to join cleanly.
     thread: Option<thread::JoinHandle<()>>,
-    /// TTS cancel flag shared with the TTS pipeline.
-    /// When VAD detects speech onset during TTS playback, the STT worker sets
-    /// this flag to trigger barge-in (stops TTS immediately).
-    /// Stored here so it lives as long as the pipeline; the worker holds a clone.
-    #[allow(dead_code)]
-    pub tts_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl SttPipeline {
@@ -121,7 +115,6 @@ impl SttPipeline {
             audio_tx,
             shutdown,
             thread: Some(handle),
-            tts_cancel,
         };
         Ok((pipeline, text_rx))
     }
