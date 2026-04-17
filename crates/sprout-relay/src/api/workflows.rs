@@ -223,9 +223,8 @@ pub async fn get_workflow(
     if let Some(channel_id) = workflow.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if workflow.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "view")?;
 
     Ok(Json(workflow_record_to_json(&workflow)))
 }

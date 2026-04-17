@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -6,17 +7,29 @@ import '../../shared/relay/relay.dart';
 
 /// In-memory cache of other users' presence, fetched in batches.
 /// Periodically refreshes to keep presence status up to date.
+///
+/// Tracked set is capped at [_maxTracked] entries; oldest entries are evicted
+/// when the cap is exceeded. Fetch failures trigger exponential backoff up to
+/// [_maxBackoff].
 class PresenceCacheNotifier extends Notifier<Map<String, String>> {
   static const _refreshInterval = Duration(seconds: 30);
+  static const _maxBackoff = Duration(minutes: 5);
+  static const _maxTracked = 200;
 
-  final Set<String> _tracked = {};
+  // List-backed so insertion order is preserved for eviction.
+  final List<String> _tracked = [];
+  final Set<String> _trackedSet = {};
   final Set<String> _pending = {};
   Timer? _batchTimer;
   Timer? _refreshTimer;
+  int _consecutiveFailures = 0;
 
   @override
   Map<String, String> build() {
     ref.watch(relayClientProvider);
+    _tracked.clear();
+    _trackedSet.clear();
+    _consecutiveFailures = 0;
     ref.onDispose(() {
       _batchTimer?.cancel();
       _batchTimer = null;
@@ -34,7 +47,19 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
         .where((pk) => !state.containsKey(pk) && !_pending.contains(pk))
         .toList();
 
-    _tracked.addAll(normalized);
+    for (final pk in normalized) {
+      if (!_trackedSet.contains(pk)) {
+        _tracked.add(pk);
+        _trackedSet.add(pk);
+      }
+    }
+
+    // Evict oldest entries if over cap.
+    while (_tracked.length > _maxTracked) {
+      final evicted = _tracked.removeAt(0);
+      _trackedSet.remove(evicted);
+    }
+
     _ensureRefreshTimer();
 
     if (uncached.isEmpty) return;
@@ -42,8 +67,41 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
     _batchTimer ??= Timer(const Duration(milliseconds: 50), _flushPending);
   }
 
+  /// Stop tracking presence for [pubkeys]. Cancels the refresh timer if
+  /// [_tracked] becomes empty.
+  void untrack(List<String> pubkeys) {
+    final normalized = pubkeys.map((pk) => pk.toLowerCase()).toList();
+    for (final pk in normalized) {
+      if (_trackedSet.remove(pk)) {
+        _tracked.remove(pk);
+      }
+    }
+    if (_tracked.isEmpty) {
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+    }
+  }
+
   void _ensureRefreshTimer() {
-    _refreshTimer ??= Timer.periodic(_refreshInterval, (_) => _refreshAll());
+    if (_refreshTimer != null) return;
+    _scheduleRefresh();
+  }
+
+  void _scheduleRefresh() {
+    _refreshTimer?.cancel();
+    final delay = _consecutiveFailures == 0
+        ? _refreshInterval
+        : _clampedBackoff(_consecutiveFailures);
+    _refreshTimer = Timer(delay, () async {
+      _refreshTimer = null;
+      await _refreshAll();
+      if (_tracked.isNotEmpty) _scheduleRefresh();
+    });
+  }
+
+  Duration _clampedBackoff(int failures) {
+    final seconds = _refreshInterval.inSeconds * pow(2, failures - 1);
+    return Duration(seconds: min(seconds.toInt(), _maxBackoff.inSeconds));
   }
 
   Future<void> _refreshAll() async {
@@ -75,8 +133,10 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
         updated[pk] = (json[pk] as String?) ?? 'offline';
       }
       state = updated;
+      _consecutiveFailures = 0;
     } catch (_) {
       // Silently fail — default to offline.
+      _consecutiveFailures++;
     }
   }
 }
