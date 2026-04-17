@@ -31,6 +31,8 @@ class ChannelMember {
   );
 
   bool get isBot => role == 'bot';
+  bool get isOwner => role == 'owner';
+  bool get isElevated => role == 'owner' || role == 'admin';
 
   String labelFor(String? currentPubkey) {
     if (currentPubkey != null &&
@@ -296,6 +298,38 @@ class ChannelActions {
         '${hex.substring(12, 16)}-'
         '${hex.substring(16, 20)}-'
         '${hex.substring(20, 32)}';
+  }
+
+  Future<void> changeMemberRole({
+    required String channelId,
+    required String pubkey,
+    required String role,
+  }) async {
+    await _signedEventRelay.submit(
+      kind: 9000,
+      content: '',
+      tags: [
+        ['h', channelId],
+        ['p', pubkey.toLowerCase()],
+        ['role', role],
+      ],
+    );
+    _ref.invalidate(channelMembersProvider(channelId));
+  }
+
+  Future<void> removeMember({
+    required String channelId,
+    required String pubkey,
+  }) async {
+    await _signedEventRelay.submit(
+      kind: 9001,
+      content: '',
+      tags: [
+        ['h', channelId],
+        ['p', pubkey.toLowerCase()],
+      ],
+    );
+    _ref.invalidate(channelMembersProvider(channelId));
   }
 
   Future<void> addReaction(String eventId, String emoji) async {
