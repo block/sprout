@@ -289,7 +289,7 @@ void main() {
         find.text('Join this channel from Manage to participate.'),
         findsNothing,
       );
-      expect(find.text('Message…'), findsOneWidget);
+      expect(find.text('Message #general'), findsOneWidget);
     });
 
     testWidgets('shows empty state when no messages', (tester) async {
@@ -848,7 +848,7 @@ void main() {
       await tester.pumpWidget(_buildTestable(messages: []));
       await tester.pumpAndSettle();
 
-      expect(find.text('Message…'), findsOneWidget);
+      expect(find.text('Message #general'), findsOneWidget);
     });
   });
 
