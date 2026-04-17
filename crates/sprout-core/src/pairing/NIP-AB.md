@@ -179,7 +179,7 @@ Before processing any `kind:24134` event, implementations MUST:
    | `Waiting` | Source | `offer` |
    | `Confirming` | Source | *(awaiting user; no inbound expected)* |
    | `Confirming` | Target | `sas-confirm` |
-   | `AwaitingConfirmation` | Target | *(awaiting user; no inbound expected)* |
+   | `AwaitingConfirmation` | Target | `payload` *(buffer until user confirms SAS; do not process until state advances to `Transferring`)* |
    | `Transferring` | Target | `payload` |
    | `PayloadExchanged` | Source | `complete` |
 
@@ -313,11 +313,13 @@ transcript_hash = HKDF-SHA256(
 )
 ```
 
-_target_ MUST compute the same `transcript_hash` and verify it matches before proceeding. Implementations MUST use constant-time comparison when checking `transcript_hash` to prevent timing side-channels. A mismatch indicates a MITM attack or protocol error; _target_ MUST send `abort` with reason `"sas_mismatch"` and terminate the session.
+_target_ MUST compute the same `transcript_hash` and verify it matches before proceeding. Implementations MUST use constant-time comparison when checking `transcript_hash` to prevent timing side-channels. A mismatch indicates session inconsistency or parameter tampering; _target_ MUST send `abort` with reason `"sas_mismatch"`, discard any payload received in this session, and terminate. Note: because _source_ sends the payload immediately after `sas-confirm` (without waiting for an acknowledgment), the payload may already be in transit or delivered when the mismatch is detected. The transcript hash is a **detection** mechanism, not a prevention gate — MITM prevention relies on the user's visual SAS comparison on the _source_ device *before* the source confirms and sends the payload.
+
+After verifying the transcript hash, _target_ enters the `AwaitingConfirmation` state. _target_ transitions to `Transferring` when the user confirms the SAS on the target device. _target_ MUST NOT decrypt, import, or act on any received `payload` until **both** the transcript hash has been verified **and** the user has confirmed the SAS on the target device.
 
 ### Step 4: Payload Transfer
 
-After receiving and verifying the `sas-confirm`, _source_ publishes a `payload` event:
+After the user confirms the SAS on the _source_ device, _source_ publishes the `sas-confirm` event (Step 3) followed immediately by a `payload` event:
 
 Encrypted plaintext:
 
@@ -446,6 +448,7 @@ def decrypt_message(ciphertext: str, recipient_privkey: bytes, sender_pubkey: by
 # After receiving sas-confirm:
 # expected = derive_transcript_hash(session_id, source_pub, target_pub, sas_input, session_secret)
 # if not constant_time_equal(received_hash, expected):
+#     discard_buffered_payload()  # payload may have arrived early
 #     send_abort(reason="sas_mismatch")
 #     raise TranscriptMismatchError
 ```
@@ -467,7 +470,7 @@ Defined reason strings:
 
 | `reason` | Meaning |
 |----------|---------|
-| `"sas_mismatch"` | User observed mismatched SAS codes |
+| `"sas_mismatch"` | SAS codes did not match, or transcript hash verification failed |
 | `"user_denied"` | User explicitly denied the pairing |
 | `"timeout"` | Session timed out |
 | `"protocol_error"` | Unexpected message or validation failure |
@@ -494,16 +497,20 @@ Upon receiving an `abort`, the other device MUST terminate the session, discard 
   Compute SAS code ◄─────────────────────────────────────────► Compute SAS code
   Display: "047291"                                            Display: "047291"
 
-  [User confirms codes match on both devices]
+  [User confirms SAS on source]
 
   Publish sas-confirm ──────────────►
-  {type:"sas-confirm",                ──────────────────────►
-   transcript_hash}                                            Verify transcript_hash
+  {type:"sas-confirm",                ──────────────────────►  Verify transcript_hash
+   transcript_hash}
+  Publish payload ──────────────────►  (sent immediately;
+  {type:"payload",                     source does not wait
+   payload_type:"nsec",                for target)
+   payload:"ncryptsec1..."}           ──────────────────────►  Buffer payload
 
-  Publish payload ──────────────────►
-  {type:"payload",                    ──────────────────────►
-   payload_type:"nsec",                                        Decrypt payload
-   payload:"ncryptsec1..."}                                    Import to secure storage
+                                                               [User confirms SAS on target]
+
+                                                               Decrypt payload
+                                                               Import to secure storage
                                       ◄─────────────────────── Publish complete
   ◄──────────────────────────────────                          {type:"complete"}
 
@@ -591,7 +598,7 @@ The `session_secret` is independent of the ephemeral keypair. This means that ev
 
 ### Why transcript binding (`transcript_hash`)?
 
-The `transcript_hash` in `sas-confirm` commits the source to the exact session parameters: the `session_id`, both ephemeral public keys, and the `sas_input`. Without this, a MITM could potentially replay a `sas-confirm` from a different session. The transcript hash ensures that the source's confirmation is bound to this specific session and cannot be replayed.
+The `transcript_hash` in `sas-confirm` commits the source to the exact session parameters: the `session_id`, both ephemeral public keys, and the `sas_input`. This gives the _target_ a cryptographic consistency check that detects session inconsistency or parameter tampering. (Cross-session replay is already prevented independently by `p`-tag binding and NIP-44 key binding — see §Replay Protection.) The transcript hash is **not** the MITM prevention mechanism — that role belongs to the user's visual SAS comparison on the _source_ device, which gates whether `sas-confirm` and the payload are sent at all.
 
 ### Why NIP-44 for event encryption instead of a custom scheme?
 

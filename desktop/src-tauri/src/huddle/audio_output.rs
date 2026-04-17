@@ -11,14 +11,16 @@ pub fn list_audio_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
     use rodio::DeviceTrait;
 
     let host = rodio::cpal::default_host();
-    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+    let default_name = host
+        .default_output_device()
+        .and_then(|d| d.description().ok().map(|desc| desc.name().to_string()));
     let devices = host
         .output_devices()
         .map_err(|e| format!("enumerate output devices: {e}"))?;
 
     let mut result = Vec::new();
     for device in devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device.description().map(|d| d.name().to_string()) {
             let is_default = default_name.as_deref() == Some(&name);
             result.push(AudioOutputDevice { name, is_default });
         }
@@ -65,7 +67,13 @@ pub(crate) fn open_output_sink_by_name(
         let host = rodio::cpal::default_host();
         if let Ok(devices) = host.output_devices() {
             for device in devices {
-                if device.name().ok().as_deref() == Some(name) {
+                if device
+                    .description()
+                    .ok()
+                    .map(|d| d.name().to_string())
+                    .as_deref()
+                    == Some(name)
+                {
                     if let Ok(sink) = rodio::DeviceSinkBuilder::from_device(device) {
                         return sink
                             .open_stream()

@@ -1,4 +1,5 @@
-import { ArrowLeft, X } from "lucide-react";
+import * as React from "react";
+import { X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -11,18 +12,21 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 
 type MessageThreadPanelProps = {
-  canGoBack: boolean;
+  canResetWidth: boolean;
   channel: Channel | null;
   channelId: string | null;
   channelName: string;
   currentPubkey?: string;
   disabled?: boolean;
   isSending: boolean;
-  onBack: () => void;
   onCancelReply: () => void;
   onClose: () => void;
   onDelete?: (message: TimelineMessage) => void;
-  onOpenNestedThread: (message: TimelineMessage) => void;
+  onExpandReplies: (message: TimelineMessage) => void;
+  onResetWidth: () => void;
+  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  onScrollTargetResolved: () => void;
+  onSelectReplyTarget: (message: TimelineMessage) => void;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -36,10 +40,12 @@ type MessageThreadPanelProps = {
   profiles?: UserProfileLookup;
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
+  scrollTargetId: string | null;
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
   threadTypingPubkeys: string[];
   totalReplyCount: number;
+  widthPx: number;
 };
 
 function canManageMessage(
@@ -54,33 +60,37 @@ function canManageMessage(
 }
 
 export function MessageThreadPanel({
-  canGoBack,
+  canResetWidth,
   channel,
   channelId,
   channelName,
   currentPubkey,
   disabled = false,
   isSending,
-  onBack,
   onCancelReply,
   onClose,
   onDelete,
-  onOpenNestedThread,
+  onExpandReplies,
+  onResetWidth,
+  onResizeStart,
+  onScrollTargetResolved,
+  onSelectReplyTarget,
   onSend,
   onToggleReaction,
   profiles,
   replyTargetId,
   replyTargetMessage,
+  scrollTargetId,
   threadHead,
   threadReplies,
   threadTypingPubkeys,
+  widthPx,
 }: MessageThreadPanelProps) {
-  if (!threadHead) {
-    return null;
-  }
+  const threadBodyRef = React.useRef<HTMLDivElement>(null);
+  const threadHeadId = threadHead?.id ?? null;
 
   const composerReplyTarget =
-    replyTargetMessage && replyTargetMessage.id !== threadHead.id
+    replyTargetMessage && threadHead && replyTargetMessage.id !== threadHead.id
       ? {
           author: replyTargetMessage.author,
           body: replyTargetMessage.body,
@@ -88,24 +98,87 @@ export function MessageThreadPanel({
         }
       : null;
 
+  React.useEffect(() => {
+    if (!threadHeadId) {
+      return;
+    }
+
+    const threadBody = threadBodyRef.current;
+    if (!threadBody) {
+      return;
+    }
+
+    const scrollToBottom = () => {
+      threadBody.scrollTop = threadBody.scrollHeight;
+    };
+    const frame = requestAnimationFrame(() => {
+      scrollToBottom();
+    });
+    const timeoutId = window.setTimeout(scrollToBottom, 300);
+
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timeoutId);
+    };
+  }, [threadHeadId]);
+
+  React.useEffect(() => {
+    if (!scrollTargetId) {
+      return;
+    }
+
+    const threadBody = threadBodyRef.current;
+    if (!threadBody) {
+      return;
+    }
+
+    const target = threadBody.querySelector<HTMLElement>(
+      `[data-message-id="${scrollTargetId}"]`,
+    );
+    if (!target) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      target.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+    onScrollTargetResolved();
+
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [onScrollTargetResolved, scrollTargetId]);
+
+  if (!threadHead) {
+    return null;
+  }
+
   return (
     <aside
-      className="hidden h-full w-[380px] shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
+      className="relative hidden h-full shrink-0 flex-col border-l border-border/80 bg-background lg:flex"
       data-testid="message-thread-panel"
+      style={{ width: `${widthPx}px` }}
     >
+      <button
+        aria-label="Resize thread panel"
+        className="group absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize"
+        data-testid="message-thread-resize-handle"
+        onDoubleClick={canResetWidth ? onResetWidth : undefined}
+        onPointerDown={onResizeStart}
+        title={
+          canResetWidth
+            ? "Drag to resize. Double-click to reset width."
+            : "Drag to resize."
+        }
+        type="button"
+      >
+        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border/80" />
+      </button>
+
       <div className="flex items-center gap-3 px-4 py-3">
-        {canGoBack ? (
-          <Button
-            aria-label="Back"
-            data-testid="message-thread-back"
-            onClick={onBack}
-            size="icon"
-            type="button"
-            variant="ghost"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
         </div>
@@ -124,47 +197,59 @@ export function MessageThreadPanel({
       <div
         className="min-h-0 flex-1 overflow-y-auto"
         data-testid="message-thread-body"
+        ref={threadBodyRef}
       >
-        <div className="px-3 py-3" data-testid="message-thread-head">
-          <MessageRow
-            activeReplyTargetId={replyTargetId}
-            message={threadHead}
-            onDelete={
-              onDelete && canManageMessage(threadHead, currentPubkey)
-                ? onDelete
-                : undefined
-            }
-            onToggleReaction={onToggleReaction}
-            profiles={profiles}
-          />
+        <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
+          <div className="rounded-2xl">
+            <MessageRow
+              activeReplyTargetId={replyTargetId}
+              layoutVariant="thread-reply"
+              message={threadHead}
+              onDelete={
+                onDelete && canManageMessage(threadHead, currentPubkey)
+                  ? onDelete
+                  : undefined
+              }
+              onToggleReaction={onToggleReaction}
+              profiles={profiles}
+            />
+          </div>
         </div>
 
-        <div className="px-3 py-3" data-testid="message-thread-replies">
+        <div className="px-3 pb-3 pt-1" data-testid="message-thread-replies">
           {threadReplies.length > 0 ? (
             <div className="space-y-2">
-              {threadReplies.map((entry) => (
-                <div key={entry.message.id}>
-                  <MessageRow
-                    activeReplyTargetId={replyTargetId}
-                    message={entry.message}
-                    onDelete={
-                      onDelete && canManageMessage(entry.message, currentPubkey)
-                        ? onDelete
-                        : undefined
-                    }
-                    onReply={onOpenNestedThread}
-                    onToggleReaction={onToggleReaction}
-                    profiles={profiles}
-                  />
-                  {entry.summary ? (
-                    <MessageThreadSummaryRow
+              {threadReplies.map((entry, index) => {
+                const nextDepth = threadReplies[index + 1]?.message.depth ?? -1;
+                const isExpanded = nextDepth > entry.message.depth;
+
+                return (
+                  <div key={entry.message.id}>
+                    <MessageRow
+                      activeReplyTargetId={replyTargetId}
+                      layoutVariant="thread-reply"
                       message={entry.message}
-                      onOpenThread={onOpenNestedThread}
-                      summary={entry.summary}
+                      onDelete={
+                        onDelete &&
+                        canManageMessage(entry.message, currentPubkey)
+                          ? onDelete
+                          : undefined
+                      }
+                      onReply={onSelectReplyTarget}
+                      onToggleReaction={onToggleReaction}
+                      profiles={profiles}
                     />
-                  ) : null}
-                </div>
-              ))}
+                    {entry.summary && !isExpanded ? (
+                      <MessageThreadSummaryRow
+                        depth={entry.message.depth}
+                        message={entry.message}
+                        onOpenThread={onExpandReplies}
+                        summary={entry.summary}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="rounded-2xl border border-dashed border-border/70 bg-card/40 px-4 py-6 text-center">

@@ -468,6 +468,7 @@ pub fn run() {
             });
         })
         .manage(build_app_state())
+        .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
@@ -647,6 +648,9 @@ pub fn run() {
             list_audio_output_devices,
             set_audio_output_device,
             get_audio_output_device,
+            start_pairing,
+            confirm_pairing_sas,
+            cancel_pairing,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

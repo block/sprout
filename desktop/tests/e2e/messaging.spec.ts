@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
 
 test.beforeEach(async ({ page }) => {
@@ -264,12 +264,18 @@ test("shows your avatar on your own message when profile avatar is set", async (
   );
 });
 
-test("opens a branch-only thread panel from the reply action", async ({
+test("opens a single-level thread panel with inline expansion", async ({
   page,
 }) => {
-  const firstReply = `First threaded reply ${Date.now()}`;
-  const siblingReply = `Sibling threaded reply ${Date.now()}`;
-  const nestedReply = `Nested threaded reply ${Date.now()}`;
+  const timestamp = Date.now();
+  const firstReply = `First threaded reply ${timestamp}`;
+  const siblingReply = `Sibling threaded reply ${timestamp}`;
+  const nestedReply = `Nested threaded reply ${timestamp}`;
+  const nestedReplyFromBob = `Nested reply from Bob ${timestamp}`;
+  const fillerReplies = Array.from(
+    { length: 14 },
+    (_, index) => `Thread filler reply ${index} ${timestamp}`,
+  );
 
   await page.goto("/");
   await page.getByTestId("channel-general").click();
@@ -281,10 +287,18 @@ test("opens a branch-only thread panel from the reply action", async ({
   const timeline = page.getByTestId("message-timeline");
   const timelineRows = timeline.getByTestId("message-row");
   const threadPanel = page.getByTestId("message-thread-panel");
+  const threadBody = threadPanel.getByTestId("message-thread-body");
   const threadComposer = threadPanel.locator('[data-testid="message-input"]');
   const threadSendButton = threadPanel.getByTestId("send-message");
   const threadReplies = threadPanel.getByTestId("message-thread-replies");
   const rootMessage = timelineRows.first();
+  const rootMessageId = await rootMessage.getAttribute("data-message-id");
+  if (!rootMessageId) {
+    throw new Error("Expected root message row to have a data-message-id.");
+  }
+  const rootSummaryRow = timeline.locator(
+    `[data-thread-head-id="${rootMessageId}"]`,
+  );
 
   await rootMessage.hover();
   await rootMessage.getByRole("button", { name: "Reply" }).click();
@@ -301,6 +315,21 @@ test("opens a branch-only thread panel from the reply action", async ({
   await threadSendButton.click();
   await expect(threadReplies).toContainText(siblingReply);
 
+  for (const fillerReply of fillerReplies) {
+    await threadComposer.fill(fillerReply);
+    await threadSendButton.click();
+    await expect(threadReplies).toContainText(fillerReply);
+  }
+
+  await expect
+    .poll(async () => {
+      return threadBody.evaluate((element) => {
+        const body = element as HTMLDivElement;
+        return body.scrollHeight - body.clientHeight;
+      });
+    })
+    .toBeGreaterThan(160);
+
   await expect(
     timeline.getByTestId("message-row").filter({ hasText: firstReply }),
   ).toHaveCount(0);
@@ -308,8 +337,10 @@ test("opens a branch-only thread panel from the reply action", async ({
     timeline.getByTestId("message-row").filter({ hasText: siblingReply }),
   ).toHaveCount(0);
 
-  const rootSummaryRow = timeline.getByTestId("message-thread-summary").first();
-  await expect(rootSummaryRow).toContainText("2 replies");
+  await expect(rootSummaryRow).toContainText("16 replies");
+  await expect(
+    rootSummaryRow.getByTestId("message-thread-summary-participant"),
+  ).toHaveCount(1);
 
   await threadPanel.getByTestId("message-thread-close").click();
   await expect(threadPanel).toBeHidden();
@@ -327,38 +358,156 @@ test("opens a branch-only thread panel from the reply action", async ({
   await firstReplyRow.hover();
   await firstReplyRow.getByRole("button", { name: "Reply" }).click();
 
-  await expect(threadPanel.getByTestId("message-thread-back")).toBeVisible();
   await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
-    firstReply,
+    "Welcome to #general",
   );
-  await expect(
-    threadPanel.getByTestId("message-thread-head"),
-  ).not.toContainText("Welcome to #general");
-  await expect(threadReplies).not.toContainText(siblingReply);
+  await expect(threadPanel.getByTestId("message-thread-back")).toHaveCount(0);
 
   await threadComposer.fill(nestedReply);
   await threadSendButton.click();
 
-  await expect(threadReplies).toContainText(nestedReply);
-  await expect(threadReplies).not.toContainText(siblingReply);
+  const nestedReplyRow = threadReplies
+    .getByTestId("message-row")
+    .filter({ hasText: nestedReply })
+    .first();
+  await expect(nestedReplyRow).toBeVisible();
   await expect(
     timeline.getByTestId("message-row").filter({ hasText: nestedReply }),
   ).toHaveCount(0);
 
-  await threadPanel.getByTestId("message-thread-back").click();
-  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
-    "Welcome to #general",
-  );
   await expect(
-    threadReplies.getByTestId("message-row").filter({ hasText: nestedReply }),
-  ).toHaveCount(0);
+    threadReplies.getByTestId("message-row").filter({ hasText: siblingReply }),
+  ).toHaveCount(1);
+  await expect
+    .poll(async () => {
+      return nestedReplyRow.evaluate((row) => {
+        const threadBody = row.closest(
+          '[data-testid="message-thread-body"]',
+        ) as HTMLElement | null;
+        if (!threadBody) {
+          return Number.POSITIVE_INFINITY;
+        }
 
-  const nestedSummaryRow = threadReplies.getByTestId("message-thread-summary");
-  await expect(nestedSummaryRow).toContainText("1 reply");
-  await nestedSummaryRow.click();
+        const rowRect = row.getBoundingClientRect();
+        const bodyRect = threadBody.getBoundingClientRect();
+        return rowRect.top - bodyRect.top;
+      });
+    })
+    .toBeLessThan(160);
 
-  await expect(threadPanel.getByTestId("message-thread-head")).toContainText(
-    firstReply,
+  const firstReplyId = await firstReplyRow.getAttribute("data-message-id");
+  if (!firstReplyId) {
+    throw new Error("Expected first reply row to have a data-message-id.");
+  }
+
+  await page.evaluate(
+    ({ content, parentEventId, pubkey }) => {
+      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "general",
+        content,
+        parentEventId,
+        pubkey,
+      });
+    },
+    {
+      content: nestedReplyFromBob,
+      parentEventId: firstReplyId,
+      pubkey: TEST_IDENTITIES.bob.pubkey,
+    },
   );
-  await expect(threadReplies).toContainText(nestedReply);
+  const nestedReplyFromBobRow = threadReplies
+    .getByTestId("message-row")
+    .filter({ hasText: nestedReplyFromBob })
+    .first();
+  await expect(nestedReplyFromBobRow).toBeVisible();
+
+  const firstReplySummaryRow = threadReplies.locator(
+    `[data-thread-head-id="${firstReplyId}"]`,
+  );
+  await expect(firstReplySummaryRow).toHaveCount(0);
+
+  await expect(rootSummaryRow).toContainText("18 replies");
+  await expect(
+    rootSummaryRow.getByTestId("message-thread-summary-participant"),
+  ).toHaveCount(2);
+
+  await expect
+    .poll(async () => {
+      return nestedReplyRow.evaluate((row) => {
+        const threadBody = row.closest(
+          '[data-testid="message-thread-body"]',
+        ) as HTMLElement | null;
+        if (!threadBody) {
+          return Number.POSITIVE_INFINITY;
+        }
+
+        const rowRect = row.getBoundingClientRect();
+        const bodyRect = threadBody.getBoundingClientRect();
+        return rowRect.top - bodyRect.top;
+      });
+    })
+    .toBeLessThan(160);
+});
+
+test("thread panel width uses session storage and reset handle", async ({
+  page,
+}) => {
+  const customWidthPx = 520;
+  const defaultWidthPx = 380;
+
+  await page.addInitScript((width) => {
+    window.sessionStorage.setItem(
+      "sprout.desktop.thread-panel-width",
+      String(width),
+    );
+  }, customWidthPx);
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const timeline = page.getByTestId("message-timeline");
+  const rootMessage = timeline.getByTestId("message-row").first();
+  const threadPanel = page.getByTestId("message-thread-panel");
+  const resizeHandle = threadPanel.getByTestId("message-thread-resize-handle");
+
+  await rootMessage.hover();
+  await rootMessage.getByRole("button", { name: "Reply" }).click();
+  await expect(threadPanel).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      return threadPanel.evaluate((panel) => {
+        const element = panel as HTMLElement;
+        return Math.round(element.getBoundingClientRect().width);
+      });
+    })
+    .toBe(customWidthPx);
+
+  await resizeHandle.dblclick();
+
+  await expect
+    .poll(async () => {
+      return threadPanel.evaluate((panel) => {
+        const element = panel as HTMLElement;
+        return Math.round(element.getBoundingClientRect().width);
+      });
+    })
+    .toBe(defaultWidthPx);
+
+  await threadPanel.getByTestId("message-thread-close").click();
+  await expect(threadPanel).toBeHidden();
+
+  await rootMessage.hover();
+  await rootMessage.getByRole("button", { name: "Reply" }).click();
+  await expect(threadPanel).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      return threadPanel.evaluate((panel) => {
+        const element = panel as HTMLElement;
+        return Math.round(element.getBoundingClientRect().width);
+      });
+    })
+    .toBe(defaultWidthPx);
 });

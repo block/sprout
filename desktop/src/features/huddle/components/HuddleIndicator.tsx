@@ -74,6 +74,10 @@ export function HuddleIndicator({
       );
 
       let huddle: ActiveHuddle | null = null;
+      // Track ended ephemeral channels so late-arriving join/left events
+      // (e.g. relay-emitted 48102 that lands 1s after a client-emitted 48103)
+      // don't resurrect a phantom huddle via the "infer huddle exists" fallback.
+      const endedChannels = new Set<string>();
 
       for (const ev of sorted) {
         let ephId: string | null = null;
@@ -87,6 +91,8 @@ export function HuddleIndicator({
         switch (ev.kind) {
           case KIND_HUDDLE_STARTED: {
             if (!ephId) break;
+            // A new start supersedes any previous ended state for this channel.
+            endedChannels.delete(ephId);
             huddle = {
               ephemeralChannelId: ephId,
               participants: new Set([ev.pubkey]),
@@ -95,6 +101,9 @@ export function HuddleIndicator({
           }
           case KIND_HUDDLE_PARTICIPANT_JOINED: {
             if (!ephId) break;
+            // Skip if this ephemeral channel has already ended — don't
+            // resurrect a phantom huddle from a late-arriving relay event.
+            if (endedChannels.has(ephId)) break;
             // 48101 events are relay-signed — the actual participant is in the "p" tag.
             const joinedPk =
               ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
@@ -109,6 +118,8 @@ export function HuddleIndicator({
           }
           case KIND_HUDDLE_PARTICIPANT_LEFT: {
             if (!ephId) break;
+            // Skip if this ephemeral channel has already ended.
+            if (endedChannels.has(ephId)) break;
             // 48102 events are relay-signed — the actual participant is in the "p" tag.
             const leftPk = ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
             if (!huddle || ephId !== huddle.ephemeralChannelId) {
@@ -121,8 +132,11 @@ export function HuddleIndicator({
             break;
           }
           case KIND_HUDDLE_ENDED: {
-            if (!huddle || !ephId || ephId !== huddle.ephemeralChannelId) break;
-            huddle = null;
+            if (!ephId) break;
+            endedChannels.add(ephId);
+            if (huddle && ephId === huddle.ephemeralChannelId) {
+              huddle = null;
+            }
             break;
           }
         }

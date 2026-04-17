@@ -9,12 +9,15 @@ import '../profile/user_profile.dart';
 /// what the desktop does via `submit_event`.
 class SendMessage {
   final SignedEventRelay _signedEventRelay;
+  final RelayClient _relayClient;
   final Map<String, UserProfile> Function() _readUserCache;
 
   SendMessage({
     required SignedEventRelay signedEventRelay,
+    required RelayClient relayClient,
     required Map<String, UserProfile> Function() readUserCache,
   }) : _signedEventRelay = signedEventRelay,
+       _relayClient = relayClient,
        _readUserCache = readUserCache;
 
   /// Send a text message to a channel.
@@ -30,8 +33,10 @@ class SendMessage {
     String? rootEventId,
     List<String>? mentionPubkeys,
   }) async {
-    // Resolve @mentions in the message content to pubkeys.
-    final resolvedMentions = mentionPubkeys ?? _resolveMentions(content);
+    // Use explicitly passed pubkeys, or resolve @mentions against
+    // channel members to avoid matching the wrong user.
+    final resolvedMentions =
+        mentionPubkeys ?? await _resolveMentions(content, channelId);
     final authorPubkey = _signedEventRelay.pubkey;
 
     // Normalize mentions: lowercase, deduplicate, exclude self (matching
@@ -44,7 +49,6 @@ class SendMessage {
     ];
 
     final tags = <List<String>>[
-      if (authorPubkey != null) ['p', authorPubkey],
       ['h', channelId],
       if (parentEventId != null) ..._buildReplyTags(parentEventId, rootEventId),
       for (final pk in normalizedMentions) ['p', pk],
@@ -57,16 +61,36 @@ class SendMessage {
     );
   }
 
-  /// Parse @mentions from message content and resolve to pubkeys using
-  /// the user cache. Reads the cache at call time (not construction time)
-  /// to ensure freshly loaded profiles are available.
-  List<String> _resolveMentions(String content) {
+  /// Resolve @mentions to pubkeys, scoped to channel members.
+  ///
+  /// Fetches channel members from the relay and matches @names only
+  /// against members of that channel. Falls back to the full user cache
+  /// if the member fetch fails.
+  Future<List<String>> _resolveMentions(
+    String content,
+    String channelId,
+  ) async {
     final mentionPattern = RegExp(r'@(\w+)');
     final matches = mentionPattern.allMatches(content);
-    final pubkeys = <String>{};
+    if (matches.isEmpty) return const [];
 
-    // Read the current cache state at send time.
+    // Try to get channel member pubkeys for scoped resolution.
+    Set<String>? memberPubkeys;
+    try {
+      final json =
+          await _relayClient.get('/api/channels/$channelId/members')
+              as Map<String, dynamic>;
+      final members = json['members'] as List<dynamic>? ?? [];
+      memberPubkeys = {
+        for (final m in members)
+          ((m as Map<String, dynamic>)['pubkey'] as String).toLowerCase(),
+      };
+    } catch (_) {
+      // Non-fatal — fall through to unscoped cache lookup.
+    }
+
     final cache = _readUserCache();
+    final pubkeys = <String>{};
 
     for (final match in matches) {
       final name = match.group(1)?.toLowerCase();
@@ -76,12 +100,18 @@ class SendMessage {
         final displayName = profile.displayName?.toLowerCase();
         if (displayName == null) continue;
 
-        // Match against full display name or first word of it.
+        // Match against full display name or first word.
         final firstName = displayName.split(RegExp(r'\s+')).first;
-        if (displayName == name || firstName == name) {
-          pubkeys.add(profile.pubkey);
-          break;
+        if (displayName != name && firstName != name) continue;
+
+        // If we have channel members, only match members of this channel.
+        if (memberPubkeys != null &&
+            !memberPubkeys.contains(profile.pubkey.toLowerCase())) {
+          continue;
         }
+
+        pubkeys.add(profile.pubkey);
+        break;
       }
     }
 
@@ -115,6 +145,7 @@ final sendMessageProvider = Provider<SendMessage>((ref) {
       client: ref.watch(relayClientProvider),
       nsec: config.nsec,
     ),
+    relayClient: ref.watch(relayClientProvider),
     readUserCache: () => ref.read(userCacheProvider),
   );
 });
