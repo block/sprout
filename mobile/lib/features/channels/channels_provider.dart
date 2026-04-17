@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
@@ -12,6 +13,14 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   Future<List<Channel>> build() {
     ref.watch(relayClientProvider);
     final sessionState = ref.watch(relaySessionProvider);
+
+    // Re-fetch when the app returns to foreground so channels created on
+    // another device while mobile was backgrounded appear immediately.
+    ref.listen(appLifecycleProvider, (prev, next) {
+      if (next == AppLifecycleState.resumed) {
+        refresh();
+      }
+    });
 
     ref.onDispose(() {
       _unsubscribe?.call();
