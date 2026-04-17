@@ -26,6 +26,7 @@ class PairingPage extends HookConsumerWidget {
           child: pairingState.status == PairingStatus.confirmingSas
               ? _SasVerificationView(
                   sasCode: pairingState.sasCode ?? '------',
+                  confirmed: pairingState.userConfirmedSas,
                   onConfirm: () =>
                       ref.read(pairingProvider.notifier).confirmSas(),
                   onDeny: () => ref.read(pairingProvider.notifier).denySas(),
@@ -190,11 +191,13 @@ class PairingPage extends HookConsumerWidget {
 /// SAS verification screen shown during NIP-AB pairing.
 class _SasVerificationView extends StatelessWidget {
   final String sasCode;
+  final bool confirmed;
   final VoidCallback onConfirm;
   final VoidCallback onDeny;
 
   const _SasVerificationView({
     required this.sasCode,
+    required this.confirmed,
     required this.onConfirm,
     required this.onDeny,
   });
@@ -213,7 +216,9 @@ class _SasVerificationView extends StatelessWidget {
         const SizedBox(height: Grid.xs),
 
         Text(
-          'Does your desktop app show this code?',
+          confirmed
+              ? 'Waiting for desktop to confirm...'
+              : 'Does your desktop app show this code?',
           textAlign: TextAlign.center,
           style: context.textTheme.bodyMedium?.copyWith(
             color: context.colors.onSurfaceVariant,
@@ -257,26 +262,48 @@ class _SasVerificationView extends StatelessWidget {
         const SizedBox(height: Grid.lg),
 
         // Confirm / Deny buttons
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: onDeny,
-                icon: const Icon(LucideIcons.x),
-                label: const Text('Cancel'),
+        if (confirmed)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: context.colors.primary,
+                ),
               ),
-            ),
-            const SizedBox(width: Grid.sm),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: onConfirm,
-                icon: const Icon(LucideIcons.check),
-                label: const Text('Codes Match'),
+              const SizedBox(width: Grid.twelve),
+              Text(
+                'Confirmed — waiting for desktop',
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          )
+        else
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onDeny,
+                  icon: const Icon(LucideIcons.x),
+                  label: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: Grid.sm),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: onConfirm,
+                  icon: const Icon(LucideIcons.check),
+                  label: const Text('Codes Match'),
+                ),
+              ),
+            ],
+          ),
 
         const Spacer(flex: 3),
       ],

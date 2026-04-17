@@ -35,21 +35,25 @@ class PairingState {
   final PairingStatus status;
   final String? errorMessage;
   final String? sasCode;
+  final bool userConfirmedSas;
 
   const PairingState({
     this.status = PairingStatus.idle,
     this.errorMessage,
     this.sasCode,
+    this.userConfirmedSas = false,
   });
 
   PairingState copyWith({
     PairingStatus? status,
     String? errorMessage,
     String? sasCode,
+    bool? userConfirmedSas,
   }) => PairingState(
     status: status ?? this.status,
     errorMessage: errorMessage ?? this.errorMessage,
     sasCode: sasCode ?? this.sasCode,
+    userConfirmedSas: userConfirmedSas ?? this.userConfirmedSas,
   );
 }
 
@@ -94,6 +98,7 @@ class PairingNotifier extends Notifier<PairingState> {
     // Desktop hasn't confirmed yet — record intent and wait. The transition
     // will happen in _handleSasConfirm() once the transcript hash is verified.
     _userConfirmedSas = true;
+    state = state.copyWith(userConfirmedSas: true);
   }
 
   /// Deny the SAS code. Send abort and terminate.
@@ -396,8 +401,8 @@ class PairingNotifier extends Notifier<PairingState> {
         throw const FormatException('Missing relayUrl or token in payload');
       }
 
-      // Send complete event.
-      _sendComplete(true);
+      // Validate relay URL to prevent SSRF via private network addresses.
+      _validateRelayUrl(relayUrl);
 
       // Validate credentials against the relay.
       final client = RelayClient(
@@ -410,6 +415,9 @@ class PairingNotifier extends Notifier<PairingState> {
       } finally {
         client.dispose();
       }
+
+      // Send complete only after credentials are validated.
+      _sendComplete(true);
 
       // Store credentials.
       await ref

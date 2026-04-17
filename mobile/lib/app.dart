@@ -90,6 +90,14 @@ class _OfflineScreen extends ConsumerWidget {
                 icon: const Icon(LucideIcons.refreshCw),
                 label: const Text('Retry'),
               ),
+              const SizedBox(height: Grid.twelve),
+              TextButton(
+                onPressed: () => ref.read(authProvider.notifier).signOut(),
+                child: Text(
+                  'Sign out and re-pair',
+                  style: TextStyle(color: context.colors.outline),
+                ),
+              ),
             ],
           ),
         ),
