@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -11,6 +10,7 @@ import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
+import 'compose_bar.dart';
 import 'message_content.dart';
 import 'send_message_provider.dart';
 import 'timeline_message.dart';
@@ -178,10 +178,17 @@ class ThreadDetailPage extends HookConsumerWidget {
           if (threadTyping.isNotEmpty)
             _ThreadTypingIndicator(entries: threadTyping),
           if (isMember && !isArchived)
-            _ThreadComposeBar(
+            ComposeBar(
               channelId: channelId,
-              threadHeadId: threadHead.id,
-              rootId: effectiveRootId,
+              hintText: 'Reply\u2026',
+              onSend: (content) => ref
+                  .read(sendMessageProvider)
+                  .call(
+                    channelId: channelId,
+                    content: content,
+                    parentEventId: threadHead.id,
+                    rootEventId: effectiveRootId,
+                  ),
             ),
         ],
       ),
@@ -481,107 +488,6 @@ class _ThreadMessage extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // Thread compose bar
 // ---------------------------------------------------------------------------
-
-class _ThreadComposeBar extends HookConsumerWidget {
-  final String channelId;
-  final String threadHeadId;
-  final String? rootId;
-
-  const _ThreadComposeBar({
-    required this.channelId,
-    required this.threadHeadId,
-    required this.rootId,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final controller = useTextEditingController();
-    final isSending = useState(false);
-
-    Future<void> send() async {
-      final text = controller.text.trim();
-      if (text.isEmpty || isSending.value) return;
-
-      isSending.value = true;
-      try {
-        await ref
-            .read(sendMessageProvider)
-            .call(
-              channelId: channelId,
-              content: text,
-              parentEventId: threadHeadId,
-              rootEventId: rootId ?? threadHeadId,
-            );
-        if (context.mounted) controller.clear();
-      } finally {
-        if (context.mounted) isSending.value = false;
-      }
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: context.colors.outlineVariant)),
-        color: context.colors.surface,
-      ),
-      padding: EdgeInsets.only(
-        left: Grid.xs,
-        right: Grid.xxs,
-        top: Grid.xxs,
-        bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => send(),
-              minLines: 1,
-              maxLines: 5,
-              decoration: InputDecoration(
-                hintText: 'Reply...',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.outlineVariant),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.outlineVariant),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.primary),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: Grid.twelve,
-                  vertical: Grid.xxs,
-                ),
-                isDense: true,
-              ),
-            ),
-          ),
-          const SizedBox(width: Grid.half),
-          IconButton(
-            onPressed: isSending.value ? null : send,
-            icon: isSending.value
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: context.colors.primary,
-                    ),
-                  )
-                : Icon(
-                    LucideIcons.sendHorizontal,
-                    color: context.colors.primary,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Thread-scoped typing indicator
