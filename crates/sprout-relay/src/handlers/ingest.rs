@@ -52,6 +52,8 @@ pub enum IngestAuth {
         pubkey: nostr::PublicKey,
         /// Permission scopes granted to this connection.
         scopes: Vec<Scope>,
+        /// Token-level channel restriction, if the WebSocket auth used an API token.
+        channel_ids: Option<Vec<Uuid>>,
         /// WebSocket connection identifier.
         conn_id: Uuid,
     },
@@ -101,7 +103,11 @@ impl IngestAuth {
     /// Token-level channel restriction (Http/ApiToken only).
     pub fn channel_ids(&self) -> Option<&[Uuid]> {
         match self {
-            Self::Http {
+            Self::Nip42 {
+                channel_ids: Some(ids),
+                ..
+            }
+            | Self::Http {
                 channel_ids: Some(ids),
                 ..
             } => Some(ids),
@@ -1536,6 +1542,7 @@ mod tests {
         let ws_auth = IngestAuth::Nip42 {
             pubkey: keys.public_key(),
             scopes: vec![],
+            channel_ids: None,
             conn_id: uuid::Uuid::new_v4(),
         };
         assert!(

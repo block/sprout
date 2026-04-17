@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { Headphones } from "lucide-react";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -73,6 +74,10 @@ export function HuddleIndicator({
       );
 
       let huddle: ActiveHuddle | null = null;
+      // Track ended ephemeral channels so late-arriving join/left events
+      // (e.g. relay-emitted 48102 that lands 1s after a client-emitted 48103)
+      // don't resurrect a phantom huddle via the "infer huddle exists" fallback.
+      const endedChannels = new Set<string>();
 
       for (const ev of sorted) {
         let ephId: string | null = null;
@@ -86,6 +91,8 @@ export function HuddleIndicator({
         switch (ev.kind) {
           case KIND_HUDDLE_STARTED: {
             if (!ephId) break;
+            // A new start supersedes any previous ended state for this channel.
+            endedChannels.delete(ephId);
             huddle = {
               ephemeralChannelId: ephId,
               participants: new Set([ev.pubkey]),
@@ -94,6 +101,9 @@ export function HuddleIndicator({
           }
           case KIND_HUDDLE_PARTICIPANT_JOINED: {
             if (!ephId) break;
+            // Skip if this ephemeral channel has already ended — don't
+            // resurrect a phantom huddle from a late-arriving relay event.
+            if (endedChannels.has(ephId)) break;
             // 48101 events are relay-signed — the actual participant is in the "p" tag.
             const joinedPk =
               ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
@@ -108,6 +118,8 @@ export function HuddleIndicator({
           }
           case KIND_HUDDLE_PARTICIPANT_LEFT: {
             if (!ephId) break;
+            // Skip if this ephemeral channel has already ended.
+            if (endedChannels.has(ephId)) break;
             // 48102 events are relay-signed — the actual participant is in the "p" tag.
             const leftPk = ev.tags.find((t) => t[0] === "p")?.[1] ?? ev.pubkey;
             if (!huddle || ephId !== huddle.ephemeralChannelId) {
@@ -120,8 +132,11 @@ export function HuddleIndicator({
             break;
           }
           case KIND_HUDDLE_ENDED: {
-            if (!huddle || !ephId || ephId !== huddle.ephemeralChannelId) break;
-            huddle = null;
+            if (!ephId) break;
+            endedChannels.add(ephId);
+            if (huddle && ephId === huddle.ephemeralChannelId) {
+              huddle = null;
+            }
             break;
           }
         }
@@ -163,6 +178,29 @@ export function HuddleIndicator({
       setActiveHuddle(null);
     };
   }, [channelId]);
+
+  // When the local user ends/leaves a huddle, the backend transitions to idle
+  // and emits huddle-state-changed. Clear the indicator immediately rather than
+  // waiting for the relay's 48103 event (which may arrive late or not at all
+  // if the relay connection tears down first).
+  React.useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+
+    listen<{ phase: string }>("huddle-state-changed", (event) => {
+      if (!cancelled && event.payload.phase === "idle") {
+        setActiveHuddle(null);
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // No active huddle — render the start button (if onStart provided).
   if (!activeHuddle) {

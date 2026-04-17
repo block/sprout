@@ -29,7 +29,7 @@ pub async fn handle_req(
     conn: Arc<ConnectionState>,
     state: Arc<AppState>,
 ) {
-    let (conn_id, pubkey_bytes) = {
+    let (conn_id, pubkey_bytes, token_channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => {
@@ -53,7 +53,7 @@ pub async fn handle_req(
                     return;
                 }
 
-                (conn.conn_id, pk_bytes)
+                (conn.conn_id, pk_bytes, ctx.channel_ids.clone())
             }
             _ => {
                 conn.send(RelayMessage::notice(
@@ -68,7 +68,7 @@ pub async fn handle_req(
         }
     };
 
-    let accessible_channels = match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
+    let mut accessible_channels = match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
         Ok(ids) => ids,
         Err(e) => {
             warn!(conn_id = %conn_id, "Failed to get accessible channels: {e}");
@@ -76,6 +76,9 @@ pub async fn handle_req(
             return;
         }
     };
+    if let Some(allowed) = token_channel_ids.as_deref() {
+        accessible_channels.retain(|channel_id| allowed.contains(channel_id));
+    }
 
     let channel_id = extract_channel_id_from_filters(&filters);
 
@@ -93,7 +96,15 @@ pub async fn handle_req(
             ));
             return;
         }
-        handle_search_req(&sub_id, &filters, &accessible_channels, &conn, &state).await;
+        handle_search_req(
+            &sub_id,
+            &filters,
+            &accessible_channels,
+            token_channel_ids.is_none(),
+            &conn,
+            &state,
+        )
+        .await;
         return;
     }
 
@@ -235,27 +246,48 @@ pub async fn handle_req(
 /// Maximum Typesense pages to fetch per filter (prevents unbounded loops).
 const MAX_SEARCH_PAGES: u32 = 10;
 
+fn build_search_channel_scope_filter(
+    accessible_channels: &[uuid::Uuid],
+    include_global: bool,
+) -> Option<String> {
+    if accessible_channels.is_empty() {
+        return if include_global {
+            Some("channel_id:=__global__".to_string())
+        } else {
+            None
+        };
+    }
+
+    let ids: Vec<String> = accessible_channels
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    Some(if include_global {
+        format!(
+            "(channel_id:=[{}] || channel_id:=__global__)",
+            ids.join(",")
+        )
+    } else {
+        format!("channel_id:=[{}]", ids.join(","))
+    })
+}
+
 async fn handle_search_req(
     sub_id: &str,
     filters: &[Filter],
     accessible_channels: &[uuid::Uuid],
+    include_global: bool,
     conn: &ConnectionState,
     state: &AppState,
 ) {
-    let all_channels_filter = {
-        if accessible_channels.is_empty() {
-            "channel_id:=__global__".to_string()
-        } else {
-            let ids: Vec<String> = accessible_channels
-                .iter()
-                .map(|id| id.to_string())
-                .collect();
-            format!(
-                "(channel_id:=[{}] || channel_id:=__global__)",
-                ids.join(",")
-            )
-        }
-    };
+    let all_channels_filter =
+        match build_search_channel_scope_filter(accessible_channels, include_global) {
+            Some(filter) => filter,
+            None => {
+                conn.send(RelayMessage::eose(sub_id));
+                return;
+            }
+        };
 
     let mut seen_ids: HashSet<nostr::EventId> = HashSet::new();
 
@@ -666,5 +698,23 @@ mod tests {
             .custom_tag(d_tag, ["slug-a", "slug-b"]);
         let q5 = filter_to_query_params(&multi_d_filter, None);
         assert_eq!(q5.d_tag, None);
+    }
+
+    #[test]
+    fn restricted_search_scope_excludes_global_results() {
+        let channel_id = uuid::Uuid::new_v4();
+
+        let scope = build_search_channel_scope_filter(&[channel_id], false)
+            .expect("restricted tokens with channel access should still search that channel");
+
+        assert_eq!(scope, format!("channel_id:=[{channel_id}]"));
+    }
+
+    #[test]
+    fn restricted_search_scope_without_accessible_channels_matches_nothing() {
+        assert!(
+            build_search_channel_scope_filter(&[], false).is_none(),
+            "restricted tokens must not fall back to global search results"
+        );
     }
 }

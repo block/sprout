@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
@@ -10,6 +11,8 @@ type ParticipantListProps = {
   activeSpeakers?: string[];
   /** Pubkeys of agent participants — rendered with a bot badge */
   agentPubkeys?: string[];
+  /** Called when the user clicks the remove button on an agent avatar */
+  onRemoveAgent?: (pubkey: string) => void;
   className?: string;
 };
 
@@ -17,6 +20,7 @@ export function ParticipantList({
   participants,
   activeSpeakers,
   agentPubkeys,
+  onRemoveAgent,
   className,
 }: ParticipantListProps) {
   const { data } = useUsersBatchQuery(participants);
@@ -38,7 +42,7 @@ export function ParticipantList({
         const ariaLabel = `${profile?.displayName || `Participant ${pubkey.slice(0, 8)}`}${isAgent ? " (agent)" : ""}`;
 
         return (
-          <li key={pubkey} className="relative">
+          <li key={pubkey} className="group/participant relative">
             {hasProfile ? (
               <div
                 aria-label={ariaLabel}
@@ -62,15 +66,25 @@ export function ParticipantList({
                 ariaLabel={ariaLabel}
               />
             )}
-            {isAgent && (
-              <span
-                aria-hidden="true"
-                className="absolute -bottom-1 -right-1 text-[9px] leading-none"
-                title="Agent"
-              >
-                🤖
-              </span>
-            )}
+            {isAgent &&
+              (onRemoveAgent ? (
+                <button
+                  aria-label={`Remove ${profile?.displayName || "agent"} from huddle`}
+                  className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-destructive-foreground opacity-0 transition-opacity group-hover/participant:opacity-100"
+                  onClick={() => onRemoveAgent(pubkey)}
+                  type="button"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  className="absolute -bottom-1 -right-1 text-[9px] leading-none"
+                  title="Agent"
+                >
+                  🤖
+                </span>
+              ))}
           </li>
         );
       })}

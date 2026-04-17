@@ -10,6 +10,9 @@ mod util;
 
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
+use huddle::audio_output::{
+    get_audio_output_device, list_audio_output_devices, set_audio_output_device,
+};
 use huddle::{
     add_agent_to_huddle, check_pipeline_hotstart, confirm_huddle_active, download_voice_models,
     end_huddle, get_huddle_agent_pubkeys, get_huddle_state, get_model_status, get_voice_input_mode,
@@ -465,6 +468,7 @@ pub fn run() {
             });
         })
         .manage(build_app_state())
+        .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
@@ -641,6 +645,12 @@ pub fn run() {
             get_huddle_agent_pubkeys,
             set_voice_input_mode,
             get_voice_input_mode,
+            list_audio_output_devices,
+            set_audio_output_device,
+            get_audio_output_device,
+            start_pairing,
+            confirm_pairing_sas,
+            cancel_pairing,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -158,7 +158,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     // ── Extract auth from WS connection state ────────────────────────────
-    let (conn_id, pubkey_bytes, auth_pubkey, scopes) = {
+    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => (
@@ -166,6 +166,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 ctx.pubkey.serialize().to_vec(),
                 ctx.pubkey,
                 ctx.scopes.clone(),
+                ctx.channel_ids.clone(),
             ),
             _ => {
                 reject("auth");
@@ -241,6 +242,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let ingest_auth = IngestAuth::Nip42 {
         pubkey: auth_pubkey,
         scopes,
+        channel_ids,
         conn_id,
     };
 
@@ -372,6 +374,42 @@ async fn handle_ephemeral_event(
         // Direct fan-out to local WS subscribers.
         // Pass the channel_id so fan_out() uses the channel-kind index.
         let stored_event = StoredEvent::new(event.clone(), Some(ch_id));
+        let matches = state.sub_registry.fan_out(&stored_event);
+        let event_json = serde_json::to_string(&event)
+            .expect("nostr::Event serialization is infallible for well-formed events");
+        let mut drop_count = 0u32;
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            if !state.conn_manager.send_to(*target_conn_id, msg) {
+                drop_count += 1;
+            }
+        }
+        if drop_count > 0 {
+            tracing::warn!(
+                event_id = %event_id_hex,
+                drop_count,
+                "fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+            );
+        }
+    } else {
+        // Channel-less ephemeral events (e.g., NIP-AB pairing kind:24134).
+        //
+        // Sentinel pattern: we use `Uuid::nil()` (all-zeros UUID) as a
+        // "global channel" routing key in Redis pub/sub. This lets other relay
+        // nodes receive and fan out these events without any real channel_id.
+        // The nil UUID is ONLY a Redis routing key — it never reaches the DB.
+        // On the receiving end (main.rs subscriber loop), `is_nil()` is checked
+        // and converted back to `None` so `fan_out()` uses the global index.
+        state.mark_local_event(&event.id);
+
+        if let Err(e) = state.pubsub.publish_event(uuid::Uuid::nil(), &event).await {
+            state.local_event_ids.invalidate(&event.id.to_bytes());
+            warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral global publish failed: {e}");
+        }
+
+        // Direct fan-out to local WS subscribers.
+        // Pass channel_id=None so fan_out() uses the global subscriber index.
+        let stored_event = StoredEvent::new(event.clone(), None);
         let matches = state.sub_registry.fan_out(&stored_event);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");

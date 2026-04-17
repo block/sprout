@@ -219,10 +219,18 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 match rx.recv().await {
                     Ok(channel_event) => {
-                        let stored = sprout_core::StoredEvent::new(
-                            channel_event.event,
-                            Some(channel_event.channel_id),
-                        );
+                        // Nil UUID is the sentinel for channel-less global events
+                        // (see event.rs `else` branch). Convert back to None so
+                        // fan_out() uses the global subscriber index instead of
+                        // looking up subscribers under Some(Uuid::nil()), which
+                        // would find nothing and silently drop every cross-node
+                        // global event.
+                        let channel_id = if channel_event.channel_id.is_nil() {
+                            None
+                        } else {
+                            Some(channel_event.channel_id)
+                        };
+                        let stored = sprout_core::StoredEvent::new(channel_event.event, channel_id);
 
                         // Skip events that were already fanned out in-process (local echo).
                         // The cache has TTL-based eviction (60s) so entries are bounded

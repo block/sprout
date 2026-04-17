@@ -233,10 +233,11 @@ fn path_candidates_from_env(command: &str) -> Vec<PathBuf> {
 }
 
 fn find_via_login_shell(command: &str) -> Option<PathBuf> {
-    let which_cmd = format!("command -v {command}");
-
     for shell in ["/bin/zsh", "/bin/bash"] {
-        let Ok(output) = Command::new(shell).args(["-l", "-c", &which_cmd]).output() else {
+        let Ok(output) = Command::new(shell)
+            .args(["-l", "-c", r#"command -v -- "$1""#, "_", command])
+            .output()
+        else {
             continue;
         };
 
@@ -370,8 +371,8 @@ pub async fn mint_token_via_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        managed_agent_avatar_url, normalize_agent_args, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
-        GOOSE_AVATAR_URL,
+        find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
+        CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
     };
 
     #[test]
@@ -419,6 +420,24 @@ mod tests {
         assert_eq!(
             normalize_agent_args("codex-acp", vec!["acp".into()]),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn login_shell_lookup_treats_command_as_data() {
+        let marker =
+            std::env::temp_dir().join(format!("sprout-discovery-marker-{}", uuid::Uuid::new_v4()));
+        let payload = format!("doesnotexist; touch {} #", marker.display());
+
+        let resolved = find_via_login_shell(&payload);
+
+        assert!(
+            resolved.is_none(),
+            "payload should not resolve to a command"
+        );
+        assert!(
+            !marker.exists(),
+            "shell lookup must not execute injected commands"
         );
     }
 }

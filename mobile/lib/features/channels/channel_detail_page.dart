@@ -8,6 +8,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../profile/presence_cache_provider.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
@@ -18,6 +19,7 @@ import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
 import 'message_content.dart';
 import 'send_message_provider.dart';
+import 'thread_detail_page.dart';
 import 'timeline_message.dart';
 
 /// Fetch channel members and preload their profiles into the user cache.
@@ -51,7 +53,11 @@ class ChannelDetailPage extends HookConsumerWidget {
     final detailsAsync = ref.watch(channelDetailsProvider(channel.id));
     final channelsAsync = ref.watch(channelsProvider);
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
-    final typingEntries = ref.watch(channelTypingProvider(channel.id));
+    // Only show channel-level typing (exclude thread-scoped entries).
+    final typingEntries = ref
+        .watch(channelTypingProvider(channel.id))
+        .where((e) => e.threadHeadId == null)
+        .toList();
     final currentPubkey = ref
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
@@ -77,22 +83,29 @@ class ChannelDetailPage extends HookConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(
-              channelIcon(resolvedChannel),
-              size: 18,
-              color: context.colors.onSurfaceVariant,
-            ),
-            const SizedBox(width: Grid.half),
-            Expanded(
-              child: Text(
-                resolvedChannel.displayLabel(currentPubkey: currentPubkey),
-                overflow: TextOverflow.ellipsis,
+        title: resolvedChannel.isDm
+            ? _DmAppBarTitle(
+                channel: resolvedChannel,
+                currentPubkey: currentPubkey,
+              )
+            : Row(
+                children: [
+                  Icon(
+                    channelIcon(resolvedChannel),
+                    size: 18,
+                    color: context.colors.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: Grid.half),
+                  Expanded(
+                    child: Text(
+                      resolvedChannel.displayLabel(
+                        currentPubkey: currentPubkey,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
         actions: [
           IconButton(
             onPressed: () {
@@ -148,10 +161,14 @@ class ChannelDetailPage extends HookConsumerWidget {
                         events,
                         currentPubkey: currentPubkey,
                       );
+                      final entries = buildMainTimelineEntries(messages);
                       return _MessageList(
-                        messages: messages,
+                        entries: entries,
+                        allMessages: messages,
                         channelId: channel.id,
                         currentPubkey: currentPubkey,
+                        isMember: resolvedChannel.isMember,
+                        isArchived: resolvedChannel.isArchived,
                       );
                     },
                   ),
@@ -172,20 +189,49 @@ class ChannelDetailPage extends HookConsumerWidget {
   }
 }
 
-class _MessageList extends ConsumerWidget {
-  final List<TimelineMessage> messages;
+class _MessageList extends HookConsumerWidget {
+  final List<MainTimelineEntry> entries;
+  final List<TimelineMessage> allMessages;
   final String channelId;
   final String? currentPubkey;
+  final bool isMember;
+  final bool isArchived;
 
   const _MessageList({
-    required this.messages,
+    required this.entries,
+    required this.allMessages,
     required this.channelId,
     required this.currentPubkey,
+    required this.isMember,
+    required this.isArchived,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (messages.isEmpty) {
+    // Pagination: fetch older messages when scrolling near the top.
+    final scrollController = useScrollController();
+    final isLoadingOlder = useState(false);
+
+    useEffect(() {
+      void onScroll() {
+        if (isLoadingOlder.value) return;
+        final notifier = ref.read(channelMessagesProvider(channelId).notifier);
+        if (notifier.reachedOldest) return;
+        // In a reversed ListView, maxScrollExtent is the oldest messages.
+        final pos = scrollController.position;
+        if (pos.pixels >= pos.maxScrollExtent - 200) {
+          isLoadingOlder.value = true;
+          notifier.fetchOlder().whenComplete(
+            () => isLoadingOlder.value = false,
+          );
+        }
+      }
+
+      scrollController.addListener(onScroll);
+      return () => scrollController.removeListener(onScroll);
+    }, [scrollController]);
+
+    if (entries.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -224,35 +270,70 @@ class _MessageList extends ConsumerWidget {
     });
 
     return ListView.builder(
+      controller: scrollController,
       reverse: true,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.xxs,
       ),
-      itemCount: messages.length,
+      itemCount: entries.length + (isLoadingOlder.value ? 1 : 0),
       itemBuilder: (context, index) {
+        // Loading indicator at the top (last index in reversed list).
+        if (index >= entries.length) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: Grid.xs),
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+
         // Reversed list: index 0 = newest (bottom of screen).
-        final chronIdx = messages.length - 1 - index;
-        final message = messages[chronIdx];
+        final chronIdx = entries.length - 1 - index;
+        final entry = entries[chronIdx];
+        final message = entry.message;
 
         if (message.isSystem) {
           return _SystemMessageRow(message: message);
         }
 
         // The message visually above is the one earlier in time.
-        final prevMessage = chronIdx > 0 ? messages[chronIdx - 1] : null;
+        final prevEntry = chronIdx > 0 ? entries[chronIdx - 1] : null;
+        final prevMessage = prevEntry?.message;
         final showAuthor =
             prevMessage == null ||
             prevMessage.isSystem ||
             prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
             (message.createdAt - prevMessage.createdAt) > 300;
 
-        return _MessageBubble(
-          message: message,
-          showAuthor: showAuthor,
-          channelNames: channelNamesMap,
-          currentChannelId: channelId,
-          currentPubkey: currentPubkey,
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _MessageBubble(
+              message: message,
+              showAuthor: showAuthor,
+              channelNames: channelNamesMap,
+              currentChannelId: channelId,
+              currentPubkey: currentPubkey,
+              allMessages: allMessages,
+              isMember: isMember,
+              isArchived: isArchived,
+            ),
+            if (entry.summary != null)
+              _ThreadSummaryRow(
+                summary: entry.summary!,
+                message: message,
+                allMessages: allMessages,
+                channelId: channelId,
+                currentPubkey: currentPubkey,
+                isMember: isMember,
+                isArchived: isArchived,
+              ),
+          ],
         );
       },
     );
@@ -324,6 +405,134 @@ class _SystemMessageRow extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Thread summary row (shown below messages that have replies)
+// ---------------------------------------------------------------------------
+
+class _ThreadSummaryRow extends ConsumerWidget {
+  final ThreadSummary summary;
+  final TimelineMessage message;
+  final List<TimelineMessage> allMessages;
+  final String channelId;
+  final String? currentPubkey;
+  final bool isMember;
+  final bool isArchived;
+
+  const _ThreadSummaryRow({
+    required this.summary,
+    required this.message,
+    required this.allMessages,
+    required this.channelId,
+    required this.currentPubkey,
+    required this.isMember,
+    required this.isArchived,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final userCache = ref.watch(userCacheProvider);
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ThreadDetailPage(
+              threadHead: message,
+              allMessages: allMessages,
+              channelId: channelId,
+              currentPubkey: currentPubkey,
+              isMember: isMember,
+              isArchived: isArchived,
+            ),
+          ),
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.only(
+          left: 36,
+          top: Grid.half,
+          bottom: Grid.half,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Stacked participant avatars.
+            SizedBox(
+              width: 20.0 + (summary.participantPubkeys.length - 1) * 12.0,
+              height: 20,
+              child: Stack(
+                children: [
+                  for (var i = 0; i < summary.participantPubkeys.length; i++)
+                    Positioned(
+                      left: i * 12.0,
+                      child: _SmallAvatar(
+                        pubkey: summary.participantPubkeys[i],
+                        userCache: userCache,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: Grid.xxs),
+            Text(
+              '${summary.replyCount} ${summary.replyCount == 1 ? 'reply' : 'replies'}',
+              style: context.textTheme.labelMedium?.copyWith(
+                color: context.colors.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: Grid.half),
+            Icon(
+              LucideIcons.chevronRight,
+              size: 14,
+              color: context.colors.primary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SmallAvatar extends StatelessWidget {
+  final String pubkey;
+  final Map<String, UserProfile> userCache;
+
+  const _SmallAvatar({required this.pubkey, required this.userCache});
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = userCache[pubkey.toLowerCase()];
+    final avatarUrl = profile?.avatarUrl;
+    final initial =
+        profile?.initial ?? (pubkey.isNotEmpty ? pubkey[0].toUpperCase() : '?');
+
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: context.colors.surface, width: 1.5),
+      ),
+      child: CircleAvatar(
+        radius: 9,
+        backgroundColor: context.colors.primaryContainer,
+        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+        child: avatarUrl == null
+            ? Text(
+                initial,
+                style: TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w600,
+                  color: context.colors.onPrimaryContainer,
+                ),
+              )
+            : null,
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // User message bubble
 // ---------------------------------------------------------------------------
 
@@ -333,6 +542,9 @@ class _MessageBubble extends ConsumerWidget {
   final Map<String, String> channelNames;
   final String currentChannelId;
   final String? currentPubkey;
+  final List<TimelineMessage>? allMessages;
+  final bool isMember;
+  final bool isArchived;
 
   const _MessageBubble({
     required this.message,
@@ -340,6 +552,9 @@ class _MessageBubble extends ConsumerWidget {
     required this.channelNames,
     required this.currentChannelId,
     required this.currentPubkey,
+    this.allMessages,
+    this.isMember = false,
+    this.isArchived = false,
   });
 
   @override
@@ -370,6 +585,10 @@ class _MessageBubble extends ConsumerWidget {
         channelId: currentChannelId,
         isOwnMessage:
             currentPubkey?.toLowerCase() == message.pubkey.toLowerCase(),
+        allMessages: allMessages,
+        currentPubkey: currentPubkey,
+        isMember: isMember,
+        isArchived: isArchived,
       ),
       child: Padding(
         padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.quarter),
@@ -576,6 +795,10 @@ void _showMessageActions({
   required TimelineMessage message,
   required String channelId,
   required bool isOwnMessage,
+  List<TimelineMessage>? allMessages,
+  String? currentPubkey,
+  bool isMember = false,
+  bool isArchived = false,
 }) {
   showModalBottomSheet<void>(
     context: context,
@@ -614,6 +837,26 @@ void _showMessageActions({
               ],
             ),
             const SizedBox(height: Grid.xs),
+            if (allMessages != null)
+              ListTile(
+                leading: const Icon(LucideIcons.messageSquareReply),
+                title: const Text('Reply in thread'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => ThreadDetailPage(
+                        threadHead: message,
+                        allMessages: allMessages,
+                        channelId: channelId,
+                        currentPubkey: currentPubkey,
+                        isMember: isMember,
+                        isArchived: isArchived,
+                      ),
+                    ),
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(LucideIcons.copy),
               title: const Text('Copy text'),
@@ -867,6 +1110,16 @@ class _MembersSheet extends HookConsumerWidget {
     final people = allMembers.where((member) => !member.isBot).toList();
     final userCache = ref.watch(userCacheProvider);
 
+    // Determine if the current user can manage members.
+    final currentMember = allMembers.cast<ChannelMember?>().firstWhere(
+      (m) => m!.pubkey.toLowerCase() == currentPubkey?.toLowerCase(),
+      orElse: () => null,
+    );
+    final canManage =
+        currentMember != null &&
+        currentMember.isElevated &&
+        !channel.isArchived;
+
     // Preload profiles for all members so avatars appear.
     useEffect(() {
       if (people.isNotEmpty) {
@@ -899,17 +1152,6 @@ class _MembersSheet extends HookConsumerWidget {
                   color: context.colors.onSurfaceVariant,
                 ),
               ),
-              if (!channel.isDm) ...[
-                const SizedBox(height: Grid.xxs),
-                Text(
-                  channel.isArchived
-                      ? 'Archived channels are read-only on mobile. Member and bot management stay on desktop.'
-                      : 'Member and bot management stay on desktop.',
-                  style: context.textTheme.bodySmall?.copyWith(
-                    color: context.colors.outline,
-                  ),
-                ),
-              ],
               if (!channel.isDm) ...[const Divider(height: Grid.sm)],
               SizedBox(
                 height: 280,
@@ -927,25 +1169,15 @@ class _MembersSheet extends HookConsumerWidget {
                           shrinkWrap: true,
                           children: [
                             for (final member in people)
-                              Builder(
-                                builder: (context) {
-                                  final profile =
-                                      userCache[member.pubkey.toLowerCase()];
-                                  final avatarUrl = profile?.avatarUrl;
-                                  final label = member.labelFor(currentPubkey);
-                                  final initial = label
-                                      .substring(0, 1)
-                                      .toUpperCase();
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: _MemberAvatar(
-                                      avatarUrl: avatarUrl,
-                                      initial: initial,
-                                    ),
-                                    title: Text(label),
-                                    subtitle: Text(member.role),
-                                  );
-                                },
+                              _MemberTile(
+                                member: member,
+                                currentPubkey: currentPubkey,
+                                profile: userCache[member.pubkey.toLowerCase()],
+                                canManage: canManage,
+                                isSelf:
+                                    member.pubkey.toLowerCase() ==
+                                    currentPubkey?.toLowerCase(),
+                                channelId: channel.id,
                               ),
                           ],
                         ),
@@ -963,6 +1195,156 @@ class _MembersSheet extends HookConsumerWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+const _changeableRoles = ['admin', 'member', 'guest'];
+
+class _MemberTile extends ConsumerWidget {
+  final ChannelMember member;
+  final String? currentPubkey;
+  final UserProfile? profile;
+  final bool canManage;
+  final bool isSelf;
+  final String channelId;
+
+  const _MemberTile({
+    required this.member,
+    required this.currentPubkey,
+    required this.profile,
+    required this.canManage,
+    required this.isSelf,
+    required this.channelId,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final label = member.labelFor(currentPubkey);
+    final initial = label.substring(0, 1).toUpperCase();
+    final showMenu = canManage && !isSelf && !member.isOwner;
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: _MemberAvatar(avatarUrl: profile?.avatarUrl, initial: initial),
+      title: Text(label),
+      subtitle: Text(
+        _roleLabel(member.role),
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colors.outline,
+        ),
+      ),
+      trailing: showMenu
+          ? IconButton(
+              icon: const Icon(LucideIcons.ellipsis, size: 18),
+              onPressed: () => _showMemberActions(context, ref),
+              visualDensity: VisualDensity.compact,
+            )
+          : null,
+    );
+  }
+
+  String _roleLabel(String role) {
+    if (role.isEmpty) return 'Member';
+    return '${role[0].toUpperCase()}${role.substring(1)}';
+  }
+
+  void _showMemberActions(BuildContext context, WidgetRef ref) {
+    final label = member.labelFor(currentPubkey);
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+              child: Text(label, style: context.textTheme.titleSmall),
+            ),
+            const SizedBox(height: Grid.xxs),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+              child: Text(
+                'Change role',
+                style: context.textTheme.labelMedium?.copyWith(
+                  color: context.colors.outline,
+                ),
+              ),
+            ),
+            const SizedBox(height: Grid.half),
+            for (final role in _changeableRoles)
+              ListTile(
+                title: Text(_roleLabel(role)),
+                trailing: role == member.role
+                    ? Icon(
+                        LucideIcons.check,
+                        size: 16,
+                        color: context.colors.primary,
+                      )
+                    : null,
+                enabled: role != member.role,
+                onTap: role == member.role
+                    ? null
+                    : () async {
+                        Navigator.of(context).pop();
+                        await ref
+                            .read(channelActionsProvider)
+                            .changeMemberRole(
+                              channelId: channelId,
+                              pubkey: member.pubkey,
+                              role: role,
+                            );
+                      },
+              ),
+            const Divider(),
+            ListTile(
+              leading: Icon(
+                LucideIcons.userMinus,
+                size: 18,
+                color: context.colors.error,
+              ),
+              title: Text(
+                'Remove from channel',
+                style: TextStyle(color: context.colors.error),
+              ),
+              onTap: () async {
+                Navigator.of(context).pop();
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Remove member'),
+                    content: Text('Remove $label from this channel?'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(false),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(true),
+                        child: Text(
+                          'Remove',
+                          style: TextStyle(color: context.colors.error),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true) {
+                  await ref
+                      .read(channelActionsProvider)
+                      .removeMember(
+                        channelId: channelId,
+                        pubkey: member.pubkey,
+                      );
+                }
+              },
+            ),
+            const SizedBox(height: Grid.xxs),
+          ],
         ),
       ),
     );
@@ -1451,3 +1833,121 @@ String _formatTime(int createdAt) {
 }
 
 String _pad(int n) => n.toString().padLeft(2, '0');
+
+class _DmAppBarTitle extends ConsumerWidget {
+  final Channel channel;
+  final String? currentPubkey;
+
+  const _DmAppBarTitle({required this.channel, required this.currentPubkey});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profiles = ref.watch(userCacheProvider);
+    final presenceMap = ref.watch(presenceCacheProvider);
+    final normalizedCurrent = currentPubkey?.toLowerCase();
+
+    String? otherPubkey;
+    for (final pk in channel.participantPubkeys) {
+      if (pk.toLowerCase() != normalizedCurrent) {
+        otherPubkey = pk.toLowerCase();
+        break;
+      }
+    }
+
+    final profile = otherPubkey != null ? profiles[otherPubkey] : null;
+
+    if (otherPubkey != null) {
+      if (profile == null) {
+        ref.read(userCacheProvider.notifier).preload([otherPubkey]);
+      }
+      ref.read(presenceCacheProvider.notifier).track([otherPubkey]);
+    }
+
+    final avatarUrl = profile?.avatarUrl;
+    final initial =
+        profile?.initial ??
+        (channel.participants.isNotEmpty
+            ? channel.participants.first[0].toUpperCase()
+            : '?');
+    final presence = otherPubkey != null
+        ? (presenceMap[otherPubkey] ?? 'offline')
+        : 'offline';
+    final presenceLabel = switch (presence) {
+      'online' => 'Online',
+      'away' => 'Away',
+      _ => 'Offline',
+    };
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 30,
+          height: 30,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: context.colors.primaryContainer,
+                backgroundImage: avatarUrl != null
+                    ? NetworkImage(avatarUrl)
+                    : null,
+                child: avatarUrl == null
+                    ? Text(
+                        initial,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colors.onPrimaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : null,
+              ),
+              Positioned(
+                right: -1,
+                bottom: -1,
+                child: Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: switch (presence) {
+                      'online' => context.appColors.success,
+                      'away' => context.appColors.warning,
+                      _ => context.colors.outline,
+                    },
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color:
+                          context.theme.appBarTheme.backgroundColor ??
+                          context.theme.scaffoldBackgroundColor,
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Grid.xxs),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                channel.displayLabel(currentPubkey: currentPubkey),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.textTheme.titleSmall,
+              ),
+              Text(
+                presenceLabel,
+                style: context.textTheme.labelSmall?.copyWith(
+                  color: context.colors.outline,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
