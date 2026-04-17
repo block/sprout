@@ -75,6 +75,11 @@ rule Source_Accepts_Offer:
       SrcSasReady(qr, xs, pkT)
   ]
 
+// SAS comparison is modeled as perfect: the rule requires both devices'
+// state facts with matching cryptographic material, so it only fires when
+// the ECDH shared secret (and therefore the SAS code) genuinely agrees.
+// In reality SAS provides ~20 bits of entropy (1/10^6 collision); that
+// computational bound is argued separately in §Design Rationale.
 rule User_Compares_Matching_SAS:
   [ SrcSasReady(qr, xs, pkT),
     TgtOfferSent(qr, 'g'^xs, xt, pkT)
@@ -92,12 +97,16 @@ rule User_Compares_Matching_SAS:
       TgtAwaitingSasConfirm(qr, 'g'^xs, xt)
   ]
 
-// Transcript hash matches spec §Step 3:
+// Transcript hash matches spec §Step 3 (see also PR #346 clarifications):
 //   transcript_hash = HKDF(IKM = session_id || pkS || pkT || sas_input,
 //                          salt = session_secret, info = "nostr-pair-transcript-v1")
 // Symbolically we collapse HKDF to h(.) and rely on collision resistance;
 // qr (session_secret) is already committed via session_id and sas_input, so
 // we do not include it again here.
+//
+// Per §Step 3, the transcript hash is a detection mechanism for session
+// inconsistency, not the MITM prevention gate (that role belongs to the
+// user's SAS comparison, modeled by User_Compares_Matching_SAS above).
 rule Source_Sends_SAS_Confirm:
   [ SrcUserConfirmed(qr, xs, pkT) ]
   --[
@@ -154,16 +163,19 @@ rule Target_Receives_SAS_Confirm:
       TargetVerifiedTranscript(h(< 'session-id', qr >), pkS, 'g'^xt)
     ]->
   [
-      TgtAwaitingUserApproval(qr, pkS, xt)
+      TgtAwaitingUserApproval(qr, pkS, xt),
+      TgtCanBuffer(qr, pkS, xt)
   ]
 
+// Target user approval: AwaitingConfirmation -> Transferring (spec §Step 3).
+// This fires only after transcript verification (Target_Receives_SAS_Confirm).
 rule Target_User_Approves_After_Transcript:
   [ TgtAwaitingUserApproval(qr, pkS, xt) ]
   --[
       TargetUserApproved(h(< 'session-id', qr >), pkS, 'g'^xt)
     ]->
   [
-      TgtReadyPayload(qr, pkS, xt)
+      TgtTransferring(qr, pkS, xt)
   ]
 
 rule Source_Sends_Payload:
@@ -185,20 +197,52 @@ rule Source_Sends_Payload:
       )
   ]
 
-rule Target_Receives_Payload:
-  [ TgtReadyPayload(qr, pkS, xt),
-    In(
-      <
-        'payload_evt',
-        senc(
-          < 'payload', payload >,
-          h(< 'pair-key', pkS^xt >)
-        )
-      >
+// --- Payload buffering (spec §Event Validation, §Step 3-4) ---
+//
+// Per #346, the source sends payload immediately after sas-confirm without
+// waiting for the target. The target may therefore receive the encrypted
+// payload while still in AwaitingConfirmation (before user approval).
+// The spec requires: buffer the ciphertext, do NOT decrypt or import until
+// both transcript_hash is verified AND the user confirms SAS on the target.
+//
+// We model this as two rules:
+//   1. Target_Buffers_Payload — receives the raw ciphertext into a holding
+//      fact WITHOUT decrypting. The buffer stores the opaque senc() term.
+//      Only fires after transcript verification (linear TgtCanBuffer),
+//      matching the spec's state table where `payload` is valid only in
+//      AwaitingConfirmation or Transferring (both post-transcript-verify).
+//      The linear fact is consumed, so at most one payload can be buffered
+//      per session — matching the spec's single-payload semantics.
+//   2. Target_Decrypts_Payload — pattern-matches senc() to extract plaintext.
+//      Requires both TgtTransferring (post-approval) and the buffered
+//      ciphertext. This is the dual-consent gate: decryption only happens
+//      after transcript verification + user approval.
+
+rule Target_Buffers_Payload:
+  [ TgtCanBuffer(qr, pkS, xt),
+    In(< 'payload_evt', cipher >)
+  ]
+  --[
+      TargetBufferedPayload(h(< 'session-id', qr >), pkS, 'g'^xt)
+    ]->
+  [
+      TgtPayloadBuffer(qr, pkS, xt, cipher)
+  ]
+
+// Target decrypts the payload only after entering Transferring state
+// (transcript verified + user approved). This is the dual-consent gate:
+// the senc() pattern match here is the symbolic decryption operation.
+rule Target_Decrypts_Payload:
+  [ TgtTransferring(qr, pkS, xt),
+    TgtPayloadBuffer(qr, pkS, xt,
+      senc(
+        < 'payload', payload >,
+        h(< 'pair-key', pkS^xt >)
+      )
     )
   ]
   --[
-      TargetReceivedPayload(h(< 'session-id', qr >), pkS, 'g'^xt, payload)
+      TargetDecryptedPayload(h(< 'session-id', qr >), pkS, 'g'^xt, payload)
     ]->
   [
       TgtHasPayload(qr, pkS, xt, payload)
@@ -288,6 +332,25 @@ lemma source_completion_implies_prior_target_completion_without_compromise:
           TargetCompleted(sid, pkS, pkT, payload) @ j
         & #j < #i)"
 
+// Injective agreement (target → source): each target completion corresponds
+// to a unique source payload send, and that send is itself unique. This is
+// one-directional; the reverse (every send leads to a completion) is a
+// liveness property not provable under Dolev-Yao scheduling.
+lemma injective_target_source_agreement:
+  "All sid pkS pkT payload #i.
+      TargetCompleted(sid, pkS, pkT, payload) @ i
+    & not (Ex pkS2 #r. SourceCompromised(sid, pkS2) @ r)
+    & not (Ex pkS2 pkT2 #r. TargetCompromised(sid, pkS2, pkT2) @ r)
+    ==> (Ex #j.
+          SourceSentPayload(sid, pkS, pkT, payload) @ j
+        & #j < #i
+        & not (Ex #i2.
+                TargetCompleted(sid, pkS, pkT, payload) @ i2
+              & not (#i2 = #i))
+        & not (Ex #j2.
+                SourceSentPayload(sid, pkS, pkT, payload) @ j2
+              & not (#j2 = #j)))"
+
 // ============================================================================
 // MITM-resistance test cases
 // ============================================================================
@@ -314,15 +377,18 @@ lemma payload_delivery_requires_genuine_target:
           TargetStarted(sid, pkS, pkT) @ j
         & #j < #i)"
 
-// Dual-consent: the target never receives a payload without an explicit
-// user-approval step after transcript verification. Proves that the
-// `AwaitingConfirmation` state in NIP-AB.md §Event Validation is load-bearing.
-lemma target_receipt_requires_target_user_approval:
+// Dual-consent gate (spec §Step 3, PR #346): the target never processes
+// (decrypts/imports) a payload without BOTH transcript verification AND
+// an explicit user-approval step. The payload may arrive and be buffered
+// earlier (see Target_Buffers_Payload), but processing is gated.
+lemma target_decrypts_payload_only_after_dual_consent:
   "All sid pkS pkT payload #i.
-      TargetReceivedPayload(sid, pkS, pkT, payload) @ i
-    ==> (Ex #j.
-          TargetUserApproved(sid, pkS, pkT) @ j
-        & #j < #i)"
+      TargetDecryptedPayload(sid, pkS, pkT, payload) @ i
+    ==> (Ex #j #k.
+          TargetVerifiedTranscript(sid, pkS, pkT) @ j
+        & TargetUserApproved(sid, pkS, pkT) @ k
+        & #j < #i
+        & #k < #i)"
 
 // ============================================================================
 // Reachability / sanity test cases
@@ -345,6 +411,25 @@ lemma executable_with_source_compromise:
 lemma executable_with_target_compromise:
   exists-trace
   "Ex sid pkS pkT #r. TargetCompromised(sid, pkS, pkT) @ r"
+
+// Buffer-then-decrypt sequencing: every decryption is preceded by buffering.
+// Makes the intended two-phase flow explicit in the proof surface.
+lemma decryption_requires_prior_buffering:
+  "All sid pkS pkT payload #i.
+      TargetDecryptedPayload(sid, pkS, pkT, payload) @ i
+    ==> (Ex #j.
+          TargetBufferedPayload(sid, pkS, pkT) @ j
+        & #j < #i)"
+
+// Sanity: the payload CAN arrive (be buffered) before the target user
+// approves. This proves the buffering path is reachable and the dual-consent
+// gate is not vacuously enforced by message ordering alone.
+lemma executable_payload_buffered_before_approval:
+  exists-trace
+  "Ex sid pkS pkT #i #j.
+      TargetBufferedPayload(sid, pkS, pkT) @ i
+    & TargetUserApproved(sid, pkS, pkT) @ j
+    & #i < #j"
 
 // Source-side compromise: an attacker who learns xs can decrypt the payload.
 // Counter-example to a naive "secrecy always holds" claim; justifies the
