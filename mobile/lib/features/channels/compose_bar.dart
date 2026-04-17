@@ -494,41 +494,50 @@ class _EmojiPickerSheet extends StatefulWidget {
 }
 
 class _EmojiPickerSheetState extends State<_EmojiPickerSheet> {
-  int _selectedCategory = 0;
+  /// -1 = "All", 0..N = specific category.
+  int _selectedCategory = -1;
+
+  static final _allEmoji = () {
+    final seen = <String>{};
+    return [
+      for (final cat in _emojiCategories)
+        for (final e in cat.emoji)
+          if (seen.add(e)) e,
+    ];
+  }();
 
   @override
   Widget build(BuildContext context) {
-    final category = _emojiCategories[_selectedCategory];
-    final textTheme = Theme.of(context).textTheme;
+    final colors = Theme.of(context).colorScheme;
+    final emoji = _selectedCategory < 0
+        ? _allEmoji
+        : _emojiCategories[_selectedCategory].emoji;
 
     return SizedBox(
       height: 340,
       child: Column(
         children: [
-          // Category tabs.
+          // Category icon bar.
           SizedBox(
-            height: 44,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
-              itemCount: _emojiCategories.length,
-              itemBuilder: (context, index) {
-                final cat = _emojiCategories[index];
-                final selected = index == _selectedCategory;
-                return Padding(
-                  padding: const EdgeInsets.only(right: Grid.half),
-                  child: FilterChip(
-                    selected: selected,
-                    showCheckmark: false,
-                    avatar: Icon(cat.icon, size: 16),
-                    label: Text(cat.label, style: textTheme.labelSmall),
-                    onSelected: (_) =>
-                        setState(() => _selectedCategory = index),
+            height: 40,
+            child: Row(
+              children: [
+                const SizedBox(width: Grid.twelve),
+                _CategoryIcon(
+                  icon: LucideIcons.layoutGrid,
+                  selected: _selectedCategory < 0,
+                  onTap: () => setState(() => _selectedCategory = -1),
+                ),
+                for (var i = 0; i < _emojiCategories.length; i++)
+                  _CategoryIcon(
+                    icon: _emojiCategories[i].icon,
+                    selected: _selectedCategory == i,
+                    onTap: () => setState(() => _selectedCategory = i),
                   ),
-                );
-              },
+              ],
             ),
           ),
+          Divider(height: 1, color: colors.outlineVariant),
           const SizedBox(height: Grid.xxs),
           // Emoji grid.
           Expanded(
@@ -539,19 +548,50 @@ class _EmojiPickerSheetState extends State<_EmojiPickerSheet> {
                 mainAxisSpacing: Grid.half,
                 crossAxisSpacing: Grid.half,
               ),
-              itemCount: category.emoji.length,
+              itemCount: emoji.length,
               itemBuilder: (context, index) {
-                final emoji = category.emoji[index];
+                final e = emoji[index];
                 return GestureDetector(
-                  onTap: () => widget.onSelect(emoji),
+                  onTap: () => widget.onSelect(e),
                   child: Center(
-                    child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                    child: Text(e, style: const TextStyle(fontSize: 28)),
                   ),
                 );
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CategoryIcon extends StatelessWidget {
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _CategoryIcon({
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: IconButton(
+        onPressed: onTap,
+        icon: Icon(
+          icon,
+          size: 18,
+          color: selected ? colors.primary : colors.onSurfaceVariant,
+        ),
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
       ),
     );
   }
