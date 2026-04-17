@@ -3,6 +3,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
@@ -15,13 +16,20 @@ class ComposeBar extends HookConsumerWidget {
   final String channelId;
   final String channelName;
   final String? hintText;
-  final Future<void> Function(String content) onSend;
+  final Future<void> Function(String content, List<String> mentionPubkeys)
+  onSend;
+
+  /// Optional thread IDs for thread-scoped typing indicators.
+  final String? threadHeadId;
+  final String? rootId;
 
   const ComposeBar({
     super.key,
     required this.channelId,
     this.channelName = '',
     this.hintText,
+    this.threadHeadId,
+    this.rootId,
     required this.onSend,
   });
 
@@ -39,16 +47,37 @@ class ComposeBar extends HookConsumerWidget {
     // Mention state --------------------------------------------------------
     final mentionQuery = useState<String?>(null);
     final mentionStartIdx = useState(-1);
+    // Map of displayName → pubkey built as the user selects mentions.
+    // Used to pass resolved pubkeys directly to onSend, avoiding regex.
+    final mentionMap = useRef(<String, String>{});
 
     final membersAsync = ref.watch(channelMembersProvider(channelId));
     final currentPubkey = ref.watch(currentPubkeyProvider);
     final userCache = ref.watch(userCacheProvider);
 
-    // Detect @mention query on every text / selection change.
+    // Typing indicator broadcast — throttled to one event per 3 seconds.
+    final lastTypingSentMs = useRef(0);
+
+    // Detect @mention query and broadcast typing on text / selection change.
     useEffect(() {
       void listener() {
         final text = controller.text;
         final sel = controller.selection;
+
+        // Broadcast typing indicator (throttled).
+        if (text.isNotEmpty) {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (now - lastTypingSentMs.value > _typingThrottleMs) {
+            lastTypingSentMs.value = now;
+            _sendTypingIndicator(
+              ref,
+              channelId: channelId,
+              threadHeadId: threadHeadId,
+              rootId: rootId,
+            );
+          }
+        }
+
         if (!sel.isValid || !sel.isCollapsed) {
           mentionQuery.value = null;
           return;
@@ -98,12 +127,20 @@ class ComposeBar extends HookConsumerWidget {
           ? member.displayName!.trim()
           : member.pubkey.substring(0, 8);
       final text = controller.text;
-      final start = mentionStartIdx.value;
-      final cursor = controller.selection.baseOffset;
+      // Clamp indices to text bounds to guard against stale state.
+      final start = mentionStartIdx.value.clamp(0, text.length);
+      final cursor =
+          (controller.selection.isValid
+                  ? controller.selection.baseOffset
+                  : text.length)
+              .clamp(start, text.length);
 
       final before = text.substring(0, start);
       final after = text.substring(cursor);
       final mention = '@$name ';
+
+      // Track the resolved pubkey so we can pass it at send time.
+      mentionMap.value[name] = member.pubkey;
 
       controller.text = '$before$mention$after';
       controller.selection = TextSelection.collapsed(
@@ -136,13 +173,21 @@ class ComposeBar extends HookConsumerWidget {
       final text = controller.text.trim();
       if (text.isEmpty || isSending.value) return;
 
+      // Extract pubkeys for mentions present in the final text.
+      final pubkeys = <String>[
+        for (final entry in mentionMap.value.entries)
+          if (text.contains('@${entry.key}')) entry.value,
+      ];
+
       isSending.value = true;
       try {
-        await onSend(text);
+        await onSend(text, pubkeys);
         if (context.mounted) {
           controller.clear();
+          mentionMap.value.clear();
           mentionQuery.value = null;
           showFormatting.value = false;
+          focusNode.requestFocus();
         }
       } finally {
         if (context.mounted) isSending.value = false;
@@ -300,6 +345,38 @@ class ComposeBar extends HookConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
+// Typing indicator broadcast
+// ---------------------------------------------------------------------------
+
+const _typingThrottleMs = 3000;
+
+void _sendTypingIndicator(
+  WidgetRef ref, {
+  required String channelId,
+  String? threadHeadId,
+  String? rootId,
+}) {
+  try {
+    final config = ref.read(relayConfigProvider);
+    final relay = SignedEventRelay(
+      client: ref.read(relayClientProvider),
+      nsec: config.nsec,
+    );
+    final tags = <List<String>>[
+      ['h', channelId],
+      if (threadHeadId != null && rootId != null && rootId != threadHeadId) ...[
+        ['e', rootId, '', 'root'],
+        ['e', threadHeadId, '', 'reply'],
+      ] else if (threadHeadId != null)
+        ['e', threadHeadId, '', 'reply'],
+    ];
+    relay.submit(kind: EventKind.typingIndicator, content: '', tags: tags);
+  } catch (_) {
+    // Fire-and-forget — typing indicator failure is non-fatal.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Emoji picker
 // ---------------------------------------------------------------------------
 
@@ -324,7 +401,7 @@ void _showEmojiPicker({
 /// Emoji categories for the picker. System Unicode emoji — no packages needed.
 const _emojiCategories = <({String label, IconData icon, List<String> emoji})>[
   (
-    label: 'Recent',
+    label: 'Popular',
     icon: LucideIcons.clock,
     emoji: [
       '\u{1F44D}',

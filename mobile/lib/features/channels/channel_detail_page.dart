@@ -181,10 +181,14 @@ class ChannelDetailPage extends HookConsumerWidget {
               !resolvedChannel.isArchived)
             ComposeBar(
               channelId: channel.id,
-              channelName: resolvedChannel.name,
-              onSend: (content) => ref
+              channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
+              onSend: (content, mentionPubkeys) => ref
                   .read(sendMessageProvider)
-                  .call(channelId: channel.id, content: content),
+                  .call(
+                    channelId: channel.id,
+                    content: content,
+                    mentionPubkeys: mentionPubkeys,
+                  ),
             )
           else if (!resolvedChannel.isForum &&
               !resolvedChannel.isDm &&

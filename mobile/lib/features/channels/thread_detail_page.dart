@@ -181,11 +181,14 @@ class ThreadDetailPage extends HookConsumerWidget {
             ComposeBar(
               channelId: channelId,
               hintText: 'Reply in thread\u2026',
-              onSend: (content) => ref
+              threadHeadId: threadHead.id,
+              rootId: effectiveRootId,
+              onSend: (content, mentionPubkeys) => ref
                   .read(sendMessageProvider)
                   .call(
                     channelId: channelId,
                     content: content,
+                    mentionPubkeys: mentionPubkeys,
                     parentEventId: threadHead.id,
                     rootEventId: effectiveRootId,
                   ),
