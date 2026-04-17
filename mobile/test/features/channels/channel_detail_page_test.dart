@@ -178,7 +178,7 @@ Finder findRichText(String text) {
 
 void main() {
   group('ChannelDetailPage', () {
-    testWidgets('shows forum placeholder for forum channels', (tester) async {
+    testWidgets('shows forum posts view for forum channels', (tester) async {
       final forumChannel = Channel(
         id: _channelId,
         name: 'design-forum',
@@ -194,10 +194,14 @@ void main() {
       await tester.pumpWidget(
         _buildTestable(messages: const [], channel: forumChannel),
       );
-      await tester.pumpAndSettle();
+      // Allow the forum posts future provider to settle. It will error
+      // because the stub relay has no real backend, but the ForumPostsView
+      // should still render (showing an error or loading state).
+      await tester.pump(const Duration(seconds: 1));
 
-      expect(find.text('Forum threads are not on mobile yet'), findsOneWidget);
-      expect(find.text('Talk through design changes'), findsOneWidget);
+      // The old placeholder text should be gone.
+      expect(find.text('Forum threads are not on mobile yet'), findsNothing);
+      // The compose bar for stream messages should not appear.
       expect(find.text('Message…'), findsNothing);
     });
 

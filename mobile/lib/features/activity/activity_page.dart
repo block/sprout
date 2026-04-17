@@ -59,7 +59,8 @@ class ActivityPage extends HookConsumerWidget {
                     child: ListView.separated(
                       padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
                       itemCount: items.length,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      separatorBuilder: (_, _) =>
+                          const SizedBox(height: Grid.half),
                       itemBuilder: (context, index) {
                         final item = items[index];
                         return _FeedItemTile(

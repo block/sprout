@@ -12,6 +12,7 @@ import '../profile/presence_cache_provider.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import '../forum/forum_posts_view.dart';
 import 'channel.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
@@ -145,7 +146,10 @@ class ChannelDetailPage extends HookConsumerWidget {
         children: [
           Expanded(
             child: resolvedChannel.isForum
-                ? _ForumPlaceholder(channel: resolvedChannel)
+                ? ForumPostsView(
+                    channel: resolvedChannel,
+                    currentPubkey: currentPubkey,
+                  )
                 : messagesState.when(
                     loading: () =>
                         const Center(child: CircularProgressIndicator()),
@@ -190,8 +194,7 @@ class ChannelDetailPage extends HookConsumerWidget {
                     mentionPubkeys: mentionPubkeys,
                   ),
             )
-          else if (!resolvedChannel.isForum &&
-              !resolvedChannel.isDm &&
+          else if (!resolvedChannel.isDm &&
               (!resolvedChannel.isMember || resolvedChannel.isArchived))
             _ReadOnlyNotice(channel: resolvedChannel),
         ],
@@ -1025,55 +1028,6 @@ IconData channelIcon(Channel channel) {
   if (channel.isPrivate) return LucideIcons.lock;
   if (channel.isForum) return LucideIcons.messageSquareText;
   return LucideIcons.hash;
-}
-
-class _ForumPlaceholder extends StatelessWidget {
-  final Channel channel;
-
-  const _ForumPlaceholder({required this.channel});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Grid.sm),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              LucideIcons.messageSquareText,
-              size: Grid.xl,
-              color: context.colors.outline,
-            ),
-            const SizedBox(height: Grid.xs),
-            Text(
-              'Forum threads are not on mobile yet',
-              style: context.textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: Grid.xxs),
-            Text(
-              'You can still view channel context, canvas, and members from the actions above.',
-              style: context.textTheme.bodyMedium?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            if (channel.description.trim().isNotEmpty) ...[
-              const SizedBox(height: Grid.xs),
-              Text(
-                channel.description,
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.outline,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _ReadOnlyNotice extends StatelessWidget {
