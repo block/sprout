@@ -225,20 +225,15 @@ export class RelayClient {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
   }
 
-  async subscribeToBatchedMentionEvents(
-    channelIds: string[],
+  async subscribeToChannelMentionEvents(
+    channelId: string,
     pubkey: string,
     onEvent: (event: RelayEvent) => void,
   ) {
-    const since = Math.floor(Date.now() / 1_000);
-    const filters = channelIds.map((channelId) => ({
-      kinds: [...HOME_MENTION_EVENT_KINDS],
-      "#h": [channelId],
-      "#p": [pubkey],
-      limit: 50,
-      since,
-    }));
-    return this.subscribe(filters, onEvent);
+    return this.subscribe(
+      this.buildChannelMentionFilter(channelId, pubkey, 50),
+      onEvent,
+    );
   }
 
   async preconnect() {
@@ -342,13 +337,26 @@ export class RelayClient {
     };
   }
 
+  private buildChannelMentionFilter(
+    channelId: string,
+    pubkey: string,
+    limit: number,
+  ): RelaySubscriptionFilter {
+    return {
+      kinds: [...HOME_MENTION_EVENT_KINDS],
+      "#h": [channelId],
+      "#p": [pubkey],
+      limit,
+      since: Math.floor(Date.now() / 1_000),
+    };
+  }
+
   private async subscribe(
-    input: RelaySubscriptionFilter | RelaySubscriptionFilter[],
+    filter: RelaySubscriptionFilter,
     onEvent: (event: RelayEvent) => void,
   ) {
     await this.ensureConnected();
 
-    const filters = Array.isArray(input) ? input : [input];
     const subId = `live-${crypto.randomUUID()}`;
     let resolveReady = () => {
       return;
@@ -365,14 +373,14 @@ export class RelayClient {
 
     this.subscriptions.set(subId, {
       mode: "live",
-      filters,
+      filter,
       onEvent,
       resolveReady,
     });
 
     try {
       await this.sendRawWithReconnectRetry(
-        ["REQ", subId, ...filters],
+        ["REQ", subId, filter],
         "Failed to restore relay subscription.",
       );
     } catch (error) {
@@ -707,9 +715,7 @@ export class RelayClient {
         await this.sendRaw([
           "REQ",
           subId,
-          ...subscription.filters.map((f) =>
-            this.buildReplayFilter(f, replaySince),
-          ),
+          this.buildReplayFilter(subscription.filter, replaySince),
         ]);
       } catch (error) {
         const reconnectError =
