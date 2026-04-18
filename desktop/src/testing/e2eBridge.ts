@@ -3964,15 +3964,29 @@ function sendToMockSocket(args: {
 
   if (type === "REQ") {
     const subId = rest[0] as string;
-    const filter = rest[1] as { "#h"?: string[] };
-    const channelId = filter["#h"]?.[0];
 
     if (subId.startsWith("live-")) {
-      socket.subscriptions.set(subId, channelId ?? GLOBAL_MOCK_SUBSCRIPTION);
+      // Collect channel IDs from all filters in the REQ
+      const channelIds = new Set<string>();
+      for (let i = 1; i < rest.length; i++) {
+        const f = rest[i] as { "#h"?: string[] };
+        const cid = f["#h"]?.[0];
+        if (cid) channelIds.add(cid);
+      }
+      const onlyChannelId =
+        channelIds.size === 1
+          ? (channelIds.values().next().value as string)
+          : undefined;
+      socket.subscriptions.set(
+        subId,
+        onlyChannelId ?? GLOBAL_MOCK_SUBSCRIPTION,
+      );
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
 
+    const filter = rest[1] as { "#h"?: string[] };
+    const channelId = filter["#h"]?.[0];
     if (!channelId) {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
