@@ -87,6 +87,12 @@ desktop-tauri-fmt-check:
 
 # Check the desktop Tauri Rust crate compiles
 desktop-tauri-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    mkdir -p desktop/src-tauri/binaries
+    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
+    touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
     cargo check --manifest-path {{desktop_tauri_manifest}}
 
 # Run desktop checks suitable for CI / pre-push
