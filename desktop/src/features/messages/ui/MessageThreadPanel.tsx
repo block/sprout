@@ -1,5 +1,5 @@
 import * as React from "react";
-import { X } from "lucide-react";
+import { ArrowDown, X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -10,6 +10,7 @@ import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
+import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageThreadPanelProps = {
   canResetWidth: boolean;
@@ -98,29 +99,24 @@ export function MessageThreadPanel({
         }
       : null;
 
-  React.useEffect(() => {
-    if (!threadHeadId) {
-      return;
-    }
+  const threadMessages = React.useMemo(
+    () => threadReplies.map((entry) => entry.message),
+    [threadReplies],
+  );
 
-    const threadBody = threadBodyRef.current;
-    if (!threadBody) {
-      return;
-    }
-
-    const scrollToBottom = () => {
-      threadBody.scrollTop = threadBody.scrollHeight;
-    };
-    const frame = requestAnimationFrame(() => {
-      scrollToBottom();
-    });
-    const timeoutId = window.setTimeout(scrollToBottom, 300);
-
-    return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(timeoutId);
-    };
-  }, [threadHeadId]);
+  const {
+    bottomAnchorRef,
+    contentRef,
+    isAtBottom,
+    newMessageCount,
+    scrollToBottom,
+    syncScrollState,
+  } = useTimelineScrollManager({
+    channelId: threadHeadId,
+    isLoading: false,
+    messages: threadMessages,
+    scrollContainerRef: threadBodyRef,
+  });
 
   React.useEffect(() => {
     if (!scrollTargetId) {
@@ -197,72 +193,94 @@ export function MessageThreadPanel({
       <div
         className="min-h-0 flex-1 overflow-y-auto"
         data-testid="message-thread-body"
+        onScroll={syncScrollState}
         ref={threadBodyRef}
       >
-        <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
-          <div className="rounded-2xl">
-            <MessageRow
-              activeReplyTargetId={replyTargetId}
-              layoutVariant="thread-reply"
-              message={threadHead}
-              onDelete={
-                onDelete && canManageMessage(threadHead, currentPubkey)
-                  ? onDelete
-                  : undefined
-              }
-              onToggleReaction={onToggleReaction}
-              profiles={profiles}
-            />
+        <div ref={contentRef}>
+          <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
+            <div className="rounded-2xl">
+              <MessageRow
+                activeReplyTargetId={replyTargetId}
+                layoutVariant="thread-reply"
+                message={threadHead}
+                onDelete={
+                  onDelete && canManageMessage(threadHead, currentPubkey)
+                    ? onDelete
+                    : undefined
+                }
+                onToggleReaction={onToggleReaction}
+                profiles={profiles}
+              />
+            </div>
+          </div>
+
+          <div className="px-3 pb-3 pt-1" data-testid="message-thread-replies">
+            {threadReplies.length > 0 ? (
+              <div className="space-y-2">
+                {threadReplies.map((entry, index) => {
+                  const nextDepth =
+                    threadReplies[index + 1]?.message.depth ?? -1;
+                  const isExpanded = nextDepth > entry.message.depth;
+
+                  return (
+                    <div key={entry.message.id}>
+                      <MessageRow
+                        activeReplyTargetId={replyTargetId}
+                        layoutVariant="thread-reply"
+                        message={entry.message}
+                        onDelete={
+                          onDelete &&
+                          canManageMessage(entry.message, currentPubkey)
+                            ? onDelete
+                            : undefined
+                        }
+                        onReply={onSelectReplyTarget}
+                        onToggleReaction={onToggleReaction}
+                        profiles={profiles}
+                      />
+                      {entry.summary && !isExpanded ? (
+                        <MessageThreadSummaryRow
+                          depth={entry.message.depth}
+                          message={entry.message}
+                          onOpenThread={onExpandReplies}
+                          summary={entry.summary}
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-border/70 bg-card/40 px-4 py-6 text-center">
+                <p className="text-sm font-medium text-foreground/80">
+                  No replies in this branch yet
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Reply in the thread to continue this branch.
+                </p>
+              </div>
+            )}
+            <div aria-hidden className="h-px" ref={bottomAnchorRef} />
           </div>
         </div>
-
-        <div className="px-3 pb-3 pt-1" data-testid="message-thread-replies">
-          {threadReplies.length > 0 ? (
-            <div className="space-y-2">
-              {threadReplies.map((entry, index) => {
-                const nextDepth = threadReplies[index + 1]?.message.depth ?? -1;
-                const isExpanded = nextDepth > entry.message.depth;
-
-                return (
-                  <div key={entry.message.id}>
-                    <MessageRow
-                      activeReplyTargetId={replyTargetId}
-                      layoutVariant="thread-reply"
-                      message={entry.message}
-                      onDelete={
-                        onDelete &&
-                        canManageMessage(entry.message, currentPubkey)
-                          ? onDelete
-                          : undefined
-                      }
-                      onReply={onSelectReplyTarget}
-                      onToggleReaction={onToggleReaction}
-                      profiles={profiles}
-                    />
-                    {entry.summary && !isExpanded ? (
-                      <MessageThreadSummaryRow
-                        depth={entry.message.depth}
-                        message={entry.message}
-                        onOpenThread={onExpandReplies}
-                        summary={entry.summary}
-                      />
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-border/70 bg-card/40 px-4 py-6 text-center">
-              <p className="text-sm font-medium text-foreground/80">
-                No replies in this branch yet
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Reply in the thread to continue this branch.
-              </p>
-            </div>
-          )}
-        </div>
       </div>
+
+      {!isAtBottom ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center px-4">
+          <Button
+            className="pointer-events-auto rounded-full shadow-lg"
+            data-testid="thread-scroll-to-latest"
+            onClick={() => scrollToBottom("smooth")}
+            size="sm"
+            type="button"
+          >
+            <ArrowDown className="h-4 w-4" />
+            {newMessageCount > 0
+              ? `${newMessageCount} new message${newMessageCount === 1 ? "" : "s"}`
+              : "Jump to latest"}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="p-4">
         <TypingIndicatorRow
