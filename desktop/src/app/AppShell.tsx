@@ -169,8 +169,8 @@ export function AppShell() {
     // advancing unread state for the active channel.
     null,
     {
-      currentPubkey: deferredPubkey,
-      onLiveMention: startupReady ? refetchHomeFeedOnLiveMention : undefined,
+      currentPubkey: identityQuery.data?.pubkey,
+      onLiveMention: refetchHomeFeedOnLiveMention,
     },
   );
 
