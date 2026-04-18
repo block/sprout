@@ -138,7 +138,10 @@ export function AppShell() {
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   const presenceSession = usePresenceSession(deferredPubkey);
   const { homeBadgeCount, homeFeedQuery, notificationSettings } =
-    useHomeFeedNotifications(deferredPubkey, selectedView === "home");
+    useHomeFeedNotifications(
+      identityQuery.data?.pubkey,
+      selectedView === "home",
+    );
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
