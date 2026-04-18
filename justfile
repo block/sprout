@@ -151,6 +151,11 @@ dev *ARGS:
     set -euo pipefail
     cd {{desktop_dir}}
     [[ -d node_modules ]] || pnpm install
+    # Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
+    TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    mkdir -p src-tauri/binaries
+    touch "src-tauri/binaries/sprout-acp-$TARGET"
+    touch "src-tauri/binaries/sprout-mcp-server-$TARGET"
     source ../scripts/instance-env.sh
     echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
     pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
