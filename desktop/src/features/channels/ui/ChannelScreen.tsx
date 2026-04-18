@@ -274,7 +274,7 @@ export function ChannelScreen({
   const openThreadHeadMessage = threadPanelData.threadHead;
   const threadMessages = threadPanelData.visibleReplies;
   const threadReplyTargetMessage = threadPanelData.replyTargetMessage;
-  const threadTotalReplyCount = threadPanelData.totalReplyCount;
+
   const editTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
@@ -466,7 +466,6 @@ export function ChannelScreen({
                 threadHeadMessage={openThreadHeadMessage}
                 threadMessages={threadMessages}
                 threadTypingPubkeys={threadTypingPubkeys}
-                threadTotalReplyCount={threadTotalReplyCount}
                 threadReplyTargetId={threadReplyTargetId}
                 threadReplyTargetMessage={threadReplyTargetMessage}
                 threadScrollTargetId={threadScrollTargetId}

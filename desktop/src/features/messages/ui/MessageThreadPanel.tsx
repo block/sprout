@@ -45,7 +45,6 @@ type MessageThreadPanelProps = {
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
   threadTypingPubkeys: string[];
-  totalReplyCount: number;
   widthPx: number;
 };
 
@@ -115,38 +114,10 @@ export function MessageThreadPanel({
     channelId: threadHeadId,
     isLoading: false,
     messages: threadMessages,
+    onTargetReached: onScrollTargetResolved,
     scrollContainerRef: threadBodyRef,
+    targetMessageId: scrollTargetId,
   });
-
-  React.useEffect(() => {
-    if (!scrollTargetId) {
-      return;
-    }
-
-    const threadBody = threadBodyRef.current;
-    if (!threadBody) {
-      return;
-    }
-
-    const target = threadBody.querySelector<HTMLElement>(
-      `[data-message-id="${scrollTargetId}"]`,
-    );
-    if (!target) {
-      return;
-    }
-
-    const frame = requestAnimationFrame(() => {
-      target.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    });
-    onScrollTargetResolved();
-
-    return () => {
-      cancelAnimationFrame(frame);
-    };
-  }, [onScrollTargetResolved, scrollTargetId]);
 
   if (!threadHead) {
     return null;
