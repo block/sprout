@@ -177,32 +177,6 @@ desktop-dev:
 desktop-app *ARGS:
     just dev {{ARGS}}
 
-# ─── Desktop Release ──────────────────────────────────────────────────────────
-
-# Tag and push to trigger the desktop release workflow (CI handles version bumping)
-desktop-release version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    git tag "desktop/v{{version}}"
-    git push origin "desktop/v{{version}}"
-
-    echo "Pushed tag desktop/v{{version}} — CI will set the version, build, and publish the release."
-
-# Set the desktop app version (patches package.json, tauri.conf.json, Cargo.toml)
-desktop-set-version version:
-    cd {{desktop_dir}} && node scripts/set-version-from-tag.mjs "{{version}}"
-    cd {{desktop_dir}}/src-tauri && cargo generate-lockfile
-
-# Build a local desktop release (for testing). Optionally set a version first.
-desktop-release-build version="" target="aarch64-apple-darwin" *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -n "{{version}}" ]; then
-        just desktop-set-version "{{version}}"
-    fi
-    cd {{desktop_dir}} && pnpm exec tauri build --target {{target}} --config src-tauri/tauri.release.conf.json {{args}}
-
 # ─── Mobile ──────────────────────────────────────────────────────────────────
 
 mobile_dir := "mobile"
