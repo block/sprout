@@ -45,12 +45,6 @@ function rememberMentionEvent(
   return true;
 }
 
-async function disposeLiveSubscriptions(
-  subscriptions: Array<() => Promise<void>>,
-) {
-  await Promise.allSettled(subscriptions.map((dispose) => dispose()));
-}
-
 export function useLiveChannelUpdates(
   channels: Channel[],
   activeChannelId: string | null,
@@ -162,54 +156,41 @@ export function useLiveChannelUpdates(
     }
 
     let isDisposed = false;
-    let cleanup: Array<() => Promise<void>> = [];
+    let cleanup: (() => Promise<void>) | undefined;
     let retryTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const subscribeToMentionChannels = async () => {
-      const settled = await Promise.allSettled(
-        mentionChannelIds.map((channelId) =>
-          relayClient.subscribeToChannelMentionEvents(
-            channelId,
-            normalizedCurrentPubkey,
-            (event) => {
-              if (!isDisposed) {
-                handleMentionEvent(event);
-              }
-            },
-          ),
-        ),
-      );
+      try {
+        const dispose = await relayClient.subscribeToBatchedMentionEvents(
+          mentionChannelIds,
+          normalizedCurrentPubkey,
+          (event) => {
+            if (!isDisposed) {
+              handleMentionEvent(event);
+            }
+          },
+        );
 
-      const nextCleanup = settled.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
+        if (isDisposed) {
+          await dispose();
+          return;
+        }
 
-      if (isDisposed) {
-        await disposeLiveSubscriptions(nextCleanup);
-        return;
+        cleanup = dispose;
+      } catch (error) {
+        if (isDisposed) {
+          return;
+        }
+
+        console.error(
+          "Failed to subscribe to batched Home mention updates; retrying",
+          error,
+        );
+        retryTimeout = window.setTimeout(() => {
+          retryTimeout = undefined;
+          void subscribeToMentionChannels();
+        }, LIVE_MENTION_SUBSCRIPTION_RETRY_MS);
       }
-
-      const firstFailure = settled.find(
-        (result) => result.status === "rejected",
-      );
-      if (!firstFailure) {
-        cleanup = nextCleanup;
-        return;
-      }
-
-      await disposeLiveSubscriptions(nextCleanup);
-      if (isDisposed) {
-        return;
-      }
-
-      console.error(
-        "Failed to subscribe to all Home mention updates; retrying",
-        firstFailure.reason,
-      );
-      retryTimeout = window.setTimeout(() => {
-        retryTimeout = undefined;
-        void subscribeToMentionChannels();
-      }, LIVE_MENTION_SUBSCRIPTION_RETRY_MS);
     };
 
     void subscribeToMentionChannels();
@@ -219,7 +200,9 @@ export function useLiveChannelUpdates(
       if (retryTimeout !== undefined) {
         window.clearTimeout(retryTimeout);
       }
-      void disposeLiveSubscriptions(cleanup);
+      if (cleanup) {
+        void cleanup();
+      }
     };
   }, [mentionChannelIds, normalizedCurrentPubkey, options.onLiveMention]);
 }

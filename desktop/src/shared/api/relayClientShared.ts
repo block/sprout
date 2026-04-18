@@ -17,7 +17,7 @@ type HistorySubscription = {
 
 type LiveSubscription = {
   mode: "live";
-  filter: RelaySubscriptionFilter;
+  filters: RelaySubscriptionFilter[];
   onEvent: (event: RelayEvent) => void;
   resolveReady?: () => void;
   lastSeenCreatedAt?: number;

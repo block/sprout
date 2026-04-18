@@ -33,6 +33,7 @@ import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { joinChannel } from "@/shared/api/tauri";
 import type { SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
@@ -130,14 +131,14 @@ export function AppShell() {
     [location.pathname],
   );
 
+  const startupReady = useDeferredStartup();
+
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
-  const presenceSession = usePresenceSession(identityQuery.data?.pubkey);
+  const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
+  const presenceSession = usePresenceSession(deferredPubkey);
   const { homeBadgeCount, homeFeedQuery, notificationSettings } =
-    useHomeFeedNotifications(
-      identityQuery.data?.pubkey,
-      selectedView === "home",
-    );
+    useHomeFeedNotifications(deferredPubkey, selectedView === "home");
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
@@ -168,8 +169,8 @@ export function AppShell() {
     // advancing unread state for the active channel.
     null,
     {
-      currentPubkey: identityQuery.data?.pubkey,
-      onLiveMention: refetchHomeFeedOnLiveMention,
+      currentPubkey: deferredPubkey,
+      onLiveMention: startupReady ? refetchHomeFeedOnLiveMention : undefined,
     },
   );
 
