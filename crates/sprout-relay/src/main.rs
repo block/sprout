@@ -67,7 +67,10 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => error!("Failed to backfill d_tags: {e}"),
     }
 
-    let audit_pool = sqlx::PgPool::connect(&config.database_url)
+    let audit_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .min_connections(1)
+        .connect(&config.database_url)
         .await
         .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
     let audit = AuditService::new(audit_pool);

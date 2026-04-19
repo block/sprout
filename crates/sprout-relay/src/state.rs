@@ -196,11 +196,19 @@ pub struct AppState {
     pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
     /// Membership cache: (channel_id, pubkey_bytes) → is_member.
     /// Short TTL (10s) — membership changes are rare but must propagate.
+    /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
     pub membership_cache: Arc<moka::sync::Cache<(Uuid, Vec<u8>), bool>>,
+    /// Accessible channel IDs cache: pubkey_bytes → channel UUIDs.
+    /// Short TTL (10s) — invalidated on membership or channel visibility changes.
+    /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
+    pub accessible_channels_cache: Arc<moka::sync::Cache<Vec<u8>, Vec<Uuid>>>,
 
     /// Bounded channel for search indexing — prevents OOM if Typesense is slow/down.
     /// Capacity 1000: at ~1KB/event that's ~1MB of backlog before we start dropping.
     pub search_index_tx: mpsc::Sender<StoredEvent>,
+    /// Bounded channel for audit logging — backpressure instead of unbounded spawns.
+    /// Uses .send().await (blocks caller if full) because audit entries must not be lost.
+    pub audit_tx: mpsc::Sender<sprout_audit::NewAuditEntry>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
     /// Audio relay room manager — tracks active huddle audio rooms.
@@ -252,11 +260,28 @@ impl AppState {
             tracing::warn!("search index worker exited (expected on shutdown)");
         });
 
+        let audit_arc = Arc::new(audit);
+        let (audit_tx, mut audit_rx) = mpsc::channel::<sprout_audit::NewAuditEntry>(1000);
+        let audit_for_worker = Arc::clone(&audit_arc);
+        tokio::spawn(async move {
+            while let Some(entry) = audit_rx.recv().await {
+                let t = std::time::Instant::now();
+                if let Err(e) = audit_for_worker.log(entry).await {
+                    metrics::counter!("sprout_audit_log_errors_total").increment(1);
+                    tracing::error!("Audit log failed: {e}");
+                } else {
+                    metrics::histogram!("sprout_audit_log_seconds")
+                        .record(t.elapsed().as_secs_f64());
+                }
+            }
+            tracing::warn!("audit log worker exited (expected on shutdown)");
+        });
+
         Self {
             config: Arc::new(config),
             db,
             redis_pool,
-            audit: Arc::new(audit),
+            audit: audit_arc,
             pubsub,
             auth: Arc::new(auth),
             search: search_arc,
@@ -280,8 +305,15 @@ impl AppState {
                     .time_to_live(std::time::Duration::from_secs(10))
                     .build(),
             ),
+            accessible_channels_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(10))
+                    .build(),
+            ),
 
             search_index_tx,
+            audit_tx,
             media_storage: Arc::new(media_storage),
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
@@ -293,6 +325,62 @@ impl AppState {
     /// Called before Redis publish so the multi-node consumer can skip the echo.
     pub fn mark_local_event(&self, event_id: &nostr::EventId) {
         self.local_event_ids.insert(event_id.to_bytes(), ());
+    }
+
+    /// Check channel membership with a 10-second cache. Falls back to DB on miss.
+    pub async fn is_member_cached(
+        &self,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<bool, sprout_db::DbError> {
+        let key = (channel_id, pubkey.to_vec());
+        if let Some(cached) = self.membership_cache.get(&key) {
+            metrics::counter!("sprout_membership_cache_hits_total").increment(1);
+            return Ok(cached);
+        }
+        metrics::counter!("sprout_membership_cache_misses_total").increment(1);
+        let result = self.db.is_member(channel_id, pubkey).await?;
+        self.membership_cache.insert(key, result);
+        Ok(result)
+    }
+
+    /// Invalidate caches after a membership change (add/remove member).
+    pub fn invalidate_membership(&self, channel_id: Uuid, pubkey: &[u8]) {
+        self.membership_cache
+            .invalidate(&(channel_id, pubkey.to_vec()));
+        self.accessible_channels_cache.invalidate(&pubkey.to_vec());
+    }
+
+    /// Invalidate all users' accessible-channels cache (e.g. new open channel created).
+    pub fn invalidate_all_accessible_channels(&self) {
+        self.accessible_channels_cache.invalidate_all();
+    }
+
+    /// Invalidate all caches after a channel is deleted.
+    ///
+    /// Channel deletion is a rare admin operation. We clear the entire membership
+    /// cache because moka doesn't support prefix-based invalidation on composite
+    /// keys, and stale `is_member=true` entries for a deleted channel would bypass
+    /// the DB's `deleted_at IS NULL` guard.
+    pub fn invalidate_channel_deleted(&self) {
+        self.membership_cache.invalidate_all();
+        self.accessible_channels_cache.invalidate_all();
+    }
+
+    /// Get accessible channel IDs with a 10-second cache. Falls back to DB on miss.
+    pub async fn get_accessible_channel_ids_cached(
+        &self,
+        pubkey: &[u8],
+    ) -> Result<Vec<Uuid>, sprout_db::DbError> {
+        let key = pubkey.to_vec();
+        if let Some(cached) = self.accessible_channels_cache.get(&key) {
+            metrics::counter!("sprout_accessible_channels_cache_hits_total").increment(1);
+            return Ok(cached);
+        }
+        metrics::counter!("sprout_accessible_channels_cache_misses_total").increment(1);
+        let result = self.db.get_accessible_channel_ids(pubkey).await?;
+        self.accessible_channels_cache.insert(key, result.clone());
+        Ok(result)
     }
 }
 

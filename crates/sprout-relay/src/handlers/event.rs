@@ -61,6 +61,7 @@ pub(crate) async fn dispatch_persistent_event(
     }
 
     let matches = state.sub_registry.fan_out(stored_event);
+    metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
     debug!(
         event_id = %event_id_hex,
         channel_id = ?stored_event.channel_id,
@@ -96,26 +97,25 @@ pub(crate) async fn dispatch_persistent_event(
         warn!(event_id = %event_id_hex, "Search index channel full — dropping event");
     }
 
-    let audit = Arc::clone(&state.audit);
-    let audit_event_id = event_id_hex.clone();
-    let audit_actor_pubkey = actor_pubkey_hex.to_string();
-    let audit_channel_id = stored_event.channel_id;
-    tokio::spawn(async move {
-        let entry = sprout_audit::NewAuditEntry {
-            event_id: audit_event_id.clone(),
-            event_kind: kind_u32,
-            actor_pubkey: audit_actor_pubkey,
-            action: sprout_audit::AuditAction::EventCreated,
-            channel_id: audit_channel_id,
-            metadata: serde_json::Value::Null,
-        };
-        let t = std::time::Instant::now();
-        if let Err(e) = audit.log(entry).await {
-            error!(event_id = %audit_event_id, "Audit log failed: {e}");
-        } else {
-            metrics::histogram!("sprout_audit_log_seconds").record(t.elapsed().as_secs_f64());
-        }
-    });
+    // Audit via bounded channel (capacity 1000). Uses .send().await so entries
+    // are never silently dropped — backpressure propagates to the event handler
+    // if the queue is full. This is intentional: the audit advisory lock already
+    // serializes writes (at most 1 in-flight), so a full queue means the audit
+    // DB is genuinely overloaded and the relay should slow down rather than
+    // accumulate unbounded in-memory state. DB write failures in the worker are
+    // logged but not retried (same as the previous per-event tokio::spawn).
+    let audit_entry = sprout_audit::NewAuditEntry {
+        event_id: event_id_hex.clone(),
+        event_kind: kind_u32,
+        actor_pubkey: actor_pubkey_hex.to_string(),
+        action: sprout_audit::AuditAction::EventCreated,
+        channel_id: stored_event.channel_id,
+        metadata: serde_json::Value::Null,
+    };
+    if let Err(e) = state.audit_tx.send(audit_entry).await {
+        error!(event_id = %event_id_hex, "Audit channel closed — entry lost: {e}");
+        metrics::counter!("sprout_audit_send_errors_total").increment(1);
+    }
 
     // Skip workflow triggering for workflow-execution kinds and relay-signed workflow messages.
     let is_relay_workflow_msg = stored_event.event.pubkey == state.relay_keypair.public_key()
@@ -332,6 +332,7 @@ async fn handle_ephemeral_event(
 
         let stored_event = StoredEvent::new(event.clone(), None);
         let matches = state.sub_registry.fan_out(&stored_event);
+        metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
         let mut drop_count = 0u32;
@@ -375,6 +376,7 @@ async fn handle_ephemeral_event(
         // Pass the channel_id so fan_out() uses the channel-kind index.
         let stored_event = StoredEvent::new(event.clone(), Some(ch_id));
         let matches = state.sub_registry.fan_out(&stored_event);
+        metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
         let mut drop_count = 0u32;
@@ -411,6 +413,7 @@ async fn handle_ephemeral_event(
         // Pass channel_id=None so fan_out() uses the global subscriber index.
         let stored_event = StoredEvent::new(event.clone(), None);
         let matches = state.sub_registry.fan_out(&stored_event);
+        metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
         let mut drop_count = 0u32;

@@ -473,8 +473,7 @@ pub async fn post_tokens(
 
                 // Verify caller is a member of the channel.
                 let is_member = state
-                    .db
-                    .is_member(cid, &ctx.pubkey_bytes)
+                    .is_member_cached(cid, &ctx.pubkey_bytes)
                     .await
                     .map_err(|e| internal_error(&format!("db error: {e}")))?;
                 if !is_member {

@@ -73,8 +73,7 @@ pub async fn feed_handler(
 
     let accessible_ids = constrain_channel_ids(
         state
-            .db
-            .get_accessible_channel_ids(&pubkey_bytes)
+            .get_accessible_channel_ids_cached(&pubkey_bytes)
             .await
             .map_err(|e| internal_error(&format!("db error: {e}")))?,
         ctx.channel_ids.as_deref(),
