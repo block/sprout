@@ -12,8 +12,15 @@ Exercises the full NIP-SB backup/recovery cycle with real crypto:
   - XChaCha20-Poly1305 (libsodium via PyNaCl)
   - secp256k1 key derivation (secp256k1 lib)
 
-The relay is simulated as an in-memory dict. Everything else follows
-the NIP-SB spec exactly.
+The relay is simulated as an in-memory dict. The crypto follows the
+NIP-SB spec (KDF chain, chunk splitting, per-blob encryption, recovery).
+Nostr event structure (kind, id, sig) is not modeled — this demo covers
+the cryptographic protocol, not the Nostr event layer.
+
+Simplifications vs. a full implementation:
+  - scrypt log_n=14 (spec requires 20) for demo speed
+  - No Nostr event id/sig generation or validation
+  - Simulated relay (dict) instead of real WebSocket relay
 
 Usage:
     uv run crates/sprout-core/src/backup/nip_sb_demo.py
@@ -26,6 +33,7 @@ import hashlib
 import hmac
 import os
 import sys
+import unicodedata
 from dataclasses import dataclass
 
 import nacl.bindings as sodium
@@ -70,6 +78,11 @@ def relay_query(relay: SimulatedRelay, d_tag: str) -> list[RelayEvent]:
 
 
 # ── Crypto helpers (spec §Step 1–5) ───────────────────────────────────────────
+
+def nfkc(password: str) -> bytes:
+    """NFKC-normalize and UTF-8 encode a password (spec §Encoding Conventions)."""
+    return unicodedata.normalize("NFKC", password).encode("utf-8")
+
 
 def nip_sb_scrypt(input_bytes: bytes, salt: bytes = b"") -> bytes:
     """scrypt KDF. Returns 32 bytes. Spec: log_n=20, r=8, p=1."""
@@ -122,7 +135,7 @@ def backup(
     """Create a NIP-SB backup. Returns list of published blob metadata."""
 
     # base = NFKC(password) || pubkey_bytes  (spec §Encoding Conventions)
-    base = password.encode("utf-8") + pubkey_bytes
+    base = nfkc(password) + pubkey_bytes
 
     # Step 1: Determine N
     h = nip_sb_scrypt(base, salt=b"")
@@ -148,18 +161,23 @@ def backup(
 
     for i in range(n):
         # Step 4: Per-blob derivation
-        base_i = password.encode("utf-8") + pubkey_bytes + str(i).encode("ascii")
+        base_i = nfkc(password) + pubkey_bytes + str(i).encode("ascii")
         h_i = nip_sb_scrypt(base_i, salt=b"")
         d_tag = nip_sb_hkdf(h_i, b"d-tag").hex()
-        sign_sk_bytes = nip_sb_hkdf(h_i, b"signing-key")
-
-        # Reject-and-retry if invalid scalar (spec §Step 4)
-        # secp256k1 order n ≈ 2^256 - 4.3×10^38. Probability of needing retry: ~3.7×10^-39.
-        try:
-            sign_pk_bytes = secret_to_pubkey(sign_sk_bytes)
-        except Exception:
-            # Astronomically unlikely. Spec says retry with "signing-key-1", etc.
-            raise RuntimeError(f"blob {i}: signing key derivation produced invalid scalar")
+        # Reject-and-retry signing key derivation (spec §Step 4)
+        # Interpret as big-endian uint256. If zero or ≥ secp256k1 order n,
+        # retry with "signing-key-1", "signing-key-2", etc. up to 255.
+        sign_pk_bytes = None
+        for retry in range(256):
+            info = b"signing-key" if retry == 0 else f"signing-key-{retry}".encode()
+            sign_sk_bytes = nip_sb_hkdf(h_i, info)
+            try:
+                sign_pk_bytes = secret_to_pubkey(sign_sk_bytes)
+                break
+            except Exception:
+                continue
+        if sign_pk_bytes is None:
+            raise RuntimeError(f"blob {i}: all 256 signing key derivations invalid")
         sign_pk_hex = sign_pk_bytes.hex()
 
         # Step 5: Encrypt chunk
@@ -203,7 +221,7 @@ def recover(
 ) -> bytes:
     """Recover nsec from password + pubkey + relay. Raises on failure."""
 
-    base = password.encode("utf-8") + pubkey_bytes
+    base = nfkc(password) + pubkey_bytes
 
     # Step 1: Derive N
     h = nip_sb_scrypt(base, salt=b"")
@@ -219,11 +237,21 @@ def recover(
 
     for i in range(n):
         # Re-derive per-blob selectors
-        base_i = password.encode("utf-8") + pubkey_bytes + str(i).encode("ascii")
+        base_i = nfkc(password) + pubkey_bytes + str(i).encode("ascii")
         h_i = nip_sb_scrypt(base_i, salt=b"")
         d_tag = nip_sb_hkdf(h_i, b"d-tag").hex()
-        sign_sk_bytes = nip_sb_hkdf(h_i, b"signing-key")
-        expected_pk = secret_to_pubkey(sign_sk_bytes).hex()
+        # Reject-and-retry (must match backup derivation exactly)
+        expected_pk = None
+        for retry in range(256):
+            info = b"signing-key" if retry == 0 else f"signing-key-{retry}".encode()
+            sign_sk_bytes = nip_sb_hkdf(h_i, info)
+            try:
+                expected_pk = secret_to_pubkey(sign_sk_bytes).hex()
+                break
+            except Exception:
+                continue
+        if expected_pk is None:
+            raise ValueError(f"blob {i}: signing key derivation failed")
 
         # Query relay by d-tag (spec: also include authors filter)
         events = relay_query(relay, d_tag)
@@ -234,7 +262,11 @@ def recover(
         event = matched[0]
 
         # Decode and validate content length (spec §Event Validation step 6)
-        raw = base64.b64decode(event.content)
+        # Spec: MUST accept both padded and unpadded base64 on input.
+        content = event.content
+        if len(content) % 4:
+            content += "=" * (4 - len(content) % 4)
+        raw = base64.b64decode(content)
         if len(raw) != 56:
             raise ValueError(f"blob {i}: content is {len(raw)} bytes, expected 56")
 
