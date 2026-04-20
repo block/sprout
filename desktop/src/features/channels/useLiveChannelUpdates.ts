@@ -64,10 +64,14 @@ export function useLiveChannelUpdates(
       ),
     [channels],
   );
-  // Effect dep uses a primitive so refetches that produce new Set refs with
-  // identical contents don't churn subscriptions. The Set is still handy for
-  // closure reads via useEffectEvent.
+  // Effect deps use primitive keys so refetches that produce new refs with
+  // identical contents don't churn subscriptions. The Set/array memos are
+  // still handy for closure reads via useEffectEvent.
   const hasLiveChannels = liveChannelIds.size > 0;
+  const mentionChannelIdsKey = React.useMemo(
+    () => [...new Set(channels.map((channel) => channel.id))].sort().join(","),
+    [channels],
+  );
 
   const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
     const channelId = getChannelIdFromTags(event.tags);
@@ -147,62 +151,112 @@ export function useLiveChannelUpdates(
     };
   }, [hasLiveChannels]);
 
+  // Subscribe to mention events per channel with a diff-based manager: only
+  // subscribe newly-added channels and unsubscribe removed ones on each sync.
+  // The ref survives re-renders so churn-with-identical-IDs does zero work.
+  const mentionSubsRef = React.useRef(new Map<string, () => Promise<void>>());
+  const mentionSubsPubkeyRef = React.useRef<string | null>(null);
+
   React.useEffect(() => {
     if (!options.onLiveMention || normalizedCurrentPubkey.length === 0) {
       return;
     }
 
-    let isDisposed = false;
-    let cleanup: (() => Promise<void>) | undefined;
+    let isCancelled = false;
     let retryTimeout: ReturnType<typeof setTimeout> | undefined;
     let retryAttempt = 0;
 
-    const subscribe = async () => {
-      try {
-        const dispose = await relayClient.subscribeToMentionsForPubkey(
-          normalizedCurrentPubkey,
-          (event) => {
-            if (!isDisposed) {
-              handleMentionEvent(event);
-            }
-          },
-        );
-        if (isDisposed) {
-          void dispose();
-          return;
-        }
-        cleanup = dispose;
-        retryAttempt = 0;
-      } catch (error) {
-        if (isDisposed) {
-          return;
-        }
-        const delayMs = Math.min(
-          LIVE_MENTION_SUBSCRIPTION_RETRY_BASE_MS * 2 ** retryAttempt,
-          LIVE_MENTION_SUBSCRIPTION_RETRY_MAX_MS,
-        );
-        retryAttempt += 1;
-        console.error(
-          `Failed to subscribe to Home mention updates; retrying in ${delayMs}ms`,
-          error,
-        );
-        retryTimeout = window.setTimeout(() => {
-          retryTimeout = undefined;
-          void subscribe();
-        }, delayMs);
+    const syncSubs = async (): Promise<boolean> => {
+      const activeSubs = mentionSubsRef.current;
+
+      if (
+        mentionSubsPubkeyRef.current !== null &&
+        mentionSubsPubkeyRef.current !== normalizedCurrentPubkey
+      ) {
+        const stale = Array.from(activeSubs.values());
+        activeSubs.clear();
+        await Promise.allSettled(stale.map((dispose) => dispose()));
+        if (isCancelled) return true;
       }
+      mentionSubsPubkeyRef.current = normalizedCurrentPubkey;
+
+      const targetIds = new Set(
+        mentionChannelIdsKey ? mentionChannelIdsKey.split(",") : [],
+      );
+
+      for (const [channelId, dispose] of activeSubs) {
+        if (!targetIds.has(channelId)) {
+          activeSubs.delete(channelId);
+          void dispose().catch(() => {});
+        }
+      }
+
+      let anyFailed = false;
+      const additions = Array.from(targetIds)
+        .filter((channelId) => !activeSubs.has(channelId))
+        .map(async (channelId) => {
+          try {
+            const dispose = await relayClient.subscribeToChannelMentionEvents(
+              channelId,
+              normalizedCurrentPubkey,
+              (event) => {
+                if (!isCancelled) handleMentionEvent(event);
+              },
+            );
+            if (isCancelled) {
+              void dispose().catch(() => {});
+              return;
+            }
+            activeSubs.set(channelId, dispose);
+          } catch (err) {
+            anyFailed = true;
+            console.error(
+              "Failed to subscribe to mention events",
+              channelId,
+              err,
+            );
+          }
+        });
+      await Promise.allSettled(additions);
+      return !anyFailed;
     };
 
-    void subscribe();
+    const runSync = async () => {
+      const ok = await syncSubs();
+      if (isCancelled) return;
+      if (ok) {
+        retryAttempt = 0;
+        return;
+      }
+      const delayMs = Math.min(
+        LIVE_MENTION_SUBSCRIPTION_RETRY_BASE_MS * 2 ** retryAttempt,
+        LIVE_MENTION_SUBSCRIPTION_RETRY_MAX_MS,
+      );
+      retryAttempt += 1;
+      retryTimeout = window.setTimeout(() => {
+        retryTimeout = undefined;
+        void runSync();
+      }, delayMs);
+    };
+
+    void runSync();
 
     return () => {
-      isDisposed = true;
+      isCancelled = true;
       if (retryTimeout !== undefined) {
         window.clearTimeout(retryTimeout);
       }
-      if (cleanup) {
-        void cleanup();
-      }
     };
-  }, [normalizedCurrentPubkey, options.onLiveMention]);
+  }, [mentionChannelIdsKey, normalizedCurrentPubkey, options.onLiveMention]);
+
+  React.useEffect(() => {
+    return () => {
+      const subs = mentionSubsRef.current;
+      for (const dispose of subs.values()) {
+        void dispose().catch(() => {});
+      }
+      subs.clear();
+      mentionSubsPubkeyRef.current = null;
+    };
+  }, []);
 }
