@@ -44,8 +44,7 @@ pub async fn search_handler(
 
     let channel_ids = constrain_channel_ids(
         state
-            .db
-            .get_accessible_channel_ids(&pubkey_bytes)
+            .get_accessible_channel_ids_cached(&pubkey_bytes)
             .await
             .unwrap_or_default(),
         ctx.channel_ids.as_deref(),

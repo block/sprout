@@ -68,7 +68,8 @@ pub async fn handle_req(
         }
     };
 
-    let mut accessible_channels = match state.db.get_accessible_channel_ids(&pubkey_bytes).await {
+    let mut accessible_channels = match state.get_accessible_channel_ids_cached(&pubkey_bytes).await
+    {
         Ok(ids) => ids,
         Err(e) => {
             warn!(conn_id = %conn_id, "Failed to get accessible channels: {e}");

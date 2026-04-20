@@ -33,6 +33,10 @@ pub struct SubscriptionRegistry {
     channel_kind_index: DashMap<IndexKey, Vec<(ConnId, SubId)>>,
     /// Subscriptions with a channel_id but no kind filter — need to receive ALL kinds.
     channel_wildcard_index: DashMap<Uuid, Vec<(ConnId, SubId)>>,
+    /// Global subscriptions indexed by kind — avoids O(all_subs) scan for global events.
+    global_kind_index: DashMap<Kind, Vec<(ConnId, SubId)>>,
+    /// Global subscriptions with no kind filter — wildcard, receives all global events.
+    global_wildcard_index: DashMap<(), Vec<(ConnId, SubId)>>,
 }
 
 impl SubscriptionRegistry {
@@ -81,6 +85,25 @@ impl SubscriptionRegistry {
                         };
                         self.channel_kind_index
                             .entry(key)
+                            .or_default()
+                            .push((conn_id, sub_id.clone()));
+                    }
+                }
+            }
+        } else {
+            // Global subscription — index by kind for sub-linear fan-out.
+            match extract_kinds_from_filters(&filters) {
+                None => {
+                    self.global_wildcard_index
+                        .entry(())
+                        .or_default()
+                        .push((conn_id, sub_id.clone()));
+                }
+                Some(kinds) if kinds.is_empty() => {}
+                Some(kinds) => {
+                    for kind in kinds {
+                        self.global_kind_index
+                            .entry(kind)
                             .or_default()
                             .push((conn_id, sub_id.clone()));
                     }
@@ -165,18 +188,29 @@ impl SubscriptionRegistry {
                 }
             }
         } else {
-            // Global event (channel_id = None) — only deliver to global subscriptions.
-            // Channel-scoped subscriptions are skipped: they target a specific channel
-            // and should not receive global infrastructure events (e.g. membership
-            // notifications) even if tag matching would succeed.
-            for conn_entry in self.subs.iter() {
-                let conn_id = *conn_entry.key();
-                for (sub_id, (filters, sub_channel_id)) in conn_entry.value().iter() {
-                    if sub_channel_id.is_some() {
-                        continue; // skip channel-scoped subscriptions
+            // Global event (channel_id = None) — use global indexes for sub-linear fan-out.
+            // Channel-scoped subscriptions are never in these indexes, preserving the
+            // scoping invariant without an explicit skip check.
+            if let Some(candidates) = self.global_kind_index.get(&event.event.kind) {
+                for (conn_id, sub_id) in candidates.iter() {
+                    if let Some(conn_subs) = self.subs.get(conn_id) {
+                        if let Some((filters, _)) = conn_subs.get(sub_id.as_str()) {
+                            if filters_match(filters, event) {
+                                results.push((*conn_id, sub_id.clone()));
+                            }
+                        }
                     }
-                    if filters_match(filters, event) {
-                        results.push((conn_id, sub_id.clone()));
+                }
+            }
+            // Also check global wildcard (kindless global subs).
+            if let Some(wildcards) = self.global_wildcard_index.get(&()) {
+                for (conn_id, sub_id) in wildcards.iter() {
+                    if let Some(conn_subs) = self.subs.get(conn_id) {
+                        if let Some((filters, _)) = conn_subs.get(sub_id.as_str()) {
+                            if filters_match(filters, event) {
+                                results.push((*conn_id, sub_id.clone()));
+                            }
+                        }
                     }
                 }
             }
@@ -255,8 +289,32 @@ impl SubscriptionRegistry {
                     }
                 }
             }
+        } else {
+            // Global subscription — remove from global indexes.
+            match extract_kinds_from_filters(filters) {
+                None => {
+                    if let Some(mut entries) = self.global_wildcard_index.get_mut(&()) {
+                        entries.retain(|(cid, sid)| !(*cid == conn_id && sid == sub_id));
+                        if entries.is_empty() {
+                            drop(entries);
+                            self.global_wildcard_index.remove(&());
+                        }
+                    }
+                }
+                Some(kinds) if kinds.is_empty() => {}
+                Some(kinds) => {
+                    for kind in kinds {
+                        if let Some(mut entries) = self.global_kind_index.get_mut(&kind) {
+                            entries.retain(|(cid, sid)| !(*cid == conn_id && sid == sub_id));
+                            if entries.is_empty() {
+                                drop(entries);
+                                self.global_kind_index.remove(&kind);
+                            }
+                        }
+                    }
+                }
+            }
         }
-        // If no channel_id, there's nothing in the index to remove (slow-path subs aren't indexed)
     }
 }
 
@@ -766,5 +824,132 @@ mod tests {
         let matches_b = registry.fan_out(&event_b);
         assert_eq!(matches_b.len(), 1);
         assert_eq!(matches_b[0].1, "sub-b");
+    }
+
+    #[test]
+    fn test_global_kind_index_fan_out() {
+        // Global subscriptions with explicit kinds should use the global_kind_index
+        // for sub-linear fan-out instead of scanning all subs.
+        let registry = SubscriptionRegistry::new();
+        let conn_a = Uuid::new_v4();
+        let conn_b = Uuid::new_v4();
+
+        registry.register(
+            conn_a,
+            "global_text".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            None,
+        );
+        registry.register(
+            conn_b,
+            "global_meta".to_string(),
+            vec![Filter::new().kind(Kind::Metadata)],
+            None,
+        );
+
+        let event_text = make_stored_event(Kind::TextNote, None);
+        let matches = registry.fan_out(&event_text);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].0, conn_a);
+
+        let event_meta = make_stored_event(Kind::Metadata, None);
+        let matches = registry.fan_out(&event_meta);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].0, conn_b);
+
+        // Unrelated kind matches nobody.
+        let event_custom = make_stored_event(Kind::Custom(9999), None);
+        assert!(registry.fan_out(&event_custom).is_empty());
+    }
+
+    #[test]
+    fn test_global_wildcard_index_fan_out() {
+        // A global subscription with no kind filter should receive all global events.
+        let registry = SubscriptionRegistry::new();
+        let conn_id = Uuid::new_v4();
+
+        registry.register(
+            conn_id,
+            "global_wildcard".to_string(),
+            vec![Filter::new()], // kindless
+            None,
+        );
+
+        let event_text = make_stored_event(Kind::TextNote, None);
+        let matches = registry.fan_out(&event_text);
+        assert_eq!(matches.len(), 1);
+
+        let event_meta = make_stored_event(Kind::Metadata, None);
+        let matches = registry.fan_out(&event_meta);
+        assert_eq!(matches.len(), 1);
+
+        // Must NOT receive channel-scoped events.
+        let channel_event = make_stored_event(Kind::TextNote, Some(Uuid::new_v4()));
+        assert!(registry.fan_out(&channel_event).is_empty());
+    }
+
+    #[test]
+    fn test_global_index_removal_cleanup() {
+        // Removing a global subscription should clean up the global indexes.
+        let registry = SubscriptionRegistry::new();
+        let conn_id = Uuid::new_v4();
+
+        // Kind-specific global sub.
+        registry.register(
+            conn_id,
+            "g1".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            None,
+        );
+        assert!(registry.global_kind_index.get(&Kind::TextNote).is_some());
+
+        registry.remove_subscription(conn_id, "g1");
+        assert!(registry.global_kind_index.get(&Kind::TextNote).is_none());
+
+        // Wildcard global sub.
+        registry.register(conn_id, "g2".to_string(), vec![Filter::new()], None);
+        assert!(registry.global_wildcard_index.get(&()).is_some());
+
+        registry.remove_subscription(conn_id, "g2");
+        assert!(registry.global_wildcard_index.get(&()).is_none());
+    }
+
+    #[test]
+    fn test_global_and_channel_subs_are_isolated() {
+        // Global subs must not see channel events; channel subs must not see global events.
+        // This tests the invariant with the new global index in place.
+        let registry = SubscriptionRegistry::new();
+        let conn_global = Uuid::new_v4();
+        let conn_channel = Uuid::new_v4();
+        let channel_id = Uuid::new_v4();
+
+        registry.register(
+            conn_global,
+            "global".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            None,
+        );
+        registry.register(
+            conn_channel,
+            "channel".to_string(),
+            vec![Filter::new().kind(Kind::TextNote)],
+            Some(channel_id),
+        );
+
+        let global_event = make_stored_event(Kind::TextNote, None);
+        let matches = registry.fan_out(&global_event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].0, conn_global,
+            "only global sub sees global event"
+        );
+
+        let channel_event = make_stored_event(Kind::TextNote, Some(channel_id));
+        let matches = registry.fan_out(&channel_event);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].0, conn_channel,
+            "only channel sub sees channel event"
+        );
     }
 }

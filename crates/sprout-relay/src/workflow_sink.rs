@@ -90,8 +90,7 @@ impl ActionSink for RelayActionSink {
             let author_pubkey_bytes = author_pubkey.serialize().to_vec();
             let author_pubkey_hex = author_pubkey.to_hex();
             let is_member = state
-                .db
-                .is_member(channel_uuid, &author_pubkey_bytes)
+                .is_member_cached(channel_uuid, &author_pubkey_bytes)
                 .await
                 .map_err(|e| ActionSinkError::Database(e.to_string()))?;
             if !is_member && channel.visibility != "open" {
