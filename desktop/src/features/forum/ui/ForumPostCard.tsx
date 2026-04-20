@@ -76,9 +76,10 @@ export function ForumPostCard({
         </span>
 
         {canDelete && onDelete ? (
+          // biome-ignore lint/a11y/noStaticElementInteractions: presentation wrapper only stops click propagation to parent card link
           <div
             className="ml-auto"
-            onClickCapture={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
             role="presentation"
           >
             <DeleteActionMenu
