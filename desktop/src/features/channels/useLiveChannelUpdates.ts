@@ -192,6 +192,11 @@ export function useLiveChannelUpdates(
       }
 
       let anyFailed = false;
+      // Pass handleMentionEvent directly — it's a stable useEffectEvent
+      // callback. Do NOT wrap in an isCancelled check here: subs persist
+      // across effect runs (that's the point of the diff manager), so a
+      // stale isCancelled flag from a prior run would silently drop events
+      // on long-lived subs.
       const additions = Array.from(targetIds)
         .filter((channelId) => !activeSubs.has(channelId))
         .map(async (channelId) => {
@@ -199,9 +204,7 @@ export function useLiveChannelUpdates(
             const dispose = await relayClient.subscribeToChannelMentionEvents(
               channelId,
               normalizedCurrentPubkey,
-              (event) => {
-                if (!isCancelled) handleMentionEvent(event);
-              },
+              handleMentionEvent,
             );
             if (isCancelled) {
               void dispose().catch(() => {});
