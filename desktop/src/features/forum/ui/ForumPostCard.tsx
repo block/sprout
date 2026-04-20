@@ -1,5 +1,4 @@
-import { MessageSquare, MoreHorizontal, Trash2 } from "lucide-react";
-import * as React from "react";
+import { MessageSquare } from "lucide-react";
 
 import {
   resolveUserLabel,
@@ -9,16 +8,10 @@ import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { ForumPost } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/shared/ui/dropdown-menu";
 import { Markdown } from "@/shared/ui/markdown";
 
 import { formatRelativeTime } from "../lib/time";
-import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { DeleteActionMenu } from "./DeleteActionMenu";
 
 type ForumPostCardProps = {
   post: ForumPost;
@@ -41,7 +34,6 @@ export function ForumPostCard({
   onClick,
   onDelete,
 }: ForumPostCardProps) {
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
   const authorLabel = resolveUserLabel({
     pubkey: post.pubkey,
     currentPubkey,
@@ -57,14 +49,22 @@ export function ForumPostCard({
       : post.content;
 
   return (
-    <button
+    // biome-ignore lint/a11y/useSemanticElements: Cannot use <button> because DeleteActionMenu renders a nested <button> via DropdownMenuTrigger, which is invalid HTML
+    <div
+      role="button"
+      tabIndex={0}
       className={cn(
         "group w-full cursor-pointer rounded-xl border border-border/60 bg-card p-4 text-left transition-colors hover:border-border hover:bg-accent/40",
         isActive && "border-primary/40 bg-accent/60",
         isDeleting && "pointer-events-none opacity-50",
       )}
       onClick={() => onClick(post)}
-      type="button"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick(post);
+        }
+      }}
     >
       <div className="flex items-center gap-2">
         <UserAvatar avatarUrl={avatarUrl} displayName={authorLabel} size="sm" />
@@ -77,36 +77,13 @@ export function ForumPostCard({
 
         {canDelete && onDelete ? (
           <div
-            className="ml-auto opacity-0 transition-opacity group-hover:opacity-100"
+            className="ml-auto"
             onClickCapture={(e) => e.stopPropagation()}
             role="presentation"
           >
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  tabIndex={-1}
-                  type="button"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={() => setIsDeleteDialogOpen(true)}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Delete post
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <DeleteConfirmDialog
+            <DeleteActionMenu
               label="post"
               onConfirm={() => onDelete(post.eventId)}
-              onOpenChange={setIsDeleteDialogOpen}
-              open={isDeleteDialogOpen}
             />
           </div>
         ) : null}
@@ -135,6 +112,6 @@ export function ForumPostCard({
           ) : null}
         </div>
       ) : null}
-    </button>
+    </div>
   );
 }
