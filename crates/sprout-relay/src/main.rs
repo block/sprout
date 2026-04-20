@@ -67,7 +67,10 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => error!("Failed to backfill d_tags: {e}"),
     }
 
-    let audit_pool = sqlx::PgPool::connect(&config.database_url)
+    let audit_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .min_connections(1)
+        .connect(&config.database_url)
         .await
         .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
     let audit = AuditService::new(audit_pool);
@@ -127,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
     info!("Media storage connected");
 
-    let state = Arc::new(AppState::new(
+    let (app_state, audit_shutdown) = AppState::new(
         config.clone(),
         db,
         redis_health_pool,
@@ -138,7 +141,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&workflow_engine),
         relay_keypair,
         media_storage,
-    ));
+    );
+    let state = Arc::new(app_state);
 
     // Wire the action sink — must happen after AppState (which creates
     // sub_registry, conn_manager) and before the cron loop starts.
@@ -287,7 +291,17 @@ async fn main() -> anyhow::Result<()> {
     let router = build_router(Arc::clone(&state));
     let health_router = build_health_router(Arc::clone(&state));
 
-    serve(router, health_router, Arc::clone(&state)).await
+    serve(router, health_router, Arc::clone(&state)).await?;
+
+    // ── Drain audit queue ────────────────────────────────────────────────────
+    // Signal the audit worker to stop accepting, flush buffered entries, and
+    // exit. Uses a CancellationToken so it works regardless of how many
+    // Arc<AppState> clones are still alive in background tasks.
+    audit_shutdown
+        .drain(std::time::Duration::from_secs(5))
+        .await;
+
+    Ok(())
 }
 
 /// Bind all listeners and run with graceful shutdown.

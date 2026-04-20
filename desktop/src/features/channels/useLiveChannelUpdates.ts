@@ -14,7 +14,8 @@ export type UseLiveChannelUpdatesOptions = {
   onLiveMention?: () => void;
 };
 
-const LIVE_MENTION_SUBSCRIPTION_RETRY_MS = 1_000;
+const LIVE_MENTION_SUBSCRIPTION_RETRY_BASE_MS = 1_000;
+const LIVE_MENTION_SUBSCRIPTION_RETRY_MAX_MS = 30_000;
 
 function getMessageTimestamp(event: RelayEvent) {
   return new Date(event.created_at * 1_000).toISOString();
@@ -45,12 +46,6 @@ function rememberMentionEvent(
   return true;
 }
 
-async function disposeLiveSubscriptions(
-  subscriptions: Array<() => Promise<void>>,
-) {
-  await Promise.allSettled(subscriptions.map((dispose) => dispose()));
-}
-
 export function useLiveChannelUpdates(
   channels: Channel[],
   activeChannelId: string | null,
@@ -69,8 +64,12 @@ export function useLiveChannelUpdates(
       ),
     [channels],
   );
-  const mentionChannelIds = React.useMemo(
-    () => [...new Set(channels.map((channel) => channel.id))].sort(),
+  // Effect deps use primitive keys so refetches that produce new refs with
+  // identical contents don't churn subscriptions. The Set/array memos are
+  // still handy for closure reads via useEffectEvent.
+  const hasLiveChannels = liveChannelIds.size > 0;
+  const mentionChannelIdsKey = React.useMemo(
+    () => [...new Set(channels.map((channel) => channel.id))].sort().join(","),
     [channels],
   );
 
@@ -119,7 +118,7 @@ export function useLiveChannelUpdates(
   }, [queryClient]);
 
   React.useEffect(() => {
-    if (liveChannelIds.size === 0) {
+    if (!hasLiveChannels) {
       return;
     }
 
@@ -150,76 +149,117 @@ export function useLiveChannelUpdates(
         void cleanup();
       }
     };
-  }, [liveChannelIds]);
+  }, [hasLiveChannels]);
+
+  // Subscribe to mention events per channel with a diff-based manager: only
+  // subscribe newly-added channels and unsubscribe removed ones on each sync.
+  // The ref survives re-renders so churn-with-identical-IDs does zero work.
+  const mentionSubsRef = React.useRef(new Map<string, () => Promise<void>>());
+  const mentionSubsPubkeyRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
-    if (
-      !options.onLiveMention ||
-      normalizedCurrentPubkey.length === 0 ||
-      mentionChannelIds.length === 0
-    ) {
+    if (!options.onLiveMention || normalizedCurrentPubkey.length === 0) {
       return;
     }
 
-    let isDisposed = false;
-    let cleanup: Array<() => Promise<void>> = [];
+    let isCancelled = false;
     let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+    let retryAttempt = 0;
 
-    const subscribeToMentionChannels = async () => {
-      const settled = await Promise.allSettled(
-        mentionChannelIds.map((channelId) =>
-          relayClient.subscribeToChannelMentionEvents(
-            channelId,
-            normalizedCurrentPubkey,
-            (event) => {
-              if (!isDisposed) {
-                handleMentionEvent(event);
-              }
-            },
-          ),
-        ),
+    const syncSubs = async (): Promise<boolean> => {
+      const activeSubs = mentionSubsRef.current;
+
+      if (
+        mentionSubsPubkeyRef.current !== null &&
+        mentionSubsPubkeyRef.current !== normalizedCurrentPubkey
+      ) {
+        const stale = Array.from(activeSubs.values());
+        activeSubs.clear();
+        await Promise.allSettled(stale.map((dispose) => dispose()));
+        if (isCancelled) return true;
+      }
+      mentionSubsPubkeyRef.current = normalizedCurrentPubkey;
+
+      const targetIds = new Set(
+        mentionChannelIdsKey ? mentionChannelIdsKey.split(",") : [],
       );
 
-      const nextCleanup = settled.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-
-      if (isDisposed) {
-        await disposeLiveSubscriptions(nextCleanup);
-        return;
+      for (const [channelId, dispose] of activeSubs) {
+        if (!targetIds.has(channelId)) {
+          activeSubs.delete(channelId);
+          void dispose().catch(() => {});
+        }
       }
 
-      const firstFailure = settled.find(
-        (result) => result.status === "rejected",
-      );
-      if (!firstFailure) {
-        cleanup = nextCleanup;
-        return;
-      }
-
-      await disposeLiveSubscriptions(nextCleanup);
-      if (isDisposed) {
-        return;
-      }
-
-      console.error(
-        "Failed to subscribe to all Home mention updates; retrying",
-        firstFailure.reason,
-      );
-      retryTimeout = window.setTimeout(() => {
-        retryTimeout = undefined;
-        void subscribeToMentionChannels();
-      }, LIVE_MENTION_SUBSCRIPTION_RETRY_MS);
+      let anyFailed = false;
+      // Pass handleMentionEvent directly — it's a stable useEffectEvent
+      // callback. Do NOT wrap in an isCancelled check here: subs persist
+      // across effect runs (that's the point of the diff manager), so a
+      // stale isCancelled flag from a prior run would silently drop events
+      // on long-lived subs.
+      const additions = Array.from(targetIds)
+        .filter((channelId) => !activeSubs.has(channelId))
+        .map(async (channelId) => {
+          try {
+            const dispose = await relayClient.subscribeToChannelMentionEvents(
+              channelId,
+              normalizedCurrentPubkey,
+              handleMentionEvent,
+            );
+            if (isCancelled) {
+              void dispose().catch(() => {});
+              return;
+            }
+            activeSubs.set(channelId, dispose);
+          } catch (err) {
+            anyFailed = true;
+            console.error(
+              "Failed to subscribe to mention events",
+              channelId,
+              err,
+            );
+          }
+        });
+      await Promise.allSettled(additions);
+      return !anyFailed;
     };
 
-    void subscribeToMentionChannels();
+    const runSync = async () => {
+      const ok = await syncSubs();
+      if (isCancelled) return;
+      if (ok) {
+        retryAttempt = 0;
+        return;
+      }
+      const delayMs = Math.min(
+        LIVE_MENTION_SUBSCRIPTION_RETRY_BASE_MS * 2 ** retryAttempt,
+        LIVE_MENTION_SUBSCRIPTION_RETRY_MAX_MS,
+      );
+      retryAttempt += 1;
+      retryTimeout = window.setTimeout(() => {
+        retryTimeout = undefined;
+        void runSync();
+      }, delayMs);
+    };
+
+    void runSync();
 
     return () => {
-      isDisposed = true;
+      isCancelled = true;
       if (retryTimeout !== undefined) {
         window.clearTimeout(retryTimeout);
       }
-      void disposeLiveSubscriptions(cleanup);
     };
-  }, [mentionChannelIds, normalizedCurrentPubkey, options.onLiveMention]);
+  }, [mentionChannelIdsKey, normalizedCurrentPubkey, options.onLiveMention]);
+
+  React.useEffect(() => {
+    return () => {
+      const subs = mentionSubsRef.current;
+      for (const dispose of subs.values()) {
+        void dispose().catch(() => {});
+      }
+      subs.clear();
+      mentionSubsPubkeyRef.current = null;
+    };
+  }, []);
 }

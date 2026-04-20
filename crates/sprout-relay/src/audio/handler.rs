@@ -512,8 +512,7 @@ async fn ensure_membership(
 
     // Fast path: already a member.
     let is_member = state
-        .db
-        .is_member(channel_id, pubkey_bytes)
+        .is_member_cached(channel_id, pubkey_bytes)
         .await
         .map_err(|e| format!("db error: {e}"))?;
 
@@ -537,8 +536,7 @@ async fn ensure_membership(
     if channel.ttl_seconds.is_some() {
         if let Some(parent_id) = parent_channel_id {
             let parent_member = state
-                .db
-                .is_member(parent_id, pubkey_bytes)
+                .is_member_cached(parent_id, pubkey_bytes)
                 .await
                 .map_err(|e| format!("db error: {e}"))?;
 
@@ -553,6 +551,7 @@ async fn ensure_membership(
                     )
                     .await
                     .map_err(|e| format!("auto-add failed: {e}"))?;
+                state.invalidate_membership(channel_id, pubkey_bytes);
 
                 return Ok(());
             }

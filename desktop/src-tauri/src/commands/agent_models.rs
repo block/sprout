@@ -49,12 +49,11 @@ pub async fn get_agent_models(
 
         let args = normalize_agent_args(&record.agent_command, record.agent_args.clone());
 
-        (
-            resolved,
-            record.agent_command.clone(),
-            args,
-            record.model.clone(),
-        )
+        let resolved_agent = resolve_command(&record.agent_command, Some(&app))
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| record.agent_command.clone());
+
+        (resolved, resolved_agent, args, record.model.clone())
     }; // store lock released — subprocess runs without holding the lock
 
     // Use spawn_blocking because the desktop Tauri crate doesn't enable
@@ -64,6 +63,9 @@ pub async fn get_agent_models(
         let mut cmd = std::process::Command::new(&resolved_acp);
         if let Some(home) = default_agent_workdir() {
             cmd.current_dir(home);
+        }
+        if let Some(ref path) = crate::managed_agents::login_shell_path() {
+            cmd.env("PATH", path);
         }
         cmd.arg("models")
             .arg("--json")

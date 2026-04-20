@@ -3,6 +3,7 @@ import { Activity, Bot, Home, PenSquare, Plus, Search, Zap } from "lucide-react"
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -92,44 +93,6 @@ type AppSidebarProps = {
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
   isPresencePending?: boolean;
 };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function useDeferredSidebarLoad(
-  activateImmediately: boolean,
-  timeoutMs: number,
-) {
-  const [shouldLoad, setShouldLoad] = React.useState(activateImmediately);
-
-  React.useEffect(() => {
-    if (shouldLoad || activateImmediately) {
-      if (!shouldLoad) {
-        setShouldLoad(true);
-      }
-      return;
-    }
-
-    const load = () => {
-      setShouldLoad(true);
-    };
-
-    if ("requestIdleCallback" in window) {
-      const idleId = window.requestIdleCallback(load, { timeout: timeoutMs });
-      return () => {
-        window.cancelIdleCallback(idleId);
-      };
-    }
-
-    const timeoutId = globalThis.setTimeout(load, timeoutMs);
-    return () => {
-      globalThis.clearTimeout(timeoutId);
-    };
-  }, [activateImmediately, shouldLoad, timeoutMs]);
-
-  return shouldLoad;
-}
 
 // ---------------------------------------------------------------------------
 // SectionHeaderActions — browse + create icon buttons for section headers
@@ -275,26 +238,25 @@ export function AppSidebar({
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
 
-  const visibleChannels = channels.filter(
-    (channel) => channel.archivedAt === null,
+  const streamChannels = React.useMemo(
+    () => channels.filter((channel) => channel.channelType === "stream"),
+    [channels],
   );
-
-  const streamChannels = visibleChannels.filter(
-    (channel) => channel.channelType === "stream",
+  const forumChannels = React.useMemo(
+    () => channels.filter((channel) => channel.channelType === "forum"),
+    [channels],
   );
-  const forumChannels = visibleChannels.filter(
-    (channel) => channel.channelType === "forum",
-  );
-  const directMessages = visibleChannels.filter(
-    (channel) => channel.channelType === "dm",
+  const directMessages = React.useMemo(
+    () => channels.filter((channel) => channel.channelType === "dm"),
+    [channels],
   );
   const isSelectedDirectMessage =
     selectedView === "channel" &&
     directMessages.some((channel) => channel.id === selectedChannelId);
-  const shouldLoadDmMetadata = useDeferredSidebarLoad(
-    isSelectedDirectMessage,
-    400,
-  );
+  const shouldLoadDmMetadata = useDeferredLoad({
+    immediate: isSelectedDirectMessage,
+    timeoutMs: 400,
+  });
   const { dmChannelLabels, dmParticipantsByChannelId, dmPresenceByChannelId } =
     useDmSidebarMetadata({
       currentPubkey,
@@ -303,10 +265,10 @@ export function AppSidebar({
       fallbackDisplayName,
       profileDisplayName: profile?.displayName,
     });
-  const shouldLoadAgentCount = useDeferredSidebarLoad(
-    selectedView === "agents",
-    250,
-  );
+  const shouldLoadAgentCount = useDeferredLoad({
+    immediate: selectedView === "agents",
+    timeoutMs: 250,
+  });
   const managedAgentsQuery = useManagedAgentsQuery({
     enabled: shouldLoadAgentCount,
   });

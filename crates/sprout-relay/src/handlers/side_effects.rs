@@ -301,7 +301,7 @@ pub async fn validate_admin_event(
                 }
             } else {
                 // topic/purpose: any member
-                let is_member = state.db.is_member(channel_id, &actor_bytes).await?;
+                let is_member = state.is_member_cached(channel_id, &actor_bytes).await?;
                 if is_member {
                     Ok(())
                 } else {
@@ -698,6 +698,7 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         .db
         .add_member(channel_id, &target_pubkey, role, Some(&actor_bytes))
         .await?;
+    state.invalidate_membership(channel_id, &target_pubkey);
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     let target_hex = nostr::util::hex::encode(&target_pubkey);
@@ -756,6 +757,7 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
         .db
         .remove_member(channel_id, &target_pubkey, &actor_bytes)
         .await?;
+    state.invalidate_membership(channel_id, &target_pubkey);
     evict_live_channel_subscriptions(state, channel_id, &target_pubkey).await;
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
@@ -1033,6 +1035,14 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
             .await?
     };
 
+    // Creator becomes owner — evict any stale negative membership lookup.
+    state.invalidate_membership(channel.id, &actor_bytes);
+    // Open channels appear in everyone's accessible set; private channels only
+    // affect the creator (the sole initial member).
+    if visibility == sprout_db::channel::ChannelVisibility::Open {
+        state.invalidate_all_accessible_channels();
+    }
+
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
         state,
@@ -1088,6 +1098,10 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         warn!(channel = %channel_id, error = %e, "failed to clean up NIP-29 discovery events");
     }
 
+    // Deleted channel: clear both membership and accessible-channels caches.
+    // Stale is_member=true entries would bypass the DB's deleted_at guard.
+    state.invalidate_channel_deleted();
+
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
         state,
@@ -1121,7 +1135,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 
     // Skip if already an active member — prevents duplicate join notifications.
     // Fail closed on DB errors rather than falling through to add_member.
-    if state.db.is_member(channel_id, &actor_bytes).await? {
+    if state.is_member_cached(channel_id, &actor_bytes).await? {
         info!(channel = %channel_id, "kind:9021 join — already a member, skipping");
         return Ok(());
     }
@@ -1136,6 +1150,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
             None,
         )
         .await?;
+    state.invalidate_membership(channel_id, &actor_bytes);
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
@@ -1191,6 +1206,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
         .db
         .remove_member(channel_id, &actor_bytes, &actor_bytes)
         .await?;
+    state.invalidate_membership(channel_id, &actor_bytes);
     evict_live_channel_subscriptions(state, channel_id, &actor_bytes).await;
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);

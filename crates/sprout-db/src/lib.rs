@@ -144,11 +144,14 @@ pub struct DbConfig {
 }
 
 impl Default for DbConfig {
+    /// Sized for a single relay pod against PG max_connections=100.
+    /// Staging measured 51 idle + 1 active out of 50 — most connections sat unused.
+    /// At 20 main + 5 audit = 25/pod, four relay pods fit within the PG limit.
     fn default() -> Self {
         Self {
             database_url: "postgres://sprout:sprout_dev@localhost:5432/sprout".to_string(),
-            max_connections: 50,
-            min_connections: 5,
+            max_connections: 20,
+            min_connections: 2,
             acquire_timeout_secs: 3,
             max_lifetime_secs: 1800,
             idle_timeout_secs: 600,
@@ -399,6 +402,14 @@ impl Db {
     /// Returns all active members of a channel.
     pub async fn get_members(&self, channel_id: Uuid) -> Result<Vec<channel::MemberRecord>> {
         channel::get_members(&self.pool, channel_id).await
+    }
+
+    /// Returns active members for multiple channels in a single query.
+    pub async fn get_members_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<Vec<channel::MemberRecord>> {
+        channel::get_members_bulk(&self.pool, channel_ids).await
     }
 
     /// Get all channel IDs accessible to a pubkey.

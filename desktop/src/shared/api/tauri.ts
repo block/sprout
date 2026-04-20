@@ -293,7 +293,6 @@ type RawCommandAvailability = {
 };
 
 type RawManagedAgentPrereqs = {
-  admin: RawCommandAvailability;
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
 };
@@ -1072,7 +1071,6 @@ export async function discoverManagedAgentPrereqs(input: {
   );
 
   return {
-    admin: fromRawCommandAvailability(response.admin),
     acp: fromRawCommandAvailability(response.acp),
     mcp: fromRawCommandAvailability(response.mcp),
   };

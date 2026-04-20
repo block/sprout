@@ -627,8 +627,7 @@ pub(crate) async fn check_channel_membership(
     pubkey_bytes: &[u8],
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let is_member = state
-        .db
-        .is_member(channel_id, pubkey_bytes)
+        .is_member_cached(channel_id, pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
     if is_member {

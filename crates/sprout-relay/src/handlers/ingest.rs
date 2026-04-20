@@ -318,7 +318,7 @@ pub(crate) async fn check_channel_membership(
     ch_id: Uuid,
     pubkey_bytes: &[u8],
 ) -> Result<(), String> {
-    match state.db.is_member(ch_id, pubkey_bytes).await {
+    match state.is_member_cached(ch_id, pubkey_bytes).await {
         Ok(true) => return Ok(()),
         Ok(false) => {}
         Err(e) => return Err(format!("error: database error: {e}")),
@@ -1312,6 +1312,7 @@ pub async fn ingest_event(
                     if let Err(re) = state.db.soft_delete_channel(ch_id).await {
                         warn!(event_id = %event_id_hex, "channel compensation failed: {re}");
                     }
+                    state.invalidate_channel_deleted();
                 }
                 return Err(match e {
                     sprout_db::DbError::AuthEventRejected => {

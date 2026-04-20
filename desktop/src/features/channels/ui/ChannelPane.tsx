@@ -90,7 +90,6 @@ type ChannelPaneProps = {
   threadHeadMessage: TimelineMessage | null;
   threadMessages: MainTimelineEntry[];
   threadTypingPubkeys: string[];
-  threadTotalReplyCount: number;
   threadReplyTargetId: string | null;
   threadReplyTargetMessage: TimelineMessage | null;
   threadScrollTargetId: string | null;
@@ -130,7 +129,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   threadMessages,
   threadScrollTargetId,
   threadTypingPubkeys,
-  threadTotalReplyCount,
   threadReplyTargetId,
   threadReplyTargetMessage,
   typingPubkeys,
@@ -286,7 +284,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           widthPx={threadPanelWidthPx}
           threadReplies={threadMessages}
           threadTypingPubkeys={threadTypingPubkeys}
-          totalReplyCount={threadTotalReplyCount}
         />
       ) : null}
     </div>

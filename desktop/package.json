@@ -18,10 +18,7 @@
     "test:e2e:smoke": "pnpm build && playwright test --project=smoke",
     "test:e2e:integration": "pnpm build && playwright test --project=integration",
     "test:e2e:report": "playwright show-report",
-    "tauri:build": "tauri build",
-    "tauri:release:config": "node scripts/build-release-config.mjs",
-    "release:dmg:publish": "node scripts/publish-dmg-to-github-release.mjs",
-    "release:updater:publish": "node scripts/publish-updater-to-github-release.mjs"
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
@@ -42,7 +39,6 @@
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.0",
     "@tiptap/core": "^3.22.3",
     "@tiptap/extension-link": "^3.22.3",
     "@tiptap/extension-placeholder": "^3.22.3",

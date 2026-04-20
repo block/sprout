@@ -192,7 +192,36 @@ fn resolve_workspace_command(command: &str, app: Option<&AppHandle>) -> Option<P
         .find(|candidate| candidate.exists())
 }
 
+/// Resolve a command to an absolute path, caching results for the app lifetime.
+/// The cache eliminates redundant login-shell spawns when multiple agents share
+/// the same binaries (e.g. `npx`, `uvx`).
 pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Fast path: return cached result without allocating a key.
+    if let Ok(guard) = cache.lock() {
+        if let Some(result) = guard.get(command) {
+            return result.clone();
+        }
+    }
+
+    // Slow path: resolve and cache.
+    let result = resolve_command_uncached(command, app);
+
+    if result.is_some() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(command.to_string(), result.clone());
+        }
+    }
+
+    result
+}
+
+fn resolve_command_uncached(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
     if let Some(path) = resolve_workspace_command(command, app) {
         return Some(path);
     }
@@ -232,30 +261,43 @@ fn path_candidates_from_env(command: &str) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-fn find_via_login_shell(command: &str) -> Option<PathBuf> {
+/// Run a command in a login shell (tries zsh then bash).
+/// Returns trimmed stdout if the command succeeds with non-empty output.
+fn run_in_login_shell(args: &[&str]) -> Option<String> {
     for shell in ["/bin/zsh", "/bin/bash"] {
-        let Ok(output) = Command::new(shell)
-            .args(["-l", "-c", r#"command -v -- "$1""#, "_", command])
-            .output()
-        else {
+        let Ok(output) = Command::new(shell).args(args).output() else {
             continue;
         };
-
         if !output.status.success() {
             continue;
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let Some(resolved) = stdout.lines().rfind(|line| !line.trim().is_empty()) else {
-            continue;
-        };
-        let path = PathBuf::from(resolved.trim());
-        if path.is_absolute() && path.exists() {
-            return Some(path);
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !stdout.is_empty() {
+            return Some(stdout);
         }
     }
-
     None
+}
+
+fn find_via_login_shell(command: &str) -> Option<PathBuf> {
+    let stdout = run_in_login_shell(&["-l", "-c", r#"command -v -- "$1""#, "_", command])?;
+    let resolved = stdout.lines().rfind(|line| !line.trim().is_empty())?;
+    let path = PathBuf::from(resolved.trim());
+    (path.is_absolute() && path.exists()).then_some(path)
+}
+
+/// Return the user's full PATH from a login shell.
+/// Cached via OnceLock so we only spawn one shell per app lifetime.
+pub fn login_shell_path() -> Option<String> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let stdout = run_in_login_shell(&["-l", "-c", "echo $PATH"])?;
+            let last_line = stdout.lines().rfind(|l| !l.trim().is_empty())?;
+            Some(last_line.trim().to_string())
+        })
+        .clone()
 }
 
 fn find_command(command: &str) -> Option<PathBuf> {

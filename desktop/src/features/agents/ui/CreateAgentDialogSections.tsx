@@ -325,7 +325,6 @@ export function CreateAgentRuntimeFields({
 }
 
 export function CreateAgentOptionToggles({
-  isMintSupported,
   isSpawnSupported,
   mintToken,
   mintToggleDisabled,
@@ -338,7 +337,6 @@ export function CreateAgentOptionToggles({
   onToggleStartOnAppLaunch,
   onToggleSpawnAfterCreate,
 }: {
-  isMintSupported: boolean;
   isSpawnSupported: boolean;
   mintToken: boolean;
   mintToggleDisabled: boolean;
@@ -369,9 +367,7 @@ export function CreateAgentOptionToggles({
       >
         <p className="text-sm font-semibold tracking-tight">Mint token</p>
         <p className="mt-1 text-sm text-foreground/70">
-          {prereqs !== null && !isMintSupported
-            ? `Unavailable until ${prereqs.admin.command} is installed.`
-            : "Use sprout-admin to create a bearer token for this agent."}
+          Mint a relay API token for this agent.
         </p>
       </button>
 

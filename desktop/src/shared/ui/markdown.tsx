@@ -221,7 +221,7 @@ function createMarkdownComponents(
       }
 
       if (hasBlockMedia(childArray)) {
-        return <div>{children}</div>;
+        return <div className={paragraphClassName}>{children}</div>;
       }
 
       return <p className={paragraphClassName}>{children}</p>;

@@ -33,13 +33,14 @@ export function isImageOnlyParagraph(childArray: React.ReactNode[]): boolean {
 }
 
 /**
- * Returns true when a paragraph contains block-level media (1+ image/video
- * component) and no meaningful text content. These paragraphs must render as
- * `<div>` instead of `<p>` to avoid invalid `<p><div>` nesting.
+ * Returns true when a paragraph contains any image/video child. The custom
+ * `img` renderer always emits block-level markup (lightbox/video wrapper),
+ * so any such paragraph must render as `<div>` to avoid invalid `<p><div>`
+ * nesting — even when mixed with text or links.
  */
 export function hasBlockMedia(childArray: React.ReactNode[]): boolean {
-  const { imageChildren, nonImageChildren } = classifyChildren(childArray);
-  return imageChildren.length >= 1 && nonImageChildren.length === 0;
+  const { imageChildren } = classifyChildren(childArray);
+  return imageChildren.length >= 1;
 }
 
 export function shallowArrayEqual(a?: string[], b?: string[]): boolean {
