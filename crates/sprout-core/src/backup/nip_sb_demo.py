@@ -303,9 +303,9 @@ def recover(
 
 def main() -> None:
     print("╔══════════════════════════════════════════════════════════════╗")
-    print("║  NIP-SB Protocol Demo — Real Crypto, Simulated Relay       ║")
-    print("║                                                            ║")
-    print("║  scrypt + HKDF-SHA256 + XChaCha20-Poly1305 + secp256k1    ║")
+    print("║  NIP-SB Protocol Demo — Real Crypto, Simulated Relay         ║")
+    print("║                                                              ║")
+    print("║  scrypt + HKDF-SHA256 + XChaCha20-Poly1305 + secp256k1       ║")
     print("╚══════════════════════════════════════════════════════════════╝")
     print()
 
@@ -407,7 +407,7 @@ def main() -> None:
 
     print()
     print("╔══════════════════════════════════════════════════════════════╗")
-    print("║                      ALL TESTS PASSED                      ║")
+    print("║                      ALL TESTS PASSED                        ║")
     print("╚══════════════════════════════════════════════════════════════╝")
 
 
