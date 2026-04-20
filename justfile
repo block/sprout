@@ -85,14 +85,18 @@ desktop-tauri-fmt:
 desktop-tauri-fmt-check:
     cargo fmt --manifest-path {{desktop_tauri_manifest}} --all -- --check
 
-# Check the desktop Tauri Rust crate compiles
-desktop-tauri-check:
+# Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
+_ensure-sidecar-stubs:
     #!/usr/bin/env bash
     set -euo pipefail
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
     mkdir -p desktop/src-tauri/binaries
-    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+    for bin in sprout-acp sprout-mcp-server; do
+        touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
+    done
+
+# Check the desktop Tauri Rust crate compiles
+desktop-tauri-check: _ensure-sidecar-stubs
     cargo check --manifest-path {{desktop_tauri_manifest}}
 
 # Build the full desktop Tauri app locally (unsigned, for testing)
@@ -156,31 +160,21 @@ proxy-release:
     cargo run -p sprout-proxy --release
 
 # Run the desktop Tauri app in dev mode (ports and identity derived from worktree)
-dev *ARGS:
+dev *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
     [[ -d node_modules ]] || pnpm install
-    # Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
-    TARGET=$(rustc -vV | sed -n 's|host: ||p')
-    mkdir -p src-tauri/binaries
-    touch "src-tauri/binaries/sprout-acp-$TARGET"
-    touch "src-tauri/binaries/sprout-mcp-server-$TARGET"
     source ../scripts/instance-env.sh
     echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
     pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
-staging *ARGS:
+staging *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
     pnpm install
-    # Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
-    TARGET=$(rustc -vV | sed -n 's|host: ||p')
-    mkdir -p src-tauri/binaries
-    touch "src-tauri/binaries/sprout-acp-$TARGET"
-    touch "src-tauri/binaries/sprout-mcp-server-$TARGET"
     cd ..
     cargo build --release -p sprout-acp -p sprout-mcp
     cd {{desktop_dir}}

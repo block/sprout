@@ -141,8 +141,8 @@ function SetupHelpCard() {
           <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[12px]">
             cargo build --release --workspace
           </code>{" "}
-          when you want the desktop app to mint tokens or spawn ACP harnesses
-          from this checkout.
+          when you want the desktop app to spawn ACP harnesses from this
+          checkout.
         </p>
         <p>
           If you keep binaries outside your PATH, use the custom ACP and MCP
@@ -169,13 +169,6 @@ export function DoctorSettingsPanel() {
 
   const toolChecks = [
     {
-      id: "admin",
-      label: "Token minting",
-      purpose:
-        "Desktop uses `sprout-admin` to mint managed-agent bearer tokens.",
-      availability: prereqs?.admin ?? null,
-    },
-    {
       id: "acp",
       label: "ACP harness",
       purpose:
@@ -192,10 +185,7 @@ export function DoctorSettingsPanel() {
   ];
 
   const hasMissingSproutTools =
-    prereqs !== null &&
-    (!prereqs.admin.available ||
-      !prereqs.acp.available ||
-      !prereqs.mcp.available);
+    prereqs !== null && (!prereqs.acp.available || !prereqs.mcp.available);
 
   return (
     <section className="space-y-5" data-testid="settings-doctor">
@@ -306,11 +296,6 @@ export function DoctorSettingsPanel() {
                 />
               </div>
             </div>
-
-            <p className="mt-3 text-xs text-muted-foreground">
-              Token minting always checks the default{" "}
-              <code className="font-mono">sprout-admin</code> command.
-            </p>
           </div>
         </div>
 

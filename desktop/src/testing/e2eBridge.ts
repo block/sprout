@@ -348,7 +348,6 @@ type RawCommandAvailability = {
 };
 
 type RawManagedAgentPrereqs = {
-  admin: RawCommandAvailability;
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
 };
@@ -3056,11 +3055,6 @@ async function handleDiscoverManagedAgentPrereqs(args: {
   };
 }): Promise<RawManagedAgentPrereqs> {
   return {
-    admin: {
-      command: "sprout-admin",
-      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-admin",
-      available: true,
-    },
     acp: {
       command: args.input?.acpCommand ?? "sprout-acp",
       resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-acp",

@@ -393,9 +393,6 @@ test("shows doctor checks for local sprout tooling", async ({ page }) => {
   await openSettings(page, "doctor");
 
   await expect(page.getByTestId("settings-doctor")).toBeVisible();
-  await expect(page.getByTestId("doctor-check-admin")).toContainText(
-    "sprout-admin",
-  );
   await expect(page.getByTestId("doctor-check-acp")).toContainText(
     "sprout-acp",
   );
