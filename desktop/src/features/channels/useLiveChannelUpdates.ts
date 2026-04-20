@@ -14,7 +14,8 @@ export type UseLiveChannelUpdatesOptions = {
   onLiveMention?: () => void;
 };
 
-const LIVE_MENTION_SUBSCRIPTION_RETRY_MS = 1_000;
+const LIVE_MENTION_SUBSCRIPTION_RETRY_BASE_MS = 1_000;
+const LIVE_MENTION_SUBSCRIPTION_RETRY_MAX_MS = 30_000;
 
 function getMessageTimestamp(event: RelayEvent) {
   return new Date(event.created_at * 1_000).toISOString();
@@ -45,12 +46,6 @@ function rememberMentionEvent(
   return true;
 }
 
-async function disposeLiveSubscriptions(
-  subscriptions: Array<() => Promise<void>>,
-) {
-  await Promise.allSettled(subscriptions.map((dispose) => dispose()));
-}
-
 export function useLiveChannelUpdates(
   channels: Channel[],
   activeChannelId: string | null,
@@ -69,10 +64,10 @@ export function useLiveChannelUpdates(
       ),
     [channels],
   );
-  const mentionChannelIds = React.useMemo(
-    () => [...new Set(channels.map((channel) => channel.id))].sort(),
-    [channels],
-  );
+  // Effect dep uses a primitive so refetches that produce new Set refs with
+  // identical contents don't churn subscriptions. The Set is still handy for
+  // closure reads via useEffectEvent.
+  const hasLiveChannels = liveChannelIds.size > 0;
 
   const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
     const channelId = getChannelIdFromTags(event.tags);
@@ -119,7 +114,7 @@ export function useLiveChannelUpdates(
   }, [queryClient]);
 
   React.useEffect(() => {
-    if (liveChannelIds.size === 0) {
+    if (!hasLiveChannels) {
       return;
     }
 
@@ -150,76 +145,64 @@ export function useLiveChannelUpdates(
         void cleanup();
       }
     };
-  }, [liveChannelIds]);
+  }, [hasLiveChannels]);
 
   React.useEffect(() => {
-    if (
-      !options.onLiveMention ||
-      normalizedCurrentPubkey.length === 0 ||
-      mentionChannelIds.length === 0
-    ) {
+    if (!options.onLiveMention || normalizedCurrentPubkey.length === 0) {
       return;
     }
 
     let isDisposed = false;
-    let cleanup: Array<() => Promise<void>> = [];
+    let cleanup: (() => Promise<void>) | undefined;
     let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+    let retryAttempt = 0;
 
-    const subscribeToMentionChannels = async () => {
-      const settled = await Promise.allSettled(
-        mentionChannelIds.map((channelId) =>
-          relayClient.subscribeToChannelMentionEvents(
-            channelId,
-            normalizedCurrentPubkey,
-            (event) => {
-              if (!isDisposed) {
-                handleMentionEvent(event);
-              }
-            },
-          ),
-        ),
-      );
-
-      const nextCleanup = settled.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      );
-
-      if (isDisposed) {
-        await disposeLiveSubscriptions(nextCleanup);
-        return;
+    const subscribe = async () => {
+      try {
+        const dispose = await relayClient.subscribeToMentionsForPubkey(
+          normalizedCurrentPubkey,
+          (event) => {
+            if (!isDisposed) {
+              handleMentionEvent(event);
+            }
+          },
+        );
+        if (isDisposed) {
+          void dispose();
+          return;
+        }
+        cleanup = dispose;
+        retryAttempt = 0;
+      } catch (error) {
+        if (isDisposed) {
+          return;
+        }
+        const delayMs = Math.min(
+          LIVE_MENTION_SUBSCRIPTION_RETRY_BASE_MS * 2 ** retryAttempt,
+          LIVE_MENTION_SUBSCRIPTION_RETRY_MAX_MS,
+        );
+        retryAttempt += 1;
+        console.error(
+          `Failed to subscribe to Home mention updates; retrying in ${delayMs}ms`,
+          error,
+        );
+        retryTimeout = window.setTimeout(() => {
+          retryTimeout = undefined;
+          void subscribe();
+        }, delayMs);
       }
-
-      const firstFailure = settled.find(
-        (result) => result.status === "rejected",
-      );
-      if (!firstFailure) {
-        cleanup = nextCleanup;
-        return;
-      }
-
-      await disposeLiveSubscriptions(nextCleanup);
-      if (isDisposed) {
-        return;
-      }
-
-      console.error(
-        "Failed to subscribe to all Home mention updates; retrying",
-        firstFailure.reason,
-      );
-      retryTimeout = window.setTimeout(() => {
-        retryTimeout = undefined;
-        void subscribeToMentionChannels();
-      }, LIVE_MENTION_SUBSCRIPTION_RETRY_MS);
     };
 
-    void subscribeToMentionChannels();
+    void subscribe();
 
     return () => {
       isDisposed = true;
       if (retryTimeout !== undefined) {
         window.clearTimeout(retryTimeout);
       }
-      void disposeLiveSubscriptions(cleanup);
+      if (cleanup) {
+        void cleanup();
+      }
     };
-  }, [mentionChannelIds, normalizedCurrentPubkey, options.onLiveMention]);
+  }, [normalizedCurrentPubkey, options.onLiveMention]);
 }

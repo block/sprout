@@ -225,13 +225,12 @@ export class RelayClient {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
   }
 
-  async subscribeToChannelMentionEvents(
-    channelId: string,
+  async subscribeToMentionsForPubkey(
     pubkey: string,
     onEvent: (event: RelayEvent) => void,
   ) {
     return this.subscribe(
-      this.buildChannelMentionFilter(channelId, pubkey, 50),
+      this.buildMentionsForPubkeyFilter(pubkey, 50),
       onEvent,
     );
   }
@@ -307,8 +306,8 @@ export class RelayClient {
       };
     });
 
-    this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
     await this.replayLiveSubscriptions();
+    this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
     this.emitReconnectIfNeeded();
   }
 
@@ -337,14 +336,12 @@ export class RelayClient {
     };
   }
 
-  private buildChannelMentionFilter(
-    channelId: string,
+  private buildMentionsForPubkeyFilter(
     pubkey: string,
     limit: number,
   ): RelaySubscriptionFilter {
     return {
       kinds: [...HOME_MENTION_EVENT_KINDS],
-      "#h": [channelId],
       "#p": [pubkey],
       limit,
       since: Math.floor(Date.now() / 1_000),
