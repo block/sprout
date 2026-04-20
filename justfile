@@ -95,6 +95,16 @@ desktop-tauri-check:
     touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
     cargo check --manifest-path {{desktop_tauri_manifest}}
 
+# Build the full desktop Tauri app locally (unsigned, for testing)
+desktop-release-build target="aarch64-apple-darwin":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TARGET={{target}}
+    mkdir -p desktop/src-tauri/binaries
+    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
+    touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+    cd {{desktop_dir}} && pnpm install && pnpm tauri build --target {{target}}
+
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-tauri-fmt-check desktop-build desktop-tauri-check
 

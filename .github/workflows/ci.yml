@@ -221,3 +221,53 @@ jobs:
       - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
       - name: Dependency policy
         run: cargo-deny check
+
+  server-cross-compile:
+    name: Server Cross-Compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - name: Install cross
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2
+        with:
+          tool: cross@0.2.5
+      - name: Build server binaries
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cross build --release --target "$TARGET" \
+            -p sprout-relay \
+            -p sprout-acp \
+            -p sprout-mcp
+
+  desktop-build-macos:
+    name: Desktop Build (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+      - name: Create sidecar placeholders
+        run: |
+          TARGET=$(rustc -vV | sed -n 's|host: ||p')
+          mkdir -p desktop/src-tauri/binaries
+          touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
+          touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+      - name: Build Tauri app
+        run: cd desktop && pnpm tauri build
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
