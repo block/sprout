@@ -4,6 +4,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../channels/message_content.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'forum_models.dart';
@@ -33,6 +34,8 @@ class ForumPostCard extends ConsumerWidget {
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
     final displayName = profile?.label ?? _shortPubkey(post.pubkey);
+    final userCache = ref.watch(userCacheProvider);
+    final mentionNames = _buildMentionNames(post.mentionPubkeys, userCache);
     final preview = post.content.length > 200
         ? '${post.content.substring(0, 200)}...'
         : post.content;
@@ -94,13 +97,14 @@ class ForumPostCard extends ConsumerWidget {
             const SizedBox(height: Grid.xxs),
 
             // Content preview
-            Text(
-              preview,
-              style: context.textTheme.bodyMedium?.copyWith(
-                color: context.colors.onSurface,
+            ClipRect(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 120),
+                child: MessageContent(
+                  content: preview,
+                  mentionNames: mentionNames,
+                ),
               ),
-              maxLines: 4,
-              overflow: TextOverflow.ellipsis,
             ),
 
             // Thread summary
@@ -250,4 +254,18 @@ class _PostAvatar extends StatelessWidget {
 String _shortPubkey(String pubkey) {
   if (pubkey.length > 12) return '${pubkey.substring(0, 8)}\u2026';
   return pubkey;
+}
+
+Map<String, String> _buildMentionNames(
+  List<String> mentionPubkeys,
+  Map<String, UserProfile> userCache,
+) {
+  final names = <String, String>{};
+  for (final pk in mentionPubkeys) {
+    final p = userCache[pk.toLowerCase()];
+    if (p?.displayName != null) {
+      names[pk.toLowerCase()] = p!.displayName!;
+    }
+  }
+  return names;
 }
