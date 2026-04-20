@@ -34,8 +34,11 @@ class ForumPostCard extends ConsumerWidget {
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
     final displayName = profile?.label ?? _shortPubkey(post.pubkey);
-    final userCache = ref.watch(userCacheProvider);
-    final mentionNames = _buildMentionNames(post.mentionPubkeys, userCache);
+    final mentionNames = ref.watch(
+      userCacheProvider.select(
+        (cache) => _buildMentionNames(post.mentionPubkeys, cache),
+      ),
+    );
     final preview = post.content.length > 200
         ? '${post.content.substring(0, 200)}...'
         : post.content;
@@ -97,12 +100,21 @@ class ForumPostCard extends ConsumerWidget {
             const SizedBox(height: Grid.xxs),
 
             // Content preview
-            ClipRect(
+            ShaderMask(
+              shaderCallback: (bounds) => const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white, Colors.white, Colors.transparent],
+                stops: [0.0, 0.75, 1.0],
+              ).createShader(bounds),
+              blendMode: BlendMode.dstIn,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 120),
-                child: MessageContent(
-                  content: preview,
-                  mentionNames: mentionNames,
+                child: IgnorePointer(
+                  child: MessageContent(
+                    content: preview,
+                    mentionNames: mentionNames,
+                  ),
                 ),
               ),
             ),
