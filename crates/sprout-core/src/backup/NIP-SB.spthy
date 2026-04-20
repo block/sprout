@@ -11,7 +11,8 @@
  *   3. Password compromise: if the password leaks, the nsec is recoverable
  *      (proves the compromise model is meaningful, not vacuous).
  *   4. All-chunks-required: recovery requires ALL chunks; any missing
- *      chunk prevents reconstruction.
+ *      chunk prevents reconstruction. (Enforced by rule structure,
+ *      not by a separate lemma — see note below.)
  *
  * == What this model does NOT prove ==
  *   - Unlinkability (blobs not attributable to user): this is an
@@ -35,6 +36,13 @@
  *     Modeled as a keyed hash with domain separation.
  *   - XChaCha20-Poly1305 → senc/sdec (Tamarin's built-in IND-CPA
  *     symmetric encryption). AAD is folded into the plaintext tuple.
+ *     NOTE: the model embeds the blob index ('0', '1', '2') and a
+ *     chunk label inside the encrypted tuple. The real protocol does
+ *     NOT — it encrypts only the padded chunk bytes. This means the
+ *     model proves a slightly STRONGER property: ciphertext is bound
+ *     to a specific blob index at the symbolic level, preventing
+ *     blob-swap attacks that the real protocol does not prevent.
+ *     This is a strengthening artifact, not a gap.
  *   - N is fixed at 3 (spec minimum). The model uses three explicit
  *     blob indices '0', '1', '2'.
  *   - The nsec is split into three symbolic parts (part_0, part_1,

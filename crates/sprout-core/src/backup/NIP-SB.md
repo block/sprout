@@ -8,7 +8,7 @@ Steganographic Key Backup
 
 Your Nostr identity is a single private key. If you lose it, you lose everything — your name, your messages, your connections. There's no "forgot my password" button, no customer support, no recovery email. The key IS the identity.
 
-This NIP lets you back up your key to any Nostr relay using just a password. The backup is invisible — it hides in plain sight among normal relay data. Nobody can tell it exists, not even the relay operator. Nobody can tell which events belong to your backup, or how many there are. To recover, you just need your password and your public key (which is your Nostr identity — you know it, or you can look it up).
+This NIP lets you back up your key to any Nostr relay using just a password. The backup is invisible — it hides in plain sight among normal relay data. Nobody with a copy of the relay's database can tell it exists. Nobody can tell which events belong to your backup, or how many there are. To recover, you just need your password and your public key (which is your Nostr identity — you know it, or you can look it up).
 
 The backup is split into multiple pieces, each stored as a separate Nostr event signed by a different throwaway key. Without your password, the pieces are indistinguishable from any other data on the relay, unlinkable to each other, and unlinkable to you.
 
@@ -57,7 +57,7 @@ This NIP eliminates the accumulation problem. An attacker who dumps a relay sees
 - **`pubkey_bytes`**: The 32-byte raw x-only public key (as used throughout Nostr per [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki)), NOT hex-encoded.
 - **`to_string(i)`**: The ASCII decimal representation of the blob index `i`, with no leading zeros or padding. Examples: `"0"`, `"1"`, `"15"`. UTF-8 encoded (ASCII is a subset of UTF-8).
 - **Hex encoding**: Lowercase hexadecimal, no `0x` prefix. Used for d-tags and pubkeys in JSON.
-- **Base64**: RFC 4648 standard alphabet (`A-Z`, `a-z`, `0-9`, `+`, `/`) with `=` padding. NOT URL-safe alphabet. The `content` field of each blob event is base64-encoded and MUST decode to exactly 56 bytes (76 base64 characters with no trailing `=` padding since 56 bytes encodes evenly: `ceil(56/3)*4 = 76`).
+- **Base64**: RFC 4648 standard alphabet (`A-Z`, `a-z`, `0-9`, `+`, `/`) with `=` padding. NOT URL-safe alphabet. The `content` field of each blob event is base64-encoded and MUST decode to exactly 56 bytes. This produces 76 base64 characters including one trailing `=` padding character (`56 mod 3 = 2`, so padding is required). Implementations MUST accept both padded and unpadded base64 on input, and MUST produce padded base64 on output.
 
 ## Terminology
 
@@ -81,6 +81,7 @@ This NIP provides relay-based steganographic backup and recovery of a Nostr priv
 - **Deniability is probabilistic, not absolute**: if a relay's ambient `kind:30078` traffic is very sparse, the presence of backup-shaped events may be statistically detectable. Deniability improves as the relay's `kind:30078` population grows.
 - **No key rotation or migration**: this NIP provides backup and recovery only. It does not provide key rotation, key migration, or ongoing key management.
 - **No fault tolerance**: this NIP does not use erasure coding or threshold schemes. Any missing blob makes recovery impossible. Future versions MAY add Reed-Solomon coding for fault tolerance.
+- **Chunks are byte slices, not independent shares**: unlike Shamir's Secret Sharing, each chunk is a contiguous slice of the encrypted key, not an information-theoretically independent share. A compromised chunk reveals its portion of the ciphertext (though not the plaintext, which requires `enc_key`).
 
 ## Overview
 
@@ -271,7 +272,7 @@ Implementations SHOULD periodically verify blob existence (for example, on login
      # with counter suffix (identical to Step 4 — reject-and-retry, no mod n)
      signing_pubkey_i = pubkey_from_secret(signing_secret_i)
 
-     Query relay: REQ { "kinds": [30078], "#d": [d_tag_i] }
+     Query relay: REQ { "kinds": [30078], "#d": [d_tag_i], "authors": [signing_pubkey_i] }
 
      Verify event.pubkey == signing_pubkey_i   (reject impostors)
      Verify event.id and event.sig per NIP-01  (reject forgeries)
@@ -286,9 +287,13 @@ Implementations SHOULD periodically verify blob existence (for example, on login
 
 6. nsec_bytes = chunk_0 ‖ chunk_1 ‖ … ‖ chunk_{N-1}   # 32 bytes
 
-7. Validate: derive pubkey from nsec_bytes.
-   If derived pubkey == provided pubkey → recovery successful.
-   If not → wrong password (or corrupted blob). Do not use the key.
+7. Validate the recovered nsec_bytes:
+   a. Check nsec_bytes is a valid secp256k1 scalar: interpret as a 256-bit
+      big-endian unsigned integer; MUST be in range [1, n-1] where n is the
+      secp256k1 group order. If not → wrong password.
+   b. Derive pubkey from nsec_bytes.
+   c. If derived pubkey == provided pubkey → recovery successful.
+      If not → wrong password (or corrupted blob). Do not use the key.
 ```
 
 Total scrypt calls at recovery: 1 (for N) + 1 (for enc_key) + N (for blob tags) = N+2.
@@ -352,7 +357,7 @@ Each backup blob is a standard NIP-01 event with the following structure:
 - `content`: base64-encoded 56-byte blob: 24-byte random nonce followed by 32-byte authenticated ciphertext.
 - `sig`: Schnorr signature by `signing_keypair_i` over the NIP-01 event hash.
 
-The `content` field MUST be exactly 76 characters of base64 (56 bytes, no padding ambiguity: `ceil(56/3)*4 = 76`). Implementations MUST reject blobs whose decoded content is not exactly 56 bytes.
+The `content` field MUST be 76 characters of base64 (56 bytes; includes one `=` padding character since `56 mod 3 = 2`). Implementations MUST reject blobs whose decoded content is not exactly 56 bytes.
 
 No field in any blob contains or reveals the user's real pubkey. While the user's pubkey is an input to the KDF chain, the outputs (throwaway signing keys, d-tags, ciphertext) are computationally unlinkable to it without the password. The throwaway signing keys are the only pubkeys visible to the relay.
 
