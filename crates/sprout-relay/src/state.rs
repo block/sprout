@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use axum::extract::ws::Message as WsMessage;
 use dashmap::DashMap;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -221,6 +223,10 @@ pub struct AppState {
 
 impl AppState {
     /// Constructs `AppState` from its component services.
+    ///
+    /// Returns `(state, audit_shutdown)`. The caller should call
+    /// `audit_shutdown.drain().await` during graceful shutdown so queued
+    /// audit entries are flushed before the process exits.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Config,
@@ -233,7 +239,7 @@ impl AppState {
         workflow_engine: Arc<WorkflowEngine>,
         relay_keypair: nostr::Keys,
         media_storage: MediaStorage,
-    ) -> Self {
+    ) -> (Self, AuditShutdownHandle) {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
         let search_arc = Arc::new(search);
@@ -263,21 +269,39 @@ impl AppState {
         let audit_arc = Arc::new(audit);
         let (audit_tx, mut audit_rx) = mpsc::channel::<sprout_audit::NewAuditEntry>(1000);
         let audit_for_worker = Arc::clone(&audit_arc);
-        tokio::spawn(async move {
-            while let Some(entry) = audit_rx.recv().await {
-                let t = std::time::Instant::now();
-                if let Err(e) = audit_for_worker.log(entry).await {
-                    metrics::counter!("sprout_audit_log_errors_total").increment(1);
-                    tracing::error!("Audit log failed: {e}");
-                } else {
-                    metrics::histogram!("sprout_audit_log_seconds")
-                        .record(t.elapsed().as_secs_f64());
+        let audit_cancel = CancellationToken::new();
+        let audit_cancel_worker = audit_cancel.clone();
+        let audit_worker_handle = tokio::spawn(async move {
+            // Normal operation: process entries as they arrive.
+            loop {
+                tokio::select! {
+                    entry = audit_rx.recv() => {
+                        match entry {
+                            Some(entry) => log_audit_entry(&audit_for_worker, entry).await,
+                            None => break, // channel closed
+                        }
+                    }
+                    _ = audit_cancel_worker.cancelled() => {
+                        // Close the receiver: rejects future sends and lets us
+                        // drain everything already buffered without a race.
+                        audit_rx.close();
+                        break;
+                    }
                 }
+            }
+            // Drain: recv() returns buffered entries, then None once empty.
+            let mut drained = 0u32;
+            while let Some(entry) = audit_rx.recv().await {
+                log_audit_entry(&audit_for_worker, entry).await;
+                drained += 1;
+            }
+            if drained > 0 {
+                tracing::info!(drained, "audit worker flushed remaining entries");
             }
             tracing::warn!("audit log worker exited (expected on shutdown)");
         });
 
-        Self {
+        let state = Self {
             config: Arc::new(config),
             db,
             redis_pool,
@@ -318,7 +342,14 @@ impl AppState {
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
-        }
+        };
+        (
+            state,
+            AuditShutdownHandle {
+                cancel: audit_cancel,
+                handle: audit_worker_handle,
+            },
+        )
     }
 
     /// Record an event ID as locally-published for dedup.
@@ -381,6 +412,43 @@ impl AppState {
         let result = self.db.get_accessible_channel_ids(pubkey).await?;
         self.accessible_channels_cache.insert(key, result.clone());
         Ok(result)
+    }
+}
+
+/// Handle for graceful audit worker shutdown.
+///
+/// Signals the worker to stop accepting new entries, drain its buffer,
+/// and exit. Independent of `Arc<AppState>` lifetime — works even when
+/// background tasks (reaper, pubsub, health) still hold state clones.
+pub struct AuditShutdownHandle {
+    cancel: CancellationToken,
+    handle: JoinHandle<()>,
+}
+
+impl AuditShutdownHandle {
+    /// Signal the audit worker to drain and wait up to `timeout` for it to finish.
+    pub async fn drain(self, timeout: std::time::Duration) {
+        self.cancel.cancel();
+        match tokio::time::timeout(timeout, self.handle).await {
+            Ok(Ok(())) => tracing::info!("Audit worker drained cleanly"),
+            Ok(Err(e)) => tracing::error!("Audit worker panicked: {e}"),
+            Err(_) => tracing::error!(
+                ?timeout,
+                "Audit worker did not drain in time — exiting anyway"
+            ),
+        }
+    }
+}
+
+/// Log a single audit entry with metrics. Extracted so the normal loop
+/// and the post-cancel drain share the same logic.
+async fn log_audit_entry(audit: &sprout_audit::AuditService, entry: sprout_audit::NewAuditEntry) {
+    let t = std::time::Instant::now();
+    if let Err(e) = audit.log(entry).await {
+        metrics::counter!("sprout_audit_log_errors_total").increment(1);
+        tracing::error!("Audit log failed: {e}");
+    } else {
+        metrics::histogram!("sprout_audit_log_seconds").record(t.elapsed().as_secs_f64());
     }
 }
 
