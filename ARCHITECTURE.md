@@ -188,11 +188,11 @@ On success, `ConnectionState.auth_state` transitions from `Pending` → `Authent
 When `SPROUT_IDENTITY_MODE` is `proxy` or `hybrid`, the relay sits behind a trusted auth proxy that injects an identity JWT via the configured header (`SPROUT_IDENTITY_JWT_HEADER`). The flow adds a two-phase binding step:
 
 1. **WS Upgrade** — The relay validates the identity JWT (signature + expiry via JWKS), extracts `uid` and `username` claims, and stashes them as `PendingProxyIdentity` on the connection. No pubkey is known yet.
-2. **NIP-42 AUTH** — The client signs the challenge with its Nostr keypair. The AUTH handler verifies the signature, then calls `bind_or_validate_identity(uid, device_cn, pubkey)` to create or validate the binding. On success, `AuthState` transitions to `Authenticated`.
-3. **REST API** — Proxy-authenticated REST requests validate the identity JWT, then look up the existing `(uid, device_cn) → pubkey` binding from the `identity_bindings` table.
+2. **NIP-42 AUTH** — The client signs the challenge with its Nostr keypair. The AUTH handler verifies the signature, then calls `bind_or_validate_identity(uid, pubkey)` to create or validate the binding. On success, `AuthState` transitions to `Authenticated`.
+3. **REST API** — Proxy-authenticated REST requests validate the identity JWT, then look up the existing `uid → pubkey` binding from the `identity_bindings` table.
 4. **Registration** — `POST /api/identity/register` allows initial binding of a pubkey to a corporate identity via NIP-98 proof of key ownership.
 
-**Binding semantics:** Once a `(uid, device_cn)` pair is bound to a pubkey, the binding is immutable. A different pubkey for the same slot returns a 409 Conflict. Admin can unbind via `sprout-admin unbind-identity`.
+**Binding semantics:** Once a uid is bound to a pubkey, the binding is immutable. A different pubkey for the same uid returns a 409 Conflict. Admin can unbind via `sprout-admin unbind-identity`. Keys are shared across devices via NIP-AB pairing.
 
 **Hybrid mode:** When the identity JWT header is absent, the connection falls through to standard NIP-42 auth (API tokens, Okta JWTs). This allows agents without corporate JWTs to authenticate alongside human users.
 
@@ -910,7 +910,7 @@ Docker Compose provides the full local development stack. All services include h
 | `api_tokens` | API token records (hash only, never plaintext) |
 | `audit_log` | Hash-chain audit entries |
 | `delivery_log` | Delivery tracking (partitioned; Rust module pending) |
-| `identity_bindings` | Proxy mode: (uid, device_cn) → pubkey binding for corporate identity |
+| `identity_bindings` | Proxy mode: uid → pubkey binding for corporate identity |
 
 ### Redis Key Patterns
 

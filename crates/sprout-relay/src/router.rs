@@ -221,7 +221,7 @@ async fn nip11_or_ws_handler(
         return Json(info).into_response();
     }
 
-    // ── Proxy / hybrid identity: validate JWT + device_cn at upgrade time ──
+    // ── Proxy / hybrid identity: validate JWT at upgrade time ─────────────
     //   - Proxy:  identity token mandatory — reject if missing.
     //   - Hybrid: identity token preferred — fall through to NIP-42 if missing.
     //   NIP-42 challenge is always sent; the AUTH handler resolves the pubkey binding.
@@ -233,15 +233,9 @@ async fn nip11_or_ws_handler(
         {
             Some(jwt) => match state.auth.validate_identity_jwt(jwt).await {
                 Ok((identity_claims, scopes)) => {
-                    let device_cn = crate::api::extract_device_cn(
-                        &headers,
-                        &state.auth.identity_config().device_cn_header,
-                    )
-                    .to_string();
                     Some(crate::connection::PendingProxyIdentity {
                         uid: identity_claims.uid,
                         username: identity_claims.username,
-                        device_cn,
                         scopes,
                     })
                 }

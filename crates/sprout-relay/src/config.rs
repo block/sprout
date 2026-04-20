@@ -158,9 +158,6 @@ impl Config {
         if let Ok(jwt_header) = std::env::var("SPROUT_IDENTITY_JWT_HEADER") {
             auth.identity.identity_jwt_header = jwt_header;
         }
-        if let Ok(cn_header) = std::env::var("SPROUT_IDENTITY_DEVICE_CN_HEADER") {
-            auth.identity.device_cn_header = cn_header;
-        }
 
         // When identity mode is active the relay sits behind a trusted proxy
         // (auth proxy) — force require_auth_token so the NIP-42 fallback path

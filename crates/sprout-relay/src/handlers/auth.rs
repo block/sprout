@@ -70,7 +70,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
     // event only needs to prove the client owns its pubkey.  No JWT or API
     // token tag is required — the identity was already established from the
     // proxy headers.  After signature verification, the relay creates or
-    // validates the (uid, device_cn) → pubkey binding.
+    // validates the uid → pubkey binding.
     if let Some(proxy) = proxy_identity {
         // Verify event structure + signature + challenge + relay URL (no token check).
         let event_clone = event.clone();
@@ -96,11 +96,11 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             return;
         }
 
-        // Resolve the (uid, device_cn) → pubkey binding.
+        // Resolve the uid → pubkey binding.
         let pubkey_bytes = event.pubkey.serialize().to_vec();
         match state
             .db
-            .bind_or_validate_identity(&proxy.uid, &proxy.device_cn, &pubkey_bytes, &proxy.username)
+            .bind_or_validate_identity(&proxy.uid, &pubkey_bytes, &proxy.username)
             .await
         {
             Ok(sprout_db::BindingResult::Created) => {
@@ -108,7 +108,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 // effect immediately — prevents a 2-min window where the pubkey
                 // could still authenticate via standard auth.
                 state.identity_bound_cache.invalidate(&pubkey_bytes);
-                info!(conn_id = %conn_id, uid = %proxy.uid, device_cn = %proxy.device_cn,
+                info!(conn_id = %conn_id, uid = %proxy.uid,
                       pubkey = %event.pubkey.to_hex(), "identity binding created");
             }
             Ok(sprout_db::BindingResult::Matched) => {
@@ -116,7 +116,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                       "identity binding matched");
             }
             Ok(sprout_db::BindingResult::Mismatch { .. }) => {
-                warn!(conn_id = %conn_id, uid = %proxy.uid, device_cn = %proxy.device_cn,
+                warn!(conn_id = %conn_id, uid = %proxy.uid,
                       pubkey = %event.pubkey.to_hex(), "identity binding mismatch");
                 metrics::counter!("sprout_auth_failures_total", "reason" => "binding_mismatch")
                     .increment(1);

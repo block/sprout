@@ -29,18 +29,16 @@ pub(crate) type ConnectionSubscriptions = Arc<Mutex<HashMap<String, Vec<Filter>>
 
 /// Proxy identity claims stashed on the connection at upgrade time.
 ///
-/// In proxy/hybrid mode the JWT and device_cn headers are validated during
-/// the HTTP → WS upgrade, but the client's pubkey is not yet known.  The
-/// claims are held here until the NIP-42 AUTH event arrives, at which point
-/// the relay can bind (uid, device_cn) → pubkey.
+/// In proxy/hybrid mode the JWT is validated during the HTTP → WS upgrade,
+/// but the client's pubkey is not yet known. The claims are held here until
+/// the NIP-42 AUTH event arrives, at which point the relay can bind
+/// uid → pubkey.
 #[derive(Debug, Clone)]
 pub struct PendingProxyIdentity {
     /// Corporate user identifier extracted from the identity JWT.
     pub uid: String,
     /// Human-readable username from the identity JWT.
     pub username: String,
-    /// Device common name from the client certificate header.
-    pub device_cn: String,
     /// Permission scopes granted by the identity JWT.
     pub scopes: Vec<sprout_auth::Scope>,
 }
@@ -129,7 +127,7 @@ impl ConnectionState {
 ///
 /// If `proxy_identity` is `Some`, the connection has a validated corporate
 /// identity from the proxy but still requires NIP-42 to prove the client's
-/// Nostr pubkey. The AUTH handler will bind (uid, device_cn) → pubkey.
+/// Nostr pubkey. The AUTH handler will bind uid → pubkey.
 pub async fn handle_connection(
     socket: WebSocket,
     state: Arc<AppState>,

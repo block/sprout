@@ -1,24 +1,22 @@
 //! Identity binding persistence for proxy identity mode.
 //!
-//! Maps (corporate_uid, device_cn) pairs to Nostr pubkeys. Each device
-//! gets its own binding, enabling multi-device support under one corporate
-//! identity.
+//! Maps corporate UIDs to Nostr pubkeys. Each user gets a single binding,
+//! and keys are shared across devices via NIP-AB pairing.
 //!
 //! # TODO: Self-service key rotation
 //!
 //! Bindings are currently immutable — rebinding requires admin intervention
 //! (`sprout-admin unbind-identity`). Planned work:
 //!
-//! - Add `POST /api/identity/rotate` endpoint (JWT + device cert + NIP-98 with new key).
+//! - Add `POST /api/identity/rotate` endpoint (JWT + NIP-98 with new key).
 //! - Soft-rotate: add `rotated_at` / `replaced_by` columns instead of deleting old rows,
 //!   preserving an audit trail and letting the UI resolve old pubkeys to usernames.
-//! - Add a UNIQUE constraint on pubkey for active (non-rotated) bindings.
 //! - Keep the 409 Conflict on mismatch — rotation must be an explicit action, not implicit.
 
 use crate::error::Result;
 use sqlx::PgPool;
 
-/// Result of attempting to bind a pubkey to a (uid, device_cn) pair.
+/// Result of attempting to bind a pubkey to a uid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingResult {
     /// No prior binding existed; a new one was created.
@@ -27,7 +25,7 @@ pub enum BindingResult {
     Matched,
     /// A binding already existed but for a different pubkey.
     Mismatch {
-        /// The pubkey that is already bound to this (uid, device_cn).
+        /// The pubkey that is already bound to this uid.
         existing_pubkey: Vec<u8>,
     },
 }
@@ -37,43 +35,38 @@ pub enum BindingResult {
 pub struct IdentityBinding {
     /// Corporate user identifier.
     pub uid: String,
-    /// Device common name from client certificate.
-    pub device_cn: String,
     /// Bound Nostr public key (32 bytes).
     pub pubkey: Vec<u8>,
     /// Cached username from the identity JWT.
     pub username: Option<String>,
 }
 
-/// Look up a binding by (uid, device_cn).
+/// Look up a binding by uid.
 pub async fn get_identity_binding(
     pool: &PgPool,
     uid: &str,
-    device_cn: &str,
 ) -> Result<Option<IdentityBinding>> {
-    let row = sqlx::query_as::<_, (String, String, Vec<u8>, Option<String>)>(
+    let row = sqlx::query_as::<_, (String, Vec<u8>, Option<String>)>(
         r#"
-        SELECT uid, device_cn, pubkey, username
+        SELECT uid, pubkey, username
         FROM identity_bindings
-        WHERE uid = $1 AND device_cn = $2
+        WHERE uid = $1
         "#,
     )
     .bind(uid)
-    .bind(device_cn)
     .fetch_optional(pool)
     .await?;
 
     Ok(
-        row.map(|(uid, device_cn, pubkey, username)| IdentityBinding {
+        row.map(|(uid, pubkey, username)| IdentityBinding {
             uid,
-            device_cn,
             pubkey,
             username,
         }),
     )
 }
 
-/// Bind a pubkey to (uid, device_cn), or validate an existing binding.
+/// Bind a pubkey to a uid, or validate an existing binding.
 ///
 /// Uses `SELECT ... FOR UPDATE` inside a transaction to prevent race conditions
 /// on first bind.
@@ -85,7 +78,6 @@ pub async fn get_identity_binding(
 pub async fn bind_or_validate_identity(
     pool: &PgPool,
     uid: &str,
-    device_cn: &str,
     pubkey: &[u8],
     username: &str,
 ) -> Result<BindingResult> {
@@ -99,12 +91,11 @@ pub async fn bind_or_validate_identity(
         r#"
         SELECT pubkey
         FROM identity_bindings
-        WHERE uid = $1 AND device_cn = $2
+        WHERE uid = $1
         FOR UPDATE
         "#,
     )
     .bind(uid)
-    .bind(device_cn)
     .fetch_optional(&mut *tx)
     .await?;
 
@@ -115,12 +106,11 @@ pub async fn bind_or_validate_identity(
                 sqlx::query(
                     r#"
                     UPDATE identity_bindings
-                    SET last_seen_at = NOW(), username = NULLIF($3, '')
-                    WHERE uid = $1 AND device_cn = $2
+                    SET last_seen_at = NOW(), username = NULLIF($2, '')
+                    WHERE uid = $1
                     "#,
                 )
                 .bind(uid)
-                .bind(device_cn)
                 .bind(username)
                 .execute(&mut *tx)
                 .await?;
@@ -132,12 +122,11 @@ pub async fn bind_or_validate_identity(
         None => {
             sqlx::query(
                 r#"
-                INSERT INTO identity_bindings (uid, device_cn, pubkey, username)
-                VALUES ($1, $2, $3, NULLIF($4, ''))
+                INSERT INTO identity_bindings (uid, pubkey, username)
+                VALUES ($1, $2, NULLIF($3, ''))
                 "#,
             )
             .bind(uid)
-            .bind(device_cn)
             .bind(pubkey)
             .bind(username)
             .execute(&mut *tx)
@@ -148,41 +137,6 @@ pub async fn bind_or_validate_identity(
 
     tx.commit().await?;
     Ok(result)
-}
-
-/// Get all bindings for a given uid (all devices).
-pub async fn get_bindings_for_uid(pool: &PgPool, uid: &str) -> Result<Vec<IdentityBinding>> {
-    let rows = sqlx::query_as::<_, (String, String, Vec<u8>, Option<String>)>(
-        r#"
-        SELECT uid, device_cn, pubkey, username
-        FROM identity_bindings
-        WHERE uid = $1
-        ORDER BY created_at
-        "#,
-    )
-    .bind(uid)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|(uid, device_cn, pubkey, username)| IdentityBinding {
-            uid,
-            device_cn,
-            pubkey,
-            username,
-        })
-        .collect())
-}
-
-/// Delete all identity bindings for a given UID (all devices).
-/// Used for employee offboarding / GDPR erasure.
-pub async fn delete_bindings_for_uid(pool: &PgPool, uid: &str) -> Result<u64> {
-    let result = sqlx::query("DELETE FROM identity_bindings WHERE uid = $1")
-        .bind(uid)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected())
 }
 
 /// Check whether a pubkey has any active identity binding.
@@ -200,12 +154,11 @@ pub async fn is_pubkey_identity_bound(pool: &PgPool, pubkey: &[u8]) -> Result<bo
     Ok(bound)
 }
 
-/// Delete a specific identity binding for a (uid, device_cn) pair.
-/// Allows re-binding after key loss or device reset.
-pub async fn delete_identity_binding(pool: &PgPool, uid: &str, device_cn: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM identity_bindings WHERE uid = $1 AND device_cn = $2")
+/// Delete the identity binding for a uid.
+/// Allows re-binding after key loss or rotation.
+pub async fn delete_identity_binding(pool: &PgPool, uid: &str) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM identity_bindings WHERE uid = $1")
         .bind(uid)
-        .bind(device_cn)
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
@@ -238,16 +191,15 @@ mod tests {
     async fn bind_creates_new_binding() {
         let pool = setup_pool().await;
         let uid = random_uid();
-        let device_cn = "test-laptop";
         let pubkey = random_pubkey();
 
-        let result = bind_or_validate_identity(&pool, &uid, device_cn, &pubkey, "alice")
+        let result = bind_or_validate_identity(&pool, &uid, &pubkey, "alice")
             .await
             .expect("bind should succeed");
         assert_eq!(result, BindingResult::Created);
 
         // Verify the binding is readable
-        let binding = get_identity_binding(&pool, &uid, device_cn)
+        let binding = get_identity_binding(&pool, &uid)
             .await
             .expect("get should succeed")
             .expect("binding should exist");
@@ -255,9 +207,7 @@ mod tests {
         assert_eq!(binding.username.as_deref(), Some("alice"));
 
         // Cleanup
-        delete_identity_binding(&pool, &uid, device_cn)
-            .await
-            .unwrap();
+        delete_identity_binding(&pool, &uid).await.unwrap();
     }
 
     #[tokio::test]
@@ -265,22 +215,19 @@ mod tests {
     async fn bind_same_pubkey_returns_matched() {
         let pool = setup_pool().await;
         let uid = random_uid();
-        let device_cn = "test-laptop";
         let pubkey = random_pubkey();
 
-        bind_or_validate_identity(&pool, &uid, device_cn, &pubkey, "alice")
+        bind_or_validate_identity(&pool, &uid, &pubkey, "alice")
             .await
             .expect("first bind");
 
-        let result = bind_or_validate_identity(&pool, &uid, device_cn, &pubkey, "alice")
+        let result = bind_or_validate_identity(&pool, &uid, &pubkey, "alice")
             .await
             .expect("second bind");
         assert_eq!(result, BindingResult::Matched);
 
         // Cleanup
-        delete_identity_binding(&pool, &uid, device_cn)
-            .await
-            .unwrap();
+        delete_identity_binding(&pool, &uid).await.unwrap();
     }
 
     #[tokio::test]
@@ -288,15 +235,14 @@ mod tests {
     async fn bind_different_pubkey_returns_mismatch() {
         let pool = setup_pool().await;
         let uid = random_uid();
-        let device_cn = "test-laptop";
         let pubkey1 = random_pubkey();
         let pubkey2 = random_pubkey();
 
-        bind_or_validate_identity(&pool, &uid, device_cn, &pubkey1, "alice")
+        bind_or_validate_identity(&pool, &uid, &pubkey1, "alice")
             .await
             .expect("first bind");
 
-        let result = bind_or_validate_identity(&pool, &uid, device_cn, &pubkey2, "alice")
+        let result = bind_or_validate_identity(&pool, &uid, &pubkey2, "alice")
             .await
             .expect("second bind with different pubkey");
         assert!(
@@ -305,33 +251,7 @@ mod tests {
         );
 
         // Cleanup
-        delete_identity_binding(&pool, &uid, device_cn)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Postgres"]
-    async fn multi_device_bindings() {
-        let pool = setup_pool().await;
-        let uid = random_uid();
-        let pubkey1 = random_pubkey();
-        let pubkey2 = random_pubkey();
-
-        bind_or_validate_identity(&pool, &uid, "laptop", &pubkey1, "alice")
-            .await
-            .expect("bind laptop");
-        bind_or_validate_identity(&pool, &uid, "phone", &pubkey2, "alice")
-            .await
-            .expect("bind phone");
-
-        let bindings = get_bindings_for_uid(&pool, &uid)
-            .await
-            .expect("get bindings");
-        assert_eq!(bindings.len(), 2);
-
-        // Cleanup
-        delete_bindings_for_uid(&pool, &uid).await.unwrap();
+        delete_identity_binding(&pool, &uid).await.unwrap();
     }
 
     #[tokio::test]
@@ -339,62 +259,35 @@ mod tests {
     async fn delete_binding_allows_rebind() {
         let pool = setup_pool().await;
         let uid = random_uid();
-        let device_cn = "test-laptop";
         let pubkey1 = random_pubkey();
         let pubkey2 = random_pubkey();
 
         // Bind first key
-        bind_or_validate_identity(&pool, &uid, device_cn, &pubkey1, "alice")
+        bind_or_validate_identity(&pool, &uid, &pubkey1, "alice")
             .await
             .expect("first bind");
 
         // Delete the binding
-        let deleted = delete_identity_binding(&pool, &uid, device_cn)
+        let deleted = delete_identity_binding(&pool, &uid)
             .await
             .expect("delete should succeed");
         assert!(deleted);
 
         // Rebind with different key should now succeed
-        let result = bind_or_validate_identity(&pool, &uid, device_cn, &pubkey2, "alice")
+        let result = bind_or_validate_identity(&pool, &uid, &pubkey2, "alice")
             .await
             .expect("rebind should succeed");
         assert_eq!(result, BindingResult::Created);
 
         // Cleanup
-        delete_identity_binding(&pool, &uid, device_cn)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Postgres"]
-    async fn delete_bindings_for_uid_removes_all_devices() {
-        let pool = setup_pool().await;
-        let uid = random_uid();
-
-        bind_or_validate_identity(&pool, &uid, "laptop", &random_pubkey(), "alice")
-            .await
-            .expect("bind laptop");
-        bind_or_validate_identity(&pool, &uid, "phone", &random_pubkey(), "alice")
-            .await
-            .expect("bind phone");
-
-        let count = delete_bindings_for_uid(&pool, &uid)
-            .await
-            .expect("delete all");
-        assert_eq!(count, 2);
-
-        let bindings = get_bindings_for_uid(&pool, &uid)
-            .await
-            .expect("get bindings");
-        assert!(bindings.is_empty());
+        delete_identity_binding(&pool, &uid).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore = "requires Postgres"]
     async fn get_nonexistent_binding_returns_none() {
         let pool = setup_pool().await;
-        let result = get_identity_binding(&pool, "nonexistent-uid", "nonexistent-device")
+        let result = get_identity_binding(&pool, "nonexistent-uid")
             .await
             .expect("query should not error");
         assert!(result.is_none());
@@ -405,7 +298,6 @@ mod tests {
     async fn is_pubkey_identity_bound_reflects_binding_lifecycle() {
         let pool = setup_pool().await;
         let uid = random_uid();
-        let device_cn = "test-laptop";
         let pubkey = random_pubkey();
 
         // Not bound before any binding exists.
@@ -415,7 +307,7 @@ mod tests {
         );
 
         // Bound after creation.
-        bind_or_validate_identity(&pool, &uid, device_cn, &pubkey, "alice")
+        bind_or_validate_identity(&pool, &uid, &pubkey, "alice")
             .await
             .expect("bind should succeed");
         assert!(
@@ -424,7 +316,7 @@ mod tests {
         );
 
         // Not bound after deletion.
-        delete_identity_binding(&pool, &uid, device_cn)
+        delete_identity_binding(&pool, &uid)
             .await
             .expect("delete should succeed");
         assert!(

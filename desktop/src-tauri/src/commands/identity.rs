@@ -87,7 +87,7 @@ pub async fn initialize_identity(
         "proxy" | "hybrid" => {
             // Client-generated key — the key is already persisted locally by
             // resolve_persisted_identity(). We just need to register it with
-            // the relay so the relay binds (uid, device_cn) → pubkey.
+            // the relay so the relay binds uid → pubkey.
             let base_url = crate::relay::relay_api_base_url();
             let register_url = format!("{base_url}/api/identity/register");
 

@@ -1,17 +1,17 @@
 //! Identity registration endpoint for proxy/hybrid identity mode.
 //!
 //! In proxy mode, the desktop client generates its own Nostr keypair locally.
-//! This endpoint binds the client's public key to its corporate identity
-//! (UID + device) so the relay can resolve identity on subsequent requests.
+//! This endpoint binds the client's public key to its corporate identity (UID)
+//! so the relay can resolve identity on subsequent requests. Keys are shared
+//! across devices via NIP-AB pairing.
 //!
 //! The endpoint is only available when `SPROUT_IDENTITY_MODE=proxy` or `hybrid`.
 //!
 //! # Trusted-proxy assumption
 //!
-//! The relay trusts the identity JWT and device CN headers (configured via
-//! `SPROUT_IDENTITY_JWT_HEADER` and `SPROUT_IDENTITY_DEVICE_CN_HEADER`)
-//! unconditionally.  It MUST be deployed behind a trusted auth proxy that is
-//! the sole source of these headers.
+//! The relay trusts the identity JWT header (configured via
+//! `SPROUT_IDENTITY_JWT_HEADER`) unconditionally. It MUST be deployed behind
+//! a trusted auth proxy that is the sole source of this header.
 
 use std::sync::Arc;
 
@@ -26,21 +26,20 @@ use crate::state::AppState;
 
 /// `POST /api/identity/register`
 ///
-/// Binds the caller's Nostr public key to their corporate identity (UID + device).
+/// Binds the caller's Nostr public key to their corporate identity (UID).
 /// The caller proves key ownership via a NIP-98 signed event in the `Authorization`
 /// header.
 ///
 /// # Headers
 ///
 /// - Identity JWT header (`SPROUT_IDENTITY_JWT_HEADER`): Corporate identity JWT (injected by auth proxy)
-/// - Device CN header (`SPROUT_IDENTITY_DEVICE_CN_HEADER`): Device identifier from client certificate
 /// - `Authorization: Nostr <base64>`: NIP-98 signed event proving pubkey ownership
 ///
 /// # Binding semantics
 ///
-/// - First request from a (UID, device) pair: creates a new binding.
+/// - First request from a UID: creates a new binding.
 /// - Subsequent requests with the same pubkey: succeeds (idempotent).
-/// - Request with a different pubkey for an already-bound (UID, device): returns
+/// - Request with a different pubkey for an already-bound UID: returns
 ///   409 Conflict with `identity_binding_mismatch`.
 ///
 /// # Response
@@ -92,11 +91,7 @@ pub async fn identity_register(
             )
         })?;
 
-    // 2. Extract device identifier from client certificate CN (fallback to "default")
-    let device_cn =
-        super::extract_device_cn(&headers, &state.auth.identity_config().device_cn_header);
-
-    // 3. Verify NIP-98 auth to prove pubkey ownership
+    // 2. Verify NIP-98 auth to prove pubkey ownership
     let auth_header = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -149,12 +144,11 @@ pub async fn identity_register(
 
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    // 4. Bind or validate the identity
+    // 3. Bind or validate the identity
     let result = state
         .db
         .bind_or_validate_identity(
             &identity_claims.uid,
-            device_cn,
             &pubkey_bytes,
             &identity_claims.username,
         )
@@ -174,7 +168,6 @@ pub async fn identity_register(
             state.identity_bound_cache.invalidate(&pubkey_bytes);
             tracing::info!(
                 uid = %identity_claims.uid,
-                device_cn = %device_cn,
                 pubkey = %pubkey.to_hex(),
                 "identity binding created"
             );
@@ -182,7 +175,6 @@ pub async fn identity_register(
         sprout_db::BindingResult::Matched => {
             tracing::info!(
                 uid = %identity_claims.uid,
-                device_cn = %device_cn,
                 pubkey = %pubkey.to_hex(),
                 "identity binding matched"
             );
@@ -190,7 +182,6 @@ pub async fn identity_register(
         sprout_db::BindingResult::Mismatch { .. } => {
             tracing::warn!(
                 uid = %identity_claims.uid,
-                device_cn = %device_cn,
                 presented = %pubkey.to_hex(),
                 "identity binding mismatch"
             );
@@ -198,13 +189,13 @@ pub async fn identity_register(
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
                     "error": "identity_binding_mismatch",
-                    "message": "this device is already bound to a different pubkey"
+                    "message": "this uid is already bound to a different pubkey"
                 })),
             ));
         }
     }
 
-    // 5. Ensure user record exists with verified name
+    // 4. Ensure user record exists with verified name
     if let Err(e) = state
         .db
         .ensure_user_with_verified_name(&pubkey_bytes, &identity_claims.username)

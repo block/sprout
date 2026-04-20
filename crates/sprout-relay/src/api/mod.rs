@@ -91,19 +91,6 @@ use sprout_auth::Scope;
 
 use crate::state::AppState;
 
-/// Extract the device common name from the configured device CN header,
-/// defaulting to `"default"` when the header is absent (e.g. deployments
-/// without mTLS client certificates).
-pub(crate) fn extract_device_cn<'a>(
-    headers: &'a axum::http::HeaderMap,
-    header_name: &str,
-) -> &'a str {
-    headers
-        .get(header_name)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-}
-
 // ── Auth context types ────────────────────────────────────────────────────────
 
 /// How the REST request was authenticated.
@@ -189,7 +176,7 @@ pub(crate) async fn extract_auth_context(
     // ── 0. Proxy / hybrid identity mode ──────────────────────────────────
     // When identity_mode is proxy or hybrid, the auth proxy injects
     // x-forwarded-identity-token for human users. The relay validates the JWT,
-    // extracts uid + device_cn, and looks up the pubkey binding from the DB.
+    // extracts uid, and looks up the pubkey binding from the DB.
     //   - Proxy:  header is mandatory — reject if missing.
     //   - Hybrid: header is preferred — fall through to standard auth if missing.
     // In both modes, a present-but-invalid header is a hard 401.
@@ -211,13 +198,10 @@ pub(crate) async fn extract_auth_context(
                     )
                 })?;
 
-            let device_cn =
-                extract_device_cn(headers, &state.auth.identity_config().device_cn_header);
-
-            // Look up the pubkey binding for this (uid, device_cn).
+            // Look up the pubkey binding for this uid.
             let binding = state
                 .db
-                .get_identity_binding(&identity_claims.uid, device_cn)
+                .get_identity_binding(&identity_claims.uid)
                 .await
                 .map_err(|e| {
                     tracing::error!("auth: identity binding lookup failed: {e}");
@@ -229,14 +213,13 @@ pub(crate) async fn extract_auth_context(
                 .ok_or_else(|| {
                     tracing::warn!(
                         uid = %identity_claims.uid,
-                        device_cn = %device_cn,
                         "no identity binding — call POST /api/identity/register first"
                     );
                     (
                         StatusCode::UNAUTHORIZED,
                         Json(serde_json::json!({
                             "error": "identity_binding_required",
-                            "message": "no identity binding for this device — call POST /api/identity/register first"
+                            "message": "no identity binding — call POST /api/identity/register first"
                         })),
                     )
                 })?;

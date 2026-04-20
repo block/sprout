@@ -44,11 +44,7 @@ enum Command {
         #[arg(long)]
         uid: String,
 
-        /// Device common name. If omitted, removes all bindings for the UID.
-        #[arg(long)]
-        device_cn: Option<String>,
-
-        /// Also clear verified_name from the user record(s).
+        /// Also clear verified_name from the user record.
         #[arg(long, default_value_t = false)]
         clear_name: bool,
     },
@@ -75,11 +71,9 @@ async fn main() -> Result<()> {
             owner_pubkey,
         } => mint_token(&db, &name, &scopes, pubkey.as_deref(), owner_pubkey).await?,
         Command::ListTokens => list_tokens(&db).await?,
-        Command::UnbindIdentity {
-            uid,
-            device_cn,
-            clear_name,
-        } => unbind_identity(&db, &uid, device_cn.as_deref(), clear_name).await?,
+        Command::UnbindIdentity { uid, clear_name } => {
+            unbind_identity(&db, &uid, clear_name).await?
+        }
     }
 
     Ok(())
@@ -202,45 +196,21 @@ async fn mint_token(
     Ok(())
 }
 
-async fn unbind_identity(
-    db: &Db,
-    uid: &str,
-    device_cn: Option<&str>,
-    clear_name: bool,
-) -> Result<()> {
-    if let Some(device_cn) = device_cn {
-        // Single binding removal
-        let binding = db.get_identity_binding(uid, device_cn).await?;
-        let deleted = db.delete_identity_binding(uid, device_cn).await?;
-        if deleted {
-            println!("Removed identity binding for uid={uid}, device_cn={device_cn}");
-            if clear_name {
-                if let Some(binding) = binding {
-                    let cleared = db.clear_verified_name(&binding.pubkey).await?;
-                    if cleared {
-                        println!("Cleared verified_name for the bound pubkey");
-                    }
-                }
-            }
-        } else {
-            println!("No binding found for uid={uid}, device_cn={device_cn}");
-        }
-    } else {
-        // Remove all bindings for the UID
-        let bindings = db.get_bindings_for_uid(uid).await?;
-        let count = db.delete_bindings_for_uid(uid).await?;
-        println!("Removed {count} identity binding(s) for uid={uid}");
+async fn unbind_identity(db: &Db, uid: &str, clear_name: bool) -> Result<()> {
+    let binding = db.get_identity_binding(uid).await?;
+    let deleted = db.delete_identity_binding(uid).await?;
+    if deleted {
+        println!("Removed identity binding for uid={uid}");
         if clear_name {
-            for binding in &bindings {
+            if let Some(binding) = binding {
                 let cleared = db.clear_verified_name(&binding.pubkey).await?;
                 if cleared {
-                    println!(
-                        "Cleared verified_name for pubkey bound to device_cn={}",
-                        binding.device_cn
-                    );
+                    println!("Cleared verified_name for the bound pubkey");
                 }
             }
         }
+    } else {
+        println!("No binding found for uid={uid}");
     }
     Ok(())
 }

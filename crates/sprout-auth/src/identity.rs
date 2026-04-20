@@ -82,9 +82,6 @@ pub struct IdentityConfig {
     /// HTTP header containing the identity JWT injected by the auth proxy.
     #[serde(default = "default_identity_jwt_header")]
     pub identity_jwt_header: String,
-    /// HTTP header containing the device common name from the client certificate.
-    #[serde(default = "default_device_cn_header")]
-    pub device_cn_header: String,
 }
 
 impl Default for IdentityConfig {
@@ -97,7 +94,6 @@ impl Default for IdentityConfig {
             issuer: String::new(),
             audience: String::new(),
             identity_jwt_header: default_identity_jwt_header(),
-            device_cn_header: default_device_cn_header(),
         }
     }
 }
@@ -116,10 +112,6 @@ fn default_user_claim() -> String {
 
 fn default_identity_jwt_header() -> String {
     "x-forwarded-identity-token".to_string()
-}
-
-fn default_device_cn_header() -> String {
-    "x-block-client-cert-subject-cn".to_string()
 }
 
 // Custom serde for IdentityMode as a lowercase string.
@@ -191,6 +183,5 @@ mod tests {
         assert_eq!(config.uid_claim, "uid");
         assert_eq!(config.user_claim, "user");
         assert_eq!(config.identity_jwt_header, "x-forwarded-identity-token");
-        assert_eq!(config.device_cn_header, "x-block-client-cert-subject-cn");
     }
 }

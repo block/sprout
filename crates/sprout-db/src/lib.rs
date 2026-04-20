@@ -512,38 +512,23 @@ impl Db {
         user::ensure_user_with_verified_name(&self.pool, pubkey, verified_name).await
     }
 
-    /// Look up an identity binding by (uid, device_cn).
+    /// Look up an identity binding by uid.
     pub async fn get_identity_binding(
         &self,
         uid: &str,
-        device_cn: &str,
     ) -> Result<Option<identity_binding::IdentityBinding>> {
-        identity_binding::get_identity_binding(&self.pool, uid, device_cn).await
+        identity_binding::get_identity_binding(&self.pool, uid).await
     }
 
-    /// Bind a pubkey to (uid, device_cn) or validate an existing binding.
+    /// Bind a pubkey to a uid or validate an existing binding.
     pub async fn bind_or_validate_identity(
         &self,
         uid: &str,
-        device_cn: &str,
         pubkey: &[u8],
         username: &str,
     ) -> Result<identity_binding::BindingResult> {
-        identity_binding::bind_or_validate_identity(&self.pool, uid, device_cn, pubkey, username)
+        identity_binding::bind_or_validate_identity(&self.pool, uid, pubkey, username)
             .await
-    }
-
-    /// Get all identity bindings for a given uid.
-    pub async fn get_bindings_for_uid(
-        &self,
-        uid: &str,
-    ) -> Result<Vec<identity_binding::IdentityBinding>> {
-        identity_binding::get_bindings_for_uid(&self.pool, uid).await
-    }
-
-    /// Delete all identity bindings for a given UID.
-    pub async fn delete_bindings_for_uid(&self, uid: &str) -> Result<u64> {
-        identity_binding::delete_bindings_for_uid(&self.pool, uid).await
     }
 
     /// Check whether a pubkey has any active identity binding.
@@ -551,9 +536,9 @@ impl Db {
         identity_binding::is_pubkey_identity_bound(&self.pool, pubkey).await
     }
 
-    /// Delete a specific identity binding.
-    pub async fn delete_identity_binding(&self, uid: &str, device_cn: &str) -> Result<bool> {
-        identity_binding::delete_identity_binding(&self.pool, uid, device_cn).await
+    /// Delete the identity binding for a uid.
+    pub async fn delete_identity_binding(&self, uid: &str) -> Result<bool> {
+        identity_binding::delete_identity_binding(&self.pool, uid).await
     }
 
     /// Clear the verified corporate name from a user record.
