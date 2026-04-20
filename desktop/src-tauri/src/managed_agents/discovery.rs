@@ -26,12 +26,27 @@ const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 
-const COMMON_BINARY_PATHS: &[&str] = &[
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/home/linuxbrew/.linuxbrew/bin",
-];
+fn common_binary_paths() -> &'static [PathBuf] {
+    use std::sync::OnceLock;
+    static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    PATHS.get_or_init(|| {
+        let mut paths = vec![
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        ];
+        if let Some(home) = dirs::home_dir() {
+            paths.extend([
+                home.join(".local/share/mise/shims"),
+                home.join(".local/bin"),
+                home.join(".volta/bin"),
+                home.join(".asdf/shims"),
+            ]);
+        }
+        paths
+    })
+}
 
 const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
     KnownAcpProvider {
@@ -240,9 +255,8 @@ fn resolve_command_uncached(command: &str, app: Option<&AppHandle>) -> Option<Pa
     if let Some(path) = find_via_login_shell(command) {
         return Some(path);
     }
-
-    for dir in COMMON_BINARY_PATHS {
-        let candidate = PathBuf::from(dir).join(executable_basename(command));
+    for dir in common_binary_paths() {
+        let candidate = dir.join(executable_basename(command));
         if candidate.exists() {
             return Some(candidate);
         }
