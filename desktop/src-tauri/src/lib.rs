@@ -20,9 +20,9 @@ use huddle::{
     speak_agent_message, start_huddle, start_stt_pipeline,
 };
 use managed_agents::{
-    ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
-    save_managed_agents, start_managed_agent_process, sync_managed_agent_processes, BackendKind,
-    ManagedAgentProcess,
+    ensure_nest, kill_stale_tracked_processes, load_managed_agents,
+    restore_managed_agents_on_launch, save_managed_agents, sync_managed_agent_processes,
+    BackendKind, ManagedAgentProcess,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -30,72 +30,6 @@ use std::sync::{
 };
 use tauri::{http, Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
-
-fn restore_managed_agents_on_launch(
-    app: &tauri::AppHandle,
-    shutdown_started: &AtomicBool,
-) -> Result<(), String> {
-    if shutdown_started.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    let state = app.state::<AppState>();
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|error| error.to_string())?;
-
-    if shutdown_started.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    let mut records = load_managed_agents(app)?;
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|error| error.to_string())?;
-    let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
-    changed |= kill_stale_tracked_processes(&mut records, &runtimes);
-
-    // PID-file sweep: kill any orphaned agent processes we have receipts for
-    // that weren’t tracked in records (e.g. escaped process groups, double-forked).
-    let tracked_pids: Vec<u32> = records
-        .iter()
-        .filter_map(|r| r.runtime_pid)
-        .chain(runtimes.values().map(|rt| rt.child.id()))
-        .collect();
-    managed_agents::sweep_orphaned_agent_processes(app, &tracked_pids);
-
-    let pubkeys_to_restore = records
-        .iter()
-        .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
-        .map(|record| record.pubkey.clone())
-        .collect::<Vec<_>>();
-
-    for pubkey in pubkeys_to_restore {
-        if shutdown_started.load(Ordering::SeqCst) {
-            break;
-        }
-
-        let record = find_managed_agent_mut(&mut records, &pubkey)?;
-        match start_managed_agent_process(app, record, &mut runtimes) {
-            Ok(()) => {
-                changed = true;
-            }
-            Err(error) => {
-                record.updated_at = util::now_iso();
-                record.last_error = Some(error);
-                changed = true;
-            }
-        }
-    }
-
-    if changed {
-        save_managed_agents(app, &records)?;
-    }
-
-    Ok(())
-}
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();

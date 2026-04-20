@@ -192,7 +192,36 @@ fn resolve_workspace_command(command: &str, app: Option<&AppHandle>) -> Option<P
         .find(|candidate| candidate.exists())
 }
 
+/// Resolve a command to an absolute path, caching results for the app lifetime.
+/// The cache eliminates redundant login-shell spawns when multiple agents share
+/// the same binaries (e.g. `npx`, `uvx`).
 pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Fast path: return cached result without allocating a key.
+    if let Ok(guard) = cache.lock() {
+        if let Some(result) = guard.get(command) {
+            return result.clone();
+        }
+    }
+
+    // Slow path: resolve and cache.
+    let result = resolve_command_uncached(command, app);
+
+    if result.is_some() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(command.to_string(), result.clone());
+        }
+    }
+
+    result
+}
+
+fn resolve_command_uncached(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
     if let Some(path) = resolve_workspace_command(command, app) {
         return Some(path);
     }

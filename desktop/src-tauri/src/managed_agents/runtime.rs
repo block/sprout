@@ -434,34 +434,13 @@ pub fn find_managed_agent_mut<'a>(
         .ok_or_else(|| format!("agent {pubkey} not found"))
 }
 
-pub fn start_managed_agent_process(
+/// Spawn an agent process without holding any locks on records or runtimes.
+/// Returns the child process and log path on success. The caller is responsible
+/// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
+pub fn spawn_agent_child(
     app: &AppHandle,
-    record: &mut ManagedAgentRecord,
-    runtimes: &mut HashMap<String, ManagedAgentProcess>,
-) -> Result<(), String> {
-    if let Some(runtime) = runtimes.get_mut(&record.pubkey) {
-        if runtime
-            .child
-            .try_wait()
-            .map_err(|error| format!("failed to inspect running process: {error}"))?
-            .is_none()
-        {
-            return Ok(());
-        }
-
-        runtimes.remove(&record.pubkey);
-    }
-
-    if let Some(pid) = record.runtime_pid {
-        if process_is_running(pid) {
-            record.updated_at = now_iso();
-            record.last_error = None;
-            return Ok(());
-        }
-
-        record.runtime_pid = None;
-    }
-
+    record: &ManagedAgentRecord,
+) -> Result<(std::process::Child, std::path::PathBuf), String> {
     let log_path = managed_agent_log_path(app, &record.pubkey)?;
     append_log_marker(
         &log_path,
@@ -505,14 +484,8 @@ pub fn start_managed_agent_process(
     command.env("SPROUT_ACP_AGENT_COMMAND", &resolved_agent_command);
     command.env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","));
     command.env("SPROUT_ACP_MCP_COMMAND", &resolved_mcp_command);
-    // Desktop-managed agents should favor the latest owner mention in a
-    // channel over stale in-flight work so follow-up pings don't appear to hang.
-    command.env("SPROUT_ACP_MULTIPLE_EVENT_HANDLING", "owner-interrupt");
-    // Timeout configuration: always set both IDLE_TIMEOUT and the deprecated TURN_TIMEOUT
-    // so older harness binaries (which only read TURN_TIMEOUT) still get a value.
     if let Some(idle) = record.idle_timeout_seconds {
         command.env("SPROUT_ACP_IDLE_TIMEOUT", idle.to_string());
-        // Mirror to deprecated var for older harness binaries.
         command.env("SPROUT_ACP_TURN_TIMEOUT", idle.to_string());
     } else {
         command.env(
@@ -532,60 +505,47 @@ pub fn start_managed_agent_process(
         "GOOSE_MODE",
         std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
     );
-    // Pack-backed agents: pass the pack path AND the user's current edits.
-    // ACP's precedence model (CLI/env > persona > default) means env vars
-    // win over pack values. We read from PersonaRecord (which the user edits
-    // in the GUI) rather than ManagedAgentRecord (stale creation-time snapshot).
     if let (Some(pack_path), Some(persona_name)) =
         (&record.persona_pack_path, &record.persona_name_in_pack)
     {
         command.env("SPROUT_ACP_PERSONA_PACK", pack_path);
         command.env("SPROUT_ACP_PERSONA_NAME", persona_name);
+    }
 
-        // Look up the current PersonaRecord for the user's latest edits.
-        let persona_prompt_and_model: Option<(String, Option<String>)> = record
-            .persona_id
-            .as_deref()
-            .and_then(|pid| {
-                super::load_personas(app)
-                    .ok()?
-                    .into_iter()
-                    .find(|p| p.id == pid)
-            })
-            .map(|p| (p.system_prompt, p.model));
+    // Resolve system prompt and model: prefer the persona definition (if a
+    // persona pack is configured and the persona matched), otherwise fall back
+    // to the record-level overrides.
+    let has_persona_pack =
+        record.persona_pack_path.is_some() && record.persona_name_in_pack.is_some();
+    let persona_prompt_and_model: Option<(String, Option<String>)> = has_persona_pack
+        .then(|| {
+            record
+                .persona_id
+                .as_deref()
+                .and_then(|pid| {
+                    super::load_personas(app)
+                        .ok()?
+                        .into_iter()
+                        .find(|p| p.id == pid)
+                })
+                .map(|p| (p.system_prompt, p.model))
+        })
+        .flatten();
 
-        if let Some((prompt, model)) = persona_prompt_and_model {
-            command.env("SPROUT_ACP_SYSTEM_PROMPT", &prompt);
-            if let Some(m) = &model {
-                command.env("SPROUT_ACP_MODEL", m);
-            } else {
-                command.env_remove("SPROUT_ACP_MODEL");
-            }
-        } else {
-            // Fallback: persona not found (deleted?), use agent record values.
-            if let Some(system_prompt) = &record.system_prompt {
-                command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
-            } else {
-                command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
-            }
-            if let Some(model) = &record.model {
-                command.env("SPROUT_ACP_MODEL", model);
-            } else {
-                command.env_remove("SPROUT_ACP_MODEL");
-            }
-        }
+    let (effective_prompt, effective_model) = match persona_prompt_and_model {
+        Some((prompt, model)) => (Some(prompt), model),
+        None => (record.system_prompt.clone(), record.model.clone()),
+    };
+
+    if let Some(prompt) = &effective_prompt {
+        command.env("SPROUT_ACP_SYSTEM_PROMPT", prompt);
     } else {
-        // Non-pack agents: use ManagedAgentRecord values directly.
-        if let Some(system_prompt) = &record.system_prompt {
-            command.env("SPROUT_ACP_SYSTEM_PROMPT", system_prompt);
-        } else {
-            command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
-        }
-        if let Some(model) = &record.model {
-            command.env("SPROUT_ACP_MODEL", model);
-        } else {
-            command.env_remove("SPROUT_ACP_MODEL");
-        }
+        command.env_remove("SPROUT_ACP_SYSTEM_PROMPT");
+    }
+    if let Some(model) = &effective_model {
+        command.env("SPROUT_ACP_MODEL", model);
+    } else {
+        command.env_remove("SPROUT_ACP_MODEL");
     }
     if let Some(toolsets) = &record.mcp_toolsets {
         command.env("SPROUT_TOOLSETS", toolsets);
@@ -617,9 +577,40 @@ pub fn start_managed_agent_process(
         )
     })?;
 
-    // Write a PID file so the orphan sweep can find this process even if the
-    // record is stale or the app crashes before updating records.
     let _ = super::write_agent_pid_file(app, &record.pubkey, child.id());
+
+    Ok((child, log_path))
+}
+
+pub fn start_managed_agent_process(
+    app: &AppHandle,
+    record: &mut ManagedAgentRecord,
+    runtimes: &mut HashMap<String, ManagedAgentProcess>,
+) -> Result<(), String> {
+    if let Some(runtime) = runtimes.get_mut(&record.pubkey) {
+        if runtime
+            .child
+            .try_wait()
+            .map_err(|error| format!("failed to inspect running process: {error}"))?
+            .is_none()
+        {
+            return Ok(());
+        }
+
+        runtimes.remove(&record.pubkey);
+    }
+
+    if let Some(pid) = record.runtime_pid {
+        if process_is_running(pid) {
+            record.updated_at = now_iso();
+            record.last_error = None;
+            return Ok(());
+        }
+
+        record.runtime_pid = None;
+    }
+
+    let (child, log_path) = spawn_agent_child(app, record)?;
 
     let now = now_iso();
     record.updated_at = now.clone();
