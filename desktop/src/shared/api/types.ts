@@ -386,7 +386,6 @@ export type CommandAvailability = {
 };
 
 export type ManagedAgentPrereqs = {
-  admin: CommandAvailability;
   acp: CommandAvailability;
   mcp: CommandAvailability;
 };
