@@ -64,6 +64,9 @@ pub async fn get_agent_models(
         if let Some(home) = default_agent_workdir() {
             cmd.current_dir(home);
         }
+        if let Some(ref path) = crate::managed_agents::login_shell_path() {
+            cmd.env("PATH", path);
+        }
         cmd.arg("models")
             .arg("--json")
             .env("SPROUT_ACP_AGENT_COMMAND", &agent_command)
