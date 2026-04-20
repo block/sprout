@@ -10,17 +10,6 @@ import type { ForumPost } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/shared/ui/alert-dialog";
-import { Button } from "@/shared/ui/button";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -29,6 +18,7 @@ import {
 import { Markdown } from "@/shared/ui/markdown";
 
 import { formatRelativeTime } from "../lib/time";
+import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 
 type ForumPostCardProps = {
   post: ForumPost;
@@ -112,35 +102,12 @@ export function ForumPostCard({
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <AlertDialog
+            <DeleteConfirmDialog
+              label="post"
+              onConfirm={() => onDelete(post.eventId)}
               onOpenChange={setIsDeleteDialogOpen}
               open={isDeleteDialogOpen}
-            >
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Delete post?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently delete this post and cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel asChild>
-                    <Button type="button" variant="outline">
-                      Cancel
-                    </Button>
-                  </AlertDialogCancel>
-                  <AlertDialogAction asChild>
-                    <Button
-                      onClick={() => onDelete(post.eventId)}
-                      type="button"
-                      variant="destructive"
-                    >
-                      Delete post
-                    </Button>
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            />
           </div>
         ) : null}
       </div>

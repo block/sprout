@@ -10,16 +10,6 @@ import type { ForumThreadResponse, ThreadReply } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -31,6 +21,7 @@ import { Markdown } from "@/shared/ui/markdown";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 import { formatRelativeTime } from "../lib/time";
+import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { ForumComposer } from "./ForumComposer";
 
 type ForumThreadPanelProps = {
@@ -60,43 +51,6 @@ function canDeleteReply(
 ): boolean {
   if (!currentPubkey) return false;
   return reply.pubkey.toLowerCase() === currentPubkey.toLowerCase();
-}
-
-function DeleteConfirmDialog({
-  open,
-  onOpenChange,
-  onConfirm,
-  label,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-  label: string;
-}) {
-  return (
-    <AlertDialog onOpenChange={onOpenChange} open={open}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This will permanently delete this {label} and cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel asChild>
-            <Button type="button" variant="outline">
-              Cancel
-            </Button>
-          </AlertDialogCancel>
-          <AlertDialogAction asChild>
-            <Button onClick={onConfirm} type="button" variant="destructive">
-              Delete {label}
-            </Button>
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
 }
 
 function ReplyRow({
