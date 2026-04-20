@@ -203,15 +203,15 @@ mobile_dir := "mobile"
 
 # Install mobile Flutter dependencies
 mobile-install:
-    cd {{mobile_dir}} && flutter pub get
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter pub get
 
 # Run mobile lint and format checks
 mobile-check:
-    cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
 
 # Run mobile tests
 mobile-test:
-    cd {{mobile_dir}} && flutter test
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 
