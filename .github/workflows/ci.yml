@@ -240,8 +240,9 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cross
-        uses: taiki-e/install-action@06203676c62f0d3c765be3f2fcfbebbcb02d09f5 # v2
+        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2
         with:
           tool: cross@0.2.5
       - name: Build server binaries
@@ -265,6 +266,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: desktop/src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install desktop dependencies
         run: just desktop-install-ci
       - name: Create sidecar placeholders
