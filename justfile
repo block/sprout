@@ -166,6 +166,11 @@ staging *ARGS:
     set -euo pipefail
     cd {{desktop_dir}}
     pnpm install
+    # Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
+    TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    mkdir -p src-tauri/binaries
+    touch "src-tauri/binaries/sprout-acp-$TARGET"
+    touch "src-tauri/binaries/sprout-mcp-server-$TARGET"
     cd ..
     cargo build --release -p sprout-acp -p sprout-mcp
     cd {{desktop_dir}}
