@@ -42,10 +42,7 @@ pub struct IdentityBinding {
 }
 
 /// Look up a binding by uid.
-pub async fn get_identity_binding(
-    pool: &PgPool,
-    uid: &str,
-) -> Result<Option<IdentityBinding>> {
+pub async fn get_identity_binding(pool: &PgPool, uid: &str) -> Result<Option<IdentityBinding>> {
     let row = sqlx::query_as::<_, (String, Vec<u8>, Option<String>)>(
         r#"
         SELECT uid, pubkey, username
@@ -57,13 +54,11 @@ pub async fn get_identity_binding(
     .fetch_optional(pool)
     .await?;
 
-    Ok(
-        row.map(|(uid, pubkey, username)| IdentityBinding {
-            uid,
-            pubkey,
-            username,
-        }),
-    )
+    Ok(row.map(|(uid, pubkey, username)| IdentityBinding {
+        uid,
+        pubkey,
+        username,
+    }))
 }
 
 /// Bind a pubkey to a uid, or validate an existing binding.

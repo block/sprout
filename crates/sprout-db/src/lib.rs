@@ -527,8 +527,7 @@ impl Db {
         pubkey: &[u8],
         username: &str,
     ) -> Result<identity_binding::BindingResult> {
-        identity_binding::bind_or_validate_identity(&self.pool, uid, pubkey, username)
-            .await
+        identity_binding::bind_or_validate_identity(&self.pool, uid, pubkey, username).await
     }
 
     /// Check whether a pubkey has any active identity binding.

@@ -232,13 +232,11 @@ async fn nip11_or_ws_handler(
             .and_then(|v| v.to_str().ok())
         {
             Some(jwt) => match state.auth.validate_identity_jwt(jwt).await {
-                Ok((identity_claims, scopes)) => {
-                    Some(crate::connection::PendingProxyIdentity {
-                        uid: identity_claims.uid,
-                        username: identity_claims.username,
-                        scopes,
-                    })
-                }
+                Ok((identity_claims, scopes)) => Some(crate::connection::PendingProxyIdentity {
+                    uid: identity_claims.uid,
+                    username: identity_claims.username,
+                    scopes,
+                }),
                 Err(e) => {
                     tracing::warn!("ws: proxy identity JWT validation failed: {e}");
                     return (StatusCode::UNAUTHORIZED, "identity token invalid").into_response();
