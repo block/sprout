@@ -4,9 +4,9 @@ use tauri::AppHandle;
 
 use crate::{
     managed_agents::{
-        append_log_marker, managed_agent_log_path, missing_command_message, normalize_agent_args,
-        open_log_file, resolve_command, ManagedAgentProcess, ManagedAgentRecord,
-        ManagedAgentSummary,
+        append_log_marker, login_shell_path, managed_agent_log_path, missing_command_message,
+        normalize_agent_args, open_log_file, resolve_command, ManagedAgentProcess,
+        ManagedAgentRecord, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -482,6 +482,13 @@ pub fn start_managed_agent_process(
         .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
     let resolved_mcp_command = resolve_command(&record.mcp_command, Some(app))
         .ok_or_else(|| missing_command_message(&record.mcp_command, "MCP server command"))?;
+    // Resolve agent command to a full path (DMG launches have minimal PATH).
+    let resolved_agent_command = resolve_command(&record.agent_command, Some(app))
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| record.agent_command.clone());
+
+    // Augment PATH for DMG launches so child processes (e.g. #!/usr/bin/env node) can find their runtimes.
+    let augmented_path = login_shell_path();
 
     let mut command = std::process::Command::new(&resolved_acp_command);
     if let Some(home) = super::default_agent_workdir() {
@@ -490,9 +497,12 @@ pub fn start_managed_agent_process(
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::from(stdout));
     command.stderr(std::process::Stdio::from(stderr));
+    if let Some(ref path) = augmented_path {
+        command.env("PATH", path);
+    }
     command.env("SPROUT_PRIVATE_KEY", &record.private_key_nsec);
     command.env("SPROUT_RELAY_URL", &record.relay_url);
-    command.env("SPROUT_ACP_AGENT_COMMAND", &record.agent_command);
+    command.env("SPROUT_ACP_AGENT_COMMAND", &resolved_agent_command);
     command.env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","));
     command.env("SPROUT_ACP_MCP_COMMAND", &resolved_mcp_command);
     // Desktop-managed agents should favor the latest owner mention in a
