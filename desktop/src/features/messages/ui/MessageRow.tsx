@@ -14,6 +14,7 @@ import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -240,12 +241,12 @@ export const MessageRow = React.memo(
           </p>
         ) : null}
         {message.edited ? (
-          <p
-            className="text-muted-foreground/70"
-            title="This message has been edited"
-          >
-            (edited)
-          </p>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <p className="text-muted-foreground/70">(edited)</p>
+            </TooltipTrigger>
+            <TooltipContent>This message has been edited</TooltipContent>
+          </Tooltip>
         ) : null}
         <MessageTimestamp createdAt={message.createdAt} time={message.time} />
       </div>

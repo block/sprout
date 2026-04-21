@@ -1,8 +1,9 @@
 import { UserRound } from "lucide-react";
-import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
+import { getInitials } from "@/shared/lib/initials";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui/avatar";
 
 type ProfileAvatarProps = {
   avatarUrl: string | null;
@@ -19,40 +20,31 @@ export function ProfileAvatar({
   iconClassName,
   testId,
 }: ProfileAvatarProps) {
-  const [failedAvatarUrl, setFailedAvatarUrl] = React.useState<string | null>(
-    null,
-  );
-
-  const initials = label
-    .trim()
-    .split(/\s+/)
-    .map((part) => part[0] ?? "")
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-  const baseClassName = cn(
-    "flex shrink-0 items-center justify-center overflow-hidden bg-primary/20 text-primary shadow-sm",
-    className,
-  );
-
-  if (avatarUrl && failedAvatarUrl !== avatarUrl) {
-    return (
-      <img
-        alt={`${label} avatar`}
-        className={cn(baseClassName, "object-cover")}
-        data-testid={testId}
-        onError={() => {
-          setFailedAvatarUrl(avatarUrl);
-        }}
-        referrerPolicy="no-referrer"
-        src={rewriteRelayUrl(avatarUrl)}
-      />
-    );
-  }
+  const initials = getInitials(label);
 
   return (
-    <div className={cn(baseClassName, "font-semibold")} data-testid={testId}>
-      {initials.length > 0 ? initials : <UserRound className={iconClassName} />}
-    </div>
+    <Avatar
+      className={cn("shrink-0 bg-primary/20 text-primary shadow-sm", className)}
+      data-testid={testId}
+    >
+      {avatarUrl ? (
+        <AvatarImage
+          alt={`${label} avatar`}
+          className="object-cover"
+          referrerPolicy="no-referrer"
+          src={rewriteRelayUrl(avatarUrl)}
+        />
+      ) : null}
+      <AvatarFallback
+        className="bg-primary/20 font-semibold text-primary"
+        delayMs={200}
+      >
+        {initials.length > 0 ? (
+          initials
+        ) : (
+          <UserRound className={iconClassName} />
+        )}
+      </AvatarFallback>
+    </Avatar>
   );
 }

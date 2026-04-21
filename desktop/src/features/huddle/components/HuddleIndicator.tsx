@@ -7,6 +7,7 @@ import { relayClient } from "@/shared/api/relayClient";
 import type { RelayEvent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useHuddle } from "../HuddleContext";
 
 /** Huddle lifecycle event kinds */
@@ -241,25 +242,31 @@ export function HuddleIndicator({
   }
 
   return (
-    <Button
-      aria-label={`Join active huddle (${participantCount} participant${participantCount !== 1 ? "s" : ""})`}
-      className={cn("h-9 w-9 rounded-full relative", className)}
-      disabled={isJoining || isStarting}
-      onClick={() => void handleJoin()}
-      size="icon"
-      type="button"
-      variant="outline"
-      title={`Huddle active — ${participantCount} participant${participantCount !== 1 ? "s" : ""}`}
-    >
-      <Headphones className="h-4 w-4 text-green-500" />
-      {/* Green glow effect */}
-      <span className="absolute inset-0 animate-pulse rounded-full ring-2 ring-green-500/40" />
-      {/* Participant count badge */}
-      {participantCount > 0 && (
-        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-green-500 px-0.5 text-[10px] font-bold text-white">
-          {participantCount}
-        </span>
-      )}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={`Join active huddle (${participantCount} participant${participantCount !== 1 ? "s" : ""})`}
+          className={cn("h-9 w-9 rounded-full relative", className)}
+          disabled={isJoining || isStarting}
+          onClick={() => void handleJoin()}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          <Headphones className="h-4 w-4 text-green-500" />
+          {/* Green glow effect */}
+          <span className="absolute inset-0 animate-pulse rounded-full ring-2 ring-green-500/40" />
+          {/* Participant count badge */}
+          {participantCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-green-500 px-0.5 text-[10px] font-bold text-white">
+              {participantCount}
+            </span>
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {`Huddle active — ${participantCount} participant${participantCount !== 1 ? "s" : ""}`}
+      </TooltipContent>
+    </Tooltip>
   );
 }

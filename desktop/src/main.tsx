@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "@/app/App";
 import "@/shared/styles/globals.css";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
+import { TooltipProvider } from "@/shared/ui/tooltip";
 
 type E2eWindow = Window & {
   __SPROUT_E2E__?: unknown;
@@ -28,7 +29,9 @@ function renderApp() {
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider defaultTheme="houston">
-          <App />
+          <TooltipProvider delayDuration={300}>
+            <App />
+          </TooltipProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </React.StrictMode>,

@@ -19,8 +19,12 @@ import type { UserNote } from "@/shared/api/socialTypes";
 import type { RelayAgent, UserProfileSummary } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 type PulseTab = "foryou" | "people" | "agents" | "mine";
+
+const tabTriggerClassName =
+  "rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm font-medium shadow-none transition-colors data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:shadow-none text-muted-foreground hover:text-foreground data-[state=active]:bg-transparent";
 
 type PulseViewProps = {
   currentPubkey?: string;
@@ -279,89 +283,103 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     mine: "You haven't posted any notes yet.",
   };
 
+  function renderTimeline() {
+    if (isLoading) return <TimelineSkeleton />;
+
+    if (activeTab === "agents") {
+      return agentNoteGroups.length === 0 ? (
+        <EmptyState message={emptyMessages.agents} />
+      ) : (
+        agentNoteGroups.map((group) => (
+          <AgentActivityCard
+            agentStatus={agentStatusMap[group.pubkey]}
+            group={group}
+            key={`${group.pubkey}-${group.latestAt}`}
+            profile={profiles[group.pubkey.toLowerCase()] ?? null}
+          />
+        ))
+      );
+    }
+
+    return visibleNotes.length === 0 ? (
+      <EmptyState message={emptyMessages[activeTab]} />
+    ) : (
+      visibleNotes.map((note) => (
+        <NoteCard
+          isAgent={agentPubkeySet.has(note.pubkey)}
+          isFollowing={followingSet.has(note.pubkey)}
+          isOwnNote={note.pubkey === currentPubkey}
+          key={note.id}
+          note={note}
+          onFollow={handleFollow}
+          onUnfollow={handleUnfollow}
+          profile={profiles[note.pubkey.toLowerCase()] ?? null}
+        />
+      ))
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 border-b border-border/60 px-4 sm:px-6">
-        <TabButton
-          active={activeTab === "foryou"}
-          label="For You"
-          onClick={() => setActiveTab("foryou")}
-        />
-        <TabButton
-          active={activeTab === "people"}
-          label="People"
-          onClick={() => setActiveTab("people")}
-        />
-        <TabButton
-          active={activeTab === "agents"}
-          count={relayAgents.length}
-          label="Agents"
-          onClick={() => setActiveTab("agents")}
-        />
-        <TabButton
-          active={activeTab === "mine"}
-          label="My Notes"
-          onClick={() => setActiveTab("mine")}
-        />
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as PulseTab)}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-border/60 px-4 sm:px-6">
+          <TabsList className="h-auto gap-1 rounded-none border-none bg-transparent p-0">
+            <TabsTrigger value="foryou" className={tabTriggerClassName}>
+              For You
+            </TabsTrigger>
+            <TabsTrigger value="people" className={tabTriggerClassName}>
+              People
+            </TabsTrigger>
+            <TabsTrigger value="agents" className={tabTriggerClassName}>
+              Agents
+              {relayAgents.length > 0 ? (
+                <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                  {relayAgents.length}
+                </span>
+              ) : null}
+            </TabsTrigger>
+            <TabsTrigger value="mine" className={tabTriggerClassName}>
+              My Notes
+            </TabsTrigger>
+          </TabsList>
 
-        <div className="ml-auto flex items-center gap-1">
-          {activeTab === "agents" && relayAgents.length > 1 ? (
-            <AgentFilter
-              agents={relayAgents}
-              onSelect={setAgentFilter}
-              profiles={profiles}
-              selectedPubkey={agentFilter}
-            />
-          ) : null}
-          <Button
-            className="h-7 w-7"
-            disabled={isRefetching}
-            onClick={handleRefresh}
-            size="icon"
-            variant="ghost"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
-            />
-          </Button>
-        </div>
-      </div>
-
-      {/* Timeline */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {isLoading ? (
-          <TimelineSkeleton />
-        ) : activeTab === "agents" ? (
-          agentNoteGroups.length === 0 ? (
-            <EmptyState message={emptyMessages.agents} />
-          ) : (
-            agentNoteGroups.map((group) => (
-              <AgentActivityCard
-                agentStatus={agentStatusMap[group.pubkey]}
-                group={group}
-                key={`${group.pubkey}-${group.latestAt}`}
-                profile={profiles[group.pubkey.toLowerCase()] ?? null}
+          <div className="ml-auto flex items-center gap-1">
+            {activeTab === "agents" && relayAgents.length > 1 ? (
+              <AgentFilter
+                agents={relayAgents}
+                onSelect={setAgentFilter}
+                profiles={profiles}
+                selectedPubkey={agentFilter}
               />
-            ))
-          )
-        ) : visibleNotes.length === 0 ? (
-          <EmptyState message={emptyMessages[activeTab]} />
-        ) : (
-          visibleNotes.map((note) => (
-            <NoteCard
-              isAgent={agentPubkeySet.has(note.pubkey)}
-              isFollowing={followingSet.has(note.pubkey)}
-              isOwnNote={note.pubkey === currentPubkey}
-              key={note.id}
-              note={note}
-              onFollow={handleFollow}
-              onUnfollow={handleUnfollow}
-              profile={profiles[note.pubkey.toLowerCase()] ?? null}
-            />
-          ))
-        )}
-      </div>
+            ) : null}
+            <Button
+              className="h-7 w-7"
+              disabled={isRefetching}
+              onClick={handleRefresh}
+              size="icon"
+              variant="ghost"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
+              />
+            </Button>
+          </div>
+        </div>
+
+        {/* Timeline — TabsContent with forceMount so aria-controls resolves */}
+        <TabsContent
+          value={activeTab}
+          forceMount
+          className="mt-0 min-h-0 flex-1 overflow-y-auto"
+        >
+          {renderTimeline()}
+        </TabsContent>
+      </Tabs>
 
       <ComposeNote
         errorMessage={
@@ -377,36 +395,5 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
         }}
       />
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  count,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  count?: number;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-        active
-          ? "border-primary text-foreground"
-          : "border-transparent text-muted-foreground hover:text-foreground"
-      }`}
-      onClick={onClick}
-      type="button"
-    >
-      {label}
-      {count != null && count > 0 ? (
-        <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-          {count}
-        </span>
-      ) : null}
-    </button>
   );
 }

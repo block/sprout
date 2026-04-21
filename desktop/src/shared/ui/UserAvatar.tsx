@@ -1,7 +1,7 @@
-import * as React from "react";
-
 import { cn } from "@/shared/lib/cn";
+import { getInitials } from "@/shared/lib/initials";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { Avatar, AvatarFallback, AvatarImage } from "@/shared/ui/avatar";
 
 type UserAvatarSize = "xs" | "sm" | "md";
 
@@ -28,43 +28,33 @@ export function UserAvatar({
   className,
   testId,
 }: UserAvatarProps) {
-  const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
-  const hasError = failedUrl === avatarUrl;
-
-  const initials = displayName
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-
-  const base = cn(sizeClasses[size], "rounded-lg shadow-sm", className);
-
-  if (avatarUrl && !hasError) {
-    return (
-      <img
-        alt={`${displayName} avatar`}
-        className={cn(base, "bg-secondary object-cover")}
-        data-testid={testId ? `${testId}-image` : undefined}
-        onError={() => setFailedUrl(avatarUrl)}
-        referrerPolicy="no-referrer"
-        src={rewriteRelayUrl(avatarUrl)}
-      />
-    );
-  }
+  const initials = getInitials(displayName);
 
   return (
-    <div
-      className={cn(
-        base,
-        "flex items-center justify-center font-semibold",
-        accent
-          ? "bg-primary text-primary-foreground"
-          : "bg-secondary text-secondary-foreground",
-      )}
-      data-testid={testId ? `${testId}-fallback` : undefined}
+    <Avatar
+      className={cn(sizeClasses[size], "rounded-lg shadow-sm", className)}
     >
-      {initials}
-    </div>
+      {avatarUrl ? (
+        <AvatarImage
+          alt={`${displayName} avatar`}
+          className="bg-secondary object-cover"
+          data-testid={testId ? `${testId}-image` : undefined}
+          referrerPolicy="no-referrer"
+          src={rewriteRelayUrl(avatarUrl)}
+        />
+      ) : null}
+      <AvatarFallback
+        className={cn(
+          "rounded-lg font-semibold",
+          accent
+            ? "bg-primary text-primary-foreground"
+            : "bg-secondary text-secondary-foreground",
+        )}
+        data-testid={testId ? `${testId}-fallback` : undefined}
+        delayMs={200}
+      >
+        {initials}
+      </AvatarFallback>
+    </Avatar>
   );
 }

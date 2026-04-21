@@ -5,6 +5,7 @@ import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useHuddle } from "../HuddleContext";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { MicControls, SpeakerControls } from "./MicControls";
@@ -288,53 +289,57 @@ export function HuddleBar({ className }: HuddleBarProps) {
       {/* Voice input mode — single toggle combining indicator + switch */}
       {micConnected ? (
         <>
-          <Button
-            aria-label={
-              isPttMode
-                ? "Push to Talk mode — click to switch to Auto"
-                : "Auto mode — click to switch to Push to Talk"
-            }
-            className="h-7 gap-1.5 px-2 text-xs"
-            onClick={() =>
-              void setVoiceInputMode(
-                isPttMode ? "voice_activity" : "push_to_talk",
-              )
-            }
-            size="sm"
-            variant="ghost"
-            title={
-              isPttMode
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={
+                  isPttMode
+                    ? "Push to Talk mode — click to switch to Auto"
+                    : "Auto mode — click to switch to Push to Talk"
+                }
+                className="h-7 gap-1.5 px-2 text-xs"
+                onClick={() =>
+                  void setVoiceInputMode(
+                    isPttMode ? "voice_activity" : "push_to_talk",
+                  )
+                }
+                size="sm"
+                variant="ghost"
+              >
+                {isPttMode ? (
+                  <>
+                    <div
+                      className={cn(
+                        "h-2 w-2 rounded-full transition-colors",
+                        pttActive && !isMuted
+                          ? "animate-pulse bg-green-500"
+                          : "bg-zinc-500",
+                      )}
+                    />
+                    Push to Talk
+                  </>
+                ) : (
+                  <>
+                    <div
+                      className="h-2 w-2 rounded-full transition-colors"
+                      style={{
+                        backgroundColor:
+                          micLevel > 0.05
+                            ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
+                            : "rgba(100, 116, 139, 0.4)",
+                      }}
+                    />
+                    Auto
+                  </>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {isPttMode
                 ? "Push to Talk — hold Ctrl+Space to transmit. Click to switch to Auto."
-                : "Auto — mic is always live. Click to switch to Push to Talk."
-            }
-          >
-            {isPttMode ? (
-              <>
-                <div
-                  className={cn(
-                    "h-2 w-2 rounded-full transition-colors",
-                    pttActive && !isMuted
-                      ? "animate-pulse bg-green-500"
-                      : "bg-zinc-500",
-                  )}
-                />
-                Push to Talk
-              </>
-            ) : (
-              <>
-                <div
-                  className="h-2 w-2 rounded-full transition-colors"
-                  style={{
-                    backgroundColor:
-                      micLevel > 0.05
-                        ? `rgba(34, 197, 94, ${0.4 + micLevel * 0.6})`
-                        : "rgba(100, 116, 139, 0.4)",
-                  }}
-                />
-                Auto
-              </>
-            )}
-          </Button>
+                : "Auto — mic is always live. Click to switch to Push to Talk."}
+            </TooltipContent>
+          </Tooltip>
           {isPttMode && (
             <kbd className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {navigator.platform?.includes("Mac") ? "⌃Space" : "Ctrl+Space"}
@@ -414,32 +419,40 @@ export function HuddleBar({ className }: HuddleBarProps) {
 
       {/* Leave / End buttons — pushed to the right */}
       <div className="ml-auto flex items-center gap-2">
-        <Button
-          aria-label="Leave huddle"
-          className="h-8 gap-1.5 px-3"
-          disabled={isLeaving}
-          aria-busy={isLeaving}
-          onClick={() => void handleLeave()}
-          size="sm"
-          variant="destructive"
-          title="Leave huddle"
-        >
-          <PhoneOff className="h-4 w-4" />
-          Leave
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Leave huddle"
+              className="h-8 gap-1.5 px-3"
+              disabled={isLeaving}
+              aria-busy={isLeaving}
+              onClick={() => void handleLeave()}
+              size="sm"
+              variant="destructive"
+            >
+              <PhoneOff className="h-4 w-4" />
+              Leave
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Leave huddle</TooltipContent>
+        </Tooltip>
         {state?.is_creator && (
-          <Button
-            aria-label="End huddle for everyone"
-            className="h-8 gap-1.5 px-3"
-            disabled={isLeaving}
-            onClick={() => void handleEnd()}
-            size="sm"
-            variant="destructive"
-            title="End huddle for everyone"
-          >
-            <PhoneOff className="h-4 w-4" />
-            End for all
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="End huddle for everyone"
+                className="h-8 gap-1.5 px-3"
+                disabled={isLeaving}
+                onClick={() => void handleEnd()}
+                size="sm"
+                variant="destructive"
+              >
+                <PhoneOff className="h-4 w-4" />
+                End for all
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>End huddle for everyone</TooltipContent>
+          </Tooltip>
         )}
       </div>
 
