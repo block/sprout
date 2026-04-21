@@ -321,7 +321,7 @@ pub fn sync_managed_agent_processes(
             continue;
         };
 
-        if process_is_running(pid) {
+        if process_is_running(pid) && process_belongs_to_us(pid) {
             continue;
         }
 
@@ -601,7 +601,7 @@ pub fn start_managed_agent_process(
     }
 
     if let Some(pid) = record.runtime_pid {
-        if process_is_running(pid) {
+        if process_is_running(pid) && process_belongs_to_us(pid) {
             record.updated_at = now_iso();
             record.last_error = None;
             return Ok(());
