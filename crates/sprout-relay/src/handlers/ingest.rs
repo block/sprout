@@ -727,15 +727,11 @@ fn validate_diff_event(event: &Event) -> Result<(), String> {
                     return Err("parent-commit SHA must be at least 7 hex characters".to_string());
                 }
             }
-            "branch" => {
-                if parts.len() < 3 || parts[1].is_empty() || parts[2].is_empty() {
-                    return Err("branch tag requires both source and target".to_string());
-                }
+            "branch" if (parts.len() < 3 || parts[1].is_empty() || parts[2].is_empty()) => {
+                return Err("branch tag requires both source and target".to_string());
             }
-            "pr" => {
-                if parts[1].parse::<u32>().map(|n| n == 0).unwrap_or(true) {
-                    return Err("pr number must be a positive integer".to_string());
-                }
+            "pr" if parts[1].parse::<u32>().map(|n| n == 0).unwrap_or(true) => {
+                return Err("pr number must be a positive integer".to_string());
             }
             _ => {}
         }
