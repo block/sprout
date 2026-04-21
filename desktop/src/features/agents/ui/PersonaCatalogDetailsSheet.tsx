@@ -1,6 +1,7 @@
 import { isCatalogPersonaSelected } from "@/features/agents/lib/catalog";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
+import { Card } from "@/shared/ui/card";
 import { cn } from "@/shared/lib/cn";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import {
@@ -18,8 +19,6 @@ import {
 } from "./personaLibraryCopy";
 
 type PersonaCatalogDetailsSheetProps = {
-  feedbackErrorMessage: string | null;
-  feedbackNoticeMessage: string | null;
   isPending: boolean;
   onOpenChange: (open: boolean) => void;
   onTogglePersona: (persona: AgentPersona) => void;
@@ -28,8 +27,6 @@ type PersonaCatalogDetailsSheetProps = {
 };
 
 export function PersonaCatalogDetailsSheet({
-  feedbackErrorMessage,
-  feedbackNoticeMessage,
   isPending,
   onOpenChange,
   onTogglePersona,
@@ -109,51 +106,39 @@ export function PersonaCatalogDetailsSheet({
               </div>
             </button>
 
-            {feedbackNoticeMessage ? (
-              <p className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
-                {feedbackNoticeMessage}
-              </p>
-            ) : null}
-
-            {feedbackErrorMessage ? (
-              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-                {feedbackErrorMessage}
-              </p>
-            ) : null}
-
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-xl border border-border/70 bg-card/70 p-4">
+              <Card className="p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   Type
                 </p>
                 <p className="mt-2 text-sm font-medium">Built-in persona</p>
-              </div>
-              <div className="rounded-xl border border-border/70 bg-card/70 p-4">
+              </Card>
+              <Card className="p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   Preferred model
                 </p>
                 <p className="mt-2 text-sm font-medium">
                   {persona.model ?? "Use app default"}
                 </p>
-              </div>
-              <div className="rounded-xl border border-border/70 bg-card/70 p-4 sm:col-span-2">
+              </Card>
+              <Card className="p-4 sm:col-span-2">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   Preferred provider
                 </p>
                 <p className="mt-2 text-sm font-medium">
                   {persona.provider ?? "Use app default"}
                 </p>
-              </div>
+              </Card>
             </div>
 
-            <div className="rounded-xl border border-border/70 bg-card/70 p-4">
+            <Card className="p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 System prompt
               </p>
               <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-sm leading-6 text-foreground">
                 {persona.systemPrompt}
               </pre>
-            </div>
+            </Card>
           </div>
         ) : null}
       </SheetContent>

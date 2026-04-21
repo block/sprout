@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { isCatalogPersonaSelected } from "@/features/agents/lib/catalog";
 import type { AgentPersona } from "@/shared/api/types";
+import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 
 import { PersonaCatalogDetailsSheet } from "./PersonaCatalogDetailsSheet";
 import { PersonaCatalogSection } from "./PersonaCatalogSection";
@@ -43,12 +44,12 @@ export function PersonaCatalogSurface({
     onSelectPersona(persona, !isCatalogPersonaSelected(persona));
   };
 
+  useFeedbackToasts(feedbackNoticeMessage, feedbackErrorMessage);
+
   return (
     <>
       <PersonaCatalogSection
         error={error}
-        feedbackErrorMessage={feedbackErrorMessage}
-        feedbackNoticeMessage={feedbackNoticeMessage}
         isLoading={isLoading}
         isPending={isPending}
         onTogglePersona={handleTogglePersona}
@@ -61,8 +62,6 @@ export function PersonaCatalogSurface({
       />
 
       <PersonaCatalogDetailsSheet
-        feedbackErrorMessage={feedbackErrorMessage}
-        feedbackNoticeMessage={feedbackNoticeMessage}
         isPending={isPending}
         onOpenChange={(open) => {
           if (!open) {

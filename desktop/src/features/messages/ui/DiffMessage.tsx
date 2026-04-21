@@ -1,6 +1,7 @@
 import { FileDiff, Maximize2 } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { DiffViewer } from "./DiffViewer";
 
 type DiffMessageProps = {
@@ -84,16 +85,21 @@ export default function DiffMessage({
           </span>
         )}
         {onExpand && (
-          <Button
-            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-            onClick={onExpand}
-            size="sm"
-            title="Expand diff"
-            type="button"
-            variant="ghost"
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Expand diff"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                onClick={onExpand}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Expand diff</TooltipContent>
+          </Tooltip>
         )}
       </div>
 

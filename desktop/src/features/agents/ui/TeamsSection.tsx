@@ -21,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { Card } from "@/shared/ui/card";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { CreateNewButton } from "./CreateNewButton";
@@ -102,10 +103,7 @@ export function TeamsSection({
       {isLoading ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {["first", "second", "third"].map((key) => (
-            <div
-              className="rounded-xl border border-border/70 bg-card/80 p-3 shadow-sm"
-              key={key}
-            >
+            <Card className="p-3" key={key}>
               <div className="flex items-center gap-2.5">
                 <Skeleton className="h-8 w-8 rounded-lg" />
                 <div className="space-y-2">
@@ -113,7 +111,7 @@ export function TeamsSection({
                   <Skeleton className="h-3 w-20 rounded-full" />
                 </div>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       ) : null}
@@ -132,10 +130,7 @@ export function TeamsSection({
             const hasMissingPersonas = resolution.hasMissingPersonas;
 
             return (
-              <div
-                className="rounded-xl border border-border/70 bg-card/80 p-3 shadow-sm"
-                key={team.id}
-              >
+              <Card className="p-3" key={team.id}>
                 <div className="flex items-start justify-between gap-2.5">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -248,7 +243,7 @@ export function TeamsSection({
                     exporting.
                   </p>
                 ) : null}
-              </div>
+              </Card>
             );
           })}
           <button

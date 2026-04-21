@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { Toggle } from "@/shared/ui/toggle";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type FormattingToolbarProps = {
   editor: Editor | null;
@@ -160,19 +161,24 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
   return (
     <div className="flex items-center gap-0.5">
       {items.map((item) => (
-        <Toggle
-          key={item.label}
-          aria-label={item.label}
-          disabled={disabled}
-          pressed={item.active}
-          onPressedChange={() => item.action()}
-          className="h-7 w-7 min-w-7 [&_svg]:size-3.5"
-          title={
-            "shortcut" in item ? `${item.label} (${item.shortcut})` : item.label
-          }
-        >
-          <item.icon className="h-3.5 w-3.5" />
-        </Toggle>
+        <Tooltip key={item.label}>
+          <TooltipTrigger asChild>
+            <Toggle
+              aria-label={item.label}
+              disabled={disabled}
+              pressed={item.active}
+              onPressedChange={() => item.action()}
+              className="h-7 w-7 min-w-7 [&_svg]:size-3.5"
+            >
+              <item.icon className="h-3.5 w-3.5" />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipContent>
+            {"shortcut" in item
+              ? `${item.label} (${item.shortcut})`
+              : item.label}
+          </TooltipContent>
+        </Tooltip>
       ))}
     </div>
   );

@@ -1,4 +1,6 @@
-import { Check, Loader2, X } from "lucide-react";
+import { Check, X } from "lucide-react";
+
+import { Spinner } from "@/shared/ui/spinner";
 
 export type ImportItemStatus = "pending" | "importing" | "done" | "error";
 
@@ -14,9 +16,7 @@ export function ImportStatusIcon({
 }) {
   switch (status) {
     case "importing":
-      return (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-      );
+      return <Spinner className="h-4 w-4 shrink-0 text-muted-foreground" />;
     case "done":
       return <Check className="h-4 w-4 shrink-0 text-green-500" />;
     case "error":

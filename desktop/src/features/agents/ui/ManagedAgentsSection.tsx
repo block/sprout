@@ -1,8 +1,10 @@
 import { Ellipsis, OctagonX, Trash2 } from "lucide-react";
 
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import type { ManagedAgent, PresenceLookup } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,6 +70,9 @@ export function ManagedAgentsSection({
   const stoppedCount = agents.filter(
     (a) => a.status === "stopped" || a.status === "not_deployed",
   ).length;
+
+  useFeedbackToasts(actionNoticeMessage, actionErrorMessage);
+
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -123,7 +128,7 @@ export function ManagedAgentsSection({
       </div>
 
       {isLoading ? (
-        <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
+        <Card className="overflow-hidden">
           {["first", "second"].map((key) => (
             <div
               className="flex items-center gap-4 border-b border-border/60 px-4 py-3 last:border-b-0"
@@ -135,7 +140,7 @@ export function ManagedAgentsSection({
               <Skeleton className="h-4 w-20" />
             </div>
           ))}
-        </div>
+        </Card>
       ) : null}
 
       {!isLoading && agents.length === 0 ? (
@@ -184,18 +189,6 @@ export function ManagedAgentsSection({
       {error ? (
         <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error.message}
-        </p>
-      ) : null}
-
-      {actionNoticeMessage ? (
-        <p className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary">
-          {actionNoticeMessage}
-        </p>
-      ) : null}
-
-      {actionErrorMessage ? (
-        <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {actionErrorMessage}
         </p>
       ) : null}
     </section>
