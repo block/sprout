@@ -187,13 +187,14 @@ export function ManagedAgentsSection({
             {stoppedCount} stopped {stoppedCount === 1 ? "agent" : "agents"}
           </p>
           <Button
+            className="text-destructive"
             disabled={isActionPending}
             onClick={onBulkRemoveStopped}
             size="sm"
             variant="ghost"
           >
             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            Remove all
+            Remove stopped
           </Button>
         </div>
       ) : null}
