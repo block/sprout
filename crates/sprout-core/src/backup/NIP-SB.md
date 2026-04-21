@@ -574,6 +574,18 @@ Missing or corrupted dummy blobs do not affect recovery. Implementations SHOULD 
 
 ## Security Analysis
 
+### Adversary Classes
+
+NIP-SB's steganographic properties vary by adversary. The protocol is designed for three tiers:
+
+| Adversary | What they observe | NIP-SB protection |
+|-----------|-------------------|-------------------|
+| **External network observer** (ISP, state actor) | TLS-encrypted WebSocket frames to a relay | **Complete.** All Nostr traffic is indistinguishable at the wire level. The observer cannot determine event kinds, d-tags, content, or pubkeys. NIP-SB backup/recovery traffic is identical to posting a message, updating a profile, or syncing a wallet. |
+| **Passive relay-dump adversary** (database leak, subpoena, bulk export) | `kind:30078` events with random d-tags, throwaway pubkeys, constant-size content | **Strong.** Blobs are computationally indistinguishable from other `kind:30078` application data (Cashu wallets, app settings, drafts) without the password. No field references the user's real pubkey. Deniability is probabilistic and improves with ambient `kind:30078` traffic volume. |
+| **Active relay operator** (timing, IP, session metadata, multi-snapshot) | Event insertion timing, query patterns, IP addresses, database snapshots over time | **Probabilistic.** Mitigated by jittered timestamps, random publication/query order, publication delays, and dummy blobs. Not guaranteed — a relay operator with network-layer visibility may correlate event bursts with user sessions. Even so, the operator cannot determine *which user* is backing up or recovering without the password. |
+
+The security analysis below evaluates each threat against the relevant adversary class.
+
 ### Threat: Multi-target accumulation (NIP-49's concern)
 
 **Substantially mitigated.** This is the primary security property of the scheme.
@@ -688,7 +700,7 @@ An attacker knows the plaintext is a 32-byte secp256k1 private key. This is irre
 - [NIP-49](49.md): This NIP uses NIP-49's scrypt parameters (`log_N=20`, `r=8`, `p=1`) and the `key_security_byte` AAD convention (`0x02`), but does NOT use the `ncryptsec1` format. NIP-49 explicitly warns against publishing encrypted keys to relays; this NIP solves that problem.
 - [NIP-59](59.md): Both NIPs use throwaway keypairs for metadata privacy. NIP-59 uses them for messaging (gift wrap); this NIP uses them for backup steganography. The pattern is the same: ephemeral Nostr identities for protocol-level operations that must not be linked to real identities.
 - [NIP-78](78.md): Blobs use `kind:30078` (application-specific data) for steganographic cover. The `kind:30078` namespace is shared with Cashu wallets, app settings, drafts, and other application data, making backup blobs indistinguishable from legitimate application use.
-- [NIP-AB](NIP-AB.md): NIP-AB provides device-to-device key transfer (primary backup via a second device). This NIP provides password-based relay backup (secondary "break glass" recovery for when no second device is available). They are complementary: NIP-AB is the preferred backup mechanism; this NIP is the fallback.
+- [NIP-AB](NIP-AB.md): **NIP-AB is the primary key backup and multi-device mechanism.** It provides device-to-device key transfer via QR code + ECDH + short authentication string — fast, interactive, and cryptographically strong without password-strength dependencies. **This NIP (NIP-SB) is the secondary "break glass" recovery option** for when no second device is available (all devices lost, single-device user, new user who never paired). Implementations SHOULD present NIP-AB as the default backup path and NIP-SB as an optional emergency fallback. The two are complementary: NIP-AB covers the common case; NIP-SB covers the catastrophic case.
 
 ## Implementation Notes
 
