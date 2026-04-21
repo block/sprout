@@ -119,6 +119,7 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
+                lastStartedAt={agent.lastStartedAt}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
@@ -139,6 +140,7 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
+                lastStartedAt={agent.lastStartedAt}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
@@ -250,11 +252,13 @@ function AgentSummary({
 }
 
 function StatusBlock({
+  lastStartedAt,
   presenceLoaded,
   presenceStatus,
   processDetail,
   status,
 }: {
+  lastStartedAt: string | null;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
   processDetail: string;
@@ -266,6 +270,7 @@ function StatusBlock({
         Status
       </p>
       <AgentStatusBadge
+        lastStartedAt={lastStartedAt}
         presenceLoaded={presenceLoaded}
         presenceStatus={presenceStatus}
         status={status}
@@ -457,10 +462,12 @@ function AgentOriginBadge({ agent }: { agent: ManagedAgent }) {
 }
 
 function AgentStatusBadge({
+  lastStartedAt,
   presenceLoaded,
   presenceStatus,
   status,
 }: {
+  lastStartedAt: string | null;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
   status: ManagedAgent["status"];
@@ -471,11 +478,25 @@ function AgentStatusBadge({
     status === "running" &&
     (!presenceStatus || presenceStatus === "offline");
 
-  const variant = isStarting ? "warning" : isActive ? "default" : "secondary";
+  const STALE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
+  const isStale =
+    isStarting &&
+    (lastStartedAt == null ||
+      Date.now() - new Date(lastStartedAt).getTime() > STALE_THRESHOLD_MS);
 
-  return (
-    <Badge variant={variant}>
-      {isStarting ? "Starting\u2026" : status.replace(/_/g, " ")}
-    </Badge>
-  );
+  const variant = isStale
+    ? "secondary"
+    : isStarting
+      ? "warning"
+      : isActive
+        ? "default"
+        : "secondary";
+
+  const label = isStale
+    ? "Offline"
+    : isStarting
+      ? "Starting\u2026"
+      : status.replace(/_/g, " ");
+
+  return <Badge variant={variant}>{label}</Badge>;
 }
