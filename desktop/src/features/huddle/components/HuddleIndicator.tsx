@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { relayClient } from "@/shared/api/relayClient";
 import type { RelayEvent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { Button } from "@/shared/ui/button";
 import { useHuddle } from "../HuddleContext";
 
@@ -156,16 +157,7 @@ export function HuddleIndicator({
         // Dedup by event ID — ignore replayed events from reconnect.
         if (seenEvents.has(event.id)) return;
         seenEvents.set(event.id, event);
-        const maxSeenEvents = 200;
-        if (seenEvents.size > maxSeenEvents) {
-          const excess = seenEvents.size - maxSeenEvents;
-          let removed = 0;
-          for (const key of seenEvents.keys()) {
-            if (removed >= excess) break;
-            seenEvents.delete(key);
-            removed++;
-          }
-        }
+        trimMapToSize(seenEvents, 200);
 
         // Reconstruct from full history on every new event.
         // This is cheap — huddle lifecycle events are rare (typically <20).

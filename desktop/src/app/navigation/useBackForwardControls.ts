@@ -5,6 +5,8 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 
+import { trimMapToSize } from "@/shared/lib/trimMapToSize";
+
 type RouterHistoryState = {
   __TSR_index?: number;
   __TSR_key?: string;
@@ -53,16 +55,7 @@ export function useBackForwardControls() {
     }
 
     keysByIndex.set(locationIndex, locationKey);
-    const maxNavEntries = 200;
-    if (keysByIndex.size > maxNavEntries) {
-      const excess = keysByIndex.size - maxNavEntries;
-      let removed = 0;
-      for (const storedIndex of keysByIndex.keys()) {
-        if (removed >= excess) break;
-        keysByIndex.delete(storedIndex);
-        removed++;
-      }
-    }
+    trimMapToSize(keysByIndex, 200);
     setMaxIndex((current: number) => {
       if (currentKey && currentKey !== locationKey) {
         return locationIndex;

@@ -7,6 +7,7 @@ import {
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
+import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { hasMention } from "./hasMention";
 
 const MENTION_DEBOUNCE_MS = 120;
@@ -175,16 +176,7 @@ export function useMentions(channelId: string | null) {
 
       const mentions = mentionMapRef.current;
       mentions.set(displayName, suggestion.pubkey);
-      const maxMentions = 200;
-      if (mentions.size > maxMentions) {
-        const excess = mentions.size - maxMentions;
-        let removed = 0;
-        for (const key of mentions.keys()) {
-          if (removed >= excess) break;
-          mentions.delete(key);
-          removed++;
-        }
-      }
+      trimMapToSize(mentions, 200);
       setMentionQuery(null);
       setMentionSelectedIndex(0);
 
