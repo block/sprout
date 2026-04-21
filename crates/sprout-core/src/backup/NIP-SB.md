@@ -654,7 +654,7 @@ During recovery, the client queries the relay for N+P+D d-tags in random order w
 
 However, an active relay operator with network-layer visibility (IP, session, timing) may be able to correlate the query burst with a recovery attempt. **Mitigations**: implementations SHOULD jitter recovery queries with random delays of 100ms–2s. Implementations MAY spread queries across multiple relay connections, sessions, or relays. Implementations MAY use Tor or a proxy for recovery to prevent IP correlation.
 
-Note: even if the relay identifies a recovery attempt, it cannot determine which user is recovering — the d-tags and throwaway pubkeys are unlinkable to any real identity without the password.
+Note: even if the relay identifies a recovery attempt, the d-tags and throwaway pubkeys are unlinkable to any Nostr identity without the password. However, an active relay operator with IP/session visibility may be able to identify the *client* (by IP address or authenticated session), even though they cannot link the backup blobs to a specific Nostr pubkey. Implementations SHOULD use Tor or a proxy for recovery to mitigate this.
 
 ### Threat: Password weakness
 

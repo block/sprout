@@ -470,17 +470,21 @@ def recover(
 
         event = matched[0]
         content = event.content
-        if len(content) % 4:
-            content += "=" * (4 - len(content) % 4)
-        raw = base64.b64decode(content)
-        assert len(raw) == 56
-
-        nonce = raw[:24]
-        ciphertext = raw[24:]
+        # Spec §Event Validation steps 6-7: validate content and decrypt
         try:
+            content = event.content
+            if len(content) % 4:
+                content += "=" * (4 - len(content) % 4)
+            raw = base64.b64decode(content)
+            if len(raw) != 56:
+                # Malformed content → treat as erasure (spec §Event Validation step 6)
+                continue
+            nonce = raw[:24]
+            ciphertext = raw[24:]
             padded = xchacha20poly1305_decrypt(enc_key, nonce, ciphertext, AAD)
         except Exception:
-            # AEAD failure → treat as erasure (spec §Event Validation step 7)
+            # Base64 decode failure or AEAD failure → treat as erasure
+            # (spec §Event Validation steps 6-7)
             continue
         padded_slots[idx] = padded
 
@@ -595,6 +599,19 @@ def main() -> None:
     recovered = recover(pubkey_bytes, password, relay, delete_indices={n_real, n_real + 1})
     assert recovered == nsec_bytes
     print(f"   ✅ RECOVERED — all real chunks present, parity not needed")
+
+    # ── Phase 4d: Recovery with corrupted blob (AEAD failure → erasure) ──
+
+    print("\n── Phase 4d: Recovery with 1 corrupted blob (AEAD erasure) ───")
+    # Corrupt a real blob's content to trigger AEAD failure
+    real_blobs = [b for b in blobs if b.role == "real"]
+    target_tag = real_blobs[0].d_tag
+    original_content = relay[target_tag][0].content
+    relay[target_tag][0].content = base64.b64encode(os.urandom(56)).decode()
+    recovered = recover(pubkey_bytes, password, relay)
+    assert recovered == nsec_bytes
+    relay[target_tag][0].content = original_content  # restore
+    print(f"   ✅ RECOVERED — AEAD failure treated as erasure, RS reconstructed")
 
     # ── Phase 5: Recovery with 3 Missing (should fail) ────────────────────
 

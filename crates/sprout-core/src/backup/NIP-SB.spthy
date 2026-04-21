@@ -7,12 +7,18 @@
  * == What this model proves ==
  *   1. Correctness: honest recovery from password + pubkey + relay data
  *      yields the original secret (all blobs present).
- *   2. Correctness with erasures: recovery succeeds when up to 2 of the
- *      N+P real/parity blobs are missing (RS erasure decoding).
- *   3. Confidentiality: the nsec is not derivable from published blobs
+ *   2. Correctness with 1 erasure: recovery succeeds when 1 of the
+ *      N+P real/parity blobs is missing (RS single-erasure decoding).
+ *   3. Correctness with 2 erasures: recovery succeeds when 2 of the
+ *      N+P real/parity blobs are missing (RS double-erasure decoding).
+ *   4. Confidentiality: the nsec is not derivable from published blobs
  *      without the password, even though the pubkey is public.
- *   4. Dummy confidentiality: dummy blobs reveal nothing about the nsec.
- *   5. Password compromise: if the password leaks, the nsec is recoverable
+ *   5. Parity confidentiality: RS parity symbols are not derivable
+ *      without the password.
+ *   6. Dummy isolation: dummy blob payloads (fresh random values) do
+ *      not leak the nsec or any chunk material. (Structural: dummy
+ *      payloads are Fr() values with no equation linking them to nsec.)
+ *   7. Password compromise: if the password leaks, the nsec is recoverable
  *      (proves the compromise model is meaningful, not vacuous).
  *
  * == What this model does NOT prove ==
@@ -58,20 +64,51 @@ functions:
   split_0/1, split_1/1, split_2/1,
   reassemble/3,
   /* Reed-Solomon parity: rs_p0 and rs_p1 are the two parity symbols.
-   * rs_recover_X reconstructs data symbol X from the other 2 data + 2 parity.
-   * This models the MDS property: any 3 of 5 symbols reconstruct all data. */
+   *
+   * Single-erasure recovery: rs_recover_X takes the other 2 data symbols
+   * + both parities → recovers missing data symbol X.
+   *
+   * Double-erasure recovery: rs_recover_01_fst / rs_recover_01_snd take
+   * the one remaining data symbol + both parities → recover both missing
+   * data symbols. This models the MDS property: any 3 of 5 symbols
+   * reconstruct all 3 data symbols. */
   rs_p0/3, rs_p1/3,
-  rs_recover_0/4, rs_recover_1/4, rs_recover_2/4
+  /* Single-erasure: 2 data + 2 parity → 1 missing */
+  rs_recover_0/4, rs_recover_1/4, rs_recover_2/4,
+  /* Double-erasure: 1 data + 2 parity → 2 missing */
+  rs_recover_01_fst/3, rs_recover_01_snd/3,
+  rs_recover_02_fst/3, rs_recover_02_snd/3,
+  rs_recover_12_fst/3, rs_recover_12_snd/3
 
 equations:
   reassemble(split_0(x), split_1(x), split_2(x)) = x,
-  /* RS recovery: any 2 data + 2 parity → missing data symbol */
+
+  /* Single-erasure recovery: 2 data + 2 parity → missing data symbol */
   rs_recover_0(split_1(x), split_2(x), rs_p0(split_0(x), split_1(x), split_2(x)),
                rs_p1(split_0(x), split_1(x), split_2(x))) = split_0(x),
   rs_recover_1(split_0(x), split_2(x), rs_p0(split_0(x), split_1(x), split_2(x)),
                rs_p1(split_0(x), split_1(x), split_2(x))) = split_1(x),
   rs_recover_2(split_0(x), split_1(x), rs_p0(split_0(x), split_1(x), split_2(x)),
-               rs_p1(split_0(x), split_1(x), split_2(x))) = split_2(x)
+               rs_p1(split_0(x), split_1(x), split_2(x))) = split_2(x),
+
+  /* Double-erasure recovery: 1 data + 2 parity → both missing data symbols.
+   * Chunks 0,1 missing — recover from chunk_2 + both parities: */
+  rs_recover_01_fst(split_2(x), rs_p0(split_0(x), split_1(x), split_2(x)),
+                    rs_p1(split_0(x), split_1(x), split_2(x))) = split_0(x),
+  rs_recover_01_snd(split_2(x), rs_p0(split_0(x), split_1(x), split_2(x)),
+                    rs_p1(split_0(x), split_1(x), split_2(x))) = split_1(x),
+
+  /* Chunks 0,2 missing — recover from chunk_1 + both parities: */
+  rs_recover_02_fst(split_1(x), rs_p0(split_0(x), split_1(x), split_2(x)),
+                    rs_p1(split_0(x), split_1(x), split_2(x))) = split_0(x),
+  rs_recover_02_snd(split_1(x), rs_p0(split_0(x), split_1(x), split_2(x)),
+                    rs_p1(split_0(x), split_1(x), split_2(x))) = split_2(x),
+
+  /* Chunks 1,2 missing — recover from chunk_0 + both parities: */
+  rs_recover_12_fst(split_0(x), rs_p0(split_0(x), split_1(x), split_2(x)),
+                    rs_p1(split_0(x), split_1(x), split_2(x))) = split_1(x),
+  rs_recover_12_snd(split_0(x), rs_p0(split_0(x), split_1(x), split_2(x)),
+                    rs_p1(split_0(x), split_1(x), split_2(x))) = split_2(x)
 
 /* ========================================================================
  * Backup creation (honest user) — v3 with parity and dummies
@@ -297,10 +334,12 @@ rule User_Recovers_2_Erasures:
     ct_p1 = senc(< 'parity', '4', 'aad02', parity_1 >, < enc_key, nonce_p1 >)
 
     /* RS: recover chunk_0 and chunk_1 from chunk_2 + both parities.
-     * With N=3, P=2, losing 2 data symbols leaves exactly N=3 known
-     * symbols (1 data + 2 parity), which is the minimum for RS(5,3). */
-    chunk_0 = rs_recover_0(chunk_1_placeholder, chunk_2, parity_0, parity_1)
-    chunk_1 = rs_recover_1(chunk_0_placeholder, chunk_2, parity_0, parity_1)
+     * With N=3, P=2, losing 2 data symbols leaves exactly 3 known
+     * symbols (1 data + 2 parity), which is the minimum for RS(5,3).
+     * Uses the double-erasure recovery functions that take only the
+     * available symbols — no placeholders needed. */
+    chunk_0 = rs_recover_01_fst(chunk_2, parity_0, parity_1)
+    chunk_1 = rs_recover_01_snd(chunk_2, parity_0, parity_1)
 
     recovered_nsec = reassemble(chunk_0, chunk_1, chunk_2)
     recovered_pk = pubkey(recovered_nsec)
