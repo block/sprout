@@ -8,31 +8,46 @@ export type DraftState = {
   selectionEnd: number;
 };
 
-export function useDrafts() {
-  const draftsRef = React.useRef(new Map<string, DraftState>());
+const sharedDrafts = new Map<string, DraftState>();
 
+export function useDrafts() {
   const saveDraft = React.useCallback(
     (channelId: string, draft: DraftState) => {
       if (draft.content.trim().length === 0) {
         return;
       }
-      const drafts = draftsRef.current;
-      drafts.set(channelId, draft);
-      trimMapToSize(drafts, 50);
+      sharedDrafts.set(channelId, draft);
+      trimMapToSize(sharedDrafts, 50);
     },
     [],
   );
 
   const loadDraft = React.useCallback(
     (channelId: string): DraftState | undefined => {
-      return draftsRef.current.get(channelId);
+      return sharedDrafts.get(channelId);
     },
     [],
   );
 
   const clearDraft = React.useCallback((channelId: string) => {
-    draftsRef.current.delete(channelId);
+    sharedDrafts.delete(channelId);
   }, []);
 
-  return { saveDraft, loadDraft, clearDraft };
+  /** Save draft if content is non-empty, otherwise clear it. */
+  const persistDraft = React.useCallback(
+    (channelId: string, content: string) => {
+      if (content.trim().length > 0) {
+        saveDraft(channelId, {
+          content,
+          selectionEnd: content.length,
+          selectionStart: content.length,
+        });
+      } else {
+        clearDraft(channelId);
+      }
+    },
+    [saveDraft, clearDraft],
+  );
+
+  return { saveDraft, loadDraft, clearDraft, persistDraft };
 }
