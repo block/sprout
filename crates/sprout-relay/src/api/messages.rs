@@ -129,11 +129,8 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
                         return Err("imeta duration must be a valid float".into());
                     }
                 }
-                "bitrate" => {
-                    // NIP-71 standard field: bits/sec as integer, positive
-                    if value.parse::<u64>().map_or(true, |b| b == 0) {
-                        return Err("imeta bitrate must be a positive integer".into());
-                    }
+                "bitrate" if value.parse::<u64>().map_or(true, |b| b == 0) => {
+                    return Err("imeta bitrate must be a positive integer".into());
                 }
                 "image" => {
                     // NIP-71 poster frame — must be a local media URL with an image extension.
