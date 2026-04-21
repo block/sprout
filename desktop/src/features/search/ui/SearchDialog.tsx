@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Badge } from "@/shared/ui/badge";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -339,9 +340,9 @@ export function SearchDialog({
                             <p className="text-sm font-semibold tracking-tight">
                               {hit.channelName}
                             </p>
-                            <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                            <Badge variant="secondary">
                               {describeSearchHit(hit)}
-                            </p>
+                            </Badge>
                             <p className="text-xs text-muted-foreground">
                               {authorLabel}
                             </p>

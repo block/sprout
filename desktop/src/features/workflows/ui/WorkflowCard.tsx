@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import type { Workflow } from "@/shared/api/types";
+import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -34,19 +35,16 @@ type WorkflowCardProps = {
 };
 
 function StatusBadge({ status }: { status: Workflow["status"] }) {
-  const colors = {
-    active: "bg-green-500/15 text-green-500",
-    disabled: "bg-muted text-muted-foreground",
-    archived: "bg-amber-500/15 text-amber-500",
+  const variants: Record<
+    Workflow["status"],
+    "success" | "secondary" | "warning"
+  > = {
+    active: "success",
+    disabled: "secondary",
+    archived: "warning",
   };
 
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${colors[status]}`}
-    >
-      {status}
-    </span>
-  );
+  return <Badge variant={variants[status]}>{status}</Badge>;
 }
 
 export function WorkflowCard({

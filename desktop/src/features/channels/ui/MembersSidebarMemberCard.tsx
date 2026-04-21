@@ -29,6 +29,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { Badge } from "@/shared/ui/badge";
 
 type MembersSidebarMemberCardProps = {
   canChangeRole: boolean;
@@ -119,12 +120,12 @@ export function MembersSidebarMemberCard({
             {managedAgent ? (
               <>
                 <span aria-hidden="true">&middot;</span>
-                <span
-                  className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
+                <Badge
                   data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
+                  variant="secondary"
                 >
                   {formatManagedAgentStatus(managedAgent)}
-                </span>
+                </Badge>
               </>
             ) : null}
           </div>

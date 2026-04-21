@@ -9,6 +9,7 @@ import type {
 } from "@/shared/api/types";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
 import { cn } from "@/shared/lib/cn";
+import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Checkbox } from "@/shared/ui/checkbox";
 import {
@@ -425,9 +426,7 @@ export function TeamDialog({
                           />
                           <span className="text-sm">{persona.displayName}</span>
                           {persona.isBuiltIn ? (
-                            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                              Built-in
-                            </span>
+                            <Badge variant="secondary">Built-in</Badge>
                           ) : null}
                         </div>
                       );

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { Badge } from "@/shared/ui/badge";
 import type {
   ManagedAgent,
   PresenceLookup,
@@ -219,9 +220,7 @@ function AgentSummary({
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium text-foreground">{agent.name}</p>
             {personaLabel ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                {personaLabel}
-              </span>
+              <Badge variant="secondary">{personaLabel}</Badge>
             ) : null}
             <AgentOriginBadge agent={agent} />
           </div>
@@ -238,12 +237,9 @@ function AgentSummary({
           {channelNames.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {channelNames.map((name) => (
-                <span
-                  className="inline-flex rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                  key={name}
-                >
+                <Badge className="normal-case" key={name} variant="secondary">
                   # {name}
-                </span>
+                </Badge>
               ))}
             </div>
           ) : null}
@@ -454,9 +450,9 @@ function AgentActionsMenu({
 
 function AgentOriginBadge({ agent }: { agent: ManagedAgent }) {
   return (
-    <span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+    <Badge variant="outline">
       {agent.backend.type === "local" ? "Local" : "Remote"}
-    </span>
+    </Badge>
   );
 }
 
@@ -475,18 +471,11 @@ function AgentStatusBadge({
     status === "running" &&
     (!presenceStatus || presenceStatus === "offline");
 
+  const variant = isStarting ? "warning" : isActive ? "default" : "secondary";
+
   return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
-        isStarting
-          ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-          : isActive
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-muted-foreground",
-      )}
-    >
+    <Badge variant={variant}>
       {isStarting ? "Starting\u2026" : status.replace(/_/g, " ")}
-    </span>
+    </Badge>
   );
 }

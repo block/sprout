@@ -70,7 +70,9 @@ export function TypingIndicatorRow({
     <div
       aria-live="polite"
       className="h-8 bg-background px-8 sm:px-10"
-      data-testid="message-typing-indicator"
+      {...(labels.length > 0
+        ? { "data-testid": "message-typing-indicator" }
+        : {})}
     >
       {labels.length > 0 && (
         <div className="flex w-full items-center gap-2 py-1.5">
