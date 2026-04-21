@@ -104,7 +104,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           </div>
         ) : null}
         <div
-          className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
+          className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-6 pt-3 [overflow-anchor:none] sm:px-6"
           data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
@@ -168,7 +168,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         </div>
 
         {!isAtBottom ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center px-4">
             <Button
               className="pointer-events-auto rounded-full shadow-lg"
               data-testid="message-scroll-to-latest"

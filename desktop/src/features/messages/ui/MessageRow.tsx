@@ -6,6 +6,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { Badge } from "@/shared/ui/badge";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
@@ -338,9 +339,7 @@ export const MessageRow = React.memo(
                         {message.personaDisplayName}
                       </span>
                     ) : message.role ? (
-                      <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                        {message.role}
-                      </p>
+                      <Badge variant="secondary">{message.role}</Badge>
                     ) : null}
                     {metadataNode}
                   </div>
@@ -360,9 +359,7 @@ export const MessageRow = React.memo(
                       {message.personaDisplayName}
                     </span>
                   ) : message.role ? (
-                    <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                      {message.role}
-                    </p>
+                    <Badge variant="secondary">{message.role}</Badge>
                   ) : null}
                   {metadataNode}
                 </div>

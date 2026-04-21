@@ -228,12 +228,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           onToggleReaction={onToggleReaction}
           targetMessageId={targetMessageId}
         />
-        <TypingIndicatorRow
-          channel={activeChannel}
-          currentPubkey={currentPubkey}
-          profiles={profiles}
-          typingPubkeys={typingPubkeys}
-        />
         <MessageComposer
           channelId={activeChannel?.id ?? null}
           channelName={activeChannel?.name ?? "channel"}
@@ -254,6 +248,12 @@ export const ChannelPane = React.memo(function ChannelPane({
                     ? `Message #${activeChannel.name}`
                     : "Select a channel"
           }
+        />
+        <TypingIndicatorRow
+          channel={activeChannel}
+          currentPubkey={currentPubkey}
+          profiles={profiles}
+          typingPubkeys={typingPubkeys}
         />
       </div>
 

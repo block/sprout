@@ -219,7 +219,7 @@ export function DoctorSettingsPanel() {
         </Button>
       </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+      <div className="mt-5 grid gap-4">
         <div className="space-y-4">
           <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
             <div className="flex items-center gap-2">

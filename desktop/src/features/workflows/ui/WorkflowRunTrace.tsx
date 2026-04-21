@@ -1,6 +1,7 @@
 import { Check, Clock, SkipForward, X } from "lucide-react";
 
 import type { WorkflowApproval, WorkflowRun } from "@/shared/api/types";
+import { Badge, type BadgeProps } from "@/shared/ui/badge";
 import { WorkflowApprovalCard } from "@/features/workflows/ui/WorkflowApprovalCard";
 
 type WorkflowRunTraceProps = {
@@ -10,6 +11,25 @@ type WorkflowRunTraceProps = {
 
 function formatStatusLabel(status: string) {
   return status.replace(/_/g, " ");
+}
+
+function StepStatusBadge({ status }: { status: string }) {
+  const variants: Record<string, BadgeProps["variant"]> = {
+    completed: "success",
+    failed: "destructive",
+    error: "destructive",
+    running: "info",
+    pending: "secondary",
+    cancelled: "secondary",
+    skipped: "secondary",
+    waiting_approval: "warning",
+  };
+
+  return (
+    <Badge variant={variants[status] ?? "secondary"}>
+      {formatStatusLabel(status)}
+    </Badge>
+  );
 }
 
 function StepStatusIcon({ status }: { status: string }) {
@@ -65,9 +85,7 @@ export function WorkflowRunTrace({
               <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium">
                 {step.stepId}
               </span>
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                {formatStatusLabel(step.status)}
-              </span>
+              <StepStatusBadge status={step.status} />
               {duration ? (
                 <span className="text-xs text-muted-foreground">
                   {duration}

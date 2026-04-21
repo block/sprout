@@ -124,11 +124,18 @@ export function AgentsView() {
               }
               logLoading={agents.managedAgentLogQuery.isLoading}
               personaLabelsById={personas.personaLabelsById}
+              presenceLoaded={agents.managedPresenceQuery.isSuccess}
               presenceLookup={agents.managedPresenceQuery.data ?? {}}
               onAddToChannel={(agent) => {
                 agents.setActionNoticeMessage(null);
                 agents.setActionErrorMessage(null);
                 agents.setAgentToAddToChannel(agent);
+              }}
+              onBulkRemoveStopped={() => {
+                void agents.handleBulkRemoveStopped();
+              }}
+              onBulkStopRunning={() => {
+                void agents.handleBulkStopRunning();
               }}
               onCreate={() => {
                 agents.setIsCreateOpen(true);

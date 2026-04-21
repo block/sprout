@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Badge } from "@/shared/ui/badge";
 import { Input } from "@/shared/ui/input";
 import { Button } from "@/shared/ui/button";
 
@@ -379,13 +380,9 @@ function ChannelCard({
             <p className="text-sm font-semibold tracking-tight">
               {channel.name}
             </p>
-            <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-              {channel.channelType}
-            </p>
+            <Badge variant="secondary">{channel.channelType}</Badge>
             {channel.archivedAt ? (
-              <p className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">
-                archived
-              </p>
+              <Badge variant="warning">archived</Badge>
             ) : null}
             <div className="ml-auto flex items-center gap-3">
               <span className="flex items-center gap-1 text-xs text-muted-foreground">

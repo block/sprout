@@ -18,8 +18,11 @@ import type {
   CreateManagedAgentResponse,
   ManagedAgent,
 } from "@/shared/api/types";
+import { removeChannelMember } from "@/shared/api/tauri";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   deleteManagedAgentWithRules,
+  isManagedAgentActive,
   startManagedAgentWithRules,
   stopManagedAgentWithRules,
 } from "../lib/managedAgentControlActions";
@@ -141,6 +144,22 @@ export function useManagedAgentActions() {
     }
   }
 
+  function getAgentChannelIds(pubkey: string): string[] {
+    const normalized = normalizePubkey(pubkey);
+    const relayAgent = (relayAgentsQuery.data ?? []).find(
+      (ra) => normalizePubkey(ra.pubkey) === normalized,
+    );
+    return relayAgent?.channelIds ?? [];
+  }
+
+  async function removeAgentFromAllChannels(pubkey: string) {
+    const channelIds = getAgentChannelIds(pubkey);
+    if (channelIds.length === 0) return;
+    await Promise.allSettled(
+      channelIds.map((channelId) => removeChannelMember(channelId, pubkey)),
+    );
+  }
+
   async function handleDelete(pubkey: string) {
     clearFeedback();
     try {
@@ -154,6 +173,7 @@ export function useManagedAgentActions() {
         relayAgents: relayAgentsQuery.data ?? [],
       });
       if (result.cancelled) return;
+      await removeAgentFromAllChannels(pubkey);
       if (logAgentPubkey === pubkey) {
         setLogAgentPubkey(null);
       }
@@ -224,6 +244,74 @@ export function useManagedAgentActions() {
     void relayAgentsQuery.refetch();
   }
 
+  async function runBulkAction(
+    targets: ManagedAgent[],
+    confirmLabel: string,
+    failureNoun: string,
+    action: (agent: ManagedAgent) => Promise<unknown>,
+  ): Promise<boolean> {
+    if (targets.length === 0) return false;
+    const confirmed = window.confirm(
+      `${confirmLabel} ${targets.length} agent${targets.length === 1 ? "" : "s"}?`,
+    );
+    if (!confirmed) return false;
+    clearFeedback();
+    const results = await Promise.allSettled(targets.map(action));
+    const failures = results.filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+      setActionErrorMessage(
+        `${failures.length} of ${targets.length} ${failureNoun}${failures.length === 1 ? "" : "s"} failed.`,
+      );
+    }
+    return true;
+  }
+
+  async function handleBulkStopRunning() {
+    await runBulkAction(
+      managedAgents.filter((a) => isManagedAgentActive(a)),
+      "Stop",
+      "stop",
+      (a) =>
+        stopManagedAgentWithRules({
+          agent: a,
+          channels: channelsQuery.data ?? [],
+          relayAgents: relayAgentsQuery.data ?? [],
+          stopManagedAgent: stopMutation.mutateAsync,
+        }),
+    );
+  }
+
+  async function handleBulkRemoveStopped() {
+    const targets = managedAgents.filter(
+      (a) => a.status === "stopped" || a.status === "not_deployed",
+    );
+    const executed = await runBulkAction(
+      targets,
+      "Remove",
+      "removal",
+      async (a) => {
+        await deleteManagedAgent(a);
+        await removeAgentFromAllChannels(a.pubkey);
+      },
+    );
+    if (
+      executed &&
+      logAgentPubkey &&
+      targets.some((a) => a.pubkey === logAgentPubkey)
+    ) {
+      setLogAgentPubkey(null);
+    }
+  }
+
+  async function deleteManagedAgent(agent: ManagedAgent) {
+    const isDeployedRemote =
+      agent.backend.type === "provider" && agent.backendAgentId;
+    await deleteMutation.mutateAsync({
+      pubkey: agent.pubkey,
+      forceRemoteDelete: isDeployedRemote ? true : undefined,
+    });
+  }
+
   const isPending =
     startMutation.isPending ||
     stopMutation.isPending ||
@@ -264,6 +352,8 @@ export function useManagedAgentActions() {
     handleToggleStartOnAppLaunch,
     handleMintToken,
     handleAddedToChannel,
+    handleBulkStopRunning,
+    handleBulkRemoveStopped,
     // Refetch helpers (for cross-domain use)
     refetchManagedAgents: () => void managedAgentsQuery.refetch(),
     refetchRelayAgents: () => void relayAgentsQuery.refetch(),

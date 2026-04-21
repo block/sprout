@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
 
 export type MentionSuggestion = {
@@ -70,9 +71,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 ({suggestion.personaName})
               </span>
             ) : suggestion.role ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                {suggestion.role}
-              </span>
+              <Badge variant="secondary">{suggestion.role}</Badge>
             ) : null}
           </button>
         ))}

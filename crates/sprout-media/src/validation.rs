@@ -245,10 +245,8 @@ fn check_moov_before_mdat(path: &Path) -> Result<(), MediaError> {
             b"moov" => {
                 moov_seen = true;
             }
-            b"mdat" => {
-                if !moov_seen {
-                    return Err(MediaError::MoovNotAtFront);
-                }
+            b"mdat" if !moov_seen => {
+                return Err(MediaError::MoovNotAtFront);
             }
             _ => {}
         }

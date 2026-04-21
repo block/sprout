@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
+import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
 
 type ChannelAutocompleteProps = {
@@ -57,9 +58,7 @@ export const ChannelAutocomplete = React.memo(function ChannelAutocomplete({
             type="button"
           >
             <span className="truncate font-medium">#{suggestion.name}</span>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-              {suggestion.channelType}
-            </span>
+            <Badge variant="secondary">{suggestion.channelType}</Badge>
           </button>
         ))}
       </div>
