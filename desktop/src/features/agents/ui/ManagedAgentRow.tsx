@@ -43,6 +43,7 @@ export function ManagedAgentRow({
   logError,
   logLoading,
   personaLabelsById,
+  presenceLoaded,
   presenceLookup,
   onAddToChannel,
   onDelete,
@@ -60,6 +61,7 @@ export function ManagedAgentRow({
   logError: Error | null;
   logLoading: boolean;
   personaLabelsById: Record<string, string>;
+  presenceLoaded: boolean;
   presenceLookup: PresenceLookup;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
@@ -116,7 +118,8 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
-                isActive={isActive}
+                presenceLoaded={presenceLoaded}
+                presenceStatus={presenceStatus}
                 processDetail={processDetail}
                 status={agent.status}
               />
@@ -135,7 +138,8 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
-                isActive={isActive}
+                presenceLoaded={presenceLoaded}
+                presenceStatus={presenceStatus}
                 processDetail={processDetail}
                 status={agent.status}
               />
@@ -250,11 +254,13 @@ function AgentSummary({
 }
 
 function StatusBlock({
-  isActive,
+  presenceLoaded,
+  presenceStatus,
   processDetail,
   status,
 }: {
-  isActive: boolean;
+  presenceLoaded: boolean;
+  presenceStatus: PresenceStatus | undefined;
   processDetail: string;
   status: ManagedAgent["status"];
 }) {
@@ -263,7 +269,11 @@ function StatusBlock({
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground lg:hidden">
         Status
       </p>
-      <AgentStatusBadge isActive={isActive} status={status} />
+      <AgentStatusBadge
+        presenceLoaded={presenceLoaded}
+        presenceStatus={presenceStatus}
+        status={status}
+      />
       <p className="text-xs text-muted-foreground">{processDetail}</p>
     </div>
   );
@@ -451,22 +461,32 @@ function AgentOriginBadge({ agent }: { agent: ManagedAgent }) {
 }
 
 function AgentStatusBadge({
-  isActive,
+  presenceLoaded,
+  presenceStatus,
   status,
 }: {
-  isActive: boolean;
+  presenceLoaded: boolean;
+  presenceStatus: PresenceStatus | undefined;
   status: ManagedAgent["status"];
 }) {
+  const isActive = status === "running" || status === "deployed";
+  const isStarting =
+    presenceLoaded &&
+    status === "running" &&
+    (!presenceStatus || presenceStatus === "offline");
+
   return (
     <span
       className={cn(
         "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
-        isActive
-          ? "bg-primary text-primary-foreground"
-          : "bg-muted text-muted-foreground",
+        isStarting
+          ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+          : isActive
+            ? "bg-primary text-primary-foreground"
+            : "bg-muted text-muted-foreground",
       )}
     >
-      {status.replace(/_/g, " ")}
+      {isStarting ? "Starting\u2026" : status.replace(/_/g, " ")}
     </span>
   );
 }

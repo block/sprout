@@ -1,4 +1,14 @@
+import { Ellipsis, OctagonX, Trash2 } from "lucide-react";
+
+import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import type { ManagedAgent, PresenceLookup } from "@/shared/api/types";
+import { Button } from "@/shared/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { CreateNewButton } from "./CreateNewButton";
 import { ManagedAgentRow } from "./ManagedAgentRow";
@@ -15,8 +25,11 @@ export function ManagedAgentsSection({
   logError,
   logLoading,
   personaLabelsById,
+  presenceLoaded,
   presenceLookup,
   onAddToChannel,
+  onBulkRemoveStopped,
+  onBulkStopRunning,
   onCreate,
   onDelete,
   onMintToken,
@@ -37,8 +50,11 @@ export function ManagedAgentsSection({
   logError: Error | null;
   logLoading: boolean;
   personaLabelsById: Record<string, string>;
+  presenceLoaded: boolean;
   presenceLookup: PresenceLookup;
   onAddToChannel: (agent: ManagedAgent) => void;
+  onBulkRemoveStopped: () => void;
+  onBulkStopRunning: () => void;
   onCreate: () => void;
   onDelete: (pubkey: string) => void;
   onMintToken: (pubkey: string, name: string) => void;
@@ -48,6 +64,10 @@ export function ManagedAgentsSection({
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
   selectedLogAgentPubkey: string | null;
 }) {
+  const runningCount = agents.filter((a) => isManagedAgentActive(a)).length;
+  const stoppedCount = agents.filter(
+    (a) => a.status === "stopped" || a.status === "not_deployed",
+  ).length;
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -59,11 +79,47 @@ export function ManagedAgentsSection({
             Agent profiles and process state — local and remote.
           </p>
         </div>
-        <CreateNewButton
-          ariaLabel="Create agent"
-          label="Agent"
-          onClick={onCreate}
-        />
+        <div className="flex items-center gap-2">
+          {agents.length > 0 ? (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label="Bulk actions"
+                  className="h-7 w-7"
+                  size="icon"
+                  variant="ghost"
+                >
+                  <Ellipsis className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={(e) => e.preventDefault()}
+              >
+                <DropdownMenuItem
+                  disabled={isActionPending || runningCount === 0}
+                  onClick={onBulkStopRunning}
+                >
+                  <OctagonX className="h-4 w-4" />
+                  Stop all running ({runningCount})
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  disabled={isActionPending || stoppedCount === 0}
+                  onClick={onBulkRemoveStopped}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove all stopped ({stoppedCount})
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          <CreateNewButton
+            ariaLabel="Create agent"
+            label="Agent"
+            onClick={onCreate}
+          />
+        </div>
       </div>
 
       {isLoading ? (
@@ -111,6 +167,7 @@ export function ManagedAgentsSection({
               }
               logLoading={selectedLogAgentPubkey === agent.pubkey && logLoading}
               personaLabelsById={personaLabelsById}
+              presenceLoaded={presenceLoaded}
               presenceLookup={presenceLookup}
               onAddToChannel={onAddToChannel}
               onDelete={onDelete}
