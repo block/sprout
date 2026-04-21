@@ -6,7 +6,6 @@ import {
   channelMessagesKey,
   dedupeMessagesById,
   normalizeTimelineMessages,
-  sortMessages,
 } from "@/features/messages/lib/messageQueryKeys";
 import {
   buildReplyTags,
@@ -51,7 +50,11 @@ export function mergeMessages(
   current: RelayEvent[],
   incoming: RelayEvent,
 ): RelayEvent[] {
-  return mergeMessagesWithNormalizer(current, incoming, sortMessages);
+  return mergeMessagesWithNormalizer(
+    current,
+    incoming,
+    normalizeTimelineMessages,
+  );
 }
 
 export function mergeTimelineCacheMessages(
@@ -139,7 +142,7 @@ export function useChannelMessagesQuery(channel: Channel | null) {
 
       return mergedHistory;
     },
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 5 * 60 * 1_000,
     gcTime: 5 * 60 * 1_000,
   });
 }

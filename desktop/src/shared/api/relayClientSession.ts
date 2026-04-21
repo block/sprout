@@ -793,8 +793,8 @@ export class RelayClient {
 
     if (this.wsId !== null) {
       void invoke("plugin:websocket|disconnect", { id: this.wsId }).catch(
-        () => {
-          return;
+        (err) => {
+          console.warn("[RelayClientSession] disconnect failed:", err);
         },
       );
     }

@@ -53,6 +53,16 @@ export function useBackForwardControls() {
     }
 
     keysByIndex.set(locationIndex, locationKey);
+    const maxNavEntries = 200;
+    if (keysByIndex.size > maxNavEntries) {
+      const excess = keysByIndex.size - maxNavEntries;
+      let removed = 0;
+      for (const storedIndex of keysByIndex.keys()) {
+        if (removed >= excess) break;
+        keysByIndex.delete(storedIndex);
+        removed++;
+      }
+    }
     setMaxIndex((current: number) => {
       if (currentKey && currentKey !== locationKey) {
         return locationIndex;

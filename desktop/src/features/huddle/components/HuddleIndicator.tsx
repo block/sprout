@@ -156,6 +156,16 @@ export function HuddleIndicator({
         // Dedup by event ID — ignore replayed events from reconnect.
         if (seenEvents.has(event.id)) return;
         seenEvents.set(event.id, event);
+        const maxSeenEvents = 200;
+        if (seenEvents.size > maxSeenEvents) {
+          const excess = seenEvents.size - maxSeenEvents;
+          let removed = 0;
+          for (const key of seenEvents.keys()) {
+            if (removed >= excess) break;
+            seenEvents.delete(key);
+            removed++;
+          }
+        }
 
         // Reconstruct from full history on every new event.
         // This is cheap — huddle lifecycle events are rare (typically <20).

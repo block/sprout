@@ -14,7 +14,18 @@ export function useDrafts() {
       if (draft.content.trim().length === 0) {
         return;
       }
-      draftsRef.current.set(channelId, draft);
+      const drafts = draftsRef.current;
+      drafts.set(channelId, draft);
+      const maxDrafts = 50;
+      if (drafts.size > maxDrafts) {
+        const excess = drafts.size - maxDrafts;
+        let removed = 0;
+        for (const key of drafts.keys()) {
+          if (removed >= excess) break;
+          drafts.delete(key);
+          removed++;
+        }
+      }
     },
     [],
   );

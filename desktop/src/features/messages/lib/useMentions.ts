@@ -173,7 +173,18 @@ export function useMentions(channelId: string | null) {
       const nextContent = `${before}${inserted}${after}`;
       const nextCursor = before.length + inserted.length;
 
-      mentionMapRef.current.set(displayName, suggestion.pubkey);
+      const mentions = mentionMapRef.current;
+      mentions.set(displayName, suggestion.pubkey);
+      const maxMentions = 200;
+      if (mentions.size > maxMentions) {
+        const excess = mentions.size - maxMentions;
+        let removed = 0;
+        for (const key of mentions.keys()) {
+          if (removed >= excess) break;
+          mentions.delete(key);
+          removed++;
+        }
+      }
       setMentionQuery(null);
       setMentionSelectedIndex(0);
 

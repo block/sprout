@@ -2,7 +2,7 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
-import { mergeMessages } from "@/features/messages/hooks";
+import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import {
   getChannelIdFromTags,
   getThreadReference,
@@ -91,7 +91,7 @@ export function useLoadMissingAncestors(
 
           queryClient.setQueryData<RelayEvent[]>(
             channelMessagesKey(activeChannel.id),
-            (current = []) => mergeMessages(current, event),
+            (current = []) => mergeTimelineCacheMessages(current, event),
           );
         } catch (error) {
           console.error("Failed to load ancestor event", eventId, error);
