@@ -441,6 +441,7 @@ fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
         purpose_set_at: row.try_get("purpose_set_at").unwrap_or(None),
         ttl_seconds: row.try_get("ttl_seconds").unwrap_or(None),
         ttl_deadline: row.try_get("ttl_deadline").unwrap_or(None),
+        project_id: row.try_get("project_id").unwrap_or(None),
     })
 }
 

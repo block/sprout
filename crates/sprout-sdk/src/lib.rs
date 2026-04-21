@@ -73,6 +73,8 @@ pub use sprout_core::channel::ChannelType as ChannelKind;
 pub use sprout_core::channel::ChannelVisibility as Visibility;
 /// Member role.
 pub use sprout_core::channel::MemberRole;
+/// Project environment.
+pub use sprout_core::project::ProjectEnvironment;
 
 // ── Error ────────────────────────────────────────────────────────────────────
 

@@ -37,7 +37,7 @@ use crate::queue::{
     ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo, PromptProfile,
     PromptProfileLookup,
 };
-use crate::relay::{ChannelInfo, RestClient};
+use crate::relay::{ChannelInfo, ProjectInfo, RestClient};
 
 // ── FlushBatch Clone note ─────────────────────────────────────────────────────
 // FlushBatch and BatchEvent derive Clone (added in queue.rs) so we can store
@@ -188,6 +188,8 @@ pub struct PromptContext {
     pub max_turns_per_session: u32,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
+    /// Lazily-populated project metadata cache. Keyed by project UUID.
+    pub project_cache: tokio::sync::RwLock<HashMap<Uuid, ProjectInfo>>,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -812,12 +814,23 @@ pub async fn run_prompt_task(
             Some(ci) => Some(PromptChannelInfo {
                 name: ci.name.clone(),
                 channel_type: ci.channel_type.clone(),
+                project_id: ci.project_id,
             }),
             None => fetch_channel_info(b.channel_id, &ctx.rest_client).await,
         };
 
         let conversation_context = if ctx.context_message_limit > 0 {
             fetch_conversation_context(b, &channel_info, &ctx).await
+        } else {
+            None
+        };
+
+        let project_info = if let Some(ref ci) = channel_info {
+            if let Some(pid) = ci.project_id {
+                fetch_or_cache_project(pid, &ctx).await
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -831,6 +844,7 @@ pub async fn run_prompt_task(
             channel_info.as_ref(),
             conversation_context.as_ref(),
             profile_lookup.as_ref(),
+            project_info.as_ref(),
         )
     } else {
         // Should not happen — batch is None only for heartbeats which have prompt_text.
@@ -1140,7 +1154,15 @@ async fn fetch_channel_info(channel_id: Uuid, rest: &RestClient) -> Option<Promp
                     .and_then(|v| v.as_str())
                     .unwrap_or("stream")
                     .to_string();
-                Some(PromptChannelInfo { name, channel_type })
+                let project_id = json
+                    .get("project_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<uuid::Uuid>().ok());
+                Some(PromptChannelInfo {
+                    name,
+                    channel_type,
+                    project_id,
+                })
             }
             Ok(Err(e)) => {
                 tracing::debug!(
@@ -1159,6 +1181,60 @@ async fn fetch_channel_info(channel_id: Uuid, rest: &RestClient) -> Option<Promp
         }
     })
     .await
+}
+
+/// Fetch project info from cache or relay REST API.
+async fn fetch_or_cache_project(project_id: Uuid, ctx: &PromptContext) -> Option<ProjectInfo> {
+    // Check cache first (read lock).
+    {
+        let cache = ctx.project_cache.read().await;
+        if let Some(info) = cache.get(&project_id) {
+            return Some(info.clone());
+        }
+    }
+
+    // Fetch from relay.
+    let path = format!("/api/projects/{}", project_id);
+    let json = match timeout(CONTEXT_FETCH_TIMEOUT, ctx.rest_client.get_json(&path)).await {
+        Ok(Ok(json)) => json,
+        Ok(Err(e)) => {
+            tracing::debug!(project_id = %project_id, "project info fetch failed: {e}");
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!(project_id = %project_id, "project info fetch timed out");
+            return None;
+        }
+    };
+
+    let info = ProjectInfo {
+        name: json.get("name").and_then(|v| v.as_str())?.to_string(),
+        prompt: json
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        description: json
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        repo_urls: json
+            .get("repo_urls")
+            .cloned()
+            .unwrap_or(serde_json::json!([])),
+        environment: json
+            .get("environment")
+            .and_then(|v| v.as_str())
+            .unwrap_or("local")
+            .to_string(),
+    };
+
+    // Cache it (write lock).
+    {
+        let mut cache = ctx.project_cache.write().await;
+        cache.insert(project_id, info.clone());
+    }
+
+    Some(info)
 }
 
 /// Fetch conversation context (thread or DM) for a batch before prompting.

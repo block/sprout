@@ -110,6 +110,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/huddle/{channel_id}/audio",
             get(audio::handler::ws_audio_handler),
         )
+        // Project routes
+        .route("/api/projects", get(api::list_projects_handler))
+        .route("/api/projects/{project_id}", get(api::get_project))
+        .route(
+            "/api/projects/{project_id}/channels",
+            get(api::list_project_channels_handler),
+        )
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes

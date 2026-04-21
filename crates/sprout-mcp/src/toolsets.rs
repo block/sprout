@@ -103,6 +103,12 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("get_event", "social", true),
     ("get_user_notes", "social", true),
     ("get_contact_list", "social", true),
+    // ── project ──────────────────────────────────────────────────────────────
+    ("create_project", "project", false),
+    ("get_project", "project", true),
+    ("list_projects", "project", true),
+    ("update_project", "project", false),
+    ("delete_project", "project", false),
     // Deferred tools (not yet implemented): upload_file, subscribe, unsubscribe
 ];
 
@@ -169,6 +175,7 @@ const KNOWN_TOOLSETS: &[&str] = &[
     "identity",
     "forums",
     "social",
+    "project",
 ];
 
 // ---------------------------------------------------------------------------
@@ -383,8 +390,8 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_48() {
-        assert_eq!(ALL_TOOLS.len(), 48);
+    fn all_tools_count_is_53() {
+        assert_eq!(ALL_TOOLS.len(), 53);
     }
 
     #[test]
@@ -411,7 +418,7 @@ mod tests {
         // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity, forums, social
         // (media and realtime have no implemented tools yet)
         let defs = all_toolsets();
-        assert_eq!(defs.len(), 8);
+        assert_eq!(defs.len(), 9);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         assert!(names.contains(&"default"));
         assert!(names.contains(&"canvas"));

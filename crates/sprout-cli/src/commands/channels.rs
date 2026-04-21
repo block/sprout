@@ -119,9 +119,15 @@ pub async fn cmd_create_channel(
         "forum" => sprout_sdk::ChannelKind::Forum,
         _ => unreachable!(), // validated above
     };
-    let builder =
-        sprout_sdk::build_create_channel(channel_uuid, name, Some(vis), Some(ct), description)
-            .map_err(|e| CliError::Other(format!("build_create_channel failed: {e}")))?;
+    let builder = sprout_sdk::build_create_channel(
+        channel_uuid,
+        name,
+        Some(vis),
+        Some(ct),
+        description,
+        None,
+    )
+    .map_err(|e| CliError::Other(format!("build_create_channel failed: {e}")))?;
 
     let event = sign_and_submit_builder(builder, keys)?;
     let resp = client.submit_event(event).await?;

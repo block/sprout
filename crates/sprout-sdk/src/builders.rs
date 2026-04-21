@@ -426,6 +426,7 @@ pub fn build_create_channel(
     visibility: Option<Visibility>,
     channel_type: Option<ChannelKind>,
     about: Option<&str>,
+    project_id: Option<Uuid>,
 ) -> Result<EventBuilder, SdkError> {
     let mut tags = vec![tag(&["h", &channel_id.to_string()])?, tag(&["name", name])?];
     if let Some(v) = visibility {
@@ -436,6 +437,9 @@ pub fn build_create_channel(
     }
     if let Some(a) = about {
         tags.push(tag(&["about", a])?);
+    }
+    if let Some(pid) = project_id {
+        tags.push(tag(&["project", &pid.to_string()])?);
     }
     Ok(EventBuilder::new(Kind::Custom(9007), "", tags))
 }
@@ -671,6 +675,102 @@ pub fn build_huddle_ended(
     ephemeral_channel_id: Uuid,
 ) -> Result<EventBuilder, SdkError> {
     build_huddle_event_sdk(48103, parent_channel_id, ephemeral_channel_id, &[], None)
+}
+
+// ── Builder 30: build_create_project ─────────────────────────────────────────
+
+/// Build a project creation event (kind 50001).
+#[allow(clippy::too_many_arguments)]
+pub fn build_create_project(
+    project_id: Uuid,
+    name: &str,
+    environment: Option<&str>,
+    description: Option<&str>,
+    prompt: Option<&str>,
+    icon: Option<&str>,
+    color: Option<&str>,
+    repo_urls: Option<&[&str]>,
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![tag(&["d", &project_id.to_string()])?, tag(&["name", name])?];
+    if let Some(env) = environment {
+        tags.push(tag(&["environment", env])?);
+    }
+    if let Some(d) = description {
+        tags.push(tag(&["about", d])?);
+    }
+    if let Some(p) = prompt {
+        tags.push(tag(&["prompt", p])?);
+    }
+    if let Some(i) = icon {
+        tags.push(tag(&["icon", i])?);
+    }
+    if let Some(c) = color {
+        tags.push(tag(&["color", c])?);
+    }
+    if let Some(urls) = repo_urls {
+        for url in urls {
+            tags.push(tag(&["repo", url])?);
+        }
+    }
+    Ok(EventBuilder::new(Kind::Custom(50001), "", tags))
+}
+
+// ── Builder 31: build_update_project ─────────────────────────────────────────
+
+/// Build a project update event (kind 50002).
+#[allow(clippy::too_many_arguments)]
+pub fn build_update_project(
+    project_id: Uuid,
+    name: Option<&str>,
+    description: Option<&str>,
+    prompt: Option<&str>,
+    icon: Option<&str>,
+    color: Option<&str>,
+    environment: Option<&str>,
+    repo_urls: Option<&[&str]>,
+) -> Result<EventBuilder, SdkError> {
+    let mut tags = vec![tag(&["d", &project_id.to_string()])?];
+    if let Some(n) = name {
+        tags.push(tag(&["name", n])?);
+    }
+    if let Some(d) = description {
+        tags.push(tag(&["about", d])?);
+    }
+    if let Some(p) = prompt {
+        tags.push(tag(&["prompt", p])?);
+    }
+    if let Some(i) = icon {
+        tags.push(tag(&["icon", i])?);
+    }
+    if let Some(c) = color {
+        tags.push(tag(&["color", c])?);
+    }
+    if let Some(env) = environment {
+        tags.push(tag(&["environment", env])?);
+    }
+    if let Some(urls) = repo_urls {
+        if urls.is_empty() {
+            tags.push(tag(&["repo", ""])?);
+        } else {
+            for url in urls {
+                tags.push(tag(&["repo", url])?);
+            }
+        }
+    }
+    if tags.len() == 1 {
+        return Err(SdkError::InvalidInput(
+            "update_project requires at least one field to update".into(),
+        ));
+    }
+    Ok(EventBuilder::new(Kind::Custom(50002), "", tags))
+}
+
+// ── Builder 32: build_delete_project ─────────────────────────────────────────
+
+/// Build a project deletion event (kind 50003).
+pub fn build_delete_project(project_id: Uuid) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["d", &project_id.to_string()])?];
+    Ok(EventBuilder::new(Kind::Custom(50003), "", tags))
 }
 
 // ── Helper: extract_channel_id ───────────────────────────────────────────────
@@ -1243,6 +1343,7 @@ mod tests {
                 Some(Visibility::Open),
                 Some(ChannelKind::Stream),
                 Some("General chat"),
+                None,
             )
             .unwrap(),
         );
@@ -1257,8 +1358,15 @@ mod tests {
     fn create_channel_minimal() {
         let cid = uuid();
         let ev = sign(
-            build_create_channel(cid, "dev", None::<Visibility>, None::<ChannelKind>, None)
-                .unwrap(),
+            build_create_channel(
+                cid,
+                "dev",
+                None::<Visibility>,
+                None::<ChannelKind>,
+                None,
+                None,
+            )
+            .unwrap(),
         );
         assert_eq!(ev.kind.as_u16(), 9007);
         assert!(has_tag(&ev, "name", "dev"));
@@ -1597,5 +1705,157 @@ mod tests {
         let ev = sign(build_huddle_ended(parent, ephemeral).unwrap());
         assert!(has_tag(&ev, "h", &parent.to_string()));
         assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_create_project ────────────────────────────────────────────────
+
+    #[test]
+    fn create_project_happy_path() {
+        let pid = uuid();
+        let ev = sign(
+            build_create_project(pid, "my-project", None, None, None, None, None, None).unwrap(),
+        );
+        assert_eq!(ev.kind.as_u16(), 50001);
+        assert!(has_tag(&ev, "d", &pid.to_string()));
+        assert!(has_tag(&ev, "name", "my-project"));
+    }
+
+    #[test]
+    fn create_project_all_fields() {
+        let pid = uuid();
+        let ev = sign(
+            build_create_project(
+                pid,
+                "full-project",
+                Some("blox"),
+                Some("A description"),
+                Some("You are a helpful agent"),
+                Some("rocket"),
+                Some("#ff0000"),
+                Some(&[
+                    "https://github.com/example/repo",
+                    "https://github.com/example/other",
+                ]),
+            )
+            .unwrap(),
+        );
+        assert_eq!(ev.kind.as_u16(), 50001);
+        assert!(has_tag(&ev, "d", &pid.to_string()));
+        assert!(has_tag(&ev, "name", "full-project"));
+        assert!(has_tag(&ev, "environment", "blox"));
+        assert!(has_tag(&ev, "about", "A description"));
+        assert!(has_tag(&ev, "prompt", "You are a helpful agent"));
+        assert!(has_tag(&ev, "icon", "rocket"));
+        assert!(has_tag(&ev, "color", "#ff0000"));
+        let repos = tag_values(&ev, "repo");
+        assert_eq!(repos.len(), 2);
+        assert!(repos.contains(&"https://github.com/example/repo".to_string()));
+        assert!(repos.contains(&"https://github.com/example/other".to_string()));
+    }
+
+    #[test]
+    fn create_project_no_repos() {
+        let pid = uuid();
+        let ev = sign(
+            build_create_project(pid, "no-repos", None, None, None, None, None, None).unwrap(),
+        );
+        let repos = tag_values(&ev, "repo");
+        assert!(repos.is_empty());
+    }
+
+    // ── build_update_project ────────────────────────────────────────────────
+
+    #[test]
+    fn update_project_partial() {
+        let pid = uuid();
+        let ev = sign(
+            build_update_project(
+                pid,
+                Some("new-name"),
+                None,
+                Some("new prompt"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        assert_eq!(ev.kind.as_u16(), 50002);
+        assert!(has_tag(&ev, "d", &pid.to_string()));
+        assert!(has_tag(&ev, "name", "new-name"));
+        assert!(has_tag(&ev, "prompt", "new prompt"));
+        // Fields not set should not be present
+        assert!(tag_values(&ev, "about").is_empty());
+        assert!(tag_values(&ev, "icon").is_empty());
+        assert!(tag_values(&ev, "color").is_empty());
+        assert!(tag_values(&ev, "environment").is_empty());
+        assert!(tag_values(&ev, "repo").is_empty());
+    }
+
+    #[test]
+    fn update_project_clear_repos() {
+        let pid = uuid();
+        let ev = sign(
+            build_update_project(pid, Some("x"), None, None, None, None, None, Some(&[])).unwrap(),
+        );
+        // Sentinel tag should be emitted
+        assert!(has_tag(&ev, "repo", ""));
+    }
+
+    #[test]
+    fn update_project_no_fields_rejected() {
+        let pid = uuid();
+        let result = build_update_project(pid, None, None, None, None, None, None, None);
+        assert!(matches!(result, Err(SdkError::InvalidInput(_))));
+    }
+
+    // ── build_delete_project ────────────────────────────────────────────────
+
+    #[test]
+    fn delete_project_happy_path() {
+        let pid = uuid();
+        let ev = sign(build_delete_project(pid).unwrap());
+        assert_eq!(ev.kind.as_u16(), 50003);
+        assert!(has_tag(&ev, "d", &pid.to_string()));
+        // Only the d-tag should be present
+        assert_eq!(ev.tags.len(), 1);
+    }
+
+    // ── build_create_channel with project_id ────────────────────────────────
+
+    #[test]
+    fn create_channel_with_project() {
+        let cid = uuid();
+        let pid = uuid();
+        let ev = sign(
+            build_create_channel(
+                cid,
+                "proj-chan",
+                None::<Visibility>,
+                None::<ChannelKind>,
+                None,
+                Some(pid),
+            )
+            .unwrap(),
+        );
+        assert!(has_tag(&ev, "project", &pid.to_string()));
+    }
+
+    #[test]
+    fn create_channel_without_project() {
+        let cid = uuid();
+        let ev = sign(
+            build_create_channel(
+                cid,
+                "no-proj",
+                None::<Visibility>,
+                None::<ChannelKind>,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        assert!(tag_values(&ev, "project").is_empty());
     }
 }

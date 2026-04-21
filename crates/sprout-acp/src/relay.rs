@@ -82,6 +82,17 @@ use crate::config::ChannelFilter;
 pub struct ChannelInfo {
     pub name: String,
     pub channel_type: String,
+    pub project_id: Option<uuid::Uuid>,
+}
+
+/// Project metadata fetched from the relay.
+#[derive(Debug, Clone)]
+pub struct ProjectInfo {
+    pub name: String,
+    pub prompt: Option<String>,
+    pub description: Option<String>,
+    pub repo_urls: serde_json::Value,
+    pub environment: String,
 }
 
 /// Lightweight REST client for pre-prompt context fetches.
@@ -465,7 +476,18 @@ impl HarnessRelay {
                             .and_then(|v| v.as_str())
                             .unwrap_or("stream")
                             .to_string();
-                        map.insert(uuid, ChannelInfo { name, channel_type });
+                        let project_id = ch
+                            .get("project_id")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<Uuid>().ok());
+                        map.insert(
+                            uuid,
+                            ChannelInfo {
+                                name,
+                                channel_type,
+                                project_id,
+                            },
+                        );
                     }
                     Err(e) => {
                         warn!("skipping channel with unparseable id {id_str:?}: {e}");

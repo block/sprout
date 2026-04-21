@@ -228,6 +228,14 @@ pub const KIND_HUDDLE_GUIDELINES: u32 = 48106;
 /// Internal kind for media upload audit entries. Not a relay event kind.
 pub const KIND_MEDIA_UPLOAD: u32 = 49001;
 
+// Projects (50000–50999)
+/// A new project was created.
+pub const KIND_PROJECT_CREATED: u32 = 50001;
+/// A project was updated.
+pub const KIND_PROJECT_UPDATED: u32 = 50002;
+/// A project was deleted.
+pub const KIND_PROJECT_DELETED: u32 = 50003;
+
 /// All registered kind constants — used for duplicate detection and iteration.
 pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -314,6 +322,9 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_HUDDLE_TRACK_PUBLISHED,
     KIND_HUDDLE_RECORDING_AVAILABLE,
     KIND_MEDIA_UPLOAD,
+    KIND_PROJECT_CREATED,
+    KIND_PROJECT_UPDATED,
+    KIND_PROJECT_DELETED,
 ];
 
 /// Returns `true` if `kind` is in the ephemeral range (20000–29999).
@@ -357,6 +368,7 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
 const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
 const _: () = assert!(KIND_HUDDLE_RECORDING_AVAILABLE <= u16::MAX as u32);
+const _: () = assert!(KIND_PROJECT_DELETED <= u16::MAX as u32);
 const _: () = assert!(EPHEMERAL_KIND_MIN < EPHEMERAL_KIND_MAX);
 
 #[cfg(test)]

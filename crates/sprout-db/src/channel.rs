@@ -62,6 +62,8 @@ pub struct ChannelRecord {
     pub ttl_seconds: Option<i32>,
     /// Deadline by which a new message must arrive or the channel is auto-archived.
     pub ttl_deadline: Option<DateTime<Utc>>,
+    /// Optional project this channel belongs to.
+    pub project_id: Option<Uuid>,
 }
 
 /// A channel membership row as returned from the database.
@@ -143,7 +145,7 @@ pub async fn create_channel(
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
+               ttl_seconds, ttl_deadline, project_id
         FROM channels WHERE id = $1
         "#,
     )
@@ -170,6 +172,7 @@ pub async fn create_channel_with_id(
     description: Option<&str>,
     created_by: &[u8],
     ttl_seconds: Option<i32>,
+    project_id: Option<Uuid>,
 ) -> Result<(ChannelRecord, bool)> {
     if created_by.len() != 32 {
         return Err(DbError::InvalidData(format!(
@@ -188,9 +191,10 @@ pub async fn create_channel_with_id(
 
     let rows_affected = sqlx::query(
         r#"
-        INSERT INTO channels (id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline)
+        INSERT INTO channels (id, name, channel_type, visibility, description, created_by, ttl_seconds, ttl_deadline, project_id)
         VALUES ($1, $2, $3::channel_type, $4::channel_visibility, $5, $6, $7,
-                CASE WHEN $7 IS NOT NULL THEN NOW() + ($7 || ' seconds')::interval ELSE NULL END)
+                CASE WHEN $7 IS NOT NULL THEN NOW() + ($7 || ' seconds')::interval ELSE NULL END,
+                $8)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
@@ -201,6 +205,7 @@ pub async fn create_channel_with_id(
     .bind(description)
     .bind(created_by)
     .bind(ttl_seconds)
+    .bind(project_id)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -234,7 +239,7 @@ pub async fn create_channel_with_id(
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
+               ttl_seconds, ttl_deadline, project_id
         FROM channels WHERE id = $1
         "#,
     )
@@ -257,7 +262,7 @@ pub async fn get_channel(pool: &PgPool, channel_id: Uuid) -> Result<ChannelRecor
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
+               ttl_seconds, ttl_deadline, project_id
         FROM channels WHERE id = $1 AND deleted_at IS NULL
         "#,
     )
@@ -589,7 +594,7 @@ pub async fn list_channels(pool: &PgPool, visibility: Option<&str>) -> Result<Ve
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
                    purpose, purpose_set_by, purpose_set_at,
-                   ttl_seconds, ttl_deadline
+                   ttl_seconds, ttl_deadline, project_id
             FROM channels
             WHERE deleted_at IS NULL AND visibility::text = $1
             ORDER BY created_at DESC
@@ -608,7 +613,7 @@ pub async fn list_channels(pool: &PgPool, visibility: Option<&str>) -> Result<Ve
                    nip29_group_id, topic_required, max_members,
                    topic, topic_set_by, topic_set_at,
                    purpose, purpose_set_by, purpose_set_at,
-                   ttl_seconds, ttl_deadline
+                   ttl_seconds, ttl_deadline, project_id
             FROM channels
             WHERE deleted_at IS NULL
             ORDER BY created_at DESC
@@ -652,7 +657,7 @@ async fn get_channel_tx(
                nip29_group_id, topic_required, max_members,
                topic, topic_set_by, topic_set_at,
                purpose, purpose_set_by, purpose_set_at,
-               ttl_seconds, ttl_deadline
+               ttl_seconds, ttl_deadline, project_id
         FROM channels WHERE id = $1 AND deleted_at IS NULL
         "#,
     )
@@ -741,7 +746,7 @@ pub async fn get_accessible_channels(
                c.nip29_group_id, c.topic_required, c.max_members,
                c.topic, c.topic_set_by, c.topic_set_at,
                c.purpose, c.purpose_set_by, c.purpose_set_at,
-               c.ttl_seconds, c.ttl_deadline,
+               c.ttl_seconds, c.ttl_deadline, c.project_id,
                (cm.channel_id IS NOT NULL) AS is_member
         FROM channels c
         LEFT JOIN channel_members cm
@@ -852,7 +857,7 @@ pub async fn get_users_bulk(pool: &PgPool, pubkeys: &[Vec<u8>]) -> Result<Vec<Us
     Ok(out)
 }
 
-fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
+pub(crate) fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
     let id: Uuid = row.try_get("id")?;
     let topic_required: bool = row.try_get("topic_required")?;
 
@@ -890,6 +895,7 @@ fn row_to_channel_record(row: sqlx::postgres::PgRow) -> Result<ChannelRecord> {
         purpose_set_at,
         ttl_seconds,
         ttl_deadline,
+        project_id: row.try_get("project_id").unwrap_or(None),
     })
 }
 

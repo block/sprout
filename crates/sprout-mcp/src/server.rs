@@ -228,6 +228,9 @@ pub struct CreateChannelParams {
     /// Optional human-readable description of the channel's purpose.
     #[serde(default)]
     pub description: Option<String>,
+    /// Optional project UUID to associate this channel with.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// Parameters for the `get_canvas` tool.
@@ -244,6 +247,79 @@ pub struct SetCanvasParams {
     pub channel_id: String,
     /// New canvas content (replaces any existing canvas).
     pub content: String,
+}
+
+// ── Project tool parameter structs ───────────────────────────────────────────
+
+/// Parameters for the `create_project` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CreateProjectParams {
+    /// Display name for the new project.
+    pub name: String,
+    /// Optional human-readable description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Shared context/instructions injected into agents.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// Optional icon identifier.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// Optional color identifier.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Execution environment: `"local"` (default) or `"blox"`.
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// Repository URLs associated with this project.
+    #[serde(default)]
+    pub repo_urls: Option<Vec<String>>,
+}
+
+/// Parameters for the `get_project` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GetProjectParams {
+    /// UUID of the project to retrieve.
+    pub project_id: String,
+}
+
+/// Parameters for the `list_projects` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ListProjectsParams {}
+
+/// Parameters for the `update_project` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UpdateProjectParams {
+    /// UUID of the project to update.
+    pub project_id: String,
+    /// New project name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// New description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// New shared prompt/instructions.
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// New icon identifier.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// New color identifier.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// New execution environment.
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// New repository URLs.
+    #[serde(default)]
+    pub repo_urls: Option<Vec<String>>,
+}
+
+/// Parameters for the `delete_project` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DeleteProjectParams {
+    /// UUID of the project to delete.
+    pub project_id: String,
 }
 
 // ── Workflow tool parameter structs ──────────────────────────────────────────
@@ -1339,12 +1415,20 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                 )
             }
         };
+        let project_uuid = match &p.project_id {
+            Some(pid) => match uuid::Uuid::parse_str(pid) {
+                Ok(id) => Some(id),
+                Err(_) => return format!("Error: invalid project UUID: {pid}"),
+            },
+            None => None,
+        };
         let builder = match sprout_sdk::build_create_channel(
             channel_uuid,
             &p.name,
             Some(visibility),
             Some(channel_type),
             p.description.as_deref(),
+            project_uuid,
         ) {
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
@@ -2617,6 +2701,152 @@ with kind:45003 comments)."
         let path = format!("/api/users/{}/contact-list", p.pubkey);
         match self.client.get(&path).await {
             Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    // ── Project tools ────────────────────────────────────────────────────────
+
+    /// Create a new project. Projects group channels and provide shared context to agents.
+    #[tool(
+        name = "create_project",
+        description = "Create a new project. Projects group channels and provide shared context to agents."
+    )]
+    pub async fn create_project(&self, Parameters(p): Parameters<CreateProjectParams>) -> String {
+        let project_uuid = uuid::Uuid::new_v4();
+        let env = p.environment.as_deref().unwrap_or("local");
+        let repo_refs: Vec<&str> = p
+            .repo_urls
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let builder = match sprout_sdk::build_create_project(
+            project_uuid,
+            &p.name,
+            Some(env),
+            p.description.as_deref(),
+            p.prompt.as_deref(),
+            p.icon.as_deref(),
+            p.color.as_deref(),
+            if repo_refs.is_empty() {
+                None
+            } else {
+                Some(&repo_refs)
+            },
+        ) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "project_id": project_uuid.to_string(),
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Get details for a project by ID.
+    #[tool(name = "get_project", description = "Get details for a project by ID.")]
+    pub async fn get_project(&self, Parameters(p): Parameters<GetProjectParams>) -> String {
+        if let Err(e) = validate_uuid(&p.project_id) {
+            return format!("Error: {e}");
+        }
+        match self
+            .client
+            .get(&format!("/api/projects/{}", p.project_id))
+            .await
+        {
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// List all projects accessible to this agent.
+    #[tool(
+        name = "list_projects",
+        description = "List all projects accessible to this agent."
+    )]
+    pub async fn list_projects(&self, Parameters(_p): Parameters<ListProjectsParams>) -> String {
+        match self.client.get("/api/projects").await {
+            Ok(b) => b,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Update a project's metadata.
+    #[tool(
+        name = "update_project",
+        description = "Update a project's name, description, prompt, icon, color, environment, or repo_urls."
+    )]
+    pub async fn update_project(&self, Parameters(p): Parameters<UpdateProjectParams>) -> String {
+        let project_id = match uuid::Uuid::parse_str(&p.project_id) {
+            Ok(id) => id,
+            Err(_) => return format!("Error: invalid project UUID: {}", p.project_id),
+        };
+        let repo_refs: Option<Vec<&str>> = p
+            .repo_urls
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let builder = match sprout_sdk::build_update_project(
+            project_id,
+            p.name.as_deref(),
+            p.description.as_deref(),
+            p.prompt.as_deref(),
+            p.icon.as_deref(),
+            p.color.as_deref(),
+            p.environment.as_deref(),
+            repo_refs.as_deref(),
+        ) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "project_id": project_id.to_string(),
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Delete a project.
+    #[tool(name = "delete_project", description = "Delete a project by ID.")]
+    pub async fn delete_project(&self, Parameters(p): Parameters<DeleteProjectParams>) -> String {
+        let project_id = match uuid::Uuid::parse_str(&p.project_id) {
+            Ok(id) => id,
+            Err(_) => return format!("Error: invalid project UUID: {}", p.project_id),
+        };
+        let builder = match sprout_sdk::build_delete_project(project_id) {
+            Ok(b) => b,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let event = match builder.sign_with_keys(self.client.keys()) {
+            Ok(e) => e,
+            Err(e) => return format!("Error: failed to sign: {e}"),
+        };
+        match self.client.send_event(event).await {
+            Ok(ok) => serde_json::json!({
+                "event_id": ok.event_id,
+                "project_id": project_id.to_string(),
+                "accepted": ok.accepted,
+                "message": ok.message,
+            })
+            .to_string(),
             Err(e) => format!("Error: {e}"),
         }
     }

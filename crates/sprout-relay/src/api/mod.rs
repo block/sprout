@@ -36,6 +36,8 @@ pub mod messages;
 pub mod nip05;
 /// Presence status endpoints.
 pub mod presence;
+/// Project endpoints.
+pub mod projects;
 /// Reaction endpoints.
 pub mod reactions;
 /// Full-text search endpoint.
@@ -61,6 +63,9 @@ pub use feed::feed_handler;
 pub use members::list_members;
 pub use messages::{get_thread, list_messages, validate_imeta_tags, verify_imeta_blobs};
 pub use presence::{presence_handler, set_presence_handler};
+pub use projects::{
+    get_project_handler as get_project, list_project_channels_handler, list_projects_handler,
+};
 pub use reactions::list_reactions_handler;
 pub use search::search_handler;
 pub use users::{
@@ -608,6 +613,7 @@ mod tests {
                 purpose_set_at: None,
                 ttl_seconds: None,
                 ttl_deadline: None,
+                project_id: None,
             },
             is_member: true,
         }

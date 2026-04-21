@@ -326,3 +326,29 @@ CREATE TABLE pubkey_allowlist (
     added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     note        TEXT
 );
+
+-- ── Projects ────────────────────────────────────────────────────────────────
+
+CREATE TABLE projects (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            VARCHAR(255) NOT NULL,
+    description     TEXT,
+    prompt          TEXT,
+    icon            VARCHAR(64),
+    color           VARCHAR(16),
+    environment     VARCHAR(32) NOT NULL DEFAULT 'local',
+    repo_urls       JSONB DEFAULT '[]'::jsonb,
+    created_by      BYTEA NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    archived_at     TIMESTAMPTZ,
+    deleted_at      TIMESTAMPTZ,
+    CONSTRAINT projects_id_not_nil CHECK (id <> '00000000-0000-0000-0000-000000000000'::uuid)
+);
+
+CREATE INDEX idx_projects_created_by ON projects(created_by);
+CREATE INDEX idx_projects_deleted_at ON projects(deleted_at) WHERE deleted_at IS NULL;
+
+-- Add project_id FK to channels table
+ALTER TABLE channels ADD COLUMN project_id UUID REFERENCES projects(id);
+CREATE INDEX idx_channels_project_id ON channels(project_id) WHERE project_id IS NOT NULL;

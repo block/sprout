@@ -21,6 +21,8 @@ pub mod network;
 pub mod pairing;
 /// Presence status types shared across crates.
 pub mod presence;
+/// Project types shared across crates.
+pub mod project;
 /// Schnorr signature and event ID verification.
 pub mod verification;
 

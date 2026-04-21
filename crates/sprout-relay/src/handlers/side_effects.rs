@@ -27,7 +27,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// handled in `ingest_event()` before storage so we can short-circuit on
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 9000..=9022 | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | 41001..=41003 | 40099 | 50001..=50003)
 }
 
 async fn evict_live_channel_subscriptions(
@@ -85,6 +85,9 @@ pub async fn handle_side_effects(
         }
         9021 => handle_join_request(event, state).await,
         9022 => handle_leave_request(event, state).await,
+        50001 => handle_create_project(event, state).await,
+        50002 => handle_update_project(event, state).await,
+        50003 => handle_delete_project(event, state).await,
         // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
     }
@@ -1417,11 +1420,88 @@ fn extract_target_event_ids(event: &Event) -> Vec<Vec<u8>> {
 }
 
 /// Extract value of a named tag.
-fn extract_tag_value(event: &Event, tag_name: &str) -> Option<String> {
+pub(crate) fn extract_tag_value(event: &Event, tag_name: &str) -> Option<String> {
     for tag in event.tags.iter() {
         if tag.kind().to_string() == tag_name {
             return tag.content().map(|s| s.to_string());
         }
     }
     None
+}
+
+// ── Project side-effect handlers ────────────────────────────────────────────
+
+async fn handle_create_project(event: &Event, _state: &Arc<AppState>) -> anyhow::Result<()> {
+    // Project was pre-created in ingest — nothing extra needed for Phase 1.
+    let project_id =
+        super::ingest::extract_d_tag_uuid(event).ok_or_else(|| anyhow::anyhow!("missing d tag"))?;
+    info!(project = %project_id, "project created");
+    Ok(())
+}
+
+async fn handle_update_project(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
+    let project_id =
+        super::ingest::extract_d_tag_uuid(event).ok_or_else(|| anyhow::anyhow!("missing d tag"))?;
+
+    let name = extract_tag_value(event, "name");
+    let description = extract_tag_value(event, "about");
+    let prompt = extract_tag_value(event, "prompt");
+    let icon = extract_tag_value(event, "icon");
+    let color = extract_tag_value(event, "color");
+    let environment = extract_tag_value(event, "environment");
+    if let Some(ref env) = environment {
+        if !matches!(env.as_str(), "local" | "blox") {
+            return Err(anyhow::anyhow!("invalid environment: {env:?}"));
+        }
+    }
+    let repo_urls: Option<serde_json::Value> = {
+        let repo_tags: Vec<_> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("repo"))
+            .collect();
+        if repo_tags.is_empty() {
+            // No repo tags at all → don't update the field
+            None
+        } else {
+            // Repo tags present → collect non-empty values; if all empty, clear to []
+            let urls: Vec<String> = repo_tags
+                .iter()
+                .filter_map(|t| {
+                    t.as_slice()
+                        .get(1)
+                        .map(|s| s.to_string())
+                        .filter(|s| !s.is_empty())
+                })
+                .collect();
+            Some(serde_json::json!(urls))
+        }
+    };
+
+    state
+        .db
+        .update_project(
+            project_id,
+            sprout_db::project::ProjectUpdate {
+                name,
+                description,
+                prompt,
+                icon,
+                color,
+                environment,
+                repo_urls,
+            },
+        )
+        .await?;
+
+    info!(project = %project_id, "project updated");
+    Ok(())
+}
+
+async fn handle_delete_project(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
+    let project_id =
+        super::ingest::extract_d_tag_uuid(event).ok_or_else(|| anyhow::anyhow!("missing d tag"))?;
+    state.db.soft_delete_project(project_id).await?;
+    info!(project = %project_id, "project deleted");
+    Ok(())
 }

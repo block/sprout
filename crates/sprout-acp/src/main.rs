@@ -770,6 +770,7 @@ async fn tokio_main() -> Result<()> {
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
         permission_mode: config.permission_mode,
+        project_cache: tokio::sync::RwLock::new(HashMap::new()),
     });
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────

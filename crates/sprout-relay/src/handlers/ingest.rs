@@ -20,15 +20,17 @@ use sprout_core::kind::{
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
     KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
     KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PRESENCE_UPDATE,
-    KIND_PROFILE, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
+    KIND_PROFILE, KIND_PROJECT_CREATED, KIND_PROJECT_DELETED, KIND_PROJECT_UPDATED, KIND_REACTION,
+    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
+    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
 };
 use sprout_core::verification::verify_event;
 
 use crate::state::AppState;
 
 use super::event::dispatch_persistent_event;
+use super::side_effects::extract_tag_value;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -183,6 +185,9 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
             }
         }
         KIND_NIP29_CREATE_GROUP | KIND_CANVAS => Ok(Scope::ChannelsWrite),
+        KIND_PROJECT_CREATED | KIND_PROJECT_UPDATED | KIND_PROJECT_DELETED => {
+            Ok(Scope::ChannelsWrite)
+        }
         KIND_NIP29_JOIN_REQUEST | KIND_NIP29_LEAVE_REQUEST => Ok(Scope::ChannelsRead),
         // Huddle lifecycle events + guidelines
         KIND_HUDDLE_STARTED
@@ -198,7 +203,20 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
 
 // ── Channel resolution helpers ───────────────────────────────────────────────
 
-/// Extract a channel UUID from the `"h"` NIP-29 group tag.
+/// Extract a UUID from the event's `d` tag.
+pub(crate) fn extract_d_tag_uuid(event: &Event) -> Option<Uuid> {
+    for tag in event.tags.iter() {
+        if tag.kind().to_string() == "d" {
+            if let Some(val) = tag.content() {
+                if let Ok(id) = val.parse::<Uuid>() {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn extract_channel_id(event: &Event) -> Option<Uuid> {
     for tag in event.tags.iter() {
         if tag.kind().to_string() == "h" {
@@ -272,7 +290,13 @@ pub(crate) async fn derive_reaction_channel(
 pub(crate) fn is_global_only_kind(kind: u32) -> bool {
     matches!(
         kind,
-        KIND_PROFILE | KIND_TEXT_NOTE | KIND_CONTACT_LIST | KIND_LONG_FORM
+        KIND_PROFILE
+            | KIND_TEXT_NOTE
+            | KIND_CONTACT_LIST
+            | KIND_LONG_FORM
+            | KIND_PROJECT_CREATED
+            | KIND_PROJECT_UPDATED
+            | KIND_PROJECT_DELETED
     )
 }
 
@@ -986,17 +1010,12 @@ pub async fn ingest_event(
 
     // Track pre-created channel UUID for compensation on insert failure.
     let mut pre_created_channel: Option<Uuid> = None;
+    let mut pre_created_project: Option<Uuid> = None;
 
     // ── 16. kind:9007 UUID dedup (create channel with client UUID) ───────
     if kind_u32 == KIND_NIP29_CREATE_GROUP {
         // Validate name tag is present and non-empty before any DB work.
-        let create_name = event.tags.iter().find_map(|t| {
-            if t.kind().to_string() == "name" {
-                t.content().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
+        let create_name = extract_tag_value(&event, "name");
         if create_name
             .as_ref()
             .map(|n| n.trim().is_empty())
@@ -1009,28 +1028,10 @@ pub async fn ingest_event(
 
         // Validate visibility/channel_type for ALL kind:9007 events (with or without h-tag).
         // This runs pre-storage so invalid enums are rejected before the event is persisted.
-        let visibility_str = event
-            .tags
-            .iter()
-            .find_map(|t| {
-                if t.kind().to_string() == "visibility" {
-                    t.content().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "open".to_string());
-        let channel_type_str = event
-            .tags
-            .iter()
-            .find_map(|t| {
-                if t.kind().to_string() == "channel_type" {
-                    t.content().map(|s| s.to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "stream".to_string());
+        let visibility_str =
+            extract_tag_value(&event, "visibility").unwrap_or_else(|| "open".to_string());
+        let channel_type_str =
+            extract_tag_value(&event, "channel_type").unwrap_or_else(|| "stream".to_string());
 
         let visibility: sprout_db::channel::ChannelVisibility = visibility_str
             .parse()
@@ -1043,15 +1044,17 @@ pub async fn ingest_event(
         if let Some(client_uuid) = channel_id {
             let name = create_name.unwrap_or_default();
 
-            let description = event.tags.iter().find_map(|t| {
-                if t.kind().to_string() == "about" {
-                    t.content().map(|s| s.to_string())
+            let description = extract_tag_value(&event, "about");
+
+            let ttl_seconds = super::resolve_ttl(&event, state.config.ephemeral_ttl_override);
+
+            let project_id = event.tags.iter().find_map(|t| {
+                if t.kind().to_string() == "project" {
+                    t.content().and_then(|s| s.parse::<Uuid>().ok())
                 } else {
                     None
                 }
             });
-
-            let ttl_seconds = super::resolve_ttl(&event, state.config.ephemeral_ttl_override);
 
             let actor_bytes = event.pubkey.serialize().to_vec();
             let (_, was_created) = state
@@ -1064,6 +1067,7 @@ pub async fn ingest_event(
                     description.as_deref(),
                     &actor_bytes,
                     ttl_seconds,
+                    project_id,
                 )
                 .await
                 .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
@@ -1077,6 +1081,65 @@ pub async fn ingest_event(
             }
             pre_created_channel = Some(client_uuid);
         }
+    }
+
+    // ── 16b. kind:50001 project pre-creation ─────────────────────────────
+    if kind_u32 == KIND_PROJECT_CREATED {
+        let project_uuid = extract_d_tag_uuid(&event).ok_or_else(|| {
+            IngestError::Rejected(
+                "invalid: project event must include a d tag with valid UUID".into(),
+            )
+        })?;
+
+        let name = extract_tag_value(&event, "name")
+            .ok_or_else(|| IngestError::Rejected("invalid: project must have a name tag".into()))?;
+
+        let environment =
+            extract_tag_value(&event, "environment").unwrap_or_else(|| "local".to_string());
+
+        if !matches!(environment.as_str(), "local" | "blox") {
+            return Err(IngestError::Rejected(format!(
+                "invalid: unknown environment {:?}",
+                environment
+            )));
+        }
+
+        let description = extract_tag_value(&event, "about");
+        let prompt = extract_tag_value(&event, "prompt");
+        let icon = extract_tag_value(&event, "icon");
+        let color = extract_tag_value(&event, "color");
+        let repo_urls: Vec<String> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("repo"))
+            .filter_map(|t| t.as_slice().get(1).map(|s| s.to_string()))
+            .collect();
+
+        let actor_bytes = event.pubkey.serialize().to_vec();
+        let (_, was_created) = state
+            .db
+            .create_project_with_id(
+                project_uuid,
+                &name,
+                &environment,
+                description.as_deref(),
+                prompt.as_deref(),
+                icon.as_deref(),
+                color.as_deref(),
+                &serde_json::json!(repo_urls),
+                &actor_bytes,
+            )
+            .await
+            .map_err(|e| IngestError::Internal(format!("error: {e}")))?;
+
+        if !was_created {
+            return Ok(IngestResult {
+                event_id: event_id_hex,
+                accepted: false,
+                message: "duplicate: project already exists".into(),
+            });
+        }
+        pre_created_project = Some(project_uuid);
     }
 
     // ── 17. kind:9021 open-only check ────────────────────────────────────
@@ -1311,6 +1374,11 @@ pub async fn ingest_event(
                         warn!(event_id = %event_id_hex, "channel compensation failed: {re}");
                     }
                     state.invalidate_channel_deleted();
+                }
+                if let Some(proj_id) = pre_created_project {
+                    if let Err(re) = state.db.soft_delete_project(proj_id).await {
+                        warn!(event_id = %event_id_hex, "project compensation failed: {re}");
+                    }
                 }
                 return Err(match e {
                     sprout_db::DbError::AuthEventRejected => {
@@ -1625,6 +1693,71 @@ mod tests {
         nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content, nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
+    }
+
+    // ── Project kind tests ──────────────────────────────────────────────
+
+    #[test]
+    fn project_kinds_require_channels_write() {
+        let dummy = make_dummy_event();
+        for kind in [
+            KIND_PROJECT_CREATED,
+            KIND_PROJECT_UPDATED,
+            KIND_PROJECT_DELETED,
+        ] {
+            assert_eq!(
+                required_scope_for_kind(kind, &dummy).unwrap(),
+                Scope::ChannelsWrite,
+                "kind {kind} should require ChannelsWrite"
+            );
+        }
+    }
+
+    #[test]
+    fn project_kinds_are_global_only() {
+        for kind in [
+            KIND_PROJECT_CREATED,
+            KIND_PROJECT_UPDATED,
+            KIND_PROJECT_DELETED,
+        ] {
+            assert!(
+                is_global_only_kind(kind),
+                "kind {kind} should be global-only"
+            );
+        }
+    }
+
+    #[test]
+    fn project_kinds_not_channel_scoped() {
+        for kind in [
+            KIND_PROJECT_CREATED,
+            KIND_PROJECT_UPDATED,
+            KIND_PROJECT_DELETED,
+        ] {
+            assert!(
+                !requires_h_channel_scope(kind),
+                "kind {kind} should NOT require h-tag channel scope"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_d_tag_uuid_valid() {
+        let id = uuid::Uuid::new_v4();
+        let event = make_event_with_tags(50001, "", &[&["d", &id.to_string()]]);
+        assert_eq!(extract_d_tag_uuid(&event), Some(id));
+    }
+
+    #[test]
+    fn extract_d_tag_uuid_missing() {
+        let event = make_event_with_tags(50001, "", &[&["name", "test"]]);
+        assert_eq!(extract_d_tag_uuid(&event), None);
+    }
+
+    #[test]
+    fn extract_d_tag_uuid_invalid() {
+        let event = make_event_with_tags(50001, "", &[&["d", "not-a-uuid"]]);
+        assert_eq!(extract_d_tag_uuid(&event), None);
     }
 
     #[test]

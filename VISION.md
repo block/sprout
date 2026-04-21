@@ -128,6 +128,14 @@ Beyond chat: channels are workspaces.
 
 ---
 
+## Projects
+
+A lightweight grouping that gives channels shared context. A project references repos (by git remote URL), carries shared instructions for agents (the project prompt), and specifies the compute environment (local dev laptop or remote Blox instance). Channels optionally belong to a project. When they do, agents automatically receive the project's context — eliminating manual setup per channel.
+
+Projects are relay-stored Nostr events (kinds 50001-50003), accessible from any client or agent runtime via REST API and MCP tools. They support all three compute topologies: local agent + local code, local/remote agent + Blox code, and fully remote (mobile-initiated).
+
+---
+
 ## Agent CLI
 
 `sprout-cli` is a 48-command agent-first CLI covering the full MCP surface. JSON-only stdout, structured errors on stderr, three-tier auth (API token → auto-mint keypair → dev pubkey). Agents can script the entire platform without a GUI.

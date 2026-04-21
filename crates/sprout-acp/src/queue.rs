@@ -677,6 +677,7 @@ pub struct ContextMessage {
 pub struct PromptChannelInfo {
     pub name: String,
     pub channel_type: String,
+    pub project_id: Option<uuid::Uuid>,
 }
 
 /// Minimal profile fields needed to label users in ACP prompts.
@@ -835,6 +836,7 @@ fn format_context_hints(
     is_dm: bool,
     has_conversation_context: bool,
     triggering_event_id: Option<&str>,
+    project_info: Option<&crate::relay::ProjectInfo>,
 ) -> String {
     let channel_display = match channel_info {
         Some(ci) => format!("{} (#{channel_id})", ci.name),
@@ -843,7 +845,7 @@ fn format_context_hints(
 
     // DM check comes first — a DM reply has both thread tags AND is_dm=true,
     // and the scope should be "dm" (not "thread") because the agent is in a DM.
-    if is_dm {
+    let mut result = if is_dm {
         let is_reply = thread_tags.root_event_id.is_some();
         // DM replies use get_thread() because /messages excludes thread replies.
         // DM non-replies use get_channel_history() for recent conversation.
@@ -904,7 +906,27 @@ fn format_context_hints(
              Channel: {channel_display}\n\
              Hint: Use get_channel_history() for recent messages if needed."
         )
+    };
+
+    // Append project context if available.
+    if let Some(project) = project_info {
+        result.push_str(&format!("\n\n[Project: {}]", project.name));
+        if let Some(desc) = &project.description {
+            result.push_str(&format!("\nDescription: {}", desc));
+        }
+        result.push_str(&format!("\nEnvironment: {}", project.environment));
+        if let Some(repos) = project.repo_urls.as_array() {
+            let repo_list: Vec<&str> = repos.iter().filter_map(|r| r.as_str()).collect();
+            if !repo_list.is_empty() {
+                result.push_str(&format!("\nRepos: {}", repo_list.join(", ")));
+            }
+        }
+        if let Some(prompt) = &project.prompt {
+            result.push_str(&format!("\n\n{}", prompt));
+        }
     }
+
+    result
 }
 
 /// Format a conversation context section (thread or DM).
@@ -955,6 +977,7 @@ pub fn format_prompt(
     channel_info: Option<&PromptChannelInfo>,
     conversation_context: Option<&ConversationContext>,
     profile_lookup: Option<&PromptProfileLookup>,
+    project_info: Option<&crate::relay::ProjectInfo>,
 ) -> String {
     // Scope is always derived from the LAST event in the batch — that's the
     // one the agent is responding to. Thread/DM context is supplementary info
@@ -992,6 +1015,7 @@ pub fn format_prompt(
         is_dm,
         conversation_context.is_some(),
         triggering_event_id.as_deref(),
+        project_info,
     ));
 
     // 3. Conversation context (thread or DM).
@@ -1298,7 +1322,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
 
         // Should contain [Context] section before the event.
         assert!(prompt.contains("[Context]"));
@@ -1394,7 +1418,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
 
         assert!(prompt.contains("[Context]"));
         assert!(prompt.contains("[Sprout events — 3 events]"));
@@ -1423,7 +1447,14 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, Some("You are a triage bot."), None, None, None);
+        let prompt = format_prompt(
+            &batch,
+            Some("You are a triage bot."),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(prompt.starts_with("[System]\nYou are a triage bot.\n\n[Context]"));
     }
 
@@ -1901,9 +1932,10 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "engineering".into(),
             channel_type: "stream".into(),
+            project_id: None,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None, None);
         assert!(prompt.contains("engineering (#"));
         assert!(prompt.contains("Scope: channel"));
     }
@@ -1924,9 +1956,10 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "DM".into(),
             channel_type: "dm".into(),
+            project_id: None,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None, None);
         assert!(prompt.contains("Scope: dm"));
     }
 
@@ -1952,7 +1985,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(prompt.contains("Scope: thread"));
         assert!(prompt.contains("Thread root: root123"));
     }
@@ -1995,7 +2028,7 @@ mod tests {
             truncated: true,
         };
 
-        let prompt = format_prompt(&batch, None, None, Some(&ctx), None);
+        let prompt = format_prompt(&batch, None, None, Some(&ctx), None, None);
         assert!(prompt.contains("[Thread Context (2 of 5 messages, truncated)]"));
         assert!(prompt.contains("Let's refactor auth"));
         assert!(prompt.contains("Thread context included below"));
@@ -2017,6 +2050,7 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "DM".into(),
             channel_type: "dm".into(),
+            project_id: None,
         };
         let ctx = ConversationContext::Dm {
             messages: vec![ContextMessage {
@@ -2028,7 +2062,7 @@ mod tests {
             truncated: false,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx), None);
+        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx), None, None);
         assert!(prompt.contains("Scope: dm"));
         assert!(prompt.contains("[Conversation Context (1 of 1 messages)]"));
         assert!(prompt.contains("Can you deploy?"));
@@ -2080,7 +2114,7 @@ mod tests {
             ),
         ]);
 
-        let prompt = format_prompt(&batch, None, None, Some(&ctx), Some(&profiles));
+        let prompt = format_prompt(&batch, None, None, Some(&ctx), Some(&profiles), None);
 
         assert!(prompt.contains("From: Wes (npub:"));
         assert!(prompt.contains(
@@ -2163,6 +2197,7 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "DM".into(),
             channel_type: "dm".into(),
+            project_id: None,
         };
         // Thread context fetched (as the fetch path does for DM replies).
         let ctx = ConversationContext::Thread {
@@ -2175,7 +2210,7 @@ mod tests {
             truncated: false,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx), None);
+        let prompt = format_prompt(&batch, None, Some(&ci), Some(&ctx), None, None);
         // Scope should be "dm", not "thread".
         assert!(
             prompt.contains("Scope: dm"),
@@ -2211,10 +2246,11 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "DM".into(),
             channel_type: "dm".into(),
+            project_id: None,
         };
 
         // No context fetched — hints only.
-        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None, None);
         assert!(prompt.contains("Scope: dm"));
         assert!(
             prompt.contains("get_channel_history()"),
@@ -2241,7 +2277,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             prompt.contains(&format!("Event ID: {event_id}")),
             "prompt should contain the event ID"
@@ -2264,7 +2300,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             prompt.contains(&format!("From: {npub} (hex: {hex})")),
             "prompt should contain both npub and hex"
@@ -2286,7 +2322,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             prompt.contains("Tags:"),
             "tags should always be included, even for stream messages"
@@ -2610,7 +2646,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
             "channel thread reply should include reply instruction with triggering event ID"
@@ -2642,9 +2678,10 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "DM".into(),
             channel_type: "dm".into(),
+            project_id: None,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None, None);
         assert!(
             prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
             "DM thread reply should include reply instruction"
@@ -2665,7 +2702,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             !prompt.contains("parent_event_id"),
             "top-level message should NOT include reply instruction"
@@ -2688,9 +2725,10 @@ mod tests {
         let ci = PromptChannelInfo {
             name: "DM".into(),
             channel_type: "dm".into(),
+            project_id: None,
         };
 
-        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None, None);
         assert!(
             !prompt.contains("parent_event_id"),
             "DM non-reply should NOT include reply instruction"
@@ -2720,7 +2758,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         // The instruction should use the triggering event's own ID — not root or parent.
         assert!(
             prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
@@ -2763,7 +2801,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             prompt.contains(&format!("parent_event_id=\"{threaded_id}\"")),
             "batched prompt should use last (threaded) event's ID"
@@ -2796,7 +2834,7 @@ mod tests {
             cancelled_events: vec![],
         };
 
-        let prompt = format_prompt(&batch, None, None, None, None);
+        let prompt = format_prompt(&batch, None, None, None, None, None);
         assert!(
             !prompt.contains("parent_event_id"),
             "batched prompt where last event is top-level should NOT include reply instruction"

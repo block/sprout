@@ -178,6 +178,102 @@ docker compose down            # stop services, keep data
 
 ---
 
+## Testing Projects
+
+Projects group channels and provide shared context to agents. The feature spans
+`sprout-core`, `sprout-db`, `sprout-sdk`, `sprout-relay`, and `sprout-mcp`.
+
+### Automated Tests
+
+```bash
+# SDK builder tests (no infrastructure needed)
+cargo test -p sprout-sdk -- project
+
+# Relay ingest classification + d-tag extraction tests
+cargo test -p sprout-relay -- project
+cargo test -p sprout-relay -- extract_d_tag_uuid
+
+# DB CRUD tests (require running Postgres)
+cargo test -p sprout-db -- project --ignored
+```
+
+**SDK tests** (9 tests) verify event construction:
+- `create_project_happy_path` / `_all_fields` / `_no_repos` — kind 50001, d-tag, name tag, optional fields
+- `update_project_partial` / `_clear_repos` / `_no_fields_rejected` — kind 50002, partial updates, sentinel tag for repo clearing
+- `delete_project_happy_path` — kind 50003, d-tag only
+- `create_channel_with_project` / `_without_project` — `["project", uuid]` tag presence
+
+**Relay tests** (6 tests) verify ingest pipeline classification:
+- `project_kinds_require_channels_write` — 50001-50003 require `ChannelsWrite` scope
+- `project_kinds_are_global_only` — projects are not channel-scoped
+- `project_kinds_not_channel_scoped` — no h-tag required
+- `extract_d_tag_uuid_valid` / `_missing` / `_invalid` — d-tag UUID extraction
+
+**DB tests** (6 tests, `#[ignore]` — require Postgres):
+- `create_and_get_project` — round-trip create + fetch
+- `list_projects_by_creator` — filtering by pubkey
+- `update_project_partial` — partial field updates
+- `update_project_repos` — set and clear JSONB repo_urls
+- `soft_delete_project` — soft delete, verify not found
+- `archive_and_unarchive_project` — archive round-trip
+
+### Manual Testing with MCP Tools
+
+With the relay running, use the MCP tools via `sprout-mcp-server`:
+
+```bash
+# Create a project
+# MCP tool: create_project
+#   name: "my-project"
+#   environment: "local"
+#   description: "Test project"
+#   repo_urls: ["https://github.com/example/repo"]
+
+# List all projects
+# MCP tool: list_projects
+
+# Get a specific project
+# MCP tool: get_project
+#   project_id: "<uuid from create>"
+
+# Update a project
+# MCP tool: update_project
+#   project_id: "<uuid>"
+#   name: "renamed-project"
+#   prompt: "You are a helpful coding assistant"
+
+# Delete a project
+# MCP tool: delete_project
+#   project_id: "<uuid>"
+```
+
+### Channel-Project Association
+
+Create a channel linked to a project:
+
+```bash
+# MCP tool: create_channel
+#   name: "project-channel"
+#   channel_type: "stream"
+#   visibility: "open"
+#   project_id: "<project-uuid>"
+
+# Verify via REST API:
+curl -s -H "X-Pubkey: $USER_PK" \
+  http://localhost:3000/api/projects/<project-uuid>/channels
+```
+
+### Validation Checks
+
+- **Environment validation**: only `"local"` and `"blox"` are accepted. Other values
+  are rejected at ingest time (kind 50001) and update time (kind 50002).
+- **Empty update guard**: `update_project` with no fields returns an error from the SDK.
+- **Repo clearing**: to clear repos, pass an empty `repo_urls: []`. The SDK emits a
+  sentinel `["repo", ""]` tag so the relay knows to set the field to `[]` rather than
+  ignoring it.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

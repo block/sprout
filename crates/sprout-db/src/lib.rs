@@ -23,6 +23,8 @@ pub mod event;
 pub mod feed;
 /// Monthly table partition management.
 pub mod partition;
+/// Project persistence.
+pub mod project;
 /// Reaction persistence.
 pub mod reaction;
 /// Thread metadata persistence.
@@ -341,6 +343,7 @@ impl Db {
         description: Option<&str>,
         created_by: &[u8],
         ttl_seconds: Option<i32>,
+        project_id: Option<Uuid>,
     ) -> Result<(channel::ChannelRecord, bool)> {
         channel::create_channel_with_id(
             &self.pool,
@@ -351,6 +354,7 @@ impl Db {
             description,
             created_by,
             ttl_seconds,
+            project_id,
         )
         .await
     }
@@ -502,6 +506,82 @@ impl Db {
     /// Archive ephemeral channels whose TTL deadline has passed.
     pub async fn reap_expired_ephemeral_channels(&self) -> Result<Vec<Uuid>> {
         channel::reap_expired_ephemeral_channels(&self.pool).await
+    }
+
+    // ── Projects ─────────────────────────────────────────────────────────────
+
+    /// Creates a project with a client-supplied UUID (idempotent).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_project_with_id(
+        &self,
+        id: Uuid,
+        name: &str,
+        environment: &str,
+        description: Option<&str>,
+        prompt: Option<&str>,
+        icon: Option<&str>,
+        color: Option<&str>,
+        repo_urls: &serde_json::Value,
+        created_by: &[u8],
+    ) -> Result<(project::ProjectRecord, bool)> {
+        project::create_project_with_id(
+            &self.pool,
+            id,
+            name,
+            environment,
+            description,
+            prompt,
+            icon,
+            color,
+            repo_urls,
+            created_by,
+        )
+        .await
+    }
+
+    /// Fetches a project by ID.
+    pub async fn get_project(&self, id: Uuid) -> Result<project::ProjectRecord> {
+        project::get_project(&self.pool, id).await
+    }
+
+    /// Lists projects, optionally filtered by creator.
+    pub async fn list_projects(
+        &self,
+        created_by: Option<&[u8]>,
+    ) -> Result<Vec<project::ProjectRecord>> {
+        project::list_projects(&self.pool, created_by).await
+    }
+
+    /// Updates a project.
+    pub async fn update_project(
+        &self,
+        id: Uuid,
+        updates: project::ProjectUpdate,
+    ) -> Result<project::ProjectRecord> {
+        project::update_project(&self.pool, id, updates).await
+    }
+
+    /// Soft-deletes a project.
+    pub async fn soft_delete_project(&self, id: Uuid) -> Result<bool> {
+        project::soft_delete_project(&self.pool, id).await
+    }
+
+    /// Archives a project.
+    pub async fn archive_project(&self, id: Uuid) -> Result<()> {
+        project::archive_project(&self.pool, id).await
+    }
+
+    /// Unarchives a project.
+    pub async fn unarchive_project(&self, id: Uuid) -> Result<()> {
+        project::unarchive_project(&self.pool, id).await
+    }
+
+    /// Lists channels belonging to a project.
+    pub async fn list_project_channels(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<channel::ChannelRecord>> {
+        project::list_project_channels(&self.pool, project_id).await
     }
 
     // ── Users ────────────────────────────────────────────────────────────────
