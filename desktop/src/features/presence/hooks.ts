@@ -232,10 +232,6 @@ export function usePresenceSession(pubkey?: string) {
       ),
     [isDocumentHidden, lastActivityAt, statusClock],
   );
-  const relayStatus =
-    normalizedPubkey.length > 0
-      ? (presenceQuery.data?.[normalizedPubkey] ?? "offline")
-      : "offline";
   const currentStatus =
     normalizedPubkey.length === 0
       ? "offline"
@@ -245,7 +241,7 @@ export function usePresenceSession(pubkey?: string) {
           ? "away"
           : presencePreference === "auto"
             ? automaticStatus
-            : relayStatus;
+            : automaticStatus;
 
   const updatePresence = React.useCallback(
     async (status: PresenceStatus) => {
@@ -283,7 +279,7 @@ export function usePresenceSession(pubkey?: string) {
   });
 
   React.useEffect(() => {
-    if (normalizedPubkey.length === 0 || presencePreference === null) {
+    if (normalizedPubkey.length === 0) {
       return;
     }
 
@@ -293,14 +289,10 @@ export function usePresenceSession(pubkey?: string) {
     }
 
     syncPresence(currentStatus);
-  }, [currentStatus, normalizedPubkey, presencePreference]);
+  }, [currentStatus, normalizedPubkey]);
 
   React.useEffect(() => {
-    if (
-      normalizedPubkey.length === 0 ||
-      presencePreference === null ||
-      currentStatus === "offline"
-    ) {
+    if (normalizedPubkey.length === 0 || currentStatus === "offline") {
       return;
     }
 
@@ -311,7 +303,7 @@ export function usePresenceSession(pubkey?: string) {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [currentStatus, normalizedPubkey, presencePreference]);
+  }, [currentStatus, normalizedPubkey]);
 
   return {
     currentStatus,

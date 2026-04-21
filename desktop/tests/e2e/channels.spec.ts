@@ -197,7 +197,7 @@ test("shows presence in sidebar, DM header, and member list", async ({
   await expect(page.getByTestId("sidebar-profile-card")).toBeVisible();
   await expect(page.getByTestId("self-presence-badge")).toHaveAttribute(
     "aria-label",
-    "Offline",
+    "Online",
   );
   await expect(page.getByTestId("channel-presence-alice-tyler")).toBeVisible();
 
