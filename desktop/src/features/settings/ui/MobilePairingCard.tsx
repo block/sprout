@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 
 import { Spinner } from "@/shared/ui/spinner";
 
@@ -45,7 +46,6 @@ function PairingDialog({
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [sasCode, setSasCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const stepRef = useRef(step);
   stepRef.current = step;
 
@@ -57,8 +57,6 @@ function PairingDialog({
     setQrUri(null);
     setSasCode(null);
     setError(null);
-    setCopied(false);
-
     let cancelled = false;
 
     startPairing().then(
@@ -169,8 +167,7 @@ function PairingDialog({
   async function handleCopy() {
     if (!qrUri) return;
     await navigator.clipboard.writeText(qrUri);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    toast.success("Copied to clipboard");
   }
 
   return (
@@ -229,11 +226,7 @@ function PairingDialog({
                       size="sm"
                       variant="outline"
                     >
-                      {copied ? (
-                        <Check className="h-3.5 w-3.5" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
+                      <Copy className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>

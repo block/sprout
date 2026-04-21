@@ -61,6 +61,7 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.2",
+    "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tiptap-markdown": "^0.9.0",
     "yaml": "^2.8.3"

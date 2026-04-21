@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Search } from "lucide-react";
 
 import type { RelayAgent } from "@/shared/api/types";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
+import { Card } from "@/shared/ui/card";
 import { Input } from "@/shared/ui/input";
 import { truncatePubkey } from "./agentUi";
 
@@ -88,7 +89,7 @@ export function RelayDirectorySection({
                 : "No other agents on this relay."}
             </p>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
+            <Card className="overflow-hidden">
               <div className="overflow-x-auto">
                 <table
                   className="w-full border-collapse text-left text-sm"
@@ -139,7 +140,7 @@ export function RelayDirectorySection({
                   </tbody>
                 </table>
               </div>
-            </div>
+            </Card>
           )}
         </>
       ) : null}

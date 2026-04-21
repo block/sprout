@@ -1,4 +1,4 @@
-import { Filter, RefreshCw } from "lucide-react";
+import { Check, Filter, RefreshCw } from "lucide-react";
 import * as React from "react";
 
 import { useRelayAgentsQuery } from "@/features/agents/hooks";
@@ -18,6 +18,12 @@ import { NoteCard } from "@/features/pulse/ui/NoteCard";
 import type { UserNote } from "@/shared/api/socialTypes";
 import type { RelayAgent, UserProfileSummary } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
@@ -68,20 +74,6 @@ function AgentFilter({
   selectedPubkey: string | null;
   onSelect: (pubkey: string | null) => void;
 }) {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
-
   const selectedName = selectedPubkey
     ? (profiles[selectedPubkey.toLowerCase()]?.displayName ??
       agents.find((a) => a.pubkey === selectedPubkey)?.name ??
@@ -89,54 +81,48 @@ function AgentFilter({
     : null;
 
   return (
-    <div className="relative" ref={ref}>
-      <Button
-        className="h-7 gap-1.5 px-2 text-xs"
-        onClick={() => setOpen(!open)}
-        size="sm"
-        variant={selectedPubkey ? "secondary" : "ghost"}
-      >
-        <Filter className="h-3 w-3" />
-        {selectedName ?? "All agents"}
-      </Button>
-      {open ? (
-        <div className="absolute right-0 top-8 z-50 max-h-48 w-48 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
-          <button
-            className={`w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent ${
-              !selectedPubkey ? "bg-accent font-medium" : ""
-            }`}
-            onClick={() => {
-              onSelect(null);
-              setOpen(false);
-            }}
-            type="button"
-          >
-            All agents
-          </button>
-          {agents.map((agent) => {
-            const name =
-              profiles[agent.pubkey.toLowerCase()]?.displayName ??
-              agent.name ??
-              `${agent.pubkey.slice(0, 8)}...`;
-            return (
-              <button
-                className={`w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent ${
-                  selectedPubkey === agent.pubkey ? "bg-accent font-medium" : ""
-                }`}
-                key={agent.pubkey}
-                onClick={() => {
-                  onSelect(agent.pubkey);
-                  setOpen(false);
-                }}
-                type="button"
-              >
-                {name}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          className="h-7 gap-1.5 px-2 text-xs"
+          size="sm"
+          variant={selectedPubkey ? "secondary" : "ghost"}
+        >
+          <Filter className="h-3 w-3" />
+          {selectedName ?? "All agents"}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-48 overflow-y-auto">
+        <DropdownMenuItem onClick={() => onSelect(null)}>
+          {!selectedPubkey ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : (
+            <span className="h-3.5 w-3.5" />
+          )}
+          All agents
+        </DropdownMenuItem>
+        {agents.map((agent) => {
+          const name =
+            profiles[agent.pubkey.toLowerCase()]?.displayName ??
+            agent.name ??
+            `${agent.pubkey.slice(0, 8)}...`;
+          const isSelected = selectedPubkey === agent.pubkey;
+          return (
+            <DropdownMenuItem
+              key={agent.pubkey}
+              onClick={() => onSelect(agent.pubkey)}
+            >
+              {isSelected ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <span className="h-3.5 w-3.5" />
+              )}
+              {name}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

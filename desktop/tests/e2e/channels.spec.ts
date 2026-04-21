@@ -872,7 +872,7 @@ test("members sidebar can respawn a stopped managed bot", async ({ page }) => {
   await agentAction.click();
 
   await expect(agentStatus).toContainText("Running");
-  await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
+  await expect(page.locator("[data-sonner-toast]")).toContainText(
     `Respawned ${agentName}.`,
   );
 
@@ -905,7 +905,7 @@ test("members sidebar supports bulk remove for managed bots", async ({
 
   await page.getByTestId("members-sidebar-agent-controls").click();
   await page.getByTestId("members-sidebar-remove-all").click();
-  await expect(page.getByTestId("members-sidebar-action-notice")).toContainText(
+  await expect(page.locator("[data-sonner-toast]")).toContainText(
     "Removed 2 managed bots from this channel.",
   );
   await expect(

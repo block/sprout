@@ -170,9 +170,9 @@ test("built-in personas are chosen from the dialog and can be selected", async (
   await page
     .getByTestId("persona-catalog-card-target-builtin:reviewer")
     .click();
-  await expect(
-    page.getByTestId("persona-catalog-feedback-notice"),
-  ).toContainText("Selected Reviewer for My Agents.");
+  await expect(page.locator("[data-sonner-toast]")).toContainText(
+    "Selected Reviewer for My Agents.",
+  );
 
   await expect(page.getByTestId("agents-library-personas")).toContainText(
     "Reviewer",
@@ -185,9 +185,9 @@ test("built-in personas are chosen from the dialog and can be selected", async (
   await page
     .getByTestId("persona-catalog-card-target-builtin:reviewer")
     .click();
-  await expect(
-    page.getByTestId("persona-catalog-feedback-notice"),
-  ).toContainText("Deselected Reviewer from My Agents.");
+  await expect(page.locator("[data-sonner-toast]")).toContainText(
+    "Deselected Reviewer from My Agents.",
+  );
   await expect(page.getByTestId("agents-library-personas")).not.toContainText(
     "Reviewer",
   );
@@ -227,9 +227,9 @@ test("persona catalog chooser order stays stable when selection changes", async 
   const before = await getCatalogOrder(page);
 
   await page.getByTestId("persona-catalog-card-target-builtin:solo").click();
-  await expect(
-    page.getByTestId("persona-catalog-feedback-notice"),
-  ).toContainText("Selected Solo for My Agents.");
+  await expect(page.locator("[data-sonner-toast]")).toContainText(
+    "Selected Solo for My Agents.",
+  );
 
   expect(await getCatalogOrder(page)).toEqual(before);
 });
@@ -312,9 +312,9 @@ test("built-in deselection failures show up in Persona Catalog", async ({
     .getByTestId("persona-catalog-card-target-builtin:reviewer")
     .click();
 
-  await expect(
-    page.getByTestId("persona-catalog-feedback-error"),
-  ).toContainText("Reviewer is still referenced by a team.");
+  await expect(page.locator("[data-sonner-toast]")).toContainText(
+    "Reviewer is still referenced by a team.",
+  );
 });
 
 test("channel quick add falls back to added personas when defaults are absent", async ({

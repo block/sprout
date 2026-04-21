@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "@/app/App";
 import "@/shared/styles/globals.css";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
+import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 
 type E2eWindow = Window & {
@@ -31,6 +32,7 @@ function renderApp() {
         <ThemeProvider defaultTheme="houston">
           <TooltipProvider delayDuration={300}>
             <App />
+            <Toaster />
           </TooltipProvider>
         </ThemeProvider>
       </QueryClientProvider>
