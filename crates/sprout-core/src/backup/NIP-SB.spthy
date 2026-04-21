@@ -7,10 +7,15 @@
  * == What this model proves ==
  *   1. Correctness: honest recovery from password + pubkey + relay data
  *      yields the original secret (all blobs present).
- *   2. Correctness with 1 erasure: recovery succeeds when 1 of the
- *      N+P real/parity blobs is missing (RS single-erasure decoding).
- *   3. Correctness with 2 erasures: recovery succeeds when 2 of the
- *      N+P real/parity blobs are missing (RS double-erasure decoding).
+ *   2. Correctness with 1 erasure (representative case): recovery
+ *      succeeds when real chunk 0 is missing, using RS single-erasure
+ *      decoding from the remaining 2 data + 2 parity symbols.
+ *   3. Correctness with 2 erasures (representative case): recovery
+ *      succeeds when real chunks 0 and 1 are both missing, using RS
+ *      double-erasure decoding from the remaining 1 data + 2 parity
+ *      symbols. The model includes equations for all 3 double-erasure
+ *      patterns (01, 02, 12) but only instantiates the 01 case in a
+ *      rule/lemma. The other patterns are structurally symmetric.
  *   4. Confidentiality: the nsec is not derivable from published blobs
  *      without the password, even though the pubkey is public.
  *   5. Parity confidentiality: RS parity symbols are not derivable
