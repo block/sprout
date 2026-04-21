@@ -6,6 +6,7 @@ import {
   channelMessagesKey,
   dedupeMessagesById,
   normalizeTimelineMessages,
+  sortMessages,
 } from "@/features/messages/lib/messageQueryKeys";
 import {
   buildReplyTags,
@@ -50,11 +51,7 @@ export function mergeMessages(
   current: RelayEvent[],
   incoming: RelayEvent,
 ): RelayEvent[] {
-  return mergeMessagesWithNormalizer(
-    current,
-    incoming,
-    normalizeTimelineMessages,
-  );
+  return mergeMessagesWithNormalizer(current, incoming, sortMessages);
 }
 
 export function mergeTimelineCacheMessages(
