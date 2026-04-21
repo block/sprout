@@ -484,7 +484,7 @@ export function useManagedAgentLogQuery(
     enabled: pubkey !== null,
     retry: false,
     staleTime: 3_000,
-    refetchInterval: pubkey ? 5_000 : false,
+    refetchInterval: pubkey ? 30_000 : false,
   });
 }
 

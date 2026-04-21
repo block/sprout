@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import { trimMapToSize } from "@/shared/lib/trimMapToSize";
+
 export type DraftState = {
   content: string;
   selectionStart: number;
@@ -14,7 +16,9 @@ export function useDrafts() {
       if (draft.content.trim().length === 0) {
         return;
       }
-      draftsRef.current.set(channelId, draft);
+      const drafts = draftsRef.current;
+      drafts.set(channelId, draft);
+      trimMapToSize(drafts, 50);
     },
     [],
   );
