@@ -584,6 +584,8 @@ NIP-SB's steganographic properties vary by adversary. The protocol is designed f
 | **Passive relay-dump adversary** (database leak, subpoena, bulk export) | `kind:30078` events with random d-tags, throwaway pubkeys, constant-size content | **Strong.** Blobs are computationally indistinguishable from other `kind:30078` application data (Cashu wallets, app settings, drafts) without the password. No field references the user's real pubkey. Deniability is probabilistic and improves with ambient `kind:30078` traffic volume. |
 | **Active relay operator** (timing, IP, session metadata, multi-snapshot) | Event insertion timing, query patterns, IP addresses, database snapshots over time | **Probabilistic.** Mitigated by jittered timestamps, random publication/query order, publication delays, and dummy blobs. Not guaranteed — a relay operator with network-layer visibility may correlate event bursts with user sessions. Even so, the operator cannot determine *which user* is backing up or recovering without the password. |
 
+*Adversary classes adapted from the taxonomy in [SoK: Plausibly Deniable Storage](https://arxiv.org/abs/2111.12809) (Chen et al., 2021), mapped from disk storage to Nostr's relay architecture.*
+
 The security analysis below evaluates each threat against the relevant adversary class.
 
 ### Threat: Multi-target accumulation (NIP-49's concern)
