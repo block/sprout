@@ -1,8 +1,23 @@
 /*
- * NIP-SB v3: Steganographic Key Backup — Tamarin Formal Model
+ * NIP-SB v3: Steganographic Key Backup — Tamarin Formal Verification
  *
- * Models the backup and recovery protocol for NIP-SB v3, including
- * Reed-Solomon parity blobs and dummy blobs.
+ * Models and verifies the backup and recovery protocol for NIP-SB v3,
+ * including Reed-Solomon parity blobs and dummy blobs.
+ *
+ * All 10 lemmas verified by tamarin-prover 1.12.0 (--prove):
+ *
+ *   executable_honest_backup_and_recovery    (exists-trace):  verified (16 steps)
+ *   executable_recovery_1_erasure            (exists-trace):  verified (20 steps)
+ *   executable_recovery_2_erasures           (exists-trace):  verified (16 steps)
+ *   nsec_secrecy_without_password_compromise (all-traces):    verified (47 steps)
+ *   password_secrecy                         (all-traces):    verified (2 steps)
+ *   chunk_secrecy_without_password           (all-traces):    verified (128 steps)
+ *   parity_secrecy_without_password          (all-traces):    verified (716 steps)
+ *   password_compromise_enables_nsec_recovery(exists-trace):  verified (13 steps)
+ *   executable_password_compromise           (exists-trace):  verified (2 steps)
+ *   enc_key_derivable_with_compromised_password(exists-trace):verified (6 steps)
+ *
+ * Processing time: ~150s. Run: tamarin-prover --prove NIP-SB.spthy
  *
  * == What this model proves ==
  *   1. Correctness: honest recovery from password + pubkey + relay data
