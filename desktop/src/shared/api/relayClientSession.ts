@@ -47,6 +47,7 @@ export class RelayClient {
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
   private onMessageChannel: Channel<unknown> | null = null;
+  private authMode: "nip42" | "preauthenticated" = "nip42";
 
   async fetchChannelHistory(channelId: string, limit = 50) {
     return this.fetchHistory(this.buildChannelFilter(channelId, limit));
@@ -249,6 +250,10 @@ export class RelayClient {
     };
   }
 
+  configure(options: { authMode: "nip42" | "preauthenticated" }) {
+    this.authMode = options.authMode;
+  }
+
   private async ensureConnected() {
     if (this.connectPromise) {
       return this.connectPromise;
@@ -290,22 +295,26 @@ export class RelayClient {
       config: {},
     });
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        this.authRequest = null;
-        this.resetConnection(
-          new Error("Timed out while waiting for relay authentication."),
-        );
-        reject(new Error("Timed out while waiting for relay authentication."));
-      }, 8_000);
+    if (this.authMode === "nip42") {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          this.authRequest = null;
+          this.resetConnection(
+            new Error("Timed out while waiting for relay authentication."),
+          );
+          reject(
+            new Error("Timed out while waiting for relay authentication."),
+          );
+        }, 8_000);
 
-      this.authRequest = {
-        pendingEventId: "",
-        resolve,
-        reject,
-        timeout,
-      };
-    });
+        this.authRequest = {
+          pendingEventId: "",
+          resolve,
+          reject,
+          timeout,
+        };
+      });
+    }
 
     this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
     await this.replayLiveSubscriptions();

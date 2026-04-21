@@ -38,6 +38,16 @@ enum Command {
     },
     /// List all active API tokens.
     ListTokens,
+    /// Remove an identity binding (for key rotation or offboarding).
+    UnbindIdentity {
+        /// Corporate user identifier (UID from identity JWT).
+        #[arg(long)]
+        uid: String,
+
+        /// Also clear verified_name from the user record.
+        #[arg(long, default_value_t = false)]
+        clear_name: bool,
+    },
 }
 
 #[tokio::main]
@@ -61,6 +71,9 @@ async fn main() -> Result<()> {
             owner_pubkey,
         } => mint_token(&db, &name, &scopes, pubkey.as_deref(), owner_pubkey).await?,
         Command::ListTokens => list_tokens(&db).await?,
+        Command::UnbindIdentity { uid, clear_name } => {
+            unbind_identity(&db, &uid, clear_name).await?
+        }
     }
 
     Ok(())
@@ -180,6 +193,25 @@ async fn mint_token(
     println!("║  {}  ║", raw_token);
     println!("╚══════════════════════════════════════════════════════════════╝");
 
+    Ok(())
+}
+
+async fn unbind_identity(db: &Db, uid: &str, clear_name: bool) -> Result<()> {
+    let binding = db.get_identity_binding(uid).await?;
+    let deleted = db.delete_identity_binding(uid).await?;
+    if deleted {
+        println!("Removed identity binding for uid={uid}");
+        if clear_name {
+            if let Some(binding) = binding {
+                let cleared = db.clear_verified_name(&binding.pubkey).await?;
+                if cleared {
+                    println!("Cleared verified_name for the bound pubkey");
+                }
+            }
+        }
+    } else {
+        println!("No binding found for uid={uid}");
+    }
     Ok(())
 }
 

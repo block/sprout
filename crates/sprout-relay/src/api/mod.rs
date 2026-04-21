@@ -26,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Identity bootstrap endpoint (proxy mode).
+pub mod identity;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.
@@ -102,6 +104,8 @@ pub enum RestAuthMethod {
     Nip98,
     /// `X-Pubkey: <hex>` — dev mode only (`require_auth_token=false`).
     DevPubkey,
+    /// Identity JWT header — proxy identity mode (auth proxy).
+    ProxyIdentity,
 }
 
 /// Full authentication context returned to REST handlers.
@@ -131,6 +135,25 @@ pub struct RestAuthContext {
     pub channel_ids: Option<Vec<Uuid>>,
 }
 
+/// In hybrid identity mode, reject a pubkey that has an identity binding
+/// but authenticated via standard auth (no JWT).
+async fn reject_if_identity_bound(
+    pubkey_bytes: &[u8],
+    state: &AppState,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if state.is_identity_bound(pubkey_bytes).await {
+        tracing::warn!("auth: identity-bound pubkey attempted standard auth without JWT");
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "identity_jwt_required",
+                "message": "this pubkey is bound to a corporate identity — connect via the auth proxy"
+            })),
+        ));
+    }
+    Ok(())
+}
+
 /// Extract the full auth context from request headers.
 ///
 /// Auth resolution order:
@@ -149,6 +172,88 @@ pub(crate) async fn extract_auth_context(
     state: &AppState,
 ) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
     let require_auth = state.config.require_auth_token;
+
+    // ── 0. Proxy / hybrid identity mode ──────────────────────────────────
+    // When identity_mode is proxy or hybrid, the auth proxy injects
+    // x-forwarded-identity-token for human users. The relay validates the JWT,
+    // extracts uid, and looks up the pubkey binding from the DB.
+    //   - Proxy:  header is mandatory — reject if missing.
+    //   - Hybrid: header is preferred — fall through to standard auth if missing.
+    // In both modes, a present-but-invalid header is a hard 401.
+    let identity_mode = &state.auth.identity_config().mode;
+    if identity_mode.is_proxy() {
+        if let Some(identity_jwt) = headers
+            .get(&*state.auth.identity_config().identity_jwt_header)
+            .and_then(|v| v.to_str().ok())
+        {
+            let (identity_claims, scopes) = state
+                .auth
+                .validate_identity_jwt(identity_jwt)
+                .await
+                .map_err(|e| {
+                    tracing::warn!("auth: identity JWT validation failed: {e}");
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({ "error": "identity_token_invalid" })),
+                    )
+                })?;
+
+            // Look up the pubkey binding for this uid.
+            let binding = state
+                .db
+                .get_identity_binding(&identity_claims.uid)
+                .await
+                .map_err(|e| {
+                    tracing::error!("auth: identity binding lookup failed: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({ "error": "internal_error" })),
+                    )
+                })?
+                .ok_or_else(|| {
+                    tracing::warn!(
+                        uid = %identity_claims.uid,
+                        "no identity binding — call POST /api/identity/register first"
+                    );
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "error": "identity_binding_required",
+                            "message": "no identity binding — call POST /api/identity/register first"
+                        })),
+                    )
+                })?;
+
+            let pubkey = nostr::PublicKey::from_slice(&binding.pubkey).map_err(|e| {
+                tracing::error!("auth: stored binding pubkey invalid: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "internal_error" })),
+                )
+            })?;
+            let pubkey_bytes = binding.pubkey;
+
+            return Ok(RestAuthContext {
+                pubkey,
+                pubkey_bytes,
+                scopes,
+                auth_method: RestAuthMethod::ProxyIdentity,
+                token_id: None,
+                channel_ids: None,
+            });
+        } else if *identity_mode == sprout_auth::IdentityMode::Proxy {
+            tracing::warn!("auth: proxy mode enabled but identity JWT header missing");
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "identity_token_required",
+                    "message": "identity JWT header is required in proxy identity mode"
+                })),
+            ));
+        }
+        // Hybrid mode: no identity token — fall through to standard auth
+        // so agents can authenticate via API tokens, Okta JWTs, etc.
+    }
 
     if let Some(auth_header) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         // ── 1. Reject NIP-98 on non-token endpoints ───────────────────────────
@@ -237,6 +342,7 @@ pub(crate) async fn extract_auth_context(
                 ) {
                     Ok((pubkey, scopes)) => {
                         let pubkey_bytes = pubkey.serialize().to_vec();
+                        reject_if_identity_bound(&pubkey_bytes, state).await?;
                         if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
                             tracing::warn!("ensure_user failed: {e}");
                         }
@@ -280,6 +386,7 @@ pub(crate) async fn extract_auth_context(
                 match state.auth.validate_bearer_jwt(token).await {
                     Ok((pubkey, scopes)) => {
                         let pubkey_bytes = pubkey.serialize().to_vec();
+                        reject_if_identity_bound(&pubkey_bytes, state).await?;
                         if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
                             tracing::warn!("ensure_user failed: {e}");
                         }

@@ -27,6 +27,22 @@ pub(crate) const SLOW_CLIENT_GRACE_LIMIT: u8 = 3;
 /// Shared mutable subscription map for a single WebSocket connection.
 pub(crate) type ConnectionSubscriptions = Arc<Mutex<HashMap<String, Vec<Filter>>>>;
 
+/// Proxy identity claims stashed on the connection at upgrade time.
+///
+/// In proxy/hybrid mode the JWT is validated during the HTTP → WS upgrade,
+/// but the client's pubkey is not yet known. The claims are held here until
+/// the NIP-42 AUTH event arrives, at which point the relay can bind
+/// uid → pubkey.
+#[derive(Debug, Clone)]
+pub struct PendingProxyIdentity {
+    /// Corporate user identifier extracted from the identity JWT.
+    pub uid: String,
+    /// Human-readable username from the identity JWT.
+    pub username: String,
+    /// Permission scopes granted by the identity JWT.
+    pub scopes: Vec<sprout_auth::Scope>,
+}
+
 /// NIP-42 authentication state for a single connection.
 #[derive(Debug, Clone)]
 pub enum AuthState {
@@ -34,6 +50,10 @@ pub enum AuthState {
     Pending {
         /// The random challenge string sent to the client.
         challenge: String,
+        /// If set, proxy identity was validated at upgrade time and the
+        /// AUTH handler should resolve the pubkey binding instead of
+        /// performing standard JWT/token auth.
+        proxy_identity: Option<PendingProxyIdentity>,
     },
     /// Client has successfully authenticated.
     Authenticated(AuthContext),
@@ -104,7 +124,16 @@ impl ConnectionState {
 ///
 /// Acquires a connection semaphore permit, sends the NIP-42 AUTH challenge,
 /// then drives the send, heartbeat, and receive loops until the connection closes.
-pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: SocketAddr) {
+///
+/// If `proxy_identity` is `Some`, the connection has a validated corporate
+/// identity from the proxy but still requires NIP-42 to prove the client's
+/// Nostr pubkey. The AUTH handler will bind uid → pubkey.
+pub async fn handle_connection(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    addr: SocketAddr,
+    proxy_identity: Option<PendingProxyIdentity>,
+) {
     let permit = match state.conn_semaphore.clone().try_acquire_owned() {
         Ok(p) => p,
         Err(_) => {
@@ -114,7 +143,6 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     };
 
     let conn_id = Uuid::new_v4();
-    let challenge = generate_challenge();
     let cancel = CancellationToken::new();
 
     let (tx, rx) = mpsc::channel::<WsMessage>(state.config.send_buffer_size);
@@ -125,12 +153,22 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     let backpressure_count = Arc::new(AtomicU8::new(0));
     let subscriptions = Arc::new(Mutex::new(HashMap::new()));
 
+    // All connections start in Pending state with a NIP-42 challenge.
+    // In proxy mode the validated identity claims are stashed so the AUTH
+    // handler can resolve the pubkey binding after the client proves its key.
+    let challenge = generate_challenge();
+    if proxy_identity.is_some() {
+        info!(conn_id = %conn_id, addr = %addr, "WebSocket connection with proxy identity — awaiting NIP-42 AUTH");
+    }
+    let initial_auth_state = AuthState::Pending {
+        challenge: challenge.clone(),
+        proxy_identity,
+    };
+
     let conn = Arc::new(ConnectionState {
         conn_id,
         remote_addr: addr,
-        auth_state: RwLock::new(AuthState::Pending {
-            challenge: challenge.clone(),
-        }),
+        auth_state: RwLock::new(initial_auth_state),
         subscriptions: Arc::clone(&subscriptions),
         send_tx: tx.clone(),
         ctrl_tx: ctrl_tx.clone(),
@@ -141,6 +179,7 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
     info!(conn_id = %conn_id, addr = %addr, "WebSocket connection established");
     metrics::counter!("sprout_ws_connections_total").increment(1);
 
+    // Send NIP-42 challenge — all connections require it now (including proxy mode).
     let challenge_msg = RelayMessage::auth_challenge(&challenge);
     if tx
         .send(WsMessage::Text(challenge_msg.into()))

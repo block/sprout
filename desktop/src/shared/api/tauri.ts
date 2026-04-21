@@ -14,6 +14,7 @@ import type {
   GetHomeFeedInput,
   HomeFeedResponse,
   Identity,
+  InitializedIdentity,
   MintTokenInput,
   MintTokenResponse,
   MintManagedAgentTokenInput,
@@ -55,6 +56,7 @@ type RawIdentity = {
 type RawProfile = {
   pubkey: string;
   display_name: string | null;
+  verified_name: string | null;
   avatar_url: string | null;
   about: string | null;
   nip05_handle: string | null;
@@ -62,6 +64,7 @@ type RawProfile = {
 
 type RawUserProfileSummary = {
   display_name: string | null;
+  verified_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
 };
@@ -74,6 +77,7 @@ type RawUsersBatchResponse = {
 type RawUserSearchResult = {
   pubkey: string;
   display_name: string | null;
+  verified_name: string | null;
   avatar_url: string | null;
   nip05_handle: string | null;
 };
@@ -416,6 +420,7 @@ function fromRawProfile(profile: RawProfile): Profile {
   return {
     pubkey: profile.pubkey,
     displayName: profile.display_name,
+    verifiedName: profile.verified_name,
     avatarUrl: profile.avatar_url,
     about: profile.about,
     nip05Handle: profile.nip05_handle,
@@ -427,6 +432,7 @@ function fromRawUserProfileSummary(
 ): UserProfileSummary {
   return {
     displayName: profile.display_name,
+    verifiedName: profile.verified_name,
     avatarUrl: profile.avatar_url,
     nip05Handle: profile.nip05_handle,
   };
@@ -436,6 +442,7 @@ function fromRawUserSearchResult(user: RawUserSearchResult): UserSearchResult {
   return {
     pubkey: user.pubkey,
     displayName: user.display_name,
+    verifiedName: user.verified_name,
     avatarUrl: user.avatar_url,
     nip05Handle: user.nip05_handle,
   };
@@ -452,6 +459,25 @@ export async function getIdentity(): Promise<Identity> {
 
 export async function getNsec(): Promise<string> {
   return invokeTauri<string>("get_nsec");
+}
+
+type RawInitializedIdentity = {
+  pubkey: string;
+  display_name: string;
+  identity_mode: string | null;
+  ws_auth_mode: "nip42" | "preauthenticated";
+};
+
+export async function initializeIdentity(): Promise<InitializedIdentity> {
+  const result = await invokeTauri<RawInitializedIdentity>(
+    "initialize_identity",
+  );
+  return {
+    pubkey: result.pubkey,
+    displayName: result.display_name,
+    identityMode: result.identity_mode,
+    wsAuthMode: result.ws_auth_mode,
+  };
 }
 
 export async function getProfile(): Promise<Profile> {

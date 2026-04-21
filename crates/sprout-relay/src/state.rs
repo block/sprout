@@ -200,6 +200,11 @@ pub struct AppState {
     /// Short TTL (10s) — membership changes are rare but must propagate.
     /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
     pub membership_cache: Arc<moka::sync::Cache<(Uuid, Vec<u8>), bool>>,
+    /// Identity binding cache: pubkey_bytes → is_bound.
+    /// 2-minute TTL — bindings rarely change; unbind propagates within minutes.
+    /// Used to enforce "once bound, always require JWT" in hybrid mode
+    /// without hitting the DB on every request.
+    pub identity_bound_cache: Arc<moka::sync::Cache<Vec<u8>, bool>>,
     /// Accessible channel IDs cache: pubkey_bytes → channel UUIDs.
     /// Short TTL (10s) — invalidated on membership or channel visibility changes.
     /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
@@ -329,6 +334,12 @@ impl AppState {
                     .time_to_live(std::time::Duration::from_secs(10))
                     .build(),
             ),
+            identity_bound_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(120))
+                    .build(),
+            ),
             accessible_channels_cache: Arc::new(
                 moka::sync::Cache::builder()
                     .max_capacity(10_000)
@@ -356,6 +367,33 @@ impl AppState {
     /// Called before Redis publish so the multi-node consumer can skip the echo.
     pub fn mark_local_event(&self, event_id: &nostr::EventId) {
         self.local_event_ids.insert(event_id.to_bytes(), ());
+    }
+
+    /// Check whether a pubkey has an active identity binding (cached).
+    ///
+    /// In hybrid mode, a bound pubkey must authenticate via identity JWT —
+    /// standard auth (API tokens, NIP-42) is rejected. Returns `false`
+    /// when identity mode is not `Hybrid` (guard is a no-op).
+    pub async fn is_identity_bound(&self, pubkey_bytes: &[u8]) -> bool {
+        if self.auth.identity_config().mode != sprout_auth::IdentityMode::Hybrid {
+            return false;
+        }
+        if let Some(cached) = self.identity_bound_cache.get(pubkey_bytes) {
+            return cached;
+        }
+        match self.db.is_pubkey_identity_bound(pubkey_bytes).await {
+            Ok(bound) => {
+                self.identity_bound_cache
+                    .insert(pubkey_bytes.to_vec(), bound);
+                bound
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "identity binding check failed — denying access");
+                // Fail closed: treat DB errors as "bound" so the caller
+                // rejects standard auth and requires identity JWT.
+                true
+            }
+        }
     }
 
     /// Check channel membership with a 10-second cache. Falls back to DB on miss.

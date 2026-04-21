@@ -21,7 +21,10 @@ function getResolvedProfile(
 export function mergeCurrentProfileIntoLookup(
   profiles: UserProfileLookup | undefined,
   currentProfile:
-    | Pick<Profile, "pubkey" | "displayName" | "avatarUrl" | "nip05Handle">
+    | Pick<
+        Profile,
+        "pubkey" | "displayName" | "verifiedName" | "avatarUrl" | "nip05Handle"
+      >
     | null
     | undefined,
 ) {
@@ -33,6 +36,7 @@ export function mergeCurrentProfileIntoLookup(
     ...(profiles ?? {}),
     [normalizePubkey(currentProfile.pubkey)]: {
       displayName: currentProfile.displayName,
+      verifiedName: currentProfile.verifiedName,
       avatarUrl: currentProfile.avatarUrl,
       nip05Handle: currentProfile.nip05Handle,
     },
@@ -64,7 +68,14 @@ export function resolveUserLabel(input: {
   }
 
   const profile = getResolvedProfile(pubkey, profiles);
+  const verifiedName = profile?.verifiedName?.trim();
   const displayName = profile?.displayName?.trim();
+  if (displayName && verifiedName && displayName !== verifiedName) {
+    return `${displayName} (${verifiedName})`;
+  }
+  if (verifiedName) {
+    return verifiedName;
+  }
   if (displayName) {
     return displayName;
   }
@@ -80,6 +91,14 @@ export function resolveUserLabel(input: {
   }
 
   return truncatePubkey(pubkey);
+}
+
+export function resolveUserVerification(input: {
+  pubkey: string;
+  profiles?: UserProfileLookup;
+}): string | null {
+  const profile = getResolvedProfile(input.pubkey, input.profiles);
+  return profile?.verifiedName?.trim() || null;
 }
 
 export function resolveUserSecondaryLabel(input: {

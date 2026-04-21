@@ -72,6 +72,7 @@ CREATE TABLE users (
     pubkey              BYTEA PRIMARY KEY,
     nip05_handle        VARCHAR(255) UNIQUE,
     display_name        VARCHAR(255),
+    verified_name       VARCHAR(255),
     avatar_url          TEXT,
     about               TEXT,
     agent_type          VARCHAR(255),
@@ -326,3 +327,17 @@ CREATE TABLE pubkey_allowlist (
     added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     note        TEXT
 );
+
+-- ── Identity bindings (proxy mode: corporate UID → pubkey) ────────────────────
+
+CREATE TABLE identity_bindings (
+    uid         TEXT NOT NULL PRIMARY KEY,
+    pubkey      BYTEA NOT NULL,
+    username    VARCHAR(255),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT chk_identity_bindings_pubkey_len CHECK (LENGTH(pubkey) = 32)
+);
+
+CREATE UNIQUE INDEX idx_identity_bindings_pubkey ON identity_bindings(pubkey);

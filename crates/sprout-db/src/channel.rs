@@ -694,6 +694,8 @@ pub struct UserRecord {
     pub pubkey: Vec<u8>,
     /// Optional display name.
     pub display_name: Option<String>,
+    /// Verified corporate name derived from the identity JWT.
+    pub verified_name: Option<String>,
     /// Optional avatar image URL.
     pub avatar_url: Option<String>,
     /// Optional NIP-05 identifier (e.g. `user@example.com`).
@@ -831,7 +833,7 @@ pub async fn get_users_bulk(pool: &PgPool, pubkeys: &[Vec<u8>]) -> Result<Vec<Us
         .collect::<Vec<_>>()
         .join(", ");
     let sql =
-        format!("SELECT pubkey, display_name, avatar_url, nip05_handle FROM users WHERE pubkey IN ({placeholders})");
+        format!("SELECT pubkey, display_name, verified_name, avatar_url, nip05_handle FROM users WHERE pubkey IN ({placeholders})");
 
     let mut q = sqlx::query(&sql);
     for pk in pubkeys {
@@ -845,6 +847,7 @@ pub async fn get_users_bulk(pool: &PgPool, pubkeys: &[Vec<u8>]) -> Result<Vec<Us
         out.push(UserRecord {
             pubkey: row.try_get("pubkey")?,
             display_name: row.try_get("display_name")?,
+            verified_name: row.try_get("verified_name")?,
             avatar_url: row.try_get("avatar_url")?,
             nip05_handle: row.try_get("nip05_handle")?,
         });

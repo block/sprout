@@ -11,6 +11,9 @@ pub enum ConfigError {
     /// The `SPROUT_BIND_ADDR` environment variable could not be parsed as a socket address.
     #[error("invalid SPROUT_BIND_ADDR: {0}")]
     InvalidBindAddr(String),
+    /// The `SPROUT_IDENTITY_MODE` environment variable contains an unrecognised value.
+    #[error("invalid SPROUT_IDENTITY_MODE: {0}")]
+    InvalidIdentityMode(String),
 }
 
 /// Relay runtime configuration, loaded from environment variables.
@@ -128,6 +131,53 @@ impl Config {
         if let Ok(jwks_uri) = std::env::var("OKTA_JWKS_URI") {
             auth.okta.jwks_uri = jwks_uri;
         }
+
+        // ── Identity mode ──────────────────────────────────────────────────────
+        let identity_mode = std::env::var("SPROUT_IDENTITY_MODE")
+            .unwrap_or_else(|_| "disabled".to_string())
+            .parse::<sprout_auth::IdentityMode>()
+            .map_err(ConfigError::InvalidIdentityMode)?;
+
+        auth.identity.mode = identity_mode.clone();
+
+        if let Ok(uid_claim) = std::env::var("SPROUT_IDENTITY_UID_CLAIM") {
+            auth.identity.uid_claim = uid_claim;
+        }
+        if let Ok(user_claim) = std::env::var("SPROUT_IDENTITY_USER_CLAIM") {
+            auth.identity.user_claim = user_claim;
+        }
+        if let Ok(jwks_uri) = std::env::var("SPROUT_IDENTITY_JWKS_URI") {
+            auth.identity.jwks_uri = jwks_uri;
+        }
+        if let Ok(issuer) = std::env::var("SPROUT_IDENTITY_ISSUER") {
+            auth.identity.issuer = issuer;
+        }
+        if let Ok(audience) = std::env::var("SPROUT_IDENTITY_AUDIENCE") {
+            auth.identity.audience = audience;
+        }
+        if let Ok(jwt_header) = std::env::var("SPROUT_IDENTITY_JWT_HEADER") {
+            auth.identity.identity_jwt_header = jwt_header;
+        }
+
+        // When identity mode is active the relay sits behind a trusted proxy
+        // (auth proxy) — force require_auth_token so the NIP-42 fallback path
+        // cannot be used with bare keypair-only auth.
+        let require_auth_token = if identity_mode.is_proxy() {
+            if !require_auth_token {
+                tracing::info!(
+                    "Identity mode: {identity_mode} — overriding SPROUT_REQUIRE_AUTH_TOKEN to true"
+                );
+            }
+            tracing::warn!(
+                "Identity mode: {identity_mode} — relay trusts proxy-injected identity headers. \
+                 Ensure the relay is reachable ONLY via the trusted auth proxy. \
+                 Direct access to the relay port would allow header injection."
+            );
+            auth.okta.require_token = true;
+            true
+        } else {
+            require_auth_token
+        };
 
         if !require_auth_token {
             warn!(

@@ -21,6 +21,8 @@ pub mod error;
 pub mod event;
 /// Home feed queries.
 pub mod feed;
+/// Identity binding persistence (corporate UID + device → pubkey).
+pub mod identity_binding;
 /// Monthly table partition management.
 pub mod partition;
 /// Reaction persistence.
@@ -34,6 +36,7 @@ pub mod workflow;
 
 pub use error::{DbError, Result};
 pub use event::EventQuery;
+pub use identity_binding::{BindingResult, IdentityBinding};
 
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
@@ -509,6 +512,48 @@ impl Db {
     /// Ensure a user record exists (upsert).
     pub async fn ensure_user(&self, pubkey: &[u8]) -> Result<()> {
         user::ensure_user(&self.pool, pubkey).await
+    }
+
+    /// Ensure a user record exists and sync the verified corporate name.
+    pub async fn ensure_user_with_verified_name(
+        &self,
+        pubkey: &[u8],
+        verified_name: &str,
+    ) -> Result<()> {
+        user::ensure_user_with_verified_name(&self.pool, pubkey, verified_name).await
+    }
+
+    /// Look up an identity binding by uid.
+    pub async fn get_identity_binding(
+        &self,
+        uid: &str,
+    ) -> Result<Option<identity_binding::IdentityBinding>> {
+        identity_binding::get_identity_binding(&self.pool, uid).await
+    }
+
+    /// Bind a pubkey to a uid or validate an existing binding.
+    pub async fn bind_or_validate_identity(
+        &self,
+        uid: &str,
+        pubkey: &[u8],
+        username: &str,
+    ) -> Result<identity_binding::BindingResult> {
+        identity_binding::bind_or_validate_identity(&self.pool, uid, pubkey, username).await
+    }
+
+    /// Check whether a pubkey has any active identity binding.
+    pub async fn is_pubkey_identity_bound(&self, pubkey: &[u8]) -> Result<bool> {
+        identity_binding::is_pubkey_identity_bound(&self.pool, pubkey).await
+    }
+
+    /// Delete the identity binding for a uid.
+    pub async fn delete_identity_binding(&self, uid: &str) -> Result<bool> {
+        identity_binding::delete_identity_binding(&self.pool, uid).await
+    }
+
+    /// Clear the verified corporate name from a user record.
+    pub async fn clear_verified_name(&self, pubkey: &[u8]) -> Result<bool> {
+        user::clear_verified_name(&self.pool, pubkey).await
     }
 
     /// Get a single user record by pubkey.

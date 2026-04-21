@@ -156,6 +156,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/users/batch", post(api::get_users_batch))
         // Feed route
         .route("/api/feed", get(api::feed_handler))
+        // Identity registration (proxy mode — binds client pubkey to corporate identity).
+        .route(
+            "/api/identity/register",
+            post(api::identity::identity_register),
+        )
         // Reject request bodies larger than 1 MB to prevent resource exhaustion.
         .layer(RequestBodyLimitLayer::new(1024 * 1024))
         .with_state(state.clone());
@@ -190,6 +195,10 @@ pub fn build_health_router(state: Arc<AppState>) -> Router {
 /// UDS connections have no `SocketAddr`, so the extractor would panic.
 /// TCP connections populate it via `into_make_service_with_connect_info`; UDS
 /// connections fall back to `0.0.0.0:0`.
+///
+/// In proxy identity mode, the identity JWT header (configured via
+/// `SPROUT_IDENTITY_JWT_HEADER`) is validated
+/// at upgrade time and the connection is pre-authenticated (NIP-42 is skipped).
 async fn nip11_or_ws_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -212,9 +221,41 @@ async fn nip11_or_ws_handler(
         return Json(info).into_response();
     }
 
+    // ── Proxy / hybrid identity: validate JWT at upgrade time ─────────────
+    //   - Proxy:  identity token mandatory — reject if missing.
+    //   - Hybrid: identity token preferred — fall through to NIP-42 if missing.
+    //   NIP-42 challenge is always sent; the AUTH handler resolves the pubkey binding.
+    let identity_mode = &state.auth.identity_config().mode;
+    let proxy_identity = if identity_mode.is_proxy() {
+        match headers
+            .get(&*state.auth.identity_config().identity_jwt_header)
+            .and_then(|v| v.to_str().ok())
+        {
+            Some(jwt) => match state.auth.validate_identity_jwt(jwt).await {
+                Ok((identity_claims, scopes)) => Some(crate::connection::PendingProxyIdentity {
+                    uid: identity_claims.uid,
+                    username: identity_claims.username,
+                    scopes,
+                }),
+                Err(e) => {
+                    tracing::warn!("ws: proxy identity JWT validation failed: {e}");
+                    return (StatusCode::UNAUTHORIZED, "identity token invalid").into_response();
+                }
+            },
+            None if *identity_mode == sprout_auth::IdentityMode::Proxy => {
+                tracing::warn!("ws: proxy mode enabled but identity JWT header missing");
+                return (StatusCode::UNAUTHORIZED, "identity token required").into_response();
+            }
+            // Hybrid: no identity token — proceed to standard NIP-42 auth.
+            None => None,
+        }
+    } else {
+        None
+    };
+
     match WebSocketUpgrade::from_request(req, &state).await {
         Ok(ws) => ws
-            .on_upgrade(move |socket| handle_connection(socket, state, addr))
+            .on_upgrade(move |socket| handle_connection(socket, state, addr, proxy_identity))
             .into_response(),
         Err(_) => {
             // Not a WS request and not asking for nostr+json — serve NIP-11 as fallback.

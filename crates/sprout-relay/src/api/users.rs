@@ -53,6 +53,7 @@ pub async fn get_profile(
             Ok(Json(serde_json::json!({
                 "pubkey": nostr_hex::encode(&p.pubkey),
                 "display_name": p.display_name,
+                "verified_name": p.verified_name,
                 "avatar_url": p.avatar_url,
                 "about": p.about,
                 "nip05_handle": p.nip05_handle,
@@ -98,6 +99,7 @@ pub async fn get_user_profile(
     Ok(Json(serde_json::json!({
         "pubkey": nostr_hex::encode(&profile.pubkey),
         "display_name": profile.display_name,
+        "verified_name": profile.verified_name,
         "avatar_url": profile.avatar_url,
         "about": profile.about,
         "nip05_handle": profile.nip05_handle,
@@ -185,6 +187,7 @@ pub async fn get_users_batch(
             hex,
             serde_json::json!({
                 "display_name": r.display_name,
+                "verified_name": r.verified_name,
                 "avatar_url": r.avatar_url,
                 "nip05_handle": r.nip05_handle,
             }),
@@ -235,6 +238,7 @@ pub async fn search_users(
             serde_json::json!({
                 "pubkey": nostr_hex::encode(&user.pubkey),
                 "display_name": user.display_name,
+                "verified_name": user.verified_name,
                 "avatar_url": user.avatar_url,
                 "nip05_handle": user.nip05_handle,
             })

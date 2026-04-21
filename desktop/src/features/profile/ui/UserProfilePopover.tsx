@@ -11,6 +11,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Markdown } from "@/shared/ui/markdown";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
+import { VerifiedBadge } from "@/shared/ui/VerifiedBadge";
 
 type UserProfilePopoverProps = {
   children: React.ReactNode;
@@ -82,7 +83,16 @@ export function UserProfilePopover({
                     className="shrink-0 rounded"
                   />
                 ) : null}
+                {profile?.verifiedName ? (
+                  <VerifiedBadge verifiedName={profile.verifiedName} />
+                ) : null}
               </div>
+              {profile?.verifiedName &&
+              profile.verifiedName !== profile?.displayName ? (
+                <p className="truncate text-xs text-muted-foreground">
+                  {profile.verifiedName}
+                </p>
+              ) : null}
               {profile?.nip05Handle ? (
                 <p className="truncate text-xs text-muted-foreground">
                   {profile.nip05Handle}

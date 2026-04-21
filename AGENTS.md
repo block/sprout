@@ -92,6 +92,26 @@ simple and testable.
 thread root events. Any code that inserts replies must update these counters —
 check existing reply handlers for the pattern.
 
+**Identity binding (proxy mode)**: In corporate deployments the relay sits
+behind a trusted auth proxy that injects an identity JWT header
+(configured via `SPROUT_IDENTITY_JWT_HEADER`).
+`SPROUT_IDENTITY_MODE` controls behaviour:
+
+- `disabled` (default) — standard Nostr key-based auth only.
+- `proxy` — all connections must present a valid identity JWT; the relay binds
+  uid → pubkey in the `identity_bindings` table. NIP-42 is still required to
+  prove pubkey ownership. Keys are shared across devices via NIP-AB pairing.
+- `hybrid` — identity JWT preferred for humans; connections without the header
+  fall through to standard auth (API tokens, Okta JWTs) for agents.
+
+Identity bindings are **immutable** — once a uid is bound to a pubkey, a
+different pubkey returns a mismatch error. Use `sprout-admin unbind-identity`
+to clear a binding (e.g., key rotation, offboarding).
+
+**Trusted-proxy security invariant**: The relay trusts proxy headers
+unconditionally. It **must** be deployed behind the trusted reverse proxy —
+direct access to the relay port would allow header injection.
+
 ---
 
 ## Testing
