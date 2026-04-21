@@ -258,6 +258,7 @@ export function MessageThreadPanel({
           channelId={channelId}
           channelName={channelName}
           disabled={disabled || isSending || !channelId}
+          draftKey={`thread:${threadHead.id}`}
           isSending={isSending}
           onCancelReply={composerReplyTarget ? onCancelReply : undefined}
           onSend={onSend}

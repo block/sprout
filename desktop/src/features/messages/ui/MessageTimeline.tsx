@@ -1,10 +1,11 @@
 import * as React from "react";
-import { ArrowDown, Loader2 } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
+import { Spinner } from "@/shared/ui/spinner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
@@ -115,7 +116,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
             {isFetchingOlder ? (
               <div className="flex justify-center py-2">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <Spinner className="h-4 w-4 text-muted-foreground" />
               </div>
             ) : null}
 

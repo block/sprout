@@ -3,13 +3,15 @@ import { QRCodeSVG } from "qrcode.react";
 import {
   Check,
   Copy,
-  Loader2,
   ShieldCheck,
   Smartphone,
   TriangleAlert,
   X,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
+
+import { Spinner } from "@/shared/ui/spinner";
 
 import {
   cancelPairing,
@@ -44,7 +46,6 @@ function PairingDialog({
   const [qrUri, setQrUri] = useState<string | null>(null);
   const [sasCode, setSasCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const stepRef = useRef(step);
   stepRef.current = step;
 
@@ -56,8 +57,6 @@ function PairingDialog({
     setQrUri(null);
     setSasCode(null);
     setError(null);
-    setCopied(false);
-
     let cancelled = false;
 
     startPairing().then(
@@ -168,8 +167,7 @@ function PairingDialog({
   async function handleCopy() {
     if (!qrUri) return;
     await navigator.clipboard.writeText(qrUri);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    toast.success("Copied to clipboard");
   }
 
   return (
@@ -198,7 +196,7 @@ function PairingDialog({
               </div>
             ) : step === "generating" ? (
               <div className="flex flex-col items-center justify-center gap-3 py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Spinner className="h-6 w-6 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
                   Preparing secure pairing session...
                 </p>
@@ -228,11 +226,7 @@ function PairingDialog({
                       size="sm"
                       variant="outline"
                     >
-                      {copied ? (
-                        <Check className="h-3.5 w-3.5" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
+                      <Copy className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 </div>
@@ -284,7 +278,7 @@ function PairingDialog({
               </div>
             ) : step === "transferring" ? (
               <div className="flex flex-col items-center justify-center gap-3 py-8">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Spinner className="h-6 w-6 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
                   Sending identity to mobile device...
                 </p>

@@ -10,7 +10,9 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
+import { Spinner } from "@/shared/ui/spinner";
 import { Toggle } from "@/shared/ui/toggle";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
 import { FormattingToolbar } from "./FormattingToolbar";
 
@@ -86,16 +88,20 @@ export const MessageComposerToolbar = React.memo(
                   exit={{ x: 8, opacity: 0 }}
                   transition={presenceSpring}
                 >
-                  <Toggle
-                    aria-label="Toggle formatting"
-                    disabled={composerDisabled}
-                    pressed={isFormattingOpen}
-                    onPressedChange={onFormattingToggle}
-                    size="sm"
-                    title="Formatting"
-                  >
-                    <ALargeSmall className="h-4 w-4" />
-                  </Toggle>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Toggle
+                        aria-label="Toggle formatting"
+                        disabled={composerDisabled}
+                        pressed={isFormattingOpen}
+                        onPressedChange={onFormattingToggle}
+                        size="sm"
+                      >
+                        <ALargeSmall className="h-4 w-4" />
+                      </Toggle>
+                    </TooltipTrigger>
+                    <TooltipContent>Formatting</TooltipContent>
+                  </Tooltip>
                 </motion.div>
                 <motion.div
                   className="flex items-center gap-1"
@@ -104,18 +110,22 @@ export const MessageComposerToolbar = React.memo(
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ ...presenceSpring, delay: 0.15 }}
                 >
-                  <Button
-                    aria-label="Close formatting"
-                    disabled={composerDisabled}
-                    onClick={() => onFormattingToggle(false)}
-                    size="icon"
-                    title="Close formatting"
-                    type="button"
-                    variant="ghost"
-                    className="h-7 w-7 shrink-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="Close formatting"
+                        disabled={composerDisabled}
+                        onClick={() => onFormattingToggle(false)}
+                        size="icon"
+                        type="button"
+                        variant="ghost"
+                        className="h-7 w-7 shrink-0"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Close formatting</TooltipContent>
+                  </Tooltip>
                   <div className="mx-1 h-5 w-px shrink-0 bg-border/60" />
                 </motion.div>
                 <motion.div
@@ -143,38 +153,42 @@ export const MessageComposerToolbar = React.memo(
                 exit={{ opacity: 0, x: -12 }}
                 transition={presenceSpring}
               >
-                <Button
-                  aria-label="Mention someone"
-                  data-testid="message-insert-mention"
-                  disabled={composerDisabled}
-                  onClick={onOpenMentionPicker}
-                  onMouseDown={onCaptureSelection}
-                  size="icon"
-                  title="Mention someone"
-                  type="button"
-                  variant="ghost"
-                >
-                  <AtSign className="h-4 w-4" />
-                </Button>
-                <Button
-                  aria-label="Attach image"
-                  disabled={composerDisabled || isUploading}
-                  onClick={onPaperclip}
-                  size="icon"
-                  title="Attach image"
-                  type="button"
-                  variant="ghost"
-                >
-                  {isUploading ? (
-                    <span
-                      className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-                      role="status"
-                      aria-label="Uploading"
-                    />
-                  ) : (
-                    <Paperclip className="h-4 w-4" />
-                  )}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Mention someone"
+                      data-testid="message-insert-mention"
+                      disabled={composerDisabled}
+                      onClick={onOpenMentionPicker}
+                      onMouseDown={onCaptureSelection}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <AtSign className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mention someone</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Attach image"
+                      disabled={composerDisabled || isUploading}
+                      onClick={onPaperclip}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      {isUploading ? (
+                        <Spinner className="h-4 w-4" />
+                      ) : (
+                        <Paperclip className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Attach image</TooltipContent>
+                </Tooltip>
                 <ComposerEmojiPicker
                   disabled={composerDisabled}
                   onEmojiSelect={onEmojiSelect}
@@ -188,16 +202,20 @@ export const MessageComposerToolbar = React.memo(
                   exit={{ x: -8, opacity: 0 }}
                   transition={presenceSpring}
                 >
-                  <Toggle
-                    aria-label="Toggle formatting"
-                    disabled={composerDisabled}
-                    pressed={isFormattingOpen}
-                    onPressedChange={onFormattingToggle}
-                    size="sm"
-                    title="Formatting"
-                  >
-                    <ALargeSmall className="h-4 w-4" />
-                  </Toggle>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Toggle
+                        aria-label="Toggle formatting"
+                        disabled={composerDisabled}
+                        pressed={isFormattingOpen}
+                        onPressedChange={onFormattingToggle}
+                        size="sm"
+                      >
+                        <ALargeSmall className="h-4 w-4" />
+                      </Toggle>
+                    </TooltipTrigger>
+                    <TooltipContent>Formatting</TooltipContent>
+                  </Tooltip>
                 </motion.div>
               </motion.div>
             )}
@@ -206,16 +224,20 @@ export const MessageComposerToolbar = React.memo(
 
         <div className="flex items-center gap-2">
           {extraActions}
-          <Button
-            className="gap-2"
-            data-testid="send-message"
-            disabled={sendDisabled || isSending}
-            title="Send (Enter)"
-            type="submit"
-          >
-            <SendHorizontal className="h-4 w-4" />
-            {isSending ? "Sending" : "Send"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                className="gap-2"
+                data-testid="send-message"
+                disabled={sendDisabled || isSending}
+                type="submit"
+              >
+                <SendHorizontal className="h-4 w-4" />
+                {isSending ? "Sending" : "Send"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Send (Enter)</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     );

@@ -3,6 +3,7 @@ import type { AgentPersona } from "@/shared/api/types";
 import { promptPreview } from "@/shared/lib/promptPreview";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { PersonaCatalogSelectionBadge } from "./PersonaCatalogSelectionBadge";
 import { PersonaIdentity } from "./PersonaIdentity";
@@ -16,8 +17,6 @@ type PersonaCatalogSectionProps = {
   emptyDescription?: string;
   emptyTitle?: string;
   error: Error | null;
-  feedbackErrorMessage?: string | null;
-  feedbackNoticeMessage?: string | null;
   isLoading: boolean;
   isPending: boolean;
   onTogglePersona: (persona: AgentPersona) => void;
@@ -30,8 +29,6 @@ export function PersonaCatalogSection({
   emptyDescription = personaCatalogCopy.emptyCatalogDescription,
   emptyTitle = personaCatalogCopy.emptyCatalogTitle,
   error,
-  feedbackErrorMessage = null,
-  feedbackNoticeMessage = null,
   isLoading,
   isPending,
   onTogglePersona,
@@ -55,10 +52,7 @@ export function PersonaCatalogSection({
       {isLoading ? (
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {["first", "second", "third", "fourth"].map((key) => (
-            <div
-              className="rounded-xl border border-border/70 bg-card/80 p-3 shadow-sm"
-              key={key}
-            >
+            <Card className="p-3" key={key}>
               <div className="flex items-center gap-2.5">
                 <Skeleton className="h-8 w-8 rounded-lg" />
                 <div className="space-y-2">
@@ -66,7 +60,7 @@ export function PersonaCatalogSection({
                   <Skeleton className="h-3 w-20" />
                 </div>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       ) : null}
@@ -165,24 +159,6 @@ export function PersonaCatalogSection({
       {error ? (
         <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error.message}
-        </p>
-      ) : null}
-
-      {feedbackNoticeMessage ? (
-        <p
-          className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary"
-          data-testid="persona-catalog-feedback-notice"
-        >
-          {feedbackNoticeMessage}
-        </p>
-      ) : null}
-
-      {feedbackErrorMessage ? (
-        <p
-          className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-          data-testid="persona-catalog-feedback-error"
-        >
-          {feedbackErrorMessage}
         </p>
       ) : null}
     </section>

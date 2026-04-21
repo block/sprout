@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/shared/ui/spinner";
 
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -81,7 +81,7 @@ export function QuickBotBar({ personas, pending, onAdd }: QuickBotBarProps) {
                   )}
                   {isThisPending ? (
                     <div className="absolute inset-0 flex items-center justify-center rounded-full bg-background/70">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                      <Spinner className="h-3.5 w-3.5 text-primary" />
                     </div>
                   ) : null}
                 </button>

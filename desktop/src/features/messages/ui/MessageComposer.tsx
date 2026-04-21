@@ -30,6 +30,7 @@ type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
   disabled?: boolean;
+  draftKey?: string;
   editTarget?: {
     author: string;
     body: string;
@@ -58,6 +59,7 @@ export function MessageComposer({
   channelId = null,
   channelName,
   disabled = false,
+  draftKey,
   editTarget = null,
   isSending = false,
   onCancelEdit,
@@ -83,7 +85,8 @@ export function MessageComposer({
   }, []);
 
   const drafts = useDrafts();
-  const previousChannelIdRef = React.useRef<string | null>(null);
+  const effectiveDraftKey = draftKey ?? channelId;
+  const previousDraftKeyRef = React.useRef<string | null>(null);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
@@ -151,24 +154,17 @@ export function MessageComposer({
   });
 
   // ── Channel switching: save/restore drafts ──────────────────────────
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger
+  // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
   React.useEffect(() => {
-    const prevId = previousChannelIdRef.current;
-    if (prevId) {
-      const currentContent = contentRef.current;
-      if (currentContent.trim().length > 0) {
-        drafts.saveDraft(prevId, {
-          content: currentContent,
-          selectionEnd: currentContent.length,
-          selectionStart: currentContent.length,
-        });
-      } else {
-        drafts.clearDraft(prevId);
-      }
+    const prevKey = previousDraftKeyRef.current;
+    if (prevKey) {
+      drafts.persistDraft(prevKey, contentRef.current);
     }
-    previousChannelIdRef.current = channelId;
+    previousDraftKeyRef.current = effectiveDraftKey;
 
-    const saved = channelId ? drafts.loadDraft(channelId) : undefined;
+    const saved = effectiveDraftKey
+      ? drafts.loadDraft(effectiveDraftKey)
+      : undefined;
     if (saved) {
       setContent(saved.content);
       contentRef.current = saved.content;
@@ -184,7 +180,13 @@ export function MessageComposer({
     setIsEmojiPickerOpen(false);
     mentions.clearMentions();
     channelLinks.clearChannels();
-  }, [channelId]);
+
+    return () => {
+      if (effectiveDraftKey) {
+        drafts.persistDraft(effectiveDraftKey, contentRef.current);
+      }
+    };
+  }, [effectiveDraftKey]);
 
   // ── Edit mode: pre-fill content ─────────────────────────────────────
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger

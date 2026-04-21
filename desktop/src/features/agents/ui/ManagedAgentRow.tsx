@@ -14,6 +14,7 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
@@ -399,7 +400,10 @@ function AgentActionsMenu({
           </DropdownMenuItem>
 
           <DropdownMenuItem
-            onClick={() => navigator.clipboard.writeText(agent.pubkey)}
+            onClick={async () => {
+              await navigator.clipboard.writeText(agent.pubkey);
+              toast.success("Copied pubkey to clipboard");
+            }}
           >
             <Clipboard className="h-4 w-4" />
             Copy pubkey
