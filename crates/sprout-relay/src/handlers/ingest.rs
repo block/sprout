@@ -807,7 +807,11 @@ pub async fn ingest_event(
     // ── 3. Pubkey match ──────────────────────────────────────────────────
     let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
     let is_app_specific = kind_u32 == sprout_core::kind::KIND_APP_SPECIFIC_DATA;
-    if event.pubkey != *auth.pubkey() && !auth.has_proxy_scope() && !is_gift_wrap && !is_app_specific {
+    if event.pubkey != *auth.pubkey()
+        && !auth.has_proxy_scope()
+        && !is_gift_wrap
+        && !is_app_specific
+    {
         return Err(IngestError::AuthFailed(
             "invalid: event pubkey does not match authenticated identity".into(),
         ));
