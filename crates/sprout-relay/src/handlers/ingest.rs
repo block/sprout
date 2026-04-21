@@ -184,6 +184,9 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         }
         KIND_NIP29_CREATE_GROUP | KIND_CANVAS => Ok(Scope::ChannelsWrite),
         KIND_NIP29_JOIN_REQUEST | KIND_NIP29_LEAVE_REQUEST => Ok(Scope::ChannelsRead),
+        // NIP-78 application-specific data (kind:30078) — used by NIP-SB backup,
+        // Cashu wallets, app settings, etc. No channel scope required.
+        sprout_core::kind::KIND_APP_SPECIFIC_DATA => Ok(Scope::MessagesWrite),
         // Huddle lifecycle events + guidelines
         KIND_HUDDLE_STARTED
         | KIND_HUDDLE_PARTICIPANT_JOINED
@@ -803,7 +806,8 @@ pub async fn ingest_event(
 
     // ── 3. Pubkey match ──────────────────────────────────────────────────
     let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
-    if event.pubkey != *auth.pubkey() && !auth.has_proxy_scope() && !is_gift_wrap {
+    let is_app_specific = kind_u32 == sprout_core::kind::KIND_APP_SPECIFIC_DATA;
+    if event.pubkey != *auth.pubkey() && !auth.has_proxy_scope() && !is_gift_wrap && !is_app_specific {
         return Err(IngestError::AuthFailed(
             "invalid: event pubkey does not match authenticated identity".into(),
         ));

@@ -159,6 +159,11 @@ pub const KIND_MEMBER_ADDED_NOTIFICATION: u32 = 44100;
 /// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
 pub const KIND_MEMBER_REMOVED_NOTIFICATION: u32 = 44101;
 
+// NIP-78 application-specific data (30078)
+/// Application-specific data — NIP-78 parameterized replaceable events.
+/// Used by NIP-SB steganographic key backup, Cashu wallets, app settings, etc.
+pub const KIND_APP_SPECIFIC_DATA: u32 = 30078;
+
 // Forum / social (45000–45999)
 // V1 used addressable range (30001–30003) — wrong.
 /// A forum post (thread root).
@@ -286,6 +291,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_LONG_FORM,
+    KIND_APP_SPECIFIC_DATA,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
     KIND_FORUM_COMMENT,

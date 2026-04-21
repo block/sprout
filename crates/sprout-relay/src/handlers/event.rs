@@ -186,7 +186,11 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     // ephemeral events bypass the pipeline entirely.
     let has_proxy_scope = scopes.contains(&sprout_auth::Scope::ProxySubmit);
     let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
-    if event.pubkey != auth_pubkey && !has_proxy_scope && !is_gift_wrap {
+    // NIP-SB (kind:30078) uses throwaway signing keys — same pattern as
+    // NIP-59 gift wrap. Each backup blob is signed by a different ephemeral
+    // key that must not be linked to the authenticated identity.
+    let is_app_specific = kind_u32 == sprout_core::kind::KIND_APP_SPECIFIC_DATA;
+    if event.pubkey != auth_pubkey && !has_proxy_scope && !is_gift_wrap && !is_app_specific {
         reject("invalid");
         conn.send(RelayMessage::ok(
             &event_id_hex,
