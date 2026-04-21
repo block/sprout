@@ -162,7 +162,7 @@ export function MessageThreadPanel({
       </div>
 
       <div
-        className="min-h-0 flex-1 overflow-y-auto"
+        className="min-h-0 flex-1 overflow-y-auto pb-6"
         data-testid="message-thread-body"
         onScroll={syncScrollState}
         ref={threadBodyRef}
@@ -253,13 +253,7 @@ export function MessageThreadPanel({
         </div>
       ) : null}
 
-      <div className="p-4">
-        <TypingIndicatorRow
-          channel={channel}
-          currentPubkey={currentPubkey}
-          profiles={profiles}
-          typingPubkeys={threadTypingPubkeys}
-        />
+      <div>
         <MessageComposer
           channelId={channelId}
           channelName={channelName}
@@ -269,9 +263,14 @@ export function MessageThreadPanel({
           onSend={onSend}
           placeholder={`Reply in thread to ${threadHead.author}`}
           replyTarget={composerReplyTarget}
-          showTopBorder={false}
           typingParentEventId={threadHead.id}
           typingRootEventId={threadHead.rootId}
+        />
+        <TypingIndicatorRow
+          channel={channel}
+          currentPubkey={currentPubkey}
+          profiles={profiles}
+          typingPubkeys={threadTypingPubkeys}
         />
       </div>
     </aside>

@@ -168,7 +168,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         </div>
 
         {!isAtBottom ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center px-4">
             <Button
               className="pointer-events-auto rounded-full shadow-lg"
               data-testid="message-scroll-to-latest"

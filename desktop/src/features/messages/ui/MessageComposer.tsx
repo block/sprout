@@ -499,7 +499,7 @@ export function MessageComposer({
     <footer className="relative z-10 -mt-4 px-8 pb-0 pt-0 sm:px-10">
       <div className="flex w-full flex-col gap-3">
         <form
-          className="relative rounded-2xl border border-input bg-card px-3 py-4 sm:px-4"
+          className="relative rounded-2xl border border-input bg-card px-4 pb-3 pt-4"
           data-testid="message-composer"
           onDragOver={media.handleDragOver}
           onDrop={(e) => {
