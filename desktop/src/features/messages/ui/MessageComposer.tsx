@@ -17,7 +17,6 @@ import {
 } from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
-import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
@@ -51,7 +50,6 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
-  showTopBorder?: boolean;
   typingParentEventId?: string | null;
   typingRootEventId?: string | null;
 };
@@ -68,7 +66,6 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
-  showTopBorder = true,
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
@@ -499,12 +496,7 @@ export function MessageComposer({
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <footer
-      className={cn(
-        "bg-background p-4",
-        showTopBorder ? "border-t border-border/80" : "",
-      )}
-    >
+    <footer className="relative z-10 -mt-4 px-8 pb-0 pt-0 sm:px-10">
       <div className="flex w-full flex-col gap-3">
         <form
           className="relative rounded-2xl border border-input bg-card px-3 py-4 sm:px-4"
