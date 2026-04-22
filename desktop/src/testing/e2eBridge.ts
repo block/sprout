@@ -1045,10 +1045,10 @@ const mockChannels: MockChannel[] = [
     created_minutes_ago: 720,
     updated_minutes_ago: 720,
     participants: ["alice", "tyler"],
-    participant_pubkeys: [ALICE_PUBKEY, DEFAULT_REAL_IDENTITY.pubkey],
+    participant_pubkeys: [ALICE_PUBKEY, MOCK_IDENTITY_PUBKEY],
     members: [
       createMockMember(ALICE_PUBKEY, "member", 720),
-      createMockMember(DEFAULT_REAL_IDENTITY.pubkey, "member", 720),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 720),
     ],
   }),
   createMockChannel({
@@ -1072,10 +1072,10 @@ const mockChannels: MockChannel[] = [
     created_minutes_ago: 700,
     updated_minutes_ago: 700,
     participants: ["bob", "tyler"],
-    participant_pubkeys: [BOB_PUBKEY, DEFAULT_REAL_IDENTITY.pubkey],
+    participant_pubkeys: [BOB_PUBKEY, MOCK_IDENTITY_PUBKEY],
     members: [
       createMockMember(BOB_PUBKEY, "member", 700),
-      createMockMember(DEFAULT_REAL_IDENTITY.pubkey, "member", 700),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 700),
     ],
   }),
 ];
@@ -3012,7 +3012,7 @@ async function handleGetFeed(
           : {
               mentions: [
                 {
-                  id: "mock-feed-mock-mention",
+                  id: "mock-feed-mention",
                   kind: 9,
                   pubkey: ALICE_PUBKEY,
                   content: "Please review the release checklist.",
@@ -3028,7 +3028,7 @@ async function handleGetFeed(
               ],
               needs_action: [
                 {
-                  id: "mock-feed-mock-reminder",
+                  id: "mock-feed-reminder",
                   kind: 40007,
                   pubkey:
                     "0000000000000000000000000000000000000000000000000000000000000000",
@@ -3045,7 +3045,7 @@ async function handleGetFeed(
               ],
               activity: [
                 {
-                  id: "mock-feed-mock-self-activity",
+                  id: "mock-feed-self-activity",
                   kind: 9,
                   pubkey: currentPubkey,
                   content: "I posted a note about the launch checklist.",
@@ -3056,7 +3056,7 @@ async function handleGetFeed(
                   category: "activity" as const,
                 },
                 {
-                  id: "mock-feed-mock-activity",
+                  id: "mock-feed-activity",
                   kind: 9,
                   pubkey: BOB_PUBKEY,
                   content: "Engineering shipped the desktop build.",
@@ -3069,7 +3069,7 @@ async function handleGetFeed(
               ],
               agent_activity: [
                 {
-                  id: "mock-feed-mock-agent",
+                  id: "mock-feed-agent",
                   kind: 43003,
                   pubkey:
                     "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
