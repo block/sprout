@@ -25,14 +25,23 @@ type UserProfilePopoverProps = {
   botIdenticonValue?: string;
 };
 
+const RUNTIME_LABELS: Record<string, string> = {
+  goose: "Goose",
+  "claude-code": "Claude Code",
+  "codex-acp": "Codex",
+  aider: "Aider",
+};
+
 function runtimeLabel(command: string): string {
-  const map: Record<string, string> = {
-    goose: "Goose",
-    "claude-code": "Claude Code",
-    "codex-acp": "Codex",
-    aider: "Aider",
-  };
-  return map[command] ?? command;
+  return RUNTIME_LABELS[command] ?? command;
+}
+
+function InfoBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+      {children}
+    </span>
+  );
 }
 
 function truncatePubkey(pubkey: string) {
@@ -120,23 +129,15 @@ export function UserProfilePopover({
           {role === "bot" && (managedAgent || relayAgent) ? (
             <div className="flex flex-wrap gap-1.5">
               {managedAgent?.agentCommand ? (
-                <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
-                  {runtimeLabel(managedAgent.agentCommand)}
-                </span>
+                <InfoBadge>{runtimeLabel(managedAgent.agentCommand)}</InfoBadge>
               ) : relayAgent?.agentType ? (
-                <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
-                  {runtimeLabel(relayAgent.agentType)}
-                </span>
+                <InfoBadge>{runtimeLabel(relayAgent.agentType)}</InfoBadge>
               ) : null}
               {managedAgent?.model ? (
-                <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
-                  {managedAgent.model}
-                </span>
+                <InfoBadge>{managedAgent.model}</InfoBadge>
               ) : null}
               {managedAgent?.acpCommand ? (
-                <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
-                  ACP: {managedAgent.acpCommand}
-                </span>
+                <InfoBadge>ACP: {managedAgent.acpCommand}</InfoBadge>
               ) : null}
             </div>
           ) : null}
