@@ -12,7 +12,7 @@ The core security property: **each password guess is bound to one pubkey.** An a
 
 ## Motivation
 
-Existing password-encrypted key formats (NIP-49 `ncryptsec1`, BIP-38) are safe for local storage but dangerous on relays. An attacker who dumps a relay can identify every encrypted backup by its format prefix, then try one password against all of them simultaneously — the cost is `|passwords| × 1 KDF call`, regardless of how many users have backups.
+Existing password-encrypted key formats (NIP-49 `ncryptsec1`, BIP-38) are safe for local storage but dangerous on relays. An attacker who dumps a relay can identify every encrypted backup by its format prefix (`ncryptsec1`), giving them a list of targets. For each password guess, the attacker tries all N blobs — the probability of cracking at least one user grows with N, and the cost per successful crack drops to `|passwords| × scrypt_cost / N`.
 
 This NIP solves the accumulation problem by mixing the user's public key into the KDF input. The backup blob is published under a throwaway identity with no reference to the user's real pubkey. To test a password, the attacker must already know which user they're targeting. One guess, one user. To attack all users: `|users| × |passwords| × 1 KDF call`.
 
@@ -29,7 +29,7 @@ This NIP solves the accumulation problem by mixing the user's public key into th
 - **Single blob.** No fault tolerance on a single relay. If the relay loses the event, the backup is gone. Publish to multiple relays and verify periodically.
 - **No steganographic guarantee.** An active relay operator can identify the blob via timing and metadata patterns. The security argument does not depend on cover — even if the adversary knows a blob is a backup, they cannot determine whose backup it is or recover the nsec without the password.
 - **Password strength is the security floor.** Weak passwords make the backup crackable regardless of protocol design.
-- **No automatic relay discovery.** The user must know which relay(s) hold their backup.
+- **No automatic relay discovery.** The user must know which relay(s) hold their backup. Recovery requires three inputs — password, public key, and relay URL — all of which must be correct. Users SHOULD record their backup relay URL(s) alongside their public key.
 - **Relay retention not guaranteed.** Events from throwaway keys may be garbage-collected. Publish to multiple relays and verify periodically.
 - **No key rotation or migration.** This NIP provides backup and recovery only.
 
@@ -40,7 +40,7 @@ SCRYPT_LOG_N     = 20          # 2^20 cost parameter (requires ~1 GiB RAM per ev
 SCRYPT_R         = 8
 SCRYPT_P         = 1
 EVENT_KIND       = 30078       # NIP-78 application-specific data
-AAD              = b"\x02"     # key_security_byte (NIP-49 convention)
+AAD              = b"\x02"     # NIP-49 key_security_byte convention, used here for format consistency
 NONCE_LEN        = 24          # XChaCha20-Poly1305 nonce
 CONTENT_LEN      = 72          # 24 nonce + 32 ciphertext + 16 tag (decoded bytes)
 ```
@@ -256,7 +256,7 @@ For each event returned by the recovery query, implementations MUST apply these 
 1. Validate `event.id` and `event.sig` per NIP-01. Discard on failure.
 2. Validate `event.pubkey == sign_pk`. Discard on mismatch.
 3. Validate `event.kind == 30078`. Discard on mismatch.
-4. Validate the event contains exactly one `d` tag with value `d_tag`. Discard if missing, duplicate, or mismatched.
+4. Validate the event contains exactly one `d` tag with value `d_tag`. Discard if missing, duplicate, or mismatched. Additional tags (including `alt`) MAY be present and MUST be ignored during validation.
 5. Validate `event.content` is valid base64 decoding to exactly 72 bytes. Discard on failure.
 6. Attempt AEAD decryption with `enc_key`. Discard if authentication fails.
 7. Validate the decrypted plaintext is a valid secp256k1 scalar (`1 ≤ int_be < n`). Discard on failure.
@@ -284,6 +284,8 @@ Events that fail any step MUST be silently discarded. Implementations MUST NOT r
    Deletion is per-relay (d-tags and signing keys are relay-scoped).
 ```
 
+After publishing the new backup, implementations MUST verify the new blob is retrievable from each relay before publishing deletion events for the old blob. If the new blob cannot be verified on a relay, do NOT delete the old blob on that relay.
+
 Deletion is best-effort. Relays MAY or MAY NOT honor `kind:5` deletions. Old blobs that persist remain encrypted under the old password.
 
 ## Security Analysis
@@ -302,7 +304,7 @@ At 128-bit password entropy: 2^127 expected guesses.
 
 ### Batch Attack (all users)
 
-Each guess is bound to one pubkey. To test one password against all users: `|users| × 1 scrypt`. Compared to NIP-49 (1 scrypt tests all users): **|users|× more expensive.**
+Each guess is bound to one pubkey. To test one password against all users: `|users| × 1 scrypt`. With NIP-49, the attacker can identify all encrypted backups by prefix and gets N chances per password guess — the cost per successful crack is `|passwords| × scrypt_cost / N`. With NIP-PB, each user requires independent computation: **|users|× more expensive.**
 
 ### What Doesn't Help the Adversary
 
