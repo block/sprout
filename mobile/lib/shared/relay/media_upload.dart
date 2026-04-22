@@ -252,27 +252,38 @@ class MediaUploadService {
   Future<_PreparedUploadImage> _prepareUploadImage(XFile pickedImage) async {
     final bytes = await pickedImage.readAsBytes();
     final detectedMimeType = _tryDetectImageMimeType(bytes);
-    if (detectedMimeType != null) {
-      _validateUpload(bytes, detectedMimeType);
-      final sanitizedBytes = await _sanitizeImageBytesIfNeeded(
-        bytes,
-        detectedMimeType,
-      );
-      return _PreparedUploadImage(
-        bytes: sanitizedBytes,
-        mimeType: _detectImageMimeType(sanitizedBytes),
-      );
+    if (detectedMimeType case final mimeType?) {
+      return _prepareDetectedUploadImage(bytes, mimeType);
     }
 
     if (_shouldTranscodePickedImage(pickedImage, bytes)) {
-      final transcodedBytes = await _transcodeImageToJpeg(bytes);
-      return _PreparedUploadImage(
-        bytes: transcodedBytes,
-        mimeType: _detectImageMimeType(transcodedBytes),
-      );
+      return _prepareTranscodedUploadImage(bytes);
     }
 
     throw Exception('unsupported file type');
+  }
+
+  Future<_PreparedUploadImage> _prepareDetectedUploadImage(
+    Uint8List bytes,
+    String mimeType,
+  ) async {
+    _validateUpload(bytes, mimeType);
+    final preparedBytes = await _sanitizeImageBytesIfNeeded(bytes, mimeType);
+    return _buildPreparedUploadImage(preparedBytes);
+  }
+
+  Future<_PreparedUploadImage> _prepareTranscodedUploadImage(
+    Uint8List bytes,
+  ) async {
+    final transcodedBytes = await _transcodeImageToJpeg(bytes);
+    return _buildPreparedUploadImage(transcodedBytes);
+  }
+
+  _PreparedUploadImage _buildPreparedUploadImage(Uint8List bytes) {
+    return _PreparedUploadImage(
+      bytes: bytes,
+      mimeType: _detectImageMimeType(bytes),
+    );
   }
 
   Future<Uint8List> _sanitizeImageBytesIfNeeded(
@@ -345,7 +356,7 @@ String _detectImageMimeType(Uint8List bytes) {
 }
 
 bool _shouldTranscodePickedImage(XFile pickedImage, Uint8List bytes) {
-  return defaultTargetPlatform == TargetPlatform.iOS &&
+  return _supportsNativeUploadImageProcessing() &&
       (_hasHeicFileExtension(pickedImage) || _looksLikeHeicOrHeif(bytes));
 }
 
@@ -412,8 +423,15 @@ bool _isAnimatedWebp(Uint8List bytes) {
 }
 
 bool _shouldSanitizePickedImage(String mimeType) {
-  return defaultTargetPlatform == TargetPlatform.iOS &&
+  return _supportsNativeUploadImageProcessing() &&
       (mimeType == 'image/jpeg' || mimeType == 'image/png');
+}
+
+bool _supportsNativeUploadImageProcessing() {
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android || TargetPlatform.iOS => true,
+    _ => false,
+  };
 }
 
 bool _hasHeicFileExtension(XFile pickedImage) {
@@ -485,27 +503,37 @@ String? _extractServerAuthority(String baseUrl) {
 }
 
 Future<Uint8List> _transcodePickedImageToJpeg(Uint8List bytes) async {
-  final transcodedBytes = await _mediaUploadPlatformChannel
-      .invokeMethod<Uint8List>(_transcodeImageToJpegMethod, bytes);
-  if (transcodedBytes == null || transcodedBytes.isEmpty) {
-    throw Exception('failed to convert image for upload');
-  }
-  return transcodedBytes;
+  return _invokeRequiredPlatformBytesMethod(
+    _transcodeImageToJpegMethod,
+    arguments: bytes,
+    errorMessage: 'failed to convert image for upload',
+  );
 }
 
 Future<Uint8List> _sanitizePickedImageBytes(
   Uint8List bytes,
   String mimeType,
 ) async {
-  final sanitizedBytes = await _mediaUploadPlatformChannel
-      .invokeMethod<Uint8List>(_sanitizeImageForUploadMethod, {
-        'bytes': bytes,
-        'mimeType': mimeType,
-      });
-  if (sanitizedBytes == null || sanitizedBytes.isEmpty) {
-    throw Exception('failed to sanitize image for upload');
+  return _invokeRequiredPlatformBytesMethod(
+    _sanitizeImageForUploadMethod,
+    arguments: {'bytes': bytes, 'mimeType': mimeType},
+    errorMessage: 'failed to sanitize image for upload',
+  );
+}
+
+Future<Uint8List> _invokeRequiredPlatformBytesMethod(
+  String method, {
+  Object? arguments,
+  required String errorMessage,
+}) async {
+  final result = await _mediaUploadPlatformChannel.invokeMethod<Uint8List>(
+    method,
+    arguments,
+  );
+  if (result == null || result.isEmpty) {
+    throw Exception(errorMessage);
   }
-  return sanitizedBytes;
+  return result;
 }
 
 final mediaUploadServiceProvider = Provider<MediaUploadService>((ref) {

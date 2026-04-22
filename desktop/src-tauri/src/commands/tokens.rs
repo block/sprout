@@ -16,6 +16,16 @@ pub(crate) enum MintTokenAuthMode {
     BootstrapNip98,
 }
 
+impl MintTokenAuthMode {
+    fn uses_configured_bearer_token(self, state: &AppState) -> bool {
+        matches!(self, Self::Auto) && state.configured_api_token.is_some()
+    }
+
+    fn should_store_minted_session_token(self, state: &AppState) -> bool {
+        matches!(self, Self::Auto) && state.configured_api_token.is_none()
+    }
+}
+
 #[tauri::command]
 pub async fn list_tokens(state: State<'_, AppState>) -> Result<ListTokensResponse, String> {
     let request =
@@ -28,7 +38,7 @@ fn build_mint_token_request(
     body: &MintTokenBody<'_>,
     auth_mode: MintTokenAuthMode,
 ) -> Result<reqwest::RequestBuilder, String> {
-    if matches!(auth_mode, MintTokenAuthMode::Auto) && state.configured_api_token.is_some() {
+    if auth_mode.uses_configured_bearer_token(state) {
         return Ok(
             build_authed_request(&state.http_client, Method::POST, "/api/tokens", state)?
                 .json(body),
@@ -85,7 +95,7 @@ pub async fn mint_token_internal_with_auth_mode(
     let request = build_mint_token_request(state, &body, auth_mode)?;
     let response: MintTokenResponse = send_json_request(request).await?;
 
-    if matches!(auth_mode, MintTokenAuthMode::Auto) && state.configured_api_token.is_none() {
+    if auth_mode.should_store_minted_session_token(state) {
         let mut token = state
             .session_token
             .lock()

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart' as http_testing;
@@ -202,7 +203,36 @@ final _animatedWebpBytes = Uint8List.fromList([
   0x00,
 ]);
 
+const _mediaUploadPlatformChannel = MethodChannel('sprout/media_upload');
+
+void _setMockMediaUploadPlatformHandler(
+  Future<Object?> Function(MethodCall call)? handler,
+) {
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(_mediaUploadPlatformChannel, handler);
+}
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() {
+    _setMockMediaUploadPlatformHandler((call) async {
+      switch (call.method) {
+        case 'sanitizeImageForUpload':
+          final arguments = call.arguments as Map<Object?, Object?>;
+          return arguments['bytes'] as Uint8List;
+        case 'transcodeImageToJpeg':
+          return _jpegBytes;
+        default:
+          return null;
+      }
+    });
+  });
+
+  tearDownAll(() {
+    _setMockMediaUploadPlatformHandler(null);
+  });
+
   group('MediaUploadService', () {
     test('signs Blossom auth and uploads gallery image bytes', () async {
       final keychain = nostr.Keychain.generate();
@@ -434,6 +464,159 @@ void main() {
       expect(capturedRequest, isNotNull);
       expect(capturedRequest!.headers['Content-Type'], 'image/jpeg');
       expect(capturedRequest!.bodyBytes, _jpegBytes);
+    });
+
+    test('transcodes HEIC gallery files on Android before upload', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+
+      Uint8List? transcodedInput;
+      http.Request? capturedRequest;
+      final client = http_testing.MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.jpg',
+            'sha256':
+                '1234512345123451234512345123451234512345123451234512345123451234',
+            'size': _jpegBytes.length,
+            'type': 'image/jpeg',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: nsec,
+        httpClient: client,
+        pickGalleryImage: () async =>
+            XFile.fromData(_heicBytes, name: 'photo.heic'),
+        transcodeImageToJpeg: (bytes) async {
+          transcodedInput = bytes;
+          return _jpegBytes;
+        },
+      );
+
+      final descriptor = await service.pickAndUploadImage();
+
+      expect(descriptor, isNotNull);
+      expect(descriptor!.type, 'image/jpeg');
+      expect(transcodedInput, _heicBytes);
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.headers['Content-Type'], 'image/jpeg');
+      expect(capturedRequest!.bodyBytes, _jpegBytes);
+    });
+
+    test('sanitizes Android JPEG gallery files before upload', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+
+      Uint8List? sanitizedInput;
+      String? sanitizedMimeType;
+      http.Request? capturedRequest;
+      final client = http_testing.MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.jpg',
+            'sha256':
+                'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+            'size': _jpegBytes.length,
+            'type': 'image/jpeg',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: nsec,
+        httpClient: client,
+        pickGalleryImage: () async =>
+            XFile.fromData(_jpegBytes, name: 'photo.jpg'),
+        sanitizeImageBytes: (bytes, mimeType) async {
+          sanitizedInput = bytes;
+          sanitizedMimeType = mimeType;
+          return _jpegBytes;
+        },
+      );
+
+      final descriptor = await service.pickAndUploadImage();
+
+      expect(descriptor, isNotNull);
+      expect(descriptor!.type, 'image/jpeg');
+      expect(sanitizedInput, _jpegBytes);
+      expect(sanitizedMimeType, 'image/jpeg');
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.headers['Content-Type'], 'image/jpeg');
+      expect(capturedRequest!.bodyBytes, _jpegBytes);
+    });
+
+    test('sanitizes Android PNG gallery files before upload', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      final previousPlatform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = previousPlatform;
+      });
+
+      Uint8List? sanitizedInput;
+      String? sanitizedMimeType;
+      http.Request? capturedRequest;
+      final client = http_testing.MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.png',
+            'sha256':
+                '9999999999999999999999999999999999999999999999999999999999999999',
+            'size': _pngBytes.length,
+            'type': 'image/png',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: nsec,
+        httpClient: client,
+        pickGalleryImage: () async =>
+            XFile.fromData(_pngBytes, name: 'photo.png'),
+        sanitizeImageBytes: (bytes, mimeType) async {
+          sanitizedInput = bytes;
+          sanitizedMimeType = mimeType;
+          return _pngBytes;
+        },
+      );
+
+      final descriptor = await service.pickAndUploadImage();
+
+      expect(descriptor, isNotNull);
+      expect(descriptor!.type, 'image/png');
+      expect(sanitizedInput, _pngBytes);
+      expect(sanitizedMimeType, 'image/png');
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.headers['Content-Type'], 'image/png');
+      expect(capturedRequest!.bodyBytes, _pngBytes);
     });
 
     test('rejects GIF gallery files before upload', () async {

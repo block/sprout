@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -94,6 +94,15 @@ final _apngBytes = Uint8List.fromList([
   0x00,
 ]);
 
+const _mediaUploadPlatformChannel = MethodChannel('sprout/media_upload');
+
+void _setMockMediaUploadPlatformHandler(
+  Future<Object?> Function(MethodCall call)? handler,
+) {
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(_mediaUploadPlatformChannel, handler);
+}
+
 Widget _buildComposeBar({
   required MediaUploadService uploadService,
   required ComposeBarOnSend onSend,
@@ -121,6 +130,26 @@ Widget _buildComposeBar({
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() {
+    _setMockMediaUploadPlatformHandler((call) async {
+      switch (call.method) {
+        case 'sanitizeImageForUpload':
+          final arguments = call.arguments as Map<Object?, Object?>;
+          return arguments['bytes'] as Uint8List;
+        case 'transcodeImageToJpeg':
+          return _pngBytes;
+        default:
+          return null;
+      }
+    });
+  });
+
+  tearDownAll(() {
+    _setMockMediaUploadPlatformHandler(null);
+  });
+
   group('ComposeBar', () {
     testWidgets('uploads an image and sends markdown plus imeta tags', (
       tester,
