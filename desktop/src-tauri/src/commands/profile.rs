@@ -50,17 +50,17 @@ pub async fn update_profile(
 
     let dn = display_name
         .as_deref()
-        .or_else(|| current.get("display_name").and_then(|v| v.as_str()));
-    let name = current.get("name").and_then(|v| v.as_str());
+        .or_else(|| profile_field_str(&current, "display_name"));
+    let name = profile_field_str(&current, "name");
     let picture = avatar_url
         .as_deref()
-        .or_else(|| current.get("avatar_url").and_then(|v| v.as_str()));
+        .or_else(|| profile_field_str(&current, "avatar_url"));
     let ab = about
         .as_deref()
-        .or_else(|| current.get("about").and_then(|v| v.as_str()));
+        .or_else(|| profile_field_str(&current, "about"));
     let nip05 = nip05_handle
         .as_deref()
-        .or_else(|| current.get("nip05_handle").and_then(|v| v.as_str()));
+        .or_else(|| profile_field_str(&current, "nip05_handle"));
 
     let builder = events::build_profile(dn, name, picture, ab, nip05)?;
     submit_event(builder, &state).await?;
@@ -184,7 +184,20 @@ fn empty_profile_info(pubkey: &str) -> ProfileInfo {
 }
 
 fn is_missing_profile_error(error: &str) -> bool {
-    error.starts_with("relay returned 404:") && error.contains("user not found")
+    error.starts_with("relay returned 404") && error.contains("user not found")
+}
+
+fn profile_object(value: &Value) -> Option<&Map<String, Value>> {
+    value
+        .get("profile")
+        .and_then(Value::as_object)
+        .or_else(|| value.as_object())
+}
+
+fn profile_field_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    profile_object(value)
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_str)
 }
 
 fn optional_profile_string(
@@ -199,10 +212,7 @@ fn optional_profile_string(
 }
 
 fn profile_info_from_value(value: Value, fallback_pubkey: &str) -> Result<ProfileInfo, String> {
-    let object = value
-        .get("profile")
-        .and_then(Value::as_object)
-        .or_else(|| value.as_object())
+    let object = profile_object(&value)
         .ok_or_else(|| "parse failed: expected profile object".to_string())?;
 
     let pubkey = match object.get("pubkey") {
@@ -236,7 +246,9 @@ async fn fetch_profile_info(
 
 #[cfg(test)]
 mod tests {
-    use super::{empty_profile_info, is_missing_profile_error, profile_info_from_value};
+    use super::{
+        empty_profile_info, is_missing_profile_error, profile_field_str, profile_info_from_value,
+    };
 
     #[test]
     fn profile_info_from_value_accepts_top_level_shape() {
@@ -285,9 +297,29 @@ mod tests {
         assert!(is_missing_profile_error(
             "relay returned 404: user not found"
         ));
+        assert!(is_missing_profile_error(
+            "relay returned 404 Not Found: user not found"
+        ));
         assert!(!is_missing_profile_error(
             "relay returned 401: authentication failed"
         ));
+    }
+
+    #[test]
+    fn profile_field_str_accepts_nested_profile_shape() {
+        let value = serde_json::json!({
+            "profile": {
+                "display_name": "Nested User",
+                "about": "Nested about"
+            }
+        });
+
+        assert_eq!(
+            profile_field_str(&value, "display_name"),
+            Some("Nested User")
+        );
+        assert_eq!(profile_field_str(&value, "about"), Some("Nested about"));
+        assert_eq!(profile_field_str(&value, "avatar_url"), None);
     }
 
     #[test]
