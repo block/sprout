@@ -170,21 +170,10 @@ export function useNotificationSettings(pubkey?: string) {
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [isUpdatingDesktopEnabled, setIsUpdatingDesktopEnabled] =
     React.useState(false);
-  const isNewUserRef = React.useRef(
-    normalizedPubkey.length > 0 &&
-      window.localStorage.getItem(
-        notificationSettingsStorageKey(normalizedPubkey),
-      ) === null,
-  );
 
   React.useEffect(() => {
     setSettings(readStoredNotificationSettings(normalizedPubkey));
     setErrorMessage(null);
-    isNewUserRef.current =
-      normalizedPubkey.length > 0 &&
-      window.localStorage.getItem(
-        notificationSettingsStorageKey(normalizedPubkey),
-      ) === null;
   }, [normalizedPubkey]);
 
   React.useEffect(() => {
@@ -200,33 +189,6 @@ export function useNotificationSettings(pubkey?: string) {
   React.useEffect(() => {
     void normalizedPubkey;
     void refreshPermission();
-  }, [normalizedPubkey]);
-
-  // Auto-request desktop notification permission for new users
-  React.useEffect(() => {
-    if (!normalizedPubkey || !isNewUserRef.current) return;
-    isNewUserRef.current = false;
-
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const currentPermission = await getDesktopNotificationPermissionState();
-        if (cancelled || currentPermission !== "default") return;
-        const result = await requestDesktopNotificationAccess();
-        if (cancelled) return;
-        setPermission(result);
-        if (result === "granted") {
-          setSettings((current) => ({ ...current, desktopEnabled: true }));
-        }
-      } catch {
-        // Best-effort auto-request; silently ignore errors
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [normalizedPubkey]);
 
   const setDesktopEnabled = React.useCallback(async (enabled: boolean) => {
