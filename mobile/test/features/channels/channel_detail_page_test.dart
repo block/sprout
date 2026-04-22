@@ -40,6 +40,7 @@ NostrEvent _textMsg({
   required String pubkey,
   required String content,
   int createdAt = 1000,
+  List<List<String>> extraTags = const [],
 }) => NostrEvent(
   id: id,
   pubkey: pubkey,
@@ -47,6 +48,7 @@ NostrEvent _textMsg({
   kind: EventKind.streamMessage,
   tags: [
     ['h', _channelId],
+    ...extraTags,
   ],
   content: content,
   sig: '',
@@ -203,6 +205,45 @@ void main() {
       expect(find.text('Forum threads are not on mobile yet'), findsNothing);
       // The compose bar for stream messages should not appear.
       expect(find.text('Message…'), findsNothing);
+    });
+
+    testWidgets('renders video attachments from imeta tags in the timeline', (
+      tester,
+    ) async {
+      const videoUrl = 'https://example.com/media/clip.mp4';
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [
+            _textMsg(
+              id: 'video-1',
+              pubkey: 'alice',
+              content: '![video]($videoUrl)',
+              extraTags: const [
+                [
+                  'imeta',
+                  'url https://example.com/media/clip.mp4',
+                  'm video/mp4',
+                  'image https://example.com/media/poster.jpg',
+                ],
+              ],
+            ),
+          ],
+          users: const {
+            'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(
+          const ValueKey(
+            'message-media-video-preview:https://example.com/media/clip.mp4',
+          ),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('members sheet shows roles and manage controls for owners', (

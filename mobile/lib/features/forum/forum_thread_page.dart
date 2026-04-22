@@ -267,13 +267,19 @@ class _ThreadContent extends HookConsumerWidget {
           ComposeBar(
             channelId: channelId,
             hintText: 'Reply to this post\u2026',
-            onSend: (content, mentionPubkeys) => createForumReply(
-              ref,
-              channelId: channelId,
-              parentEventId: post.eventId,
-              content: content,
-              mentionPubkeys: mentionPubkeys,
-            ),
+            onSend:
+                (
+                  content,
+                  mentionPubkeys, {
+                  mediaTags = const <List<String>>[],
+                }) => createForumReply(
+                  ref,
+                  channelId: channelId,
+                  parentEventId: post.eventId,
+                  content: content,
+                  mentionPubkeys: mentionPubkeys,
+                  mediaTags: mediaTags,
+                ),
           ),
       ],
     );
@@ -327,7 +333,11 @@ class _OriginalPost extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: Grid.xxs),
-          MessageContent(content: post.content, mentionNames: mentionNames),
+          MessageContent(
+            content: post.content,
+            mentionNames: mentionNames,
+            tags: post.tags,
+          ),
         ],
       ),
     );
@@ -410,6 +420,7 @@ class _ReplyRow extends ConsumerWidget {
             child: MessageContent(
               content: reply.content,
               mentionNames: mentionNames,
+              tags: reply.tags,
             ),
           ),
         ],

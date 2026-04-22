@@ -14,12 +14,18 @@ import 'channel_management_provider.dart';
 /// Rich compose bar with @mention autocomplete, emoji picker, and a markdown
 /// formatting toolbar. Used in both channel and thread views — the caller
 /// provides an [onSend] callback that handles actual message submission.
+typedef ComposeBarOnSend =
+    Future<void> Function(
+      String content,
+      List<String> mentionPubkeys, {
+      List<List<String>> mediaTags,
+    });
+
 class ComposeBar extends HookConsumerWidget {
   final String channelId;
   final String channelName;
   final String? hintText;
-  final Future<void> Function(String content, List<String> mentionPubkeys)
-  onSend;
+  final ComposeBarOnSend onSend;
 
   /// Optional thread IDs for thread-scoped typing indicators.
   final String? threadHeadId;
@@ -41,6 +47,11 @@ class ComposeBar extends HookConsumerWidget {
     final focusNode = useFocusNode();
     final isSending = useState(false);
     final showFormatting = useState(false);
+    final attachments = useState<List<BlobDescriptor>>([]);
+    final uploadError = useState<String?>(null);
+    final uploadingCount = useState(0);
+    final hasAttachments = attachments.value.isNotEmpty;
+    final hasPendingUploads = uploadingCount.value > 0;
 
     final resolvedHint =
         hintText ??
@@ -170,10 +181,28 @@ class ComposeBar extends HookConsumerWidget {
       focusNode.requestFocus();
     }
 
+    void clearComposer() {
+      controller.clear();
+      attachments.value = [];
+      mentionMap.value.clear();
+      mentionQuery.value = null;
+      showFormatting.value = false;
+      uploadError.value = null;
+      focusNode.requestFocus();
+    }
+
+    void removeAttachment(String url) {
+      attachments.value = _withoutAttachment(attachments.value, url);
+    }
+
     // Send the message.
     Future<void> send() async {
       final text = controller.text.trim();
-      if (text.isEmpty || isSending.value) return;
+      if ((text.isEmpty && !hasAttachments) ||
+          isSending.value ||
+          hasPendingUploads) {
+        return;
+      }
 
       // Extract pubkeys for mentions present in the final text.
       final pubkeys = <String>[
@@ -181,18 +210,40 @@ class ComposeBar extends HookConsumerWidget {
           if (text.contains('@${entry.key}')) entry.value,
       ];
 
+      final payload = _ComposeDraftPayload.fromDraft(
+        text: text,
+        attachments: attachments.value,
+      );
+
       isSending.value = true;
       try {
-        await onSend(text, pubkeys);
+        await onSend(payload.content, pubkeys, mediaTags: payload.mediaTags);
         if (context.mounted) {
-          controller.clear();
-          mentionMap.value.clear();
-          mentionQuery.value = null;
-          showFormatting.value = false;
-          focusNode.requestFocus();
+          clearComposer();
         }
       } finally {
         if (context.mounted) isSending.value = false;
+      }
+    }
+
+    Future<void> pickAndUploadAttachment() async {
+      uploadError.value = null;
+      uploadingCount.value += 1;
+      try {
+        final uploaded = await ref
+            .read(mediaUploadServiceProvider)
+            .pickAndUploadImage();
+        if (uploaded != null && context.mounted) {
+          attachments.value = [...attachments.value, uploaded];
+        }
+      } catch (error) {
+        if (context.mounted) {
+          uploadError.value = _formatUploadError(error);
+        }
+      } finally {
+        if (context.mounted) {
+          uploadingCount.value -= 1;
+        }
       }
     }
 
@@ -284,6 +335,28 @@ class ComposeBar extends HookConsumerWidget {
               if (showFormatting.value)
                 _FormattingToolbar(onFormat: applyFormat),
 
+              if (hasAttachments || hasPendingUploads) ...[
+                _AttachmentStrip(
+                  attachments: attachments.value,
+                  uploadingCount: uploadingCount.value,
+                  onRemove: removeAttachment,
+                ),
+                const SizedBox(height: Grid.xxs),
+              ],
+
+              if (uploadError.value case final error?) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    error,
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.error,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: Grid.xxs),
+              ],
+
               // Row 1 — text input (full width, grows).
               TextField(
                 controller: controller,
@@ -316,7 +389,7 @@ class ComposeBar extends HookConsumerWidget {
                 children: [
                   _ComposeAction(
                     icon: LucideIcons.paperclip,
-                    onTap: () {}, // attachment placeholder
+                    onTap: pickAndUploadAttachment,
                   ),
                   _ComposeAction(
                     icon: LucideIcons.smilePlus,
@@ -335,7 +408,11 @@ class ComposeBar extends HookConsumerWidget {
                     onTap: () => showFormatting.value = !showFormatting.value,
                   ),
                   const Spacer(),
-                  _SendButton(isSending: isSending.value, onTap: send),
+                  _SendButton(
+                    isDisabled: hasPendingUploads,
+                    isSending: isSending.value,
+                    onTap: send,
+                  ),
                 ],
               ),
             ],
@@ -902,11 +979,146 @@ class _ComposeAction extends StatelessWidget {
   }
 }
 
+@immutable
+class _ComposeDraftPayload {
+  final String content;
+  final List<List<String>> mediaTags;
+
+  const _ComposeDraftPayload({required this.content, required this.mediaTags});
+
+  factory _ComposeDraftPayload.fromDraft({
+    required String text,
+    required List<BlobDescriptor> attachments,
+  }) {
+    var content = text;
+    final mediaTags = <List<String>>[];
+    for (final attachment in attachments) {
+      mediaTags.add(attachment.toImetaTag());
+      content += '\n${attachment.toMarkdownImage()}';
+    }
+    return _ComposeDraftPayload(content: content, mediaTags: mediaTags);
+  }
+}
+
+List<BlobDescriptor> _withoutAttachment(
+  List<BlobDescriptor> attachments,
+  String url,
+) {
+  return [
+    for (final attachment in attachments)
+      if (attachment.url != url) attachment,
+  ];
+}
+
+class _AttachmentStrip extends StatelessWidget {
+  final List<BlobDescriptor> attachments;
+  final int uploadingCount;
+  final void Function(String url) onRemove;
+
+  const _AttachmentStrip({
+    required this.attachments,
+    required this.uploadingCount,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final thumbWidth = 72.0;
+    final thumbHeight = 72.0;
+
+    return SizedBox(
+      height: thumbHeight,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: attachments.length + uploadingCount,
+        separatorBuilder: (_, _) => const SizedBox(width: Grid.half),
+        itemBuilder: (context, index) {
+          if (index >= attachments.length) {
+            return Container(
+              width: thumbWidth,
+              decoration: BoxDecoration(
+                color: context.colors.surface,
+                borderRadius: BorderRadius.circular(Radii.md),
+                border: Border.all(color: context.colors.outlineVariant),
+              ),
+              child: const Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          }
+
+          final attachment = attachments[index];
+          final previewUrl = attachment.thumb ?? attachment.url;
+          return Container(
+            key: ValueKey('compose-attachment:${attachment.url}'),
+            width: thumbWidth,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Radii.md),
+              border: Border.all(color: context.colors.outlineVariant),
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(Radii.md),
+                  child: Image.network(
+                    previewUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => ColoredBox(
+                      color: context.colors.surface,
+                      child: Icon(
+                        LucideIcons.image,
+                        color: context.colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: Grid.quarter,
+                  right: Grid.quarter,
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: IconButton(
+                      onPressed: () => onRemove(attachment.url),
+                      tooltip: 'Remove attachment',
+                      visualDensity: VisualDensity.compact,
+                      style: IconButton.styleFrom(
+                        backgroundColor: context.colors.surface.withValues(
+                          alpha: 0.92,
+                        ),
+                        minimumSize: const Size(24, 24),
+                        maximumSize: const Size(24, 24),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: Icon(
+                        LucideIcons.x,
+                        size: 14,
+                        color: context.colors.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _SendButton extends StatelessWidget {
   final bool isSending;
+  final bool isDisabled;
   final VoidCallback onTap;
 
-  const _SendButton({required this.isSending, required this.onTap});
+  const _SendButton({
+    required this.isSending,
+    required this.onTap,
+    this.isDisabled = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -914,7 +1126,7 @@ class _SendButton extends StatelessWidget {
       width: 36,
       height: 36,
       child: IconButton(
-        onPressed: isSending ? null : onTap,
+        onPressed: (isSending || isDisabled) ? null : onTap,
         style: IconButton.styleFrom(
           backgroundColor: context.colors.primary,
           disabledBackgroundColor: context.colors.primary.withValues(
@@ -942,4 +1154,8 @@ class _SendButton extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatUploadError(Object error) {
+  return error.toString().replaceFirst('Exception: ', '');
 }

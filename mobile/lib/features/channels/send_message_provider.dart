@@ -25,13 +25,15 @@ class SendMessage {
   /// For thread replies, pass [parentEventId] and optionally [rootEventId].
   /// If [rootEventId] is null it defaults to [parentEventId] (direct reply to
   /// thread head). Tags are built to match the desktop's `buildReplyTags`
-  /// convention with `root` / `reply` markers.
+  /// convention with `root` / `reply` markers. Pass [mediaTags] to append
+  /// relay-validated `imeta` tags for uploaded media.
   Future<void> call({
     required String channelId,
     required String content,
     String? parentEventId,
     String? rootEventId,
     List<String>? mentionPubkeys,
+    List<List<String>> mediaTags = const [],
   }) async {
     // Use explicitly passed pubkeys, or resolve @mentions against
     // channel members to avoid matching the wrong user.
@@ -52,6 +54,7 @@ class SendMessage {
       ['h', channelId],
       if (parentEventId != null) ..._buildReplyTags(parentEventId, rootEventId),
       for (final pk in normalizedMentions) ['p', pk],
+      ...mediaTags,
     ];
 
     await _signedEventRelay.submit(

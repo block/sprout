@@ -114,6 +114,7 @@ class ForumPostCard extends ConsumerWidget {
                   child: MessageContent(
                     content: preview,
                     mentionNames: mentionNames,
+                    tags: post.tags,
                   ),
                 ),
               ),

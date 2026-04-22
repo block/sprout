@@ -133,6 +133,7 @@ class TimelineMessage {
   final String pubkey;
   final int createdAt;
   final String content;
+  final List<List<String>> tags;
   final bool isSystem;
   final bool edited;
   final SystemEvent? systemEvent;
@@ -154,6 +155,7 @@ class TimelineMessage {
     required this.pubkey,
     required this.createdAt,
     required this.content,
+    this.tags = const [],
     this.isSystem = false,
     this.edited = false,
     this.systemEvent,
@@ -269,6 +271,7 @@ List<TimelineMessage> formatTimeline(
             pubkey: event.pubkey,
             createdAt: event.createdAt,
             content: event.content,
+            tags: event.tags,
             isSystem: true,
             systemEvent: systemEvent,
           ),
@@ -311,6 +314,7 @@ List<TimelineMessage> formatTimeline(
           pubkey: event.pubkey,
           createdAt: event.createdAt,
           content: edit?.content ?? event.content,
+          tags: event.tags,
           edited: edit != null,
           mentionPubkeys: mentions,
           reactions: reactions,

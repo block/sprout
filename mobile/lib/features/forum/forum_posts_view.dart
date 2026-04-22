@@ -121,15 +121,21 @@ class ForumPostsView extends HookConsumerWidget {
           ComposeBar(
             channelId: channel.id,
             hintText: 'Write your post\u2026',
-            onSend: (content, mentionPubkeys) async {
-              await createForumPost(
-                ref,
-                channelId: channel.id,
-                content: content,
-                mentionPubkeys: mentionPubkeys,
-              );
-              if (context.mounted) isComposing.value = false;
-            },
+            onSend:
+                (
+                  content,
+                  mentionPubkeys, {
+                  mediaTags = const <List<String>>[],
+                }) async {
+                  await createForumPost(
+                    ref,
+                    channelId: channel.id,
+                    content: content,
+                    mentionPubkeys: mentionPubkeys,
+                    mediaTags: mediaTags,
+                  );
+                  if (context.mounted) isComposing.value = false;
+                },
           ),
         ],
       ],

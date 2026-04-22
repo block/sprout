@@ -44,6 +44,7 @@ Future<void> createForumPost(
   required String channelId,
   required String content,
   List<String> mentionPubkeys = const [],
+  List<List<String>> mediaTags = const [],
 }) async {
   final config = ref.read(relayConfigProvider);
   final client = ref.read(relayClientProvider);
@@ -62,6 +63,7 @@ Future<void> createForumPost(
     tags: [
       ['h', channelId],
       for (final pk in normalizedMentions) ['p', pk],
+      ...mediaTags,
     ],
   );
   ref.invalidate(forumPostsProvider(channelId));
@@ -74,6 +76,7 @@ Future<void> createForumReply(
   required String parentEventId,
   required String content,
   List<String> mentionPubkeys = const [],
+  List<List<String>> mediaTags = const [],
 }) async {
   final config = ref.read(relayConfigProvider);
   final client = ref.read(relayClientProvider);
@@ -93,6 +96,7 @@ Future<void> createForumReply(
       ['h', channelId],
       ['e', parentEventId, '', 'reply'],
       for (final pk in normalizedMentions) ['p', pk],
+      ...mediaTags,
     ],
   );
   ref.invalidate(forumPostsProvider(channelId));
