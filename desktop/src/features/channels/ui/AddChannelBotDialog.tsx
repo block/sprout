@@ -38,6 +38,7 @@ import {
 } from "@/features/agents/lib/resolvePersonaProvider";
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
+import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 type AddChannelBotDialogProps = {
   backendProviders?: BackendProviderCandidate[];
@@ -98,6 +99,7 @@ export function AddChannelBotDialog({
   onAdded,
   onOpenChange,
 }: AddChannelBotDialogProps) {
+  const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
   const inChannelPersonaIds = useInChannelPersonaIds(
@@ -183,10 +185,13 @@ export function AddChannelBotDialog({
       return;
     }
 
-    if (!selectedProviderId && providers[0]) {
-      setSelectedProviderId(providers[0].id);
+    if (!selectedProviderId && providers.length > 0) {
+      const remembered = lastProviderId
+        ? providers.find((p) => p.id === lastProviderId)
+        : null;
+      setSelectedProviderId(remembered ? remembered.id : providers[0].id);
     }
-  }, [open, providers, selectedProviderId]);
+  }, [open, providers, selectedProviderId, lastProviderId]);
 
   React.useEffect(() => {
     if (!selectedProvider || hasEditedCustomName) {
@@ -247,7 +252,7 @@ export function AddChannelBotDialog({
   }, [isProviderMode, selectedBackendProvider]);
 
   function reset() {
-    setSelectedProviderId(providers[0]?.id ?? "");
+    setSelectedProviderId("");
     setSelectedPersonaIds([]);
     setIncludeGeneric(false);
     setCustomName(providers[0] ? defaultBotName(providers[0]) : "");
@@ -503,7 +508,10 @@ export function AddChannelBotDialog({
               onCloseAutoFocus={(event) => event.preventDefault()}
             >
               <DropdownMenuRadioGroup
-                onValueChange={setSelectedProviderId}
+                onValueChange={(id) => {
+                  setSelectedProviderId(id);
+                  setLastProvider(id);
+                }}
                 value={selectedProvider?.id ?? ""}
               >
                 {providers.map((provider) => (

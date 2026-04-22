@@ -34,6 +34,7 @@ import {
   coerceConfigValues,
   ProviderConfigFields,
 } from "./ProviderConfigFields";
+import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ export function CreateAgentDialog({
   const createMutation = useCreateManagedAgentMutation();
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
+  const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
@@ -111,15 +113,26 @@ export function CreateAgentDialog({
       return;
     }
 
-    const matchingProvider =
-      providers.find((provider) => provider.command === agentCommand) ?? null;
-    if (matchingProvider) {
-      setSelectedProviderId(matchingProvider.id);
+    // Prefer last-used provider from localStorage
+    const remembered = lastProviderId
+      ? providers.find((provider) => provider.id === lastProviderId)
+      : null;
+    if (remembered) {
+      setSelectedProviderId(remembered.id);
+      setAgentCommand(remembered.command);
+      setAgentArgs(remembered.defaultArgs.join(","));
+    } else {
+      const matchingProvider =
+        providers.find((provider) => provider.command === agentCommand) ?? null;
+      if (matchingProvider) {
+        setSelectedProviderId(matchingProvider.id);
+      }
     }
     setHasSyncedProviderSelection(true);
   }, [
     agentCommand,
     hasSyncedProviderSelection,
+    lastProviderId,
     providers,
     providersQuery.isLoading,
   ]);
@@ -269,6 +282,7 @@ export function CreateAgentDialog({
       return;
     }
 
+    setLastProvider(nextProviderId);
     setAgentCommand(provider.command);
     setAgentArgs(provider.defaultArgs.join(","));
   }
