@@ -6,7 +6,12 @@
 """
 NIP-SB v3 Steganographic Key Backup — Protocol Demo
 
-Exercises the full NIP-SB v3 backup/recovery cycle with real crypto:
+Exercises the NIP-SB v3 backup/recovery cryptographic protocol with real crypto.
+This is NOT a security-complete reference implementation — it omits Nostr event
+id/sig validation, kind/d-tag verification, and relay transport. It validates
+the KDF chain, encryption, RS coding, and relay-scoped derivation only.
+
+Crypto libraries used:
   - scrypt (hashlib, stdlib — log_n reduced to 14 for demo speed)
   - HKDF-SHA256 (hmac, stdlib)
   - XChaCha20-Poly1305 (libsodium via PyNaCl)
@@ -15,10 +20,10 @@ Exercises the full NIP-SB v3 backup/recovery cycle with real crypto:
 
 v3 additions over v1:
   - P=2 Reed-Solomon parity blobs (tolerates loss of any 2 blobs)
-  - D=4-12 variable dummy blobs (encrypted random garbage)
+  - D=4-12 variable dummy blobs (encrypted HKDF-derived filler)
   - Cover key for cheap dummy derivation (1 scrypt, rest HKDF)
   - Random-order publication and recovery
-  - d-tag-only queries (no authors filter)
+  - d-tag-only queries with pubkey-first filtering
 
 The relay is simulated as an in-memory dict. Nostr event structure
 (kind, id, sig) is not modeled — this demo covers the cryptographic
@@ -26,9 +31,15 @@ protocol, not the Nostr event layer.
 
 Simplifications vs. a full implementation:
   - scrypt log_n=14 (spec requires 20) for demo speed
-  - No Nostr event id/sig generation or validation
+  - No Nostr event id/sig generation or validation (spec steps 1-2, 4-5
+    require id/sig/kind/d-tag checks that are omitted here since the
+    simulated relay has no Nostr event layer)
   - Simulated relay (dict) instead of real WebSocket relay
   - No jittered timestamps or publication delays
+  - No WHATWG URL parsing (relay URL normalized by hand for demo)
+  - No pagination/EOSE or authors-filter fallback for d-tag squatting
+    defense (spec §Recovery step 6). The simulated relay returns all
+    events for a d-tag; real relays may truncate.
 
 Usage:
     uv run crates/sprout-core/src/backup/nip_sb_demo.py
@@ -42,6 +53,7 @@ import hmac
 import os
 import random
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass
 
@@ -63,6 +75,7 @@ MAX_DUMMIES = 12
 DUMMY_RANGE = MAX_DUMMIES - MIN_DUMMIES + 1  # 9
 CHUNK_PAD_LEN = 16
 AAD = b"\x02"           # key_security_byte per NIP-49
+DEMO_RELAY_URL = b"wss://relay.example.com/"  # Normalized relay URL for demo
 
 
 # ── GF(2^8) arithmetic for Reed-Solomon ───────────────────────────────────────
@@ -228,6 +241,7 @@ class RelayEvent:
     pubkey: str     # throwaway signing pubkey (hex, 32 bytes x-only)
     d_tag: str      # NIP-33 d-tag (hex, 32 bytes)
     content: str    # base64-encoded blob (56 bytes: 24 nonce + 32 ciphertext)
+    created_at: int = 0  # unix timestamp (for NIP-33 replacement semantics)
 
 SimulatedRelay = dict[str, list[RelayEvent]]
 
@@ -265,6 +279,12 @@ def secret_to_pubkey(secret_bytes: bytes) -> bytes:
     return sk.pubkey.serialize(compressed=True)[1:]
 
 
+def make_base(password: str, pubkey_bytes: bytes, suffix: bytes = b"") -> bytes:
+    """Length-prefixed password ‖ pubkey ‖ optional suffix (injective encoding)."""
+    pw = nfkc(password)
+    return len(pw).to_bytes(2, "big") + pw + pubkey_bytes + suffix
+
+
 # ── Backup (spec §Steps 1-5) ─────────────────────────────────────────────────
 
 @dataclass
@@ -279,8 +299,9 @@ def backup(
     pubkey_bytes: bytes,
     password: str,
     relay: SimulatedRelay,
+    relay_url_bytes: bytes = b"wss://relay.example.com/",
 ) -> list[BlobInfo]:
-    base = nfkc(password) + pubkey_bytes
+    base = make_base(password, pubkey_bytes)
 
     # Step 1: Determine N and D
     h = nip_sb_scrypt(base, salt=b"")
@@ -304,25 +325,31 @@ def backup(
         offset += chunk_len
     assert offset == 32 and b"".join(chunks) == nsec_bytes
 
-    # Step 3b: Pad chunks and compute RS parity
+    # Step 3b + 4 combined: Derive per-blob keys, pad deterministically, compute RS parity
+    h_cover = nip_sb_scrypt(base, salt=b"cover")
+
+    # Pre-derive all per-blob H_i for real+parity blobs (needed for deterministic padding)
+    h_values: list[bytes] = []
+    for i in range(n + PARITY_BLOBS):
+        base_i = make_base(password, pubkey_bytes, str(i).encode("ascii"))
+        h_values.append(nip_sb_scrypt(base_i, salt=b""))
+
+    # Pad chunks deterministically using per-blob key material
     padded_chunks: list[bytes] = []
     for i in range(n):
-        padded = chunks[i] + os.urandom(CHUNK_PAD_LEN - len(chunks[i]))
-        padded_chunks.append(padded)
+        pad_len = CHUNK_PAD_LEN - len(chunks[i])
+        pad_bytes = nip_sb_hkdf(h_values[i], b"pad", length=pad_len) if pad_len > 0 else b""
+        padded_chunks.append(chunks[i] + pad_bytes)
     parity_row_0, parity_row_1 = rs_encode_rows(padded_chunks)
-
-    # Step 3c: Cover key for dummy blobs
-    h_cover = nip_sb_scrypt(base, salt=b"cover")
 
     # Step 4 + 5: Derive keys, encrypt, collect all blobs
     all_blobs: list[tuple[BlobInfo, RelayEvent]] = []
 
     # Real chunk blobs (indices 0..N-1)
     for i in range(n):
-        base_i = nfkc(password) + pubkey_bytes + str(i).encode("ascii")
-        h_i = nip_sb_scrypt(base_i, salt=b"")
-        d_tag = nip_sb_hkdf(h_i, b"d-tag").hex()
-        sign_sk = _derive_signing_key(h_i, b"signing-key")
+        h_i = h_values[i]
+        d_tag = nip_sb_hkdf(h_i, b"d-tag" + relay_url_bytes).hex()
+        sign_sk = _derive_signing_key(h_i, b"signing-key", relay_url_bytes)
         sign_pk = secret_to_pubkey(sign_sk).hex()
 
         nonce = os.urandom(24)
@@ -330,17 +357,16 @@ def backup(
         content = base64.b64encode(nonce + ct).decode("ascii")
 
         info = BlobInfo(i, "real", d_tag, sign_pk)
-        event = RelayEvent(pubkey=sign_pk, d_tag=d_tag, content=content)
+        event = RelayEvent(pubkey=sign_pk, d_tag=d_tag, content=content, created_at=int(time.time()))
         all_blobs.append((info, event))
 
     # Parity blobs (indices N..N+1)
     parity_rows = [parity_row_0, parity_row_1]
     for k in range(p):
         i = n + k
-        base_i = nfkc(password) + pubkey_bytes + str(i).encode("ascii")
-        h_i = nip_sb_scrypt(base_i, salt=b"")
-        d_tag = nip_sb_hkdf(h_i, b"d-tag").hex()
-        sign_sk = _derive_signing_key(h_i, b"signing-key")
+        h_i = h_values[i]
+        d_tag = nip_sb_hkdf(h_i, b"d-tag" + relay_url_bytes).hex()
+        sign_sk = _derive_signing_key(h_i, b"signing-key", relay_url_bytes)
         sign_pk = secret_to_pubkey(sign_sk).hex()
 
         nonce = os.urandom(24)
@@ -348,22 +374,22 @@ def backup(
         content = base64.b64encode(nonce + ct).decode("ascii")
 
         info = BlobInfo(i, "parity", d_tag, sign_pk)
-        event = RelayEvent(pubkey=sign_pk, d_tag=d_tag, content=content)
+        event = RelayEvent(pubkey=sign_pk, d_tag=d_tag, content=content, created_at=int(time.time()))
         all_blobs.append((info, event))
 
     # Dummy blobs (indices 0..D-1, separate namespace)
     for j in range(d):
-        d_tag = nip_sb_hkdf(h_cover, f"dummy-d-tag-{j}".encode()).hex()
-        sign_sk = _derive_dummy_signing_key(h_cover, j)
+        d_tag = nip_sb_hkdf(h_cover, f"dummy-d-tag-{j}".encode() + relay_url_bytes).hex()
+        sign_sk = _derive_dummy_signing_key(h_cover, j, relay_url_bytes)
         sign_pk = secret_to_pubkey(sign_sk).hex()
 
-        dummy_payload = os.urandom(CHUNK_PAD_LEN)
+        dummy_payload = nip_sb_hkdf(h_cover, f"dummy-pad-{j}".encode(), length=CHUNK_PAD_LEN)
         nonce = os.urandom(24)
         ct = xchacha20poly1305_encrypt(enc_key, nonce, dummy_payload, AAD)
         content = base64.b64encode(nonce + ct).decode("ascii")
 
         info = BlobInfo(n + p + j, "dummy", d_tag, sign_pk)
-        event = RelayEvent(pubkey=sign_pk, d_tag=d_tag, content=content)
+        event = RelayEvent(pubkey=sign_pk, d_tag=d_tag, content=content, created_at=int(time.time()))
         all_blobs.append((info, event))
 
     # Shuffle and publish in random order (spec: MUST shuffle)
@@ -378,10 +404,10 @@ def backup(
     return blob_infos
 
 
-def _derive_signing_key(h_i: bytes, prefix: bytes) -> bytes:
+def _derive_signing_key(h_i: bytes, prefix: bytes, relay_url_bytes: bytes) -> bytes:
     """Reject-and-retry signing key derivation (spec §Step 4)."""
     for retry in range(256):
-        info = prefix if retry == 0 else prefix + f"-{retry}".encode()
+        info = (prefix if retry == 0 else prefix + f"-{retry}".encode()) + relay_url_bytes
         sk = nip_sb_hkdf(h_i, info)
         try:
             secret_to_pubkey(sk)  # validates scalar
@@ -391,11 +417,11 @@ def _derive_signing_key(h_i: bytes, prefix: bytes) -> bytes:
     raise RuntimeError("All 256 signing key derivations invalid")
 
 
-def _derive_dummy_signing_key(h_cover: bytes, j: int) -> bytes:
+def _derive_dummy_signing_key(h_cover: bytes, j: int, relay_url_bytes: bytes) -> bytes:
     """Reject-and-retry for dummy signing keys (spec §Step 4, dummy section)."""
     for retry in range(256):
         suffix = f"-{retry}" if retry > 0 else ""
-        info = f"dummy-signing-key-{j}{suffix}".encode()
+        info = f"dummy-signing-key-{j}{suffix}".encode() + relay_url_bytes
         sk = nip_sb_hkdf(h_cover, info)
         try:
             secret_to_pubkey(sk)
@@ -411,13 +437,14 @@ def recover(
     pubkey_bytes: bytes,
     password: str,
     relay: SimulatedRelay,
+    relay_url_bytes: bytes = b"wss://relay.example.com/",
     delete_indices: set[int] | None = None,
 ) -> bytes:
     """
     Recover nsec from password + pubkey + relay.
     delete_indices: if set, simulate missing blobs by skipping these real/parity indices.
     """
-    base = nfkc(password) + pubkey_bytes
+    base = make_base(password, pubkey_bytes)
 
     # Step 3: Derive N, D, enc_key, cover key
     h = nip_sb_scrypt(base, salt=b"")
@@ -436,17 +463,17 @@ def recover(
     all_queries: list[tuple[str, str, str, int]] = []  # (d_tag, expected_pk, role, index)
 
     for i in range(n + p):
-        base_i = nfkc(password) + pubkey_bytes + str(i).encode("ascii")
+        base_i = make_base(password, pubkey_bytes, str(i).encode("ascii"))
         h_i = nip_sb_scrypt(base_i, salt=b"")
-        d_tag = nip_sb_hkdf(h_i, b"d-tag").hex()
-        sign_sk = _derive_signing_key(h_i, b"signing-key")
+        d_tag = nip_sb_hkdf(h_i, b"d-tag" + relay_url_bytes).hex()
+        sign_sk = _derive_signing_key(h_i, b"signing-key", relay_url_bytes)
         sign_pk = secret_to_pubkey(sign_sk).hex()
         role = "real" if i < n else "parity"
         all_queries.append((d_tag, sign_pk, role, i))
 
     for j in range(d):
-        d_tag = nip_sb_hkdf(h_cover, f"dummy-d-tag-{j}".encode()).hex()
-        sign_sk = _derive_dummy_signing_key(h_cover, j)
+        d_tag = nip_sb_hkdf(h_cover, f"dummy-d-tag-{j}".encode() + relay_url_bytes).hex()
+        sign_sk = _derive_dummy_signing_key(h_cover, j, relay_url_bytes)
         sign_pk = secret_to_pubkey(sign_sk).hex()
         all_queries.append((d_tag, sign_pk, "dummy", n + p + j))
 
@@ -460,6 +487,7 @@ def recover(
             continue  # simulate missing blob
 
         events = relay_query(relay, d_tag)
+        # Spec §Event Validation: filter by expected pubkey, validate, then select newest valid
         matched = [e for e in events if e.pubkey == expected_pk]
 
         if role == "dummy":
@@ -468,24 +496,28 @@ def recover(
         if not matched:
             continue  # missing blob — will try RS recovery
 
-        event = matched[0]
-        content = event.content
-        # Spec §Event Validation steps 6-7: validate content and decrypt
-        try:
-            content = event.content
-            if len(content) % 4:
-                content += "=" * (4 - len(content) % 4)
-            raw = base64.b64decode(content)
-            if len(raw) != 56:
-                # Malformed content → treat as erasure (spec §Event Validation step 6)
-                continue
-            nonce = raw[:24]
-            ciphertext = raw[24:]
-            padded = xchacha20poly1305_decrypt(enc_key, nonce, ciphertext, AAD)
-        except Exception:
-            # Base64 decode failure or AEAD failure → treat as erasure
-            # (spec §Event Validation steps 6-7)
-            continue
+        # Validate-then-select: try each candidate, keep valid ones, pick newest
+        valid_candidates: list[tuple[int, bytes]] = []  # (created_at, padded)
+        for candidate in matched:
+            try:
+                content_str = candidate.content
+                if len(content_str) % 4:
+                    content_str += "=" * (4 - len(content_str) % 4)
+                raw = base64.b64decode(content_str, validate=True)
+                if len(raw) != 56:
+                    continue  # malformed content → skip this candidate
+                nonce = raw[:24]
+                ciphertext = raw[24:]
+                padded = xchacha20poly1305_decrypt(enc_key, nonce, ciphertext, AAD)
+                valid_candidates.append((candidate.created_at, padded))
+            except Exception:
+                continue  # base64 or AEAD failure → skip this candidate
+
+        if not valid_candidates:
+            continue  # no valid candidates → erasure
+
+        # Select the newest valid event (spec §Event Validation step 8)
+        _, padded = max(valid_candidates, key=lambda x: x[0])
         padded_slots[idx] = padded
 
     # Step 8: Reassemble
@@ -645,6 +677,60 @@ def main() -> None:
     except ValueError as e:
         print(f"   ✅ Correctly rejected: {e}")
 
+    # ── Phase 7b: Cross-Relay Isolation ──────────────────────────────────
+
+    print("\n── Phase 7b: Cross-Relay Isolation ──────────────────────────")
+    relay_a: SimulatedRelay = {}
+    relay_b: SimulatedRelay = {}
+    url_a = b"wss://relay-a.example.com/"
+    url_b = b"wss://relay-b.example.com/"
+    blobs_a = backup(nsec_bytes, pubkey_bytes, password, relay_a, relay_url_bytes=url_a)
+    blobs_b = backup(nsec_bytes, pubkey_bytes, password, relay_b, relay_url_bytes=url_b)
+    tags_a = {b.d_tag for b in blobs_a}
+    tags_b = {b.d_tag for b in blobs_b}
+    assert tags_a.isdisjoint(tags_b), "d-tags must differ across relays"
+    print(f"   ✅ Same password+pubkey → completely different d-tags per relay")
+    recovered_a = recover(pubkey_bytes, password, relay_a, relay_url_bytes=url_a)
+    assert recovered_a == nsec_bytes
+    print(f"   ✅ Recovery from relay A succeeds with correct relay URL")
+    try:
+        recover(pubkey_bytes, password, relay_a, relay_url_bytes=url_b)
+        print("   ❌ UNEXPECTED SUCCESS (wrong relay URL should fail)")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"   ✅ Wrong relay URL correctly rejected: {e}")
+
+    # ── Phase 7c: d-tag Squatting Resistance ─────────────────────────────
+
+    print("\n── Phase 7c: d-tag Squatting Resistance ─────────────────────")
+    # Inject impostor events with same d-tags but different pubkeys
+    real_blobs_list = [b for b in blobs if b.role == "real"]
+    for b in real_blobs_list[:2]:
+        impostor_sk = secp256k1.PrivateKey()
+        impostor_pk = secret_to_pubkey(impostor_sk.private_key).hex()
+        relay_publish(relay, RelayEvent(
+            pubkey=impostor_pk, d_tag=b.d_tag,
+            content=base64.b64encode(os.urandom(56)).decode(),
+            created_at=int(time.time()) + 9999,  # newer than legitimate
+        ))
+    recovered = recover(pubkey_bytes, password, relay)
+    assert recovered == nsec_bytes
+    print(f"   ✅ RECOVERED — impostor events with same d-tags ignored (pubkey filter)")
+
+    # ── Phase 7d: Malformed-Newer-Duplicate Resistance ────────────────────
+
+    print("\n── Phase 7d: Malformed-Newer-Duplicate Resistance ───────────")
+    # Inject a malformed event with CORRECT pubkey but garbage content, newer timestamp
+    target_blob = real_blobs_list[0]
+    relay_publish(relay, RelayEvent(
+        pubkey=target_blob.sign_pk, d_tag=target_blob.d_tag,
+        content=base64.b64encode(os.urandom(56)).decode(),  # wrong ciphertext
+        created_at=int(time.time()) + 99999,  # much newer than legitimate
+    ))
+    recovered = recover(pubkey_bytes, password, relay)
+    assert recovered == nsec_bytes
+    print(f"   ✅ RECOVERED — malformed newer event skipped, older valid event used")
+
     # ── Phase 8: What an Attacker Sees ────────────────────────────────────
 
     print("\n── Phase 8: What an Attacker Sees (relay dump) ──────────────")
@@ -659,7 +745,7 @@ def main() -> None:
                   f"content={evt.content[:16]}…{label}")
     print(f"\n   {len(blobs)} backup + 5 decoy = {total} total")
     print(f"   Labels are only visible because this demo knows the password.")
-    print(f"   An attacker cannot distinguish real/parity/dummy/decoy.")
+    print(f"   Steganographic cover is environment-dependent (see spec §Limitations).")
 
     # ── Phase 9: RS Test Vectors ──────────────────────────────────────────
 

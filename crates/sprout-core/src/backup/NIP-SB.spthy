@@ -1,8 +1,10 @@
 /*
  * NIP-SB v3: Steganographic Key Backup — Tamarin Formal Verification
  *
- * Models and verifies the backup and recovery protocol for NIP-SB v3,
- * including Reed-Solomon parity blobs and dummy blobs.
+ * Models and verifies CORE CRYPTOGRAPHIC PROPERTIES of NIP-SB v3
+ * (KDF chain, encryption, RS parity, dummy isolation). Does NOT cover
+ * event-level validation, relay scoping, variable N/D, or traffic analysis.
+ * See "What this model does NOT prove" below for full scope limitations.
  *
  * All 10 lemmas verified by tamarin-prover 1.12.0 (--prove):
  *
@@ -19,7 +21,12 @@
  *
  * Processing time: ~150s. Run: tamarin-prover --prove NIP-SB.spthy
  *
- * == What this model proves ==
+ * == What this model proves (in the symbolic model, with abstractions listed below) ==
+ * NOTE: These are properties of the REDUCED symbolic model, not the full
+ * protocol. The model fixes N=3/P=2/D=2, omits relay scoping, event
+ * validation, and variable parameters. Secrecy and compromise are proved
+ * in separate rule instances (not as a conditional property of one run).
+ *
  *   1. Correctness: honest recovery from password + pubkey + relay data
  *      yields the original secret (all blobs present).
  *   2. Correctness with 1 erasure (representative case): recovery
@@ -35,11 +42,17 @@
  *      without the password, even though the pubkey is public.
  *   5. Parity confidentiality: RS parity symbols are not derivable
  *      without the password.
- *   6. Dummy isolation: dummy blob payloads (fresh random values) do
- *      not leak the nsec or any chunk material. (Structural: dummy
- *      payloads are Fr() values with no equation linking them to nsec.)
- *   7. Password compromise: if the password leaks, the nsec is recoverable
- *      (proves the compromise model is meaningful, not vacuous).
+ *   6. Dummy isolation: dummy blob payloads (Fr() values, modeling
+ *      HKDF-derived filler) do not leak the nsec or any chunk material.
+ *      (Structural: dummy payloads have no equation linking them to nsec.)
+ *   7. Password compromise: if the password leaks, the nsec is recoverable.
+ *      NOTE: compromise is modeled as a separate rule (Compromise_Password)
+ *      that creates a fresh backup and immediately leaks the password.
+ *      This proves recoverability in the compromised world but does not
+ *      model a transition from honest to compromised for the same backup
+ *      instance. The conditional "secrecy holds unless password leaks"
+ *      is argued across the two separate rule instances, not as a single
+ *      trace property.
  *
  * == What this model does NOT prove ==
  *   - Unlinkability (blobs not attributable to user): this is an
@@ -59,6 +72,11 @@
  *   - Steganographic indistinguishability: this is an observational
  *     property. The model publishes all blob types (real, parity, dummy)
  *     via Out() but cannot express that they are indistinguishable.
+ *   - Event-level validation/selection attacks: NIP-01 signature checks,
+ *     multiple returned events for one d-tag, d-tag squatting, and
+ *     result-set truncation are not modeled. The spec's event validation
+ *     rules (pubkey-first filtering, pagination to EOSE, authors-filter
+ *     fallback) are argued in prose, not formally verified.
  *
  * == Abstractions ==
  *   - scrypt(input, salt) → h(<salt, input>)
@@ -68,8 +86,21 @@
  *     function with equations enabling reconstruction from any 3 of 5
  *     symbols (3 data + 2 parity). This models the MDS property.
  *   - N=3, P=2, D=2 (fixed for tractability)
- *   - Dummy blobs encrypt fresh random values, not nsec material
+ *   - Dummy blobs encrypt deterministic HKDF-derived values (modeled as
+ *     Fr() for symbolic freshness — the security property is that dummy
+ *     payloads are independent of nsec, which Fr() captures correctly).
+ *     The spec uses HKDF(H_cover, "dummy-pad-"‖j) for deterministic
+ *     dummy payloads; the model abstracts this as fresh values since
+ *     Tamarin cannot distinguish HKDF-derived from random.
+ *   - Chunk padding is deterministic in the spec (HKDF-derived) but
+ *     omitted in the model — chunks are encrypted directly. The padding
+ *     determinism property (safe partial re-publication) is not modeled.
  *   - Cover key: h(<'cover', password, pk>) for dummy derivation
+ *   - Relay URL scoping omitted — all derivations model a single relay.
+ *     The spec's relay-scoped HKDF info strings (e.g., "d-tag" ‖
+ *     relay_url_bytes) are modeled as bare info strings (e.g., "d-tag").
+ *     Cross-relay unlinkability is argued in the spec's security analysis
+ *     and would require a multi-session model to verify formally.
  */
 
 theory NIP_SB_v3
