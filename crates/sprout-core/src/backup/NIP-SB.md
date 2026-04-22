@@ -60,7 +60,7 @@ As a secondary benefit, NIP-SB blobs share the same event structure as other `ki
 4. **Per-user uniqueness** — the user's pubkey is mixed into every derivation via length-prefixed concatenation (injective encoding). Identical passwords for different users produce completely unrelated blobs. No cross-user interference, no d-tag collisions.
 5. **Fault tolerance** — Reed-Solomon parity (P=2) tolerates loss of up to 2 blobs. Dummy blobs obscure the real chunk count.
 6. **No new crypto** — scrypt (NIP-49 parameters), HKDF-SHA256, XChaCha20-Poly1305, Reed-Solomon over GF(2^8). All battle-tested.
-7. **Just Nostr events** — `kind:30078` parameterized replaceable events. No special relay support needed.
+7. **Just Nostr events** — `kind:30078` parameterized replaceable events. No special relay protocol extensions needed (though relays may require authorization for `kind:30078` writes — see §Relay Requirements).
 
 ## Encoding Conventions
 
@@ -246,7 +246,7 @@ D = (H_d[0] % DUMMY_RANGE) + MIN_DUMMIES   # result in [4, 12]
 
 P is fixed at `PARITY_BLOBS = 2`. The total number of blobs in a backup set is `N + P + D`, ranging from 9 to 30.
 
-The empty salt for N derivation is intentional — this derivation exists solely to determine N and is not used for encryption. The `"dummies"` salt provides domain separation for D derivation. Each real and parity blob receives its own full-strength scrypt derivation in Step 4. The pubkey is included in `base` (with a length-prefixed password for injective encoding) to ensure per-user uniqueness: identical passwords for different users produce completely unrelated N, D values and blob chains.
+The empty salt for N derivation is intentional — this derivation exists solely to determine N and is not used for encryption. The `"dummies"` salt provides domain separation for D derivation. Each real and parity blob receives its own full-strength scrypt derivation in Step 3b. The pubkey is included in `base` (with a length-prefixed password for injective encoding) to ensure per-user uniqueness: identical passwords for different users produce completely unrelated N, D values and blob chains.
 
 Note: `H[0] % 14` and `H_d[0] % 9` have slight modular bias. This is acceptable for this use case. Implementations MAY use rejection sampling if strict uniformity is required.
 
@@ -288,9 +288,30 @@ for i in 0..N-1:
     offset     += chunk_len_i
 ```
 
-### Step 3b: Compute Reed-Solomon Parity
+### Step 3b: Derive Per-Blob Scrypt Keys (H_i)
 
-Compute P=2 parity rows across the N padded chunks using 16 parallel systematic Reed-Solomon codes over GF(2^8):
+Before padding or RS encoding, derive the per-blob scrypt key `H_i` for each real and parity blob. These keys are used for deterministic padding (Step 3c), d-tags, and signing keys (Step 4).
+
+```
+For each blob i in 0..N+P-1 (real chunks and parity):
+    pw_bytes = NFKC(password)
+    base_i   = len(pw_bytes).to_bytes(2, 'big') ‖ pw_bytes ‖ pubkey_bytes ‖ to_string(i)
+
+    H_i = scrypt(
+        password = base_i,
+        salt     = b"",
+        N        = 2^SCRYPT_LOG_N,
+        r        = SCRYPT_R,
+        p        = SCRYPT_P,
+        dkLen    = 32
+    )
+```
+
+Each `H_i` is fully independent: different scrypt input, different output. Compromise of any `H_i` reveals nothing about any other blob's key material or the `enc_key`.
+
+### Step 3c: Pad Chunks and Compute Reed-Solomon Parity
+
+Using the `H_i` values from Step 3b, pad each chunk deterministically and compute P=2 parity rows using 16 parallel systematic Reed-Solomon codes over GF(2^8):
 
 ```
 # Pad each chunk to CHUNK_PAD_LEN before RS encoding.
@@ -300,7 +321,6 @@ Compute P=2 parity rows across the N padded chunks using 16 parallel systematic 
 for i in 0..N-1:
     pad_bytes_i = HKDF-SHA256(ikm=H_i, salt=b"", info=b"pad", length=CHUNK_PAD_LEN - len(chunk_i))
     padded_i    = chunk_i ‖ pad_bytes_i
-    # H_i is the per-blob scrypt output from Step 4 (derived before this step)
 
 # For each byte position b in 0..15:
 #   Treat padded_0[b], padded_1[b], ..., padded_{N-1}[b] as N data symbols.
@@ -326,7 +346,7 @@ Implementations MUST include test vectors (see §Implementation Notes).
 
 Note: The deterministic padding bytes derived here MUST be the same bytes encrypted in Step 5. Because padding is derived from per-blob key material (not random), re-publication always produces the same padded chunks and therefore the same RS parity — enabling safe partial re-publication of missing blobs without invalidating the backup set.
 
-### Step 3c: Derive Cover Key for Dummy Blobs
+### Step 3d: Derive Cover Key for Dummy Blobs
 
 ```
 H_cover = scrypt(
@@ -341,41 +361,26 @@ H_cover = scrypt(
 
 `H_cover` is used to derive d-tags and signing keys for all D dummy blobs via HKDF (no per-dummy scrypt call). This keeps the scrypt budget low while producing indistinguishable dummy blob metadata.
 
-### Step 4: Derive Per-Blob Keys and Tags
+### Step 4: Derive D-Tags and Signing Keys
 
 #### Real chunk blobs (indices 0..N-1) and parity blobs (indices N..N+1)
 
-For each blob `i` in `0..N+P-1` (real chunks and parity):
+Using the `H_i` values from Step 3b, derive d-tags and signing keys for each real and parity blob:
 
 ```
-pw_bytes = NFKC(password)
-base_i   = len(pw_bytes).to_bytes(2, 'big') ‖ pw_bytes ‖ pubkey_bytes ‖ to_string(i)
-           # to_string(i) is the ASCII decimal representation, e.g. "0", "1", "15"
-           # pubkey_bytes is fixed 32 bytes, so the boundary with to_string(i) is unambiguous
+For each blob i in 0..N+P-1:
+    d_tag_i = hex(HKDF-SHA256(ikm=H_i, salt=b"", info=b"d-tag" ‖ relay_url_bytes,      length=32))
 
-H_i = scrypt(
-    password = base_i,
-    salt     = b"",
-    N        = 2^SCRYPT_LOG_N,
-    r        = SCRYPT_R,
-    p        = SCRYPT_P,
-    dkLen    = 32
-)
-
-d_tag_i = hex(HKDF-SHA256(ikm=H_i, salt=b"", info=b"d-tag" ‖ relay_url_bytes,      length=32))
-
-signing_secret_i = HKDF-SHA256(ikm=H_i, salt=b"", info=b"signing-key" ‖ relay_url_bytes, length=32)
-# Interpret signing_secret_i as a 256-bit big-endian unsigned integer.
-# If the value is zero or ≥ secp256k1 order n, REJECT and re-derive:
-#   info=b"signing-key-1" ‖ relay_url_bytes, then b"signing-key-2" ‖ relay_url_bytes, etc.
-# Do NOT reduce mod n (reject-and-retry avoids modular bias).
-# Implementations MUST retry up to 255 times. If all attempts produce
-# an invalid scalar, the backup MUST fail.
-# (Probability of even one retry: ~3.7×10^-39. This will never happen.)
-signing_keypair_i = keypair_from_secret(signing_secret_i)
+    signing_secret_i = HKDF-SHA256(ikm=H_i, salt=b"", info=b"signing-key" ‖ relay_url_bytes, length=32)
+    # Interpret signing_secret_i as a 256-bit big-endian unsigned integer.
+    # If the value is zero or ≥ secp256k1 order n, REJECT and re-derive:
+    #   info=b"signing-key-1" ‖ relay_url_bytes, then b"signing-key-2" ‖ relay_url_bytes, etc.
+    # Do NOT reduce mod n (reject-and-retry avoids modular bias).
+    # Implementations MUST retry up to 255 times. If all attempts produce
+    # an invalid scalar, the backup MUST fail.
+    # (Probability of even one retry: ~3.7×10^-39. This will never happen.)
+    signing_keypair_i = keypair_from_secret(signing_secret_i)
 ```
-
-Each real and parity blob's `H_i` is fully independent: different scrypt input, different output. Compromise of any `H_i` reveals nothing about any other blob's d-tag, signing key, or the enc_key.
 
 Parity blobs (indices N and N+1) use the same derivation as real chunks. They carry real recovery data and deserve the same per-blob scrypt isolation.
 
@@ -410,12 +415,12 @@ For each blob (real, parity, or dummy), prepare the 16-byte plaintext payload:
 ```
 # Real chunk blobs (i in 0..N-1):
 padded_i = chunk_i ‖ pad_bytes_i
-           # Deterministic padding from Step 3b (HKDF-derived, NOT random).
+           # Deterministic padding from Step 3c (HKDF-derived, NOT random).
            # Ensures re-publication produces identical padded chunks and
            # consistent RS parity across generations.
 
 # Parity blobs (i in N..N+1):
-padded_i = parity_row_{i-N}    # 16 bytes from RS encoding (Step 3b)
+padded_i = parity_row_{i-N}    # 16 bytes from RS encoding (Step 3c)
 
 # Dummy blobs (j in 0..D-1):
 padded_j = HKDF-SHA256(ikm=H_cover, salt=b"", info=b"dummy-pad-" ‖ to_string(j), length=CHUNK_PAD_LEN)
@@ -579,7 +584,7 @@ At N=8: 14 scrypt calls. At approximately 1 second each on consumer hardware: ap
      relay_url_bytes = UTF-8(WHATWG_normalize(relay_url))
 
      For each old real/parity blob i in 0..old_N+P-1:
-       Re-derive old_H_i from old password + pubkey + i (Step 4)
+       Re-derive old_H_i from old password + pubkey + i (Step 3b)
        Re-derive old d_tag_i and old signing_keypair_i using relay_url_bytes
        Publish a NIP-09 kind:5 deletion event:
          {
@@ -774,8 +779,8 @@ An attacker knows the plaintext is a 32-byte secp256k1 private key. This is irre
 | Attacker cost: batch (all users) | 1× scrypt per guess, tested against all blobs | `|users|×` scrypt per guess (each guess bound to one pubkey) |
 | Attacker can identify backup blobs | Yes (`ncryptsec1` prefix) | Environment-dependent — blobs share `kind:30078` structure but steganographic cover is unvalidated (see §Limitations) |
 | Attacker can confirm backup exists | Yes (blob is visible) | Environment-dependent (against passive dump adversary with diverse ambient traffic) |
-| Attacker can link blobs to user | Yes (signed by user's key) | No — throwaway keys, no reference to real pubkey |
-| Deniability | No — backup existence is provable | Yes — probabilistic, against passive dump adversary |
+| Attacker can link blobs to user | Yes (signed by user's key) | No (passive dump) — throwaway keys, no reference to real pubkey. Active operator may correlate via IP/timing (see §Adversary Classes) |
+| Deniability | No — backup existence is provable | Yes — probabilistic, passive dump adversary only (see §Adversary Classes) |
 | Fault tolerance | Single blob (robust) | Tolerates loss of up to 2 blobs (RS parity) |
 | Relay storage | ~400 bytes | ~8.1 KB (N+P+D=18 × ~450 bytes/event) |
 | Client complexity | Low | Medium |
@@ -789,8 +794,8 @@ An attacker knows the plaintext is a 32-byte secp256k1 private key. This is irre
 | Backup existence detectable | Yes | Yes | Yes (requires infra) | Yes (shares identifiable) | **Environment-dependent** (against passive dump adversary with diverse ambient traffic; unvalidated — see §Limitations) |
 | Offline cracking cost (1 target, rejection) | 1× scrypt per guess | 1× scrypt per guess | Threshold OPRF (no offline attack) | N/A (no password) | 1× scrypt per guess (early-exit) |
 | Offline cracking cost (all users) | 1× scrypt, all blobs | 1× scrypt, all blobs | N/A | N/A | `|users|×` scrypt per guess |
-| Linkability to user | Signed by user's key | Encoded with user's address | Requires recovery nodes | Shares linked by `id` | **None** |
-| Deniability | No | No | No | No | **Yes** (probabilistic) |
+| Linkability to user | Signed by user's key | Encoded with user's address | Requires recovery nodes | Shares linked by `id` | No (against passive dump adversary; active operator may correlate via IP/timing) |
+| Deniability | No | No | No | No | Probabilistic (passive dump adversary only) |
 | Bootstrap problem | No (salt in blob) | No (salt in blob) | Requires node registration | Requires share distribution | No (everything from password + pubkey) |
 | Fault tolerance | Single blob (robust) | Single blob | Threshold (t-of-n) | Threshold (t-of-n) | Tolerates 2 missing blobs (RS parity) |
 | Infrastructure required | None | None | Dedicated recovery nodes | Trusted share holders | **None** (standard Nostr relays) |
@@ -827,11 +832,13 @@ An attacker knows the plaintext is a 32-byte secp256k1 private key. This is irre
 
 ### Relay Requirements
 
-No special relay support is required. Implementations need only:
+No special relay protocol extensions are required. Implementations need only standard NIP-33 behavior:
 
 - Support `kind:30078` (NIP-78/NIP-33 parameterized replaceable events)
 - Store events from unknown pubkeys (throwaway keys have no profile or followers)
 - Support `#d` tag filtering in REQ subscriptions (standard NIP-33 behavior)
+
+Note: relays that enforce authorization scopes (e.g., Sprout's `MessagesWrite` scope for `kind:30078`) require clients to hold the appropriate credential. This is standard relay access control, not a NIP-SB-specific requirement.
 
 ### Sprout-Specific Notes
 
