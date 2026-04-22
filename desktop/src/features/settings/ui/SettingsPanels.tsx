@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from "react";
 import {
   BellRing,
   Check,
+  Keyboard,
   KeyRound,
   MonitorCog,
   Moon,
@@ -21,6 +22,7 @@ import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
+import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
@@ -29,6 +31,7 @@ export type SettingsSection =
   | "profile"
   | "notifications"
   | "appearance"
+  | "shortcuts"
   | "tokens"
   | "mobile"
   | "doctor";
@@ -69,6 +72,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "appearance",
     label: "Appearance",
     icon: MonitorCog,
+  },
+  {
+    value: "shortcuts",
+    label: "Shortcuts",
+    icon: Keyboard,
   },
   {
     value: "tokens",
@@ -234,6 +242,8 @@ export function renderSettingsSection(
       );
     case "appearance":
       return <ThemeSettingsCard />;
+    case "shortcuts":
+      return <KeyboardShortcutsCard />;
     case "tokens":
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
     case "mobile":

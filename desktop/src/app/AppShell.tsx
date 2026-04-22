@@ -28,7 +28,10 @@ import {
 } from "@/features/notifications/lib/desktop";
 import { usePresenceSession } from "@/features/presence/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
-import type { SettingsSection } from "@/features/settings/ui/SettingsPanels";
+import {
+  DEFAULT_SETTINGS_SECTION,
+  type SettingsSection,
+} from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { relayClient } from "@/shared/api/relayClient";
@@ -45,7 +48,6 @@ import {
 } from "@/shared/ui/sidebar";
 
 type AppView = "home" | "channel" | "agents" | "workflows" | "pulse";
-const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
 
 const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
@@ -120,6 +122,7 @@ export function AppShell() {
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
+  const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
   const location = useLocation();
   const queryClient = useQueryClient();
   const { goAgents, goChannel, goHome, goPulse, goWorkflows, openSearchHit } =
@@ -324,6 +327,10 @@ export function AppShell() {
     };
   }, []);
 
+  const handleOpenNewDm = React.useCallback(() => {
+    setIsNewDmOpen(true);
+  }, []);
+
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -341,9 +348,22 @@ export function AppShell() {
         return;
       }
 
+      if (key === "k" && event.shiftKey) {
+        event.preventDefault();
+        handleOpenNewDm();
+        return;
+      }
+
       if (key === "o" && event.shiftKey) {
         event.preventDefault();
         handleOpenBrowseChannels();
+        return;
+      }
+
+      if (key === "a" && event.shiftKey) {
+        event.preventDefault();
+        void goHome();
+        return;
       }
     }
 
@@ -351,7 +371,13 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleOpenBrowseChannels, handleOpenSearch, settingsOpen]);
+  }, [
+    handleOpenBrowseChannels,
+    handleOpenNewDm,
+    handleOpenSearch,
+    goHome,
+    settingsOpen,
+  ]);
 
   React.useLayoutEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -432,7 +458,9 @@ export function AppShell() {
                 isCreatingForum={createForumMutation.isPending}
                 isLoading={channelsQuery.isLoading}
                 isOpeningDm={openDmMutation.isPending}
+                isNewDmOpen={isNewDmOpen}
                 isPresencePending={presenceSession.isPending}
+                onNewDmOpenChange={setIsNewDmOpen}
                 selfPresenceStatus={presenceSession.currentStatus}
                 onCreateChannel={async ({
                   description,

@@ -92,6 +92,8 @@ type AppSidebarProps = {
   onSelectSettings: () => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
   isPresencePending?: boolean;
+  isNewDmOpen?: boolean;
+  onNewDmOpenChange?: (open: boolean) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -231,9 +233,13 @@ export function AppSidebar({
   onSelectSettings,
   onSetPresenceStatus,
   isPresencePending,
+  isNewDmOpen: isNewDmOpenProp,
+  onNewDmOpenChange,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
-  const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
+  const [isNewDmOpenInternal, setIsNewDmOpenInternal] = React.useState(false);
+  const isNewDmOpen = isNewDmOpenProp ?? isNewDmOpenInternal;
+  const setIsNewDmOpen = onNewDmOpenChange ?? setIsNewDmOpenInternal;
   const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
