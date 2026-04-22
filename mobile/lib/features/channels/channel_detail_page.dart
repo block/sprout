@@ -186,13 +186,19 @@ class ChannelDetailPage extends HookConsumerWidget {
             ComposeBar(
               channelId: channel.id,
               channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
-              onSend: (content, mentionPubkeys) => ref
-                  .read(sendMessageProvider)
-                  .call(
-                    channelId: channel.id,
-                    content: content,
-                    mentionPubkeys: mentionPubkeys,
-                  ),
+              onSend:
+                  (
+                    content,
+                    mentionPubkeys, {
+                    mediaTags = const <List<String>>[],
+                  }) => ref
+                      .read(sendMessageProvider)
+                      .call(
+                        channelId: channel.id,
+                        content: content,
+                        mentionPubkeys: mentionPubkeys,
+                        mediaTags: mediaTags,
+                      ),
             )
           else if (!resolvedChannel.isDm &&
               (!resolvedChannel.isMember || resolvedChannel.isArchived))
@@ -654,6 +660,7 @@ class _MessageBubble extends ConsumerWidget {
                     content: message.content,
                     mentionNames: mentionNames,
                     channelNames: channelNames,
+                    tags: message.tags,
                     onChannelTap: (channelId) {
                       if (channelId == currentChannelId) return;
                       final channelsAsync = ref.read(channelsProvider);

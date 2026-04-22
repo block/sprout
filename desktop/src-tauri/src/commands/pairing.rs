@@ -1,14 +1,3 @@
-//! NIP-AB device pairing — Tauri commands for the source (desktop) side.
-//!
-//! Architecture: a background tokio task owns the WebSocket connection.
-//! Tauri commands communicate with it via an mpsc channel (JSON strings).
-//! State changes are pushed to the React frontend via Tauri events.
-//!
-//! sprout-core depends on nostr 0.36 while the desktop uses nostr 0.37.
-//! We import `nostr_compat` (aliased to nostr 0.36) for types that cross
-//! the sprout-core boundary, and serialize events to JSON strings for the
-//! mpsc channel to avoid mixing the two versions.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,9 +17,7 @@ use zeroize::Zeroizing;
 use crate::app_state::AppState;
 use crate::relay::{relay_api_base_url, relay_ws_url};
 
-use super::tokens::mint_token_internal;
-
-// ── Tauri event payloads ────────────────────────────────────────────────────
+use super::tokens::{mint_token_internal_with_auth_mode, MintTokenAuthMode};
 
 #[derive(Serialize, Clone)]
 struct PairingSasPayload {
@@ -46,8 +33,6 @@ struct PairingAbortedPayload {
 struct PairingErrorPayload {
     message: String,
 }
-
-// ── Managed state ───────────────────────────────────────────────────────────
 
 /// Managed Tauri state for an active pairing session.
 pub struct PairingHandle {
@@ -74,13 +59,8 @@ impl PairingHandle {
         *self.cancel.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.outbound_tx.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.payload.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        // Note: session is in an Arc<tokio::sync::Mutex> and is cleared
-        // by the background task on exit. For immediate cleanup, callers
-        // should also lock and clear the session explicitly.
     }
 }
-
-// ── Mobile scopes ───────────────────────────────────────────────────────────
 
 const MOBILE_SCOPES: &[&str] = &[
     "messages:read",
@@ -89,10 +69,17 @@ const MOBILE_SCOPES: &[&str] = &[
     "channels:write",
     "users:read",
     "files:read",
+    "files:write",
 ];
 const EXPIRES_IN_DAYS: u32 = 90;
 
-// ── Commands ────────────────────────────────────────────────────────────────
+fn mobile_pairing_mint_auth_mode(state: &AppState) -> MintTokenAuthMode {
+    if state.configured_api_token.is_some() {
+        MintTokenAuthMode::BootstrapNip98
+    } else {
+        MintTokenAuthMode::Auto
+    }
+}
 
 /// Start a NIP-AB pairing session as the source device.
 ///
@@ -104,19 +91,23 @@ pub async fn start_pairing(
     state: State<'_, AppState>,
     pairing: State<'_, PairingHandle>,
 ) -> Result<String, String> {
-    // Cancel any existing session.
     if let Some(token) = pairing.cancel.lock().map_err(|e| e.to_string())?.take() {
         token.cancel();
     }
     pairing.clear();
 
-    // 1. Mint a mobile token.
     let scopes: Vec<String> = MOBILE_SCOPES.iter().map(|s| s.to_string()).collect();
     let token_name = format!("mobile-pairing-{}", chrono::Utc::now().timestamp());
-    let mint_result =
-        mint_token_internal(&state, &token_name, &scopes, None, Some(EXPIRES_IN_DAYS)).await?;
+    let mint_result = mint_token_internal_with_auth_mode(
+        &state,
+        &token_name,
+        &scopes,
+        None,
+        Some(EXPIRES_IN_DAYS),
+        mobile_pairing_mint_auth_mode(&state),
+    )
+    .await?;
 
-    // 2. Read user identity.
     let (nsec, pubkey_hex) = {
         let keys = state.keys.lock().map_err(|e| e.to_string())?;
         let nsec = keys
@@ -127,15 +118,12 @@ pub async fn start_pairing(
         (nsec, pubkey)
     };
 
-    // 3. Get relay URLs.
     let ws_url = relay_ws_url();
     let http_url = relay_api_base_url();
 
-    // 4. Create the pairing session.
     let (session, qr_payload) = PairingSession::new_source(ws_url.clone());
     let qr_uri = encode_qr(&qr_payload);
 
-    // 5. Build the custom payload to send after SAS confirmation.
     let payload_json = serde_json::json!({
         "relayUrl": http_url,
         "token": mint_result.token,
@@ -143,7 +131,6 @@ pub async fn start_pairing(
         "nsec": nsec,
     });
 
-    // 6. Store session + payload.
     {
         let mut s = pairing.session.lock().await;
         *s = Some(session);
@@ -151,14 +138,12 @@ pub async fn start_pairing(
     *pairing.payload.lock().map_err(|e| e.to_string())? =
         Some(Zeroizing::new(payload_json.to_string()));
 
-    // 7. Create channel + cancellation token.
     let (outbound_tx, outbound_rx) = mpsc::channel::<String>(16);
     let cancel = CancellationToken::new();
 
     *pairing.outbound_tx.lock().map_err(|e| e.to_string())? = Some(outbound_tx);
     *pairing.cancel.lock().map_err(|e| e.to_string())? = Some(cancel.clone());
 
-    // 8. Spawn background WS task.
     let session_arc = Arc::clone(&pairing.session);
     tauri::async_runtime::spawn(pairing_ws_task(
         ws_url,
@@ -181,7 +166,6 @@ pub async fn confirm_pairing_sas(pairing: State<'_, PairingHandle>) -> Result<()
         .clone()
         .ok_or("no active pairing session")?;
 
-    // 1. Confirm SAS → get sas-confirm event, serialize to JSON.
     let sas_confirm_json = {
         let mut guard = pairing.session.lock().await;
         let session = guard.as_mut().ok_or("no active pairing session")?;
@@ -193,7 +177,6 @@ pub async fn confirm_pairing_sas(pairing: State<'_, PairingHandle>) -> Result<()
         .await
         .map_err(|_| "failed to send sas-confirm")?;
 
-    // 2. Send payload (contains nsec — Zeroizing ensures cleanup).
     let payload = pairing
         .payload
         .lock()
@@ -220,7 +203,6 @@ pub async fn confirm_pairing_sas(pairing: State<'_, PairingHandle>) -> Result<()
 /// Cancel the active pairing session.
 #[tauri::command]
 pub async fn cancel_pairing(pairing: State<'_, PairingHandle>) -> Result<(), String> {
-    // Try to send an abort event if we have a session and a channel.
     let abort_json = {
         let mut guard = pairing.session.lock().await;
         if let Some(session) = guard.as_mut() {
@@ -245,13 +227,11 @@ pub async fn cancel_pairing(pairing: State<'_, PairingHandle>) -> Result<(), Str
         }
     }
 
-    // Cancel background task.
     if let Some(token) = pairing.cancel.lock().map_err(|e| e.to_string())?.take() {
         token.cancel();
     }
     pairing.clear();
 
-    // Clear session.
     {
         let mut s = pairing.session.lock().await;
         *s = None;
@@ -259,8 +239,6 @@ pub async fn cancel_pairing(pairing: State<'_, PairingHandle>) -> Result<(), Str
 
     Ok(())
 }
-
-// ── Background WebSocket task ───────────────────────────────────────────────
 
 async fn pairing_ws_task(
     relay_url: String,
@@ -274,7 +252,6 @@ async fn pairing_ws_task(
     {
         let _ = app.emit("pairing-error", PairingErrorPayload { message: e });
     }
-    // Clean up session on exit.
     let mut s = session.lock().await;
     *s = None;
 }
@@ -286,16 +263,13 @@ async fn pairing_ws_task_inner(
     outbound_rx: &mut mpsc::Receiver<String>,
     app: &AppHandle,
 ) -> Result<(), String> {
-    // Connect to relay.
     let (ws, _) = connect_async(relay_url)
         .await
         .map_err(|e| format!("WebSocket connection failed: {e}"))?;
     let (mut write, mut read) = ws.split();
 
-    // Handle NIP-42 auth if required.
     handle_nip42_auth(&mut read, &mut write, session, relay_url).await?;
 
-    // Subscribe for kind:24134 events tagged to our ephemeral pubkey.
     let our_pk = {
         let guard = session.lock().await;
         guard.as_ref().ok_or("session gone")?.pubkey().to_hex()
@@ -309,10 +283,8 @@ async fn pairing_ws_task_inner(
         .await
         .map_err(|e| format!("subscribe failed: {e}"))?;
 
-    // Wait for EOSE to confirm subscription is registered.
     wait_for_eose(&mut read, "pair", Duration::from_secs(10)).await?;
 
-    // Event loop.
     let hard_timeout = tokio::time::sleep(Duration::from_secs(130));
     tokio::pin!(hard_timeout);
 
@@ -326,7 +298,6 @@ async fn pairing_ws_task_inner(
                 break;
             }
             Some(json_msg) = outbound_rx.recv() => {
-                // json_msg is already a ["EVENT", ...] JSON string.
                 if let Err(e) = write.send(Message::Text(json_msg.into())).await {
                     return Err(format!("publish failed: {e}"));
                 }
@@ -338,12 +309,10 @@ async fn pairing_ws_task_inner(
                 let msg = msg.map_err(|e| format!("WS read error: {e}"))?;
                 let Message::Text(text) = msg else { continue };
 
-                // Parse relay EVENT message into sprout-core's nostr::Event.
                 if let Some(event) = parse_relay_event(text.as_str(), "pair") {
                     let mut guard = session.lock().await;
                     let Some(s) = guard.as_mut() else { break };
 
-                    // Check for abort from peer.
                     match s.handle_abort(&event) {
                         Ok(reason) => {
                             let _ = app.emit("pairing-aborted", PairingAbortedPayload {
@@ -351,16 +320,14 @@ async fn pairing_ws_task_inner(
                             });
                             break;
                         }
-                        Err(_) => {} // Not an abort — continue.
+                        Err(_) => {}
                     }
 
-                    // Try handle_offer (source waits for this first).
                     if let Ok(sas) = s.handle_offer(&event) {
                         let _ = app.emit("pairing-sas-received", PairingSasPayload { sas });
                         continue;
                     }
 
-                    // Try handle_complete (source waits for this after sending payload).
                     match s.handle_complete(&event) {
                         Ok(()) => {
                             let _ = app.emit("pairing-complete", serde_json::json!({}));
@@ -372,7 +339,7 @@ async fn pairing_ws_task_inner(
                             });
                             break;
                         }
-                        Err(_) => {} // Wrong state or wrong message — discard per NIP-AB.
+                        Err(_) => {}
                     }
                 }
             }
@@ -381,8 +348,6 @@ async fn pairing_ws_task_inner(
 
     Ok(())
 }
-
-// ── NIP-42 auth helper ──────────────────────────────────────────────────────
 
 async fn handle_nip42_auth<R, W>(
     read: &mut R,
@@ -394,7 +359,6 @@ where
     R: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
     W: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
-    // Wait up to 3 seconds for an AUTH challenge. Timeout is normal.
     let auth_result = tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             let msg = read
@@ -414,11 +378,9 @@ where
     let challenge: String = match auth_result {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => return Err(e),
-        Err(_) => return Ok(()), // No AUTH challenge.
+        Err(_) => return Ok(()),
     };
 
-    // Sign auth event with the session's ephemeral keys.
-    // Use sprout-core's nostr EventBuilder (0.36) via PairingSession::sign_event.
     let relay_url_parsed: url::Url = relay_url
         .parse()
         .map_err(|e| format!("invalid relay URL: {e}"))?;
@@ -442,7 +404,6 @@ where
         .await
         .map_err(|e| format!("send auth: {e}"))?;
 
-    // Wait for OK response (up to 5 seconds).
     let _ = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let msg = read
@@ -461,8 +422,6 @@ where
 
     Ok(())
 }
-
-// ── Helper functions ────────────────────────────────────────────────────────
 
 /// Serialize a nostr 0.36 Event to `["EVENT", <event>]` JSON string.
 fn event_to_relay_json(event: &nostr_compat::Event) -> String {
@@ -521,4 +480,38 @@ where
     })
     .await
     .map_err(|_| "timeout waiting for EOSE".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MOBILE_SCOPES;
+    use super::*;
+    use crate::app_state::build_app_state;
+
+    #[test]
+    fn mobile_pairing_token_includes_file_write_scope() {
+        assert!(MOBILE_SCOPES.contains(&"files:write"));
+    }
+
+    #[test]
+    fn mobile_pairing_uses_bootstrap_mint_when_configured_token_is_present() {
+        let mut state = build_app_state();
+        state.configured_api_token = Some("desktop-token".to_string());
+
+        assert_eq!(
+            mobile_pairing_mint_auth_mode(&state),
+            MintTokenAuthMode::BootstrapNip98
+        );
+    }
+
+    #[test]
+    fn mobile_pairing_keeps_auto_mint_without_configured_token() {
+        let mut state = build_app_state();
+        state.configured_api_token = None;
+
+        assert_eq!(
+            mobile_pairing_mint_auth_mode(&state),
+            MintTokenAuthMode::Auto
+        );
+    }
 }

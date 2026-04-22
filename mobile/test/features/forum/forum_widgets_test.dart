@@ -36,6 +36,9 @@ ForumPost _makePost({
   String pubkey = 'alice',
   String content = 'Hello forum',
   int createdAt = 1000,
+  List<List<String>> tags = const [
+    ['h', 'forum-channel'],
+  ],
   ForumThreadSummary? threadSummary,
 }) => ForumPost(
   eventId: eventId,
@@ -44,13 +47,16 @@ ForumPost _makePost({
   kind: 45001,
   createdAt: createdAt,
   channelId: _channelId,
-  tags: const [
-    ['h', 'forum-channel'],
-  ],
+  tags: tags,
   threadSummary: threadSummary,
 );
 
 const _aliceProfile = UserProfile(pubkey: 'alice', displayName: 'Alice');
+
+void _setSurfaceSize(WidgetTester tester, Size size) {
+  tester.view.devicePixelRatio = 1.0;
+  tester.view.physicalSize = size;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -232,6 +238,46 @@ void main() {
 
       await tester.tap(find.text('Hello forum'));
       expect(tapped, isTrue);
+    });
+
+    testWidgets('keeps media previews non-interactive in the post list', (
+      tester,
+    ) async {
+      var tapped = false;
+      const imageUrl = 'https://example.com/media/card.png';
+
+      await tester.pumpWidget(
+        _buildPostCard(
+          post: _makePost(
+            content: '![image]($imageUrl)',
+            tags: const [
+              ['h', _channelId],
+              [
+                'imeta',
+                'url https://example.com/media/card.png',
+                'm image/png',
+              ],
+            ],
+          ),
+          onTap: () => tapped = true,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final preview = find.byKey(
+        const ValueKey(
+          'message-media-image-preview:https://example.com/media/card.png',
+        ),
+      );
+
+      await tester.tapAt(tester.getCenter(preview));
+      await tester.pumpAndSettle();
+
+      expect(tapped, isTrue);
+      expect(
+        find.byKey(const ValueKey('message-media-image-viewer')),
+        findsNothing,
+      );
     });
 
     testWidgets('long press opens action sheet with Copy text', (tester) async {
@@ -464,6 +510,86 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Reply to this post\u2026'), findsOneWidget);
+    });
+
+    testWidgets('renders media previews for forum posts', (tester) async {
+      const imageUrl = 'https://example.com/media/forum.png';
+
+      await tester.pumpWidget(
+        _buildThreadPage(
+          threadResponse: ForumThreadResponse(
+            post: _makePost(
+              content: '![image]($imageUrl)',
+              tags: const [
+                ['h', _channelId],
+                [
+                  'imeta',
+                  'url https://example.com/media/forum.png',
+                  'm image/png',
+                ],
+              ],
+            ),
+            replies: const [],
+            totalReplies: 0,
+          ),
+          users: const {'alice': _aliceProfile},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(
+          const ValueKey(
+            'message-media-image-preview:https://example.com/media/forum.png',
+          ),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('keeps tall forum image previews bounded inline', (
+      tester,
+    ) async {
+      _setSurfaceSize(tester, const Size(400, 800));
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      const imageUrl = 'https://example.com/media/forum-tall.png';
+
+      await tester.pumpWidget(
+        _buildThreadPage(
+          threadResponse: ForumThreadResponse(
+            post: _makePost(
+              content: '![image]($imageUrl)',
+              tags: const [
+                ['h', _channelId],
+                [
+                  'imeta',
+                  'url https://example.com/media/forum-tall.png',
+                  'm image/png',
+                  'dim 1200x2400',
+                ],
+              ],
+            ),
+            replies: const [],
+            totalReplies: 0,
+          ),
+          users: const {'alice': _aliceProfile},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final preview = find.byKey(
+        const ValueKey(
+          'message-media-image-preview:https://example.com/media/forum-tall.png',
+        ),
+      );
+      final size = tester.getSize(preview);
+
+      expect(size.height, closeTo(240, 0.1));
+      expect(size.width, closeTo(120, 0.1));
     });
 
     testWidgets('hides compose bar for non-members', (tester) async {

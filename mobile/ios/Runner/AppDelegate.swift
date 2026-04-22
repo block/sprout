@@ -3,6 +3,8 @@ import UIKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private var mediaUploadChannel: FlutterMethodChannel?
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -12,5 +14,97 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    mediaUploadChannel = FlutterMethodChannel(
+      name: "sprout/media_upload",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    mediaUploadChannel?.setMethodCallHandler { [weak self] call, result in
+      self?.handleMediaUploadMethodCall(call, result: result)
+    }
+  }
+
+  private func handleMediaUploadMethodCall(
+    _ call: FlutterMethodCall,
+    result: @escaping FlutterResult
+  ) {
+    switch call.method {
+    case "sanitizeImageForUpload":
+      guard
+        let arguments = call.arguments as? [String: Any],
+        let typedData = arguments["bytes"] as? FlutterStandardTypedData,
+        let mimeType = arguments["mimeType"] as? String
+      else {
+        result(
+          FlutterError(
+            code: "invalid_arguments",
+            message: "Expected image bytes and mime type.",
+            details: nil
+          )
+        )
+        return
+      }
+
+      guard let image = UIImage(data: typedData.data) else {
+        result(
+          FlutterError(
+            code: "sanitize_failed",
+            message: "Unable to decode picked image.",
+            details: nil
+          )
+        )
+        return
+      }
+
+      let sanitizedData: Data?
+      switch mimeType {
+      case "image/png":
+        sanitizedData = image.pngData()
+      case "image/jpeg":
+        sanitizedData = image.jpegData(compressionQuality: 1.0)
+      default:
+        sanitizedData = nil
+      }
+
+      guard let sanitizedData else {
+        result(
+          FlutterError(
+            code: "sanitize_failed",
+            message: "Unable to sanitize picked image.",
+            details: mimeType
+          )
+        )
+        return
+      }
+
+      result(FlutterStandardTypedData(bytes: sanitizedData))
+    case "transcodeImageToJpeg":
+      guard let typedData = call.arguments as? FlutterStandardTypedData else {
+        result(
+          FlutterError(
+            code: "invalid_arguments",
+            message: "Expected raw image bytes.",
+            details: nil
+          )
+        )
+        return
+      }
+
+      guard let image = UIImage(data: typedData.data),
+        let jpegData = image.jpegData(compressionQuality: 1.0)
+      else {
+        result(
+          FlutterError(
+            code: "transcode_failed",
+            message: "Unable to convert picked image to JPEG.",
+            details: nil
+          )
+        )
+        return
+      }
+
+      result(FlutterStandardTypedData(bytes: jpegData))
+    default:
+      result(FlutterMethodNotImplemented)
+    }
   }
 }

@@ -183,15 +183,21 @@ class ThreadDetailPage extends HookConsumerWidget {
               hintText: 'Reply in thread\u2026',
               threadHeadId: threadHead.id,
               rootId: effectiveRootId,
-              onSend: (content, mentionPubkeys) => ref
-                  .read(sendMessageProvider)
-                  .call(
-                    channelId: channelId,
-                    content: content,
-                    mentionPubkeys: mentionPubkeys,
-                    parentEventId: threadHead.id,
-                    rootEventId: effectiveRootId,
-                  ),
+              onSend:
+                  (
+                    content,
+                    mentionPubkeys, {
+                    mediaTags = const <List<String>>[],
+                  }) => ref
+                      .read(sendMessageProvider)
+                      .call(
+                        channelId: channelId,
+                        content: content,
+                        mentionPubkeys: mentionPubkeys,
+                        parentEventId: threadHead.id,
+                        rootEventId: effectiveRootId,
+                        mediaTags: mediaTags,
+                      ),
             ),
         ],
       ),
@@ -457,6 +463,7 @@ class _ThreadMessage extends ConsumerWidget {
                     content: message.content,
                     mentionNames: mentionNames,
                     channelNames: channelNames,
+                    tags: message.tags,
                     onChannelTap: (_) {},
                   ),
                   if (message.reactions.isNotEmpty)
