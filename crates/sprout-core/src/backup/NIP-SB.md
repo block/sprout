@@ -8,9 +8,15 @@ Steganographic Key Backup
 
 Your Nostr identity is a single private key. If you lose it, you lose everything — your name, your messages, your connections. There's no "forgot my password" button, no customer support, no recovery email. The key IS the identity.
 
-This NIP lets you back up your key to any Nostr relay using just a password. The backup hides in plain sight among normal relay data. Against a passive database dump, the backup blobs are computationally indistinguishable from other application data — an attacker cannot identify which events are backup blobs, link them to each other, or link them to you without guessing your password. To recover, you just need your password and your public key (which is your Nostr identity — you know it, or you can look it up).
+This NIP lets you back up your key to any Nostr relay using just a password. The backup is split into multiple pieces — real chunks, parity blobs for fault tolerance, and dummy blobs to obscure the count — each stored as a separate Nostr event signed by a different throwaway key. To recover, you just need your password and your public key (which is your Nostr identity — you know it, or you can look it up).
 
-The backup is split into multiple pieces — real chunks, parity blobs for fault tolerance, and dummy blobs to obscure the count — each stored as a separate Nostr event signed by a different throwaway key. Without your password, the pieces are indistinguishable from any other data on the relay, unlinkable to each other, and unlinkable to you. Deniability is probabilistic and depends on the relay's ambient `kind:30078` traffic (see §Limitations).
+NIP-SB provides two distinct privacy properties:
+
+1. **Cryptographic unlinkability (the security property).** No field in any blob references the user's real pubkey. The throwaway signing keys, d-tags, and ciphertext are derived from a one-way function of `password ‖ pubkey ‖ index`. An attacker who obtains a blob — even one they suspect is a NIP-SB backup — cannot determine which user it belongs to, cannot link it to other blobs in the same backup set, and cannot test one password against multiple users' backups simultaneously. This property holds under standard computational assumptions (one-wayness of scrypt and HKDF). It does not depend on cover traffic, relay population, or deployment conditions. It is the property that defeats the accumulation attack NIP-49 warned about.
+
+2. **Steganographic cover (environment-dependent).** NIP-SB blobs share the same event structure (`kind:30078`, constant-size content, standard alt tag) as other application-specific data. The degree to which blobs blend into ambient relay traffic depends on the relay's `kind:30078` population — specifically, the distribution of content lengths, d-tag formats, pubkey reuse patterns, and publication timing among non-backup events. This property has not been empirically validated. On a relay with diverse, high-volume `kind:30078` traffic, steganographic cover may be strong. On a relay with sparse or structurally uniform traffic, a statistical classifier may identify probable backup blobs. Steganographic cover provides defense-in-depth but the core security properties hold without it.
+
+Note: against an active relay operator with connection logs, blobs published or queried from the same IP address within a short time window can be correlated into backup sets and potentially associated with a client identity, even though the operator cannot link the blobs to a specific Nostr pubkey without the password. Per-blob isolation holds at the database layer but not at the network layer. Implementations that require protection against active relay operators SHOULD publish blobs over separate connections with substantial time separation, ideally via Tor or a relay proxy. See §Security Analysis for detailed adversary-class analysis.
 
 ## Versions
 
@@ -28,7 +34,9 @@ Blobs do not carry an on-wire version indicator — the version is implicit in t
 
 [NIP-49](49.md) provides password-encrypted key export (`ncryptsec1`) but explicitly warns against publishing to relays: *"cracking a key may become easier when an attacker can amass many encrypted private keys."* This warning is well-founded: with NIP-49, an attacker who dumps a relay can grep for `ncryptsec1` and instantly build a list of every user's encrypted backup, then try one password against all blobs simultaneously — the cost is `|passwords| × 1 scrypt`, tested against all targets in parallel.
 
-This NIP substantially mitigates the accumulation problem. An attacker who dumps a relay sees thousands of `kind:30078` events from unrelated throwaway pubkeys with random-looking d-tags and constant-size content. No field in any blob contains or reveals the user's real pubkey — while the KDF inputs include the pubkey, the outputs (throwaway signing keys, d-tags, ciphertext) are computationally unlinkable to it without the password. Against a passive relay-dump adversary, the attacker cannot identify which events are backup blobs (versus Cashu wallets, app settings, drafts, or any other `kind:30078` data), cannot link blobs to each other, and cannot confirm whether a specific user has a backup at all without guessing that user's password. Deniability is probabilistic and depends on the relay's ambient `kind:30078` traffic volume (see §Limitations).
+This NIP substantially mitigates the accumulation problem through cryptographic unlinkability: no field in any blob contains or reveals the user's real pubkey. While the KDF inputs include the pubkey, the outputs (throwaway signing keys, d-tags, ciphertext) are computationally unlinkable to it without the password. An attacker who obtains a blob cannot determine which user it belongs to, cannot link it to other blobs in the same backup set, and cannot test one password against multiple users simultaneously. This property holds under standard computational assumptions (one-wayness of scrypt and HKDF) — it does not depend on cover traffic or relay population.
+
+As a secondary benefit, NIP-SB blobs share the same event structure as other `kind:30078` application data (Cashu wallets, app settings, drafts), providing steganographic cover that makes it harder for a passive relay-dump adversary to identify which events are backup blobs at all. This cover is environment-dependent — it improves with ambient `kind:30078` traffic volume and has not been empirically validated against a statistical classifier (see §Limitations). The security argument does not depend on steganographic cover: even if an attacker can classify blobs as probable backups, the unlinkability property prevents them from determining whose backups they are or batch-cracking them.
 
 ### Prior Art
 
@@ -60,6 +68,7 @@ This NIP substantially mitigates the accumulation problem. An attacker who dumps
 - **Concatenation (`‖`)**: Raw byte concatenation with no length prefixes or delimiters.
 - **`pubkey_bytes`**: The 32-byte raw x-only public key (as used throughout Nostr per [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki)), NOT hex-encoded.
 - **`to_string(i)`**: The ASCII decimal representation of the blob index `i`, with no leading zeros or padding. Examples: `"0"`, `"1"`, `"15"`. UTF-8 encoded (ASCII is a subset of UTF-8).
+- **`relay_url_bytes`**: The UTF-8 encoding of the normalized relay URL (see §Relay URL Normalization). Used as a domain separator in HKDF `info` strings to produce relay-scoped d-tags and signing keys.
 - **Hex encoding**: Lowercase hexadecimal, no `0x` prefix. Used for d-tags and pubkeys in JSON.
 - **Base64**: RFC 4648 standard alphabet (`A-Z`, `a-z`, `0-9`, `+`, `/`) with `=` padding. NOT URL-safe alphabet. The `content` field of each blob event is base64-encoded and MUST decode to exactly 56 bytes. This produces 76 base64 characters including one trailing `=` padding character (`56 mod 3 = 2`, so padding is required). Implementations MUST accept both padded and unpadded base64 on input, and MUST produce padded base64 on output.
 
@@ -163,6 +172,46 @@ EVENT_KIND       = 30078       # NIP-78 application-specific data
 Implementations MUST normalize passwords to NFKC Unicode normalization form before any use.
 
 Implementations MUST enforce minimum password entropy of 80 bits. The specific entropy estimation method is implementation-defined (e.g., zxcvbn, wordlist-based calculation, or other validated estimator). Implementations MUST refuse to create a backup if the password does not meet this threshold. Implementations SHOULD recommend generated passphrases of seven or more words from a standard wordlist (e.g., EFF large wordlist at ~12.9 bits/word ≥ 90 bits for 7 words, or BIP-39 English wordlist at ~11 bits/word ≥ 88 bits for 8 words). Both exceed the 80-bit minimum with margin.
+
+### Relay URL Normalization
+
+Blob d-tags and signing keys are scoped to the relay they are published to. This ensures that the same backup published to different relays produces completely different metadata on each relay, preventing cross-relay linkability (see §Security Analysis, Adversary Classes).
+
+The relay URL MUST be normalized to a canonical form before use in any derivation. Normalization uses the [WHATWG URL Standard](https://url.spec.whatwg.org/) parsing and serialization algorithms:
+
+```
+To compute relay_url_bytes for a given relay:
+
+1. Parse the URL as an absolute URL using the WHATWG URL Standard
+   parsing algorithm with no base URL. REJECT if parsing fails.
+2. Inspect the parsed URL components:
+   a. REJECT if the scheme is not "wss".
+   b. REJECT if the URL contains userinfo (username or password).
+   c. REJECT if the URL contains a query string (search component is non-empty).
+3. Serialize the parsed URL using the WHATWG URL Standard
+   serialization algorithm with the "exclude fragment" flag set to true.
+4. UTF-8 encode the serialized string. The result is relay_url_bytes.
+```
+
+The WHATWG URL Standard is implemented by JavaScript `new URL()`, Rust's `url` crate, and equivalent libraries in most languages. Parse-then-serialize is idempotent — the same input always produces the same output. The standard handles scheme and hostname lowercasing, IDNA/punycode normalization, default port elision (443 for `wss`), path normalization, and IPv6 address normalization.
+
+Implementations MUST use a WHATWG-conformant URL parser. Generic URL libraries that implement RFC 3986 but not the WHATWG URL Standard may produce different canonical forms and will cause recovery failures.
+
+**Normalization examples:**
+
+| Input | Canonical form (`relay_url_bytes`) |
+|-------|-----|
+| `wss://Relay.Example.COM` | `wss://relay.example.com/` |
+| `wss://relay.example.com/` | `wss://relay.example.com/` |
+| `wss://relay.example.com:443` | `wss://relay.example.com/` |
+| `wss://relay.example.com:443/` | `wss://relay.example.com/` |
+| `wss://relay.example.com:8080` | `wss://relay.example.com:8080/` |
+| `wss://relay.example.com/v1` | `wss://relay.example.com/v1` |
+| `wss://relay.example.com/v1/` | `wss://relay.example.com/v1/` |
+| `wss://relay.example.com#frag` | `wss://relay.example.com/` |
+| `wss://relay.example.com?q=1` | REJECTED (query string) |
+| `ws://relay.example.com` | REJECTED (not wss) |
+| `wss://user:pass@relay.example.com` | REJECTED (userinfo) |
 
 ### Step 1: Determine N and D
 
@@ -301,9 +350,9 @@ H_i = scrypt(
     dkLen    = 32
 )
 
-d_tag_i = hex(HKDF-SHA256(ikm=H_i, salt=b"", info=b"d-tag",      length=32))
+d_tag_i = hex(HKDF-SHA256(ikm=H_i, salt=b"", info=b"d-tag" ‖ relay_url_bytes,      length=32))
 
-signing_secret_i = HKDF-SHA256(ikm=H_i, salt=b"", info=b"signing-key", length=32)
+signing_secret_i = HKDF-SHA256(ikm=H_i, salt=b"", info=b"signing-key" ‖ relay_url_bytes, length=32)
 # Interpret signing_secret_i as a 256-bit big-endian unsigned integer.
 # If the value is zero or ≥ secp256k1 order n, REJECT and re-derive:
 #   info=b"signing-key-1", then b"signing-key-2", etc.
@@ -325,10 +374,10 @@ Dummy blob keys are derived from `H_cover` via HKDF, not individual scrypt calls
 ```
 For each dummy j in 0..D-1:
     d_tag_dummy_j       = hex(HKDF-SHA256(ikm=H_cover, salt=b"",
-                              info=b"dummy-d-tag-" ‖ to_string(j),       length=32))
+                              info=b"dummy-d-tag-" ‖ to_string(j) ‖ relay_url_bytes,       length=32))
 
     signing_secret_dummy_j = HKDF-SHA256(ikm=H_cover, salt=b"",
-                              info=b"dummy-signing-key-" ‖ to_string(j), length=32)
+                              info=b"dummy-signing-key-" ‖ to_string(j) ‖ relay_url_bytes, length=32)
     # Interpret signing_secret_dummy_j as a 256-bit big-endian unsigned integer.
     # If the value is zero or ≥ secp256k1 order n, REJECT and re-derive:
     #   info=b"dummy-signing-key-" ‖ to_string(j) ‖ b"-1",
@@ -393,6 +442,11 @@ Implementations SHOULD periodically verify blob existence (for example, on login
 
 ```
 1. User provides: password, pubkey (npub or hex), relay URL(s)
+   # The relay URL is a derivation input, not just a query target.
+   # Each relay produces different d-tags and signing keys.
+   # If the user doesn't remember which relay, the client can
+   # silently try each relay in the user's relay list — wrong
+   # relay URLs produce d-tags that match nothing (no harm).
 
 2. base = NFKC(password) ‖ pubkey_bytes
 
@@ -403,18 +457,21 @@ Implementations SHOULD periodically verify blob existence (for example, on login
    H_cover = scrypt(base, salt="cover")     (for dummy d-tags)
    P = 2
 
-4. Derive d-tags and signing pubkeys for all N+P+D blobs:
+4. Normalize the relay URL (see §Relay URL Normalization):
+     relay_url_bytes = UTF-8(WHATWG_normalize(relay_url))
+
+   Derive d-tags and signing pubkeys for all N+P+D blobs:
 
    For real and parity blobs (i in 0..N+P-1):
      H_i              = scrypt(base ‖ to_string(i), salt="")
-     d_tag_i          = hex(HKDF(H_i, "d-tag"))
-     signing_secret_i = HKDF(H_i, info="signing-key", length=32)
+     d_tag_i          = hex(HKDF(H_i, "d-tag" ‖ relay_url_bytes))
+     signing_secret_i = HKDF(H_i, info="signing-key" ‖ relay_url_bytes, length=32)
      # Reject-and-retry if zero or ≥ n (identical to Step 4)
      signing_pubkey_i = pubkey_from_secret(signing_secret_i)
 
    For dummy blobs (j in 0..D-1):
-     d_tag_dummy_j          = hex(HKDF(H_cover, "dummy-d-tag-" ‖ to_string(j)))
-     signing_secret_dummy_j = HKDF(H_cover, "dummy-signing-key-" ‖ to_string(j))
+     d_tag_dummy_j          = hex(HKDF(H_cover, "dummy-d-tag-" ‖ to_string(j) ‖ relay_url_bytes))
+     signing_secret_dummy_j = HKDF(H_cover, "dummy-signing-key-" ‖ to_string(j) ‖ relay_url_bytes)
      signing_pubkey_dummy_j = pubkey_from_secret(signing_secret_dummy_j)
 
 5. Collect all N+P+D (d-tag, signing_pubkey) pairs.
@@ -576,13 +633,13 @@ Missing or corrupted dummy blobs do not affect recovery. Implementations SHOULD 
 
 ### Adversary Classes
 
-NIP-SB's steganographic properties vary by adversary. The protocol is designed for three tiers:
+NIP-SB's privacy properties vary by adversary. The table below separates the two properties — **unlinkability** (cannot determine which user a blob belongs to) and **steganographic cover** (cannot determine that a blob is a backup at all) — for each adversary class:
 
-| Adversary | What they observe | NIP-SB protection |
-|-----------|-------------------|-------------------|
-| **External network observer** (ISP, state actor) | TLS-encrypted WebSocket frames to a relay | **Complete.** All Nostr traffic is indistinguishable at the wire level. The observer cannot determine event kinds, d-tags, content, or pubkeys. NIP-SB backup/recovery traffic is identical to posting a message, updating a profile, or syncing a wallet. |
-| **Passive relay-dump adversary** (database leak, subpoena, bulk export) | `kind:30078` events with random d-tags, throwaway pubkeys, constant-size content | **Strong.** Blobs are computationally indistinguishable from other `kind:30078` application data (Cashu wallets, app settings, drafts) without the password. No field references the user's real pubkey. Deniability is probabilistic and improves with ambient `kind:30078` traffic volume. |
-| **Active relay operator** (timing, IP, session metadata, multi-snapshot) | Event insertion timing, query patterns, IP addresses, database snapshots over time | **Probabilistic.** Mitigated by jittered timestamps, random publication/query order, publication delays, and dummy blobs. Not guaranteed — a relay operator with network-layer visibility may correlate event bursts with client sessions or IP addresses. The operator cannot link blob metadata to a specific Nostr pubkey without the password, but may identify the *client* performing backup or recovery. Use Tor or a proxy to mitigate. |
+| Adversary | What they observe | Unlinkability | Steganographic cover |
+|-----------|-------------------|---------------|----------------------|
+| **External network observer** (ISP, state actor) | TLS-encrypted WebSocket frames to a relay | **Complete under confidentiality of the transport channel.** Cannot see event content, pubkeys, or d-tags. | **Complete under confidentiality of the transport channel.** All Nostr traffic is indistinguishable at the wire level. |
+| **Passive relay-dump adversary** (database leak, subpoena, bulk export) | `kind:30078` events with random d-tags, throwaway pubkeys, constant-size content | **Strong (computational).** No field in any blob references the user's real pubkey. Cannot link blobs to users or to each other. Cannot batch-crack. Holds under standard assumptions (one-wayness of scrypt/HKDF). | **Environment-dependent.** Blobs share the same event structure as other `kind:30078` data. Effectiveness depends on ambient traffic distribution and has not been empirically validated against a statistical classifier. |
+| **Active relay operator** (timing, IP, session metadata, multi-snapshot) | Event insertion timing, query patterns, IP addresses, database snapshots over time | **Strong at the data layer; degraded at the network layer.** Cannot link blob metadata to a Nostr pubkey without the password (computational). However, can correlate blobs published or queried from the same IP/session within a short time window, grouping them into backup sets and associating them with a client identity. | **Weak.** A burst of N+P+D `EVENT` messages from one connection, or N+P+D `REQ` subscriptions during recovery, is a distinctive pattern regardless of ambient traffic. Jitter and delays help but do not eliminate the signal. Use Tor or a relay proxy to mitigate. |
 
 *Adversary classes adapted from the taxonomy in [SoK: Plausibly Deniable Storage](https://arxiv.org/abs/2111.12809) (Chen et al., 2021), mapped from disk storage to Nostr's relay architecture.*
 
@@ -596,15 +653,21 @@ With NIP-49, an attacker who dumps a relay can grep for `ncryptsec1` and instant
 
 With this NIP, the attacker sees thousands of `kind:30078` events from unrelated throwaway pubkeys with random-looking d-tags and constant-size content. **No field in any blob contains or reveals the user's real pubkey — the KDF outputs are computationally unlinkable to it without the password.** The throwaway signing keys sever the connection between the backup and the user entirely.
 
-The attacker cannot:
-- Identify which events are backup blobs (versus Cashu wallets, app settings, drafts, or any other `kind:30078` data)
-- Determine whether a specific user has a backup at all
-- Build a list of backup targets for batch cracking
+The cryptographic unlinkability property means the attacker cannot:
+- Determine which user any blob belongs to (no field references a real pubkey)
 - Link any blob to any other blob (each has a different throwaway pubkey and an unrelated d-tag)
+- Build a list of backup targets for batch cracking
+- Test one password against multiple users' backups simultaneously
+
+As a secondary benefit, steganographic cover means the attacker may also be unable to:
+- Identify which `kind:30078` events are backup blobs (versus Cashu wallets, app settings, drafts)
+- Confirm whether a specific user has a backup at all
+
+The steganographic benefit is environment-dependent and has not been empirically validated against a statistical classifier (see §Limitations). **The security argument does not depend on it.** Even if an attacker can classify blobs as probable backups, the unlinkability property prevents them from determining whose backups they are or batch-cracking them.
 
 To attack a specific user P, the attacker must already know P and then guess passwords: `|passwords| × (N+2) scrypt calls`, all bound to that one pubkey. To attack "any user," the cost is `|users| × |passwords| × (N+2) scrypt calls` — multiplying the NIP-49 accumulation cost by `|users| × (N+2)`.
 
-The backup's **existence** is hidden, not just its contents. An attacker cannot confirm whether user P has a backup without guessing P's password. This is a qualitative security property that NIP-49 and BIP-38 do not have.
+**Active relay operator caveat:** A relay operator with connection logs can correlate blobs published or queried from the same IP address within a short time window, grouping them into backup sets and potentially associating them with a client identity — even though the operator cannot link the blobs to a specific Nostr pubkey without the password. Per-blob isolation holds at the database layer but degrades at the network layer. Implementations that require protection against active relay operators SHOULD publish blobs over separate connections with substantial time separation, ideally via Tor or a relay proxy.
 
 ### Threat: Full relay database dump
 
@@ -626,9 +689,11 @@ To attack **any user** (the accumulation scenario NIP-49 warns about): the attac
 
 ### Threat: Content-matching / clustering attack
 
-**Content clustering eliminated; metadata clustering remains possible for repeated publications.** Each blob uses a fresh random 24-byte nonce, so re-running backup with the same password produces completely different ciphertext. An attacker cannot cluster events by content.
+**Content clustering eliminated; cross-relay metadata clustering eliminated by relay-scoped derivation.** Each blob uses a fresh random 24-byte nonce, so re-running backup with the same password produces completely different ciphertext. An attacker cannot cluster events by content.
 
-However, the throwaway signing keys and d-tags are deterministic for a given `password ‖ pubkey ‖ index`. If the same backup is published to multiple relays or re-published during health checks, the `(kind, pubkey, d-tag)` tuples are identical across relays. An attacker with dumps from multiple relays can intersect metadata to identify repeated publications of the same backup set. This does not reveal the user's identity (the throwaway keys are still unlinkable to the real pubkey), but it does link blobs across relays.
+The throwaway signing keys and d-tags are deterministic for a given `password ‖ pubkey ‖ index ‖ relay_url`. Because the relay URL is mixed into the HKDF `info` parameter (see §Relay URL Normalization), the same backup published to different relays produces completely different `(pubkey, d-tag)` tuples on each relay. An attacker with dumps from multiple relays cannot intersect metadata to identify the same backup set across relays.
+
+Within a single relay, the `(pubkey, d-tag)` tuples are stable across re-publications and health checks — this is by design, as the d-tag is the address by which the blob is found during recovery (NIP-33 parameterized replaceable events update in place). An attacker with multiple snapshots of the same relay can observe that a blob persists, but cannot link it to blobs on other relays or to the user's real identity.
 
 ### Threat: Timing correlation
 
