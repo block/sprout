@@ -35,8 +35,30 @@ export const TEST_IDENTITIES = {
 
 type BridgeMode = "mock" | "relay";
 
+type MockAcpProvider = {
+  id: string;
+  label: string;
+  command: string;
+  binaryPath: string;
+  defaultArgs: string[];
+};
+
+type MockCommandAvailability = {
+  available?: boolean;
+  command?: string;
+  resolvedPath?: string | null;
+};
+
 type MockBridgeOptions = {
+  acpProviders?: MockAcpProvider[];
+  managedAgentPrereqs?: {
+    acp?: MockCommandAvailability;
+    mcp?: MockCommandAvailability;
+  };
   mintTokenError?: string;
+  profileReadDelayMs?: number;
+  profileReadError?: string;
+  profileUpdateError?: string;
   seededTokens?: Array<{
     id: string;
     name: string;
@@ -55,14 +77,38 @@ type BridgeOptions = {
   mock?: MockBridgeOptions;
   relayHttpUrl?: string;
   relayWsUrl?: string;
+  skipOnboardingSeed?: boolean;
   user?: keyof typeof TEST_IDENTITIES;
 };
+
+const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX =
+  "sprout-onboarding-complete.v1:";
+const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
+
+async function seedOnboardingCompletionForKnownIdentities(page: Page) {
+  const pubkeys = [
+    DEFAULT_MOCK_PUBKEY,
+    ...Object.values(TEST_IDENTITIES).map(({ pubkey }) => pubkey),
+  ];
+  await page.addInitScript(
+    ({ prefix, pubkeys: pubkeysToSeed }) => {
+      for (const pubkey of pubkeysToSeed) {
+        window.localStorage.setItem(`${prefix}${pubkey}`, "true");
+      }
+    },
+    { prefix: ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX, pubkeys },
+  );
+}
 
 export async function installBridge(page: Page, options: BridgeOptions) {
   const identity =
     options.mode === "relay"
       ? TEST_IDENTITIES[options.user ?? "tyler"]
       : undefined;
+
+  if (!options.skipOnboardingSeed) {
+    await seedOnboardingCompletionForKnownIdentities(page);
+  }
 
   await page.addInitScript(
     ({ identity: bridgeIdentity, mock, mode, relayHttpUrl, relayWsUrl }) => {
@@ -146,8 +192,16 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   );
 }
 
-export async function installMockBridge(page: Page, mock?: MockBridgeOptions) {
-  await installBridge(page, { mode: "mock", mock });
+export async function installMockBridge(
+  page: Page,
+  mock?: MockBridgeOptions,
+  options?: { skipOnboardingSeed?: boolean },
+) {
+  await installBridge(page, {
+    mode: "mock",
+    mock,
+    skipOnboardingSeed: options?.skipOnboardingSeed,
+  });
 }
 
 export async function installRelayBridge(
