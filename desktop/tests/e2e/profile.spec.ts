@@ -276,7 +276,7 @@ test("desktop notification clicks open the matching forum thread", async ({
   ).toBeVisible();
 });
 
-test("opens settings with the keyboard shortcut, applies the selected theme, and preserves the user accent", async ({
+test("opens settings with the keyboard shortcut and updates theme", async ({
   page,
 }) => {
   await page.goto("/");
@@ -290,14 +290,14 @@ test("opens settings with the keyboard shortcut, applies the selected theme, and
   await expect(page.getByTestId("settings-nav-appearance")).toBeVisible();
   await page.getByTestId("settings-nav-appearance").click();
 
-  // The default theme is applied directly on load.
+  // Default theme is houston (dark)
   await expect
     .poll(() =>
       page.evaluate(() => document.documentElement.classList.contains("dark")),
     )
     .toBe(true);
 
-  // Selecting a theme applies it directly and persists the choice.
+  // Switch to a light theme — verifies dark→light transition
   await page.getByTestId("theme-option-github-light").click();
 
   await expect
@@ -315,6 +315,7 @@ test("opens settings with the keyboard shortcut, applies the selected theme, and
   );
   expect(primaryBeforeAccent).toBeTruthy();
 
+  // Accent choice should persist across later theme switches.
   await page.getByTestId("accent-color-red").click();
 
   await expect

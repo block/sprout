@@ -73,8 +73,8 @@ export const SYNTAX_THEMES = [
 
 export type SyntaxThemeName = (typeof SYNTAX_THEMES)[number];
 
-// Known light themes — used by the theme picker icons and to seed the root
-// class before the full theme variables finish loading.
+// Known light themes — used by the theme picker to show sun/moon icons
+// for themes that haven't been loaded yet.
 export const LIGHT_THEMES: ReadonlySet<SyntaxThemeName> = new Set([
   "catppuccin-latte",
   "everforest-light",
@@ -204,29 +204,15 @@ function stripAlpha(color: string): string {
   return color;
 }
 
-function findColor(
-  colors: Record<string, string> | undefined,
-  keys: readonly string[],
-): string | null {
-  if (!colors) {
-    return null;
-  }
-
-  for (const key of keys) {
-    const value = colors[key];
-    if (value) {
-      return stripAlpha(value);
-    }
-  }
-
-  return null;
-}
-
 function extractGitColors(colors: Record<string, string> | undefined): {
   added: string | null;
   deleted: string | null;
   modified: string | null;
 } {
+  if (!colors) {
+    return { added: null, deleted: null, modified: null };
+  }
+
   const addedKeys = [
     "gitDecoration.addedResourceForeground",
     "editorGutter.addedBackground",
@@ -242,10 +228,18 @@ function extractGitColors(colors: Record<string, string> | undefined): {
     "editorGutter.modifiedBackground",
   ];
 
+  const findColor = (keys: string[]): string | null => {
+    for (const key of keys) {
+      const value = colors[key];
+      if (value) return stripAlpha(value);
+    }
+    return null;
+  };
+
   return {
-    added: findColor(colors, addedKeys),
-    deleted: findColor(colors, deletedKeys),
-    modified: findColor(colors, modifiedKeys),
+    added: findColor(addedKeys),
+    deleted: findColor(deletedKeys),
+    modified: findColor(modifiedKeys),
   };
 }
 
@@ -267,8 +261,9 @@ export function extractThemeInfo(
     (theme.colors?.["editor.background"] as string | undefined) || "#1e1e1e";
   const fg =
     (theme.colors?.["editor.foreground"] as string | undefined) || "#d4d4d4";
-  const colors = theme.colors as Record<string, string> | undefined;
-  const gitColors = extractGitColors(colors);
+  const gitColors = extractGitColors(
+    theme.colors as Record<string, string> | undefined,
+  );
   return {
     name: themeName,
     bg,
