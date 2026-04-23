@@ -29,7 +29,7 @@ function renderApp() {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <ThemeProvider defaultTheme="houston">
+        <ThemeProvider>
           <TooltipProvider delayDuration={300}>
             <App />
             <Toaster />

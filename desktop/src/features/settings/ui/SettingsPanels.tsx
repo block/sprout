@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   BellRing,
   Check,
@@ -98,7 +98,7 @@ export const settingsSections: SettingsSectionDescriptor[] = [
 function formatThemeLabel(name: string): string {
   return name
     .split("-")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
 
@@ -113,10 +113,13 @@ function ThemeSettingsCard() {
     }
   };
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    if (!q) return SYNTAX_THEMES;
-    return SYNTAX_THEMES.filter((name) => name.includes(q));
+  const filteredThemes = useMemo(() => {
+    const query = search.toLowerCase().trim();
+    if (!query) {
+      return SYNTAX_THEMES;
+    }
+
+    return SYNTAX_THEMES.filter((name) => name.includes(query));
   }, [search]);
 
   return (
@@ -124,7 +127,8 @@ function ThemeSettingsCard() {
       <div className="mb-3 min-w-0">
         <h2 className="text-sm font-semibold tracking-tight">Appearance</h2>
         <p className="text-sm text-muted-foreground">
-          Choose a theme for Sprout. Light and dark mode is auto-detected.
+          Pick the theme Sprout should use. Your selection stays active until
+          you choose another one.
         </p>
       </div>
 
@@ -132,7 +136,7 @@ function ThemeSettingsCard() {
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <input
           className="w-full rounded-lg border border-border/70 bg-background/70 py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
           placeholder="Search themes..."
           type="text"
           value={search}
@@ -140,12 +144,12 @@ function ThemeSettingsCard() {
       </div>
 
       <div className="max-h-72 overflow-y-auto rounded-lg border border-border/70 bg-background/70">
-        {filtered.length === 0 ? (
+        {filteredThemes.length === 0 ? (
           <p className="px-3 py-4 text-center text-sm text-muted-foreground">
             No themes match your search.
           </p>
         ) : (
-          filtered.map((name) => {
+          filteredThemes.map((name) => {
             const isActive = themeName === name;
             const light = isLightTheme(name);
 
@@ -172,9 +176,9 @@ function ThemeSettingsCard() {
                 <span className="flex-1 truncate">
                   {formatThemeLabel(name)}
                 </span>
-                {isActive && (
+                {isActive ? (
                   <Check className="h-4 w-4 shrink-0 text-primary" />
-                )}
+                ) : null}
               </button>
             );
           })
@@ -198,9 +202,9 @@ function ThemeSettingsCard() {
               title={color.name}
               type="button"
             >
-              {accentColor === color.value && (
+              {accentColor === color.value ? (
                 <Check className="h-3.5 w-3.5 text-white" />
-              )}
+              ) : null}
             </button>
           ))}
         </div>
