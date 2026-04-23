@@ -3,12 +3,16 @@ package com.sprout.sprout_mobile
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.nio.ByteBuffer
+import java.util.UUID
 
 class MainActivity : FlutterActivity() {
     private var mediaUploadChannel: MethodChannel? = null
@@ -27,6 +31,9 @@ class MainActivity : FlutterActivity() {
                     }
                     TRANSCODE_IMAGE_TO_JPEG_METHOD -> {
                         handleTranscodeImageToJpeg(call.arguments, result)
+                    }
+                    TRANSCODE_VIDEO_TO_MP4_METHOD -> {
+                        handleTranscodeVideoToMp4(call.arguments, result)
                     }
                     else -> result.notImplemented()
                 }
@@ -150,6 +157,63 @@ class MainActivity : FlutterActivity() {
         result.success(transformedBytes)
     }
 
+    private fun handleTranscodeVideoToMp4(
+        arguments: Any?,
+        result: MethodChannel.Result,
+    ) {
+        val sourcePath = arguments as? String ?: run {
+            invalidArguments(result, "Expected source file path as String.")
+            return
+        }
+
+        val outputFile = File(cacheDir, "${UUID.randomUUID()}.mp4")
+        var muxer: MediaMuxer? = null
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(sourcePath)
+            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+
+            val trackIndices = mutableMapOf<Int, Int>()
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val newIndex = muxer.addTrack(format)
+                trackIndices[i] = newIndex
+            }
+
+            muxer.start()
+            val buffer = ByteBuffer.allocate(1024 * 1024) // 1MB buffer
+            val bufferInfo = android.media.MediaCodec.BufferInfo()
+
+            for ((sourceTrack, muxerTrack) in trackIndices) {
+                extractor.selectTrack(sourceTrack)
+                while (true) {
+                    val sampleSize = extractor.readSampleData(buffer, 0)
+                    if (sampleSize < 0) break
+                    bufferInfo.offset = 0
+                    bufferInfo.size = sampleSize
+                    bufferInfo.presentationTimeUs = extractor.sampleTime
+                    bufferInfo.flags = extractor.sampleFlags
+                    muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
+                    extractor.advance()
+                }
+                extractor.unselectTrack(sourceTrack)
+            }
+
+            muxer.stop()
+            result.success(outputFile.absolutePath)
+        } catch (e: Exception) {
+            outputFile.delete()
+            result.error(
+                "transcode_failed",
+                e.message ?: "Video transcoding failed.",
+                null,
+            )
+        } finally {
+            try { muxer?.release() } catch (_: Exception) {}
+            extractor.release()
+        }
+    }
+
     private fun invalidArguments(
         result: MethodChannel.Result,
         message: String,
@@ -161,5 +225,6 @@ class MainActivity : FlutterActivity() {
         private const val MEDIA_UPLOAD_CHANNEL = "sprout/media_upload"
         private const val SANITIZE_IMAGE_FOR_UPLOAD_METHOD = "sanitizeImageForUpload"
         private const val TRANSCODE_IMAGE_TO_JPEG_METHOD = "transcodeImageToJpeg"
+        private const val TRANSCODE_VIDEO_TO_MP4_METHOD = "transcodeVideoToMp4"
     }
 }

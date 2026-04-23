@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,7 @@ import 'relay_provider.dart';
 const _mediaUploadPath = '/media/upload';
 const _mediaUploadPlatformChannelName = 'sprout/media_upload';
 const _sanitizeImageForUploadMethod = 'sanitizeImageForUpload';
+const _transcodeVideoToMp4Method = 'transcodeVideoToMp4';
 const _transcodeImageToJpegMethod = 'transcodeImageToJpeg';
 const _uploadAuthKind = 24242;
 const _uploadAuthLifetimeSeconds = 300;
@@ -46,6 +48,7 @@ typedef PickGalleryVideo = Future<XFile?> Function();
 typedef SanitizeImageBytes =
     Future<Uint8List> Function(Uint8List bytes, String mimeType);
 typedef TranscodeImageToJpeg = Future<Uint8List> Function(Uint8List bytes);
+typedef TranscodeVideoToMp4 = Future<String> Function(String filePath);
 
 @immutable
 class _PreparedUploadImage {
@@ -119,6 +122,7 @@ class MediaUploadService {
   final PickGalleryVideo _pickGalleryVideo;
   final SanitizeImageBytes _sanitizeImageBytes;
   final TranscodeImageToJpeg _transcodeImageToJpeg;
+  final TranscodeVideoToMp4 _transcodeVideoToMp4;
   final DateTime Function() _now;
   final http.Client _http;
   final bool _ownsHttpClient;
@@ -131,6 +135,7 @@ class MediaUploadService {
     required PickGalleryVideo pickGalleryVideo,
     SanitizeImageBytes? sanitizeImageBytes,
     TranscodeImageToJpeg? transcodeImageToJpeg,
+    TranscodeVideoToMp4? transcodeVideoToMp4,
     DateTime Function()? now,
     http.Client? httpClient,
   }) : _baseUrl = baseUrl,
@@ -141,6 +146,7 @@ class MediaUploadService {
        _sanitizeImageBytes = sanitizeImageBytes ?? _sanitizePickedImageBytes,
        _transcodeImageToJpeg =
            transcodeImageToJpeg ?? _transcodePickedImageToJpeg,
+       _transcodeVideoToMp4 = transcodeVideoToMp4 ?? _transcodePickedVideoToMp4,
        _now = now ?? DateTime.now,
        _http = httpClient ?? http.Client(),
        _ownsHttpClient = httpClient == null;
@@ -167,9 +173,38 @@ class MediaUploadService {
         'Video is too large (${(length / 1024 / 1024).toStringAsFixed(0)}MB). Maximum is 100MB.',
       );
     }
-    final bytes = await pickedVideo.readAsBytes();
-    final mimeType = _detectVideoMimeType(pickedVideo.name);
-    return uploadBytes(bytes, mimeType: mimeType);
+
+    // Read first 32 bytes to check if it's already an MP4 container.
+    final header = await _readFileHeader(pickedVideo.path, 32);
+
+    if (_isAlreadyMp4Container(header)) {
+      // Already MP4 — upload directly.
+      final bytes = await pickedVideo.readAsBytes();
+      return uploadBytes(bytes, mimeType: 'video/mp4');
+    }
+
+    // Non-MP4 container (e.g. QuickTime .mov) — remux to MP4 via platform.
+    String? transcodedPath;
+    try {
+      transcodedPath = await _transcodeVideoToMp4(pickedVideo.path);
+      final transcodedFile = File(transcodedPath);
+      final transcodedLength = await transcodedFile.length();
+      if (transcodedLength > _maxVideoSizeBytes) {
+        throw Exception(
+          'Transcoded video is too large (${(transcodedLength / 1024 / 1024).toStringAsFixed(0)}MB). Maximum is 100MB.',
+        );
+      }
+      final bytes = await transcodedFile.readAsBytes();
+      return uploadBytes(bytes, mimeType: 'video/mp4');
+    } finally {
+      if (transcodedPath != null) {
+        try {
+          await File(transcodedPath).delete();
+        } catch (_) {
+          // Best-effort temp file cleanup.
+        }
+      }
+    }
   }
 
   Future<BlobDescriptor> uploadBytes(
@@ -519,7 +554,46 @@ int _readUint32LittleEndian(Uint8List bytes, int offset) {
 /// Always returns `video/mp4` — the relay only accepts MP4 and does its own
 /// magic-byte validation. Most iPhone `.mov` files are ftyp-isom containers
 /// that the relay accepts as MP4.
-String _detectVideoMimeType(String filename) => 'video/mp4';
+/// Known MP4 ftyp major brands. If the file's major brand (bytes 8–11)
+/// matches one of these, it's already an MP4-compatible container.
+const _mp4FtypBrands = {'isom', 'mp41', 'mp42', 'M4V ', 'avc1', 'iso5'};
+
+/// Checks whether [bytes] (at least 12 bytes of file header) represent
+/// an MP4-family container by inspecting the ftyp box major brand.
+///
+/// Exposed for testing as [isAlreadyMp4Container].
+@visibleForTesting
+bool isAlreadyMp4Container(Uint8List bytes) => _isAlreadyMp4Container(bytes);
+
+bool _isAlreadyMp4Container(Uint8List bytes) {
+  if (bytes.length < 12) return false;
+  if (!_matchesAscii(bytes, 4, 'ftyp')) return false;
+  final brand = ascii.decode(bytes.sublist(8, 12), allowInvalid: true);
+  return _mp4FtypBrands.contains(brand);
+}
+
+/// Reads the first [count] bytes of a file without loading it entirely.
+Future<Uint8List> _readFileHeader(String path, int count) async {
+  final file = File(path);
+  final raf = await file.open(mode: FileMode.read);
+  try {
+    final bytes = await raf.read(count);
+    return bytes;
+  } finally {
+    await raf.close();
+  }
+}
+
+Future<String> _transcodePickedVideoToMp4(String filePath) async {
+  final result = await _mediaUploadPlatformChannel.invokeMethod<String>(
+    _transcodeVideoToMp4Method,
+    filePath,
+  );
+  if (result == null || result.isEmpty) {
+    throw Exception('Failed to convert video to MP4.');
+  }
+  return result;
+}
 
 String? _extractServerAuthority(String baseUrl) {
   final uri = Uri.parse(baseUrl);
