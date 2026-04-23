@@ -7,6 +7,7 @@ import 'package:nostr/nostr.dart' as nostr;
 import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import 'theme_picker_page.dart';
 
 class SettingsPage extends HookConsumerWidget {
   const SettingsPage({super.key});
@@ -15,6 +16,7 @@ class SettingsPage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(relayConfigProvider);
     final selectedAccent = ref.watch(accentProvider);
+    final selectedScheme = ref.watch(schemeProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -94,28 +96,23 @@ class SettingsPage extends HookConsumerWidget {
           // Appearance
           Text('Appearance', style: context.textTheme.titleMedium),
           const SizedBox(height: Grid.twelve),
-          SegmentedButton<ThemeMode>(
-            segments: const [
-              ButtonSegment(
-                value: ThemeMode.light,
-                icon: Icon(LucideIcons.sun),
-                label: Text('Light'),
+
+          // Color scheme picker — navigates to dedicated page
+          ListTile(
+            leading: const Icon(LucideIcons.palette),
+            title: const Text('Color Scheme'),
+            subtitle: Text(
+              selectedScheme == null
+                  ? 'Default (Catppuccin)'
+                  : findTheme(selectedScheme)?.displayName ?? selectedScheme,
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
               ),
-              ButtonSegment(
-                value: ThemeMode.system,
-                icon: Icon(LucideIcons.monitor),
-                label: Text('System'),
-              ),
-              ButtonSegment(
-                value: ThemeMode.dark,
-                icon: Icon(LucideIcons.moon),
-                label: Text('Dark'),
-              ),
-            ],
-            selected: {ref.watch(themeProvider)},
-            onSelectionChanged: (modes) {
-              ref.read(themeProvider.notifier).setThemeMode(modes.first);
-            },
+            ),
+            trailing: const Icon(LucideIcons.chevronRight, size: 18),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const ThemePickerPage()),
+            ),
           ),
 
           const SizedBox(height: Grid.xs),
@@ -138,7 +135,6 @@ class SettingsPage extends HookConsumerWidget {
                     .read(accentProvider.notifier)
                     .setAccent(defaultAccentIndex),
               ),
-              // 8 accent colors from desktop
               for (var i = 0; i < accentColors.length; i++)
                 _AccentSwatch(
                   color: context.colors.brightness == Brightness.light
@@ -219,19 +215,14 @@ class _AccentSwatch extends StatelessWidget {
                 : Border.all(color: color.withValues(alpha: 0.4), width: 1),
           ),
           child: selected
-              ? Icon(LucideIcons.check, size: 16, color: _contrastColor(color))
+              ? Icon(
+                  LucideIcons.check,
+                  size: 16,
+                  color: contrastForeground(color),
+                )
               : null,
         ),
       ),
     );
-  }
-
-  static Color _contrastColor(Color bg) {
-    final lum = bg.computeLuminance();
-    final contrastWithBlack = (lum + 0.05) / 0.05;
-    final contrastWithWhite = 1.05 / (lum + 0.05);
-    return contrastWithBlack >= contrastWithWhite
-        ? const Color(0xFF000000)
-        : const Color(0xFFFFFFFF);
   }
 }
