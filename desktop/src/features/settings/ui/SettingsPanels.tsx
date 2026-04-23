@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from "react";
 import {
   BellRing,
   Check,
+  Download,
   Keyboard,
   KeyRound,
   MonitorCog,
@@ -26,6 +27,7 @@ import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
+import { UpdateChecker } from "../UpdateChecker";
 
 export type SettingsSection =
   | "profile"
@@ -34,6 +36,7 @@ export type SettingsSection =
   | "shortcuts"
   | "tokens"
   | "mobile"
+  | "updates"
   | "doctor";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
@@ -87,6 +90,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "mobile",
     label: "Mobile",
     icon: Smartphone,
+  },
+  {
+    value: "updates",
+    label: "Updates",
+    icon: Download,
   },
   {
     value: "doctor",
@@ -248,6 +256,8 @@ export function renderSettingsSection(
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
     case "mobile":
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
+    case "updates":
+      return <UpdateChecker />;
     case "doctor":
       return <DoctorSettingsPanel />;
     default: {
