@@ -227,34 +227,11 @@ class ComposeBar extends HookConsumerWidget {
       }
     }
 
-    Future<void> pickAndUploadAttachment() async {
+    Future<void> pickAndUpload(Future<BlobDescriptor?> Function() pick) async {
       uploadError.value = null;
       uploadingCount.value += 1;
       try {
-        final uploaded = await ref
-            .read(mediaUploadServiceProvider)
-            .pickAndUploadImage();
-        if (uploaded != null && context.mounted) {
-          attachments.value = [...attachments.value, uploaded];
-        }
-      } catch (error) {
-        if (context.mounted) {
-          uploadError.value = _formatUploadError(error);
-        }
-      } finally {
-        if (context.mounted) {
-          uploadingCount.value -= 1;
-        }
-      }
-    }
-
-    Future<void> pickAndUploadVideo() async {
-      uploadError.value = null;
-      uploadingCount.value += 1;
-      try {
-        final uploaded = await ref
-            .read(mediaUploadServiceProvider)
-            .pickAndUploadVideo();
+        final uploaded = await pick();
         if (uploaded != null && context.mounted) {
           attachments.value = [...attachments.value, uploaded];
         }
@@ -424,7 +401,11 @@ class ComposeBar extends HookConsumerWidget {
                                 title: const Text('Photo'),
                                 onTap: () {
                                   Navigator.of(sheetContext).pop();
-                                  pickAndUploadAttachment();
+                                  pickAndUpload(
+                                    ref
+                                        .read(mediaUploadServiceProvider)
+                                        .pickAndUploadImage,
+                                  );
                                 },
                               ),
                               ListTile(
@@ -432,7 +413,11 @@ class ComposeBar extends HookConsumerWidget {
                                 title: const Text('Video'),
                                 onTap: () {
                                   Navigator.of(sheetContext).pop();
-                                  pickAndUploadVideo();
+                                  pickAndUpload(
+                                    ref
+                                        .read(mediaUploadServiceProvider)
+                                        .pickAndUploadVideo,
+                                  );
                                 },
                               ),
                             ],
