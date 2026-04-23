@@ -114,7 +114,7 @@ function SectionHeaderActions({
   onCreateClick: () => void;
 }) {
   return (
-    <div className="absolute right-1 top-3 flex items-center gap-0.5">
+    <div className="absolute right-1 top-3 z-10 flex items-center gap-0.5">
       <button
         aria-label={browseAriaLabel}
         className={SECTION_ICON_BUTTON_CLASS}

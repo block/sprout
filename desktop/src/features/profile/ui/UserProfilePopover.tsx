@@ -4,6 +4,10 @@ import {
   useUserNotesQuery,
   useUserProfileQuery,
 } from "@/features/profile/hooks";
+import {
+  useRelayAgentsQuery,
+  useManagedAgentsQuery,
+} from "@/features/agents/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { formatRelativeTime } from "@/features/forum/lib/time";
@@ -20,6 +24,25 @@ type UserProfilePopoverProps = {
   /** Value used to generate the BotIdenticon glyph (typically the author name). */
   botIdenticonValue?: string;
 };
+
+const RUNTIME_LABELS: Record<string, string> = {
+  goose: "Goose",
+  "claude-code": "Claude Code",
+  "codex-acp": "Codex",
+  aider: "Aider",
+};
+
+function runtimeLabel(command: string): string {
+  return RUNTIME_LABELS[command] ?? command;
+}
+
+function InfoBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+      {children}
+    </span>
+  );
+}
 
 function truncatePubkey(pubkey: string) {
   if (pubkey.length <= 16) {
@@ -41,10 +64,20 @@ export function UserProfilePopover({
   const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
     limit: showAllNotes ? 20 : 3,
   });
+  const relayAgentsQuery = useRelayAgentsQuery({
+    enabled: open && role === "bot",
+  });
+  const managedAgentsQuery = useManagedAgentsQuery({
+    enabled: open && role === "bot",
+  });
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
   });
 
+  const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
+  const managedAgent = managedAgentsQuery.data?.find(
+    (a) => a.pubkey === pubkey,
+  );
   const profile = profileQuery.data;
   const notes = notesQuery.data?.notes ?? [];
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
@@ -92,6 +125,22 @@ export function UserProfilePopover({
 
             {presenceStatus ? <PresenceBadge status={presenceStatus} /> : null}
           </div>
+
+          {role === "bot" && (managedAgent || relayAgent) ? (
+            <div className="flex flex-wrap gap-1.5">
+              {managedAgent?.agentCommand ? (
+                <InfoBadge>{runtimeLabel(managedAgent.agentCommand)}</InfoBadge>
+              ) : relayAgent?.agentType ? (
+                <InfoBadge>{runtimeLabel(relayAgent.agentType)}</InfoBadge>
+              ) : null}
+              {managedAgent?.model ? (
+                <InfoBadge>{managedAgent.model}</InfoBadge>
+              ) : null}
+              {managedAgent?.acpCommand ? (
+                <InfoBadge>ACP: {managedAgent.acpCommand}</InfoBadge>
+              ) : null}
+            </div>
+          ) : null}
 
           {profile?.about ? (
             <p className="text-xs leading-relaxed text-muted-foreground">
