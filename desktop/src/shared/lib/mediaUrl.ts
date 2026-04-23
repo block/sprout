@@ -8,11 +8,11 @@
  * For video, the proxy streams via axum — no buffering the entire file.
  * Images and other media also benefit from this path.
  *
- * Detection is path-based: /media/{64-hex-chars}.{ext} is a Blossom BUD-01
- * content-addressed URL. The 64-char lowercase hex SHA-256 hash makes this
- * pattern unique to Blossom relays — false positives from other origins are
- * practically impossible. This avoids needing async relay-URL initialization,
- * eliminating race conditions with first render.
+ * Only URLs hosted on the Sprout relay are rewritten. External Blossom URLs
+ * (e.g. nostr.build, void.cat) are returned unchanged — they aren't behind
+ * Cloudflare Access and can be loaded directly by WKWebView. Without this
+ * origin check, external Blossom URLs would be proxied to the wrong server
+ * (the Sprout relay), resulting in 404s.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -26,14 +26,27 @@ const RELAY_MEDIA_RE =
 let cachedPort: number | null = null;
 let portPromise: Promise<number | null> | null = null;
 
+/** Cached relay origin (e.g. "https://sprout-oss.stage.blox.sqprod.co"). */
+let cachedRelayOrigin: string | null = null;
+
 const POLL_INTERVAL_MS = 100;
 const POLL_TIMEOUT_MS = 5000;
 
 /**
  * Poll `get_media_proxy_port` until we get a non-zero port or timeout.
+ * Also fetches the relay HTTP base URL for origin-checking.
  * Returns the port, or null if the proxy never came up.
  */
 async function fetchProxyPort(): Promise<number | null> {
+  // Fetch relay origin in parallel — fire-and-forget, no retry needed.
+  if (!cachedRelayOrigin) {
+    invoke<string>("get_relay_http_url")
+      .then((url) => {
+        cachedRelayOrigin = url.replace(/\/+$/, "");
+      })
+      .catch(() => {});
+  }
+
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
@@ -58,13 +71,23 @@ if (typeof window !== "undefined") {
 }
 
 /**
- * If `url` looks like a Blossom relay media URL, rewrite it to go through
- * the localhost streaming proxy. Falls back to sprout-media:// if the proxy
- * port isn't available yet.
+ * If `url` is a Blossom media URL hosted on the Sprout relay, rewrite it
+ * to go through the localhost streaming proxy. External Blossom URLs and
+ * non-Blossom URLs are returned unchanged.
+ *
+ * Falls back to sprout-media:// if the proxy port isn't available yet.
  */
 export function rewriteRelayUrl(url: string): string {
   const m = RELAY_MEDIA_RE.exec(url);
   if (!m) return url;
+
+  // Only proxy URLs that belong to our relay. External Blossom URLs
+  // (different origin) pass through unchanged — they work fine via WKWebView.
+  // If the relay origin isn't cached yet, fall through to the rewrite path
+  // as a safe default (relay URLs need the proxy to avoid Cloudflare 403s).
+  if (cachedRelayOrigin && !url.startsWith(`${cachedRelayOrigin}/`)) {
+    return url;
+  }
 
   if (cachedPort && cachedPort > 0) {
     return `http://localhost:${cachedPort}/media/${m[1]}`;
