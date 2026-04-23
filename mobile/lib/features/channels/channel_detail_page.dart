@@ -16,6 +16,7 @@ import '../forum/forum_posts_view.dart';
 import 'channel.dart';
 import 'date_formatters.dart';
 import 'day_divider.dart';
+import 'emoji_picker.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
@@ -866,6 +867,37 @@ void _showMessageActions({
                       child: Text(emoji, style: const TextStyle(fontSize: 20)),
                     ),
                   ),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    showEmojiPicker(
+                      context: context,
+                      onSelect: (emoji) {
+                        ref
+                            .read(channelActionsProvider)
+                            .addReaction(message.id, emoji);
+                      },
+                    );
+                  },
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        sheetContext,
+                      ).colorScheme.surfaceContainerHighest,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      LucideIcons.plus,
+                      size: 20,
+                      color: Theme.of(
+                        sheetContext,
+                      ).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: Grid.xs),
