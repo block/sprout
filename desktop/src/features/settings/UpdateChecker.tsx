@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { check } from "@tauri-apps/plugin-updater";
+import { useState, useRef, useCallback } from "react";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 type UpdateStatus =
@@ -7,20 +7,30 @@ type UpdateStatus =
   | { state: "checking" }
   | { state: "up-to-date" }
   | { state: "available"; version: string }
-  | { state: "downloading"; progress?: number }
+  | { state: "downloading" }
   | { state: "installing" }
   | { state: "ready" }
   | { state: "error"; message: string };
 
 export function UpdateChecker() {
   const [status, setStatus] = useState<UpdateStatus>({ state: "idle" });
+  const updateRef = useRef<Update | null>(null);
+
+  const closeUpdate = useCallback(async () => {
+    if (updateRef.current) {
+      await updateRef.current.close();
+      updateRef.current = null;
+    }
+  }, []);
 
   async function checkForUpdate() {
     try {
+      await closeUpdate();
       setStatus({ state: "checking" });
       const update = await check();
 
       if (update) {
+        updateRef.current = update;
         setStatus({ state: "available", version: update.version });
       } else {
         setStatus({ state: "up-to-date" });
@@ -35,19 +45,16 @@ export function UpdateChecker() {
 
   async function downloadAndInstall() {
     try {
-      setStatus({ state: "downloading" });
-      const update = await check();
+      const update = updateRef.current;
       if (!update) {
         setStatus({ state: "up-to-date" });
         return;
       }
 
+      setStatus({ state: "downloading" });
+
       await update.downloadAndInstall((event) => {
-        if (event.event === "Started" && event.data.contentLength) {
-          setStatus({ state: "downloading", progress: 0 });
-        } else if (event.event === "Progress") {
-          // Could track progress here
-        } else if (event.event === "Finished") {
+        if (event.event === "Finished") {
           setStatus({ state: "installing" });
         }
       });
