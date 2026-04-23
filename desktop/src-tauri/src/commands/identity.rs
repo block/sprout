@@ -38,6 +38,13 @@ pub fn get_relay_http_url() -> String {
 }
 
 #[tauri::command]
+pub fn get_media_proxy_port(state: State<'_, AppState>) -> u16 {
+    state
+        .media_proxy_port
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
 pub fn sign_event(
     kind: u16,
     content: String,

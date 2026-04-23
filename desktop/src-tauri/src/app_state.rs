@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io::Write, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io::Write,
+    sync::{atomic::AtomicU16, Mutex},
+};
 
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, Manager};
@@ -23,6 +27,8 @@ pub struct AppState {
     /// Selected audio output device name. `None` = system default.
     /// Used by `connect_audio_relay` and TTS pipeline when opening sinks.
     pub audio_output_device: Mutex<Option<String>>,
+    /// Port of the localhost media streaming proxy (set during setup).
+    pub media_proxy_port: AtomicU16,
 }
 
 pub fn build_app_state() -> AppState {
@@ -69,6 +75,7 @@ pub fn build_app_state() -> AppState {
         huddle_state: Mutex::new(HuddleState::default()),
         app_handle: Mutex::new(None),
         audio_output_device: Mutex::new(None),
+        media_proxy_port: AtomicU16::new(0),
     }
 }
 

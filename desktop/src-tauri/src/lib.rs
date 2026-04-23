@@ -3,6 +3,7 @@ mod commands;
 mod events;
 mod huddle;
 mod managed_agents;
+mod media_proxy;
 mod migration;
 mod models;
 mod relay;
@@ -28,7 +29,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::{http, Emitter, Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
@@ -150,133 +151,6 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Defense-in-depth cap: refuse to buffer responses larger than this into RAM.
-/// Range requests (≤16 MiB from server) always fit. Full GETs for huge videos
-/// get a clear 413 instead of OOM — the <video> element always uses range
-/// requests for seeking, so this only catches edge cases.
-const MAX_PROXY_RESPONSE: u64 = 20 * 1024 * 1024;
-
-/// Proxy media requests through the Rust backend so they traverse the WARP tunnel.
-///
-/// WKWebView's networking stack bypasses WARP, causing 403s from Cloudflare Access.
-/// This handler routes `sprout-media://localhost/{path}` through reqwest, which
-/// runs in the Tauri process and goes through WARP.
-async fn handle_sprout_media(
-    app: &tauri::AppHandle,
-    request: &http::Request<Vec<u8>>,
-) -> http::Response<Vec<u8>> {
-    let state = app.state::<AppState>();
-    let base = relay::relay_api_base_url();
-
-    // Preserve path + query (thumbnails may have query params).
-    // Only proxy /media/ paths — reject anything else.
-    let path_and_query = request
-        .uri()
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-
-    if !path_and_query.starts_with("/media/") {
-        return error_response(404, "not found");
-    }
-
-    let has_range = request.headers().contains_key("range");
-    let upstream_url = format!("{base}{path_and_query}");
-
-    // Forward Range header if present — enables video seeking through the proxy.
-    let mut upstream = state
-        .http_client
-        .get(&upstream_url)
-        .timeout(std::time::Duration::from_secs(60));
-    if let Some(range) = request.headers().get("range") {
-        if let Ok(v) = range.to_str() {
-            upstream = upstream.header("range", v);
-        }
-    }
-
-    let result = upstream.send().await;
-
-    match result {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let content_type = resp
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("application/octet-stream")
-                .to_string();
-
-            // Propagate range-related headers so <video> seeking works.
-            let content_range = resp
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let accept_ranges = resp
-                .headers()
-                .get("accept-ranges")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let content_length = resp
-                .headers()
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-
-            // OOM guard: if this is a non-range GET and the upstream body is
-            // larger than our cap, bail with 413 instead of buffering into RAM.
-            // Tauri's protocol handler requires Vec<u8> so we can't truly stream.
-            if !has_range {
-                if let Some(ref cl) = content_length {
-                    if let Ok(len) = cl.parse::<u64>() {
-                        if len > MAX_PROXY_RESPONSE {
-                            return error_response(
-                                413,
-                                "response too large — use range requests for video playback",
-                            );
-                        }
-                    }
-                }
-            }
-
-            match resp.bytes().await {
-                Ok(bytes) => {
-                    let mut builder = http::Response::builder()
-                        .status(status)
-                        .header("content-type", &content_type);
-                    if let Some(ref cr) = content_range {
-                        builder = builder.header("content-range", cr);
-                    }
-                    if let Some(ref ar) = accept_ranges {
-                        builder = builder.header("accept-ranges", ar);
-                    }
-                    if let Some(ref cl) = content_length {
-                        builder = builder.header("content-length", cl);
-                    }
-                    builder
-                        .body(bytes.to_vec())
-                        .unwrap_or_else(|_| error_response(500, "response build failed"))
-                }
-                Err(_) => error_response(502, "failed to read upstream body"),
-            }
-        }
-        Err(_) => error_response(502, "upstream request failed"),
-    }
-}
-
-fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
-    http::Response::builder()
-        .status(status)
-        .header("content-type", "text/plain")
-        .body(msg.as_bytes().to_vec())
-        .unwrap_or_else(|_| {
-            http::Response::builder()
-                .status(500)
-                .body(Vec::new())
-                .unwrap()
-        })
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -384,7 +258,7 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("sprout-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                let response = handle_sprout_media(&app, &request).await;
+                let response = media_proxy::handle_sprout_media(&app, &request).await;
                 responder.respond(response);
             });
         })
@@ -414,6 +288,19 @@ pub fn run() {
 
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+            // Start the localhost media streaming proxy. Uses the shared HTTP
+            // client so WARP tunnelling applies. The port is stored in AppState
+            // and exposed to the frontend via the `get_media_proxy_port` command.
+            let proxy_client = state.http_client.clone();
+            let proxy_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let port = media_proxy::spawn_media_proxy(proxy_client).await;
+                let state = proxy_handle.state::<AppState>();
+                state
+                    .media_proxy_port
+                    .store(port, std::sync::atomic::Ordering::Relaxed);
+            });
 
             // Create the Sprout nest (~/.sprout) before agents are restored,
             // so default_agent_workdir() resolves to the nest directory.
@@ -466,6 +353,7 @@ pub fn run() {
             set_presence,
             get_relay_ws_url,
             get_relay_http_url,
+            get_media_proxy_port,
             discover_acp_providers,
             discover_managed_agent_prereqs,
             sign_event,
