@@ -29,7 +29,7 @@ PageRoute<void> buildImageViewerRoute({
           semanticLabel: semanticLabel,
         ),
     transitionsBuilder: (context, animation, secondaryAnimation, child) =>
-        _ImageViewerRouteTransition(animation: animation, child: child),
+        _MediaViewerRouteTransition(animation: animation, child: child),
   );
 }
 
@@ -54,18 +54,22 @@ void openVideoViewer(
   String? posterUrl,
 }) {
   Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (_) =>
+    PageRouteBuilder<void>(
+      transitionDuration: _imageViewerPushDuration,
+      reverseTransitionDuration: _imageViewerPopDuration,
+      pageBuilder: (context, animation, secondaryAnimation) =>
           MediaVideoViewerPage(videoUrl: videoUrl, posterUrl: posterUrl),
+      transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+          _MediaViewerRouteTransition(animation: animation, child: child),
     ),
   );
 }
 
-class _ImageViewerRouteTransition extends StatelessWidget {
+class _MediaViewerRouteTransition extends StatelessWidget {
   final Animation<double> animation;
   final Widget child;
 
-  const _ImageViewerRouteTransition({
+  const _MediaViewerRouteTransition({
     required this.animation,
     required this.child,
   });
@@ -288,67 +292,64 @@ class _MediaVideoViewerPageState extends State<MediaVideoViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return _MediaViewerScaffold(
-      scaffoldKey: const ValueKey('message-media-video-viewer'),
-      title: 'Video',
-      child: Center(
-        child: FutureBuilder<void>(
-          future: _initializeFuture,
-          builder: (context, snapshot) {
-            if (_error != null || snapshot.hasError) {
-              return const _MediaLoadFailure(
-                message: 'Failed to load video',
-                icon: LucideIcons.videoOff,
-              );
-            }
-
-            if (!_controller.value.isInitialized) {
-              return _VideoLoadingPoster(posterUrl: widget.posterUrl);
-            }
-
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AspectRatio(
-                  aspectRatio: _controller.value.aspectRatio,
-                  child: VideoPlayer(_controller),
-                ),
-                const SizedBox(height: Grid.sm),
-                _VideoTransportBar(controller: _controller),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _MediaViewerScaffold extends StatelessWidget {
-  final Key scaffoldKey;
-  final String title;
-  final Widget child;
-
-  const _MediaViewerScaffold({
-    required this.scaffoldKey,
-    required this.title,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
     return Scaffold(
-      key: scaffoldKey,
+      key: const ValueKey('message-media-video-viewer'),
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        scrolledUnderElevation: 0,
-        surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: Colors.white),
-        title: Text(title),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: SafeArea(
+              child: Center(
+                child: FutureBuilder<void>(
+                  future: _initializeFuture,
+                  builder: (context, snapshot) {
+                    if (_error != null || snapshot.hasError) {
+                      return const _MediaLoadFailure(
+                        message: 'Failed to load video',
+                        icon: LucideIcons.videoOff,
+                      );
+                    }
+
+                    if (!_controller.value.isInitialized) {
+                      return _VideoLoadingPoster(posterUrl: widget.posterUrl);
+                    }
+
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AspectRatio(
+                          aspectRatio: _controller.value.aspectRatio,
+                          child: VideoPlayer(_controller),
+                        ),
+                        const SizedBox(height: Grid.sm),
+                        _VideoTransportBar(controller: _controller),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+          PositionedDirectional(
+            top: Grid.sm,
+            end: Grid.sm,
+            child: SafeArea(
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  color: Color.fromRGBO(0, 0, 0, 0.56),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  key: const ValueKey('message-media-video-viewer-close'),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  tooltip: 'Close video viewer',
+                  icon: const Icon(LucideIcons.x, color: Colors.white),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
-      body: SafeArea(child: child),
     );
   }
 }

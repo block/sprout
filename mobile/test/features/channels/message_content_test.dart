@@ -565,6 +565,65 @@ void main() {
         expect(find.byIcon(LucideIcons.play), findsOneWidget);
       });
 
+      testWidgets(
+        'tapping video preview opens overlay viewer with close button',
+        (tester) async {
+          await tester.pumpWidget(
+            _testable(
+              const MessageContent(
+                content: '![video](https://example.com/media/clip.mp4)',
+                tags: [
+                  [
+                    'imeta',
+                    'url https://example.com/media/clip.mp4',
+                    'm video/mp4',
+                  ],
+                ],
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final preview = find.byKey(
+            const ValueKey(
+              'message-media-video-preview:https://example.com/media/clip.mp4',
+            ),
+          );
+          expect(preview, findsOneWidget);
+
+          await tester.tap(preview);
+          await tester.pumpAndSettle();
+
+          // Video viewer opens as a modal overlay (no AppBar)
+          final viewer = tester.widget<Scaffold>(
+            find.byKey(const ValueKey('message-media-video-viewer')),
+          );
+          expect(
+            find.byKey(const ValueKey('message-media-video-viewer')),
+            findsOneWidget,
+          );
+          expect(viewer.backgroundColor, Colors.black);
+          expect(viewer.appBar, isNull);
+
+          // Close button is present
+          expect(
+            find.byKey(const ValueKey('message-media-video-viewer-close')),
+            findsOneWidget,
+          );
+
+          // Tapping close dismisses the viewer
+          await tester.tap(
+            find.byKey(const ValueKey('message-media-video-viewer-close')),
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.byKey(const ValueKey('message-media-video-viewer')),
+            findsNothing,
+          );
+        },
+      );
+
       testWidgets('treats only mp4 fallback URLs as videos', (tester) async {
         await tester.pumpWidget(
           _testable(
