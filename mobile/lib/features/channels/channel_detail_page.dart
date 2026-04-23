@@ -14,6 +14,8 @@ import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import '../forum/forum_posts_view.dart';
 import 'channel.dart';
+import 'date_formatters.dart';
+import 'day_divider.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
@@ -317,42 +319,51 @@ class _MessageList extends HookConsumerWidget {
         final entry = entries[chronIdx];
         final message = entry.message;
 
-        if (message.isSystem) {
-          return _SystemMessageRow(message: message);
-        }
-
-        // The message visually above is the one earlier in time.
+        // Day boundary check — applies to all messages including system.
         final prevEntry = chronIdx > 0 ? entries[chronIdx - 1] : null;
         final prevMessage = prevEntry?.message;
-        final showAuthor =
+        final showDayDivider =
             prevMessage == null ||
-            prevMessage.isSystem ||
-            prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
-            (message.createdAt - prevMessage.createdAt) > 300;
+            !isSameDay(prevMessage.createdAt, message.createdAt);
+
+        final showAuthor =
+            !message.isSystem &&
+            (prevMessage == null ||
+                prevMessage.isSystem ||
+                showDayDivider ||
+                prevMessage.pubkey.toLowerCase() !=
+                    message.pubkey.toLowerCase() ||
+                (message.createdAt - prevMessage.createdAt) > 300);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _MessageBubble(
-              message: message,
-              showAuthor: showAuthor,
-              channelNames: channelNamesMap,
-              currentChannelId: channelId,
-              currentPubkey: currentPubkey,
-              allMessages: allMessages,
-              isMember: isMember,
-              isArchived: isArchived,
-            ),
-            if (entry.summary != null)
-              _ThreadSummaryRow(
-                summary: entry.summary!,
+            if (showDayDivider)
+              DayDivider(label: formatDayHeading(message.createdAt)),
+            if (message.isSystem)
+              _SystemMessageRow(message: message)
+            else ...[
+              _MessageBubble(
                 message: message,
-                allMessages: allMessages,
-                channelId: channelId,
+                showAuthor: showAuthor,
+                channelNames: channelNamesMap,
+                currentChannelId: channelId,
                 currentPubkey: currentPubkey,
+                allMessages: allMessages,
                 isMember: isMember,
                 isArchived: isArchived,
               ),
+              if (entry.summary != null)
+                _ThreadSummaryRow(
+                  summary: entry.summary!,
+                  message: message,
+                  allMessages: allMessages,
+                  channelId: channelId,
+                  currentPubkey: currentPubkey,
+                  isMember: isMember,
+                  isArchived: isArchived,
+                ),
+            ],
           ],
         );
       },
@@ -387,7 +398,7 @@ class _SystemMessageRow extends ConsumerWidget {
     final description = systemEvent.describe(resolveLabel);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Grid.half),
+      padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
       child: Row(
         children: [
           Container(
@@ -408,14 +419,14 @@ class _SystemMessageRow extends ConsumerWidget {
             child: Text(
               description,
               style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
             ),
           ),
           Text(
             _formatTime(message.createdAt),
             style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline.withValues(alpha: 0.6),
+              color: context.colors.outline,
             ),
           ),
         ],
@@ -611,7 +622,7 @@ class _MessageBubble extends ConsumerWidget {
         isArchived: isArchived,
       ),
       child: Padding(
-        padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.quarter),
+        padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.half),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

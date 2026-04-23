@@ -51,8 +51,27 @@ class MessageContent extends StatelessWidget {
         context.textTheme.bodyMedium?.copyWith(color: context.colors.onSurface);
     final imetaByUrl = parseImetaTags(tags);
 
+    // Convert angle-bracket autolinks to standard markdown links,
+    // but skip content inside backticks (inline code / fenced blocks).
+    final buffer = StringBuffer();
+    final parts = content.split('`');
+    for (var i = 0; i < parts.length; i++) {
+      if (i.isOdd) {
+        // Inside backticks — preserve as-is.
+        buffer.write('`${parts[i]}`');
+      } else {
+        buffer.write(
+          parts[i].replaceAllMapped(
+            RegExp(r'<(https?://[^>]+)>'),
+            (m) => '[${m[1]}](${m[1]})',
+          ),
+        );
+      }
+    }
+    final processed = buffer.toString();
+
     return GptMarkdown(
-      content,
+      processed,
       style: style,
       followLinkColor: false,
       linkBuilder: (context, linkText, url, linkStyle) =>
