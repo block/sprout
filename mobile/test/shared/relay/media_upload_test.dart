@@ -260,6 +260,7 @@ void main() {
         apiToken: 'sprout_test_token',
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
         now: () => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000),
@@ -312,6 +313,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: null,
         nsec: null,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async => null,
       );
 
@@ -344,6 +346,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
       );
@@ -396,6 +399,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_heicBytes, name: 'photo.heic'),
         transcodeImageToJpeg: (bytes) async {
@@ -446,6 +450,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_jpegBytes, name: 'photo.jpg'),
         sanitizeImageBytes: (bytes, mimeType) async {
@@ -497,6 +502,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_heicBytes, name: 'photo.heic'),
         transcodeImageToJpeg: (bytes) async {
@@ -547,6 +553,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_jpegBytes, name: 'photo.jpg'),
         sanitizeImageBytes: (bytes, mimeType) async {
@@ -599,6 +606,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'photo.png'),
         sanitizeImageBytes: (bytes, mimeType) async {
@@ -627,6 +635,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: null,
         nsec: nsec,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_gifBytes, name: 'animated.gif'),
       );
@@ -654,6 +663,7 @@ void main() {
         httpClient: http_testing.MockClient(
           (request) async => http.Response('{}', 200),
         ),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_apngBytes, name: 'animated.png'),
       );
@@ -695,6 +705,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_staticPngWithActlPayloadBytes, name: 'static.png'),
       );
@@ -719,6 +730,7 @@ void main() {
         httpClient: http_testing.MockClient(
           (request) async => http.Response('{}', 200),
         ),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_animatedWebpBytes, name: 'animated.webp'),
       );
@@ -743,6 +755,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: null,
         nsec: nsec,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async => XFile.fromData(
           Uint8List.fromList(utf8.encode('not an image')),
           name: 'note.txt',
@@ -756,6 +769,120 @@ void main() {
             (error) => error.toString(),
             'message',
             contains('unsupported file type'),
+          ),
+        ),
+      );
+    });
+  });
+
+  group('pickAndUploadVideo', () {
+    test('picks video, uploads with video/mp4 MIME type', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      http.BaseRequest? capturedRequest;
+      final client = http_testing.MockClient((request) async {
+        capturedRequest = request;
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.mp4',
+            'sha256':
+                '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'size': 1024,
+            'type': 'video/mp4',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      final videoBytes = Uint8List.fromList([0x00, 0x00, 0x00, 0x20]);
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: nsec,
+        httpClient: client,
+        pickGalleryVideo: () async =>
+            XFile.fromData(videoBytes, name: 'clip.mov'),
+        pickGalleryImage: () async => null,
+        now: () => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000),
+      );
+
+      final descriptor = await service.pickAndUploadVideo();
+
+      expect(descriptor, isNotNull);
+      expect(descriptor!.type, 'video/mp4');
+      expect(capturedRequest, isNotNull);
+      expect(capturedRequest!.headers['Content-Type'], 'video/mp4');
+    });
+
+    test('always sends video/mp4 regardless of file extension', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      final client = http_testing.MockClient((request) async {
+        expect(request.headers['Content-Type'], 'video/mp4');
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.mp4',
+            'sha256':
+                '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'size': 1024,
+            'type': 'video/mp4',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      for (final name in ['clip.mov', 'clip.webm', 'clip.mp4', 'clip.avi']) {
+        final service = MediaUploadService(
+          baseUrl: 'https://relay.example',
+          apiToken: null,
+          nsec: nsec,
+          httpClient: client,
+          pickGalleryVideo: () async =>
+              XFile.fromData(Uint8List.fromList([0x00]), name: name),
+          pickGalleryImage: () async => null,
+          now: () => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000),
+        );
+
+        final descriptor = await service.pickAndUploadVideo();
+        expect(descriptor, isNotNull, reason: 'failed for $name');
+      }
+    });
+
+    test('returns null when video picker is cancelled', () async {
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: null,
+        pickGalleryVideo: () async => null,
+        pickGalleryImage: () async => null,
+      );
+
+      final result = await service.pickAndUploadVideo();
+      expect(result, isNull);
+    });
+
+    test('rejects videos over 100MB', () async {
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: null,
+        pickGalleryVideo: () async => XFile.fromData(
+          Uint8List(101 * 1024 * 1024),
+          name: 'huge.mp4',
+          length: 101 * 1024 * 1024,
+        ),
+        pickGalleryImage: () async => null,
+      );
+
+      expect(
+        () => service.pickAndUploadVideo(),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'message',
+            contains('too large'),
           ),
         ),
       );

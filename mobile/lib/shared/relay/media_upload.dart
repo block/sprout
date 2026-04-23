@@ -31,6 +31,8 @@ final _mediaUploadPlatformChannel = MethodChannel(
 );
 
 const _allowedImageMimeTypes = {'image/jpeg', 'image/png', 'image/webp'};
+const _allowedVideoMimeTypes = {'video/mp4'};
+const _maxVideoSizeBytes = 100 * 1024 * 1024; // 100MB
 const _unsupportedAnimatedImageMimeTypes = {'image/gif'};
 const _unsupportedGifUploadMessage =
     'GIF uploads are not supported on mobile yet';
@@ -40,6 +42,7 @@ const _unsupportedAnimatedWebpUploadMessage =
     'Animated WebP uploads are not supported on mobile yet';
 
 typedef PickGalleryImage = Future<XFile?> Function();
+typedef PickGalleryVideo = Future<XFile?> Function();
 typedef SanitizeImageBytes =
     Future<Uint8List> Function(Uint8List bytes, String mimeType);
 typedef TranscodeImageToJpeg = Future<Uint8List> Function(Uint8List bytes);
@@ -113,6 +116,7 @@ class MediaUploadService {
   final String? _apiToken;
   final String? _nsec;
   final PickGalleryImage _pickGalleryImage;
+  final PickGalleryVideo _pickGalleryVideo;
   final SanitizeImageBytes _sanitizeImageBytes;
   final TranscodeImageToJpeg _transcodeImageToJpeg;
   final DateTime Function() _now;
@@ -124,6 +128,7 @@ class MediaUploadService {
     required String? apiToken,
     required String? nsec,
     required PickGalleryImage pickGalleryImage,
+    required PickGalleryVideo pickGalleryVideo,
     SanitizeImageBytes? sanitizeImageBytes,
     TranscodeImageToJpeg? transcodeImageToJpeg,
     DateTime Function()? now,
@@ -132,6 +137,7 @@ class MediaUploadService {
        _apiToken = apiToken,
        _nsec = nsec,
        _pickGalleryImage = pickGalleryImage,
+       _pickGalleryVideo = pickGalleryVideo,
        _sanitizeImageBytes = sanitizeImageBytes ?? _sanitizePickedImageBytes,
        _transcodeImageToJpeg =
            transcodeImageToJpeg ?? _transcodePickedImageToJpeg,
@@ -152,12 +158,27 @@ class MediaUploadService {
     return uploadBytes(preparedImage.bytes, mimeType: preparedImage.mimeType);
   }
 
+  Future<BlobDescriptor?> pickAndUploadVideo() async {
+    final pickedVideo = await _pickGalleryVideo();
+    if (pickedVideo == null) return null;
+    final length = await pickedVideo.length();
+    if (length > _maxVideoSizeBytes) {
+      throw Exception(
+        'Video is too large (${(length / 1024 / 1024).toStringAsFixed(0)}MB). Maximum is 100MB.',
+      );
+    }
+    final bytes = await pickedVideo.readAsBytes();
+    final mimeType = _detectVideoMimeType(pickedVideo.name);
+    return uploadBytes(bytes, mimeType: mimeType);
+  }
+
   Future<BlobDescriptor> uploadBytes(
     Uint8List bytes, {
     required String mimeType,
   }) async {
     _validateUpload(bytes, mimeType);
-    if (!_allowedImageMimeTypes.contains(mimeType)) {
+    if (!_allowedImageMimeTypes.contains(mimeType) &&
+        !_allowedVideoMimeTypes.contains(mimeType)) {
       throw Exception('unsupported file type: $mimeType');
     }
 
@@ -495,6 +516,11 @@ int _readUint32LittleEndian(Uint8List bytes, int offset) {
       (bytes[offset + 3] << 24);
 }
 
+/// Always returns `video/mp4` — the relay only accepts MP4 and does its own
+/// magic-byte validation. Most iPhone `.mov` files are ftyp-isom containers
+/// that the relay accepts as MP4.
+String _detectVideoMimeType(String filename) => 'video/mp4';
+
 String? _extractServerAuthority(String baseUrl) {
   final uri = Uri.parse(baseUrl);
   if (uri.host.isEmpty) return null;
@@ -547,6 +573,7 @@ final mediaUploadServiceProvider = Provider<MediaUploadService>((ref) {
       source: ImageSource.gallery,
       requestFullMetadata: false,
     ),
+    pickGalleryVideo: () => picker.pickVideo(source: ImageSource.gallery),
   );
   ref.onDispose(service.dispose);
   return service;

@@ -248,6 +248,27 @@ class ComposeBar extends HookConsumerWidget {
       }
     }
 
+    Future<void> pickAndUploadVideo() async {
+      uploadError.value = null;
+      uploadingCount.value += 1;
+      try {
+        final uploaded = await ref
+            .read(mediaUploadServiceProvider)
+            .pickAndUploadVideo();
+        if (uploaded != null && context.mounted) {
+          attachments.value = [...attachments.value, uploaded];
+        }
+      } catch (error) {
+        if (context.mounted) {
+          uploadError.value = _formatUploadError(error);
+        }
+      } finally {
+        if (context.mounted) {
+          uploadingCount.value -= 1;
+        }
+      }
+    }
+
     // Insert an emoji at the cursor.
     void insertEmoji(String emoji) {
       final text = controller.text;
@@ -390,7 +411,35 @@ class ComposeBar extends HookConsumerWidget {
                 children: [
                   _ComposeAction(
                     icon: LucideIcons.paperclip,
-                    onTap: pickAndUploadAttachment,
+                    onTap: () {
+                      showModalBottomSheet<void>(
+                        context: context,
+                        showDragHandle: true,
+                        builder: (sheetContext) => SafeArea(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ListTile(
+                                leading: const Icon(LucideIcons.image),
+                                title: const Text('Photo'),
+                                onTap: () {
+                                  Navigator.of(sheetContext).pop();
+                                  pickAndUploadAttachment();
+                                },
+                              ),
+                              ListTile(
+                                leading: const Icon(LucideIcons.video),
+                                title: const Text('Video'),
+                                onTap: () {
+                                  Navigator.of(sheetContext).pop();
+                                  pickAndUploadVideo();
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   _ComposeAction(
                     icon: LucideIcons.smilePlus,
@@ -751,6 +800,7 @@ class _AttachmentStrip extends StatelessWidget {
           }
 
           final attachment = attachments[index];
+          final isVideo = attachment.type.startsWith('video/');
           final previewUrl = attachment.thumb ?? attachment.url;
           return Container(
             key: ValueKey('compose-attachment:${attachment.url}'),
@@ -764,17 +814,28 @@ class _AttachmentStrip extends StatelessWidget {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(Radii.md),
-                  child: Image.network(
-                    previewUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => ColoredBox(
-                      color: context.colors.surface,
-                      child: Icon(
-                        LucideIcons.image,
-                        color: context.colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
+                  child: isVideo
+                      ? ColoredBox(
+                          color: Colors.black,
+                          child: Center(
+                            child: Icon(
+                              LucideIcons.video,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                          ),
+                        )
+                      : Image.network(
+                          previewUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => ColoredBox(
+                            color: context.colors.surface,
+                            child: Icon(
+                              LucideIcons.image,
+                              color: context.colors.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
                 ),
                 Positioned(
                   top: Grid.quarter,
