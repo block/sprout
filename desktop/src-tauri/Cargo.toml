@@ -44,7 +44,7 @@ serde_json = "1"
 nostr = "0.37"
 nostr-compat = { package = "nostr", version = "0.36" }
 zeroize = "1"
-reqwest = { version = "0.13", features = ["json", "query"] }
+reqwest = { version = "0.13", features = ["json", "query", "stream"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
 sprout-persona = { path = "../../crates/sprout-persona" }
@@ -62,6 +62,7 @@ sherpa-onnx = "1.12"
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-23", "coreml"] }
 ndarray = { version = "0.17", features = ["rayon"] }
 regex = "1"
+axum = "0.8"
 rodio = "0.22"
 earshot = "1.0"
 rubato = "2.0"

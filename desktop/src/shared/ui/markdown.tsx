@@ -19,6 +19,7 @@ import {
   isImageOnlyParagraph,
   shallowArrayEqual,
 } from "./markdownUtils";
+import { VideoPlayer } from "./VideoPlayer";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
 
@@ -129,16 +130,63 @@ function createMarkdownComponents(
           ? rewriteRelayUrl(posterUrl)
           : undefined;
         return (
-          <div className="mt-3 flex max-w-sm items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-muted/40">
-            {/* biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available */}
-            <video
-              controls
-              preload="metadata"
-              poster={resolvedPoster}
-              className="max-h-64 max-w-full object-contain"
-              src={resolvedSrc}
-            />
-          </div>
+          <DialogPrimitive.Root>
+            <DialogPrimitive.Trigger asChild>
+              <div className="cursor-pointer transition-opacity hover:opacity-90">
+                <VideoPlayer
+                  key={resolvedSrc}
+                  src={resolvedSrc}
+                  poster={resolvedPoster}
+                />
+              </div>
+            </DialogPrimitive.Trigger>
+            <DialogPrimitive.Portal>
+              <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+              <DialogPrimitive.Content
+                className="fixed inset-0 z-50 flex items-center justify-center p-8"
+                onPointerDownOutside={(e) => e.preventDefault()}
+                onInteractOutside={(e) => e.preventDefault()}
+              >
+                <DialogPrimitive.Title className="sr-only">
+                  Video preview
+                </DialogPrimitive.Title>
+                <DialogPrimitive.Description className="sr-only">
+                  Full-size video preview. Press Escape or click outside the
+                  video to close.
+                </DialogPrimitive.Description>
+                <DialogPrimitive.Close
+                  className="absolute inset-0 cursor-default"
+                  aria-label="Close lightbox"
+                />
+                {/* biome-ignore lint/a11y/useMediaCaption: user-uploaded video, no captions available */}
+                <video
+                  controls
+                  autoPlay
+                  src={resolvedSrc}
+                  poster={resolvedPoster}
+                  className="relative max-h-[90vh] max-w-[90vw] rounded-lg"
+                />
+                <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
+                  <svg
+                    aria-hidden="true"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                  <span className="sr-only">Close</span>
+                </DialogPrimitive.Close>
+              </DialogPrimitive.Content>
+            </DialogPrimitive.Portal>
+          </DialogPrimitive.Root>
         );
       }
       return (
