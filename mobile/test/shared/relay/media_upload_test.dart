@@ -976,7 +976,7 @@ void main() {
           pickGalleryImage: () async => null,
         );
 
-        expect(
+        await expectLater(
           () => service.pickAndUploadVideo(),
           throwsA(
             isA<Exception>().having(
