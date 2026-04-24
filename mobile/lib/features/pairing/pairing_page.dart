@@ -319,6 +319,9 @@ class _ScannerPage extends HookWidget {
   @override
   Widget build(BuildContext context) {
     final handled = useState(false);
+    final controller = useMemoized(() => MobileScannerController());
+
+    useEffect(() => controller.dispose, const []);
 
     return Scaffold(
       appBar: AppBar(
@@ -329,6 +332,38 @@ class _ScannerPage extends HookWidget {
         ),
       ),
       body: MobileScanner(
+        controller: controller,
+        errorBuilder: (context, error) {
+          final message = switch (error.errorCode) {
+            MobileScannerErrorCode.permissionDenied =>
+              'Camera permission is required to scan QR codes.\n\nPlease grant camera access in your device settings.',
+            _ =>
+              'Could not start camera: ${error.errorDetails?.message ?? 'unknown error'}',
+          };
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(Grid.sm),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    LucideIcons.cameraOff,
+                    size: 48,
+                    color: context.colors.onSurfaceVariant,
+                  ),
+                  const SizedBox(height: Grid.xs),
+                  Text(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: context.textTheme.bodyMedium?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
         onDetect: (capture) {
           if (handled.value) return;
           final barcodes = capture.barcodes;

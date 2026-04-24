@@ -58,10 +58,15 @@ class ThreadDetailPage extends HookConsumerWidget {
 
     final replies = childrenByParent[threadHead.id] ?? const [];
 
-    // Thread-scoped typing indicators.
+    // Thread-scoped typing indicators (exclude self).
     final allTyping = ref.watch(channelTypingProvider(channelId));
     final threadTyping = allTyping
         .where((e) => e.threadHeadId == threadHead.id)
+        .where(
+          (e) =>
+              currentPubkey == null ||
+              e.pubkey.toLowerCase() != currentPubkey?.toLowerCase(),
+        )
         .toList();
 
     // Resolve thread head from live data (reactions/edits may have changed).

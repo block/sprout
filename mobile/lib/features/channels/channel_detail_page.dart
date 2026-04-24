@@ -59,15 +59,20 @@ class ChannelDetailPage extends HookConsumerWidget {
     final detailsAsync = ref.watch(channelDetailsProvider(channel.id));
     final channelsAsync = ref.watch(channelsProvider);
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
-    // Only show channel-level typing (exclude thread-scoped entries).
-    final typingEntries = ref
-        .watch(channelTypingProvider(channel.id))
-        .where((e) => e.threadHeadId == null)
-        .toList();
     final currentPubkey = ref
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
         .value;
+    // Only show channel-level typing (exclude thread-scoped entries and self).
+    final typingEntries = ref
+        .watch(channelTypingProvider(channel.id))
+        .where((e) => e.threadHeadId == null)
+        .where(
+          (e) =>
+              currentPubkey == null ||
+              e.pubkey.toLowerCase() != currentPubkey.toLowerCase(),
+        )
+        .toList();
     final baseChannel =
         channelsAsync
             .whenData(
@@ -148,6 +153,9 @@ class ChannelDetailPage extends HookConsumerWidget {
       ),
       body: Column(
         children: [
+          _DetailConnectionBanner(
+            status: ref.watch(relaySessionProvider).status,
+          ),
           Expanded(
             child: resolvedChannel.isForum
                 ? ForumPostsView(
@@ -855,6 +863,53 @@ class _ReadOnlyNotice extends StatelessWidget {
           color: context.colors.onSurfaceVariant,
         ),
         textAlign: TextAlign.center,
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Connection banner (shown inside channel detail during reconnect)
+// ---------------------------------------------------------------------------
+
+class _DetailConnectionBanner extends StatelessWidget {
+  final SessionStatus status;
+
+  const _DetailConnectionBanner({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == SessionStatus.connected ||
+        status == SessionStatus.disconnected) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: Grid.xs,
+        vertical: Grid.quarter + 2,
+      ),
+      color: context.colors.surfaceContainerHighest,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Text(
+            'Reconnecting…',
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }

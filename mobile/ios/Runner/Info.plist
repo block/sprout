@@ -26,6 +26,8 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Sprout needs camera access to scan QR codes for device pairing.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Sprout needs photo library access so you can attach images to messages.</string>
 	<key>UIApplicationSceneManifest</key>

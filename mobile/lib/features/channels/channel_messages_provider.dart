@@ -9,8 +9,13 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   final String channelId;
   void Function()? _unsubscribe;
   bool _reachedOldest = false;
+  bool _initInFlight = false;
 
   ChannelMessagesNotifier(this.channelId);
+
+  /// Last successfully loaded messages, preserved across reconnections so the
+  /// UI can show stale data instead of a blank loading spinner.
+  List<NostrEvent>? _lastKnownMessages;
 
   @override
   AsyncValue<List<NostrEvent>> build() {
@@ -21,16 +26,23 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     });
 
     if (sessionState.status != SessionStatus.connected) {
-      return const AsyncData([]);
+      // Return cached messages if available so the UI remains usable while
+      // disconnected/reconnecting, instead of showing an empty screen.
+      return AsyncData(_lastKnownMessages ?? const []);
     }
 
     // Reset pagination state on rebuild (e.g. after reconnect).
     _reachedOldest = false;
     _init();
+    // Show previous messages while fetching fresh ones, instead of a spinner.
+    if (_lastKnownMessages case final cached? when cached.isNotEmpty) {
+      return AsyncData(cached);
+    }
     return const AsyncLoading();
   }
 
   Future<void> _init() async {
+    _initInFlight = true;
     try {
       final session = ref.read(relaySessionProvider.notifier);
 
@@ -57,15 +69,31 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
         _handleLiveEvent,
       );
 
-      history.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      state = AsyncData(history);
+      // Merge fresh history with any events already in state (e.g. from
+      // fetchOlder() or live events that arrived while _init was in flight)
+      // to avoid discarding data the user has already scrolled through.
+      final existing = state.value ?? const [];
+      final existingIds = existing.map((e) => e.id).toSet();
+      final newEvents = history
+          .where((e) => !existingIds.contains(e.id))
+          .toList();
+      final merged = [...existing, ...newEvents];
+      merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _lastKnownMessages = merged;
+      state = AsyncData(merged);
     } catch (e, st) {
       state = AsyncError(e, st);
+    } finally {
+      _initInFlight = false;
     }
   }
 
   void _handleLiveEvent(NostrEvent event) {
-    state = state.whenData((events) => _mergeEvent(events, event));
+    state = state.whenData((events) {
+      final merged = _mergeEvent(events, event);
+      _lastKnownMessages = merged;
+      return merged;
+    });
 
     // When a membership system event arrives, refresh the channel member list
     // so the @mention autocomplete picks up new members without a restart.
@@ -98,7 +126,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   /// Fetch older messages (pagination). Call this when the user scrolls up.
   /// Returns `true` if new messages were loaded.
   Future<bool> fetchOlder() async {
-    if (_reachedOldest) return false;
+    if (_reachedOldest || _initInFlight) return false;
 
     final currentEvents = state.value;
     if (currentEvents == null || currentEvents.isEmpty) return false;
@@ -136,6 +164,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     state = state.whenData((events) {
       final merged = [...deduped, ...events];
       merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _lastKnownMessages = merged;
       return merged;
     });
     return true;
