@@ -192,10 +192,10 @@ function createMarkdownComponents(
       return (
         <DialogPrimitive.Root>
           <DialogPrimitive.Trigger asChild>
-            <div className="mt-3 flex max-w-sm cursor-pointer items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-muted/40 transition-opacity hover:opacity-90">
+            <div className="mt-1 max-w-sm cursor-pointer transition-opacity hover:opacity-90">
               <img
                 alt={alt}
-                className="max-h-64 max-w-full object-contain"
+                className="max-h-64 max-w-full rounded-xl object-contain"
                 src={resolvedSrc}
               />
             </div>
@@ -262,7 +262,7 @@ function createMarkdownComponents(
 
       if (isImageOnlyParagraph(childArray)) {
         return (
-          <div className="mt-3 grid max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_div]:mt-0 [&_div]:max-w-none">
+          <div className="mt-1 grid max-w-lg grid-cols-2 gap-1.5 [&_br]:hidden [&_div]:mt-0 [&_div]:max-w-none">
             {imageChildren}
           </div>
         );
