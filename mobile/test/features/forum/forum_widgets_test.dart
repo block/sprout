@@ -236,7 +236,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Hello forum'));
+      await tester.tap(find.byType(ForumPostCard));
       expect(tapped, isTrue);
     });
 
@@ -284,7 +284,7 @@ void main() {
       await tester.pumpWidget(_buildPostCard(post: _makePost()));
       await tester.pumpAndSettle();
 
-      await tester.longPress(find.text('Hello forum'));
+      await tester.longPress(find.byType(ForumPostCard));
       await tester.pumpAndSettle();
 
       expect(find.text('Copy text'), findsOneWidget);
@@ -301,7 +301,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.longPress(find.text('Hello forum'));
+      await tester.longPress(find.byType(ForumPostCard));
       await tester.pumpAndSettle();
       expect(find.text('Delete post'), findsOneWidget);
 
@@ -319,7 +319,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.longPress(find.text('Hello forum'));
+      await tester.longPress(find.byType(ForumPostCard));
       await tester.pumpAndSettle();
       expect(find.text('Delete post'), findsNothing);
     });
@@ -336,7 +336,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Long press → action sheet.
-      await tester.longPress(find.text('Hello forum'));
+      await tester.longPress(find.byType(ForumPostCard));
       await tester.pumpAndSettle();
 
       // Tap Delete post.

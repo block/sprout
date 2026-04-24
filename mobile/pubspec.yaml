@@ -22,6 +22,7 @@ dependencies:
   pointycastle: ^3.7.3
   url_launcher: ^6.3.2
   gpt_markdown: ^1.1.6
+  intl: ^0.20.2
   image_picker: ^1.1.2
   video_player: ^2.10.1
 
