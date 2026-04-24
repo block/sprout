@@ -10,6 +10,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import rehypeImageGallery from "@/shared/lib/rehypeImageGallery";
+import rehypeSearchHighlight from "@/shared/lib/rehypeSearchHighlight";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
 
@@ -30,6 +31,7 @@ type MarkdownProps = {
   content: string;
   imetaByUrl?: ImetaLookup;
   mentionNames?: string[];
+  searchQuery?: string;
   tight?: boolean;
 };
 
@@ -354,6 +356,7 @@ function MarkdownInner({
   content,
   imetaByUrl,
   mentionNames,
+  searchQuery,
   tight = false,
 }: MarkdownProps) {
   const variant: MarkdownVariant = tight
@@ -389,7 +392,14 @@ function MarkdownInner({
   );
 
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
-  const rehypePlugins = React.useMemo<any[]>(() => [rehypeImageGallery], []);
+  const rehypePlugins = React.useMemo<any[]>(() => {
+    // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
+    const plugins: any[] = [rehypeImageGallery];
+    if (searchQuery && searchQuery.trim().length >= 2) {
+      plugins.push([rehypeSearchHighlight, { query: searchQuery }]);
+    }
+    return plugins;
+  }, [searchQuery]);
 
   let processedContent = content;
 
@@ -400,6 +410,16 @@ function MarkdownInner({
   if (/(?:\s{2}\n)+$/.test(content)) {
     processedContent = `${processedContent}\u200B`;
   }
+
+  const markdownNode = (
+    <ReactMarkdown
+      components={components}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+    >
+      {processedContent}
+    </ReactMarkdown>
+  );
 
   return (
     <div
@@ -412,13 +432,7 @@ function MarkdownInner({
         className,
       )}
     >
-      <ReactMarkdown
-        components={components}
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-      >
-        {processedContent}
-      </ReactMarkdown>
+      {markdownNode}
     </div>
   );
 }
@@ -432,7 +446,8 @@ export const Markdown = React.memo(
     prev.tight === next.tight &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
     shallowArrayEqual(prev.channelNames, next.channelNames) &&
-    prev.imetaByUrl === next.imetaByUrl,
+    prev.imetaByUrl === next.imetaByUrl &&
+    prev.searchQuery === next.searchQuery,
 );
 
 Markdown.displayName = "Markdown";

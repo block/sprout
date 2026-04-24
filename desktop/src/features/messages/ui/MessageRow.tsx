@@ -30,6 +30,7 @@ export const MessageRow = React.memo(
     onToggleReaction,
     onReply,
     profiles,
+    searchQuery,
   }: {
     activeReplyTargetId?: string | null;
     highlighted?: boolean;
@@ -44,6 +45,7 @@ export const MessageRow = React.memo(
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
+    searchQuery?: string;
   }) {
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
@@ -111,6 +113,7 @@ export const MessageRow = React.memo(
               content={message.body}
               imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
+              searchQuery={searchQuery}
               tight
             />
           );
@@ -393,7 +396,8 @@ export const MessageRow = React.memo(
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.layoutVariant === next.layoutVariant &&
-    prev.profiles === next.profiles,
+    prev.profiles === next.profiles &&
+    prev.searchQuery === next.searchQuery,
 );
 
 MessageRow.displayName = "MessageRow";

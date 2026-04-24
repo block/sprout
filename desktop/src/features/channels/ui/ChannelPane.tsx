@@ -4,6 +4,8 @@ import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
+import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
+import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
@@ -45,6 +47,7 @@ function getInitialThreadPanelWidth(): number {
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
+  channelFind: ReturnType<typeof useChannelFind>;
   currentPubkey?: string;
   editTarget?: {
     author: string;
@@ -99,6 +102,7 @@ type ChannelPaneProps = {
 
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
+  channelFind,
   currentPubkey,
   editTarget = null,
   fetchOlder,
@@ -198,6 +202,17 @@ export const ChannelPane = React.memo(function ChannelPane({
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {channelFind.isOpen ? (
+          <ChannelFindBar
+            matchCount={channelFind.matchCount}
+            matchIndex={channelFind.activeIndex}
+            onClose={channelFind.close}
+            onNext={channelFind.goToNext}
+            onPrevious={channelFind.goToPrevious}
+            onQueryChange={channelFind.setQuery}
+            query={channelFind.query}
+          />
+        ) : null}
         <MessageTimeline
           channelId={activeChannel?.id}
           activeReplyTargetId={openThreadHeadId}
@@ -226,6 +241,9 @@ export const ChannelPane = React.memo(function ChannelPane({
           onReply={onOpenThread}
           onTargetReached={onTargetReached}
           onToggleReaction={onToggleReaction}
+          searchActiveMessageId={channelFind.activeMatch?.messageId ?? null}
+          searchMatchingMessageIds={channelFind.matchingMessageIds}
+          searchQuery={channelFind.query}
           targetMessageId={targetMessageId}
         />
         <MessageComposer
