@@ -9,6 +9,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   final String channelId;
   void Function()? _unsubscribe;
   bool _reachedOldest = false;
+  bool _initInFlight = false;
 
   ChannelMessagesNotifier(this.channelId);
 
@@ -41,6 +42,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   }
 
   Future<void> _init() async {
+    _initInFlight = true;
     try {
       final session = ref.read(relaySessionProvider.notifier);
 
@@ -67,11 +69,22 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
         _handleLiveEvent,
       );
 
-      history.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      _lastKnownMessages = history;
-      state = AsyncData(history);
+      // Merge fresh history with any events already in state (e.g. from
+      // fetchOlder() or live events that arrived while _init was in flight)
+      // to avoid discarding data the user has already scrolled through.
+      final existing = state.value ?? const [];
+      final existingIds = existing.map((e) => e.id).toSet();
+      final newEvents = history
+          .where((e) => !existingIds.contains(e.id))
+          .toList();
+      final merged = [...existing, ...newEvents];
+      merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _lastKnownMessages = merged;
+      state = AsyncData(merged);
     } catch (e, st) {
       state = AsyncError(e, st);
+    } finally {
+      _initInFlight = false;
     }
   }
 
@@ -113,7 +126,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   /// Fetch older messages (pagination). Call this when the user scrolls up.
   /// Returns `true` if new messages were loaded.
   Future<bool> fetchOlder() async {
-    if (_reachedOldest) return false;
+    if (_reachedOldest || _initInFlight) return false;
 
     final currentEvents = state.value;
     if (currentEvents == null || currentEvents.isEmpty) return false;

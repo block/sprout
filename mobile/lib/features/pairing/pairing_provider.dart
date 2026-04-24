@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -229,15 +228,8 @@ class PairingNotifier extends Notifier<PairingState> {
         status: PairingStatus.error,
         errorMessage: 'Invalid pairing code: ${e.message}',
       );
-    } on SocketException catch (_) {
-      _cleanup();
-      state = const PairingState(
-        status: PairingStatus.error,
-        errorMessage:
-            'Could not reach the pairing relay. Check your internet '
-            'connection and VPN, then try again.',
-      );
     } catch (e) {
+      debugPrint('Pairing connection error: $e');
       _cleanup();
       state = PairingState(
         status: PairingStatus.error,
@@ -251,7 +243,9 @@ class PairingNotifier extends Notifier<PairingState> {
     if (message.contains('SocketException') ||
         message.contains('Connection refused') ||
         message.contains('Network is unreachable') ||
-        message.contains('No route to host')) {
+        message.contains('No route to host') ||
+        message.contains('Failed to connect') ||
+        message.contains('Null check operator used on a null value')) {
       return 'Could not reach the pairing relay. Check your internet '
           'connection and VPN, then try again.';
     }
