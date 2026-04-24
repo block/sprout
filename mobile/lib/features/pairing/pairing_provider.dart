@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -228,13 +229,43 @@ class PairingNotifier extends Notifier<PairingState> {
         status: PairingStatus.error,
         errorMessage: 'Invalid pairing code: ${e.message}',
       );
+    } on SocketException catch (_) {
+      _cleanup();
+      state = const PairingState(
+        status: PairingStatus.error,
+        errorMessage:
+            'Could not reach the pairing relay. Check your internet '
+            'connection and VPN, then try again.',
+      );
     } catch (e) {
       _cleanup();
       state = PairingState(
         status: PairingStatus.error,
-        errorMessage: 'Connection failed: $e',
+        errorMessage: _friendlyErrorMessage(e),
       );
     }
+  }
+
+  static String _friendlyErrorMessage(Object error) {
+    final message = error.toString();
+    if (message.contains('SocketException') ||
+        message.contains('Connection refused') ||
+        message.contains('Network is unreachable') ||
+        message.contains('No route to host')) {
+      return 'Could not reach the pairing relay. Check your internet '
+          'connection and VPN, then try again.';
+    }
+    if (message.contains('HandshakeException') ||
+        message.contains('CERTIFICATE_VERIFY_FAILED')) {
+      return 'Secure connection failed. Check your network settings '
+          'and try again.';
+    }
+    if (message.contains('TimeoutException') || message.contains('timed out')) {
+      return 'Connection timed out. Check your internet connection and '
+          'try again.';
+    }
+    return 'Connection failed. Please check your internet connection '
+        'and try again.';
   }
 
   void _handleRelayMessage(List<dynamic> data) {

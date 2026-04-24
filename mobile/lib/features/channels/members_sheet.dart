@@ -24,6 +24,7 @@ class MembersSheet extends HookConsumerWidget {
     final membersAsync = ref.watch(channelMembersProvider(channel.id));
     final allMembers = membersAsync.asData?.value ?? const <ChannelMember>[];
     final people = allMembers.where((member) => !member.isBot).toList();
+    final bots = allMembers.where((member) => member.isBot).toList();
     final userCache = ref.watch(userCacheProvider);
 
     // Determine if the current user can manage members.
@@ -38,13 +39,13 @@ class MembersSheet extends HookConsumerWidget {
 
     // Preload profiles for all members so avatars appear.
     useEffect(() {
-      if (people.isNotEmpty) {
+      if (allMembers.isNotEmpty) {
         ref
             .read(userCacheProvider.notifier)
-            .preload(people.map((m) => m.pubkey).toList());
+            .preload(allMembers.map((m) => m.pubkey).toList());
       }
       return null;
-    }, [people.length]);
+    }, [allMembers.length]);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -70,33 +71,49 @@ class MembersSheet extends HookConsumerWidget {
               ),
               if (!channel.isDm) ...[const Divider(height: Grid.sm)],
               SizedBox(
-                height: 280,
+                height: bots.isEmpty ? 280 : 360,
                 child: membersAsync.when(
-                  data: (_) => people.isEmpty
-                      ? Center(
+                  data: (_) => ListView(
+                    shrinkWrap: true,
+                    children: [
+                      if (people.isNotEmpty) ...[
+                        _SectionLabel(label: 'People — ${people.length}'),
+                        for (final member in people)
+                          _MemberTile(
+                            member: member,
+                            currentPubkey: currentPubkey,
+                            profile: userCache[member.pubkey.toLowerCase()],
+                            canManage: canManage,
+                            isSelf:
+                                member.pubkey.toLowerCase() ==
+                                currentPubkey?.toLowerCase(),
+                            channelId: channel.id,
+                          ),
+                      ],
+                      if (bots.isNotEmpty) ...[
+                        const SizedBox(height: Grid.xxs),
+                        _SectionLabel(label: 'Bots — ${bots.length}'),
+                        for (final bot in bots)
+                          _MemberTile(
+                            member: bot,
+                            currentPubkey: currentPubkey,
+                            profile: userCache[bot.pubkey.toLowerCase()],
+                            canManage: canManage,
+                            isSelf: false,
+                            channelId: channel.id,
+                          ),
+                      ],
+                      if (people.isEmpty && bots.isEmpty)
+                        Center(
                           child: Text(
-                            'No people found.',
+                            'No members found.',
                             style: context.textTheme.bodySmall?.copyWith(
                               color: context.colors.outline,
                             ),
                           ),
-                        )
-                      : ListView(
-                          shrinkWrap: true,
-                          children: [
-                            for (final member in people)
-                              _MemberTile(
-                                member: member,
-                                currentPubkey: currentPubkey,
-                                profile: userCache[member.pubkey.toLowerCase()],
-                                canManage: canManage,
-                                isSelf:
-                                    member.pubkey.toLowerCase() ==
-                                    currentPubkey?.toLowerCase(),
-                                channelId: channel.id,
-                              ),
-                          ],
                         ),
+                    ],
+                  ),
                   loading: () =>
                       const Center(child: CircularProgressIndicator()),
                   error: (error, _) => Center(
@@ -111,6 +128,27 @@ class MembersSheet extends HookConsumerWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String label;
+
+  const _SectionLabel({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: Grid.half, bottom: Grid.half),
+      child: Text(
+        label.toUpperCase(),
+        style: context.textTheme.labelSmall?.copyWith(
+          color: context.colors.outline,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.8,
         ),
       ),
     );

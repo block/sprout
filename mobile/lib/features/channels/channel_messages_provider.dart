@@ -12,6 +12,10 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
 
   ChannelMessagesNotifier(this.channelId);
 
+  /// Last successfully loaded messages, preserved across reconnections so the
+  /// UI can show stale data instead of a blank loading spinner.
+  List<NostrEvent>? _lastKnownMessages;
+
   @override
   AsyncValue<List<NostrEvent>> build() {
     final sessionState = ref.watch(relaySessionProvider);
@@ -21,12 +25,18 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     });
 
     if (sessionState.status != SessionStatus.connected) {
-      return const AsyncData([]);
+      // Return cached messages if available so the UI remains usable while
+      // disconnected/reconnecting, instead of showing an empty screen.
+      return AsyncData(_lastKnownMessages ?? const []);
     }
 
     // Reset pagination state on rebuild (e.g. after reconnect).
     _reachedOldest = false;
     _init();
+    // Show previous messages while fetching fresh ones, instead of a spinner.
+    if (_lastKnownMessages case final cached? when cached.isNotEmpty) {
+      return AsyncData(cached);
+    }
     return const AsyncLoading();
   }
 
@@ -58,6 +68,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       );
 
       history.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _lastKnownMessages = history;
       state = AsyncData(history);
     } catch (e, st) {
       state = AsyncError(e, st);
@@ -65,7 +76,11 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   }
 
   void _handleLiveEvent(NostrEvent event) {
-    state = state.whenData((events) => _mergeEvent(events, event));
+    state = state.whenData((events) {
+      final merged = _mergeEvent(events, event);
+      _lastKnownMessages = merged;
+      return merged;
+    });
 
     // When a membership system event arrives, refresh the channel member list
     // so the @mention autocomplete picks up new members without a restart.
@@ -136,6 +151,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     state = state.whenData((events) {
       final merged = [...deduped, ...events];
       merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _lastKnownMessages = merged;
       return merged;
     });
     return true;

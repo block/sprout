@@ -855,7 +855,10 @@ class _BrowseChannelsSheet extends HookConsumerWidget {
                   )
                 : ListView(
                     controller: scrollController,
-                    padding: const EdgeInsets.only(top: Grid.xxs),
+                    padding: EdgeInsets.only(
+                      top: Grid.xxs,
+                      bottom: MediaQuery.viewInsetsOf(context).bottom,
+                    ),
                     children: [
                       if (notJoined.isNotEmpty) ...[
                         _MiniHeader(
