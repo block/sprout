@@ -209,6 +209,7 @@ export type GetHomeFeedInput = {
 export type SearchMessagesInput = {
   q: string;
   limit?: number;
+  channelId?: string;
 };
 
 export type SearchHit = {

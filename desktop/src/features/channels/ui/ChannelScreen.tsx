@@ -38,6 +38,7 @@ import type {
   Profile,
   RelayEvent,
 } from "@/shared/api/types";
+import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 const ChannelPane = React.lazy(async () => {
@@ -237,6 +238,11 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
+  const channelFind = useChannelFind({
+    channelId: activeChannelId,
+    messages: timelineMessages,
+  });
+
   const directReplyIdsByParentId = React.useMemo(() => {
     const map = new Map<string, string[]>();
 
@@ -341,7 +347,6 @@ export function ChannelScreen({
   React.useEffect(() => {
     resetComposerTargets(activeChannelId);
   }, [activeChannelId, resetComposerTargets]);
-
   React.useEffect(() => {
     if (openThreadHeadId && !openThreadHeadMessage) {
       setOpenThreadHeadId(null);
@@ -430,6 +435,7 @@ export function ChannelScreen({
             <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
               <ChannelPane
                 activeChannel={activeChannel}
+                channelFind={channelFind}
                 currentPubkey={currentPubkey}
                 fetchOlder={fetchOlder}
                 hasOlderMessages={hasOlderMessages}

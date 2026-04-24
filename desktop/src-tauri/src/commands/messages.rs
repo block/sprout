@@ -35,10 +35,15 @@ pub async fn get_feed(
 pub async fn search_messages(
     q: String,
     limit: Option<u32>,
+    channel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<SearchResponse, String> {
     let request = build_authed_request(&state.http_client, Method::GET, "/api/search", &state)?
-        .query(&SearchQueryParams { q: q.trim(), limit });
+        .query(&SearchQueryParams {
+            q: q.trim(),
+            limit,
+            channel_id: channel_id.as_deref(),
+        });
 
     send_json_request(request).await
 }

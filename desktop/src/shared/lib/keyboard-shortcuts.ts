@@ -64,6 +64,14 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
     category: "Navigation",
   },
   {
+    id: "find-in-channel",
+    label: "Find in channel",
+    description: "Search messages in current channel",
+    keys: "⌘F",
+    keysWindows: "Ctrl+F",
+    category: "Navigation",
+  },
+  {
     id: "go-home",
     label: "Home",
     description: "Navigate to the home feed",

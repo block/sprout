@@ -681,10 +681,11 @@ export async function getHomeFeed(
 export async function searchMessages(
   input: SearchMessagesInput,
 ): Promise<SearchMessagesResponse> {
-  const response = await invokeTauri<RawSearchResponse>(
-    "search_messages",
-    input,
-  );
+  const response = await invokeTauri<RawSearchResponse>("search_messages", {
+    q: input.q,
+    limit: input.limit,
+    channelId: input.channelId,
+  });
 
   return {
     hits: response.hits.map(fromRawSearchHit),
