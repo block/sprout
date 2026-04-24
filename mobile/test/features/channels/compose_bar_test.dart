@@ -456,7 +456,12 @@ void main() {
         await tester.tap(find.byIcon(LucideIcons.paperclip));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Video'));
-        await tester.pumpAndSettle();
+        // Pump enough frames for the async file read + upload to complete.
+        // Can't use pumpAndSettle here — the upload spinner's animation
+        // prevents settling while the async upload is in-flight.
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
 
         // Video attachment should show a video icon (not a broken image).
         expect(find.byIcon(LucideIcons.video), findsOneWidget);
