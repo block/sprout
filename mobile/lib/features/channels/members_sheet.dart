@@ -70,8 +70,8 @@ class MembersSheet extends HookConsumerWidget {
                 ),
               ),
               if (!channel.isDm) ...[const Divider(height: Grid.sm)],
-              SizedBox(
-                height: bots.isEmpty ? 280 : 360,
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 400),
                 child: membersAsync.when(
                   data: (_) => ListView(
                     shrinkWrap: true,
