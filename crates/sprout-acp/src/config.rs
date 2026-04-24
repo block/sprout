@@ -151,7 +151,7 @@ impl std::fmt::Display for PermissionMode {
     about = "Query available models from the configured agent"
 )]
 pub struct ModelsArgs {
-    /// Agent binary to spawn (e.g. "goose", "claude-agent-acp", "codex-acp").
+    /// Agent binary to spawn (e.g. "goose", "claude-agent-acp", "codex-acp", "acp-amp").
     #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
 
@@ -451,7 +451,7 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_agent_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" => Some(Vec::new()),
+        | "claudecode" | "acp-amp" | "amp-acp" => Some(Vec::new()),
         _ => None,
     }
 }

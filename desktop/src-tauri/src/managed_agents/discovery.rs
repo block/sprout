@@ -25,6 +25,7 @@ struct KnownAcpProvider {
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
+const AMP_AVATAR_URL: &str = "https://ampcode.com/img/amp-logo.png";
 
 fn common_binary_paths() -> &'static [PathBuf] {
     use std::sync::OnceLock;
@@ -69,6 +70,13 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         commands: &["codex-acp"],
         aliases: &[],
         avatar_url: CODEX_AVATAR_URL,
+    },
+    KnownAcpProvider {
+        id: "amp",
+        label: "Amp",
+        commands: &["acp-amp"],
+        aliases: &["amp-acp"],
+        avatar_url: AMP_AVATAR_URL,
     },
 ];
 
@@ -136,7 +144,7 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     match normalize_command_identity(command).as_str() {
         "goose" => Some(vec!["acp".to_string()]),
         "codex" | "codex-acp" | "claude-agent-acp" | "claude-code-acp" | "claude-code"
-        | "claudecode" => Some(Vec::new()),
+        | "claudecode" | "acp-amp" | "amp-acp" => Some(Vec::new()),
         _ => None,
     }
 }

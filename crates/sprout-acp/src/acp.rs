@@ -299,6 +299,19 @@ impl AcpClient {
         self.send_request("session/set_config_option", params).await
     }
 
+    /// Send `session/set_mode` — newer ACP path used by adapters like amp-acp.
+    pub async fn session_set_mode(
+        &mut self,
+        session_id: &str,
+        mode_id: &str,
+    ) -> Result<serde_json::Value, AcpError> {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "modeId": mode_id,
+        });
+        self.send_request("session/set_mode", params).await
+    }
+
     /// Send `session/set_model` (unstable ACP path).
     pub async fn session_set_model(
         &mut self,
