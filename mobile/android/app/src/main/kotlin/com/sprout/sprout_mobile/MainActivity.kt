@@ -166,29 +166,30 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        val outputFile = File(cacheDir, "${UUID.randomUUID()}.mp4")
-        var muxer: MediaMuxer? = null
-        val extractor = MediaExtractor()
-        try {
-            extractor.setDataSource(sourcePath)
-            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        Thread {
+            val outputFile = File(cacheDir, "${UUID.randomUUID()}.mp4")
+            var muxer: MediaMuxer? = null
+            val extractor = MediaExtractor()
+            try {
+                extractor.setDataSource(sourcePath)
+                muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
-            val trackIndices = mutableMapOf<Int, Int>()
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val newIndex = muxer.addTrack(format)
-                trackIndices[i] = newIndex
-            }
+                val trackIndices = mutableMapOf<Int, Int>()
+                for (i in 0 until extractor.trackCount) {
+                    val format = extractor.getTrackFormat(i)
+                    val newIndex = muxer.addTrack(format)
+                    trackIndices[i] = newIndex
+                    extractor.selectTrack(i)
+                }
 
-            muxer.start()
-            val buffer = ByteBuffer.allocate(1024 * 1024) // 1MB buffer
-            val bufferInfo = android.media.MediaCodec.BufferInfo()
+                muxer.start()
+                val buffer = ByteBuffer.allocate(1024 * 1024) // 1MB buffer
+                val bufferInfo = android.media.MediaCodec.BufferInfo()
 
-            for ((sourceTrack, muxerTrack) in trackIndices) {
-                extractor.selectTrack(sourceTrack)
                 while (true) {
                     val sampleSize = extractor.readSampleData(buffer, 0)
                     if (sampleSize < 0) break
+                    val muxerTrack = trackIndices[extractor.sampleTrackIndex]!!
                     bufferInfo.offset = 0
                     bufferInfo.size = sampleSize
                     bufferInfo.presentationTimeUs = extractor.sampleTime
@@ -196,22 +197,21 @@ class MainActivity : FlutterActivity() {
                     muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
                     extractor.advance()
                 }
-                extractor.unselectTrack(sourceTrack)
-            }
 
-            muxer.stop()
-            result.success(outputFile.absolutePath)
-        } catch (e: Exception) {
-            outputFile.delete()
-            result.error(
-                "transcode_failed",
-                e.message ?: "Video transcoding failed.",
-                null,
-            )
-        } finally {
-            try { muxer?.release() } catch (_: Exception) {}
-            extractor.release()
-        }
+                muxer.stop()
+                result.success(outputFile.absolutePath)
+            } catch (e: Exception) {
+                outputFile.delete()
+                result.error(
+                    "transcode_failed",
+                    e.message ?: "Video transcoding failed.",
+                    null,
+                )
+            } finally {
+                try { muxer?.release() } catch (_: Exception) {}
+                extractor.release()
+            }
+        }.start()
     }
 
     private fun invalidArguments(
