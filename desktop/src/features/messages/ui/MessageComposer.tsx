@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
+import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
+import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
 
 import {
   ALLOWED_MEDIA_TYPES,
@@ -20,6 +22,7 @@ import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
+import { EmojiAutocomplete } from "./EmojiAutocomplete";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -90,6 +93,7 @@ export function MessageComposer({
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
+  const emojiAutocomplete = useEmojiAutocomplete();
   const notifyTyping = useTypingBroadcast(
     channelId,
     typingParentEventId,
@@ -118,7 +122,9 @@ export function MessageComposer({
   // ── Refs consumed by Tiptap's submitOnEnter extension ──────────────
   const isAutocompleteOpenRef = React.useRef(false);
   isAutocompleteOpenRef.current =
-    mentions.isMentionOpen || channelLinks.isChannelOpen;
+    mentions.isMentionOpen ||
+    channelLinks.isChannelOpen ||
+    emojiAutocomplete.isEmojiAutocompleteOpen;
 
   const submitMessageRef = React.useRef<() => void>(() => {});
 
@@ -142,10 +148,11 @@ export function MessageComposer({
       setContent(markdown);
       contentRef.current = markdown;
 
-      // Bridge to existing mention/channel detection hooks.
+      // Bridge to existing mention/channel/emoji detection hooks.
       const { cursor } = richText.getTextAndCursor();
       mentions.updateMentionQuery(text, cursor);
       channelLinks.updateChannelQuery(text, cursor);
+      emojiAutocomplete.updateEmojiQuery(text, cursor);
 
       if (text.trim().length > 0) {
         notifyTyping();
@@ -180,6 +187,7 @@ export function MessageComposer({
     setIsEmojiPickerOpen(false);
     mentions.clearMentions();
     channelLinks.clearChannels();
+    emojiAutocomplete.clearEmojis();
 
     return () => {
       if (effectiveDraftKey) {
@@ -232,6 +240,21 @@ export function MessageComposer({
     },
     [
       channelLinks.insertChannel,
+      richText.getTextAndCursor,
+      richText.setContentWithTrailingSpace,
+    ],
+  );
+
+  const applyEmojiInsert = React.useCallback(
+    (suggestion: EmojiSuggestion) => {
+      const { text, cursor } = richText.getTextAndCursor();
+      const result = emojiAutocomplete.insertEmoji(suggestion, text, cursor);
+      richText.setContentWithTrailingSpace(result.nextContent);
+      setContent(result.nextContent);
+      contentRef.current = result.nextContent;
+    },
+    [
+      emojiAutocomplete.insertEmoji,
       richText.getTextAndCursor,
       richText.setContentWithTrailingSpace,
     ],
@@ -293,6 +316,7 @@ export function MessageComposer({
       richText.clearContent();
       mentions.clearMentions();
       channelLinks.clearChannels();
+      emojiAutocomplete.clearEmojis();
       setIsEmojiPickerOpen(false);
 
       try {
@@ -350,6 +374,7 @@ export function MessageComposer({
     media.setPendingImeta([]);
     mentions.clearMentions();
     channelLinks.clearChannels();
+    emojiAutocomplete.clearEmojis();
     setIsEmojiPickerOpen(false);
 
     const sendChannelId = channelIdRef.current;
@@ -373,6 +398,7 @@ export function MessageComposer({
     channelLinks.clearChannels,
     richText.clearContent,
     richText.setContent,
+    emojiAutocomplete.clearEmojis,
   ]);
   submitMessageRef.current = submitMessage;
 
@@ -392,6 +418,14 @@ export function MessageComposer({
   const handleEditorKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       // Let autocomplete handle keys first
+      const emojiResult = emojiAutocomplete.handleEmojiKeyDown(event);
+      if (emojiResult.handled) {
+        if (emojiResult.suggestion) {
+          applyEmojiInsert(emojiResult.suggestion);
+        }
+        return;
+      }
+
       const channelResult = channelLinks.handleChannelKeyDown(event);
       if (channelResult.handled) {
         if (channelResult.suggestion) {
@@ -416,6 +450,8 @@ export function MessageComposer({
       }
     },
     [
+      emojiAutocomplete.handleEmojiKeyDown,
+      applyEmojiInsert,
       channelLinks.handleChannelKeyDown,
       applyChannelInsert,
       mentions.handleMentionKeyDown,
@@ -511,6 +547,15 @@ export function MessageComposer({
             handleSubmit(event);
           }}
         >
+          <EmojiAutocomplete
+            onSelect={applyEmojiInsert}
+            selectedIndex={emojiAutocomplete.emojiSelectedIndex}
+            suggestions={
+              emojiAutocomplete.isEmojiAutocompleteOpen
+                ? emojiAutocomplete.emojiSuggestions
+                : []
+            }
+          />
           <ChannelAutocomplete
             onSelect={applyChannelInsert}
             selectedIndex={channelLinks.channelSelectedIndex}
