@@ -14,7 +14,7 @@ class HomePage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tabIndex = useState(0);
 
-    const pages = [ChannelsPage(), SearchPage(), ActivityPage()];
+    const pages = [ChannelsPage(), ActivityPage(), SearchPage()];
 
     return Scaffold(
       body: IndexedStack(index: tabIndex.value, children: pages),
@@ -28,14 +28,14 @@ class HomePage extends HookConsumerWidget {
             label: 'Home',
           ),
           NavigationDestination(
-            icon: Icon(LucideIcons.search),
-            selectedIcon: Icon(LucideIcons.search),
-            label: 'Search',
-          ),
-          NavigationDestination(
             icon: Icon(LucideIcons.bell),
             selectedIcon: Icon(LucideIcons.bell),
             label: 'Activity',
+          ),
+          NavigationDestination(
+            icon: Icon(LucideIcons.search),
+            selectedIcon: Icon(LucideIcons.search),
+            label: 'Search',
           ),
         ],
       ),
