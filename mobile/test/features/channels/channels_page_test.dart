@@ -122,15 +122,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Unjoined and archived channels should not appear in the main list.
     expect(find.text('general'), findsOneWidget);
     expect(find.text('open-stream'), findsNothing);
     expect(find.text('archived-stream'), findsNothing);
-
-    await tester.tap(find.text('Search'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('open-stream'), findsOneWidget);
-    expect(find.text('archived-stream'), findsOneWidget);
   });
 
   testWidgets('shows empty state when no channels', (tester) async {

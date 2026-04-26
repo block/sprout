@@ -21,7 +21,9 @@ import 'channels_provider.dart';
 enum _QuickAction { createChannel, createForum, newDm }
 
 class ChannelsPage extends HookConsumerWidget {
-  const ChannelsPage({super.key});
+  final VoidCallback? onSearchTap;
+
+  const ChannelsPage({super.key, this.onSearchTap});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -47,23 +49,6 @@ class ChannelsPage extends HookConsumerWidget {
           builder: (_) => ChannelDetailPage(channel: channel),
         ),
       );
-    }
-
-    Future<void> browseChannels() async {
-      final channels = channelsAsync.asData?.value;
-      if (channels == null || channels.isEmpty) {
-        return;
-      }
-
-      final selected = await showModalBottomSheet<Channel>(
-        context: context,
-        isScrollControlled: true,
-        showDragHandle: true,
-        builder: (_) => _BrowseChannelsSheet(channels: channels),
-      );
-      if (selected != null && context.mounted) {
-        await openChannel(selected);
-      }
     }
 
     Future<void> openQuickActions() async {
@@ -114,7 +99,7 @@ class ChannelsPage extends HookConsumerWidget {
           children: [
             Expanded(
               child: GestureDetector(
-                onTap: channelsAsync.hasValue ? browseChannels : null,
+                onTap: onSearchTap,
                 child: Container(
                   height: 36,
                   padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
@@ -730,203 +715,6 @@ class _CreateChannelSheet extends HookConsumerWidget {
   }
 }
 
-class _BrowseChannelsSheet extends HookConsumerWidget {
-  final List<Channel> channels;
-
-  const _BrowseChannelsSheet({required this.channels});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final query = useState('');
-    final busyChannelId = useState<String?>(null);
-
-    final normalizedQuery = query.value.trim().toLowerCase();
-    final browsableChannels = channels.where((channel) {
-      if (channel.isDm) return false;
-      final visible = channel.isArchived
-          ? channel.isMember
-          : channel.visibility == 'open' || channel.isMember;
-      if (!visible) return false;
-      if (normalizedQuery.isEmpty) return true;
-      return channel.name.toLowerCase().contains(normalizedQuery) ||
-          channel.description.toLowerCase().contains(normalizedQuery);
-    }).toList();
-
-    final notJoined = browsableChannels
-        .where((channel) => !channel.isMember)
-        .toList();
-    final joined = browsableChannels
-        .where((channel) => channel.isMember)
-        .toList();
-
-    Future<void> openOrJoin(Channel channel) async {
-      if (busyChannelId.value != null) return;
-
-      if (channel.isMember) {
-        Navigator.of(context).pop(channel);
-        return;
-      }
-
-      busyChannelId.value = channel.id;
-      try {
-        await ref.read(channelActionsProvider).joinChannel(channel.id);
-        final refreshed = await ref.read(channelsProvider.future);
-        final joinedChannel = refreshed.firstWhere(
-          (candidate) => candidate.id == channel.id,
-          orElse: () => channel,
-        );
-        if (context.mounted) {
-          Navigator.of(context).pop(joinedChannel);
-        }
-      } catch (error) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
-      } finally {
-        busyChannelId.value = null;
-      }
-    }
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.75,
-      minChildSize: 0.4,
-      maxChildSize: 0.95,
-      expand: false,
-      builder: (context, scrollController) => Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              Grid.xs,
-              Grid.twelve,
-              Grid.xs,
-              Grid.xxs,
-            ),
-            child: GestureDetector(
-              onTap: () {},
-              child: Container(
-                height: 36,
-                padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
-                decoration: BoxDecoration(
-                  color: context.colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  border: Border.all(color: context.colors.outlineVariant),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      LucideIcons.search,
-                      size: 16,
-                      color: context.colors.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: Grid.xxs),
-                    Expanded(
-                      child: TextField(
-                        autofocus: true,
-                        decoration: InputDecoration(
-                          hintText: 'Search channels, forums…',
-                          hintStyle: context.textTheme.bodyMedium?.copyWith(
-                            color: context.colors.onSurfaceVariant,
-                          ),
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          isDense: true,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                        style: context.textTheme.bodyMedium,
-                        onChanged: (value) => query.value = value,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: browsableChannels.isEmpty
-                ? Center(
-                    child: Text(
-                      'No matching results',
-                      style: context.textTheme.bodyMedium?.copyWith(
-                        color: context.colors.onSurfaceVariant,
-                      ),
-                    ),
-                  )
-                : ListView(
-                    controller: scrollController,
-                    padding: EdgeInsets.only(
-                      top: Grid.xxs,
-                      bottom: MediaQuery.viewInsetsOf(context).bottom,
-                    ),
-                    children: [
-                      if (notJoined.isNotEmpty) ...[
-                        _MiniHeader(
-                          label: '${notJoined.length} available to join',
-                        ),
-                        for (final channel in notJoined)
-                          _BrowseTile(
-                            channel: channel,
-                            isBusy: busyChannelId.value == channel.id,
-                            onTap: () => openOrJoin(channel),
-                          ),
-                      ],
-                      if (joined.isNotEmpty) ...[
-                        _MiniHeader(label: '${joined.length} joined'),
-                        for (final channel in joined)
-                          _BrowseTile(
-                            channel: channel,
-                            isBusy: false,
-                            onTap: () => openOrJoin(channel),
-                          ),
-                      ],
-                    ],
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _BrowseTile extends StatelessWidget {
-  final Channel channel;
-  final bool isBusy;
-  final VoidCallback onTap;
-
-  const _BrowseTile({
-    required this.channel,
-    required this.isBusy,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(
-        channel.isForum ? LucideIcons.messageSquareText : LucideIcons.hash,
-      ),
-      title: Text(channel.name),
-      subtitle: Text(
-        channel.description.isEmpty ? 'No description' : channel.description,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: FilledButton.tonal(
-        onPressed: isBusy ? null : onTap,
-        child: Text(
-          isBusy
-              ? 'Joining…'
-              : channel.isMember
-              ? 'Open'
-              : 'Join',
-        ),
-      ),
-      onTap: isBusy ? null : onTap,
-    );
-  }
-}
-
 class _NewDirectMessageSheet extends HookConsumerWidget {
   final String? currentPubkey;
 
@@ -1122,29 +910,6 @@ class _NewDirectMessageSheet extends HookConsumerWidget {
               ],
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MiniHeader extends StatelessWidget {
-  final String label;
-
-  const _MiniHeader({required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xs,
-        vertical: Grid.half,
-      ),
-      child: Text(
-        label,
-        style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
-          fontWeight: FontWeight.w600,
         ),
       ),
     );
