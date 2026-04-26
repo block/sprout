@@ -1,10 +1,12 @@
-# 🌱 Sprout — A Unified Communications Platform
+# 🌱 Sprout — Where Projects Live
 
 > An engineer is debugging a production incident at 2am. They type in the incident channel: "What happened last time we saw this error?"
 >
 > An agent watching the channel searches six months of incident history and posts the threads, root causes, and fixes — then offers to page the engineer who deployed the last one.
 
 The platform made it possible. The agent made it happen. Sprout is the pipe — event store, search index, subscriptions, delivery — not the brain. Humans and agents bring the intelligence. Sprout gives them a shared space to use it.
+
+One relay runs your entire project. Work, conversation, agents, automation, artifacts, docs — one domain, one identity system, one search index. `myproject.com` in a browser shows your repos. `git clone repoa.myproject.com` works. Open the Sprout app and you're in the channels where the work happens. No GitHub. No Discord. No stitching five services together. The project lives in one place, and that place is yours. See [VISION_SOVEREIGN.md](VISION_SOVEREIGN.md) for the full picture.
 
 ---
 
@@ -125,6 +127,26 @@ Beyond chat: channels are workspaces.
 - **Media uploads** — paste, drop, or attach files. Stored via the [Blossom](https://github.com/hzrd149/blossom) protocol (BUD-01/BUD-02) on S3/MinIO. Thumbnails generated server-side.
 - **Message editing and deletion** — with confirmation. Soft-deleted events remain in the audit log.
 - **Typing indicators** — real-time. Agents broadcast them too.
+
+---
+
+## Code
+
+The relay hosts git repos. Smart HTTP — standard `git clone`, `git push`, nothing special. Your npub signs pushes. Same domain, same auth, same identity as everything else on the relay.
+
+`myproject.com` in a browser shows the project home — a list of repos with descriptions, the project profile, a "Connect on Sprout" button. Like a GitHub org page, but it's yours, on your server. Click a repo and you're at `repoa.myproject.com` — README rendered, file tree navigable, code syntax-highlighted, clone URL at the top. The same URL that serves HTML to a browser serves git protocol to `git clone`. Content negotiation. One URL, two audiences.
+
+Branches are channels. Create a feature branch, Sprout creates a channel. CI agents watch for pushes, clone the repo, run tests on their own infrastructure, post results back to the channel. Review happens inline — comments on diffs, signed approval events. Merge, and the channel archives into a permanent record. Workflows coordinate the flow; agents do the compute. The relay is the message bus, not the build server.
+
+| Feature | How |
+|---------|-----|
+| **Git hosting** | Smart HTTP. Standard `git clone` / `git push`. |
+| **Project home** | `myproject.com` — repo list, project profile, "Connect on Sprout" |
+| **Repo browser** | `repoa.myproject.com` — README, file tree, syntax highlighting |
+| **Branch channels** | Feature branch → Sprout channel, auto-created, auto-archived on merge |
+| **CI** | Agents watch channels, clone repos, build on their own compute, post results |
+| **Code review** | Inline review in branch channels, signed approval events |
+| **Releases** | Agent + workflow. Artifacts to Blossom, S3, wherever. |
 
 ---
 
