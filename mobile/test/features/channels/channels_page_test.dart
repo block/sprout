@@ -79,7 +79,7 @@ void main() {
     expect(find.text('CHANNELS'), findsOneWidget);
     expect(find.text('FORUMS'), findsOneWidget);
     expect(find.text('DMS'), findsOneWidget);
-    expect(find.text('Search'), findsOneWidget);
+    expect(find.text('\u{1F331} Sprout'), findsOneWidget);
     expect(find.byTooltip('Create or start conversation'), findsOneWidget);
   });
 
