@@ -24,6 +24,32 @@ export function useUpdater() {
     }
   }, []);
 
+  const downloadAndInstall = useCallback(async () => {
+    try {
+      const update = updateRef.current;
+      if (!update) {
+        return;
+      }
+
+      toast.dismiss("update-available");
+      setStatus({ state: "downloading" });
+
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Finished") {
+          setStatus({ state: "installing" });
+        }
+      });
+
+      updateRef.current = null;
+      setStatus({ state: "ready" });
+    } catch (err) {
+      setStatus({
+        state: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, []);
+
   const checkForUpdate = useCallback(async () => {
     try {
       await closeUpdate();
@@ -36,6 +62,11 @@ export function useUpdater() {
         toast("Update Available", {
           id: "update-available",
           description: `Version ${update.version} is ready to download.`,
+          duration: Infinity,
+          action: {
+            label: "Download & install",
+            onClick: () => downloadAndInstall(),
+          },
         });
       } else {
         setStatus({ state: "up-to-date" });
@@ -51,32 +82,7 @@ export function useUpdater() {
       }
       setStatus({ state: "error", message: msg });
     }
-  }, [closeUpdate]);
-
-  const downloadAndInstall = useCallback(async () => {
-    try {
-      const update = updateRef.current;
-      if (!update) {
-        setStatus({ state: "up-to-date" });
-        return;
-      }
-
-      setStatus({ state: "downloading" });
-
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Finished") {
-          setStatus({ state: "installing" });
-        }
-      });
-
-      setStatus({ state: "ready" });
-    } catch (err) {
-      setStatus({
-        state: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }, []);
+  }, [closeUpdate, downloadAndInstall]);
 
   const handleRelaunch = useCallback(async () => {
     try {
