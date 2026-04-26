@@ -1,4 +1,4 @@
-# 🌱 Sprout — Where Projects Live
+# 🌱 Sprout — The relay is the project
 
 > An engineer is debugging a production incident at 2am. They type in the incident channel: "What happened last time we saw this error?"
 >
