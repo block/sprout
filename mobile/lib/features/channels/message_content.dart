@@ -51,7 +51,7 @@ class MessageContent extends StatelessWidget {
         context.textTheme.bodyMedium?.copyWith(color: context.colors.onSurface);
     final imetaByUrl = parseImetaTags(tags);
 
-    // Convert angle-bracket autolinks to standard markdown links,
+    // Convert autolinks and bare URLs to standard markdown links,
     // but skip content inside backticks (inline code / fenced blocks).
     final buffer = StringBuffer();
     final parts = content.split('`');
@@ -60,12 +60,26 @@ class MessageContent extends StatelessWidget {
         // Inside backticks — preserve as-is.
         buffer.write('`${parts[i]}`');
       } else {
-        buffer.write(
-          parts[i].replaceAllMapped(
-            RegExp(r'<(https?://[^>]+)>'),
-            (m) => '[${m[1]}](${m[1]})',
-          ),
+        // 1. Angle-bracket autolinks: <https://...>
+        var segment = parts[i].replaceAllMapped(
+          RegExp(r'<(https?://[^>]+)>'),
+          (m) => '[${m[1]}](${m[1]})',
         );
+        // 2. Bare URLs not already inside markdown link/image syntax.
+        //    Negative lookbehind avoids matching URLs preceded by ]( or =
+        //    which are already part of markdown links or imeta tags.
+        segment = segment.replaceAllMapped(
+          RegExp(r'(?<![(\]=])https?://[^\s)>\]]+'),
+          (m) {
+            final url = m[0]!;
+            // Skip if this URL is already a markdown link label that equals
+            // the URL (produced by step 1 or authored as [url](url)).
+            final start = m.start;
+            if (start >= 1 && segment[start - 1] == '[') return url;
+            return '[$url]($url)';
+          },
+        );
+        buffer.write(segment);
       }
     }
     final processed = buffer.toString();

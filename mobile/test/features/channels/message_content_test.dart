@@ -226,8 +226,10 @@ void main() {
           ),
         );
 
-        final allText = _allRichText(tester);
-        expect(allText, contains('https://example.com'));
+        // The URL text should be rendered and tappable.
+        expect(find.text('https://example.com'), findsOneWidget);
+        final urlWidget = tester.widget<Text>(find.text('https://example.com'));
+        expect(urlWidget.style?.decoration, TextDecoration.underline);
       });
     });
 
