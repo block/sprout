@@ -37,20 +37,32 @@ class SearchPage extends HookConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: TextField(
-          controller: textController,
-          decoration: InputDecoration(
-            hintText: 'Search messages, channels, people\u2026',
-            hintStyle: context.textTheme.bodyMedium?.copyWith(
-              color: context.colors.onSurfaceVariant,
-            ),
-            prefixIcon: const Icon(LucideIcons.search, size: 20),
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
+        title: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: Grid.half),
+          decoration: BoxDecoration(
+            color: context.colors.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(Radii.lg),
           ),
-          style: context.textTheme.bodyMedium,
-          onChanged: (value) => ref.read(searchProvider.notifier).search(value),
+          child: TextField(
+            controller: textController,
+            decoration: InputDecoration(
+              hintText: 'Search messages, channels, people\u2026',
+              hintStyle: context.textTheme.bodyMedium?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+              prefixIcon: const Icon(LucideIcons.search, size: 16),
+              prefixIconConstraints: const BoxConstraints(minWidth: 32),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(vertical: Grid.xxs),
+            ),
+            style: context.textTheme.bodyMedium,
+            onChanged: (value) =>
+                ref.read(searchProvider.notifier).search(value),
+          ),
         ),
         actions: [
           if (hasText)
@@ -101,10 +113,32 @@ class _FilterChips extends StatelessWidget {
           for (final filter in _SearchFilter.values) ...[
             if (filter != _SearchFilter.values.first)
               const SizedBox(width: Grid.xxs),
-            FilterChip(
-              label: Text(filter.label),
-              selected: active == filter,
-              onSelected: (_) => onChanged(filter),
+            GestureDetector(
+              onTap: () => onChanged(filter),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Grid.twelve,
+                  vertical: Grid.half + 2,
+                ),
+                decoration: BoxDecoration(
+                  color: active == filter
+                      ? context.colors.primary
+                      : context.colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(Radii.lg),
+                  border: active == filter
+                      ? null
+                      : Border.all(color: context.colors.outlineVariant),
+                ),
+                child: Text(
+                  filter.label,
+                  style: context.textTheme.labelMedium?.copyWith(
+                    color: active == filter
+                        ? context.colors.onPrimary
+                        : context.colors.onSurfaceVariant,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
             ),
           ],
         ],

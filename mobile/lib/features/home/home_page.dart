@@ -14,11 +14,7 @@ class HomePage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tabIndex = useState(0);
 
-    final pages = [
-      ChannelsPage(onSearchTap: () => tabIndex.value = 1),
-      const SearchPage(),
-      const ActivityPage(),
-    ];
+    const pages = [ChannelsPage(), SearchPage(), ActivityPage()];
 
     return Scaffold(
       body: IndexedStack(index: tabIndex.value, children: pages),

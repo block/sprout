@@ -21,9 +21,7 @@ import 'channels_provider.dart';
 enum _QuickAction { createChannel, createForum, newDm }
 
 class ChannelsPage extends HookConsumerWidget {
-  final VoidCallback? onSearchTap;
-
-  const ChannelsPage({super.key, this.onSearchTap});
+  const ChannelsPage({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -95,46 +93,20 @@ class ChannelsPage extends HookConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: Grid.xs,
-        title: Row(
-          children: [
-            Expanded(
-              child: GestureDetector(
-                onTap: onSearchTap,
-                child: Container(
-                  height: 36,
-                  padding: const EdgeInsets.symmetric(horizontal: Grid.twelve),
-                  decoration: BoxDecoration(
-                    color: context.colors.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(Radii.lg),
-                    border: Border.all(color: context.colors.outlineVariant),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        LucideIcons.search,
-                        size: 16,
-                        color: context.colors.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: Grid.xxs),
-                      Text(
-                        'Search',
-                        style: context.textTheme.bodyMedium?.copyWith(
-                          color: context.colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: Grid.twelve),
-            ProfileAvatar(
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-              ),
-            ),
-          ],
+        title: Text(
+          'Sprout',
+          style: context.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
+        actions: [
+          ProfileAvatar(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+            ),
+          ),
+          const SizedBox(width: Grid.xs),
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: openQuickActions,
