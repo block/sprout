@@ -3,9 +3,35 @@ import { Download, RefreshCw } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 
 import { useUpdaterContext } from "./hooks/UpdaterProvider";
+import type { UpdateStatus } from "./hooks/use-updater";
 
 const indicatorButtonClass =
-  "relative h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground";
+  "relative text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground";
+
+const iconClass = "h-3.5 w-3.5";
+
+const variants: Record<
+  "available" | "ready",
+  { Icon: typeof Download; label: string; badgeColor: string }
+> = {
+  available: {
+    Icon: Download,
+    label: "Update available",
+    badgeColor: "bg-primary",
+  },
+  ready: {
+    Icon: RefreshCw,
+    label: "Restart to update",
+    badgeColor: "bg-emerald-500",
+  },
+};
+
+function getVariant(state: UpdateStatus["state"]) {
+  if (state === "available" || state === "ready") {
+    return variants[state];
+  }
+  return null;
+}
 
 export function UpdateIndicator({
   onOpenUpdates,
@@ -13,36 +39,27 @@ export function UpdateIndicator({
   onOpenUpdates: () => void;
 }) {
   const { status } = useUpdaterContext();
+  const variant = getVariant(status.state);
 
-  if (status.state === "available") {
-    return (
-      <Button
-        aria-label="Update available"
-        className={indicatorButtonClass}
-        onClick={onOpenUpdates}
-        size="icon"
-        variant="ghost"
-      >
-        <Download className="h-3.5 w-3.5" />
-        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-primary animate-pulse" />
-      </Button>
-    );
+  if (!variant) {
+    return null;
   }
 
-  if (status.state === "ready") {
-    return (
-      <Button
-        aria-label="Restart to update"
-        className={indicatorButtonClass}
-        onClick={onOpenUpdates}
-        size="icon"
-        variant="ghost"
-      >
-        <RefreshCw className="h-3.5 w-3.5" />
-        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500" />
-      </Button>
-    );
-  }
+  const { Icon, label, badgeColor } = variant;
 
-  return null;
+  return (
+    <Button
+      aria-label={label}
+      className={indicatorButtonClass}
+      onClick={onOpenUpdates}
+      size="sm"
+      variant="ghost"
+    >
+      <Icon className={iconClass} />
+      {label}
+      <span
+        className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ${badgeColor} animate-pulse`}
+      />
+    </Button>
+  );
 }
