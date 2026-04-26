@@ -13,6 +13,7 @@ This NIP defines an optional `auth` tag by which an owner key authorizes an agen
 NIP-26 defines a sound Schnorr-signature mechanism for proving that one key authorized another key subject to explicit conditions.
 NIP-26 assigns the event to the delegator semantically, and that semantic MUST NOT be reused for agent provenance.
 This NIP reuses NIP-26 as prior art for the credential format and signing flow and defines the credential as authorization evidence only.
+A valid `auth` tag is a reusable capability: the same tag MAY appear on multiple events by the same agent key provided each event satisfies the conditions.
 An event that includes a valid `auth` tag remains authored by `event.pubkey`.
 
 ## Non-Goals
@@ -57,6 +58,8 @@ Clause names and operators are case-sensitive and MUST appear exactly as specifi
 A trailing `&`, a leading `&`, or `&&` is malformed and MUST be rejected.
 
 The decimal encoding in a clause MUST be canonical base-10 with no leading zeroes except `0`.
+Values in `kind=` clauses MUST be in the range `0` to `65535`.
+Values in `created_at<` and `created_at>` clauses MUST be in the range `0` to `4294967295`.
 An empty `<conditions>` string imposes no additional event constraints.
 Verifiers MUST evaluate every clause.
 Verifiers MUST reject an `auth` tag that contains an unsupported clause, malformed decimal encoding, invalid public key, or invalid signature.
@@ -65,6 +68,7 @@ An event satisfies `kind=<n>` if and only if `event.kind = n`.
 An event satisfies `created_at<t>` if and only if `event.created_at < t`.
 An event satisfies `created_at>t` if and only if `event.created_at > t`.
 Clause order is part of the signed preimage and verifiers MUST use the exact `<conditions>` string from the tag when verifying the signature.
+Implementers MUST NOT reorder, deduplicate, normalize, or canonicalize the `<conditions>` string before computing the preimage.
 Verifiers MUST NOT reinterpret a valid `auth` tag as an identity override.
 
 ## Relay Behavior
@@ -93,7 +97,9 @@ Compromise of the agent secret key MUST NOT imply compromise of the owner secret
 Compromise of the agent secret key permits only signatures by the compromised agent key.
 Owners SHOULD bound authorization lifetime with a `created_at<...` clause when revocation latency matters.
 Owners MAY revoke future authorization by refusing to issue new `auth` tags.
-A tag fails a `created_at<...` or `created_at>...` clause based solely on `event.created_at`.
+A `created_at<...` or `created_at>...` clause constrains the event's self-declared `created_at` field, which the agent controls.
+These clauses do not enforce wall-clock expiry; a misbehaving agent can backdate `event.created_at` to satisfy an expired window.
+Relays or clients that require wall-clock freshness MUST enforce it independently of this NIP.
 Verification MUST NOT depend on the verifier's local clock, receipt time, or relay storage time.
 
 ## Privacy Considerations
