@@ -13,14 +13,28 @@ export type UpdateStatus =
   | { state: "ready" }
   | { state: "error"; message: string };
 
+const TOAST_ID = "update-available";
+
+function toErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isUpdaterUnavailable(message: string): boolean {
+  return (
+    message.includes("plugin updater not found") ||
+    message.includes("not initialized")
+  );
+}
+
 export function useUpdater() {
   const [status, setStatus] = useState<UpdateStatus>({ state: "idle" });
   const updateRef = useRef<Update | null>(null);
 
   const closeUpdate = useCallback(async () => {
-    if (updateRef.current) {
-      await updateRef.current.close();
+    const current = updateRef.current;
+    if (current) {
       updateRef.current = null;
+      await current.close();
     }
   }, []);
 
@@ -31,7 +45,7 @@ export function useUpdater() {
         return;
       }
 
-      toast.dismiss("update-available");
+      toast.dismiss(TOAST_ID);
       setStatus({ state: "downloading" });
 
       await update.downloadAndInstall((event) => {
@@ -43,10 +57,7 @@ export function useUpdater() {
       updateRef.current = null;
       setStatus({ state: "ready" });
     } catch (err) {
-      setStatus({
-        state: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
+      setStatus({ state: "error", message: toErrorMessage(err) });
     }
   }, []);
 
@@ -60,7 +71,7 @@ export function useUpdater() {
         updateRef.current = update;
         setStatus({ state: "available", version: update.version });
         toast("Update Available", {
-          id: "update-available",
+          id: TOAST_ID,
           description: `Version ${update.version} is ready to download.`,
           duration: Infinity,
           action: {
@@ -72,15 +83,12 @@ export function useUpdater() {
         setStatus({ state: "up-to-date" });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (
-        msg.includes("plugin updater not found") ||
-        msg.includes("not initialized")
-      ) {
+      const message = toErrorMessage(err);
+      if (isUpdaterUnavailable(message)) {
         setStatus({ state: "idle" });
         return;
       }
-      setStatus({ state: "error", message: msg });
+      setStatus({ state: "error", message });
     }
   }, [closeUpdate, downloadAndInstall]);
 
@@ -88,10 +96,7 @@ export function useUpdater() {
     try {
       await relaunch();
     } catch (err) {
-      setStatus({
-        state: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
+      setStatus({ state: "error", message: toErrorMessage(err) });
     }
   }, []);
 
