@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../activity/activity_page.dart';
 import '../channels/channels_page.dart';
+import '../search/search_page.dart';
 
 class HomePage extends HookConsumerWidget {
   const HomePage({super.key});
@@ -13,7 +14,7 @@ class HomePage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tabIndex = useState(0);
 
-    const pages = [ChannelsPage(), ActivityPage()];
+    const pages = [ChannelsPage(), ActivityPage(), SearchPage()];
 
     return Scaffold(
       body: IndexedStack(index: tabIndex.value, children: pages),
@@ -30,6 +31,11 @@ class HomePage extends HookConsumerWidget {
             icon: Icon(LucideIcons.bell),
             selectedIcon: Icon(LucideIcons.bell),
             label: 'Activity',
+          ),
+          NavigationDestination(
+            icon: Icon(LucideIcons.search),
+            selectedIcon: Icon(LucideIcons.search),
+            label: 'Search',
           ),
         ],
       ),

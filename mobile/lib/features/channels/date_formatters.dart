@@ -41,3 +41,26 @@ bool isSameDay(int a, int b) {
   ).toLocal();
   return dtA.year == dtB.year && dtA.month == dtB.month && dtA.day == dtB.day;
 }
+
+/// Returns a compact relative time string like "just now", "5m ago", "3h ago",
+/// "2d ago", or a short date for older timestamps.
+String relativeTime(int unixSeconds) {
+  final now = DateTime.now();
+  final time = DateTime.fromMillisecondsSinceEpoch(
+    unixSeconds * 1000,
+    isUtc: true,
+  ).toLocal();
+  final diff = now.difference(time);
+
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  return '${time.month}/${time.day}/${time.year}';
+}
+
+/// Truncates a hex pubkey to the first 8 characters with an ellipsis.
+String shortPubkey(String pubkey) {
+  if (pubkey.length > 12) return '${pubkey.substring(0, 8)}\u2026';
+  return pubkey;
+}
