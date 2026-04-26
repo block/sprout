@@ -94,7 +94,7 @@ class ChannelsPage extends HookConsumerWidget {
       appBar: AppBar(
         titleSpacing: Grid.xs,
         title: Text(
-          'Sprout',
+          '\u{1F331} Sprout',
           style: context.textTheme.titleLarge?.copyWith(
             fontWeight: FontWeight.w700,
           ),

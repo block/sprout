@@ -36,7 +36,7 @@ class SearchPage extends HookConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 0,
+        titleSpacing: Grid.xs,
         title: Container(
           height: 36,
           padding: const EdgeInsets.symmetric(horizontal: Grid.half),
@@ -104,10 +104,7 @@ class _FilterChips extends StatelessWidget {
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xs,
-        vertical: Grid.xxs,
-      ),
+      padding: const EdgeInsets.fromLTRB(Grid.xs, Grid.xxs, Grid.xs, Grid.xxs),
       child: Row(
         children: [
           for (final filter in _SearchFilter.values) ...[
