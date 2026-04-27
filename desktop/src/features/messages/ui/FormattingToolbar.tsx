@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEditorState, type Editor } from "@tiptap/react";
+import type { Editor } from "@tiptap/react";
 import {
   Bold,
   Code,
@@ -19,14 +19,62 @@ type FormattingToolbarProps = {
   disabled?: boolean;
 };
 
+type ActiveStates = {
+  bold: boolean;
+  italic: boolean;
+  strike: boolean;
+  code: boolean;
+  link: boolean;
+  bulletList: boolean;
+  orderedList: boolean;
+  blockquote: boolean;
+};
+
+function getActiveStates(editor: Editor): ActiveStates {
+  return {
+    bold: editor.isActive("bold"),
+    italic: editor.isActive("italic"),
+    strike: editor.isActive("strike"),
+    code: editor.isActive("code"),
+    link: editor.isActive("link"),
+    bulletList: editor.isActive("bulletList"),
+    orderedList: editor.isActive("orderedList"),
+    blockquote: editor.isActive("blockquote"),
+  };
+}
+
 /**
  * Formatting bar shown above the editor when the format toggle is active.
- * Renders all formatting buttons in a single row with bg-muted styling.
+ * Renders all formatting buttons in a single row.
+ *
+ * Uses a direct editor.on("transaction") subscription instead of
+ * useEditorState to ensure active-mark updates always trigger re-renders.
  */
 export const FormattingToolbar = React.memo(function FormattingToolbar({
   editor,
   disabled = false,
 }: FormattingToolbarProps) {
+  const [activeStates, setActiveStates] = React.useState<ActiveStates | null>(
+    () => (editor ? getActiveStates(editor) : null),
+  );
+
+  React.useEffect(() => {
+    if (!editor) {
+      setActiveStates(null);
+      return;
+    }
+    // Seed with current state.
+    setActiveStates(getActiveStates(editor));
+
+    const onTransaction = () => {
+      setActiveStates(getActiveStates(editor));
+    };
+    editor.on("transaction", onTransaction);
+    return () => {
+      editor.off("transaction", onTransaction);
+    };
+  }, [editor]);
+
   const toggleBold = React.useCallback(() => {
     editor?.chain().focus().toggleBold().run();
   }, [editor]);
@@ -79,26 +127,6 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
   const toggleBlockquote = React.useCallback(() => {
     editor?.chain().focus().toggleBlockquote().run();
   }, [editor]);
-
-  // Subscribe to editor state changes so active marks/nodes update on
-  // selection change — useEditorState triggers re-renders when the
-  // selector result changes.
-  const activeStates = useEditorState({
-    editor,
-    selector: ({ editor: ed }) =>
-      ed
-        ? {
-            bold: ed.isActive("bold"),
-            italic: ed.isActive("italic"),
-            strike: ed.isActive("strike"),
-            code: ed.isActive("code"),
-            link: ed.isActive("link"),
-            bulletList: ed.isActive("bulletList"),
-            orderedList: ed.isActive("orderedList"),
-            blockquote: ed.isActive("blockquote"),
-          }
-        : null,
-  });
 
   if (!editor || !activeStates) return null;
 
