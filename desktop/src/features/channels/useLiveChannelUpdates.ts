@@ -133,17 +133,18 @@ export function useLiveChannelUpdates(
     // when the user is already viewing the DM.
     handleDmEvent(event);
 
-    if (channelId === activeChannelId) {
-      return;
-    }
-
     if (!liveChannelIds.has(channelId)) {
-      void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+      if (channelId !== activeChannelId) {
+        void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+      }
       return;
     }
 
+    // Always update the cache — even for the active channel.
+    // useChannelSubscription also writes to this cache, but there's a
+    // race window where it hasn't connected yet. Writes are idempotent
+    // (mergeTimelineCacheMessages deduplicates by event ID).
     const messageTimestamp = getMessageTimestamp(event);
-
     updateChannelLastMessageAt(queryClient, channelId, messageTimestamp);
     queryClient.setQueryData<RelayEvent[]>(
       channelMessagesKey(channelId),
