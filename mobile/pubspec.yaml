@@ -23,6 +23,7 @@ dependencies:
   url_launcher: ^6.3.2
   gpt_markdown: ^1.1.6
   intl: ^0.20.2
+  uuid: ^4.5.1
   image_picker: ^1.1.2
   video_player: ^2.10.1
 

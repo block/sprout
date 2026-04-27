@@ -6,6 +6,7 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
@@ -15,6 +16,7 @@ import '../profile/profile_provider.dart';
 import '../settings/settings_page.dart';
 import '../profile/presence_cache_provider.dart';
 import '../profile/user_cache_provider.dart';
+import '../pairing/pairing_page.dart';
 import 'channel.dart';
 import 'channel_detail_page.dart';
 import 'channel_management_provider.dart';
@@ -39,8 +41,19 @@ class ChannelsPage extends HookConsumerWidget {
         .value;
 
     // Cache the last successfully loaded channels so the UI never flashes
-    // back to a loading state when the provider rebuilds.
+    // back to a loading state when the provider rebuilds (e.g. reconnect).
+    // Clear the cache on workspace switch so we show a full loader instead of
+    // stale channels from the previous workspace. unwrapPrevious() ensures the
+    // selector sees null during loading (not the previous workspace's ID).
+    final activeWorkspaceId = ref.watch(
+      activeWorkspaceProvider.select((v) => v.unwrapPrevious().value?.id),
+    );
     final cachedChannels = useRef<List<Channel>?>(null);
+    final lastWorkspaceId = useRef<String?>(null);
+    if (lastWorkspaceId.value != activeWorkspaceId) {
+      cachedChannels.value = null;
+      lastWorkspaceId.value = activeWorkspaceId;
+    }
     if (channelsAsync.asData?.value case final data?) {
       cachedChannels.value = data;
     }
@@ -98,9 +111,12 @@ class ChannelsPage extends HookConsumerWidget {
 
     return FrostedScaffold(
       appBar: FrostedAppBar(
-        leading: const Padding(
-          padding: EdgeInsets.only(left: Grid.xs),
-          child: Text('\u{1F331}', style: TextStyle(fontSize: 28)),
+        leading: _WorkspaceIndicator(
+          onTap: () => showModalBottomSheet<void>(
+            context: context,
+            showDragHandle: true,
+            builder: (_) => const _WorkspaceSwitcherSheet(),
+          ),
         ),
         title: const SizedBox.shrink(),
         actions: [
@@ -1111,5 +1127,332 @@ class _ErrorView extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _WorkspaceSwitcherSheet extends ConsumerWidget {
+  const _WorkspaceSwitcherSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workspacesAsync = ref.watch(workspaceListProvider);
+    final activeAsync = ref.watch(activeWorkspaceProvider);
+    final sessionState = ref.watch(relaySessionProvider);
+
+    return SafeArea(
+      child: workspacesAsync.when(
+        loading: () => const SizedBox(
+          height: 120,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+        error: (e, _) => Padding(
+          padding: const EdgeInsets.all(Grid.xs),
+          child: Text('Error loading workspaces: $e'),
+        ),
+        data: (workspaces) {
+          final activeId = activeAsync.value?.id;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final workspace in workspaces)
+                _WorkspaceSwitcherTile(
+                  workspace: workspace,
+                  isActive: workspace.id == activeId,
+                  sessionStatus: workspace.id == activeId
+                      ? sessionState.status
+                      : null,
+                  onTap: () async {
+                    if (workspace.id != activeId) {
+                      await ref
+                          .read(workspaceListProvider.notifier)
+                          .switchWorkspace(workspace.id);
+                    }
+                    if (context.mounted) Navigator.of(context).pop();
+                  },
+                  onRename: () async {
+                    final nav = Navigator.of(context, rootNavigator: true);
+                    final notifier = ref.read(workspaceListProvider.notifier);
+                    Navigator.of(context).pop();
+                    final name = await showDialog<String>(
+                      context: nav.context,
+                      useRootNavigator: true,
+                      builder: (_) =>
+                          _RenameWorkspaceDialog(currentName: workspace.name),
+                    );
+                    if (name != null && name.isNotEmpty) {
+                      await notifier.renameWorkspace(workspace.id, name);
+                    }
+                  },
+                  onRemove: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (dialogContext) => AlertDialog(
+                        title: const Text('Remove Workspace'),
+                        content: Text(
+                          'Remove "${workspace.name}"? You can re-pair later.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(false),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(true),
+                            child: const Text('Remove'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true && context.mounted) {
+                      final messenger = ScaffoldMessenger.of(context);
+                      try {
+                        await ref
+                            .read(workspaceListProvider.notifier)
+                            .removeWorkspace(workspace.id);
+                        if (context.mounted) Navigator.of(context).pop();
+                      } catch (e) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text('Failed to remove workspace: $e'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(LucideIcons.plus),
+                title: const Text('Add Workspace'),
+                onTap: () {
+                  final nav = Navigator.of(context, rootNavigator: true);
+                  Navigator.of(context).pop();
+                  nav.push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const PairingPage(addingWorkspace: true),
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _WorkspaceSwitcherTile extends StatelessWidget {
+  final Workspace workspace;
+  final bool isActive;
+  final SessionStatus? sessionStatus;
+  final VoidCallback onTap;
+  final VoidCallback onRename;
+  final VoidCallback onRemove;
+
+  const _WorkspaceSwitcherTile({
+    required this.workspace,
+    required this.isActive,
+    required this.sessionStatus,
+    required this.onTap,
+    required this.onRename,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final host = Uri.tryParse(workspace.relayUrl)?.host ?? workspace.relayUrl;
+
+    return ListTile(
+      leading: _StatusDot(isActive: isActive, sessionStatus: sessionStatus),
+      title: Text(
+        workspace.name,
+        style: context.textTheme.bodyLarge?.copyWith(
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
+      subtitle: Text(
+        host,
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colors.onSurfaceVariant,
+        ),
+      ),
+      trailing: PopupMenuButton<String>(
+        icon: Icon(
+          LucideIcons.ellipsisVertical,
+          size: 18,
+          color: context.colors.onSurfaceVariant,
+        ),
+        onSelected: (value) {
+          switch (value) {
+            case 'rename':
+              onRename();
+            case 'remove':
+              onRemove();
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'rename', child: Text('Rename')),
+          const PopupMenuItem(value: 'remove', child: Text('Remove')),
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  final bool isActive;
+  final SessionStatus? sessionStatus;
+
+  const _StatusDot({required this.isActive, required this.sessionStatus});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isActive) {
+      return Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: context.colors.outline.withValues(alpha: 0.3),
+        ),
+      );
+    }
+
+    final color = switch (sessionStatus) {
+      SessionStatus.connected => context.appColors.success,
+      SessionStatus.connecting ||
+      SessionStatus.reconnecting => context.appColors.warning,
+      _ => context.colors.outline,
+    };
+
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+    );
+  }
+}
+
+class _RenameWorkspaceDialog extends HookWidget {
+  final String currentName;
+
+  const _RenameWorkspaceDialog({required this.currentName});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = useTextEditingController(text: currentName);
+
+    return AlertDialog(
+      title: const Text('Rename Workspace'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Name'),
+        onSubmitted: (value) {
+          final name = value.trim();
+          if (name.isNotEmpty) Navigator.of(context).pop(name);
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            final name = controller.text.trim();
+            if (name.isNotEmpty) Navigator.of(context).pop(name);
+          },
+          child: const Text('Rename'),
+        ),
+      ],
+    );
+  }
+}
+
+class _WorkspaceIndicator extends ConsumerWidget {
+  final VoidCallback onTap;
+
+  const _WorkspaceIndicator({required this.onTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeAsync = ref.watch(activeWorkspaceProvider);
+    final sessionState = ref.watch(relaySessionProvider);
+
+    final name = activeAsync.value?.name;
+    final host = activeAsync.value != null
+        ? Uri.tryParse(activeAsync.value!.relayUrl)?.host
+        : null;
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.only(left: Grid.xs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _statusColor(context, sessionState.status),
+              ),
+            ),
+            const SizedBox(width: Grid.half),
+            if (name != null)
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.textTheme.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (host != null)
+                      Text(
+                        host,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colors.onSurfaceVariant,
+                          fontSize: 10,
+                        ),
+                      ),
+                  ],
+                ),
+              )
+            else
+              const Text('\u{1F331}', style: TextStyle(fontSize: 28)),
+            const SizedBox(width: Grid.quarter),
+            Icon(
+              LucideIcons.chevronDown,
+              size: 14,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _statusColor(BuildContext context, SessionStatus status) {
+    return switch (status) {
+      SessionStatus.connected => context.appColors.success,
+      SessionStatus.connecting ||
+      SessionStatus.reconnecting => context.appColors.warning,
+      _ => context.colors.outline,
+    };
   }
 }

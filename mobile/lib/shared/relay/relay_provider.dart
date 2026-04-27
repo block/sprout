@@ -1,5 +1,6 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import '../workspace/workspace_provider.dart';
 import 'relay_client.dart';
 
 /// Relay connection configuration.
@@ -49,11 +50,26 @@ class Env {
 
 class RelayConfigNotifier extends Notifier<RelayConfig> {
   @override
-  RelayConfig build() => RelayConfig(
-    baseUrl: Env.relayUrl,
-    apiToken: Env.apiToken.isEmpty ? null : Env.apiToken,
-    devPubkey: Env.devPubkey.isEmpty ? null : Env.devPubkey,
-  );
+  RelayConfig build() {
+    // Watch the active workspace so that when it changes (workspace switch),
+    // the config rebuilds, triggering the full provider cascade.
+    final activeAsync = ref.watch(activeWorkspaceProvider);
+    final active = activeAsync.value;
+    if (active != null) {
+      return RelayConfig(
+        baseUrl: active.relayUrl,
+        apiToken: active.token,
+        nsec: active.nsec,
+      );
+    }
+
+    // Fallback to compile-time env config (dev mode).
+    return RelayConfig(
+      baseUrl: Env.relayUrl,
+      apiToken: Env.apiToken.isEmpty ? null : Env.apiToken,
+      devPubkey: Env.devPubkey.isEmpty ? null : Env.devPubkey,
+    );
+  }
 
   void update({
     required String baseUrl,
