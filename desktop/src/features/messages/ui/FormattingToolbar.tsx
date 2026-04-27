@@ -11,7 +11,7 @@ import {
   Strikethrough,
 } from "lucide-react";
 
-import { Toggle } from "@/shared/ui/toggle";
+import { cn } from "@/shared/lib/cn";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type FormattingToolbarProps = {
@@ -45,10 +45,8 @@ function getActiveStates(editor: Editor): ActiveStates {
 
 /**
  * Formatting bar shown above the editor when the format toggle is active.
- * Renders all formatting buttons in a single row.
- *
- * Uses a direct editor.on("transaction") subscription instead of
- * useEditorState to ensure active-mark updates always trigger re-renders.
+ * Uses plain buttons with explicit active-class toggling instead of
+ * Radix Toggle to avoid data-state / re-render issues.
  */
 export const FormattingToolbar = React.memo(function FormattingToolbar({
   editor,
@@ -63,7 +61,6 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
       setActiveStates(null);
       return;
     }
-    // Seed with current state.
     setActiveStates(getActiveStates(editor));
 
     const onTransaction = () => {
@@ -191,15 +188,25 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
       {items.map((item) => (
         <Tooltip key={item.label}>
           <TooltipTrigger asChild>
-            <Toggle
+            <button
+              type="button"
               aria-label={item.label}
+              aria-pressed={item.active}
               disabled={disabled}
-              pressed={item.active}
-              onPressedChange={() => item.action()}
-              className="h-7 w-7 min-w-7 [&_svg]:size-3.5"
+              onClick={() => item.action()}
+              className={cn(
+                "inline-flex h-7 w-7 min-w-7 items-center justify-center rounded-md text-sm font-medium transition-colors",
+                "hover:bg-muted hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                "disabled:pointer-events-none disabled:opacity-50",
+                "[&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
+                item.active
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-transparent text-muted-foreground",
+              )}
             >
               <item.icon className="h-3.5 w-3.5" />
-            </Toggle>
+            </button>
           </TooltipTrigger>
           <TooltipContent>
             {"shortcut" in item
