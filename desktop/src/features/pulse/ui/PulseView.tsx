@@ -403,9 +403,9 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
           members={pulseMentionMembers}
           placeholder="Post to Pulse..."
           isSending={publishMutation.isPending}
-          onSubmit={(content, mentionPubkeys, mediaTags) => {
-            publishMutation.mutate({ content, mentionPubkeys, mediaTags });
-          }}
+          onSubmit={(content, mentionPubkeys, mediaTags) =>
+            publishMutation.mutateAsync({ content, mentionPubkeys, mediaTags })
+          }
         />
       </div>
     </div>

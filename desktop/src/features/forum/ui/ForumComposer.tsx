@@ -35,7 +35,7 @@ type ForumComposerProps = {
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
-  ) => void;
+  ) => void | Promise<unknown>;
   /** When true, autocomplete renders below the input (for top-of-view composers). */
   autocompleteBelow?: boolean;
 };
@@ -204,6 +204,10 @@ export function ForumComposer({
       finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
     }
 
+    // Save draft state so we can restore on failure.
+    const savedContent = contentRef.current;
+    const savedImeta = [...currentPendingImeta];
+
     setContent("");
     contentRef.current = "";
     richText.clearContent();
@@ -212,7 +216,17 @@ export function ForumComposer({
     channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
-    onSubmitRef.current(finalContent, pubkeys, mediaTags);
+    const result = onSubmitRef.current(finalContent, pubkeys, mediaTags);
+
+    // If onSubmit returns a promise, restore draft on failure.
+    if (result && typeof result.then === "function") {
+      result.catch(() => {
+        setContent(savedContent);
+        contentRef.current = savedContent;
+        richText.setContent(savedContent);
+        media.setPendingImeta(savedImeta);
+      });
+    }
   }, [
     media.pendingImetaRef,
     media.setPendingImeta,
@@ -220,6 +234,7 @@ export function ForumComposer({
     mentions.clearMentions,
     channelLinks.clearChannels,
     richText.clearContent,
+    richText.setContent,
   ]);
   submitMessageRef.current = submitMessage;
 

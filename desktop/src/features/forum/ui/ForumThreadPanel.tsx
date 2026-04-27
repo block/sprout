@@ -30,7 +30,7 @@ type ForumThreadPanelProps = {
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
-  ) => void;
+  ) => void | Promise<unknown>;
   onDeletePost?: (eventId: string) => void;
   onDeleteReply?: (eventId: string) => void;
   onTargetReached?: (eventId: string) => void;
