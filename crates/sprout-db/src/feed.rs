@@ -41,7 +41,12 @@ use sprout_core::StoredEvent;
 use crate::error::Result;
 use crate::event::row_to_stored_event;
 
-/// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags).
+/// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags),
+/// **plus** all messages from DM channels the user can access (excluding their own).
+///
+/// DM messages are included unconditionally so that desktop notifications fire on
+/// every DM, matching Slack/Discord behaviour.  The two result sets are combined
+/// via `UNION ALL` and ordered by `created_at DESC`.
 ///
 /// Joins against the `event_mentions` table -- Phase 2 implementation.
 /// **Performance**: indexed lookup on `(pubkey_hex, event_created_at DESC)`.
@@ -57,6 +62,8 @@ pub async fn query_mentions(
 ) -> Result<Vec<StoredEvent>> {
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
+
+    // -- Part 1: explicit @mentions (existing behaviour) ----------------------
 
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
@@ -85,8 +92,40 @@ pub async fn query_mentions(
         qb.push(" AND m.event_created_at >= ").push_bind(s);
     }
 
-    qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
-        .push_bind(limit);
+    // -- Part 2: all DM messages (not from self) ------------------------------
+
+    qb.push(
+        " UNION ALL \
+         SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
+         e.received_at, e.channel_id \
+         FROM events e \
+         INNER JOIN channels c ON e.channel_id = c.id \
+         WHERE c.channel_type = 'dm' \
+         AND e.deleted_at IS NULL \
+         AND e.pubkey != ",
+    );
+    qb.push_bind(pubkey_bytes);
+
+    qb.push(format!(
+        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2})"
+    ));
+
+    if !accessible_channel_ids.is_empty() {
+        qb.push(" AND e.channel_id IN (");
+        let mut sep = qb.separated(", ");
+        for id in accessible_channel_ids {
+            sep.push_bind(*id);
+        }
+        qb.push(")");
+    }
+
+    if let Some(s) = since {
+        qb.push(" AND e.created_at >= ").push_bind(s);
+    }
+
+    // -- Combined ordering and limit ------------------------------------------
+
+    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
     let mut out = Vec::with_capacity(rows.len());

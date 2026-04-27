@@ -167,6 +167,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type?: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };

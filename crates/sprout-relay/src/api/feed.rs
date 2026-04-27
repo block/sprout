@@ -121,13 +121,25 @@ pub async fn feed_handler(
         tracing::warn!("feed: failed to load channel names for enrichment: {e}");
         vec![]
     });
-    let channel_name_map: HashMap<uuid::Uuid, String> =
-        all_channels.into_iter().map(|c| (c.id, c.name)).collect();
+    let channel_name_map: HashMap<uuid::Uuid, String> = all_channels
+        .iter()
+        .map(|c| (c.id, c.name.clone()))
+        .collect();
+    let channel_type_map: HashMap<uuid::Uuid, String> = all_channels
+        .into_iter()
+        .map(|c| (c.id, c.channel_type))
+        .collect();
 
     let to_feed_item = |event: &sprout_core::StoredEvent, category: &str| -> serde_json::Value {
         let channel_name = event
             .channel_id
             .and_then(|id| channel_name_map.get(&id))
+            .cloned()
+            .unwrap_or_default();
+
+        let channel_type = event
+            .channel_id
+            .and_then(|id| channel_type_map.get(&id))
             .cloned()
             .unwrap_or_default();
 
@@ -149,6 +161,7 @@ pub async fn feed_handler(
             "created_at": event.event.created_at.as_u64(),
             "channel_id": event.channel_id.map(|id| id.to_string()),
             "channel_name": channel_name,
+            "channel_type": channel_type,
             "tags": tags,
             "category": category,
         })
