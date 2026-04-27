@@ -75,12 +75,7 @@ fn collect_stored_events(rows: Vec<PgRow>) -> Result<Vec<StoredEvent>> {
     Ok(out)
 }
 
-/// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags),
-/// **plus** all messages from DM channels the user can access (excluding their own).
-///
-/// DM messages are included unconditionally so that desktop notifications fire on
-/// every DM, matching Slack/Discord behaviour.  The two result sets are combined
-/// via `UNION ALL` and ordered by `created_at DESC`.
+/// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags).
 ///
 /// Joins against the `event_mentions` table -- Phase 2 implementation.
 /// **Performance**: indexed lookup on `(pubkey_hex, event_created_at DESC)`.
@@ -97,10 +92,8 @@ pub async fn query_mentions(
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
 
-    // -- Part 1: explicit @mentions -------------------------------------------
-
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(format!(
-        "(SELECT {EVENT_COLS} FROM events e \
+        "SELECT {EVENT_COLS} FROM events e \
          INNER JOIN event_mentions m ON e.id = m.event_id \
          WHERE m.pubkey_hex = "
     ));
@@ -116,40 +109,6 @@ pub async fn query_mentions(
     }
     qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
         .push_bind(limit);
-    qb.push(")");
-
-    // -- Part 2: DM messages (deduped against part 1) -------------------------
-
-    qb.push(format!(
-        " UNION ALL \
-         (SELECT {EVENT_COLS} FROM events e \
-         INNER JOIN channels c ON e.channel_id = c.id \
-         WHERE c.channel_type = 'dm' \
-         AND e.deleted_at IS NULL \
-         AND e.pubkey != "
-    ));
-    qb.push_bind(pubkey_bytes);
-    qb.push(format!(
-        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2})"
-    ));
-    // Exclude DMs that already have an explicit @mention (avoid duplicates)
-    qb.push(
-        " AND NOT EXISTS (SELECT 1 FROM event_mentions em \
-         WHERE em.event_id = e.id AND em.pubkey_hex = ",
-    );
-    qb.push_bind(&pubkey_hex);
-    qb.push(")");
-    push_channel_id_filter(&mut qb, "e.channel_id", accessible_channel_ids);
-    if let Some(s) = since {
-        qb.push(" AND e.created_at >= ").push_bind(s);
-    }
-    qb.push(" ORDER BY e.created_at DESC LIMIT ")
-        .push_bind(limit);
-    qb.push(")");
-
-    // -- Combined ordering ----------------------------------------------------
-
-    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
     collect_stored_events(rows)

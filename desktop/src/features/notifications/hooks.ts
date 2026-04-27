@@ -285,13 +285,12 @@ export function useFeedDesktopNotifications(
   settings: NotificationSettings,
 ) {
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
-  const seenItemIdsRef = React.useRef<Set<string>>(new Set());
-  const hasInitializedFeedRef = React.useRef(false);
+  const seenItemIdsRef = React.useRef<Set<string>>(
+    new Set(readStoredSeenFeedIds(normalizedPubkey)),
+  );
 
   React.useEffect(() => {
-    void normalizedPubkey;
-    seenItemIdsRef.current = new Set();
-    hasInitializedFeedRef.current = false;
+    seenItemIdsRef.current = new Set(readStoredSeenFeedIds(normalizedPubkey));
   }, [normalizedPubkey]);
 
   const deliverFeedNotification = React.useEffectEvent(
@@ -318,12 +317,6 @@ export function useFeedDesktopNotifications(
     }
 
     const currentFeedItems = collectHomeAlertItems(feed);
-    if (!hasInitializedFeedRef.current) {
-      hasInitializedFeedRef.current = true;
-      seenItemIdsRef.current = new Set(currentFeedItems.map((item) => item.id));
-      return;
-    }
-
     const nextSeenItemIds = new Set(seenItemIdsRef.current);
     const newItems = settings.desktopEnabled
       ? eligibleFeedNotificationItems(feed, {
@@ -349,11 +342,18 @@ export function useFeedDesktopNotifications(
     }
 
     seenItemIdsRef.current = nextSeenItemIds;
+    writeStoredSeenFeedIds(normalizedPubkey, [...nextSeenItemIds]);
 
     for (const item of newItems) {
       void deliverFeedNotification(item);
     }
-  }, [feed, settings.desktopEnabled, settings.mentions, settings.needsAction]);
+  }, [
+    feed,
+    normalizedPubkey,
+    settings.desktopEnabled,
+    settings.mentions,
+    settings.needsAction,
+  ]);
 }
 
 export function useHomeFeedNotificationState(

@@ -11,6 +11,7 @@ import type { Channel, RelayEvent } from "@/shared/api/types";
 
 export type UseLiveChannelUpdatesOptions = {
   currentPubkey?: string;
+  onDmMessage?: (event: RelayEvent, channel: Channel) => void;
   onLiveMention?: () => void;
 };
 
@@ -64,6 +65,24 @@ export function useLiveChannelUpdates(
       ),
     [channels],
   );
+  const dmChannelMap = React.useMemo(
+    () =>
+      new Map(
+        channels
+          .filter((channel) => channel.channelType === "dm")
+          .map((channel) => [channel.id, channel]),
+      ),
+    [channels],
+  );
+  const seenDmEventIdsRef = React.useRef(new Set<string>());
+  const dmWarmupDoneRef = React.useRef(false);
+
+  // Reset warmup flag when identity changes.
+  React.useEffect(() => {
+    void normalizedCurrentPubkey;
+    dmWarmupDoneRef.current = false;
+  }, [normalizedCurrentPubkey]);
+
   // Effect deps use primitive keys so refetches that produce new refs with
   // identical contents don't churn subscriptions. The Set/array memos are
   // still handy for closure reads via useEffectEvent.
@@ -73,9 +92,49 @@ export function useLiveChannelUpdates(
     [channels],
   );
 
+  const handleDmEvent = React.useEffectEvent((event: RelayEvent) => {
+    if (!dmWarmupDoneRef.current) {
+      return;
+    }
+
+    const channelId = getChannelIdFromTags(event.tags);
+    if (!channelId) {
+      return;
+    }
+
+    if (!isExternalMentionEvent(event, normalizedCurrentPubkey)) {
+      return;
+    }
+
+    const dmChannel = dmChannelMap.get(channelId);
+    if (!dmChannel) {
+      return;
+    }
+
+    if (!rememberMentionEvent(seenDmEventIdsRef.current, event.id)) {
+      return;
+    }
+
+    // Don't fire a notification for the channel the user is already viewing.
+    if (channelId === activeChannelId) {
+      return;
+    }
+
+    options.onDmMessage?.(event, dmChannel);
+  });
+
   const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
     const channelId = getChannelIdFromTags(event.tags);
-    if (!channelId || channelId === activeChannelId) {
+    if (!channelId) {
+      return;
+    }
+
+    // Track DM events even for the active channel so the dedup set stays
+    // current. The handler itself skips firing the notification callback
+    // when the user is already viewing the DM.
+    handleDmEvent(event);
+
+    if (channelId === activeChannelId) {
       return;
     }
 
@@ -114,6 +173,13 @@ export function useLiveChannelUpdates(
   React.useEffect(() => {
     return relayClient.subscribeToReconnects(() => {
       void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+
+      // Re-arm the DM warmup guard so the reconnect replay backlog
+      // doesn't trigger stale DM notifications.
+      dmWarmupDoneRef.current = false;
+      setTimeout(() => {
+        dmWarmupDoneRef.current = true;
+      }, 500);
     });
   }, [queryClient]);
 
@@ -124,6 +190,9 @@ export function useLiveChannelUpdates(
 
     let isDisposed = false;
     let cleanup: (() => Promise<void>) | undefined;
+    let warmupTimer: ReturnType<typeof setTimeout> | undefined;
+
+    dmWarmupDoneRef.current = false;
 
     relayClient
       .subscribeToAllStreamMessages((event) => {
@@ -138,6 +207,12 @@ export function useLiveChannelUpdates(
         }
 
         cleanup = dispose;
+
+        // Allow 500ms for the relay to replay backlog before delivering
+        // DM notifications, so historical messages don't trigger alerts.
+        warmupTimer = setTimeout(() => {
+          dmWarmupDoneRef.current = true;
+        }, 500);
       })
       .catch((error) => {
         console.error("Failed to subscribe to unread channel updates", error);
@@ -145,6 +220,9 @@ export function useLiveChannelUpdates(
 
     return () => {
       isDisposed = true;
+      if (warmupTimer !== undefined) {
+        clearTimeout(warmupTimer);
+      }
       if (cleanup) {
         void cleanup();
       }

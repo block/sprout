@@ -47,14 +47,13 @@ export function eligibleFeedNotificationItems(
 ) {
   const items: FeedItem[] = [];
 
+  // DM notifications are handled by the real-time WebSocket hook, so we
+  // exclude DM items here to avoid duplicate toasts.
   if (options.mentions) {
     items.push(
       ...feed.feed.mentions.filter((item) => item.channelType !== "dm"),
     );
   }
-
-  // DMs always notify — like Slack/Discord
-  items.push(...feed.feed.mentions.filter((item) => item.channelType === "dm"));
 
   if (options.needsAction) {
     items.push(...feed.feed.needsAction);
