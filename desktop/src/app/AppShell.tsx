@@ -23,6 +23,7 @@ import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import {
   listenForDesktopNotificationActions,
   revealDesktopAppWindow,
+  sendDesktopNotification,
   setDesktopAppBadgeCount,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
@@ -38,7 +39,7 @@ import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { joinChannel } from "@/shared/api/tauri";
-import type { SearchHit } from "@/shared/api/types";
+import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { Button } from "@/shared/ui/button";
 import {
@@ -152,6 +153,37 @@ export function AppShell() {
     void homeFeedQuery.refetch();
   });
 
+  const handleDmNotification = React.useEffectEvent(
+    (event: RelayEvent, channel: Channel) => {
+      if (!notificationSettings.settings.desktopEnabled) {
+        return;
+      }
+
+      const channelName = channel.name?.trim() || "Direct message";
+      const content = event.content.trim();
+      const body =
+        content.length > 0
+          ? content.length > 140
+            ? `${content.slice(0, 137).trimEnd()}...`
+            : content
+          : "New message";
+
+      void sendDesktopNotification({
+        title: "Direct message",
+        body,
+        target: {
+          channelId: channel.id,
+          channelName,
+          content: event.content,
+          createdAt: event.created_at,
+          eventId: event.id,
+          kind: event.kind,
+          pubkey: event.pubkey,
+        },
+      });
+    },
+  );
+
   const channelsQuery = useChannelsQuery();
   const { refetch: refetchChannels } = channelsQuery;
   const channels = channelsQuery.data ?? [];
@@ -179,6 +211,7 @@ export function AppShell() {
     null,
     {
       currentPubkey: identityQuery.data?.pubkey,
+      onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
     },
   );

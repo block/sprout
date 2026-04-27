@@ -178,6 +178,7 @@ export type FeedItem = {
   createdAt: number;
   channelId: string | null;
   channelName: string;
+  channelType?: string;
   tags: string[][];
   category: FeedItemCategory;
 };

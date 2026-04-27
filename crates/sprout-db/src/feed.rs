@@ -28,6 +28,7 @@
 pub const FEED_MAX_LIMIT: i64 = 100;
 
 use chrono::{DateTime, Utc};
+use sqlx::postgres::PgRow;
 use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
@@ -40,6 +41,39 @@ use sprout_core::StoredEvent;
 
 use crate::error::Result;
 use crate::event::row_to_stored_event;
+
+/// Column list shared by every feed subquery that aliases the `events` table as `e`.
+const EVENT_COLS: &str =
+    "e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, e.received_at, e.channel_id";
+
+/// Column list for queries that select directly from `events` (no table alias).
+const EVENT_COLS_UNALIASED: &str =
+    "id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id";
+
+/// Append `AND <col> IN ($1, $2, …)` for the given channel IDs.
+///
+/// No-ops when the slice is empty so callers don't need a guard.
+fn push_channel_id_filter(qb: &mut QueryBuilder<sqlx::Postgres>, col: &str, ids: &[Uuid]) {
+    if !ids.is_empty() {
+        qb.push(format!(" AND {col} IN ("));
+        let mut sep = qb.separated(", ");
+        for id in ids {
+            sep.push_bind(*id);
+        }
+        qb.push(")");
+    }
+}
+
+/// Convert fetched rows into `Vec<StoredEvent>`, skipping any that fail conversion.
+fn collect_stored_events(rows: Vec<PgRow>) -> Result<Vec<StoredEvent>> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        if let Some(ev) = row_to_stored_event(row)? {
+            out.push(ev);
+        }
+    }
+    Ok(out)
+}
 
 /// Find events that @mention the given pubkey (have `["p", pubkey_hex]` in tags).
 ///
@@ -58,44 +92,26 @@ pub async fn query_mentions(
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
 
-    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
-         e.received_at, e.channel_id \
-         FROM events e \
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(format!(
+        "SELECT {EVENT_COLS} FROM events e \
          INNER JOIN event_mentions m ON e.id = m.event_id \
-         WHERE m.pubkey_hex = ",
-    );
+         WHERE m.pubkey_hex = "
+    ));
     qb.push_bind(&pubkey_hex);
     qb.push(" AND e.deleted_at IS NULL");
-
     qb.push(format!(
-        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_FORUM_COMMENT})"
+        " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, \
+         {KIND_FORUM_POST}, {KIND_FORUM_COMMENT})"
     ));
-
-    if !accessible_channel_ids.is_empty() {
-        qb.push(" AND e.channel_id IN (");
-        let mut sep = qb.separated(", ");
-        for id in accessible_channel_ids {
-            sep.push_bind(*id);
-        }
-        qb.push(")");
-    }
-
+    push_channel_id_filter(&mut qb, "e.channel_id", accessible_channel_ids);
     if let Some(s) = since {
         qb.push(" AND m.event_created_at >= ").push_bind(s);
     }
-
     qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
         .push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        if let Some(ev) = row_to_stored_event(row)? {
-            out.push(ev);
-        }
-    }
-    Ok(out)
+    collect_stored_events(rows)
 }
 
 /// Find events that require action from the given pubkey:
@@ -117,44 +133,25 @@ pub async fn query_needs_action(
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
 
-    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
-         e.received_at, e.channel_id \
-         FROM events e \
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(format!(
+        "SELECT {EVENT_COLS} FROM events e \
          INNER JOIN event_mentions m ON e.id = m.event_id \
-         WHERE m.pubkey_hex = ",
-    );
+         WHERE m.pubkey_hex = "
+    ));
     qb.push_bind(&pubkey_hex);
     qb.push(" AND e.deleted_at IS NULL");
-
     qb.push(format!(
         " AND e.kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER})"
     ));
-
-    if !accessible_channel_ids.is_empty() {
-        qb.push(" AND e.channel_id IN (");
-        let mut sep = qb.separated(", ");
-        for id in accessible_channel_ids {
-            sep.push_bind(*id);
-        }
-        qb.push(")");
-    }
-
+    push_channel_id_filter(&mut qb, "e.channel_id", accessible_channel_ids);
     if let Some(s) = since {
         qb.push(" AND m.event_created_at >= ").push_bind(s);
     }
-
     qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
         .push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        if let Some(ev) = row_to_stored_event(row)? {
-            out.push(ev);
-        }
-    }
-    Ok(out)
+    collect_stored_events(rows)
 }
 
 /// Find recent activity across accessible channels (for watched topics / agent activity).
@@ -170,40 +167,21 @@ pub async fn query_activity(
     limit: i64,
 ) -> Result<Vec<StoredEvent>> {
     let limit = limit.min(FEED_MAX_LIMIT);
-    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT id, pubkey, created_at, kind, tags, content, sig, received_at, channel_id \
-         FROM events WHERE 1=1",
-    );
-
-    qb.push(" AND deleted_at IS NULL");
-
-    qb.push(format!(
-        " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(format!(
+        "SELECT {EVENT_COLS_UNALIASED} FROM events WHERE deleted_at IS NULL"
     ));
-
-    if !accessible_channel_ids.is_empty() {
-        qb.push(" AND channel_id IN (");
-        let mut sep = qb.separated(", ");
-        for id in accessible_channel_ids {
-            sep.push_bind(*id);
-        }
-        qb.push(")");
-    }
-
+    qb.push(format!(
+        " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, \
+         {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
+    ));
+    push_channel_id_filter(&mut qb, "channel_id", accessible_channel_ids);
     if let Some(s) = since {
         qb.push(" AND created_at >= ").push_bind(s);
     }
-
     qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
 
     let rows = qb.build().fetch_all(pool).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        if let Some(ev) = row_to_stored_event(row)? {
-            out.push(ev);
-        }
-    }
-    Ok(out)
+    collect_stored_events(rows)
 }
 
 // -- Tests --------------------------------------------------------------------
