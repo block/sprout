@@ -13,10 +13,14 @@ import {
 } from "@/features/pulse/hooks";
 import { groupAgentNotes } from "@/features/pulse/lib/groupAgentNotes";
 import { AgentActivityCard } from "@/features/pulse/ui/AgentActivityCard";
-import { ComposeNote } from "@/features/pulse/ui/ComposeNote";
+import { ForumComposer } from "@/features/forum/ui/ForumComposer";
 import { NoteCard } from "@/features/pulse/ui/NoteCard";
 import type { UserNote } from "@/shared/api/socialTypes";
-import type { RelayAgent, UserProfileSummary } from "@/shared/api/types";
+import type {
+  ChannelMember,
+  RelayAgent,
+  UserProfileSummary,
+} from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -233,6 +237,26 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   const profiles: Record<string, UserProfileSummary> =
     profilesQuery.data?.profiles ?? {};
 
+  // ── Mention members for ForumComposer ─────────────────────────────────
+  const mentionProfilesQuery = useUsersBatchQuery(forYouPubkeys, {
+    enabled: forYouPubkeys.length > 0,
+  });
+  const mentionProfiles = mentionProfilesQuery.data?.profiles ?? {};
+
+  const pulseMentionMembers = React.useMemo<ChannelMember[]>(() => {
+    const members: ChannelMember[] = [];
+    for (const pubkey of forYouPubkeys) {
+      const profile = mentionProfiles[pubkey.toLowerCase()];
+      members.push({
+        pubkey,
+        role: "member",
+        joinedAt: "",
+        displayName: profile?.displayName ?? null,
+      });
+    }
+    return members;
+  }, [forYouPubkeys, mentionProfiles]);
+
   // ── Loading / refresh state ────────────────────────────────────────────
   const activeQuery =
     activeTab === "foryou"
@@ -306,7 +330,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col">
       <Tabs
         value={activeTab}
         onValueChange={(v) => setActiveTab(v as PulseTab)}
@@ -367,19 +391,23 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
         </TabsContent>
       </Tabs>
 
-      <ComposeNote
-        errorMessage={
-          publishMutation.error instanceof Error
-            ? publishMutation.error.message
-            : publishMutation.error
-              ? String(publishMutation.error)
-              : undefined
-        }
-        isPending={publishMutation.isPending}
-        onPublish={async (content) => {
-          await publishMutation.mutateAsync({ content });
-        }}
-      />
+      <div className="border-t border-border/60 px-4 py-3 sm:px-6">
+        {publishMutation.isError && (
+          <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {publishMutation.error instanceof Error
+              ? publishMutation.error.message
+              : "Failed to publish note"}
+          </div>
+        )}
+        <ForumComposer
+          members={pulseMentionMembers}
+          placeholder="Post to Pulse..."
+          isSending={publishMutation.isPending}
+          onSubmit={(content, mentionPubkeys, mediaTags) =>
+            publishMutation.mutateAsync({ content, mentionPubkeys, mediaTags })
+          }
+        />
+      </div>
     </div>
   );
 }

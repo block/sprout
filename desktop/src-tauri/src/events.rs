@@ -66,6 +66,7 @@ fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     let mut seen = std::collections::HashSet::new();
     let mut tags = Vec::new();
     for &hex in mentions {
+        check_pubkey(hex)?;
         let lower = hex.to_ascii_lowercase();
         if seen.insert(lower.clone()) {
             tags.push(tag(vec!["p", &lower])?);
@@ -428,12 +429,16 @@ pub fn build_huddle_guidelines(
 pub fn build_note(
     content: &str,
     reply_to_event_id: Option<EventId>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = Vec::new();
     if let Some(parent) = reply_to_event_id {
         tags.push(tag(vec!["e", &parent.to_hex(), "", "reply"])?);
     }
+    tags.extend(mention_tags(mentions)?);
+    imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::TextNote, content).tags(tags))
 }
 

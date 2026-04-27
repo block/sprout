@@ -69,8 +69,17 @@ export function usePublishNoteMutation(currentPubkey?: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ content, replyTo }: { content: string; replyTo?: string }) =>
-      publishNote(content, replyTo),
+    mutationFn: ({
+      content,
+      replyTo,
+      mentionPubkeys,
+      mediaTags,
+    }: {
+      content: string;
+      replyTo?: string;
+      mentionPubkeys?: string[];
+      mediaTags?: string[][];
+    }) => publishNote(content, replyTo, mentionPubkeys, mediaTags),
     onSuccess: () => {
       if (currentPubkey) {
         void queryClient.invalidateQueries({

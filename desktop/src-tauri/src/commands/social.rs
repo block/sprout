@@ -14,13 +14,17 @@ use crate::{
 pub async fn publish_note(
     content: String,
     reply_to: Option<String>,
+    mention_pubkeys: Option<Vec<String>>,
+    media_tags: Option<Vec<Vec<String>>>,
     state: State<'_, AppState>,
 ) -> Result<SubmitEventResponse, String> {
     let reply_id = reply_to
         .map(|hex| EventId::from_hex(&hex).map_err(|e| format!("invalid reply_to event id: {e}")))
         .transpose()?;
-
-    let builder = events::build_note(&content, reply_id)?;
+    let mentions = mention_pubkeys.unwrap_or_default();
+    let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
+    let media = media_tags.unwrap_or_default();
+    let builder = events::build_note(&content, reply_id, &mention_refs, &media)?;
     submit_event(builder, &state).await
 }
 

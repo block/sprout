@@ -9,9 +9,9 @@ import {
   X,
 } from "lucide-react";
 
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
-import { Toggle } from "@/shared/ui/toggle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
 import { FormattingToolbar } from "./FormattingToolbar";
@@ -90,15 +90,25 @@ export const MessageComposerToolbar = React.memo(
                 >
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Toggle
+                      <button
+                        type="button"
                         aria-label="Toggle formatting"
+                        aria-pressed={isFormattingOpen}
                         disabled={composerDisabled}
-                        pressed={isFormattingOpen}
-                        onPressedChange={onFormattingToggle}
-                        size="sm"
+                        onClick={() => onFormattingToggle(!isFormattingOpen)}
+                        className={cn(
+                          "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors",
+                          "hover:bg-muted hover:text-foreground",
+                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          "disabled:pointer-events-none disabled:opacity-50",
+                          "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+                          isFormattingOpen
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-transparent text-muted-foreground",
+                        )}
                       >
                         <ALargeSmall className="h-4 w-4" />
-                      </Toggle>
+                      </button>
                     </TooltipTrigger>
                     <TooltipContent>Formatting</TooltipContent>
                   </Tooltip>
@@ -204,15 +214,25 @@ export const MessageComposerToolbar = React.memo(
                 >
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Toggle
+                      <button
+                        type="button"
                         aria-label="Toggle formatting"
+                        aria-pressed={isFormattingOpen}
                         disabled={composerDisabled}
-                        pressed={isFormattingOpen}
-                        onPressedChange={onFormattingToggle}
-                        size="sm"
+                        onClick={() => onFormattingToggle(!isFormattingOpen)}
+                        className={cn(
+                          "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors",
+                          "hover:bg-muted hover:text-foreground",
+                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          "disabled:pointer-events-none disabled:opacity-50",
+                          "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+                          isFormattingOpen
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-transparent text-muted-foreground",
+                        )}
                       >
                         <ALargeSmall className="h-4 w-4" />
-                      </Toggle>
+                      </button>
                     </TooltipTrigger>
                     <TooltipContent>Formatting</TooltipContent>
                   </Tooltip>
