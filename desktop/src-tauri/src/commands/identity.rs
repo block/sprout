@@ -4,7 +4,7 @@ use tauri::State;
 use crate::{
     app_state::AppState,
     models::IdentityInfo,
-    relay::{relay_api_base_url, relay_ws_url},
+    relay::{relay_api_base_url_with_override, relay_ws_url_with_override},
 };
 
 #[tauri::command]
@@ -28,13 +28,13 @@ pub fn get_identity(state: State<'_, AppState>) -> Result<IdentityInfo, String> 
 }
 
 #[tauri::command]
-pub fn get_relay_ws_url() -> String {
-    relay_ws_url()
+pub fn get_relay_ws_url(state: State<'_, AppState>) -> String {
+    relay_ws_url_with_override(&state)
 }
 
 #[tauri::command]
-pub fn get_relay_http_url() -> String {
-    relay_api_base_url()
+pub fn get_relay_http_url(state: State<'_, AppState>) -> String {
+    relay_api_base_url_with_override(&state)
 }
 
 #[tauri::command]
@@ -89,9 +89,23 @@ pub fn create_auth_event(
             .map_err(|error| format!("challenge tag failed: {error}"))?,
     ];
 
-    if let Some(token) = state.configured_api_token.as_deref() {
+    // Use configured API token first, then fall back to session token
+    // (set by workspace apply).
+    let auth_token = state
+        .configured_api_token
+        .as_deref()
+        .map(String::from)
+        .or_else(|| {
+            state
+                .session_token
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone())
+        });
+
+    if let Some(token) = auth_token {
         tags.push(
-            Tag::parse(vec!["auth_token", token])
+            Tag::parse(vec!["auth_token", &token])
                 .map_err(|error| format!("auth token tag failed: {error}"))?,
         );
     }

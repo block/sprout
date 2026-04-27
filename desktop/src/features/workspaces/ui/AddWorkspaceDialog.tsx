@@ -1,0 +1,181 @@
+import * as React from "react";
+
+import type { Workspace } from "@/features/workspaces/types";
+import { Button } from "@/shared/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/shared/ui/dialog";
+import { Input } from "@/shared/ui/input";
+
+type AddWorkspaceDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (workspace: Workspace) => void;
+};
+
+export function AddWorkspaceDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+}: AddWorkspaceDialogProps) {
+  const [name, setName] = React.useState("");
+  const [relayUrl, setRelayUrl] = React.useState("");
+  const [token, setToken] = React.useState("");
+  const [nsec, setNsec] = React.useState("");
+
+  const handleClose = React.useCallback(() => {
+    onOpenChange(false);
+    setName("");
+    setRelayUrl("");
+    setToken("");
+    setNsec("");
+  }, [onOpenChange]);
+
+  const handleSubmit = React.useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!relayUrl.trim()) {
+        return;
+      }
+
+      const workspace: Workspace = {
+        id: crypto.randomUUID(),
+        name: name.trim() || deriveNameFromUrl(relayUrl.trim()),
+        relayUrl: normalizeRelayUrl(relayUrl.trim()),
+        token: token.trim() || undefined,
+        nsec: nsec.trim() || undefined,
+        addedAt: new Date().toISOString(),
+      };
+
+      onSubmit(workspace);
+      handleClose();
+    },
+    [name, relayUrl, token, nsec, onSubmit, handleClose],
+  );
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Workspace</DialogTitle>
+          <DialogDescription>
+            Connect to another Sprout relay. Each workspace has its own
+            channels, messages, and identity.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="ws-relay-url"
+            >
+              Relay URL
+            </label>
+            <Input
+              autoFocus
+              id="ws-relay-url"
+              onChange={(e) => setRelayUrl(e.target.value)}
+              placeholder="wss://relay.example.com"
+              type="text"
+              value={relayUrl}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="ws-name"
+            >
+              Name
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </label>
+            <Input
+              id="ws-name"
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My Workspace"
+              type="text"
+              value={name}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="ws-token"
+            >
+              API Token
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </label>
+            <Input
+              id="ws-token"
+              onChange={(e) => setToken(e.target.value)}
+              placeholder="sprout_..."
+              type="password"
+              value={token}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="ws-nsec"
+            >
+              Private Key (nsec)
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                (optional — generates new if blank)
+              </span>
+            </label>
+            <Input
+              id="ws-nsec"
+              onChange={(e) => setNsec(e.target.value)}
+              placeholder="nsec1..."
+              type="password"
+              value={nsec}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button onClick={handleClose} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button disabled={!relayUrl.trim()} type="submit">
+              Add Workspace
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function normalizeRelayUrl(url: string): string {
+  // Add wss:// if no protocol specified
+  if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+    return `wss://${url}`;
+  }
+  return url;
+}
+
+function deriveNameFromUrl(url: string): string {
+  try {
+    const normalized = url
+      .replace("ws://", "http://")
+      .replace("wss://", "https://");
+    const parsed = new URL(normalized);
+    const host = parsed.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "Local Dev";
+    }
+    const parts = host.split(".");
+    if (parts.length >= 2) {
+      return parts[0] === "relay" ? parts[1] : parts[0];
+    }
+    return host;
+  } catch {
+    return "Workspace";
+  }
+}

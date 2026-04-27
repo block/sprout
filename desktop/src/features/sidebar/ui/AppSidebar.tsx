@@ -3,6 +3,9 @@ import { Activity, Bot, Home, PenSquare, Plus, Search, Zap } from "lucide-react"
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import type { Workspace } from "@/features/workspaces/types";
+import { AddWorkspaceDialog } from "@/features/workspaces/ui/AddWorkspaceDialog";
+import { WorkspaceSwitcher } from "@/features/workspaces/ui/WorkspaceSwitcher";
 import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
@@ -53,10 +56,12 @@ const SECTION_ICON_BUTTON_CLASS =
 type CreateChannelKind = "stream" | "forum";
 
 type AppSidebarProps = {
+  activeWorkspace: Workspace | null;
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
   homeBadgeCount: number;
+  isAddWorkspaceOpen?: boolean;
   isLoading: boolean;
   isCreatingChannel: boolean;
   isCreatingForum: boolean;
@@ -67,6 +72,9 @@ type AppSidebarProps = {
   selectedChannelId: string | null;
   selectedView: "home" | "channel" | "agents" | "workflows" | "pulse";
   unreadChannelIds: Set<string>;
+  workspaces: Workspace[];
+  onAddWorkspace: (workspace: Workspace) => void;
+  onAddWorkspaceOpenChange?: (open: boolean) => void;
   onCreateChannel: (input: {
     name: string;
     description?: string;
@@ -79,11 +87,14 @@ type AppSidebarProps = {
     visibility: ChannelVisibility;
     ttlSeconds?: number;
   }) => Promise<void>;
+  onOpenAddWorkspace: () => void;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
   onOpenSearch: () => void;
   onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
+  onRemoveWorkspace: (id: string) => void;
+  onRenameWorkspace: (id: string, name: string) => void;
   onSelectAgents: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
@@ -91,6 +102,7 @@ type AppSidebarProps = {
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
+  onSwitchWorkspace: (id: string) => void;
   isPresencePending?: boolean;
   isNewDmOpen?: boolean;
   onNewDmOpenChange?: (open: boolean) => void;
@@ -204,10 +216,12 @@ function ChannelGroupSection({
 // ---------------------------------------------------------------------------
 
 export function AppSidebar({
+  activeWorkspace,
   channels,
   currentPubkey,
   fallbackDisplayName,
   homeBadgeCount,
+  isAddWorkspaceOpen,
   isLoading,
   isCreatingChannel,
   isCreatingForum,
@@ -218,13 +232,19 @@ export function AppSidebar({
   selectedChannelId,
   selectedView,
   unreadChannelIds,
+  workspaces,
+  onAddWorkspace,
+  onAddWorkspaceOpenChange,
   onCreateChannel,
   onCreateForum,
+  onOpenAddWorkspace,
   onOpenBrowseChannels,
   onOpenBrowseForums,
   onOpenSearch,
   onHideDm,
   onOpenDm,
+  onRemoveWorkspace,
+  onRenameWorkspace,
   onSelectAgents,
   onSelectPulse,
   onSelectWorkflows,
@@ -232,6 +252,7 @@ export function AppSidebar({
   onSelectChannel,
   onSelectSettings,
   onSetPresenceStatus,
+  onSwitchWorkspace,
   isPresencePending,
   isNewDmOpen: isNewDmOpenProp,
   onNewDmOpenChange,
@@ -483,6 +504,19 @@ export function AppSidebar({
 
       <SidebarSeparator className="mx-0 w-full" />
 
+      <div className="px-2 py-1.5">
+        <WorkspaceSwitcher
+          activeWorkspace={activeWorkspace}
+          onAddWorkspace={onOpenAddWorkspace}
+          onRemoveWorkspace={onRemoveWorkspace}
+          onRenameWorkspace={onRenameWorkspace}
+          onSwitchWorkspace={onSwitchWorkspace}
+          workspaces={workspaces}
+        />
+      </div>
+
+      <SidebarSeparator className="mx-0 w-full" />
+
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -556,6 +590,12 @@ export function AppSidebar({
         onOpenChange={setIsNewDmOpen}
         onSubmit={onOpenDm}
         open={isNewDmOpen}
+      />
+
+      <AddWorkspaceDialog
+        onOpenChange={onAddWorkspaceOpenChange ?? (() => {})}
+        onSubmit={onAddWorkspace}
+        open={isAddWorkspaceOpen ?? false}
       />
     </Sidebar>
   );

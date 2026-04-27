@@ -35,6 +35,7 @@ import {
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
@@ -115,6 +116,9 @@ function deriveShellRoute(pathname: string): {
 
 export function AppShell() {
   useWebviewZoomShortcuts();
+
+  const workspacesHook = useWorkspaces();
+  const [isAddWorkspaceOpen, setIsAddWorkspaceOpen] = React.useState(false);
 
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
@@ -487,6 +491,7 @@ export function AppShell() {
                   />
                 </div>
                 <AppSidebar
+                  activeWorkspace={workspacesHook.activeWorkspace}
                   channels={sidebarChannels}
                   currentPubkey={identityQuery.data?.pubkey}
                   errorMessage={
@@ -496,14 +501,25 @@ export function AppShell() {
                   }
                   fallbackDisplayName={identityQuery.data?.displayName}
                   homeBadgeCount={homeBadgeCount}
+                  isAddWorkspaceOpen={isAddWorkspaceOpen}
                   isCreatingChannel={createChannelMutation.isPending}
                   isCreatingForum={createForumMutation.isPending}
                   isLoading={channelsQuery.isLoading}
                   isOpeningDm={openDmMutation.isPending}
                   isNewDmOpen={isNewDmOpen}
                   isPresencePending={presenceSession.isPending}
+                  onAddWorkspace={(workspace) => {
+                    workspacesHook.addWorkspace(workspace);
+                    workspacesHook.switchWorkspace(workspace.id);
+                  }}
+                  onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                   onNewDmOpenChange={setIsNewDmOpen}
+                  onOpenAddWorkspace={() => setIsAddWorkspaceOpen(true)}
+                  onRemoveWorkspace={workspacesHook.removeWorkspace}
+                  onRenameWorkspace={workspacesHook.renameWorkspace}
+                  onSwitchWorkspace={workspacesHook.switchWorkspace}
                   selfPresenceStatus={presenceSession.currentStatus}
+                  workspaces={workspacesHook.workspaces}
                   onCreateChannel={async ({
                     description,
                     name,

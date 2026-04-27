@@ -15,6 +15,9 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub configured_api_token: Option<String>,
     pub session_token: Mutex<Option<String>>,
+    /// Workspace-provided relay URL override. Set by `apply_workspace` on app
+    /// init and takes priority over env vars and compile-time defaults.
+    pub relay_url_override: Mutex<Option<String>>,
     pub managed_agents_store_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<String, ManagedAgentProcess>>,
     pub huddle_state: Mutex<HuddleState>,
@@ -70,6 +73,7 @@ pub fn build_app_state() -> AppState {
         http_client: reqwest::Client::new(),
         configured_api_token: api_token,
         session_token: Mutex::new(None),
+        relay_url_override: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),

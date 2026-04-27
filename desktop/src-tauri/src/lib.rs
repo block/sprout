@@ -473,6 +473,8 @@ pub fn run() {
             start_pairing,
             confirm_pairing_sas,
             cancel_pairing,
+            apply_workspace,
+            get_active_workspace,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

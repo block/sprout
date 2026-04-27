@@ -1106,3 +1106,15 @@ export async function confirmPairingSas(): Promise<void> {
 export async function cancelPairing(): Promise<void> {
   await invokeTauri("cancel_pairing");
 }
+
+export async function applyWorkspace(
+  relayUrl: string,
+  nsec?: string,
+  token?: string,
+): Promise<void> {
+  await invokeTauri("apply_workspace", {
+    relayUrl,
+    nsec: nsec ?? null,
+    token: token ?? null,
+  });
+}

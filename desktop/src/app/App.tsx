@@ -5,6 +5,7 @@ import { useLayoutEffect } from "react";
 import { router } from "@/app/router";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
+import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
 
 function AppLoadingGate() {
   return (
@@ -29,7 +30,14 @@ export function App() {
     void getCurrentWindow().show();
   }, []);
 
+  const workspace = useWorkspaceInit();
   const onboarding = useAppOnboardingState();
+
+  // Wait for workspace config to be applied to the backend before
+  // rendering anything that connects to the relay.
+  if (!workspace.isReady) {
+    return <AppLoadingGate />;
+  }
 
   if (onboarding.stage === "onboarding") {
     return (
