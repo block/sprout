@@ -69,6 +69,9 @@ export function useRichTextEditor({
           // after block nodes (lists, blockquotes, code blocks) which creates
           // a phantom empty line in the compact message composer.
           trailingNode: false,
+          // Disable StarterKit's built-in Link — we configure it separately
+          // below with custom options (autolink, openOnClick, etc.).
+          link: false,
         }),
         // Shift+Enter inside lists/blockquotes: split the node instead of
         // inserting a hard break so continuation lines keep their formatting.

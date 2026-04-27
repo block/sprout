@@ -20,10 +20,13 @@ import {
   type MentionSuggestion,
 } from "@/features/messages/ui/MentionAutocomplete";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
+import type { ChannelMember } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 
 type ForumComposerProps = {
   channelId?: string | null;
+  /** Override mention source when no channel is available (e.g. Pulse). */
+  members?: ChannelMember[];
   placeholder: string;
   disabled?: boolean;
   isSending?: boolean;
@@ -39,6 +42,7 @@ type ForumComposerProps = {
 
 export function ForumComposer({
   channelId = null,
+  members,
   placeholder,
   disabled,
   isSending,
@@ -58,7 +62,7 @@ export function ForumComposer({
     setIsFormattingOpen(pressed);
   }, []);
 
-  const mentions = useMentions(channelId);
+  const mentions = useMentions(channelId, members);
   const channelLinks = useChannelLinks();
   const media = useMediaUpload();
 
