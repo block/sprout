@@ -7,7 +7,7 @@ import 'package:sprout_mobile/shared/theme/theme.dart';
 
 Widget _testable(Widget child) {
   return MaterialApp(
-    theme: AppTheme.lightTheme,
+    theme: AppTheme.light(),
     home: Scaffold(body: child),
   );
 }

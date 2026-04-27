@@ -156,7 +156,7 @@ Widget _buildTestable({
       ),
     ],
     child: MaterialApp(
-      theme: AppTheme.lightTheme,
+      theme: AppTheme.light(),
       navigatorObservers: navigatorObservers,
       home: ChannelDetailPage(channel: resolvedChannel),
     ),
@@ -949,7 +949,7 @@ void main() {
             ),
           ],
           child: MaterialApp(
-            theme: AppTheme.lightTheme,
+            theme: AppTheme.light(),
             home: ChannelDetailPage(channel: _testChannel),
           ),
         ),

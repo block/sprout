@@ -53,10 +53,6 @@ class AppTheme {
     );
   }
 
-  /// Legacy getters for backwards compatibility.
-  static ThemeData get lightTheme => light();
-  static ThemeData get darkTheme => dark();
-
   static ThemeData _buildTheme({
     required ColorScheme scheme,
     required AppColors appColors,
@@ -71,10 +67,11 @@ class AppTheme {
       fontFamily: 'Geist',
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
-        backgroundColor: scheme.surface,
+        backgroundColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
+        scrolledUnderElevation: 0,
         titleTextStyle: textTheme.titleMedium?.copyWith(
           color: scheme.onSurface,
         ),

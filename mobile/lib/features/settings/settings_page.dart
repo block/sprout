@@ -7,6 +7,8 @@ import 'package:nostr/nostr.dart' as nostr;
 import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import 'theme_picker_page.dart';
 
 class SettingsPage extends HookConsumerWidget {
@@ -18,10 +20,15 @@ class SettingsPage extends HookConsumerWidget {
     final selectedAccent = ref.watch(accentProvider);
     final selectedScheme = ref.watch(schemeProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+    return FrostedScaffold(
+      appBar: const FrostedAppBar(title: Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.all(Grid.xs),
+        padding: EdgeInsets.only(
+          top: frostedAppBarHeight(context),
+          left: Grid.xs,
+          right: Grid.xs,
+          bottom: Grid.xs,
+        ),
         children: [
           // Connection info
           Text('Connection', style: context.textTheme.titleMedium),

@@ -120,7 +120,7 @@ Widget _buildComposeBar({
       ),
     ],
     child: MaterialApp(
-      theme: AppTheme.lightTheme,
+      theme: AppTheme.light(),
       home: Scaffold(
         body: SafeArea(
           child: ComposeBar(channelId: 'channel-1', onSend: onSend),
