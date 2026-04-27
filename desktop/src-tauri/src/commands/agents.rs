@@ -16,7 +16,7 @@ use crate::{
         DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
         DEFAULT_MCP_COMMAND,
     },
-    relay::{relay_ws_url, sync_managed_agent_profile},
+    relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
 };
 
@@ -221,7 +221,7 @@ pub async fn create_managed_agent(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(relay_ws_url);
+            .unwrap_or_else(|| relay_ws_url_with_override(&state));
 
         let mint_token = input.mint_token;
         (

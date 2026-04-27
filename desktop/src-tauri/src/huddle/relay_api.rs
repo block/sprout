@@ -57,7 +57,7 @@ pub(crate) async fn connect_audio_relay(
 ) -> Result<(CancellationToken, tokio::sync::mpsc::Sender<Vec<u8>>), String> {
     use nostr::JsonUtil;
 
-    let relay_url = crate::relay::relay_ws_url();
+    let relay_url = crate::relay::relay_ws_url_with_override(state);
     let ws_url = format!("{relay_url}/huddle/{channel_id}/audio");
 
     let keys = state.keys.lock().map_err(|e| e.to_string())?.clone();

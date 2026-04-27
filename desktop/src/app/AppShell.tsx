@@ -509,8 +509,8 @@ export function AppShell() {
                   isNewDmOpen={isNewDmOpen}
                   isPresencePending={presenceSession.isPending}
                   onAddWorkspace={(workspace) => {
-                    workspacesHook.addWorkspace(workspace);
-                    workspacesHook.switchWorkspace(workspace.id);
+                    const id = workspacesHook.addWorkspace(workspace);
+                    workspacesHook.switchWorkspace(id);
                   }}
                   onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                   onNewDmOpenChange={setIsNewDmOpen}

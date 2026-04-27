@@ -24,6 +24,7 @@ pub fn relay_ws_url() -> String {
 }
 
 /// Returns the relay WebSocket URL, checking the workspace override first.
+/// Precedence: workspace override > env vars > build-time vars > default.
 pub fn relay_ws_url_with_override(state: &AppState) -> String {
     if let Ok(guard) = state.relay_url_override.lock() {
         if let Some(ref url) = *guard {
@@ -31,6 +32,18 @@ pub fn relay_ws_url_with_override(state: &AppState) -> String {
         }
     }
     relay_ws_url()
+}
+
+/// Returns the relay HTTP API base URL, checking the workspace override first.
+/// Precedence: workspace override > env vars > build-time vars > default.
+pub fn relay_api_base_url_with_override(state: &AppState) -> String {
+    // Workspace override takes priority over env vars.
+    if let Ok(guard) = state.relay_url_override.lock() {
+        if let Some(ref url) = *guard {
+            return relay_http_base_url(url);
+        }
+    }
+    relay_api_base_url()
 }
 
 pub fn relay_http_base_url(relay_url: &str) -> String {
@@ -57,19 +70,6 @@ pub fn relay_api_base_url() -> String {
     }
 
     relay_http_base_url(&relay_ws_url())
-}
-
-/// Returns the relay HTTP API base URL, checking the workspace override first.
-pub fn relay_api_base_url_with_override(state: &AppState) -> String {
-    if let Some(base) = configured_env_var("SPROUT_RELAY_HTTP") {
-        return base.trim_end_matches('/').to_string();
-    }
-
-    if let Some(base) = option_env!("SPROUT_DESKTOP_BUILD_RELAY_HTTP") {
-        return base.trim().trim_end_matches('/').to_string();
-    }
-
-    relay_http_base_url(&relay_ws_url_with_override(state))
 }
 
 /// Build a relay API path from untrusted path segments by percent-encoding each segment.
@@ -113,6 +113,10 @@ pub fn build_authed_request(
     let request = client.request(method, url);
 
     if let Some(token) = state.configured_api_token.as_deref() {
+        return Ok(request.header("Authorization", format!("Bearer {token}")));
+    }
+
+    if let Some(token) = session_api_token(state)? {
         return Ok(request.header("Authorization", format!("Bearer {token}")));
     }
 
@@ -346,9 +350,12 @@ pub async fn submit_event(
             .sign_with_keys(&keys)
             .map_err(|e| format!("failed to sign event: {e}"))?;
         let json = event.as_json();
-        let auth = match state.configured_api_token.as_deref() {
-            Some(token) => format!("Bearer {token}"),
-            None => format!("X-Pubkey {}", keys.public_key().to_hex()),
+        let auth = if let Some(token) = state.configured_api_token.as_deref() {
+            format!("Bearer {token}")
+        } else if let Some(token) = session_api_token(state)? {
+            format!("Bearer {token}")
+        } else {
+            format!("X-Pubkey {}", keys.public_key().to_hex())
         };
         (json, auth)
     }; // keys lock dropped here

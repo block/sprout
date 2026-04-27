@@ -33,23 +33,25 @@ pub fn apply_workspace(
     token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Set relay URL override
+    // ── Validate before mutating ──────────────────────────────────────────
+    let parsed_keys = match nsec.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(nsec_trimmed) => {
+            Some(Keys::parse(nsec_trimmed).map_err(|e| format!("invalid nsec: {e}"))?)
+        }
+        None => None,
+    };
+
+    // ── Apply all state changes (nothing below can fail) ──────────────────
     {
         let mut override_guard = state.relay_url_override.lock().map_err(|e| e.to_string())?;
         *override_guard = Some(relay_url);
     }
 
-    // Set keys if nsec is provided
-    if let Some(nsec_str) = nsec {
-        let nsec_trimmed = nsec_str.trim();
-        if !nsec_trimmed.is_empty() {
-            let new_keys = Keys::parse(nsec_trimmed).map_err(|e| format!("invalid nsec: {e}"))?;
-            let mut keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
-            *keys_guard = new_keys;
-        }
+    if let Some(keys) = parsed_keys {
+        let mut keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
+        *keys_guard = keys;
     }
 
-    // Set API token override
     {
         let mut token_guard = state.session_token.lock().map_err(|e| e.to_string())?;
         *token_guard = token;

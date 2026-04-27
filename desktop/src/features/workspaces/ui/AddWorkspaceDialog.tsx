@@ -127,7 +127,7 @@ export function AddWorkspaceDialog({
             >
               Private Key (nsec)
               <span className="ml-1 text-xs font-normal text-muted-foreground">
-                (optional — generates new if blank)
+                (optional — uses current identity if blank)
               </span>
             </label>
             <Input
