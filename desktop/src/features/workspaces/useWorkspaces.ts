@@ -16,8 +16,6 @@ export type UseWorkspacesReturn = {
   removeWorkspace: (id: string) => void;
   switchWorkspace: (id: string) => void;
   renameWorkspace: (id: string, name: string) => void;
-  setWorkspaces: (workspaces: Workspace[]) => void;
-  setActiveWorkspaceId: (id: string) => void;
 };
 
 export function useWorkspaces(): UseWorkspacesReturn {
@@ -33,16 +31,6 @@ export function useWorkspaces(): UseWorkspacesReturn {
     () => workspaces.find((w) => w.id === activeId) ?? workspaces[0] ?? null,
     [workspaces, activeId],
   );
-
-  const setWorkspaces = useCallback((next: Workspace[]) => {
-    setWorkspacesState(next);
-    saveWorkspaces(next);
-  }, []);
-
-  const setActiveWorkspaceId = useCallback((id: string) => {
-    setActiveId(id);
-    saveActiveWorkspaceId(id);
-  }, []);
 
   const addWorkspace = useCallback((workspace: Workspace): string => {
     const existing = workspacesRef.current.find(
@@ -122,7 +110,5 @@ export function useWorkspaces(): UseWorkspacesReturn {
     removeWorkspace,
     switchWorkspace,
     renameWorkspace,
-    setWorkspaces,
-    setActiveWorkspaceId,
   };
 }

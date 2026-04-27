@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type { Workspace } from "@/features/workspaces/types";
+import { deriveWorkspaceName } from "@/features/workspaces/workspaceStorage";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -44,7 +45,7 @@ export function AddWorkspaceDialog({
 
       const workspace: Workspace = {
         id: crypto.randomUUID(),
-        name: name.trim() || deriveNameFromUrl(relayUrl.trim()),
+        name: name.trim() || deriveWorkspaceName(relayUrl.trim()),
         relayUrl: normalizeRelayUrl(relayUrl.trim()),
         token: token.trim() || undefined,
         nsec: nsec.trim() || undefined,
@@ -158,24 +159,4 @@ function normalizeRelayUrl(url: string): string {
     return `wss://${url}`;
   }
   return url;
-}
-
-function deriveNameFromUrl(url: string): string {
-  try {
-    const normalized = url
-      .replace("ws://", "http://")
-      .replace("wss://", "https://");
-    const parsed = new URL(normalized);
-    const host = parsed.hostname;
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "Local Dev";
-    }
-    const parts = host.split(".");
-    if (parts.length >= 2) {
-      return parts[0] === "relay" ? parts[1] : parts[0];
-    }
-    return host;
-  } catch {
-    return "Workspace";
-  }
 }

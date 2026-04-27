@@ -23,27 +23,29 @@ pub fn relay_ws_url() -> String {
         .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string())
 }
 
+/// Read the workspace relay URL override, if set. Returns `None` when no
+/// override is active or when the mutex is poisoned (best-effort).
+fn workspace_relay_override(state: &AppState) -> Option<String> {
+    state
+        .relay_url_override
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
 /// Returns the relay WebSocket URL, checking the workspace override first.
 /// Precedence: workspace override > env vars > build-time vars > default.
 pub fn relay_ws_url_with_override(state: &AppState) -> String {
-    if let Ok(guard) = state.relay_url_override.lock() {
-        if let Some(ref url) = *guard {
-            return url.clone();
-        }
-    }
-    relay_ws_url()
+    workspace_relay_override(state).unwrap_or_else(relay_ws_url)
 }
 
 /// Returns the relay HTTP API base URL, checking the workspace override first.
 /// Precedence: workspace override > env vars > build-time vars > default.
 pub fn relay_api_base_url_with_override(state: &AppState) -> String {
-    // Workspace override takes priority over env vars.
-    if let Ok(guard) = state.relay_url_override.lock() {
-        if let Some(ref url) = *guard {
-            return relay_http_base_url(url);
-        }
+    match workspace_relay_override(state) {
+        Some(url) => relay_http_base_url(&url),
+        None => relay_api_base_url(),
     }
-    relay_api_base_url()
 }
 
 pub fn relay_http_base_url(relay_url: &str) -> String {

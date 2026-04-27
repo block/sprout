@@ -70,7 +70,7 @@ export async function migrateFromSingleWorkspace(): Promise<Workspace[]> {
   }
 }
 
-function deriveWorkspaceName(relayUrl: string): string {
+export function deriveWorkspaceName(relayUrl: string): string {
   try {
     const url = new URL(
       relayUrl.replace("ws://", "http://").replace("wss://", "https://"),
