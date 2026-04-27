@@ -74,7 +74,7 @@ Widget _buildPostCard({
       userCacheProvider.overrideWith(() => _FakeUserCacheNotifier(users)),
     ],
     child: MaterialApp(
-      theme: AppTheme.lightTheme,
+      theme: AppTheme.light(),
       home: Scaffold(
         body: ForumPostCard(
           post: post,
@@ -103,7 +103,7 @@ Widget _buildPostsView({
       ),
     ],
     child: MaterialApp(
-      theme: AppTheme.lightTheme,
+      theme: AppTheme.light(),
       home: Scaffold(
         body: ForumPostsView(channel: ch, currentPubkey: 'self'),
       ),
@@ -132,7 +132,7 @@ Widget _buildThreadPage({
       ),
     ],
     child: MaterialApp(
-      theme: AppTheme.lightTheme,
+      theme: AppTheme.light(),
       home: ForumThreadPage(
         channelId: _channelId,
         postEventId: postEventId,

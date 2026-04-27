@@ -17,10 +17,7 @@ void main() {
   Widget buildTestable({required List<Override> overrides}) {
     return ProviderScope(
       overrides: overrides,
-      child: MaterialApp(
-        theme: AppTheme.lightTheme,
-        home: const ActivityPage(),
-      ),
+      child: MaterialApp(theme: AppTheme.light(), home: const ActivityPage()),
     );
   }
 

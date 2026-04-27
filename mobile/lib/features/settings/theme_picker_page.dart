@@ -4,6 +4,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 
 class ThemePickerPage extends HookConsumerWidget {
   const ThemePickerPage({super.key});
@@ -64,10 +66,11 @@ class ThemePickerPage extends HookConsumerWidget {
       return null;
     }, const []);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Color Scheme')),
+    return FrostedScaffold(
+      appBar: const FrostedAppBar(title: Text('Color Scheme')),
       body: Column(
         children: [
+          SizedBox(height: frostedAppBarHeight(context)),
           // Always-visible search bar
           Padding(
             padding: const EdgeInsets.symmetric(

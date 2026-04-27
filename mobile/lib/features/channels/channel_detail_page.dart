@@ -7,6 +7,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/presence_cache_provider.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
@@ -92,8 +94,8 @@ class ChannelDetailPage extends HookConsumerWidget {
       return null;
     }, [channel.id]);
 
-    return Scaffold(
-      appBar: AppBar(
+    return FrostedScaffold(
+      appBar: FrostedAppBar(
         title: resolvedChannel.isDm
             ? _DmAppBarTitle(
                 channel: resolvedChannel,
@@ -108,11 +110,28 @@ class ChannelDetailPage extends HookConsumerWidget {
                   ),
                   const SizedBox(width: Grid.half),
                   Expanded(
-                    child: Text(
-                      resolvedChannel.displayLabel(
-                        currentPubkey: currentPubkey,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          resolvedChannel.displayLabel(
+                            currentPubkey: currentPubkey,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (resolvedChannel.isStream)
+                          Text(
+                            resolvedChannel.description.isNotEmpty
+                                ? resolvedChannel.description
+                                : '${resolvedChannel.memberCount} member${resolvedChannel.memberCount == 1 ? '' : 's'}',
+                            style: context.textTheme.bodySmall?.copyWith(
+                              color: context.colors.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
                     ),
                   ),
                 ],
@@ -153,9 +172,6 @@ class ChannelDetailPage extends HookConsumerWidget {
       ),
       body: Column(
         children: [
-          _DetailConnectionBanner(
-            status: ref.watch(relaySessionProvider).status,
-          ),
           Expanded(
             child: resolvedChannel.isForum
                 ? ForumPostsView(
@@ -163,13 +179,22 @@ class ChannelDetailPage extends HookConsumerWidget {
                     currentPubkey: currentPubkey,
                   )
                 : messagesState.when(
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (e, _) => Center(
-                      child: Text(
-                        'Failed to load messages',
-                        style: context.textTheme.bodyMedium?.copyWith(
-                          color: context.colors.error,
+                    loading: () => Padding(
+                      padding: EdgeInsets.only(
+                        top: frostedAppBarHeight(context),
+                      ),
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                    error: (e, _) => Padding(
+                      padding: EdgeInsets.only(
+                        top: frostedAppBarHeight(context),
+                      ),
+                      child: Center(
+                        child: Text(
+                          'Failed to load messages',
+                          style: context.textTheme.bodyMedium?.copyWith(
+                            color: context.colors.error,
+                          ),
                         ),
                       ),
                     ),
@@ -189,6 +214,9 @@ class ChannelDetailPage extends HookConsumerWidget {
                       );
                     },
                   ),
+          ),
+          _DetailConnectionBanner(
+            status: ref.watch(relaySessionProvider).status,
           ),
           if (!resolvedChannel.isForum && typingEntries.isNotEmpty)
             _TypingIndicator(entries: typingEntries),
@@ -304,9 +332,11 @@ class _MessageList extends HookConsumerWidget {
     return ListView.builder(
       controller: scrollController,
       reverse: true,
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xs,
-        vertical: Grid.xxs,
+      padding: EdgeInsets.only(
+        left: Grid.xs,
+        right: Grid.xs,
+        top: frostedAppBarHeight(context),
+        bottom: Grid.xxs,
       ),
       itemCount: entries.length + (isLoadingOlder.value ? 1 : 0),
       itemBuilder: (context, index) {
@@ -1065,9 +1095,7 @@ class _DmAppBarTitle extends ConsumerWidget {
                     },
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color:
-                          context.theme.appBarTheme.backgroundColor ??
-                          context.theme.scaffoldBackgroundColor,
+                      color: context.colors.surface,
                       width: 1.5,
                     ),
                   ),
@@ -1080,6 +1108,7 @@ class _DmAppBarTitle extends ConsumerWidget {
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 channel.displayLabel(currentPubkey: currentPubkey),
@@ -1089,8 +1118,8 @@ class _DmAppBarTitle extends ConsumerWidget {
               ),
               Text(
                 presenceLabel,
-                style: context.textTheme.labelSmall?.copyWith(
-                  color: context.colors.outline,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
                 ),
               ),
             ],

@@ -4,6 +4,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../channels/channel.dart';
 import '../channels/channel_detail_page.dart';
 import '../channels/channels_provider.dart';
@@ -83,7 +85,16 @@ class ActivityPage extends HookConsumerWidget {
       body = const _LoadingSkeleton();
     }
 
-    return Scaffold(body: SafeArea(child: body));
+    return FrostedScaffold(
+      appBar: const FrostedAppBar(title: Text('Activity')),
+      body: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
+          child: body,
+        ),
+      ),
+    );
   }
 
   List<FeedItem> _filteredItems(HomeFeedResponse feed, _Filter filter) {

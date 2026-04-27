@@ -4,6 +4,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../channels/channel.dart';
 import '../channels/channel_detail_page.dart';
 import '../channels/channel_management_provider.dart';
@@ -34,9 +36,9 @@ class SearchPage extends HookConsumerWidget {
       () => textController.text.isNotEmpty,
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: Grid.xs,
+    return FrostedScaffold(
+      resizeToAvoidBottomInset: true,
+      appBar: FrostedAppBar(
         title: Container(
           height: 36,
           padding: const EdgeInsets.symmetric(horizontal: Grid.half),
@@ -77,6 +79,7 @@ class SearchPage extends HookConsumerWidget {
       ),
       body: Column(
         children: [
+          SizedBox(height: frostedAppBarHeight(context)),
           _FilterChips(
             active: activeFilter.value,
             onChanged: (f) => activeFilter.value = f,

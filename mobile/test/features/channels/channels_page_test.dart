@@ -18,10 +18,7 @@ void main() {
         presenceProvider.overrideWith(() => _FakePresenceNotifier()),
         ...overrides,
       ],
-      child: MaterialApp(
-        theme: AppTheme.lightTheme,
-        home: const ChannelsPage(),
-      ),
+      child: MaterialApp(theme: AppTheme.light(), home: const ChannelsPage()),
     );
   }
 
@@ -79,7 +76,7 @@ void main() {
     expect(find.text('CHANNELS'), findsOneWidget);
     expect(find.text('FORUMS'), findsOneWidget);
     expect(find.text('DMS'), findsOneWidget);
-    expect(find.text('\u{1F331} Sprout'), findsOneWidget);
+    expect(find.text('\u{1F331}'), findsOneWidget);
     expect(find.byTooltip('Create or start conversation'), findsOneWidget);
   });
 

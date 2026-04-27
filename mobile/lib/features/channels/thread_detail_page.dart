@@ -4,6 +4,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import 'channel_management_provider.dart';
@@ -86,15 +88,17 @@ class ThreadDetailPage extends HookConsumerWidget {
       }
     });
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Thread')),
+    return FrostedScaffold(
+      appBar: const FrostedAppBar(title: Text('Thread')),
       body: Column(
         children: [
           Expanded(
             child: ListView.builder(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Grid.xs,
-                vertical: Grid.xxs,
+              padding: EdgeInsets.only(
+                left: Grid.xs,
+                right: Grid.xs,
+                top: frostedAppBarHeight(context),
+                bottom: Grid.xxs,
               ),
               itemCount: replies.length + 1, // +1 for thread head
               itemBuilder: (context, index) {

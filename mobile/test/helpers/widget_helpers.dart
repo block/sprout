@@ -11,7 +11,7 @@ class WidgetHelpers {
     return ProviderScope(
       overrides: overrides,
       child: MaterialApp(
-        theme: AppTheme.lightTheme,
+        theme: AppTheme.light(),
         home: Scaffold(body: child),
       ),
     );

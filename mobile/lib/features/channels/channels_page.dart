@@ -8,6 +8,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/profile_avatar.dart';
 import '../profile/profile_provider.dart';
 import '../settings/settings_page.dart';
@@ -19,6 +21,10 @@ import 'channel_management_provider.dart';
 import 'channels_provider.dart';
 
 enum _QuickAction { createChannel, createForum, newDm }
+
+/// Height of the [_ConnectionBanner]: vertical padding (Grid.quarter + 2) × 2
+/// plus the ~16px row content (12px spinner / labelSmall text).
+const double _kBannerHeight = 24.0;
 
 class ChannelsPage extends HookConsumerWidget {
   const ChannelsPage({super.key});
@@ -90,15 +96,13 @@ class ChannelsPage extends HookConsumerWidget {
       }
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: Grid.xs,
-        title: Text(
-          '\u{1F331} Sprout',
-          style: context.textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
+    return FrostedScaffold(
+      appBar: FrostedAppBar(
+        leading: const Padding(
+          padding: EdgeInsets.only(left: Grid.xs),
+          child: Text('\u{1F331}', style: TextStyle(fontSize: 28)),
         ),
+        title: const SizedBox.shrink(),
         actions: [
           ProfileAvatar(
             onTap: () => Navigator.of(context).push(
@@ -114,35 +118,91 @@ class ChannelsPage extends HookConsumerWidget {
         shape: const CircleBorder(),
         child: const Icon(LucideIcons.plus),
       ),
-      body: channels != null
-          ? Column(
-              children: [
-                _ConnectionBanner(status: sessionState.status),
-                Expanded(
-                  child: _ChannelsList(
-                    channels: channels,
-                    currentPubkey: currentPubkey,
-                    onSelectChannel: openChannel,
-                  ),
-                ),
-              ],
-            )
-          : channelsAsync.hasError
-          ? _ErrorView(
-              error: channelsAsync.error!,
-              onRetry: () => ref.read(channelsProvider.notifier).refresh(),
-            )
-          : const _ConnectionBanner(status: SessionStatus.connecting),
+      body: _ChannelsBody(
+        channels: channels,
+        channelsAsync: channelsAsync,
+        sessionStatus: sessionState.status,
+        currentPubkey: currentPubkey,
+        onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
+        onSelectChannel: openChannel,
+      ),
     );
   }
 }
 
-class _ChannelsList extends HookConsumerWidget {
+class _ChannelsBody extends StatelessWidget {
+  final List<Channel>? channels;
+  final AsyncValue<List<Channel>> channelsAsync;
+  final SessionStatus sessionStatus;
+  final String? currentPubkey;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function(Channel channel) onSelectChannel;
+
+  const _ChannelsBody({
+    required this.channels,
+    required this.channelsAsync,
+    required this.sessionStatus,
+    required this.currentPubkey,
+    required this.onRefresh,
+    required this.onSelectChannel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final barHeight = frostedAppBarHeight(context);
+
+    if (channels != null) {
+      return Stack(
+        children: [
+          RefreshIndicator(
+            onRefresh: onRefresh,
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(child: SizedBox(height: barHeight)),
+                // Extra space for the connection banner when visible.
+                if (sessionStatus != SessionStatus.connected &&
+                    sessionStatus != SessionStatus.disconnected)
+                  const SliverToBoxAdapter(
+                    child: SizedBox(height: _kBannerHeight),
+                  ),
+                _SliverChannelsList(
+                  channels: channels!,
+                  currentPubkey: currentPubkey,
+                  onSelectChannel: onSelectChannel,
+                ),
+              ],
+            ),
+          ),
+          Positioned(
+            top: barHeight,
+            left: 0,
+            right: 0,
+            child: _ConnectionBanner(status: sessionStatus),
+          ),
+        ],
+      );
+    }
+
+    if (channelsAsync.hasError) {
+      return Padding(
+        padding: EdgeInsets.only(top: barHeight),
+        child: _ErrorView(error: channelsAsync.error!, onRetry: onRefresh),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.only(top: barHeight),
+      child: const _ConnectionBanner(status: SessionStatus.connecting),
+    );
+  }
+}
+
+class _SliverChannelsList extends HookConsumerWidget {
   final List<Channel> channels;
   final String? currentPubkey;
   final Future<void> Function(Channel channel) onSelectChannel;
 
-  const _ChannelsList({
+  const _SliverChannelsList({
     required this.channels,
     required this.currentPubkey,
     required this.onSelectChannel,
@@ -167,10 +227,9 @@ class _ChannelsList extends HookConsumerWidget {
     final forumsExpanded = useState(true);
     final dmsExpanded = useState(true);
 
-    return RefreshIndicator(
-      onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
-      child: ListView(
-        padding: const EdgeInsets.only(top: Grid.xxs, bottom: 80),
+    return SliverPadding(
+      padding: const EdgeInsets.only(top: Grid.xxs, bottom: 80),
+      sliver: SliverList.list(
         children: [
           if (visibleChannels.isEmpty)
             const _EmptyState()
