@@ -6,6 +6,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
 import '../channels/channel.dart';
 import '../channels/compose_bar.dart';
 import 'forum_models.dart';
@@ -57,12 +58,18 @@ class ForumPostsView extends HookConsumerWidget {
                   )
                 : null,
             body: postsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(
-                child: Text(
-                  'Failed to load posts',
-                  style: context.textTheme.bodyMedium?.copyWith(
-                    color: context.colors.error,
+              loading: () => Padding(
+                padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
+                child: const Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Padding(
+                padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
+                child: Center(
+                  child: Text(
+                    'Failed to load posts',
+                    style: context.textTheme.bodyMedium?.copyWith(
+                      color: context.colors.error,
+                    ),
                   ),
                 ),
               ),
@@ -80,7 +87,12 @@ class ForumPostsView extends HookConsumerWidget {
                     await ref.read(forumPostsProvider(channel.id).future);
                   },
                   child: ListView.separated(
-                    padding: const EdgeInsets.all(Grid.xs),
+                    padding: EdgeInsets.only(
+                      top: frostedAppBarHeight(context),
+                      left: Grid.xs,
+                      right: Grid.xs,
+                      bottom: Grid.xs,
+                    ),
                     itemCount: posts.length,
                     separatorBuilder: (_, _) =>
                         const SizedBox(height: Grid.xxs),

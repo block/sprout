@@ -110,11 +110,28 @@ class ChannelDetailPage extends HookConsumerWidget {
                   ),
                   const SizedBox(width: Grid.half),
                   Expanded(
-                    child: Text(
-                      resolvedChannel.displayLabel(
-                        currentPubkey: currentPubkey,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          resolvedChannel.displayLabel(
+                            currentPubkey: currentPubkey,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (resolvedChannel.isStream)
+                          Text(
+                            resolvedChannel.description.isNotEmpty
+                                ? resolvedChannel.description
+                                : '${resolvedChannel.memberCount} member${resolvedChannel.memberCount == 1 ? '' : 's'}',
+                            style: context.textTheme.bodySmall?.copyWith(
+                              color: context.colors.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
                     ),
                   ),
                 ],
@@ -1091,6 +1108,7 @@ class _DmAppBarTitle extends ConsumerWidget {
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 channel.displayLabel(currentPubkey: currentPubkey),
@@ -1100,8 +1118,8 @@ class _DmAppBarTitle extends ConsumerWidget {
               ),
               Text(
                 presenceLabel,
-                style: context.textTheme.labelSmall?.copyWith(
-                  color: context.colors.outline,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
                 ),
               ),
             ],
