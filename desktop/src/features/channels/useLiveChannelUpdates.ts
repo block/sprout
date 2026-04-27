@@ -229,7 +229,7 @@ export function useLiveChannelUpdates(
     }
 
     let isCancelled = false;
-    let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+    let retryTimeout: number | undefined;
     let retryAttempt = 0;
 
     const syncSubs = async (): Promise<boolean> => {
