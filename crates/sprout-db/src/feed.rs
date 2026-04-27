@@ -63,10 +63,10 @@ pub async fn query_mentions(
     let limit = limit.min(FEED_MAX_LIMIT);
     let pubkey_hex = hex::encode(pubkey_bytes);
 
-    // -- Part 1: explicit @mentions (existing behaviour) ----------------------
+    // -- Part 1: explicit @mentions (subquery with own limit) ------------------
 
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
+        "(SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
          e.received_at, e.channel_id \
          FROM events e \
          INNER JOIN event_mentions m ON e.id = m.event_id \
@@ -92,11 +92,15 @@ pub async fn query_mentions(
         qb.push(" AND m.event_created_at >= ").push_bind(s);
     }
 
-    // -- Part 2: all DM messages (not from self) ------------------------------
+    qb.push(" ORDER BY m.event_created_at DESC LIMIT ")
+        .push_bind(limit);
+    qb.push(")");
+
+    // -- Part 2: DM messages (subquery with own limit, deduped) ---------------
 
     qb.push(
         " UNION ALL \
-         SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
+         (SELECT e.id, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig, \
          e.received_at, e.channel_id \
          FROM events e \
          INNER JOIN channels c ON e.channel_id = c.id \
@@ -110,6 +114,11 @@ pub async fn query_mentions(
         " AND e.kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2})"
     ));
 
+    // Exclude DMs that already have an explicit @mention (avoid duplicates)
+    qb.push(" AND NOT EXISTS (SELECT 1 FROM event_mentions em WHERE em.event_id = e.id AND em.pubkey_hex = ");
+    qb.push_bind(&pubkey_hex);
+    qb.push(")");
+
     if !accessible_channel_ids.is_empty() {
         qb.push(" AND e.channel_id IN (");
         let mut sep = qb.separated(", ");
@@ -122,6 +131,10 @@ pub async fn query_mentions(
     if let Some(s) = since {
         qb.push(" AND e.created_at >= ").push_bind(s);
     }
+
+    qb.push(" ORDER BY e.created_at DESC LIMIT ")
+        .push_bind(limit);
+    qb.push(")");
 
     // -- Combined ordering and limit ------------------------------------------
 
