@@ -46,8 +46,22 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       return AuthState(status: AuthStatus.authenticated, workspace: active);
     } on RelayException catch (e) {
       if (e.statusCode == 401 || e.statusCode == 403) {
-        // Token is invalid or revoked — remove from storage directly.
+        // Token is invalid or revoked — remove this workspace.
         await storage.remove(active.id);
+
+        // Check if other workspaces remain — fall through to the next one
+        // instead of sending the user back to the pairing screen.
+        final remaining = await storage.loadAll();
+        if (remaining.isNotEmpty) {
+          final next = remaining.first;
+          await storage.saveActiveId(next.id);
+          ref.invalidate(workspaceListProvider);
+          ref.invalidate(activeWorkspaceProvider);
+          // Re-run build() to validate the next workspace's credentials.
+          ref.invalidateSelf();
+          return await future;
+        }
+
         return const AuthState(status: AuthStatus.unauthenticated);
       }
       // Transient server error (5xx, 429, etc.) — keep workspace, go offline.

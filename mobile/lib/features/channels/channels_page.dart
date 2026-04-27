@@ -17,6 +17,7 @@ import '../settings/settings_page.dart';
 import '../profile/presence_cache_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../pairing/pairing_page.dart';
+import '../pairing/pairing_provider.dart';
 import 'channel.dart';
 import 'channel_detail_page.dart';
 import 'channel_management_provider.dart';
@@ -1228,6 +1229,7 @@ class _WorkspaceSwitcherSheet extends ConsumerWidget {
                 title: const Text('Add Workspace'),
                 onTap: () {
                   final nav = Navigator.of(context, rootNavigator: true);
+                  ref.read(pairingProvider.notifier).reset();
                   Navigator.of(context).pop();
                   nav.push(
                     MaterialPageRoute<void>(

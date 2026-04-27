@@ -1,6 +1,7 @@
 import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
+const _sentinel = Object();
 
 class Workspace {
   final String id;
@@ -43,16 +44,16 @@ class Workspace {
     String? name,
     String? relayUrl,
     String? token,
-    String? pubkey,
-    String? nsec,
+    Object? pubkey = _sentinel,
+    Object? nsec = _sentinel,
   }) {
     return Workspace(
       id: id,
       name: name ?? this.name,
       relayUrl: relayUrl ?? this.relayUrl,
       token: token ?? this.token,
-      pubkey: pubkey ?? this.pubkey,
-      nsec: nsec ?? this.nsec,
+      pubkey: pubkey == _sentinel ? this.pubkey : pubkey as String?,
+      nsec: nsec == _sentinel ? this.nsec : nsec as String?,
       addedAt: addedAt,
     );
   }
