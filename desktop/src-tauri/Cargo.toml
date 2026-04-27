@@ -49,6 +49,7 @@ reqwest = { version = "0.13", features = ["json", "query", "stream"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
 sprout-persona = { path = "../../crates/sprout-persona" }
+sprout-sdk = { path = "../../crates/sprout-sdk" }
 base64 = "0.22"
 sha2 = "0.11"
 tar = "0.4"

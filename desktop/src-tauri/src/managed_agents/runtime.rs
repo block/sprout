@@ -555,6 +555,12 @@ pub fn spawn_agent_child(
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");
 
+    if let Some(ref auth_tag) = record.auth_tag {
+        command.env("SPROUT_AUTH_TAG", auth_tag);
+    } else {
+        command.env_remove("SPROUT_AUTH_TAG");
+    }
+
     if let Some(token) = &record.api_token {
         command.env("SPROUT_API_TOKEN", token);
     } else {

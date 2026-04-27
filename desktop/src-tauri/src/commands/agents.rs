@@ -1,4 +1,5 @@
 use nostr::{Keys, ToBech32};
+use nostr_compat;
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -26,6 +27,7 @@ fn build_deploy_payload(record: &ManagedAgentRecord) -> serde_json::Value {
         "name": &record.name,
         "relay_url": &record.relay_url,
         "private_key_nsec": &record.private_key_nsec,
+        "auth_tag": &record.auth_tag,
         "api_token": &record.api_token,
         "agent_command": &record.agent_command,
         "agent_args": &record.agent_args,
@@ -267,12 +269,20 @@ pub async fn create_managed_agent(
         resolve_provider_binary(id)?;
     }
 
-    // ── Phase 2: mint token via REST API (async, outside lock) ───────────────
-    // Pass the desktop user's pubkey as the agent owner so the relay records
-    // the ownership chain. Only NIP-98 bootstrap mints can set owner_pubkey.
-    let user_pubkey_hex = {
-        let keys = state.keys.lock().map_err(|e| e.to_string())?;
-        keys.public_key().to_hex()
+    // ── Phase 2: mint token (async, outside lock) ──────────────────────────
+    // Snapshot owner identity once for both token mint and NIP-OA attestation.
+    // during the async mint. Fail closed: bad auth tag → don't create agent.
+    let (user_pubkey_hex, auth_tag) = {
+        let owner_keys = state.keys.lock().map_err(|e| e.to_string())?;
+        let pubkey_hex = owner_keys.public_key().to_hex();
+        // Bridge nostr 0.37 → 0.36 (sprout-sdk) via hex round-trip.
+        let compat_owner = nostr_compat::Keys::parse(&owner_keys.secret_key().to_secret_hex())
+            .map_err(|e| format!("failed to bridge owner keys: {e}"))?;
+        let compat_agent = nostr_compat::PublicKey::from_hex(&agent_keys.public_key().to_hex())
+            .map_err(|e| format!("failed to bridge agent pubkey: {e}"))?;
+        let tag = sprout_sdk::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
+            .map_err(|e| format!("failed to compute NIP-OA auth tag: {e}"))?;
+        (pubkey_hex, Some(tag))
     };
     let api_token: Option<String> = if mint_token {
         let token = mint_token_via_api(
@@ -288,9 +298,6 @@ pub async fn create_managed_agent(
     } else {
         None
     };
-
-    // Agent ownership is set atomically during token mint via owner_pubkey
-    // in the request body — no separate API call needed.
 
     // ── Phase 3: save record and optionally spawn (sync lock) ─────────────────
     let (agent, spawn_error) = {
@@ -361,6 +368,7 @@ pub async fn create_managed_agent(
             name: name.clone(),
             persona_id: requested_persona_id.clone(),
             private_key_nsec: private_key_nsec.clone(),
+            auth_tag: auth_tag.clone(),
             api_token: api_token.clone(),
             relay_url: resolved_relay_url.clone(),
             acp_command: input
@@ -408,9 +416,7 @@ pub async fn create_managed_agent(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            // Provider agents don't auto-start with the desktop — they're
-            // managed externally. Force false to avoid persisting a flag the
-            // app will never honor.
+            // Provider agents are managed externally — force false.
             start_on_app_launch: if input.backend != BackendKind::Local {
                 false
             } else {
@@ -420,13 +426,9 @@ pub async fn create_managed_agent(
             backend: input.backend.clone(),
             backend_agent_id: None,
             provider_binary_path,
-            // If the persona came from a pack, record the installed pack path
-            // and the persona's internal name within the pack so the runtime
-            // can resolve pack-specific config at startup via ACP.
-            //
-            // Important: persona_name_in_pack must be the internal `name` slug
-            // (e.g., "lep"), NOT the display_name (e.g., "Lep"). ACP's
-            // resolve_persona_by_name() matches on the internal name.
+            // Pack-backed personas: record path + internal slug so the runtime
+            // can resolve pack config at startup. Must be the slug (e.g., "lep"),
+            // NOT the display_name — ACP's resolve_persona_by_name() matches slugs.
             persona_pack_path: pack_metadata.as_ref().map(|(path, _)| path.clone()),
             persona_name_in_pack: pack_metadata.as_ref().map(|(_, name)| name.clone()),
             created_at: now_iso(),
@@ -475,6 +477,7 @@ pub async fn create_managed_agent(
         &token_scopes,
         &name,
         avatar_url.as_deref(),
+        auth_tag.as_deref(),
     )
     .await)
         .err();

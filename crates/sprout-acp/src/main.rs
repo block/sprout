@@ -2246,6 +2246,16 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                     });
                 }
             }
+            // Forward SPROUT_AUTH_TAG (NIP-OA owner attestation credential)
+            // so the MCP server can attach it to every signed event.
+            if let Ok(auth_tag) = std::env::var("SPROUT_AUTH_TAG") {
+                if !auth_tag.is_empty() {
+                    env.push(EnvVar {
+                        name: "SPROUT_AUTH_TAG".into(),
+                        value: auth_tag,
+                    });
+                }
+            }
             env
         },
     }]
@@ -2501,5 +2511,112 @@ mod sibling_cache_tests {
         assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
         assert_eq!(cache.check(AUTHOR_2, OWNER_A), Some(false));
         assert_eq!(cache.check(AUTHOR_2, OWNER_B), Some(true));
+    }
+}
+
+#[cfg(test)]
+mod build_mcp_servers_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Env-var-touching tests must run serially — env vars are process-global.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn test_config() -> Config {
+        Config {
+            keys: nostr::Keys::generate(),
+            api_token: None,
+            relay_url: "ws://localhost:3000".into(),
+            agent_command: "goose".into(),
+            agent_args: vec!["acp".into()],
+            mcp_command: "sprout-mcp-server".into(),
+            idle_timeout_secs: 320,
+            max_turn_duration_secs: 3600,
+            agents: 1,
+            heartbeat_interval_secs: 0,
+            heartbeat_prompt: None,
+            system_prompt: None,
+            initial_message: None,
+            subscribe_mode: config::SubscribeMode::All,
+            dedup_mode: config::DedupMode::Queue,
+            multiple_event_handling: config::MultipleEventHandling::Queue,
+            ignore_self: true,
+            kinds_override: None,
+            channels_override: None,
+            no_mention_filter: false,
+            config_path: std::path::PathBuf::from("./sprout-acp.toml"),
+            context_message_limit: 12,
+            max_turns_per_session: 0,
+            presence_enabled: true,
+            typing_enabled: true,
+            model: None,
+            permission_mode: config::PermissionMode::BypassPermissions,
+            respond_to: config::RespondTo::Anyone,
+            respond_to_allowlist: std::collections::HashSet::new(),
+            persona_env_vars: vec![],
+        }
+    }
+
+    #[test]
+    fn session_new_mcp_server_has_required_fields() {
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        assert_eq!(servers.len(), 1);
+        let server = &servers[0];
+        assert_eq!(server.name, "sprout-mcp");
+
+        let names: Vec<&str> = server.env.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"SPROUT_RELAY_URL"),
+            "missing SPROUT_RELAY_URL; got {names:?}"
+        );
+        assert!(
+            names.contains(&"SPROUT_PRIVATE_KEY"),
+            "missing SPROUT_PRIVATE_KEY; got {names:?}"
+        );
+    }
+
+    #[test]
+    fn session_new_mcp_server_forwards_sprout_auth_tag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("SPROUT_AUTH_TAG", "test-attestation-tag");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("SPROUT_AUTH_TAG");
+
+        let server = &servers[0];
+        let auth_tag_env = server.env.iter().find(|e| e.name == "SPROUT_AUTH_TAG");
+        assert!(
+            auth_tag_env.is_some(),
+            "SPROUT_AUTH_TAG should be forwarded when set"
+        );
+        assert_eq!(auth_tag_env.unwrap().value, "test-attestation-tag");
+    }
+
+    #[test]
+    fn session_new_mcp_server_skips_empty_sprout_auth_tag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("SPROUT_AUTH_TAG", "");
+        let config = test_config();
+        let servers = build_mcp_servers(&config);
+        std::env::remove_var("SPROUT_AUTH_TAG");
+
+        let server = &servers[0];
+        let has_auth_tag = server.env.iter().any(|e| e.name == "SPROUT_AUTH_TAG");
+        assert!(
+            !has_auth_tag,
+            "empty SPROUT_AUTH_TAG should not be forwarded"
+        );
+    }
+
+    #[test]
+    fn session_new_mcp_server_forwards_api_token_when_set() {
+        let mut config = test_config();
+        config.api_token = Some("tok_test_123".into());
+        let servers = build_mcp_servers(&config);
+        let server = &servers[0];
+        let token_env = server.env.iter().find(|e| e.name == "SPROUT_API_TOKEN");
+        assert!(token_env.is_some(), "SPROUT_API_TOKEN should be forwarded");
+        assert_eq!(token_env.unwrap().value, "tok_test_123");
     }
 }

@@ -5302,6 +5302,7 @@ dependencies = [
  "sherpa-onnx",
  "sprout-core",
  "sprout-persona",
+ "sprout-sdk",
  "tar",
  "tauri",
  "tauri-build",
@@ -5350,6 +5351,18 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "sprout-sdk"
+version = "0.1.0"
+dependencies = [
+ "nostr 0.36.0",
+ "serde",
+ "serde_json",
+ "sprout-core",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
