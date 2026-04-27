@@ -92,7 +92,7 @@ class SettingsPage extends HookConsumerWidget {
           OutlinedButton.icon(
             onPressed: () => _confirmSignOut(context, ref),
             icon: const Icon(LucideIcons.logOut),
-            label: const Text('Sign Out'),
+            label: const Text('Remove Workspace'),
             style: OutlinedButton.styleFrom(
               foregroundColor: context.colors.error,
             ),
@@ -162,10 +162,10 @@ class SettingsPage extends HookConsumerWidget {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Sign Out'),
+        title: const Text('Remove Workspace'),
         content: const Text(
-          'You will need to scan a new pairing code from your '
-          'desktop app to reconnect.',
+          'This will disconnect this workspace. You will need '
+          'to scan a new pairing code to reconnect.',
         ),
         actions: [
           TextButton(
@@ -183,7 +183,7 @@ class SettingsPage extends HookConsumerWidget {
             style: FilledButton.styleFrom(
               backgroundColor: Theme.of(ctx).colorScheme.error,
             ),
-            child: const Text('Sign Out'),
+            child: const Text('Remove'),
           ),
         ],
       ),

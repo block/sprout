@@ -8,7 +8,11 @@ import '../../shared/theme/theme.dart';
 import 'pairing_provider.dart';
 
 class PairingPage extends HookConsumerWidget {
-  const PairingPage({super.key});
+  /// When true, the pairing page is being used to add a new workspace
+  /// (user is already authenticated with at least one workspace).
+  final bool addingWorkspace;
+
+  const PairingPage({super.key, this.addingWorkspace = false});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -19,156 +23,184 @@ class PairingPage extends HookConsumerWidget {
         pairingState.status == PairingStatus.transferring ||
         pairingState.status == PairingStatus.storing;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: Grid.sm),
-          child: pairingState.status == PairingStatus.confirmingSas
-              ? _SasVerificationView(
-                  sasCode: pairingState.sasCode ?? '------',
-                  confirmed: pairingState.userConfirmedSas,
-                  onConfirm: () =>
-                      ref.read(pairingProvider.notifier).confirmSas(),
-                  onDeny: () => ref.read(pairingProvider.notifier).denySas(),
-                )
-              : Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Spacer(flex: 2),
+    // When adding a workspace and pairing succeeds, pop back.
+    if (addingWorkspace && pairingState.status == PairingStatus.success) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          ref.read(pairingProvider.notifier).reset();
+          Navigator.of(context).pop();
+        }
+      });
+    }
 
-                    // Branding
-                    Icon(
-                      LucideIcons.sprout,
-                      size: 64,
-                      color: context.colors.primary,
-                    ),
-                    const SizedBox(height: Grid.xs),
-                    Text(
-                      'Welcome to Sprout',
-                      style: context.textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: Grid.xxs),
-                    Text(
-                      'Scan the QR code from your desktop app\nor paste a pairing code to connect.',
-                      textAlign: TextAlign.center,
-                      style: context.textTheme.bodyMedium?.copyWith(
-                        color: context.colors.onSurfaceVariant,
+    return PopScope(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) {
+          ref.read(pairingProvider.notifier).reset();
+        }
+      },
+      child: Scaffold(
+        appBar: addingWorkspace
+            ? AppBar(
+                leading: IconButton(
+                  icon: const Icon(LucideIcons.arrowLeft),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                title: const Text('Add Workspace'),
+              )
+            : null,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Grid.sm),
+            child: pairingState.status == PairingStatus.confirmingSas
+                ? _SasVerificationView(
+                    sasCode: pairingState.sasCode ?? '------',
+                    confirmed: pairingState.userConfirmedSas,
+                    onConfirm: () =>
+                        ref.read(pairingProvider.notifier).confirmSas(),
+                    onDeny: () => ref.read(pairingProvider.notifier).denySas(),
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Spacer(flex: 2),
+
+                      // Branding
+                      Icon(
+                        LucideIcons.sprout,
+                        size: 64,
+                        color: context.colors.primary,
                       ),
-                    ),
-
-                    const SizedBox(height: Grid.lg),
-
-                    // Scan QR button
-                    FilledButton.icon(
-                      onPressed: isBusy
-                          ? null
-                          : () => _openScanner(context, ref),
-                      icon: const Icon(LucideIcons.scanLine),
-                      label: const Text('Scan QR Code'),
-                    ),
-
-                    const SizedBox(height: Grid.sm),
-
-                    // Divider
-                    Row(
-                      children: [
-                        const Expanded(child: Divider()),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: Grid.twelve,
-                          ),
-                          child: Text(
-                            'or paste pairing code',
-                            style: context.textTheme.bodySmall?.copyWith(
-                              color: context.colors.onSurfaceVariant,
-                            ),
-                          ),
+                      const SizedBox(height: Grid.xs),
+                      Text(
+                        'Welcome to Sprout',
+                        style: context.textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: Grid.xxs),
+                      Text(
+                        'Scan the QR code from your desktop app\nor paste a pairing code to connect.',
+                        textAlign: TextAlign.center,
+                        style: context.textTheme.bodyMedium?.copyWith(
+                          color: context.colors.onSurfaceVariant,
                         ),
-                        const Expanded(child: Divider()),
-                      ],
-                    ),
-
-                    const SizedBox(height: Grid.sm),
-
-                    // Paste field
-                    TextField(
-                      controller: codeController,
-                      decoration: const InputDecoration(
-                        hintText: 'nostrpair://... or sprout://...',
-                        prefixIcon: Icon(LucideIcons.link),
-                        isDense: true,
                       ),
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      enabled: !isBusy,
-                      contextMenuBuilder: (context, editableTextState) {
-                        return AdaptiveTextSelectionToolbar.editableText(
-                          editableTextState: editableTextState,
-                        );
-                      },
-                    ),
 
-                    const SizedBox(height: Grid.twelve),
+                      const SizedBox(height: Grid.lg),
 
-                    // Connect button
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton(
+                      // Scan QR button
+                      FilledButton.icon(
                         onPressed: isBusy
                             ? null
-                            : () {
-                                final code = codeController.text.trim();
-                                if (code.isNotEmpty) {
-                                  ref.read(pairingProvider.notifier).pair(code);
-                                }
-                              },
-                        child: isBusy
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Text('Connect'),
+                            : () => _openScanner(context, ref),
+                        icon: const Icon(LucideIcons.scanLine),
+                        label: const Text('Scan QR Code'),
                       ),
-                    ),
 
-                    // Error message
-                    if (pairingState.status == PairingStatus.error &&
-                        pairingState.errorMessage != null) ...[
-                      const SizedBox(height: Grid.twelve),
-                      Container(
-                        padding: const EdgeInsets.all(Grid.twelve),
-                        decoration: BoxDecoration(
-                          color: context.colors.errorContainer,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              LucideIcons.triangleAlert,
-                              size: 16,
-                              color: context.colors.onErrorContainer,
+                      const SizedBox(height: Grid.sm),
+
+                      // Divider
+                      Row(
+                        children: [
+                          const Expanded(child: Divider()),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: Grid.twelve,
                             ),
-                            const SizedBox(width: Grid.xxs),
-                            Expanded(
-                              child: Text(
-                                pairingState.errorMessage!,
-                                style: context.textTheme.bodySmall?.copyWith(
-                                  color: context.colors.onErrorContainer,
-                                ),
+                            child: Text(
+                              'or paste pairing code',
+                              style: context.textTheme.bodySmall?.copyWith(
+                                color: context.colors.onSurfaceVariant,
                               ),
                             ),
-                          ],
+                          ),
+                          const Expanded(child: Divider()),
+                        ],
+                      ),
+
+                      const SizedBox(height: Grid.sm),
+
+                      // Paste field
+                      TextField(
+                        controller: codeController,
+                        decoration: const InputDecoration(
+                          hintText: 'nostrpair://... or sprout://...',
+                          prefixIcon: Icon(LucideIcons.link),
+                          isDense: true,
+                        ),
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        enabled: !isBusy,
+                        contextMenuBuilder: (context, editableTextState) {
+                          return AdaptiveTextSelectionToolbar.editableText(
+                            editableTextState: editableTextState,
+                          );
+                        },
+                      ),
+
+                      const SizedBox(height: Grid.twelve),
+
+                      // Connect button
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton(
+                          onPressed: isBusy
+                              ? null
+                              : () {
+                                  final code = codeController.text.trim();
+                                  if (code.isNotEmpty) {
+                                    ref
+                                        .read(pairingProvider.notifier)
+                                        .pair(code);
+                                  }
+                                },
+                          child: isBusy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Connect'),
                         ),
                       ),
-                    ],
 
-                    const Spacer(flex: 3),
-                  ],
-                ),
+                      // Error message
+                      if (pairingState.status == PairingStatus.error &&
+                          pairingState.errorMessage != null) ...[
+                        const SizedBox(height: Grid.twelve),
+                        Container(
+                          padding: const EdgeInsets.all(Grid.twelve),
+                          decoration: BoxDecoration(
+                            color: context.colors.errorContainer,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                LucideIcons.triangleAlert,
+                                size: 16,
+                                color: context.colors.onErrorContainer,
+                              ),
+                              const SizedBox(width: Grid.xxs),
+                              Expanded(
+                                child: Text(
+                                  pairingState.errorMessage!,
+                                  style: context.textTheme.bodySmall?.copyWith(
+                                    color: context.colors.onErrorContainer,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                      const Spacer(flex: 3),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
