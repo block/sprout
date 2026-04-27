@@ -317,6 +317,15 @@ export function useFeedDesktopNotifications(
     }
 
     const currentFeedItems = collectHomeAlertItems(feed);
+
+    // Guard: empty seen set + populated feed means first load or cleared
+    // storage. Seed the seen set without notifying to prevent a flood.
+    if (seenItemIdsRef.current.size === 0 && currentFeedItems.length > 0) {
+      seenItemIdsRef.current = new Set(currentFeedItems.map((item) => item.id));
+      writeStoredSeenFeedIds(normalizedPubkey, [...seenItemIdsRef.current]);
+      return;
+    }
+
     const nextSeenItemIds = new Set(seenItemIdsRef.current);
     const newItems = settings.desktopEnabled
       ? eligibleFeedNotificationItems(feed, {

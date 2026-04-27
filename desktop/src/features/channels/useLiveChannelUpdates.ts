@@ -75,12 +75,12 @@ export function useLiveChannelUpdates(
     [channels],
   );
   const seenDmEventIdsRef = React.useRef(new Set<string>());
-  const dmWarmupDoneRef = React.useRef(false);
+  const subscriptionStartedAtRef = React.useRef(Math.floor(Date.now() / 1000));
 
-  // Reset warmup flag when identity changes.
+  // Reset subscription timestamp when identity changes.
   React.useEffect(() => {
     void normalizedCurrentPubkey;
-    dmWarmupDoneRef.current = false;
+    subscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
   }, [normalizedCurrentPubkey]);
 
   // Effect deps use primitive keys so refetches that produce new refs with
@@ -93,7 +93,9 @@ export function useLiveChannelUpdates(
   );
 
   const handleDmEvent = React.useEffectEvent((event: RelayEvent) => {
-    if (!dmWarmupDoneRef.current) {
+    // Suppress backlog events that predate our subscription — these are
+    // historical replays, not live messages.
+    if (event.created_at < subscriptionStartedAtRef.current) {
       return;
     }
 
@@ -174,12 +176,9 @@ export function useLiveChannelUpdates(
     return relayClient.subscribeToReconnects(() => {
       void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
 
-      // Re-arm the DM warmup guard so the reconnect replay backlog
-      // doesn't trigger stale DM notifications.
-      dmWarmupDoneRef.current = false;
-      setTimeout(() => {
-        dmWarmupDoneRef.current = true;
-      }, 500);
+      // Update the subscription timestamp so replayed backlog events
+      // (which have created_at in the past) are naturally suppressed.
+      subscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
     });
   }, [queryClient]);
 
@@ -190,9 +189,10 @@ export function useLiveChannelUpdates(
 
     let isDisposed = false;
     let cleanup: (() => Promise<void>) | undefined;
-    let warmupTimer: ReturnType<typeof setTimeout> | undefined;
 
-    dmWarmupDoneRef.current = false;
+    // Record the subscription start time so handleDmEvent can distinguish
+    // backlog replays (created_at < startedAt) from live messages.
+    subscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
 
     relayClient
       .subscribeToAllStreamMessages((event) => {
@@ -207,12 +207,6 @@ export function useLiveChannelUpdates(
         }
 
         cleanup = dispose;
-
-        // Allow 500ms for the relay to replay backlog before delivering
-        // DM notifications, so historical messages don't trigger alerts.
-        warmupTimer = setTimeout(() => {
-          dmWarmupDoneRef.current = true;
-        }, 500);
       })
       .catch((error) => {
         console.error("Failed to subscribe to unread channel updates", error);
@@ -220,9 +214,6 @@ export function useLiveChannelUpdates(
 
     return () => {
       isDisposed = true;
-      if (warmupTimer !== undefined) {
-        clearTimeout(warmupTimer);
-      }
       if (cleanup) {
         void cleanup();
       }
