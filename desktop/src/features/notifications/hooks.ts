@@ -339,9 +339,8 @@ export function useFeedDesktopNotifications(
     }
 
     // Prevent unbounded growth — keep only the most recent entries.
-    const MAX_SEEN_FEED_ITEMS = 500;
-    if (nextSeenItemIds.size > MAX_SEEN_FEED_ITEMS) {
-      const excess = nextSeenItemIds.size - MAX_SEEN_FEED_ITEMS;
+    if (nextSeenItemIds.size > HOME_FEED_SEEN_MAX_ITEMS) {
+      const excess = nextSeenItemIds.size - HOME_FEED_SEEN_MAX_ITEMS;
       let removed = 0;
       for (const id of nextSeenItemIds) {
         if (removed >= excess) break;

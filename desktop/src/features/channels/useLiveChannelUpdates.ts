@@ -28,19 +28,16 @@ function isExternalMentionEvent(event: RelayEvent, currentPubkey: string) {
   );
 }
 
-function rememberMentionEvent(
-  seenMentionEventIds: Set<string>,
-  eventId: string,
-): boolean {
-  if (seenMentionEventIds.has(eventId)) {
+function trackSeenEvent(seenEventIds: Set<string>, eventId: string): boolean {
+  if (seenEventIds.has(eventId)) {
     return false;
   }
 
-  seenMentionEventIds.add(eventId);
-  if (seenMentionEventIds.size > 200) {
-    const oldestEventId = seenMentionEventIds.values().next().value;
+  seenEventIds.add(eventId);
+  if (seenEventIds.size > 200) {
+    const oldestEventId = seenEventIds.values().next().value;
     if (oldestEventId) {
-      seenMentionEventIds.delete(oldestEventId);
+      seenEventIds.delete(oldestEventId);
     }
   }
 
@@ -75,12 +72,12 @@ export function useLiveChannelUpdates(
     [channels],
   );
   const seenDmEventIdsRef = React.useRef(new Set<string>());
-  const subscriptionStartedAtRef = React.useRef(Math.floor(Date.now() / 1000));
+  const dmSubscriptionStartedAtRef = React.useRef(0);
 
   // Reset subscription timestamp when identity changes.
   React.useEffect(() => {
     void normalizedCurrentPubkey;
-    subscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
+    dmSubscriptionStartedAtRef.current = 0;
   }, [normalizedCurrentPubkey]);
 
   // Effect deps use primitive keys so refetches that produce new refs with
@@ -95,7 +92,7 @@ export function useLiveChannelUpdates(
   const handleDmEvent = React.useEffectEvent((event: RelayEvent) => {
     // Suppress backlog events that predate our subscription — these are
     // historical replays, not live messages.
-    if (event.created_at < subscriptionStartedAtRef.current) {
+    if (event.created_at < dmSubscriptionStartedAtRef.current) {
       return;
     }
 
@@ -113,7 +110,7 @@ export function useLiveChannelUpdates(
       return;
     }
 
-    if (!rememberMentionEvent(seenDmEventIdsRef.current, event.id)) {
+    if (!trackSeenEvent(seenDmEventIdsRef.current, event.id)) {
       return;
     }
 
@@ -165,7 +162,7 @@ export function useLiveChannelUpdates(
       return;
     }
 
-    if (!rememberMentionEvent(seenMentionEventIdsRef.current, event.id)) {
+    if (!trackSeenEvent(seenMentionEventIdsRef.current, event.id)) {
       return;
     }
 
@@ -178,7 +175,7 @@ export function useLiveChannelUpdates(
 
       // Update the subscription timestamp so replayed backlog events
       // (which have created_at in the past) are naturally suppressed.
-      subscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
+      dmSubscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
     });
   }, [queryClient]);
 
@@ -192,7 +189,7 @@ export function useLiveChannelUpdates(
 
     // Record the subscription start time so handleDmEvent can distinguish
     // backlog replays (created_at < startedAt) from live messages.
-    subscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
+    dmSubscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
 
     relayClient
       .subscribeToAllStreamMessages((event) => {
