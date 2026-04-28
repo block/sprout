@@ -26,7 +26,9 @@ import 'manage_channel_sheet.dart';
 import 'members_sheet.dart';
 import 'message_actions.dart';
 import 'message_content.dart';
+import 'reaction_row.dart';
 import 'send_message_provider.dart';
+import 'small_avatar.dart';
 import 'thread_detail_page.dart';
 import 'timeline_message.dart';
 
@@ -432,7 +434,7 @@ class _SystemMessageRow extends ConsumerWidget {
       final profile =
           userCache[pubkey.toLowerCase()] ??
           ref.read(userCacheProvider.notifier).get(pubkey.toLowerCase());
-      return profile?.label ?? _shortPubkey(pubkey);
+      return profile?.label ?? shortPubkey(pubkey);
     }
 
     final description = systemEvent.describe(resolveLabel);
@@ -464,7 +466,7 @@ class _SystemMessageRow extends ConsumerWidget {
             ),
           ),
           Text(
-            _formatTime(message.createdAt),
+            formatMessageTime(message.createdAt),
             style: context.textTheme.labelSmall?.copyWith(
               color: context.colors.outline,
             ),
@@ -535,7 +537,7 @@ class _ThreadSummaryRow extends ConsumerWidget {
                   for (var i = 0; i < summary.participantPubkeys.length; i++)
                     Positioned(
                       left: i * 12.0,
-                      child: _SmallAvatar(
+                      child: SmallAvatar(
                         pubkey: summary.participantPubkeys[i],
                         userCache: userCache,
                       ),
@@ -559,45 +561,6 @@ class _ThreadSummaryRow extends ConsumerWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SmallAvatar extends StatelessWidget {
-  final String pubkey;
-  final Map<String, UserProfile> userCache;
-
-  const _SmallAvatar({required this.pubkey, required this.userCache});
-
-  @override
-  Widget build(BuildContext context) {
-    final profile = userCache[pubkey.toLowerCase()];
-    final avatarUrl = profile?.avatarUrl;
-    final initial =
-        profile?.initial ?? (pubkey.isNotEmpty ? pubkey[0].toUpperCase() : '?');
-
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: context.colors.surface, width: 1.5),
-      ),
-      child: CircleAvatar(
-        radius: 9,
-        backgroundColor: context.colors.primaryContainer,
-        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-        child: avatarUrl == null
-            ? Text(
-                initial,
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w600,
-                  color: context.colors.onPrimaryContainer,
-                ),
-              )
-            : null,
       ),
     );
   }
@@ -635,7 +598,7 @@ class _MessageBubble extends ConsumerWidget {
     final profile =
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
-    final displayName = profile?.label ?? _shortPubkey(message.pubkey);
+    final displayName = profile?.label ?? shortPubkey(message.pubkey);
 
     // Build mention names map from event p-tags.
     final userCache = ref.watch(userCacheProvider);
@@ -689,7 +652,7 @@ class _MessageBubble extends ConsumerWidget {
                           ),
                           const SizedBox(width: Grid.xxs),
                           Text(
-                            _formatTime(message.createdAt),
+                            formatMessageTime(message.createdAt),
                             style: context.textTheme.labelSmall?.copyWith(
                               color: context.colors.outline,
                             ),
@@ -735,7 +698,7 @@ class _MessageBubble extends ConsumerWidget {
                     },
                   ),
                   if (message.reactions.isNotEmpty)
-                    _ReactionRow(
+                    ReactionRow(
                       reactions: message.reactions,
                       onToggle: (emoji) {
                         final actions = ref.read(channelActionsProvider);
@@ -788,69 +751,6 @@ class _UserAvatar extends StatelessWidget {
               ),
             )
           : null,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Reaction pills row
-// ---------------------------------------------------------------------------
-
-class _ReactionRow extends StatelessWidget {
-  final List<TimelineReaction> reactions;
-  final void Function(String emoji) onToggle;
-
-  const _ReactionRow({required this.reactions, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: Grid.half),
-      child: Wrap(
-        spacing: Grid.half,
-        runSpacing: Grid.half,
-        children: [
-          for (final reaction in reactions)
-            GestureDetector(
-              onTap: () => onToggle(reaction.emoji),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Grid.xxs,
-                  vertical: Grid.quarter,
-                ),
-                decoration: BoxDecoration(
-                  color: reaction.reactedByCurrentUser
-                      ? context.colors.primary.withValues(alpha: 0.12)
-                      : context.colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  border: Border.all(
-                    color: reaction.reactedByCurrentUser
-                        ? context.colors.primary.withValues(alpha: 0.4)
-                        : context.colors.outlineVariant,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(reaction.emoji, style: const TextStyle(fontSize: 14)),
-                    if (reaction.count > 1) ...[
-                      const SizedBox(width: Grid.quarter),
-                      Text(
-                        '${reaction.count}',
-                        style: context.textTheme.labelSmall?.copyWith(
-                          color: reaction.reactedByCurrentUser
-                              ? context.colors.primary
-                              : context.colors.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 }
@@ -961,7 +861,7 @@ class _TypingIndicator extends ConsumerWidget {
       final profile =
           userCache[e.pubkey.toLowerCase()] ??
           ref.read(userCacheProvider.notifier).get(e.pubkey.toLowerCase());
-      return profile?.label ?? _shortPubkey(e.pubkey);
+      return profile?.label ?? shortPubkey(e.pubkey);
     }).toList();
     final text = switch (names.length) {
       1 => '${names[0]} is typing…',
@@ -985,33 +885,6 @@ class _TypingIndicator extends ConsumerWidget {
     );
   }
 }
-
-// ---------------------------------------------------------------------------
-// Compose bar
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-String _shortPubkey(String pubkey) {
-  if (pubkey.length > 12) return '${pubkey.substring(0, 8)}…';
-  return pubkey;
-}
-
-String _formatTime(int createdAt) {
-  final dt = DateTime.fromMillisecondsSinceEpoch(
-    createdAt * 1000,
-    isUtc: true,
-  ).toLocal();
-  final now = DateTime.now();
-  final diff = now.difference(dt);
-
-  if (diff.inDays > 0) {
-    return '${dt.month}/${dt.day} ${_pad(dt.hour)}:${_pad(dt.minute)}';
-  }
-  return '${_pad(dt.hour)}:${_pad(dt.minute)}';
-}
-
-String _pad(int n) => n.toString().padLeft(2, '0');
 
 class _DmAppBarTitle extends ConsumerWidget {
   final Channel channel;
