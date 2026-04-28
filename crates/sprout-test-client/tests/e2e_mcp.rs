@@ -336,8 +336,8 @@ async fn test_mcp_initialize_and_list_tools() {
 
     assert_eq!(
         tools.len(),
-        44,
-        "expected exactly 44 tools, got {}. Tools: {:?}",
+        49,
+        "expected exactly 49 tools, got {}. Tools: {:?}",
         tools.len(),
         tools
             .iter()

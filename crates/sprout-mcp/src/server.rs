@@ -1001,7 +1001,7 @@ Default kind is 9 (stream message)."
             }
         };
 
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign message event: {e}"),
         };
@@ -1115,7 +1115,7 @@ The diff is rendered with GitHub-quality visualization in the desktop client."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign diff event: {e}"),
         };
@@ -1166,7 +1166,7 @@ The diff is rendered with GitHub-quality visualization in the desktop client."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign edit event: {e}"),
         };
@@ -1233,7 +1233,7 @@ The diff is rendered with GitHub-quality visualization in the desktop client."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign delete event: {e}"),
         };
@@ -1349,7 +1349,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign create_channel event: {e}"),
         };
@@ -1407,7 +1407,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign set_canvas event: {e}"),
         };
@@ -1643,7 +1643,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign add_member event: {e}"),
         };
@@ -1678,7 +1678,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign remove_member event: {e}"),
         };
@@ -1732,7 +1732,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign join event: {e}"),
         };
@@ -1764,7 +1764,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign leave event: {e}"),
         };
@@ -1821,7 +1821,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign update_channel event: {e}"),
         };
@@ -1856,7 +1856,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign set_topic event: {e}"),
         };
@@ -1891,7 +1891,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign set_purpose event: {e}"),
         };
@@ -1923,7 +1923,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign archive event: {e}"),
         };
@@ -1958,7 +1958,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign unarchive event: {e}"),
         };
@@ -2117,7 +2117,7 @@ with kind:45003 comments)."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign reaction event: {e}"),
         };
@@ -2140,7 +2140,7 @@ with kind:45003 comments)."
     pub async fn remove_reaction(&self, Parameters(p): Parameters<RemoveReactionParams>) -> String {
         // Fetch the reactions list to find the current user's reaction event ID for this emoji.
         let encoded_event_id = percent_encode(&p.event_id);
-        let my_pubkey = self.client.keys().public_key().to_hex();
+        let my_pubkey = self.client.pubkey_hex();
         let reactions_resp = match self
             .client
             .get(&format!("/api/messages/{}/reactions", encoded_event_id))
@@ -2186,7 +2186,7 @@ with kind:45003 comments)."
                     Ok(b) => b,
                     Err(e) => return format!("Error: {e}"),
                 };
-                let event = match builder.sign_with_keys(self.client.keys()) {
+                let event = match self.client.sign_event(builder) {
                     Ok(e) => e,
                     Err(e) => return format!("Error: failed to sign remove_reaction event: {e}"),
                 };
@@ -2262,7 +2262,7 @@ with kind:45003 comments)."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign profile event: {e}"),
         };
@@ -2415,7 +2415,7 @@ with kind:45003 comments)."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign vote event: {e}"),
         };
@@ -2447,7 +2447,7 @@ with kind:45003 comments)."
             Ok(b) => b,
             Err(e) => return format!("Error: {e}"),
         };
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign delete_channel event: {e}"),
         };
@@ -2490,7 +2490,7 @@ with kind:45003 comments)."
             Err(e) => return format!("Error: {e}"),
         };
 
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign event: {e}"),
         };
@@ -2532,7 +2532,7 @@ with kind:45003 comments)."
             Err(e) => return format!("Error: {e}"),
         };
 
-        let event = match builder.sign_with_keys(self.client.keys()) {
+        let event = match self.client.sign_event(builder) {
             Ok(e) => e,
             Err(e) => return format!("Error: failed to sign event: {e}"),
         };

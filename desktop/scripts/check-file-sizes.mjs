@@ -44,7 +44,7 @@ const overrides = new Map([
   ["src/shared/api/tauri.ts", 1100], // remote agent provider API bindings + canvas API functions
   ["src-tauri/src/lib.rs", 710], // sprout-media:// proxy + Range headers + Sprout nest init (ensure_nest) in setup() + huddle command registration + PTT global shortcut handler + persona pack commands + app_handle storage for event emission
   ["src-tauri/src/commands/media.rs", 720], // ffmpeg video transcode + poster frame extraction + run_ffmpeg_with_timeout (find_ffmpeg, is_video_file, transcode_to_mp4, extract_poster_frame, transcode_and_extract_poster) + spawn_blocking wrappers + tests
-  ["src-tauri/src/commands/agents.rs", 880], // remote agent lifecycle routing (local + provider branches) + scope enforcement + persona pack metadata wiring + mcp_toolsets field
+  ["src-tauri/src/commands/agents.rs", 881], // remote agent lifecycle routing (local + provider branches) + scope enforcement + persona pack metadata wiring + mcp_toolsets field + NIP-OA auth_tag in deploy payload
   ["src-tauri/src/managed_agents/runtime.rs", 700], // KNOWN_AGENT_BINARIES const + process_belongs_to_us FFI (macOS proc_name + Linux /proc/comm) + terminate_process + start/stop/sync lifecycle + pack persona live-read + login shell PATH augmentation
   ["src-tauri/src/managed_agents/backend.rs", 530], // provider IPC, validation, discovery, binary resolution + tests
   ["src/features/huddle/HuddleContext.tsx", 650], // huddle lifecycle context + joinHuddle + connectAndSetupMedia shared helper + activeSpeakers/isReconnecting state + PTT (reusable AudioContext) + TTS subscription + mic level analyser (10fps throttle) + agent pubkey refresh
@@ -65,6 +65,7 @@ const overrides = new Map([
   ["src-tauri/src/huddle/preprocessing.rs", 670], // TTS text preprocessing pipeline + unified split_sentences + int_to_words 0-999999 + URL trailing punctuation preservation + 23 unit tests
   ["src-tauri/src/huddle/relay_api.rs", 510], // audio relay recv task + per-peer frame counting for remote human TTS interrupt
   ["src-tauri/src/huddle/tts.rs", 1030], // TTS pipeline + session warmup + cancel/shutdown handling + apply_fades + 18 unit tests for remote interrupt mechanism
+  ["src-tauri/src/relay.rs", 510], // +4 lines for NIP-OA auth tag injection in profile sync (build_profile_event) + verification test
   ["src-tauri/src/commands/pairing.rs", 550], // NIP-AB pairing actor: 3 Tauri commands + background WS task + NIP-42 auth + event parsing helpers
   ["src-tauri/src/lib.rs", 715], // +4 lines for PairingHandle managed state + 3 pairing command registrations
   ["src/shared/api/tauri.ts", 1125], // +14 lines for 3 NIP-AB pairing command wrappers + applyWorkspace
