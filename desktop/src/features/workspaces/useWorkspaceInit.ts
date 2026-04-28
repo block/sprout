@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
 import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
@@ -7,6 +8,23 @@ import {
   loadWorkspaces,
   saveActiveWorkspaceId,
 } from "./workspaceStorage";
+
+/**
+ * Wait for the media proxy port to become available so images work on
+ * first render after a workspace switch.
+ */
+async function waitForMediaProxy(timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const port = await invoke<number>("get_media_proxy_port");
+      if (port > 0) return;
+    } catch {
+      // Tauri IPC not ready yet — keep trying
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
 
 type WorkspaceInitResult =
   | { isReady: true; needsSetup: false }
@@ -76,6 +94,10 @@ export function useWorkspaceInit(): WorkspaceInitResult {
       } catch (error) {
         console.error("Failed to apply workspace to backend:", error);
       }
+
+      // Ensure the media proxy is ready before rendering so images work
+      // immediately after a workspace switch (avoids broken image placeholders).
+      await waitForMediaProxy();
 
       if (!cancelled) {
         setResult({ isReady: true, needsSetup: false });

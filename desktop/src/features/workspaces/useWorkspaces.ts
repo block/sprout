@@ -21,6 +21,8 @@ export type UseWorkspacesReturn = {
   ) => void;
 };
 
+const WORKSPACE_SWITCHING_KEY = "sprout.desktop.workspace-switching";
+
 export function useWorkspaces(): UseWorkspacesReturn {
   const [workspaces, setWorkspacesState] =
     useState<Workspace[]>(loadWorkspaces);
@@ -78,6 +80,7 @@ export function useWorkspaces(): UseWorkspacesReturn {
         if (activeId === id && next.length > 0) {
           setActiveId(next[0].id);
           saveActiveWorkspaceId(next[0].id);
+          sessionStorage.setItem(WORKSPACE_SWITCHING_KEY, "1");
           window.location.reload();
         }
 
@@ -93,6 +96,7 @@ export function useWorkspaces(): UseWorkspacesReturn {
         return;
       }
       saveActiveWorkspaceId(id);
+      sessionStorage.setItem(WORKSPACE_SWITCHING_KEY, "1");
       window.location.reload();
     },
     [activeId],
@@ -120,6 +124,7 @@ export function useWorkspaces(): UseWorkspacesReturn {
         id === activeId &&
         (updates.relayUrl || updates.token !== undefined)
       ) {
+        sessionStorage.setItem(WORKSPACE_SWITCHING_KEY, "1");
         window.location.reload();
       }
     },

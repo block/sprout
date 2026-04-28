@@ -8,7 +8,31 @@ import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
 import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
 
+const WORKSPACE_SWITCHING_KEY = "sprout.desktop.workspace-switching";
+
+function isWorkspaceSwitching(): boolean {
+  try {
+    return sessionStorage.getItem(WORKSPACE_SWITCHING_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function clearWorkspaceSwitching(): void {
+  try {
+    sessionStorage.removeItem(WORKSPACE_SWITCHING_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 function AppLoadingGate() {
+  // When switching workspaces, show a minimal screen that matches the app
+  // background to avoid a jarring white/light flash.
+  if (isWorkspaceSwitching()) {
+    return <div className="min-h-dvh bg-background" />;
+  }
+
   return (
     <div className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_48%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] px-4 py-8">
       <div className="w-full max-w-sm rounded-[28px] border border-border/70 bg-background/92 p-8 shadow-2xl backdrop-blur">
@@ -27,6 +51,7 @@ function AppLoadingGate() {
 }
 
 function AppReady() {
+  clearWorkspaceSwitching();
   const onboarding = useAppOnboardingState();
 
   if (onboarding.stage === "onboarding") {
