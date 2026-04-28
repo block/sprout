@@ -171,7 +171,7 @@ export function EditWorkspaceDialog({
               <Button onClick={handleClose} type="button" variant="outline">
                 Cancel
               </Button>
-              <Button disabled={!relayUrl.trim()} type="submit">
+              <Button disabled={!name.trim() || !relayUrl.trim()} type="submit">
                 Save Changes
               </Button>
             </div>

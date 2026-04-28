@@ -104,12 +104,22 @@ export function useWorkspaces(): UseWorkspacesReturn {
       updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
     ) => {
       setWorkspacesState((prev) => {
+        // Prevent duplicate relay URLs across workspaces
+        if (
+          updates.relayUrl &&
+          prev.some((w) => w.id !== id && w.relayUrl === updates.relayUrl)
+        ) {
+          return prev;
+        }
         const next = prev.map((w) => (w.id === id ? { ...w, ...updates } : w));
         saveWorkspaces(next);
         return next;
       });
-      // If the active workspace's relay URL changed, reload to reconnect
-      if (id === activeId && updates.relayUrl) {
+      // If the active workspace's relay URL or token changed, reload to reconnect
+      if (
+        id === activeId &&
+        (updates.relayUrl || updates.token !== undefined)
+      ) {
         window.location.reload();
       }
     },

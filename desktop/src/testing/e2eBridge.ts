@@ -4350,6 +4350,8 @@ export function maybeInstallE2eTauriMocks() {
         return DEFAULT_MOCK_IDENTITY;
       case "get_nsec":
         return "nsec1mock000000000000000000000000000000000000000000000000000000";
+      case "apply_workspace":
+        return;
       case "get_profile":
         return handleGetProfile(activeConfig);
       case "update_profile":

@@ -84,6 +84,7 @@ type BridgeOptions = {
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX =
   "sprout-onboarding-complete.v1:";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
+const DEFAULT_RELAY_WS_URL = "ws://localhost:3000";
 
 async function seedOnboardingCompletionForKnownIdentities(page: Page) {
   const pubkeys = [
@@ -100,6 +101,26 @@ async function seedOnboardingCompletionForKnownIdentities(page: Page) {
   );
 }
 
+async function seedDefaultWorkspace(page: Page, relayWsUrl?: string) {
+  await page.addInitScript(
+    ({ relayUrl }) => {
+      const workspaceId = "e2e-default-workspace";
+      const workspace = {
+        id: workspaceId,
+        name: "E2E Test",
+        relayUrl,
+        addedAt: new Date().toISOString(),
+      };
+      window.localStorage.setItem(
+        "sprout-workspaces",
+        JSON.stringify([workspace]),
+      );
+      window.localStorage.setItem("sprout-active-workspace-id", workspaceId);
+    },
+    { relayUrl: relayWsUrl ?? DEFAULT_RELAY_WS_URL },
+  );
+}
+
 export async function installBridge(page: Page, options: BridgeOptions) {
   const identity =
     options.mode === "relay"
@@ -108,6 +129,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
 
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page);
+    await seedDefaultWorkspace(page, options.relayWsUrl);
   }
 
   await page.addInitScript(
