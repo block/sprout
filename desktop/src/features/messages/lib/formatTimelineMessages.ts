@@ -234,7 +234,11 @@ export function formatTimelineMessages(
       profile?.displayName?.trim() ||
       profile?.nip05Handle?.trim() ||
       `${actorPubkey.slice(0, 8)}…`;
-    existing.users.push({ pubkey: actorPubkey, displayName });
+    existing.users.push({
+      pubkey: actorPubkey,
+      displayName,
+      avatarUrl: profile?.avatarUrl ?? null,
+    });
 
     current.set(emoji, existing);
     reactionsByEventId.set(targetId, current);
