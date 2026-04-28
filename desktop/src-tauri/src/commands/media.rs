@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::app_state::AppState;
-use crate::relay::relay_api_base_url;
+use crate::relay::relay_api_base_url_with_override;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobDescriptor {
@@ -123,6 +123,7 @@ fn sign_blossom_upload_auth(
     keys: &Keys,
     sha256: &str,
     expiry_secs: u64,
+    base_url: &str,
 ) -> Result<nostr::Event, String> {
     let now = Timestamp::now().as_u64();
     let mut tags = vec![
@@ -131,7 +132,6 @@ fn sign_blossom_upload_auth(
         Tag::parse(vec!["expiration", &(now + expiry_secs).to_string()])
             .map_err(|e| e.to_string())?,
     ];
-    let base_url = relay_api_base_url();
     if let Some(domain) = extract_server_authority(&base_url) {
         tags.push(Tag::parse(vec!["server".to_string(), domain]).map_err(|e| e.to_string())?);
     }
@@ -161,17 +161,16 @@ async fn do_upload(
     } else {
         300
     };
+    let base_url = relay_api_base_url_with_override(state);
     let auth_event = {
         let keys = state.keys.lock().map_err(|e| e.to_string())?;
-        sign_blossom_upload_auth(&keys, &sha256, expiry_secs)?
+        sign_blossom_upload_auth(&keys, &sha256, expiry_secs, &base_url)?
     };
 
     let auth_header = format!(
         "Nostr {}",
         URL_SAFE_NO_PAD.encode(auth_event.as_json().as_bytes())
     );
-
-    let base_url = relay_api_base_url();
     let mut req = state
         .http_client
         .put(format!("{base_url}/media/upload"))

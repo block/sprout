@@ -528,6 +528,10 @@ export async function setPresence(
   };
 }
 
+export function getDefaultRelayUrl(): Promise<string> {
+  return invokeTauri<string>("get_default_relay_url");
+}
+
 export function getRelayWsUrl(): Promise<string> {
   return invokeTauri<string>("get_relay_ws_url");
 }
@@ -1105,4 +1109,16 @@ export async function confirmPairingSas(): Promise<void> {
 
 export async function cancelPairing(): Promise<void> {
   await invokeTauri("cancel_pairing");
+}
+
+export async function applyWorkspace(
+  relayUrl: string,
+  nsec?: string,
+  token?: string,
+): Promise<void> {
+  await invokeTauri("apply_workspace", {
+    relayUrl,
+    nsec: nsec ?? null,
+    token: token ?? null,
+  });
 }

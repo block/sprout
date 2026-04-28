@@ -30,19 +30,19 @@ export class RelayClient {
   private wsId: number | null = null;
   private relayUrl: string | null = null;
   private connectPromise: Promise<void> | null = null;
-  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimeout: number | null = null;
   private reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
   private keepAliveRequested = false;
   private authRequest: {
     pendingEventId: string;
     resolve: () => void;
     reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
+    timeout: number;
   } | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
   private eventBuffer: Array<{ subId: string; event: RelayEvent }> = [];
-  private flushTimeout: ReturnType<typeof setTimeout> | null = null;
+  private flushTimeout: number | null = null;
   private reconnectListeners = new Set<() => void>();
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;

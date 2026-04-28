@@ -11,7 +11,7 @@ use crate::{
         normalize_agent_args, resolve_command, save_managed_agents, sync_managed_agent_processes,
         AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest, UpdateManagedAgentResponse,
     },
-    relay::{relay_ws_url, sync_managed_agent_profile},
+    relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
 };
 
@@ -154,7 +154,7 @@ pub async fn update_managed_agent(
         if let Some(relay_url) = input.relay_url {
             let trimmed = relay_url.trim();
             record.relay_url = if trimmed.is_empty() {
-                relay_ws_url()
+                relay_ws_url_with_override(&state)
             } else {
                 trimmed.to_string()
             };
