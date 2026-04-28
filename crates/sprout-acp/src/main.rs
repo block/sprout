@@ -3,6 +3,7 @@
 mod acp;
 mod config;
 mod filter;
+mod observer;
 mod pool;
 mod queue;
 mod relay;
@@ -529,6 +530,36 @@ async fn tokio_main() -> Result<()> {
     let config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
     tracing::info!("sprout-acp starting: {}", config.summary());
 
+    let observer = match config.observer_addr.as_deref() {
+        Some(addr) => {
+            match observer::spawn_observer_server(addr, config.observer_token.clone()).await {
+                Ok(handle) => {
+                    tracing::info!(target: "observer", "ACP observer listening on http://{}", handle.addr());
+                    handle.emit(
+                        "harness_started",
+                        None,
+                        &observer::ObserverContext::default(),
+                        serde_json::json!({
+                            "relayUrl": config.relay_url,
+                            "agentCommand": config.agent_command,
+                            "agentArgs": config.agent_args,
+                            "parallelism": config.agents,
+                        }),
+                    );
+                    Some(handle)
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "observer",
+                        "failed to start local ACP observer at {addr}: {error}"
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     // ── Step 1: Spawn N ACP agent subprocesses and initialize ─────────────────
     //
     // Finding #10: one agent failing to start must not kill the whole pool.
@@ -549,9 +580,17 @@ async fn tokio_main() -> Result<()> {
         .await;
         match spawn_result {
             Ok(mut acp) => {
+                acp.set_observer(observer.clone(), i);
                 match tokio::time::timeout(Duration::from_secs(60), acp.initialize()).await {
                     Ok(Ok(init_result)) => {
                         tracing::info!(agent = i, "agent initialized: {init_result}");
+                        acp.observe(
+                            "agent_initialized",
+                            serde_json::json!({
+                                "agentIndex": i,
+                                "initializeResult": init_result,
+                            }),
+                        );
                         agent_slots.push(Some(OwnedAgent {
                             index: i,
                             acp,
@@ -918,9 +957,10 @@ async fn tokio_main() -> Result<()> {
                 let cmd = config.agent_command.clone();
                 let args = config.agent_args.clone();
                 let env = config.persona_env_vars.clone();
+                let observer = observer.clone();
                 let guard = RespawnGuard::new(idx, respawn_tx.clone());
                 respawn_tasks.spawn(async move {
-                    let result = spawn_and_init(&cmd, &args, &env).await;
+                    let result = spawn_and_init(&cmd, &args, &env, idx, observer).await;
                     guard.send(result);
                 });
             }
@@ -1379,6 +1419,7 @@ async fn tokio_main() -> Result<()> {
                     &mut crash_history,
                     &respawn_tx,
                     &mut respawn_tasks,
+                    observer.clone(),
                 ) == LoopAction::Exit
                 {
                     break;
@@ -1393,6 +1434,7 @@ async fn tokio_main() -> Result<()> {
                     &mut crash_history,
                     &respawn_tx,
                     &mut respawn_tasks,
+                    observer.clone(),
                 ) == LoopAction::Exit
                 {
                     break;
@@ -1414,6 +1456,7 @@ async fn tokio_main() -> Result<()> {
                     &mut crash_history,
                     &respawn_tx,
                     &mut respawn_tasks,
+                    observer.clone(),
                 );
                 if pool.live_count() == 0 && !any_respawn_in_flight(&crash_history) {
                     tracing::error!("all agents dead — exiting");
@@ -1643,6 +1686,7 @@ fn handle_prompt_result(
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
+    observer: Option<observer::ObserverHandle>,
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
@@ -1722,6 +1766,7 @@ fn handle_prompt_result(
                 slot_history,
                 respawn_tx,
                 respawn_tasks,
+                observer.clone(),
             ) {
                 // Circuit open — slot stays empty until maintenance refill.
                 if pool.live_count() == 0 && !any_respawn_in_flight(crash_history) {
@@ -1775,6 +1820,7 @@ fn handle_prompt_result(
                     slot_history,
                     respawn_tx,
                     respawn_tasks,
+                    observer,
                 ) && pool.live_count() == 0
                     && !any_respawn_in_flight(crash_history)
                 {
@@ -1808,6 +1854,7 @@ fn recover_panicked_agent(
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
+    observer: Option<observer::ObserverHandle>,
 ) {
     let task_id = join_error.id();
     let Some(meta) = pool.task_map_mut().remove(&task_id) else {
@@ -1874,7 +1921,7 @@ fn recover_panicked_agent(
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        let result = spawn_and_init(&cmd, &args, &env).await;
+        let result = spawn_and_init(&cmd, &args, &env, i, observer).await;
         guard.send(result);
     });
 }
@@ -1892,6 +1939,7 @@ fn drain_ready_join_results(
     crash_history: &mut [SlotCircuit],
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
+    observer: Option<observer::ObserverHandle>,
 ) -> LoopAction {
     while let Some(Some(join_result)) = pool.join_set.join_next().now_or_never() {
         if let Err(join_error) = join_result {
@@ -1907,6 +1955,7 @@ fn drain_ready_join_results(
                 crash_history,
                 respawn_tx,
                 respawn_tasks,
+                observer.clone(),
             );
             if pool.live_count() == 0 && !any_respawn_in_flight(crash_history) {
                 return LoopAction::Exit;
@@ -1991,6 +2040,7 @@ fn spawn_respawn_task(
     slot: &mut SlotCircuit,
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
+    observer: Option<observer::ObserverHandle>,
 ) -> bool {
     let index = old_agent.index;
 
@@ -2027,7 +2077,7 @@ fn spawn_respawn_task(
             tokio::time::sleep(delay).await;
         }
 
-        let result = spawn_and_init(&cmd, &args, &env).await;
+        let result = spawn_and_init(&cmd, &args, &env, index, observer).await;
         guard.send(result);
     });
 
@@ -2044,14 +2094,24 @@ async fn spawn_and_init(
     command: &str,
     args: &[String],
     extra_env: &[(String, String)],
+    agent_index: usize,
+    observer: Option<observer::ObserverHandle>,
 ) -> Result<AcpClient> {
     let mut acp = AcpClient::spawn(command, args, extra_env)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
+    acp.set_observer(observer, agent_index);
 
     match acp.initialize().await {
         Ok(init_result) => {
             tracing::info!("agent initialized: {init_result}");
+            acp.observe(
+                "agent_initialized",
+                serde_json::json!({
+                    "agentIndex": agent_index,
+                    "initializeResult": init_result,
+                }),
+            );
             Ok(acp)
         }
         Err(e) => {

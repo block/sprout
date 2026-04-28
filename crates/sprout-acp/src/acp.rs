@@ -13,6 +13,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
 
+use crate::observer::{ObserverContext, ObserverHandle};
+
 /// Maximum allowed size of a single NDJSON line from the agent's stdout.
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
@@ -137,6 +139,12 @@ pub struct AcpClient {
     /// Inherited by `cancel_with_cleanup` so the drain loop shares the same budget
     /// rather than starting a fresh timer (prevents double-jeopardy).
     current_hard_deadline: Option<tokio::time::Instant>,
+    /// Optional local observer feed used by the desktop app.
+    observer: Option<ObserverHandle>,
+    /// Pool slot index for this agent process.
+    observer_agent_index: Option<usize>,
+    /// Best-effort context attached to raw ACP wire events.
+    observer_context: ObserverContext,
 }
 
 impl AcpClient {
@@ -225,7 +233,33 @@ impl AcpClient {
             permission_responded: false,
             last_prompt_id: None,
             current_hard_deadline: None,
+            observer: None,
+            observer_agent_index: None,
+            observer_context: ObserverContext::default(),
         })
+    }
+
+    /// Attach a local observer feed to this ACP client.
+    pub fn set_observer(&mut self, observer: Option<ObserverHandle>, agent_index: usize) {
+        self.observer = observer;
+        self.observer_agent_index = Some(agent_index);
+    }
+
+    /// Update metadata that will be attached to subsequent raw wire events.
+    pub fn set_observer_context(&mut self, context: ObserverContext) {
+        self.observer_context = context;
+    }
+
+    /// Emit a semantic event to the local observer feed, if enabled.
+    pub fn observe(&self, kind: impl Into<String>, payload: serde_json::Value) {
+        if let Some(observer) = &self.observer {
+            observer.emit(
+                kind,
+                self.observer_agent_index,
+                &self.observer_context,
+                payload,
+            );
+        }
     }
 
     /// Send the `initialize` request and return the agent's response result value.
@@ -484,7 +518,9 @@ impl AcpClient {
         })
         .await
         .map_err(|_| AcpError::WriteTimeout(WRITE_TIMEOUT))?
-        .map_err(AcpError::Io)
+        .map_err(AcpError::Io)?;
+        self.observe("acp_write", value.clone());
+        Ok(())
     }
 
     /// Default timeout for non-prompt RPCs (initialize, session/new, etc.).
@@ -626,6 +662,13 @@ impl AcpClient {
             let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
                 Err(e) => {
+                    self.observe(
+                        "acp_parse_error",
+                        serde_json::json!({
+                            "line": trimmed,
+                            "error": e.to_string(),
+                        }),
+                    );
                     tracing::warn!(
                         target: "acp::wire",
                         "failed to parse line as JSON: {e} — skipping"
@@ -633,6 +676,7 @@ impl AcpClient {
                     continue;
                 }
             };
+            self.observe("acp_read", msg.clone());
 
             // Check if this is a response to our expected request (has matching id
             // AND no `method` field — a `method` field means it's an agent-initiated
@@ -729,6 +773,13 @@ impl AcpClient {
                     let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                         Ok(v) => v,
                         Err(e) => {
+                            self.observe(
+                                "acp_parse_error",
+                                serde_json::json!({
+                                    "line": trimmed,
+                                    "error": e.to_string(),
+                                }),
+                            );
                             tracing::warn!(
                                 target: "acp::wire",
                                 "failed to parse line as JSON: {e} — skipping"
@@ -736,6 +787,7 @@ impl AcpClient {
                             continue;
                         }
                     };
+                    self.observe("acp_read", msg.clone());
 
                     // Only reset the idle clock on lines that parse as valid JSON.
                     // Malformed lines (skipped above) don't count as real agent activity.

@@ -33,6 +33,7 @@ use crate::acp::{
     AcpError, McpServer, ModelSwitchMethod, StopReason,
 };
 use crate::config::{DedupMode, PermissionMode};
+use crate::observer;
 use crate::queue::{
     ContextMessage, ConversationContext, FlushBatch, PromptChannelInfo, PromptProfile,
     PromptProfileLookup,
@@ -605,6 +606,30 @@ pub async fn run_prompt_task(
         Some(b) => PromptSource::Channel(b.channel_id),
         None => PromptSource::Heartbeat,
     };
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let observer_channel_id = match &source {
+        PromptSource::Channel(channel_id) => Some(*channel_id),
+        PromptSource::Heartbeat => None,
+    };
+    agent.acp.set_observer_context(observer::context_for(
+        observer_channel_id,
+        None,
+        Some(turn_id.clone()),
+    ));
+    let triggering_event_ids: Vec<String> = batch
+        .as_ref()
+        .map(|b| b.events.iter().map(|be| be.event.id.to_hex()).collect())
+        .unwrap_or_default();
+    agent.acp.observe(
+        "turn_started",
+        serde_json::json!({
+            "source": match &source {
+                PromptSource::Channel(_) => "channel",
+                PromptSource::Heartbeat => "heartbeat",
+            },
+            "triggeringEventIds": triggering_event_ids,
+        }),
+    );
 
     // ── Reaction cleanup guard ────────────────────────────────────────────
     // Collects event IDs up front. On drop (any exit path — normal, early
@@ -690,6 +715,18 @@ pub async fn run_prompt_task(
             }
         }
     };
+    agent.acp.set_observer_context(observer::context_for(
+        observer_channel_id,
+        Some(session_id.clone()),
+        Some(turn_id.clone()),
+    ));
+    agent.acp.observe(
+        "session_resolved",
+        serde_json::json!({
+            "sessionId": session_id,
+            "isNewSession": is_new_session,
+        }),
+    );
 
     // ── Send initial_message on new channel sessions ──────────────────────
 
