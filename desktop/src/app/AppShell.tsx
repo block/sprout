@@ -207,7 +207,12 @@ export function AppShell() {
     [channels, selectedChannelId],
   );
 
-  const { markChannelRead, unreadChannelIds } = useUnreadChannels(
+  const {
+    markChannelRead,
+    unreadChannelIds,
+    syncEnabled: readStateSyncEnabled,
+    setSyncEnabled: setReadStateSyncEnabled,
+  } = useUnreadChannels(
     channels,
     activeChannel,
     // Wait for ChannelScreen to report the latest loaded message before
@@ -640,6 +645,8 @@ export function AppShell() {
                       onSetNeedsActionNotificationsEnabled={
                         notificationSettings.setNeedsActionEnabled
                       }
+                      readStateSyncEnabled={readStateSyncEnabled}
+                      onSetReadStateSyncEnabled={setReadStateSyncEnabled}
                       section={settingsSection}
                     />
                   </React.Suspense>

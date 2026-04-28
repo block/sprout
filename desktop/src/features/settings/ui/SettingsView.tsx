@@ -74,6 +74,8 @@ export function SettingsView({
   onSetHomeBadgeEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  readStateSyncEnabled,
+  onSetReadStateSyncEnabled,
   section,
 }: SettingsViewProps) {
   const [isLoaded, setIsLoaded] = React.useState(false);
@@ -192,6 +194,8 @@ export function SettingsView({
                 onSetHomeBadgeEnabled,
                 onSetMentionNotificationsEnabled,
                 onSetNeedsActionNotificationsEnabled,
+                readStateSyncEnabled,
+                onSetReadStateSyncEnabled,
               })}
             </div>
           </section>

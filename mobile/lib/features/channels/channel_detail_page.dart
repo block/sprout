@@ -19,6 +19,7 @@ import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
+import 'read_state_provider.dart';
 import 'compose_bar.dart';
 import 'date_formatters.dart';
 import 'day_divider.dart';
@@ -95,6 +96,20 @@ class ChannelDetailPage extends HookConsumerWidget {
       _preloadMembers(ref, channel.id);
       return null;
     }, [channel.id]);
+
+    // Mark channel as read when opened and when new messages arrive.
+    final lastMessageAt = resolvedChannel.lastMessageAt;
+    useEffect(() {
+      if (lastMessageAt != null) {
+        ref
+            .read(readStateSyncProvider.notifier)
+            .markContextRead(
+              channel.id,
+              lastMessageAt.millisecondsSinceEpoch ~/ 1000,
+            );
+      }
+      return null;
+    }, [channel.id, lastMessageAt]);
 
     return FrostedScaffold(
       appBar: FrostedAppBar(

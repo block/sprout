@@ -25,6 +25,9 @@ pub const KIND_FILE_METADATA: u32 = 1063;
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); author-owned, not channel-scoped.
 pub const KIND_LONG_FORM: u32 = 30023;
+/// NIP-78: Arbitrary custom app data (parameterized replaceable).
+/// Used by NIP-RS for cross-device read state sync.
+pub const KIND_READ_STATE: u32 = 30078;
 /// NIP-42 auth event — never stored (carries bearer tokens).
 pub const KIND_AUTH: u32 = 22242;
 
@@ -286,6 +289,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_LONG_FORM,
+    KIND_READ_STATE,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
     KIND_FORUM_COMMENT,

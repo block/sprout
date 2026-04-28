@@ -23,8 +23,7 @@ import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 
 const RECONNECT_BASE_DELAY_MS = 1_000,
   RECONNECT_MAX_DELAY_MS = 30_000;
-const RECONNECT_REPLAY_SKEW_SECS = 5,
-  EVENT_BATCH_MS = 16;
+const RECONNECT_REPLAY_SKEW_SECS = 5;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -41,8 +40,6 @@ export class RelayClient {
   } | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
-  private eventBuffer: Array<{ subId: string; event: RelayEvent }> = [];
-  private flushTimeout: number | null = null;
   private reconnectListeners = new Set<() => void>();
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
@@ -94,11 +91,6 @@ export class RelayClient {
       this.pendingEvents.delete(eventId);
     }
 
-    if (this.flushTimeout !== null) {
-      window.clearTimeout(this.flushTimeout);
-      this.flushTimeout = null;
-    }
-    this.eventBuffer = [];
     this.reconnectListeners.clear();
     this.onMessageChannel = null;
     this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
@@ -289,6 +281,55 @@ export class RelayClient {
     return this.subscribe(
       this.buildChannelMentionFilter(channelId, pubkey, 50),
       onEvent,
+    );
+  }
+
+  async fetchReadStateEvents(
+    userPubkey: string,
+    since: number,
+  ): Promise<RelayEvent[]> {
+    return this.fetchHistory({
+      kinds: [30078],
+      authors: [userPubkey],
+      "#t": ["read-state"],
+      since,
+      limit: 100,
+    });
+  }
+
+  async fetchOwnReadStateBlob(
+    userPubkey: string,
+    slotId: string,
+  ): Promise<RelayEvent[]> {
+    return this.fetchHistory({
+      kinds: [30078],
+      authors: [userPubkey],
+      "#d": [`read-state:${slotId}`],
+      limit: 10,
+    });
+  }
+
+  async subscribeToReadState(
+    userPubkey: string,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(
+      {
+        kinds: [30078],
+        authors: [userPubkey],
+        "#t": ["read-state"],
+        limit: 100,
+      },
+      onEvent,
+    );
+  }
+
+  async publishReadStateEvent(event: RelayEvent): Promise<RelayEvent> {
+    await this.ensureConnected();
+    return this.publishEvent(
+      event,
+      "Timed out while publishing read state.",
+      "Failed to publish read state.",
     );
   }
 
@@ -661,25 +702,7 @@ export class RelayClient {
       event.created_at,
     );
 
-    this.eventBuffer.push({ subId, event });
-    this.flushTimeout ??= window.setTimeout(
-      () => this.flushEventBuffer(),
-      EVENT_BATCH_MS,
-    );
-  }
-
-  private flushEventBuffer() {
-    this.flushTimeout = null;
-    const buffer = this.eventBuffer;
-    this.eventBuffer = [];
-
-    // Re-lookup: subscriptions removed during batch window are intentionally skipped.
-    for (const { subId, event } of buffer) {
-      const subscription = this.subscriptions.get(subId);
-      if (subscription?.mode === "live") {
-        subscription.onEvent(event);
-      }
-    }
+    subscription.onEvent(event);
   }
 
   private handleEose(subId: string) {
@@ -834,9 +857,6 @@ export class RelayClient {
     },
   ) {
     this.onMessageChannel = null;
-    if (this.flushTimeout !== null) window.clearTimeout(this.flushTimeout);
-    this.flushTimeout = null;
-    this.eventBuffer = [];
 
     if (options?.reconnect !== false && this.hasConnectedOnce) {
       this.notifyReconnectListeners = true;

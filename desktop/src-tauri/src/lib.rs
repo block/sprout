@@ -372,6 +372,8 @@ pub fn run() {
             discover_acp_providers,
             discover_managed_agent_prereqs,
             sign_event,
+            nip44_encrypt_to_self,
+            nip44_decrypt_self,
             create_auth_event,
             get_channels,
             create_channel,

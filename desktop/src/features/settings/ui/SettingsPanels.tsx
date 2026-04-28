@@ -58,6 +58,8 @@ export type SettingsPanelProps = {
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  readStateSyncEnabled: boolean;
+  onSetReadStateSyncEnabled: (enabled: boolean) => void;
 };
 
 export const settingsSections: SettingsSectionDescriptor[] = [
@@ -246,6 +248,8 @@ export function renderSettingsSection(
           onSetNeedsActionNotificationsEnabled={
             props.onSetNeedsActionNotificationsEnabled
           }
+          readStateSyncEnabled={props.readStateSyncEnabled}
+          onSetReadStateSyncEnabled={props.onSetReadStateSyncEnabled}
         />
       );
     case "appearance":

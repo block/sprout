@@ -5,6 +5,7 @@ export type RelaySubscriptionFilter = {
   limit: number;
   since?: number;
   until?: number;
+  authors?: string[];
 } & Partial<Record<`#${string}`, string[]>>;
 
 type HistorySubscription = {

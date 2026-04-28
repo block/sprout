@@ -16,6 +16,8 @@ type SettingsScreenProps = {
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  readStateSyncEnabled: boolean;
+  onSetReadStateSyncEnabled: (enabled: boolean) => void;
   section: SettingsSection;
 };
 
@@ -32,6 +34,8 @@ export function SettingsScreen({
   onSetHomeBadgeEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  readStateSyncEnabled,
+  onSetReadStateSyncEnabled,
   section,
 }: SettingsScreenProps) {
   return (
@@ -50,6 +54,8 @@ export function SettingsScreen({
       onSetNeedsActionNotificationsEnabled={
         onSetNeedsActionNotificationsEnabled
       }
+      readStateSyncEnabled={readStateSyncEnabled}
+      onSetReadStateSyncEnabled={onSetReadStateSyncEnabled}
       section={section}
     />
   );

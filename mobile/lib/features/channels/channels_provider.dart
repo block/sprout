@@ -3,6 +3,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
 import 'channel.dart';
+import 'read_state_provider.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
@@ -100,3 +101,42 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 final channelsProvider = AsyncNotifierProvider<ChannelsNotifier, List<Channel>>(
   ChannelsNotifier.new,
 );
+
+/// Set of channel IDs that have unread messages based on read-state sync.
+final unreadChannelIdsProvider = Provider<Set<String>>((ref) {
+  final readState = ref.watch(readStateSyncProvider);
+  final channelsAsync = ref.watch(channelsProvider);
+  final channels = channelsAsync.asData?.value ?? [];
+
+  return channels
+      .where((ch) {
+        if (ch.lastMessageAt == null) return false;
+        final lastMessageSecs =
+            ch.lastMessageAt!.millisecondsSinceEpoch ~/ 1000;
+        final lastReadSecs = readState.mergedState[ch.id] ?? 0;
+        return lastMessageSecs > lastReadSecs;
+      })
+      .map((ch) => ch.id)
+      .toSet();
+});
+
+/// Seeds channels as read on first load so everything doesn't appear unread.
+/// Watch this provider from the top-level widget (e.g. ChannelsPage) to
+/// activate it.
+final readStateSeedProvider = Provider<void>((ref) {
+  final readState = ref.watch(readStateSyncProvider);
+  final channelsAsync = ref.watch(channelsProvider);
+
+  // Only seed once read state has initialized and channels have loaded.
+  if (!readState.isInitialized) return;
+  final channels = channelsAsync.asData?.value;
+  if (channels == null) return;
+
+  ref
+      .read(readStateSyncProvider.notifier)
+      .seedChannelsAsRead(
+        channels
+            .map((ch) => (id: ch.id, lastMessageAt: ch.lastMessageAt))
+            .toList(),
+      );
+});

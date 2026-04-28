@@ -1,4 +1,4 @@
-use nostr::{EventBuilder, JsonUtil, Kind, Tag, ToBech32};
+use nostr::{nips::nip44, EventBuilder, JsonUtil, Kind, Tag, Timestamp, ToBech32};
 use tauri::State;
 
 use crate::{
@@ -54,6 +54,7 @@ pub fn sign_event(
     kind: u16,
     content: String,
     tags: Vec<Vec<String>>,
+    created_at: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|error| error.to_string())?;
@@ -63,8 +64,11 @@ pub fn sign_event(
         .map(|tag| Tag::parse(tag).map_err(|error| format!("invalid tag: {error}")))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let event = EventBuilder::new(Kind::Custom(kind), content)
-        .tags(nostr_tags)
+    let mut builder = EventBuilder::new(Kind::Custom(kind), content).tags(nostr_tags);
+    if let Some(ts) = created_at {
+        builder = builder.custom_created_at(Timestamp::from(ts));
+    }
+    let event = builder
         .sign_with_keys(&keys)
         .map_err(|error| format!("sign failed: {error}"))?;
 
@@ -77,6 +81,31 @@ pub fn get_nsec(state: State<'_, AppState>) -> Result<String, String> {
     keys.secret_key()
         .to_bech32()
         .map_err(|error| format!("encode nsec: {error}"))
+}
+
+#[tauri::command]
+pub fn nip44_encrypt_to_self(
+    plaintext: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+    nip44::encrypt(
+        keys.secret_key(),
+        &keys.public_key(),
+        plaintext,
+        nip44::Version::V2,
+    )
+    .map_err(|e| format!("nip44 encrypt failed: {e}"))
+}
+
+#[tauri::command]
+pub fn nip44_decrypt_self(
+    ciphertext: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+    nip44::decrypt(keys.secret_key(), &keys.public_key(), ciphertext)
+        .map_err(|e| format!("nip44 decrypt failed: {e}"))
 }
 
 #[tauri::command]

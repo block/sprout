@@ -792,10 +792,19 @@ export async function removeReaction(
   await invokeTauri("remove_reaction", { eventId, emoji });
 }
 
+export async function nip44EncryptToSelf(plaintext: string): Promise<string> {
+  return invokeTauri<string>("nip44_encrypt_to_self", { plaintext });
+}
+
+export async function nip44DecryptSelf(ciphertext: string): Promise<string> {
+  return invokeTauri<string>("nip44_decrypt_self", { ciphertext });
+}
+
 export async function signRelayEvent(input: {
   kind: number;
   content: string;
   tags: string[][];
+  created_at?: number;
 }): Promise<RelayEvent> {
   const eventJson = await invokeTauri<string>("sign_event", input);
   return JSON.parse(eventJson) as RelayEvent;

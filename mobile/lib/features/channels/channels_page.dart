@@ -22,6 +22,7 @@ import 'channel.dart';
 import 'channel_detail_page.dart';
 import 'channel_management_provider.dart';
 import 'channels_provider.dart';
+import 'read_state_provider.dart';
 
 enum _QuickAction { createChannel, createForum, newDm }
 
@@ -36,6 +37,8 @@ class ChannelsPage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final channelsAsync = ref.watch(channelsProvider);
     final sessionState = ref.watch(relaySessionProvider);
+    // Activate read-state seeding so new channels start as read.
+    ref.watch(readStateSeedProvider);
     final currentPubkey = ref
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
@@ -62,11 +65,33 @@ class ChannelsPage extends HookConsumerWidget {
 
     Future<void> openChannel(Channel channel) async {
       if (!context.mounted) return;
+      // Mark channel as read at its latest message timestamp.
+      if (channel.lastMessageAt != null) {
+        ref
+            .read(readStateSyncProvider.notifier)
+            .markContextRead(
+              channel.id,
+              channel.lastMessageAt!.millisecondsSinceEpoch ~/ 1000,
+            );
+      }
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => ChannelDetailPage(channel: channel),
         ),
       );
+      // Mark read again on return in case new messages arrived while viewing.
+      final updatedChannels = ref.read(channelsProvider).asData?.value ?? [];
+      final updated = updatedChannels
+          .where((c) => c.id == channel.id)
+          .firstOrNull;
+      if (updated?.lastMessageAt != null) {
+        ref
+            .read(readStateSyncProvider.notifier)
+            .markContextRead(
+              channel.id,
+              updated!.lastMessageAt!.millisecondsSinceEpoch ~/ 1000,
+            );
+      }
     }
 
     Future<void> openQuickActions() async {
@@ -443,6 +468,8 @@ class _ChannelTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasActivity = channel.lastMessageAt != null;
+    final unreadIds = ref.watch(unreadChannelIdsProvider);
+    final isUnread = unreadIds.contains(channel.id);
 
     return InkWell(
       borderRadius: BorderRadius.circular(Radii.md),
@@ -479,11 +506,24 @@ class _ChannelTile extends ConsumerWidget {
                       color: hasActivity
                           ? context.colors.onSurface
                           : context.colors.onSurfaceVariant,
+                      fontWeight: isUnread ? FontWeight.w600 : null,
                     ),
                   ),
                 ],
               ),
             ),
+            if (isUnread)
+              Padding(
+                padding: const EdgeInsets.only(right: Grid.xxs),
+                child: Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: context.colors.primary,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
             if (!channel.isMember && !channel.isDm)
               Padding(
                 padding: const EdgeInsets.only(right: Grid.xxs),

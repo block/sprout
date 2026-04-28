@@ -3,6 +3,7 @@ import {
   BellRing,
   CircleAlert,
   Home as HomeIcon,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 
@@ -91,6 +92,8 @@ export function NotificationSettingsCard({
   onSetHomeBadgeEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  readStateSyncEnabled,
+  onSetReadStateSyncEnabled,
 }: {
   isUpdatingDesktopNotifications: boolean;
   notificationErrorMessage: string | null;
@@ -100,6 +103,8 @@ export function NotificationSettingsCard({
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  readStateSyncEnabled: boolean;
+  onSetReadStateSyncEnabled: (enabled: boolean) => void;
 }) {
   return (
     <section className="min-w-0" data-testid="settings-notifications">
@@ -182,6 +187,25 @@ export function NotificationSettingsCard({
           testId="notifications-needs-action-toggle"
           title="Needs action"
         />
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold tracking-tight">Read state</h3>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Sync which channels you&apos;ve read across all your devices.
+        </p>
+        <div className="grid gap-2 md:grid-cols-2">
+          <NotificationPreferenceCard
+            description="Publish your read position so other devices can mark channels as read automatically."
+            enabled={readStateSyncEnabled}
+            icon={RefreshCw}
+            onToggle={() => {
+              onSetReadStateSyncEnabled(!readStateSyncEnabled);
+            }}
+            testId="read-state-sync-toggle"
+            title="Sync read state across devices"
+          />
+        </div>
       </div>
 
       {notificationErrorMessage ? (

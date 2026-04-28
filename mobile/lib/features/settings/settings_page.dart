@@ -9,6 +9,7 @@ import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
+import '../channels/read_state_provider.dart';
 import 'theme_picker_page.dart';
 
 class SettingsPage extends HookConsumerWidget {
@@ -100,6 +101,13 @@ class SettingsPage extends HookConsumerWidget {
 
           const SizedBox(height: Grid.sm),
 
+          // Sync
+          Text('Sync', style: context.textTheme.titleMedium),
+          const SizedBox(height: Grid.twelve),
+          _ReadStateSyncToggle(),
+
+          const SizedBox(height: Grid.sm),
+
           // Appearance
           Text('Appearance', style: context.textTheme.titleMedium),
           const SizedBox(height: Grid.twelve),
@@ -186,6 +194,34 @@ class SettingsPage extends HookConsumerWidget {
             child: const Text('Remove'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ReadStateSyncToggle extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final syncEnabled = ref.watch(
+      readStateSyncProvider.select((s) => s.syncEnabled),
+    );
+
+    return SwitchListTile(
+      secondary: const Icon(LucideIcons.refreshCw),
+      title: const Text('Cross-device read sync'),
+      subtitle: Text(
+        'Sync read status across your devices',
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colors.onSurfaceVariant,
+        ),
+      ),
+      value: syncEnabled,
+      onChanged: (value) {
+        ref.read(readStateSyncProvider.notifier).setSyncEnabled(value);
+      },
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Radii.md),
+        side: BorderSide(color: context.colors.outlineVariant),
       ),
     );
   }

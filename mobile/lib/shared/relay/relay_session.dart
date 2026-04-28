@@ -55,33 +55,23 @@ class _PendingEvent {
   _PendingEvent({required this.completer, required this.timeout});
 }
 
-class _BufferedEvent {
-  final String subId;
-  final NostrEvent event;
-
-  _BufferedEvent(this.subId, this.event);
-}
-
 // ---------------------------------------------------------------------------
 // RelaySession — the core session manager
 // ---------------------------------------------------------------------------
 
-/// Manages websocket subscriptions, event batching, reconnection with replay,
+/// Manages websocket subscriptions, reconnection with replay,
 /// and pending event tracking. Equivalent to the desktop's RelayClientSession.
 class RelaySessionNotifier extends Notifier<SessionState> {
   static const _baseReconnectDelayMs = 1000;
   static const _maxReconnectDelayMs = 30000;
-  static const _eventBatchMs = 16;
   static const _reconnectReplaySkewSeconds = 5;
 
   RelaySocket? _socket;
   final Map<String, _HistorySubscription> _historySubscriptions = {};
   final Map<String, _LiveSubscription> _liveSubscriptions = {};
   final Map<String, _PendingEvent> _pendingEvents = {};
-  final List<_BufferedEvent> _eventBuffer = [];
   final Set<String> _recentEventIds = {};
   Timer? _reconnectTimer;
-  Timer? _flushTimer;
   Timer? _backgroundGraceTimer;
   int _reconnectDelayMs = _baseReconnectDelayMs;
   int _subIdCounter = 0;
@@ -199,6 +189,56 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _socket?.send(payload);
   }
 
+  /// Fetch all kind:30078 read-state events for [pubkey] within [since] horizon.
+  Future<List<NostrEvent>> fetchReadStateEvents(
+    String pubkey, {
+    required int since,
+  }) {
+    return fetchHistory(
+      NostrFilter(
+        kinds: const [EventKind.readState],
+        authors: [pubkey],
+        tags: const {
+          '#t': ['read-state'],
+        },
+        since: since,
+        limit: 100,
+      ),
+    );
+  }
+
+  /// Fetch own blob by slot-ID (read-before-write, NIP-RS §Read-Before-Write).
+  Future<List<NostrEvent>> fetchOwnReadStateBlob(String pubkey, String slotId) {
+    return fetchHistory(
+      NostrFilter(
+        kinds: const [EventKind.readState],
+        authors: [pubkey],
+        tags: {
+          '#d': ['read-state:$slotId'],
+        },
+        limit: 10,
+      ),
+    );
+  }
+
+  /// Subscribe to live read-state events for [pubkey].
+  Future<void Function()> subscribeToReadState(
+    String pubkey,
+    void Function(NostrEvent) onEvent,
+  ) {
+    return subscribe(
+      NostrFilter(
+        kinds: const [EventKind.readState],
+        authors: [pubkey],
+        tags: const {
+          '#t': ['read-state'],
+        },
+        limit: 0,
+      ),
+      onEvent,
+    );
+  }
+
   /// Force a reconnect (e.g., returning from background).
   Future<void> reconnect() async {
     await _socket?.disconnect();
@@ -267,9 +307,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     if (_disposed) return;
     _cancelAllHistory(error);
     _rejectAllPending(error);
-    _eventBuffer.clear();
-    _flushTimer?.cancel();
-    _flushTimer = null;
     _scheduleReconnect();
   }
 
@@ -333,23 +370,25 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     final eventJson = data[2] as Map<String, dynamic>;
     final event = NostrEvent.fromJson(eventJson);
 
-    // History subscriptions accumulate immediately.
     final historySub = _historySubscriptions[subId];
     if (historySub != null) {
       historySub.events.add(event);
       return;
     }
 
-    // Live subscriptions get batched.
     final liveSub = _liveSubscriptions[subId];
     if (liveSub != null) {
-      // Track last seen timestamp for reconnect replay.
       if (liveSub.lastSeenCreatedAt == null ||
           event.createdAt > liveSub.lastSeenCreatedAt!) {
         liveSub.lastSeenCreatedAt = event.createdAt;
       }
-      _eventBuffer.add(_BufferedEvent(subId, event));
-      _scheduleFlush();
+
+      // Dedup: skip recently seen events.
+      if (_recentEventIds.contains(event.id)) return;
+      _recentEventIds.add(event.id);
+      if (_recentEventIds.length > 5000) _recentEventIds.clear();
+
+      liveSub.onEvent(event);
     }
   }
 
@@ -412,41 +451,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   }
 
   // -------------------------------------------------------------------------
-  // Event batching (16ms flush interval)
-  // -------------------------------------------------------------------------
-
-  void _scheduleFlush() {
-    _flushTimer ??= Timer(
-      const Duration(milliseconds: _eventBatchMs),
-      _flushEventBuffer,
-    );
-  }
-
-  void _flushEventBuffer() {
-    _flushTimer = null;
-    if (_eventBuffer.isEmpty) return;
-
-    final batch = List<_BufferedEvent>.from(_eventBuffer);
-    _eventBuffer.clear();
-
-    for (final buffered in batch) {
-      // Deduplication: skip events we've already seen recently.
-      if (_recentEventIds.contains(buffered.event.id)) continue;
-      _recentEventIds.add(buffered.event.id);
-
-      // Cap the dedup set to prevent unbounded memory growth.
-      if (_recentEventIds.length > 5000) {
-        _recentEventIds.clear();
-      }
-
-      final sub = _liveSubscriptions[buffered.subId];
-      if (sub != null) {
-        sub.onEvent(buffered.event);
-      }
-    }
-  }
-
-  // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
 
@@ -491,7 +495,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   void _dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
-    _flushTimer?.cancel();
     _backgroundGraceTimer?.cancel();
     _cancelAllHistory(null);
     _rejectAllPending(null);

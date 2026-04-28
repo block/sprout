@@ -13,6 +13,7 @@ abstract final class EventKind {
   static const streamMessageEdit = 40003;
   static const streamMessageDiff = 40008;
   static const systemMessage = 40099;
+  static const readState = 30078;
   static const forumPost = 45001;
   static const forumComment = 45003;
 
@@ -23,6 +24,7 @@ abstract final class EventKind {
     reaction, // 7
     streamMessage, // 9
     40001, // legacy pre-migration stream messages
+    streamMessageV2, // 40002
     streamMessageEdit, // 40003
     streamMessageDiff, // 40008
     systemMessage, // 40099
@@ -136,6 +138,7 @@ class NostrFilter {
   final int limit;
   final int? since;
   final int? until;
+  final List<String>? authors;
 
   /// Tag filters, e.g. `{'#h': ['channel-id']}`.
   final Map<String, List<String>> tags;
@@ -145,6 +148,7 @@ class NostrFilter {
     this.limit = 100,
     this.since,
     this.until,
+    this.authors,
     this.tags = const {},
   });
 
@@ -154,6 +158,7 @@ class NostrFilter {
     limit: limit,
     since: since,
     until: until,
+    authors: authors,
     tags: tags,
   );
 
@@ -161,6 +166,7 @@ class NostrFilter {
     final json = <String, dynamic>{'kinds': kinds, 'limit': limit};
     if (since != null) json['since'] = since;
     if (until != null) json['until'] = until;
+    if (authors != null) json['authors'] = authors;
     for (final entry in tags.entries) {
       json[entry.key] = entry.value;
     }
