@@ -4,7 +4,7 @@
 name on it. Not a Discord server that Discord could delete tomorrow. Your domain.
 Your relay. One thing.
 
-The relay is the project. Code lives there. Conversation lives there. Agents connect
+The relay is the workspace. Code lives there. Conversation lives there. Agents connect
 to it. Automation flows through it. Artifacts publish from it. You type the URL, you
 see the project. That's the whole idea.
 

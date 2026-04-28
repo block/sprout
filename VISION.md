@@ -1,4 +1,4 @@
-# 🌱 Sprout — The relay is the project
+# 🌱 Sprout — The relay is the workspace
 
 > An engineer is debugging a production incident at 2am. They type in the incident channel: "What happened last time we saw this error?"
 >
