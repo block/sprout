@@ -112,7 +112,8 @@ class ComposeBar extends HookConsumerWidget {
         }
 
         // Walk backward from cursor looking for trigger characters.
-        final atPos = _findTrigger(text, cursor, '@');
+        // stopAtSpace: false — @mentions support multi-word display names.
+        final atPos = findTrigger(text, cursor, '@', stopAtSpace: false);
 
         if (atPos != null) {
           mentionQuery.value = text.substring(atPos + 1, cursor).toLowerCase();
@@ -124,7 +125,7 @@ class ComposeBar extends HookConsumerWidget {
 
         // Channel autocomplete detection — only when no @mention is active.
         if (mentionQuery.value == null) {
-          final hashPos = _findTrigger(text, cursor, '#');
+          final hashPos = findTrigger(text, cursor, '#');
           if (hashPos != null) {
             channelQuery.value = text
                 .substring(hashPos + 1, cursor)
@@ -152,7 +153,7 @@ class ComposeBar extends HookConsumerWidget {
 
     // Filter channels against the query.
     final channels = channelsAsync.asData?.value ?? <Channel>[];
-    final channelSuggestions = _filterChannels(channels, channelQuery.value);
+    final channelSuggestions = filterChannels(channels, channelQuery.value);
 
     // Insert a selected mention into the text field.
     void insertMention(ChannelMember member) {
@@ -163,7 +164,7 @@ class ComposeBar extends HookConsumerWidget {
       mentionMap.value[name] = member.pubkey;
 
       final start = mentionStartIdx.value.clamp(0, controller.text.length);
-      _spliceAndMoveCursor(
+      spliceAndMoveCursor(
         controller,
         focusNode,
         start: start,
@@ -175,7 +176,7 @@ class ComposeBar extends HookConsumerWidget {
     // Insert a selected channel into the text field.
     void insertChannel(Channel channel) {
       final start = channelStartIdx.value.clamp(0, controller.text.length);
-      _spliceAndMoveCursor(
+      spliceAndMoveCursor(
         controller,
         focusNode,
         start: start,
@@ -486,12 +487,23 @@ const _typingThrottleMs = 3000;
 
 /// Walk backward from [cursor] looking for [trigger] (e.g. `@` or `#`) at a
 /// word boundary. Returns the index of the trigger character, or `null` if none
-/// is found. The walk stops at whitespace characters — a trigger preceded by
-/// anything other than whitespace (or the start of the string) is ignored.
-int? _findTrigger(String text, int cursor, String trigger) {
+/// is found.
+///
+/// When [stopAtSpace] is `true` the walk stops at both spaces and newlines —
+/// appropriate for `#channel` names which are kebab-case slugs without spaces.
+/// When `false`, only newlines stop the walk, allowing multi-word queries like
+/// `@Alice Smith` to match members with multi-word display names.
+@visibleForTesting
+int? findTrigger(
+  String text,
+  int cursor,
+  String trigger, {
+  bool stopAtSpace = true,
+}) {
   for (var i = cursor - 1; i >= 0; i--) {
     final ch = text[i];
-    if (ch == ' ' || ch == '\n') break;
+    if (ch == '\n') break;
+    if (stopAtSpace && ch == ' ') break;
     if (ch == trigger) {
       if (i == 0 || text[i - 1] == ' ' || text[i - 1] == '\n') {
         return i;
@@ -504,7 +516,8 @@ int? _findTrigger(String text, int cursor, String trigger) {
 
 /// Replace the range `[start, cursor)` with [replacement] and move the cursor
 /// to the end of the replacement. Used by both mention and channel insertion.
-void _spliceAndMoveCursor(
+@visibleForTesting
+void spliceAndMoveCursor(
   TextEditingController controller,
   FocusNode focusNode, {
   required int start,
@@ -702,7 +715,8 @@ class _MentionSuggestions extends StatelessWidget {
 // Channel suggestions
 // ---------------------------------------------------------------------------
 
-List<Channel> _filterChannels(List<Channel> channels, String? query) {
+@visibleForTesting
+List<Channel> filterChannels(List<Channel> channels, String? query) {
   if (query == null) return const [];
   final q = query.toLowerCase();
   return channels
