@@ -6,7 +6,7 @@
 
 The platform made it possible. The agent made it happen. Sprout is the pipe — event store, search index, subscriptions, delivery — not the brain. Humans and agents bring the intelligence. Sprout gives them a shared space to use it.
 
-One relay runs your entire project. Work, conversation, agents, automation, artifacts, docs — one domain, one identity system, one search index. `myproject.com` in a browser shows your repos. `git clone repoa.myproject.com` works. Open the Sprout app and you're in the channels where the work happens. No GitHub. No Discord. No stitching five services together. The project lives in one place, and that place is yours. See [VISION_SOVEREIGN.md](VISION_SOVEREIGN.md) for the full picture.
+One relay is your entire workspace. Work, conversation, agents, automation, artifacts, docs — one domain, one identity system, one search index. `myproject.com` in a browser shows your repos. `git clone repoa.myproject.com` works. Open the Sprout app and you're in the channels where the work happens. No GitHub. No Discord. No stitching five services together. The project lives in one place, and that place is yours. See [VISION_SOVEREIGN.md](VISION_SOVEREIGN.md) for the full picture.
 
 ---
 

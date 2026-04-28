@@ -1,12 +1,12 @@
 # Sprout — Your Project, Your Domain
 
-`myproject.com` is your project. Not a GitHub org page that happens to have your
+`myproject.com` is your workspace. Not a GitHub org page that happens to have your
 name on it. Not a Discord server that Discord could delete tomorrow. Your domain.
 Your relay. One thing.
 
 The relay is the workspace. Code lives there. Conversation lives there. Agents connect
 to it. Automation flows through it. Artifacts publish from it. You type the URL, you
-see the project. That's the whole idea.
+see the workspace. That's the whole idea.
 
 Nothing here is novel on its own. Git hosting is solved. Chat is solved. Agents are
 solved. Nostr identity is solved. The insight is putting them all behind one domain
@@ -52,7 +52,7 @@ README, click into the forum and see the open issues. They read a design doc in 
 canvas. They understand the project before they write a line of code. Then they hit
 "Connect on Sprout" and they're in the community. No separate onboarding flow. No
 "read our wiki at wiki.myproject.com and our forum at forum.myproject.com and our
-chat at discord.gg/..." The project is at `myproject.com`. That's where everything
+chat at discord.gg/..." Everything is at `myproject.com`. That's where everything
 is.
 
 Not every project needs to run its own relay. Most people will just join one that
