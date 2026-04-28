@@ -19,10 +19,14 @@ type MessageThreadPanelProps = {
   channelName: string;
   currentPubkey?: string;
   disabled?: boolean;
+  editTarget?: { author: string; body: string; id: string } | null;
   isSending: boolean;
+  onCancelEdit?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
   onDelete?: (message: TimelineMessage) => void;
+  onEdit?: (message: TimelineMessage) => void;
+  onEditSave?: (content: string) => Promise<void>;
   onExpandReplies: (message: TimelineMessage) => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
@@ -66,10 +70,14 @@ export function MessageThreadPanel({
   channelName,
   currentPubkey,
   disabled = false,
+  editTarget,
   isSending,
+  onCancelEdit,
   onCancelReply,
   onClose,
   onDelete,
+  onEdit,
+  onEditSave,
   onExpandReplies,
   onResetWidth,
   onResizeStart,
@@ -179,6 +187,11 @@ export function MessageThreadPanel({
                     ? onDelete
                     : undefined
                 }
+                onEdit={
+                  onEdit && canManageMessage(threadHead, currentPubkey)
+                    ? onEdit
+                    : undefined
+                }
                 onToggleReaction={onToggleReaction}
                 profiles={profiles}
               />
@@ -203,6 +216,12 @@ export function MessageThreadPanel({
                           onDelete &&
                           canManageMessage(entry.message, currentPubkey)
                             ? onDelete
+                            : undefined
+                        }
+                        onEdit={
+                          onEdit &&
+                          canManageMessage(entry.message, currentPubkey)
+                            ? onEdit
                             : undefined
                         }
                         onReply={onSelectReplyTarget}
@@ -259,8 +278,11 @@ export function MessageThreadPanel({
           channelName={channelName}
           disabled={disabled || isSending || !channelId}
           draftKey={`thread:${threadHead.id}`}
+          editTarget={editTarget}
           isSending={isSending}
+          onCancelEdit={onCancelEdit}
           onCancelReply={composerReplyTarget ? onCancelReply : undefined}
+          onEditSave={onEditSave}
           onSend={onSend}
           placeholder={`Reply in thread to ${threadHead.author}`}
           replyTarget={composerReplyTarget}

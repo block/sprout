@@ -460,6 +460,9 @@ function AgentOriginBadge({ agent }: { agent: ManagedAgent }) {
   );
 }
 
+/** Grace period after mount before treating "running + no presence" as "Starting…" */
+const PRESENCE_GRACE_MS = 15_000;
+
 function AgentStatusBadge({
   presenceLoaded,
   presenceStatus,
@@ -469,8 +472,16 @@ function AgentStatusBadge({
   presenceStatus: PresenceStatus | undefined;
   status: ManagedAgent["status"];
 }) {
+  const [inGracePeriod, setInGracePeriod] = React.useState(true);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setInGracePeriod(false), PRESENCE_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
   const isActive = status === "running" || status === "deployed";
   const isStarting =
+    !inGracePeriod &&
     presenceLoaded &&
     status === "running" &&
     (!presenceStatus || presenceStatus === "offline");
