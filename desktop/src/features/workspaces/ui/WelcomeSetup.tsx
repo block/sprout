@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { applyWorkspace, getIdentity, getNsec } from "@/shared/api/tauri";
+import { getIdentity, getNsec } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
@@ -54,8 +54,8 @@ export function WelcomeSetup({
       saveWorkspaces([workspace]);
       saveActiveWorkspaceId(workspace.id);
 
-      await applyWorkspace(workspace.relayUrl, workspace.nsec, workspace.token);
-
+      // The reload triggered by onComplete() will re-run useWorkspaceInit,
+      // which calls applyWorkspace with the saved config. No need to apply here.
       onComplete();
     } catch (err) {
       setError(

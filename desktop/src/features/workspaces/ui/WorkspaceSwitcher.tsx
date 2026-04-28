@@ -52,8 +52,8 @@ export function WorkspaceSwitcher({
                 data-testid="workspace-switcher"
                 type="button"
               >
-                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/15 text-[10px] font-bold text-primary">
-                  {activeWorkspace?.name?.[0]?.toUpperCase() ?? "W"}
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/15 text-xs leading-none">
+                  🌱
                 </span>
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                   {activeWorkspace?.name ?? "No workspace"}
