@@ -187,7 +187,10 @@ class _ReactionDetailSheet extends HookConsumerWidget {
           Flexible(
             child: ListView.builder(
               shrinkWrap: true,
-              padding: const EdgeInsets.symmetric(vertical: Grid.half),
+              padding: EdgeInsets.only(
+                top: Grid.half,
+                bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.half,
+              ),
               itemCount: currentReaction.userPubkeys.length,
               itemBuilder: (context, index) {
                 final pubkey = currentReaction.userPubkeys[index];
