@@ -127,6 +127,35 @@ just desktop-dev   # web-only dev server (faster iteration)
 just desktop-app   # full Tauri app with native shell
 ```
 
+### Workspace Switching
+
+The desktop app supports multiple workspaces (each backed by a different relay).
+Switching workspaces does **not** reload the page — it uses React key-based
+remounting. `<AppReady key={workspaceKey} />` in `App.tsx` forces the entire
+workspace-scoped subtree to unmount and remount with fresh state.
+
+**Module-level singletons must be explicitly reset.** React remounting only
+clears React state (useState, useRef, context). Module-level variables (Maps,
+class instances, cached promises) survive across remounts. Every workspace-scoped
+singleton needs a reset function wired into `resetWorkspaceState()` in
+`desktop/src/features/workspaces/useWorkspaceInit.ts`.
+
+Current singletons that are reset on workspace switch:
+- `relayClient.disconnect()` — WebSocket teardown + promise rejection
+- `resetMediaCaches()` — proxy port and relay origin caches
+- `clearSearchHitEventCache()` — search result event cache
+- `clearAllDrafts()` — message draft cache
+
+**If you add a new module-level cache, Map, or class instance that holds
+workspace-scoped data, you must add its reset to `resetWorkspaceState()`.**
+Failure to do so causes data from the old workspace to leak into the new one.
+
+Key files:
+- `desktop/src/app/App.tsx` — workspace key, init gate, remount boundary
+- `desktop/src/features/workspaces/useWorkspaceInit.ts` — `resetWorkspaceState()`, applies config to Tauri backend
+- `desktop/src/features/workspaces/useWorkspaces.tsx` — `WorkspacesProvider` context (shared state for App + AppShell)
+- `desktop/src/main.tsx` — provider hierarchy (`QueryClientProvider` > `WorkspacesProvider` > `App`)
+
 ---
 
 ## Mobile App (Flutter)

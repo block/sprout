@@ -10,7 +10,9 @@ import type { Workspace } from "./types";
 
 /**
  * Tear down all workspace-scoped module singletons so the new
- * workspace starts with a clean slate. Add new resets here.
+ * workspace starts with a clean slate. If you add a new module-level
+ * cache or singleton that holds workspace data, add its reset here.
+ * See AGENTS.md "Workspace Switching" for the full contract.
  */
 function resetWorkspaceState(): void {
   relayClient.disconnect();
