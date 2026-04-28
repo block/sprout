@@ -15,7 +15,10 @@ export type UseWorkspacesReturn = {
   addWorkspace: (workspace: Workspace) => string;
   removeWorkspace: (id: string) => void;
   switchWorkspace: (id: string) => void;
-  renameWorkspace: (id: string, name: string) => void;
+  updateWorkspace: (
+    id: string,
+    updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
+  ) => void;
 };
 
 export function useWorkspaces(): UseWorkspacesReturn {
@@ -95,13 +98,23 @@ export function useWorkspaces(): UseWorkspacesReturn {
     [activeId],
   );
 
-  const renameWorkspace = useCallback((id: string, name: string) => {
-    setWorkspacesState((prev) => {
-      const next = prev.map((w) => (w.id === id ? { ...w, name } : w));
-      saveWorkspaces(next);
-      return next;
-    });
-  }, []);
+  const updateWorkspace = useCallback(
+    (
+      id: string,
+      updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
+    ) => {
+      setWorkspacesState((prev) => {
+        const next = prev.map((w) => (w.id === id ? { ...w, ...updates } : w));
+        saveWorkspaces(next);
+        return next;
+      });
+      // If the active workspace's relay URL changed, reload to reconnect
+      if (id === activeId && updates.relayUrl) {
+        window.location.reload();
+      }
+    },
+    [activeId],
+  );
 
   return {
     workspaces,
@@ -109,6 +122,6 @@ export function useWorkspaces(): UseWorkspacesReturn {
     addWorkspace,
     removeWorkspace,
     switchWorkspace,
-    renameWorkspace,
+    updateWorkspace,
   };
 }

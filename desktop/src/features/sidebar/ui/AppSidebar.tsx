@@ -93,8 +93,11 @@ type AppSidebarProps = {
   onOpenSearch: () => void;
   onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
+  onUpdateWorkspace: (
+    id: string,
+    updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
+  ) => void;
   onRemoveWorkspace: (id: string) => void;
-  onRenameWorkspace: (id: string, name: string) => void;
   onSelectAgents: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
@@ -243,8 +246,8 @@ export function AppSidebar({
   onOpenSearch,
   onHideDm,
   onOpenDm,
+  onUpdateWorkspace,
   onRemoveWorkspace,
-  onRenameWorkspace,
   onSelectAgents,
   onSelectPulse,
   onSelectWorkflows,
@@ -337,6 +340,16 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader className="gap-3 pt-10" data-tauri-drag-region>
+        <div className="px-0.5">
+          <WorkspaceSwitcher
+            activeWorkspace={activeWorkspace}
+            onAddWorkspace={onOpenAddWorkspace}
+            onRemoveWorkspace={onRemoveWorkspace}
+            onSwitchWorkspace={onSwitchWorkspace}
+            onUpdateWorkspace={onUpdateWorkspace}
+            workspaces={workspaces}
+          />
+        </div>
         <Button
           className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
           data-testid="open-search"
@@ -501,21 +514,6 @@ export function AppSidebar({
           </div>
         ) : null}
       </SidebarContent>
-
-      <SidebarSeparator className="mx-0 w-full" />
-
-      <div className="px-2 py-1.5">
-        <WorkspaceSwitcher
-          activeWorkspace={activeWorkspace}
-          onAddWorkspace={onOpenAddWorkspace}
-          onRemoveWorkspace={onRemoveWorkspace}
-          onRenameWorkspace={onRenameWorkspace}
-          onSwitchWorkspace={onSwitchWorkspace}
-          workspaces={workspaces}
-        />
-      </div>
-
-      <SidebarSeparator className="mx-0 w-full" />
 
       <SidebarFooter>
         <SidebarMenu>

@@ -1,5 +1,3 @@
-import { getIdentity, getNsec, getRelayWsUrl } from "@/shared/api/tauri";
-
 import type { Workspace } from "./types";
 
 const WORKSPACES_KEY = "sprout-workspaces";
@@ -33,41 +31,11 @@ export function saveActiveWorkspaceId(id: string): void {
   localStorage.setItem(ACTIVE_WORKSPACE_KEY, id);
 }
 
-/**
- * On first load, if no workspaces exist, read the current relay URL and
- * identity to create the first workspace entry automatically. Ensures
- * existing single-workspace users get a seamless migration.
- */
-export async function migrateFromSingleWorkspace(): Promise<Workspace[]> {
-  const existing = loadWorkspaces();
-  if (existing.length > 0) {
-    return existing;
+export function normalizeRelayUrl(url: string): string {
+  if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+    return `wss://${url}`;
   }
-
-  try {
-    const [relayUrl, identity, nsec] = await Promise.all([
-      getRelayWsUrl(),
-      getIdentity(),
-      getNsec(),
-    ]);
-
-    const workspace: Workspace = {
-      id: crypto.randomUUID(),
-      name: deriveWorkspaceName(relayUrl),
-      relayUrl,
-      nsec,
-      pubkey: identity.pubkey,
-      addedAt: new Date().toISOString(),
-    };
-
-    const workspaces = [workspace];
-    saveWorkspaces(workspaces);
-    saveActiveWorkspaceId(workspace.id);
-    return workspaces;
-  } catch (error) {
-    console.error("Failed to migrate single workspace:", error);
-    return [];
-  }
+  return url;
 }
 
 export function deriveWorkspaceName(relayUrl: string): string {
@@ -79,8 +47,12 @@ export function deriveWorkspaceName(relayUrl: string): string {
     if (host === "localhost" || host === "127.0.0.1") {
       return "Local Dev";
     }
-    // Use the first subdomain segment or the domain itself
     const parts = host.split(".");
+    // Detect staging environments (e.g. sprout-oss.stage.blox.sqprod.co)
+    if (parts.some((p) => p === "stage" || p === "staging")) {
+      return "Sprout (staging)";
+    }
+    // Use the first subdomain segment or the domain itself
     if (parts.length >= 2) {
       return parts[0] === "relay" ? parts[1] : parts[0];
     }

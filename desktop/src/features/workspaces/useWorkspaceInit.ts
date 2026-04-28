@@ -1,38 +1,56 @@
 import { useEffect, useState } from "react";
 
-import { applyWorkspace } from "@/shared/api/tauri";
+import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
 
 import {
   loadActiveWorkspaceId,
   loadWorkspaces,
-  migrateFromSingleWorkspace,
   saveActiveWorkspaceId,
 } from "./workspaceStorage";
 
+type WorkspaceInitResult =
+  | { isReady: true; needsSetup: false }
+  | { isReady: false; needsSetup: true; defaultRelayUrl: string }
+  | { isReady: false; needsSetup: false };
+
 /**
- * Runs once on mount. Loads the active workspace from localStorage,
- * performs legacy migration if needed, and calls the Tauri backend
- * to apply the workspace config (keys, relay URL, token).
+ * Runs once on mount. Loads the active workspace from localStorage
+ * and calls the Tauri backend to apply the workspace config
+ * (keys, relay URL, token).
  *
- * Returns `{ isReady }` — only render the app after workspace is applied.
+ * Returns a discriminated union — only render the app after the
+ * workspace is applied. When `needsSetup` is true, the caller
+ * should show a first-run welcome screen.
  */
-export function useWorkspaceInit(): { isReady: boolean } {
-  const [isReady, setIsReady] = useState(false);
+export function useWorkspaceInit(): WorkspaceInitResult {
+  const [result, setResult] = useState<WorkspaceInitResult>({
+    isReady: false,
+    needsSetup: false,
+  });
 
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
-      // Run legacy migration if this is a first-time user
-      let workspaces = loadWorkspaces();
-      if (workspaces.length === 0) {
-        workspaces = await migrateFromSingleWorkspace();
-      }
+      const workspaces = loadWorkspaces();
 
       if (workspaces.length === 0) {
-        // No workspaces at all — let the app proceed so onboarding can handle it
-        if (!cancelled) {
-          setIsReady(true);
+        // No workspaces at all — fetch the build default relay URL
+        // so the welcome screen can pre-fill it.
+        try {
+          const defaultRelayUrl = await getDefaultRelayUrl();
+          if (!cancelled) {
+            setResult({ isReady: false, needsSetup: true, defaultRelayUrl });
+          }
+        } catch {
+          // If we can't get the default, fall back to localhost
+          if (!cancelled) {
+            setResult({
+              isReady: false,
+              needsSetup: true,
+              defaultRelayUrl: "ws://localhost:3000",
+            });
+          }
         }
         return;
       }
@@ -47,7 +65,7 @@ export function useWorkspaceInit(): { isReady: boolean } {
       const active = workspaces.find((w) => w.id === activeId);
       if (!active) {
         if (!cancelled) {
-          setIsReady(true);
+          setResult({ isReady: true, needsSetup: false });
         }
         return;
       }
@@ -60,7 +78,7 @@ export function useWorkspaceInit(): { isReady: boolean } {
       }
 
       if (!cancelled) {
-        setIsReady(true);
+        setResult({ isReady: true, needsSetup: false });
       }
     }
 
@@ -71,5 +89,5 @@ export function useWorkspaceInit(): { isReady: boolean } {
     };
   }, []);
 
-  return { isReady };
+  return result;
 }

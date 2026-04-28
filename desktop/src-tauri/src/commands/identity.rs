@@ -4,7 +4,7 @@ use tauri::State;
 use crate::{
     app_state::AppState,
     models::IdentityInfo,
-    relay::{relay_api_base_url_with_override, relay_ws_url_with_override},
+    relay::{self, relay_api_base_url_with_override, relay_ws_url_with_override},
 };
 
 #[tauri::command]
@@ -25,6 +25,11 @@ pub fn get_identity(state: State<'_, AppState>) -> Result<IdentityInfo, String> 
         pubkey: pubkey_hex,
         display_name,
     })
+}
+
+#[tauri::command]
+pub fn get_default_relay_url() -> String {
+    relay::relay_ws_url()
 }
 
 #[tauri::command]

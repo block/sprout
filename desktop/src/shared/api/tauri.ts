@@ -528,6 +528,10 @@ export async function setPresence(
   };
 }
 
+export function getDefaultRelayUrl(): Promise<string> {
+  return invokeTauri<string>("get_default_relay_url");
+}
+
 export function getRelayWsUrl(): Promise<string> {
   return invokeTauri<string>("get_relay_ws_url");
 }

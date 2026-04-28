@@ -1,7 +1,10 @@
 import * as React from "react";
 
 import type { Workspace } from "@/features/workspaces/types";
-import { deriveWorkspaceName } from "@/features/workspaces/workspaceStorage";
+import {
+  deriveWorkspaceName,
+  normalizeRelayUrl,
+} from "@/features/workspaces/workspaceStorage";
 import { Button } from "@/shared/ui/button";
 import {
   Dialog,
@@ -151,12 +154,4 @@ export function AddWorkspaceDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function normalizeRelayUrl(url: string): string {
-  // Add wss:// if no protocol specified
-  if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
-    return `wss://${url}`;
-  }
-  return url;
 }

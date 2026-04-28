@@ -515,8 +515,8 @@ export function AppShell() {
                   onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                   onNewDmOpenChange={setIsNewDmOpen}
                   onOpenAddWorkspace={() => setIsAddWorkspaceOpen(true)}
+                  onUpdateWorkspace={workspacesHook.updateWorkspace}
                   onRemoveWorkspace={workspacesHook.removeWorkspace}
-                  onRenameWorkspace={workspacesHook.renameWorkspace}
                   onSwitchWorkspace={workspacesHook.switchWorkspace}
                   selfPresenceStatus={presenceSession.currentStatus}
                   workspaces={workspacesHook.workspaces}

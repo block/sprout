@@ -1,11 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { RouterProvider } from "@tanstack/react-router";
-import { useLayoutEffect } from "react";
+import { useCallback, useLayoutEffect } from "react";
 
 import { router } from "@/app/router";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
+import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
 
 function AppLoadingGate() {
   return (
@@ -25,19 +26,8 @@ function AppLoadingGate() {
   );
 }
 
-export function App() {
-  useLayoutEffect(() => {
-    void getCurrentWindow().show();
-  }, []);
-
-  const workspace = useWorkspaceInit();
+function AppReady() {
   const onboarding = useAppOnboardingState();
-
-  // Wait for workspace config to be applied to the backend before
-  // rendering anything that connects to the relay.
-  if (!workspace.isReady) {
-    return <AppLoadingGate />;
-  }
 
   if (onboarding.stage === "onboarding") {
     return (
@@ -55,4 +45,36 @@ export function App() {
   }
 
   return <RouterProvider router={router} />;
+}
+
+export function App() {
+  useLayoutEffect(() => {
+    void getCurrentWindow().show();
+  }, []);
+
+  const workspace = useWorkspaceInit();
+
+  const handleSetupComplete = useCallback(() => {
+    // Force a full reload so useWorkspaceInit re-runs and picks up
+    // the newly-created workspace from localStorage.
+    window.location.reload();
+  }, []);
+
+  // Show welcome setup for first-run users with no workspaces
+  if (workspace.needsSetup) {
+    return (
+      <WelcomeSetup
+        defaultRelayUrl={workspace.defaultRelayUrl}
+        onComplete={handleSetupComplete}
+      />
+    );
+  }
+
+  // Wait for workspace config to be applied to the backend before
+  // rendering anything that connects to the relay.
+  if (!workspace.isReady) {
+    return <AppLoadingGate />;
+  }
+
+  return <AppReady />;
 }
