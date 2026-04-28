@@ -35,7 +35,7 @@ type ForumComposerProps = {
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
-  ) => void | Promise<unknown>;
+  ) => undefined | Promise<unknown>;
   /** When true, autocomplete renders below the input (for top-of-view composers). */
   autocompleteBelow?: boolean;
 };

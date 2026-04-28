@@ -252,6 +252,7 @@ export type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  observer_url: string | null;
   start_on_app_launch: boolean;
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
@@ -857,6 +858,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     lastExitCode: agent.last_exit_code,
     lastError: agent.last_error,
     logPath: agent.log_path,
+    observerUrl: agent.observer_url,
     startOnAppLaunch: agent.start_on_app_launch,
     backend: agent.backend,
     backendAgentId: agent.backend_agent_id,

@@ -4,9 +4,9 @@ use tauri::AppHandle;
 
 use crate::{
     managed_agents::{
-        append_log_marker, login_shell_path, managed_agent_log_path, missing_command_message,
-        normalize_agent_args, open_log_file, resolve_command, ManagedAgentProcess,
-        ManagedAgentRecord, ManagedAgentSummary,
+        allocate_observer_endpoint, append_log_marker, login_shell_path, managed_agent_log_path,
+        missing_command_message, normalize_agent_args, open_log_file, resolve_command,
+        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -343,7 +343,7 @@ pub fn build_managed_agent_summary(
 ) -> Result<ManagedAgentSummary, String> {
     use crate::managed_agents::BackendKind;
 
-    let (status, pid, log_path) = if record.backend != BackendKind::Local {
+    let (status, pid, log_path, observer_url) = if record.backend != BackendKind::Local {
         // Two-axis status model for remote agents:
         //
         //   Control-plane (this field): "deployed" = provider has been invoked and
@@ -364,7 +364,7 @@ pub fn build_managed_agent_summary(
         } else {
             "not_deployed".to_string()
         };
-        (status, None, String::new())
+        (status, None, String::new(), None)
     } else {
         let persisted_pid = record.runtime_pid.filter(|pid| process_is_running(*pid));
         if let Some(runtime) = runtimes.get(&record.pubkey) {
@@ -372,6 +372,7 @@ pub fn build_managed_agent_summary(
                 "running".to_string(),
                 Some(runtime.child.id()),
                 runtime.log_path.display().to_string(),
+                runtime.observer_url.clone(),
             )
         } else if let Some(pid) = persisted_pid {
             (
@@ -380,6 +381,7 @@ pub fn build_managed_agent_summary(
                 managed_agent_log_path(app, &record.pubkey)?
                     .display()
                     .to_string(),
+                None,
             )
         } else {
             (
@@ -388,6 +390,7 @@ pub fn build_managed_agent_summary(
                 managed_agent_log_path(app, &record.pubkey)?
                     .display()
                     .to_string(),
+                None,
             )
         }
     };
@@ -421,6 +424,7 @@ pub fn build_managed_agent_summary(
         last_error: record.last_error.clone(),
         start_on_app_launch: record.start_on_app_launch,
         log_path,
+        observer_url,
     })
 }
 
@@ -440,7 +444,7 @@ pub fn find_managed_agent_mut<'a>(
 pub fn spawn_agent_child(
     app: &AppHandle,
     record: &ManagedAgentRecord,
-) -> Result<(std::process::Child, std::path::PathBuf), String> {
+) -> Result<(std::process::Child, std::path::PathBuf, Option<String>), String> {
     let log_path = managed_agent_log_path(app, &record.pubkey)?;
     append_log_marker(
         &log_path,
@@ -561,6 +565,10 @@ pub fn spawn_agent_child(
         command.env_remove("SPROUT_API_TOKEN");
     }
 
+    let observer = allocate_observer_endpoint()?;
+    command.env("SPROUT_ACP_OBSERVER_ADDR", &observer.addr);
+    command.env("SPROUT_ACP_OBSERVER_TOKEN", &observer.token);
+
     // Spawn the harness in its own process group so we can kill the entire
     // tree (harness + MCP servers + agent subprocesses) on shutdown.
     #[cfg(unix)]
@@ -579,7 +587,7 @@ pub fn spawn_agent_child(
 
     let _ = super::write_agent_pid_file(app, &record.pubkey, child.id());
 
-    Ok((child, log_path))
+    Ok((child, log_path, Some(observer.url)))
 }
 
 pub fn start_managed_agent_process(
@@ -610,7 +618,7 @@ pub fn start_managed_agent_process(
         record.runtime_pid = None;
     }
 
-    let (child, log_path) = spawn_agent_child(app, record)?;
+    let (child, log_path, observer_url) = spawn_agent_child(app, record)?;
 
     let now = now_iso();
     record.updated_at = now.clone();
@@ -622,7 +630,11 @@ pub fn start_managed_agent_process(
 
     runtimes.insert(
         record.pubkey.clone(),
-        ManagedAgentProcess { child, log_path },
+        ManagedAgentProcess {
+            child,
+            log_path,
+            observer_url,
+        },
     );
     Ok(())
 }

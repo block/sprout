@@ -1,6 +1,7 @@
 mod backend;
 mod discovery;
 mod nest;
+mod observer;
 mod persona_avatars;
 mod persona_card;
 mod personas;
@@ -13,6 +14,7 @@ mod types;
 pub use backend::*;
 pub use discovery::*;
 pub use nest::*;
+pub use observer::*;
 pub use persona_card::*;
 pub use personas::*;
 pub use restore::*;

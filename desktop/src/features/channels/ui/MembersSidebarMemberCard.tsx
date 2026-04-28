@@ -1,4 +1,5 @@
 import {
+  Activity,
   Ellipsis,
   Play,
   RotateCcw,
@@ -43,6 +44,7 @@ type MembersSidebarMemberCardProps = {
   onChangeRole: (member: ChannelMember, role: string) => void;
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
+  onViewActivity?: (pubkey: string) => void;
   presenceStatus?: PresenceStatus | null;
   profileAvatarUrl?: string | null;
 };
@@ -80,13 +82,18 @@ export function MembersSidebarMemberCard({
   onChangeRole,
   onManagedAgentAction,
   onRemoveMember,
+  onViewActivity,
   presenceStatus,
   profileAvatarUrl,
 }: MembersSidebarMemberCardProps) {
   const roleLabel = formatRoleLabel(member, memberIsBot);
   const disabled = isActionPending || isArchived;
+  const canViewActivity =
+    memberIsBot &&
+    managedAgent?.backend.type === "local" &&
+    Boolean(onViewActivity);
   const hasActions = memberIsBot
-    ? Boolean(managedAgent) || canRemoveMember
+    ? Boolean(managedAgent) || canRemoveMember || canViewActivity
     : canRemoveMember || canChangeRole;
 
   return (
@@ -135,6 +142,7 @@ export function MembersSidebarMemberCard({
         <MemberActionsMenu
           canChangeRole={canChangeRole}
           canRemoveMember={canRemoveMember}
+          canViewActivity={canViewActivity}
           disabled={disabled}
           managedAgent={managedAgent}
           member={member}
@@ -142,6 +150,7 @@ export function MembersSidebarMemberCard({
           onChangeRole={onChangeRole}
           onManagedAgentAction={onManagedAgentAction}
           onRemoveMember={onRemoveMember}
+          onViewActivity={onViewActivity}
         />
       ) : null}
     </div>
@@ -153,6 +162,7 @@ const PEOPLE_ROLES = ["admin", "member", "guest"] as const;
 function MemberActionsMenu({
   canChangeRole,
   canRemoveMember,
+  canViewActivity,
   disabled,
   managedAgent,
   member,
@@ -160,9 +170,11 @@ function MemberActionsMenu({
   onChangeRole,
   onManagedAgentAction,
   onRemoveMember,
+  onViewActivity,
 }: {
   canChangeRole: boolean;
   canRemoveMember: boolean;
+  canViewActivity: boolean;
   disabled: boolean;
   managedAgent?: ManagedAgent;
   member: ChannelMember;
@@ -170,6 +182,7 @@ function MemberActionsMenu({
   onChangeRole: (member: ChannelMember, role: string) => void;
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
+  onViewActivity?: (pubkey: string) => void;
 }) {
   const showChangeRole =
     canChangeRole && !memberIsBot && member.role !== "owner";
@@ -189,8 +202,18 @@ function MemberActionsMenu({
         align="end"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
+        {canViewActivity ? (
+          <DropdownMenuItem
+            data-testid={`sidebar-view-activity-${member.pubkey}`}
+            onClick={() => onViewActivity?.(member.pubkey)}
+          >
+            <Activity className="h-4 w-4" />
+            View activity
+          </DropdownMenuItem>
+        ) : null}
         {memberIsBot && managedAgent ? (
           <>
+            {canViewActivity ? <DropdownMenuSeparator /> : null}
             <DropdownMenuItem
               data-testid={`sidebar-agent-action-${member.pubkey}`}
               disabled={disabled}

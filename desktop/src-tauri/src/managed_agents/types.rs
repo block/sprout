@@ -120,6 +120,7 @@ pub struct ManagedAgentRecord {
 pub struct ManagedAgentProcess {
     pub child: Child,
     pub log_path: PathBuf,
+    pub observer_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +153,7 @@ pub struct ManagedAgentSummary {
     pub last_error: Option<String>,
     pub start_on_app_launch: bool,
     pub log_path: String,
+    pub observer_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
