@@ -134,19 +134,9 @@ Beyond chat: channels are workspaces.
 
 The relay hosts git repos. Smart HTTP — standard `git clone`, `git push`, nothing special. Your npub signs pushes. Same domain, same auth, same identity as everything else on the relay.
 
-`myproject.com` in a browser shows the project home — a list of repos with descriptions, the project profile, a "Connect on Sprout" button. Like a GitHub org page, but it's yours, on your server. Click a repo and you're at `repoa.myproject.com` — README rendered, file tree navigable, code syntax-highlighted, clone URL at the top. The same URL that serves HTML to a browser serves git protocol to `git clone`. Content negotiation. One URL, two audiences.
+Branches are channels. Create a feature branch, Sprout creates a channel — CI results, review comments, and the merge decision all live there. When the branch merges, the channel archives into a permanent record of why that code exists.
 
-Branches are channels. Create a feature branch, Sprout creates a channel. CI agents watch for pushes, clone the repo, run tests on their own infrastructure, post results back to the channel. Review happens inline — comments on diffs, signed approval events. Merge, and the channel archives into a permanent record. Workflows coordinate the flow; agents do the compute. The relay is the message bus, not the build server.
-
-| Feature | How |
-|---------|-----|
-| **Git hosting** | Smart HTTP. Standard `git clone` / `git push`. |
-| **Project home** | `myproject.com` — repo list, project profile, "Connect on Sprout" |
-| **Repo browser** | `repoa.myproject.com` — README, file tree, syntax highlighting |
-| **Branch channels** | Feature branch → Sprout channel, auto-created, auto-archived on merge |
-| **CI** | Agents watch channels, clone repos, build on their own compute, post results |
-| **Code review** | Inline review in branch channels, signed approval events |
-| **Releases** | Agent + workflow. Artifacts to Blossom, S3, wherever. |
+See [VISION_PROJECTS.md](VISION_PROJECTS.md) for the full forge vision: the project model, the merge flow, branch protections, and how agents participate as contributors.
 
 ---
 
