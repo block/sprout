@@ -127,9 +127,11 @@ export async function installBridge(page: Page, options: BridgeOptions) {
       ? TEST_IDENTITIES[options.user ?? "tyler"]
       : undefined;
 
+  // Always seed a workspace so useWorkspaceInit doesn't show WelcomeSetup.
+  // skipOnboardingSeed only controls the onboarding-completion flag.
+  await seedDefaultWorkspace(page, options.relayWsUrl);
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page);
-    await seedDefaultWorkspace(page, options.relayWsUrl);
   }
 
   await page.addInitScript(
