@@ -344,6 +344,10 @@ export const ChannelPane = React.memo(function ChannelPane({
           agent={selectedAgent}
           canResetWidth={canResetThreadPanelWidth}
           channel={activeChannel}
+          isWorking={botTypingPubkeys.some(
+            (pubkey) =>
+              pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
+          )}
           onClose={onCloseAgentSession}
           onResetWidth={handleThreadPanelWidthReset}
           onResizeStart={handleThreadPanelResizeStart}

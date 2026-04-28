@@ -4498,6 +4498,8 @@ export function maybeInstallE2eTauriMocks() {
         return handleStopManagedAgent(
           payload as Parameters<typeof handleStopManagedAgent>[0],
         );
+      case "cancel_managed_agent_turn":
+        return { status: "sent" };
       case "set_managed_agent_start_on_app_launch":
         return handleSetManagedAgentStartOnAppLaunch(
           payload as Parameters<

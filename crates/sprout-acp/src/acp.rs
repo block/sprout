@@ -463,6 +463,33 @@ impl AcpClient {
             }
         };
 
+        self.cancel_with_cleanup_until(session_id, hard_deadline)
+            .await
+    }
+
+    /// Cancel a user-interrupted turn with a bounded grace window.
+    ///
+    /// Some ACP servers currently keep streaming after `session/cancel`. For an
+    /// explicit Stop button, waiting until the original turn deadline can make
+    /// cancellation look broken. This variant gives the agent a short chance to
+    /// acknowledge cancellation, then returns a timeout so the caller can respawn
+    /// the agent process and actually stop the work.
+    pub async fn cancel_with_cleanup_grace(
+        &mut self,
+        session_id: &str,
+        grace: std::time::Duration,
+    ) -> Result<StopReason, AcpError> {
+        let _ = self.current_hard_deadline.take();
+        let hard_deadline = tokio::time::Instant::now() + grace;
+        self.cancel_with_cleanup_until(session_id, hard_deadline)
+            .await
+    }
+
+    async fn cancel_with_cleanup_until(
+        &mut self,
+        session_id: &str,
+        hard_deadline: tokio::time::Instant,
+    ) -> Result<StopReason, AcpError> {
         // Validate precondition before any side effects — fail fast if there's
         // no in-flight prompt (prevents writing permission responses or cancel
         // notifications to the agent when no prompt is active).
@@ -490,10 +517,8 @@ impl AcpClient {
         tracing::info!(target: "acp::cancel", "sent session/cancel for {session_id}");
         // Use a fixed 30s idle timeout during cleanup — the cancel notification
         // needs time to propagate and the agent may go silent while winding down.
-        // We do NOT use the caller's idle_timeout here: that value was tuned for
-        // normal prompt activity and may be very short (e.g. 5s). Using it during
-        // cancel would cause premature IdleTimeout before the cancelled response
-        // arrives, leaving the session in an inconsistent state.
+        // The separate hard_deadline bounds agents that keep producing output
+        // but ignore cancellation.
         let cleanup_idle = std::time::Duration::from_secs(30);
         let result = self
             .read_until_response_with_idle_timeout(prompt_id, cleanup_idle, hard_deadline)

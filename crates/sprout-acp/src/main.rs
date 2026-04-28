@@ -20,7 +20,8 @@ use filter::SubscriptionRule;
 use futures_util::FutureExt;
 use nostr::ToBech32;
 use pool::{
-    AgentPool, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource, SessionState,
+    AgentPool, CancelMode, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource,
+    SessionState,
 };
 use queue::{EventQueue, QueuedEvent, ThreadTags};
 use relay::HarnessRelay;
@@ -530,9 +531,18 @@ async fn tokio_main() -> Result<()> {
     let config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
     tracing::info!("sprout-acp starting: {}", config.summary());
 
+    let (observer_control_tx, mut observer_control_rx) =
+        mpsc::channel::<observer::ObserverControlCommand>(32);
+
     let observer = match config.observer_addr.as_deref() {
         Some(addr) => {
-            match observer::spawn_observer_server(addr, config.observer_token.clone()).await {
+            match observer::spawn_observer_server(
+                addr,
+                config.observer_token.clone(),
+                Some(observer_control_tx.clone()),
+            )
+            .await
+            {
                 Ok(handle) => {
                     tracing::info!(target: "observer", "ACP observer listening on http://{}", handle.addr());
                     handle.emit(
@@ -1029,6 +1039,29 @@ async fn tokio_main() -> Result<()> {
                 Some(Err(e)) = join_set.join_next(), if !join_set.is_empty() => {
                     Some(PoolEvent::Panic(e))
                 }
+                control = observer_control_rx.recv() => {
+                    let _ = result_rx;
+                    if let Some(command) = control {
+                        match command {
+                            observer::ObserverControlCommand::CancelTurn { channel_id, respond_to } => {
+                                let fired = cancel_in_flight_task(&mut pool, channel_id, CancelMode::Stop);
+                                if !fired {
+                                    tracing::warn!(
+                                        channel_id = %channel_id,
+                                        "observer cancel requested but no in-flight task — no-op"
+                                    );
+                                }
+                                let status = if fired {
+                                    observer::CancelTurnStatus::Sent
+                                } else {
+                                    observer::CancelTurnStatus::NoActiveTurn
+                                };
+                                let _ = respond_to.send(observer::CancelTurnResponse { status });
+                            }
+                        }
+                    }
+                    None
+                }
                 // Remaining branches don't touch pool — evaluated when pool is idle.
                 sprout_event = relay.next_event() => {
                     let _ = result_rx; // end split borrow before relay handling
@@ -1202,7 +1235,7 @@ async fn tokio_main() -> Result<()> {
                                     .await;
                                 if let Some(owner) = owner {
                                     if sprout_event.event.pubkey.to_hex() == *owner {
-                                        let fired = cancel_in_flight_task(&mut pool, sprout_event.channel_id);
+                                        let fired = cancel_in_flight_task(&mut pool, sprout_event.channel_id, CancelMode::Stop);
                                         if !fired {
                                             tracing::warn!(
                                                 channel_id = %sprout_event.channel_id,
@@ -1312,7 +1345,7 @@ async fn tokio_main() -> Result<()> {
                                     }
                                 };
                                 if should_cancel {
-                                    cancel_in_flight_task(&mut pool, sprout_event.channel_id);
+                                    cancel_in_flight_task(&mut pool, sprout_event.channel_id, CancelMode::Interrupt);
                                 }
                             }
                             // ── End mode gate ────────────────────────────────
@@ -1580,7 +1613,7 @@ enum LoopAction {
 
 /// Send a cancel signal to the in-flight task for `channel_id`.
 /// Returns `true` if a signal was sent, `false` if no in-flight task was found.
-fn cancel_in_flight_task(pool: &mut AgentPool, channel_id: uuid::Uuid) -> bool {
+fn cancel_in_flight_task(pool: &mut AgentPool, channel_id: uuid::Uuid, mode: CancelMode) -> bool {
     let entry = pool
         .task_map_mut()
         .values_mut()
@@ -1588,7 +1621,7 @@ fn cancel_in_flight_task(pool: &mut AgentPool, channel_id: uuid::Uuid) -> bool {
 
     if let Some(meta) = entry {
         if let Some(tx) = meta.cancel_tx.take() {
-            let _ = tx.send(());
+            let _ = tx.send(mode);
             tracing::info!(channel = %channel_id, "cancel signal sent to in-flight task");
             return true;
         }
@@ -1640,7 +1673,7 @@ fn dispatch_pending(
 
         // Prompt text is now built inside run_prompt_task (needs async for
         // context fetching). Pass None for prompt_text; batch carries the data.
-        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<CancelMode>();
 
         let abort_handle = pool.join_set.spawn(async move {
             pool::run_prompt_task(

@@ -1,8 +1,8 @@
-//! Local read-only observer feed for ACP session activity.
+//! Local observer and control endpoint for ACP session activity.
 //!
 //! This is intentionally process-local infrastructure: it lets the desktop app
-//! watch the raw ACP JSON-RPC stream without sending private execution detail
-//! through the Sprout relay.
+//! watch the raw ACP JSON-RPC stream and send tightly-scoped control commands
+//! without sending private execution detail through the Sprout relay.
 
 use std::{
     collections::VecDeque,
@@ -21,12 +21,12 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use futures_util::{stream, StreamExt};
-use serde::Serialize;
-use tokio::sync::broadcast;
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 const OBSERVER_BUFFER_CAP: usize = 1_000;
 
@@ -62,20 +62,49 @@ pub struct ObserverEvent {
     pub payload: serde_json::Value,
 }
 
+#[derive(Debug)]
+pub enum ObserverControlCommand {
+    CancelTurn {
+        channel_id: uuid::Uuid,
+        respond_to: oneshot::Sender<CancelTurnResponse>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelTurnResponse {
+    pub status: CancelTurnStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelTurnStatus {
+    Sent,
+    NoActiveTurn,
+}
+
 #[derive(Clone)]
 struct ObserverServerState {
     observer: ObserverHandle,
     token: Option<String>,
+    control_tx: Option<mpsc::Sender<ObserverControlCommand>>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 struct EventQuery {
     token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelTurnRequest {
+    channel_id: uuid::Uuid,
 }
 
 pub async fn spawn_observer_server(
     bind_addr: &str,
     token: Option<String>,
+    control_tx: Option<mpsc::Sender<ObserverControlCommand>>,
 ) -> anyhow::Result<ObserverHandle> {
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     let addr = listener.local_addr()?;
@@ -95,10 +124,12 @@ pub async fn spawn_observer_server(
     let state = ObserverServerState {
         observer: observer.clone(),
         token,
+        control_tx,
     };
     let app = Router::new()
         .route("/events", get(events_handler))
         .route("/health", get(health_handler))
+        .route("/control/cancel", post(cancel_turn_handler))
         .with_state(state);
 
     tokio::spawn(async move {
@@ -167,6 +198,7 @@ async fn health_handler(State(state): State<ObserverServerState>) -> Response {
     serde_json::json!({
         "ok": true,
         "addr": state.observer.addr().to_string(),
+        "control": state.control_tx.is_some(),
     })
     .to_string()
     .into_response()
@@ -177,7 +209,7 @@ async fn events_handler(
     Query(query): Query<EventQuery>,
     headers: HeaderMap,
 ) -> Response {
-    if !token_matches(state.token.as_deref(), query.token.as_deref()) {
+    if !authorized(state.token.as_deref(), query.token.as_deref(), &headers) {
         return (StatusCode::UNAUTHORIZED, "invalid observer token").into_response();
     }
 
@@ -212,6 +244,62 @@ async fn events_handler(
         HeaderValue::from_static("no-store, no-cache"),
     );
     response
+}
+
+async fn cancel_turn_handler(
+    State(state): State<ObserverServerState>,
+    Query(query): Query<EventQuery>,
+    headers: HeaderMap,
+    Json(request): Json<CancelTurnRequest>,
+) -> Response {
+    if !authorized(state.token.as_deref(), query.token.as_deref(), &headers) {
+        return (StatusCode::UNAUTHORIZED, "invalid observer token").into_response();
+    }
+
+    if !origin_allowed(headers.get(header::ORIGIN)) {
+        return (StatusCode::FORBIDDEN, "forbidden: invalid origin").into_response();
+    }
+
+    let Some(control_tx) = state.control_tx else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "observer control is not available",
+        )
+            .into_response();
+    };
+
+    let (respond_to, response_rx) = oneshot::channel();
+    let command = ObserverControlCommand::CancelTurn {
+        channel_id: request.channel_id,
+        respond_to,
+    };
+
+    if control_tx.send(command).await.is_err() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "observer control loop is not available",
+        )
+            .into_response();
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(2), response_rx).await {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "observer control response was dropped",
+        )
+            .into_response(),
+        Err(_) => (StatusCode::GATEWAY_TIMEOUT, "observer control timed out").into_response(),
+    }
+}
+
+fn authorized(expected: Option<&str>, query_token: Option<&str>, headers: &HeaderMap) -> bool {
+    token_matches(expected, query_token) || token_matches(expected, bearer_token(headers))
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    value.strip_prefix("Bearer ")
 }
 
 fn token_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
@@ -260,9 +348,9 @@ pub fn context_for(
 
 #[cfg(test)]
 mod tests {
-    use axum::http::HeaderValue;
+    use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{origin_allowed, token_matches};
+    use super::{authorized, origin_allowed, token_matches};
 
     #[test]
     fn observer_token_requires_exact_match_when_configured() {
@@ -271,6 +359,17 @@ mod tests {
         assert!(!token_matches(Some("secret"), None));
         assert!(token_matches(None, None));
         assert!(token_matches(None, Some("anything")));
+    }
+
+    #[test]
+    fn observer_authorization_accepts_bearer_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret"),
+        );
+        assert!(authorized(Some("secret"), None, &headers));
+        assert!(!authorized(Some("other"), None, &headers));
     }
 
     #[test]

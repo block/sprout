@@ -374,6 +374,10 @@ export type ManagedAgentLog = {
   logPath: string;
 };
 
+export type CancelManagedAgentTurnResult = {
+  status: "sent" | "no_active_turn";
+};
+
 export type AcpProvider = {
   id: string;
   label: string;

@@ -1,3 +1,4 @@
+mod agent_control;
 mod agent_discovery;
 mod agent_models;
 mod agent_settings;
@@ -18,6 +19,7 @@ pub mod tokens;
 mod workflows;
 mod workspace;
 
+pub use agent_control::*;
 pub use agent_discovery::*;
 pub use agent_models::*;
 pub use agent_settings::*;

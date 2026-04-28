@@ -412,6 +412,7 @@ pub fn run() {
             revoke_token,
             revoke_all_tokens,
             list_relay_agents,
+            cancel_managed_agent_turn,
             list_managed_agents,
             create_managed_agent,
             start_managed_agent,

@@ -1,16 +1,20 @@
 import type * as React from "react";
-import { Activity, Bot, CircleDot, X } from "lucide-react";
+import { Activity, Bot, CircleDot, Octagon, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
+import { cancelManagedAgentTurn } from "@/shared/api/agentControl";
 import type { Channel, ManagedAgent } from "@/shared/api/types";
 import { useStickToBottom } from "@/shared/hooks/useStickToBottom";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type AgentSessionThreadPanelProps = {
   agent: ManagedAgent;
   canResetWidth: boolean;
   channel: Channel;
+  isWorking: boolean;
   onClose: () => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
@@ -21,6 +25,7 @@ export function AgentSessionThreadPanel({
   agent,
   canResetWidth,
   channel,
+  isWorking,
   onClose,
   onResetWidth,
   onResizeStart,
@@ -28,6 +33,23 @@ export function AgentSessionThreadPanel({
 }: AgentSessionThreadPanelProps) {
   const isLive = agent.status === "running" && Boolean(agent.observerUrl);
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
+
+  async function handleInterruptTurn() {
+    try {
+      const result = await cancelManagedAgentTurn(agent.pubkey, channel.id);
+      if (result.status === "sent") {
+        toast.success(`Stop signal sent to ${agent.name}.`);
+      } else {
+        toast.info(`${agent.name} has no active turn in this channel.`);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Failed to stop ${agent.name}'s current turn.`,
+      );
+    }
+  }
 
   return (
     <aside
@@ -74,6 +96,29 @@ export function AgentSessionThreadPanel({
             Idle
           </Badge>
         )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Stop current agent turn"
+              data-testid="agent-session-stop-turn"
+              disabled={!isLive || !isWorking}
+              onClick={() => {
+                void handleInterruptTurn();
+              }}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Octagon className="h-3.5 w-3.5" />
+              Stop
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">
+            {isWorking
+              ? "Interrupt the current ACP turn without stopping the agent process."
+              : "No active turn to interrupt."}
+          </TooltipContent>
+        </Tooltip>
         <Button
           aria-label="Close activity panel"
           data-testid="agent-session-close"
