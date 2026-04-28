@@ -1,4 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { ReactNode } from "react";
 
 import type { Workspace } from "./types";
 import {
@@ -11,6 +19,8 @@ import {
 export type UseWorkspacesReturn = {
   workspaces: Workspace[];
   activeWorkspace: Workspace | null;
+  /** Counter bumped when the active workspace's config changes (relayUrl/token). */
+  reinitKey: number;
   /** Add a workspace, deduplicating by relayUrl. Returns the final ID in the list. */
   addWorkspace: (workspace: Workspace) => string;
   removeWorkspace: (id: string) => void;
@@ -21,12 +31,32 @@ export type UseWorkspacesReturn = {
   ) => void;
 };
 
+const WorkspacesContext = createContext<UseWorkspacesReturn | null>(null);
+
+export function WorkspacesProvider({ children }: { children: ReactNode }) {
+  const value = useWorkspacesInternal();
+  return (
+    <WorkspacesContext.Provider value={value}>
+      {children}
+    </WorkspacesContext.Provider>
+  );
+}
+
 export function useWorkspaces(): UseWorkspacesReturn {
+  const ctx = useContext(WorkspacesContext);
+  if (!ctx) {
+    throw new Error("useWorkspaces must be used within a WorkspacesProvider");
+  }
+  return ctx;
+}
+
+function useWorkspacesInternal(): UseWorkspacesReturn {
   const [workspaces, setWorkspacesState] =
     useState<Workspace[]>(loadWorkspaces);
   const [activeId, setActiveId] = useState<string | null>(
     loadActiveWorkspaceId,
   );
+  const [reinitKey, setReinitKey] = useState(0);
   const workspacesRef = useRef(workspaces);
   workspacesRef.current = workspaces;
 
@@ -76,9 +106,8 @@ export function useWorkspaces(): UseWorkspacesReturn {
 
         // If removing the active workspace, switch to first remaining
         if (activeId === id && next.length > 0) {
-          setActiveId(next[0].id);
           saveActiveWorkspaceId(next[0].id);
-          window.location.reload();
+          setActiveId(next[0].id);
         }
 
         return next;
@@ -93,7 +122,7 @@ export function useWorkspaces(): UseWorkspacesReturn {
         return;
       }
       saveActiveWorkspaceId(id);
-      window.location.reload();
+      setActiveId(id);
     },
     [activeId],
   );
@@ -115,12 +144,13 @@ export function useWorkspaces(): UseWorkspacesReturn {
         saveWorkspaces(next);
         return next;
       });
-      // If the active workspace's relay URL or token changed, reload to reconnect
+      // If the active workspace's relay URL or token changed, bump reinitKey
+      // so the React tree remounts with the new config.
       if (
         id === activeId &&
         (updates.relayUrl || updates.token !== undefined)
       ) {
-        window.location.reload();
+        setReinitKey((k) => k + 1);
       }
     },
     [activeId],
@@ -129,6 +159,7 @@ export function useWorkspaces(): UseWorkspacesReturn {
   return {
     workspaces,
     activeWorkspace,
+    reinitKey,
     addWorkspace,
     removeWorkspace,
     switchWorkspace,

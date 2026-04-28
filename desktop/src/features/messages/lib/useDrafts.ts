@@ -10,6 +10,10 @@ export type DraftState = {
 
 const sharedDrafts = new Map<string, DraftState>();
 
+export function clearAllDrafts(): void {
+  sharedDrafts.clear();
+}
+
 export function useDrafts() {
   const saveDraft = React.useCallback(
     (channelId: string, draft: DraftState) => {

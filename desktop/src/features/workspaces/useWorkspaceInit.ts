@@ -1,12 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { relayClient } from "@/shared/api/relayClient";
 import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
+import { resetMediaCaches } from "@/shared/lib/mediaUrl";
+import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
+import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 
-import {
-  loadActiveWorkspaceId,
-  loadWorkspaces,
-  saveActiveWorkspaceId,
-} from "./workspaceStorage";
+import type { Workspace } from "./types";
+
+/**
+ * Tear down all workspace-scoped module singletons so the new
+ * workspace starts with a clean slate. Add new resets here.
+ */
+function resetWorkspaceState(): void {
+  relayClient.disconnect();
+  resetMediaCaches();
+  clearSearchHitEventCache();
+  clearAllDrafts();
+}
 
 type WorkspaceInitResult =
   | { isReady: true; needsSetup: false }
@@ -14,36 +25,38 @@ type WorkspaceInitResult =
   | { isReady: false; needsSetup: false };
 
 /**
- * Runs once on mount. Loads the active workspace from localStorage
- * and calls the Tauri backend to apply the workspace config
- * (keys, relay URL, token).
+ * Applies the active workspace config to the Tauri backend and resets
+ * all workspace-scoped module singletons when the workspace changes.
  *
  * Returns a discriminated union — only render the app after the
  * workspace is applied. When `needsSetup` is true, the caller
  * should show a first-run welcome screen.
  */
-export function useWorkspaceInit(): WorkspaceInitResult {
+export function useWorkspaceInit(
+  activeWorkspace: Workspace | null,
+): WorkspaceInitResult {
   const [result, setResult] = useState<WorkspaceInitResult>({
     isReady: false,
     needsSetup: false,
   });
 
+  // Track whether this is the initial mount or a workspace switch.
+  // On the initial mount we skip resetting singletons (they're fresh).
+  const hasInitializedRef = useRef(false);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: we intentionally depend on specific properties (id/relayUrl/token) — depending on the whole object would trigger resets on name-only changes
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
-      const workspaces = loadWorkspaces();
-
-      if (workspaces.length === 0) {
-        // No workspaces at all — fetch the build default relay URL
-        // so the welcome screen can pre-fill it.
+      if (!activeWorkspace) {
+        // No workspace — need setup
         try {
           const defaultRelayUrl = await getDefaultRelayUrl();
           if (!cancelled) {
             setResult({ isReady: false, needsSetup: true, defaultRelayUrl });
           }
         } catch {
-          // If we can't get the default, fall back to localhost
           if (!cancelled) {
             setResult({
               isReady: false,
@@ -55,24 +68,23 @@ export function useWorkspaceInit(): WorkspaceInitResult {
         return;
       }
 
-      // Determine active workspace
-      let activeId = loadActiveWorkspaceId();
-      if (!activeId || !workspaces.find((w) => w.id === activeId)) {
-        activeId = workspaces[0].id;
-        saveActiveWorkspaceId(activeId);
+      // On workspace switch (not initial mount), reset module singletons
+      // so the new tree starts with a clean slate.
+      if (hasInitializedRef.current) {
+        resetWorkspaceState();
       }
+      hasInitializedRef.current = true;
 
-      const active = workspaces.find((w) => w.id === activeId);
-      if (!active) {
-        if (!cancelled) {
-          setResult({ isReady: true, needsSetup: false });
-        }
-        return;
-      }
+      // Show loading gate while we apply the new workspace config
+      setResult({ isReady: false, needsSetup: false });
 
       // Apply workspace config to the Tauri backend
       try {
-        await applyWorkspace(active.relayUrl, active.nsec, active.token);
+        await applyWorkspace(
+          activeWorkspace.relayUrl,
+          activeWorkspace.nsec,
+          activeWorkspace.token,
+        );
       } catch (error) {
         console.error("Failed to apply workspace to backend:", error);
       }
@@ -87,7 +99,7 @@ export function useWorkspaceInit(): WorkspaceInitResult {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeWorkspace?.id, activeWorkspace?.relayUrl, activeWorkspace?.token]);
 
   return result;
 }

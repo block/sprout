@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useQueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import { useCallback, useLayoutEffect } from "react";
 
@@ -6,6 +7,7 @@ import { router } from "@/app/router";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
 
 function AppLoadingGate() {
@@ -52,11 +54,25 @@ export function App() {
     void getCurrentWindow().show();
   }, []);
 
-  const workspace = useWorkspaceInit();
+  const queryClient = useQueryClient();
+  const { activeWorkspace, reinitKey } = useWorkspaces();
+  const workspace = useWorkspaceInit(activeWorkspace);
+
+  // Composite key: changes when workspace ID changes OR when
+  // the active workspace's config is updated (relayUrl/token).
+  const workspaceKey = `${activeWorkspace?.id ?? "none"}-${reinitKey}`;
+
+  // Clear stale React Query cache synchronously when workspace changes.
+  // useLayoutEffect fires before child useEffect hooks, preventing stale
+  // data from being served to the new workspace's components.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: workspaceKey drives the re-run intentionally
+  useLayoutEffect(() => {
+    queryClient.clear();
+  }, [workspaceKey, queryClient]);
 
   const handleSetupComplete = useCallback(() => {
-    // Force a full reload so useWorkspaceInit re-runs and picks up
-    // the newly-created workspace from localStorage.
+    // Force a full reload so useWorkspaces re-initializes from localStorage.
+    // This only runs once — during first-run setup when no workspace existed.
     window.location.reload();
   }, []);
 
@@ -76,5 +92,5 @@ export function App() {
     return <AppLoadingGate />;
   }
 
-  return <AppReady />;
+  return <AppReady key={workspaceKey} />;
 }
