@@ -167,6 +167,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type?: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -4347,6 +4348,10 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return DEFAULT_MOCK_IDENTITY;
+      case "get_nsec":
+        return "nsec1mock000000000000000000000000000000000000000000000000000000";
+      case "apply_workspace":
+        return;
       case "get_profile":
         return handleGetProfile(activeConfig);
       case "update_profile":
@@ -4387,6 +4392,8 @@ export function maybeInstallE2eTauriMocks() {
           activeConfig,
         );
       case "get_relay_ws_url":
+        return getRelayWsUrl(activeConfig);
+      case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
       case "get_relay_http_url":
         return getRelayHttpUrl(activeConfig);

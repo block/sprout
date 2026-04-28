@@ -23,6 +23,7 @@ import { useHomeFeedNotifications } from "@/features/notifications/hooks";
 import {
   listenForDesktopNotificationActions,
   revealDesktopAppWindow,
+  sendDesktopNotification,
   setDesktopAppBadgeCount,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
@@ -34,11 +35,12 @@ import {
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import { joinChannel } from "@/shared/api/tauri";
-import type { SearchHit } from "@/shared/api/types";
+import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { Button } from "@/shared/ui/button";
 import {
@@ -115,6 +117,9 @@ function deriveShellRoute(pathname: string): {
 export function AppShell() {
   useWebviewZoomShortcuts();
 
+  const workspacesHook = useWorkspaces();
+  const [isAddWorkspaceOpen, setIsAddWorkspaceOpen] = React.useState(false);
+
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
     DEFAULT_SETTINGS_SECTION,
@@ -152,6 +157,37 @@ export function AppShell() {
     void homeFeedQuery.refetch();
   });
 
+  const handleDmNotification = React.useEffectEvent(
+    (event: RelayEvent, channel: Channel) => {
+      if (!notificationSettings.settings.desktopEnabled) {
+        return;
+      }
+
+      const channelName = channel.name?.trim() || "Direct message";
+      const content = event.content.trim();
+      const body =
+        content.length > 0
+          ? content.length > 140
+            ? `${content.slice(0, 137).trimEnd()}...`
+            : content
+          : "New message";
+
+      void sendDesktopNotification({
+        title: "Direct message",
+        body,
+        target: {
+          channelId: channel.id,
+          channelName,
+          content: event.content,
+          createdAt: event.created_at,
+          eventId: event.id,
+          kind: event.kind,
+          pubkey: event.pubkey,
+        },
+      });
+    },
+  );
+
   const channelsQuery = useChannelsQuery();
   const { refetch: refetchChannels } = channelsQuery;
   const channels = channelsQuery.data ?? [];
@@ -179,6 +215,7 @@ export function AppShell() {
     null,
     {
       currentPubkey: identityQuery.data?.pubkey,
+      onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
     },
   );
@@ -454,6 +491,7 @@ export function AppShell() {
                   />
                 </div>
                 <AppSidebar
+                  activeWorkspace={workspacesHook.activeWorkspace}
                   channels={sidebarChannels}
                   currentPubkey={identityQuery.data?.pubkey}
                   errorMessage={
@@ -463,14 +501,25 @@ export function AppShell() {
                   }
                   fallbackDisplayName={identityQuery.data?.displayName}
                   homeBadgeCount={homeBadgeCount}
+                  isAddWorkspaceOpen={isAddWorkspaceOpen}
                   isCreatingChannel={createChannelMutation.isPending}
                   isCreatingForum={createForumMutation.isPending}
                   isLoading={channelsQuery.isLoading}
                   isOpeningDm={openDmMutation.isPending}
                   isNewDmOpen={isNewDmOpen}
                   isPresencePending={presenceSession.isPending}
+                  onAddWorkspace={(workspace) => {
+                    const id = workspacesHook.addWorkspace(workspace);
+                    workspacesHook.switchWorkspace(id);
+                  }}
+                  onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                   onNewDmOpenChange={setIsNewDmOpen}
+                  onOpenAddWorkspace={() => setIsAddWorkspaceOpen(true)}
+                  onUpdateWorkspace={workspacesHook.updateWorkspace}
+                  onRemoveWorkspace={workspacesHook.removeWorkspace}
+                  onSwitchWorkspace={workspacesHook.switchWorkspace}
                   selfPresenceStatus={presenceSession.currentStatus}
+                  workspaces={workspacesHook.workspaces}
                   onCreateChannel={async ({
                     description,
                     name,

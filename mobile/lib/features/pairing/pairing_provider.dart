@@ -444,17 +444,17 @@ class PairingNotifier extends Notifier<PairingState> {
       // Send complete only after credentials are validated.
       _sendComplete(true);
 
-      // Store credentials.
+      // Store as workspace and switch to it.
+      final workspace = Workspace.create(
+        name: Workspace.nameFromUrl(relayUrl),
+        relayUrl: relayUrl,
+        token: token,
+        pubkey: pubkey,
+        nsec: nsec,
+      );
       await ref
           .read(authProvider.notifier)
-          .authenticate(
-            StoredCredentials(
-              relayUrl: relayUrl,
-              token: token,
-              pubkey: pubkey,
-              nsec: nsec,
-            ),
-          );
+          .authenticateWithWorkspace(workspace);
 
       _cleanup();
       state = const PairingState(status: PairingStatus.success);
@@ -543,11 +543,11 @@ class PairingNotifier extends Notifier<PairingState> {
     state = const PairingState(status: PairingStatus.connecting);
 
     try {
-      final creds = _parseLegacyInput(rawInput);
+      final workspace = _parseLegacyInput(rawInput);
 
       final client = RelayClient(
-        baseUrl: creds.relayUrl,
-        apiToken: creds.token,
+        baseUrl: workspace.relayUrl,
+        apiToken: workspace.token,
         httpClient: ref.read(pairingHttpClientProvider),
       );
       try {
@@ -556,7 +556,9 @@ class PairingNotifier extends Notifier<PairingState> {
         client.dispose();
       }
 
-      await ref.read(authProvider.notifier).authenticate(creds);
+      await ref
+          .read(authProvider.notifier)
+          .authenticateWithWorkspace(workspace);
       state = const PairingState(status: PairingStatus.success);
     } on FormatException catch (e) {
       state = PairingState(
@@ -580,7 +582,7 @@ class PairingNotifier extends Notifier<PairingState> {
     }
   }
 
-  StoredCredentials _parseLegacyInput(String raw) {
+  Workspace _parseLegacyInput(String raw) {
     var payload = raw.trim();
 
     if (payload.startsWith('sprout://')) {
@@ -602,7 +604,8 @@ class PairingNotifier extends Notifier<PairingState> {
 
     _validateRelayUrl(relayUrl);
 
-    return StoredCredentials(
+    return Workspace.create(
+      name: Workspace.nameFromUrl(relayUrl),
       relayUrl: relayUrl,
       token: token,
       pubkey: decoded['pubkey'] as String?,

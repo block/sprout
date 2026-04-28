@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEditorState, type Editor } from "@tiptap/react";
+import type { Editor } from "@tiptap/react";
 import {
   Bold,
   Code,
@@ -11,7 +11,7 @@ import {
   Strikethrough,
 } from "lucide-react";
 
-import { Toggle } from "@/shared/ui/toggle";
+import { cn } from "@/shared/lib/cn";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type FormattingToolbarProps = {
@@ -19,14 +19,59 @@ type FormattingToolbarProps = {
   disabled?: boolean;
 };
 
+type ActiveStates = {
+  bold: boolean;
+  italic: boolean;
+  strike: boolean;
+  code: boolean;
+  link: boolean;
+  bulletList: boolean;
+  orderedList: boolean;
+  blockquote: boolean;
+};
+
+function getActiveStates(editor: Editor): ActiveStates {
+  return {
+    bold: editor.isActive("bold"),
+    italic: editor.isActive("italic"),
+    strike: editor.isActive("strike"),
+    code: editor.isActive("code"),
+    link: editor.isActive("link"),
+    bulletList: editor.isActive("bulletList"),
+    orderedList: editor.isActive("orderedList"),
+    blockquote: editor.isActive("blockquote"),
+  };
+}
+
 /**
  * Formatting bar shown above the editor when the format toggle is active.
- * Renders all formatting buttons in a single row with bg-muted styling.
+ * Uses plain buttons with explicit active-class toggling instead of
+ * Radix Toggle to avoid data-state / re-render issues.
  */
 export const FormattingToolbar = React.memo(function FormattingToolbar({
   editor,
   disabled = false,
 }: FormattingToolbarProps) {
+  const [activeStates, setActiveStates] = React.useState<ActiveStates | null>(
+    () => (editor ? getActiveStates(editor) : null),
+  );
+
+  React.useEffect(() => {
+    if (!editor) {
+      setActiveStates(null);
+      return;
+    }
+    setActiveStates(getActiveStates(editor));
+
+    const onTransaction = () => {
+      setActiveStates(getActiveStates(editor));
+    };
+    editor.on("transaction", onTransaction);
+    return () => {
+      editor.off("transaction", onTransaction);
+    };
+  }, [editor]);
+
   const toggleBold = React.useCallback(() => {
     editor?.chain().focus().toggleBold().run();
   }, [editor]);
@@ -79,26 +124,6 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
   const toggleBlockquote = React.useCallback(() => {
     editor?.chain().focus().toggleBlockquote().run();
   }, [editor]);
-
-  // Subscribe to editor state changes so active marks/nodes update on
-  // selection change — useEditorState triggers re-renders when the
-  // selector result changes.
-  const activeStates = useEditorState({
-    editor,
-    selector: ({ editor: ed }) =>
-      ed
-        ? {
-            bold: ed.isActive("bold"),
-            italic: ed.isActive("italic"),
-            strike: ed.isActive("strike"),
-            code: ed.isActive("code"),
-            link: ed.isActive("link"),
-            bulletList: ed.isActive("bulletList"),
-            orderedList: ed.isActive("orderedList"),
-            blockquote: ed.isActive("blockquote"),
-          }
-        : null,
-  });
 
   if (!editor || !activeStates) return null;
 
@@ -163,15 +188,25 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
       {items.map((item) => (
         <Tooltip key={item.label}>
           <TooltipTrigger asChild>
-            <Toggle
+            <button
+              type="button"
               aria-label={item.label}
+              aria-pressed={item.active}
               disabled={disabled}
-              pressed={item.active}
-              onPressedChange={() => item.action()}
-              className="h-7 w-7 min-w-7 [&_svg]:size-3.5"
+              onClick={() => item.action()}
+              className={cn(
+                "inline-flex h-7 w-7 min-w-7 items-center justify-center rounded-md text-sm font-medium transition-colors",
+                "hover:bg-muted hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                "disabled:pointer-events-none disabled:opacity-50",
+                "[&_svg]:pointer-events-none [&_svg]:size-3.5 [&_svg]:shrink-0",
+                item.active
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-transparent text-muted-foreground",
+              )}
             >
               <item.icon className="h-3.5 w-3.5" />
-            </Toggle>
+            </button>
           </TooltipTrigger>
           <TooltipContent>
             {"shortcut" in item

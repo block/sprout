@@ -903,7 +903,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('general'), findsOneWidget);
-      expect(find.byIcon(LucideIcons.hash), findsOneWidget);
+      // The hash icon appears in the app bar and in the compose bar toolbar.
+      expect(find.byIcon(LucideIcons.hash), findsAtLeastNWidgets(1));
     });
 
     testWidgets('shows lock icon for private channel', (tester) async {

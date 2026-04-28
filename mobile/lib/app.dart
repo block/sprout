@@ -100,7 +100,7 @@ class _OfflineScreen extends ConsumerWidget {
               TextButton(
                 onPressed: () => ref.read(authProvider.notifier).signOut(),
                 child: Text(
-                  'Sign out and re-pair',
+                  'Remove workspace and re-pair',
                   style: TextStyle(color: context.colors.outline),
                 ),
               ),

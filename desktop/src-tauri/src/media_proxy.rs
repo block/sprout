@@ -111,10 +111,10 @@ async fn proxy_handler(AxumState(state): AxumState<ProxyState>, req: Request) ->
 /// Spawn a localhost HTTP proxy that streams media via reqwest, avoiding the
 /// Tauri protocol handler's requirement to buffer the entire response into
 /// `Vec<u8>`. Returns the OS-assigned port.
-pub async fn spawn_media_proxy(http_client: reqwest::Client) -> u16 {
+pub async fn spawn_media_proxy(http_client: reqwest::Client, base_url: String) -> u16 {
     let proxy_state = ProxyState {
         client: http_client,
-        base_url: relay::relay_api_base_url(),
+        base_url,
     };
 
     let app = Router::new()
@@ -146,7 +146,7 @@ pub async fn handle_sprout_media(
     use tauri::Manager;
 
     let state = app.state::<AppState>();
-    let base = relay::relay_api_base_url();
+    let base = relay::relay_api_base_url_with_override(&state);
 
     // Preserve path + query (thumbnails may have query params).
     // Only proxy /media/ paths — reject anything else.

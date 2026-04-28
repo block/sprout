@@ -224,6 +224,8 @@ pub struct FeedItemInfo {
     pub created_at: u64,
     pub channel_id: Option<String>,
     pub channel_name: String,
+    #[serde(default)]
+    pub channel_type: Option<String>,
     pub tags: Vec<Vec<String>>,
     pub category: String,
 }

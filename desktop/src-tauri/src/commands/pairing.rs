@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 use crate::app_state::AppState;
-use crate::relay::{relay_api_base_url, relay_ws_url};
+use crate::relay::{relay_api_base_url_with_override, relay_ws_url_with_override};
 
 use super::tokens::{mint_token_internal_with_auth_mode, MintTokenAuthMode};
 
@@ -118,8 +118,8 @@ pub async fn start_pairing(
         (nsec, pubkey)
     };
 
-    let ws_url = relay_ws_url();
-    let http_url = relay_api_base_url();
+    let ws_url = relay_ws_url_with_override(&state);
+    let http_url = relay_api_base_url_with_override(&state);
 
     let (session, qr_payload) = PairingSession::new_source(ws_url.clone());
     let qr_uri = encode_qr(&qr_payload);

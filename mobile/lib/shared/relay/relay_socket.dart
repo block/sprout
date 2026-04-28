@@ -59,6 +59,13 @@ class RelaySocket {
       return;
     }
 
+    // The channel may have been disposed while we were awaiting ready
+    // (e.g. provider rebuild triggered dispose() concurrently).
+    if (_channel == null) {
+      _state = SocketState.disconnected;
+      return;
+    }
+
     _state = SocketState.authenticating;
     _authCompleter = Completer<void>();
 

@@ -148,6 +148,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -394,6 +395,7 @@ function fromRawFeedItem(item: RawFeedItem) {
     createdAt: item.created_at,
     channelId: item.channel_id,
     channelName: item.channel_name,
+    channelType: item.channel_type,
     tags: item.tags,
     category: item.category,
   };
@@ -524,6 +526,10 @@ export async function setPresence(
     status: response.status,
     ttlSeconds: response.ttl_seconds,
   };
+}
+
+export function getDefaultRelayUrl(): Promise<string> {
+  return invokeTauri<string>("get_default_relay_url");
 }
 
 export function getRelayWsUrl(): Promise<string> {
@@ -1103,4 +1109,16 @@ export async function confirmPairingSas(): Promise<void> {
 
 export async function cancelPairing(): Promise<void> {
   await invokeTauri("cancel_pairing");
+}
+
+export async function applyWorkspace(
+  relayUrl: string,
+  nsec?: string,
+  token?: string,
+): Promise<void> {
+  await invokeTauri("apply_workspace", {
+    relayUrl,
+    nsec: nsec ?? null,
+    token: token ?? null,
+  });
 }

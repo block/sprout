@@ -90,6 +90,8 @@ class SearchNotifier extends Notifier<SearchState> {
 
   @override
   SearchState build() {
+    // Watch relayClientProvider so search state resets on workspace switch.
+    ref.watch(relayClientProvider);
     ref.onDispose(() {
       _debounce?.cancel();
     });

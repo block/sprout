@@ -26,6 +26,31 @@ pub fn relay_ws_url() -> String {
         .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string())
 }
 
+/// Read the workspace relay URL override, if set. Returns `None` when no
+/// override is active or when the mutex is poisoned (best-effort).
+fn workspace_relay_override(state: &AppState) -> Option<String> {
+    state
+        .relay_url_override
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+/// Returns the relay WebSocket URL, checking the workspace override first.
+/// Precedence: workspace override > env vars > build-time vars > default.
+pub fn relay_ws_url_with_override(state: &AppState) -> String {
+    workspace_relay_override(state).unwrap_or_else(relay_ws_url)
+}
+
+/// Returns the relay HTTP API base URL, checking the workspace override first.
+/// Precedence: workspace override > env vars > build-time vars > default.
+pub fn relay_api_base_url_with_override(state: &AppState) -> String {
+    match workspace_relay_override(state) {
+        Some(url) => relay_http_base_url(&url),
+        None => relay_api_base_url(),
+    }
+}
+
 pub fn relay_http_base_url(relay_url: &str) -> String {
     let trimmed = relay_url.trim().trim_end_matches('/');
 
@@ -89,10 +114,14 @@ pub fn build_authed_request(
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
     validate_api_path(path)?;
-    let url = format!("{}{}", relay_api_base_url(), path);
+    let url = format!("{}{}", relay_api_base_url_with_override(state), path);
     let request = client.request(method, url);
 
     if let Some(token) = state.configured_api_token.as_deref() {
+        return Ok(request.header("Authorization", format!("Bearer {token}")));
+    }
+
+    if let Some(token) = session_api_token(state)? {
         return Ok(request.header("Authorization", format!("Bearer {token}")));
     }
 
@@ -217,7 +246,7 @@ pub fn build_token_management_request(
     state: &AppState,
 ) -> Result<reqwest::RequestBuilder, String> {
     validate_api_path(path)?;
-    let url = format!("{}{}", relay_api_base_url(), path);
+    let url = format!("{}{}", relay_api_base_url_with_override(state), path);
     let request = client.request(method, url);
 
     if let Some(token) = state.configured_api_token.as_deref() {
@@ -429,14 +458,17 @@ pub async fn submit_event(
             .sign_with_keys(&keys)
             .map_err(|e| format!("failed to sign event: {e}"))?;
         let json = event.as_json();
-        let auth = match state.configured_api_token.as_deref() {
-            Some(token) => format!("Bearer {token}"),
-            None => format!("X-Pubkey {}", keys.public_key().to_hex()),
+        let auth = if let Some(token) = state.configured_api_token.as_deref() {
+            format!("Bearer {token}")
+        } else if let Some(token) = session_api_token(state)? {
+            format!("Bearer {token}")
+        } else {
+            format!("X-Pubkey {}", keys.public_key().to_hex())
         };
         (json, auth)
     }; // keys lock dropped here
 
-    let url = format!("{}/api/events", relay_api_base_url());
+    let url = format!("{}/api/events", relay_api_base_url_with_override(state));
     let request = if auth_header.starts_with("Bearer ") {
         state
             .http_client
