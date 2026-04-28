@@ -14,6 +14,7 @@ import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';
 import 'message_content.dart';
+import 'reaction_row.dart';
 import 'send_message_provider.dart';
 import 'timeline_message.dart';
 
@@ -476,7 +477,7 @@ class _ThreadMessage extends ConsumerWidget {
                     onChannelTap: (_) {},
                   ),
                   if (message.reactions.isNotEmpty)
-                    _ReactionRow(
+                    ReactionRow(
                       reactions: message.reactions,
                       onToggle: (emoji) {
                         final actions = ref.read(channelActionsProvider);
@@ -717,65 +718,6 @@ class _Avatar extends StatelessWidget {
               ),
             )
           : null,
-    );
-  }
-}
-
-class _ReactionRow extends StatelessWidget {
-  final List<TimelineReaction> reactions;
-  final void Function(String emoji) onToggle;
-
-  const _ReactionRow({required this.reactions, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: Grid.half),
-      child: Wrap(
-        spacing: Grid.half,
-        runSpacing: Grid.half,
-        children: [
-          for (final reaction in reactions)
-            GestureDetector(
-              onTap: () => onToggle(reaction.emoji),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Grid.xxs,
-                  vertical: Grid.quarter,
-                ),
-                decoration: BoxDecoration(
-                  color: reaction.reactedByCurrentUser
-                      ? context.colors.primary.withValues(alpha: 0.12)
-                      : context.colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  border: Border.all(
-                    color: reaction.reactedByCurrentUser
-                        ? context.colors.primary.withValues(alpha: 0.4)
-                        : context.colors.outlineVariant,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(reaction.emoji, style: const TextStyle(fontSize: 14)),
-                    if (reaction.count > 1) ...[
-                      const SizedBox(width: Grid.quarter),
-                      Text(
-                        '${reaction.count}',
-                        style: context.textTheme.labelSmall?.copyWith(
-                          color: reaction.reactedByCurrentUser
-                              ? context.colors.primary
-                              : context.colors.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
     );
   }
 }
