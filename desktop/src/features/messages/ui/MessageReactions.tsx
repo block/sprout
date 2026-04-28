@@ -112,6 +112,17 @@ function ReactionPill({
     closeTimeout.current = setTimeout(() => setOpen(false), 150);
   }, [clearTimers]);
 
+  const handleFocus = React.useCallback(() => {
+    if (reaction.users.length === 0) return;
+    clearTimers();
+    setOpen(true);
+  }, [reaction.users.length, clearTimers]);
+
+  const handleBlur = React.useCallback(() => {
+    clearTimers();
+    closeTimeout.current = setTimeout(() => setOpen(false), 150);
+  }, [clearTimers]);
+
   React.useEffect(() => {
     return clearTimers;
   }, [clearTimers]);
@@ -150,19 +161,26 @@ function ReactionPill({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          aria-label={`Toggle ${reaction.emoji} reaction`}
-          aria-pressed={reaction.reactedByCurrentUser}
-          className={pillClasses}
-          disabled={!canToggle || pending}
-          onClick={handleClick}
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: span delegates hover/focus to disabled button */}
+        <span
+          className="inline-flex"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
-          type="button"
+          onFocus={handleFocus}
+          onBlur={handleBlur}
         >
-          <span>{reaction.emoji}</span>
-          <span className="text-muted-foreground">{reaction.count}</span>
-        </button>
+          <button
+            aria-label={`Toggle ${reaction.emoji} reaction`}
+            aria-pressed={reaction.reactedByCurrentUser}
+            className={pillClasses}
+            disabled={!canToggle || pending}
+            onClick={handleClick}
+            type="button"
+          >
+            <span>{reaction.emoji}</span>
+            <span className="text-muted-foreground">{reaction.count}</span>
+          </button>
+        </span>
       </PopoverTrigger>
       <PopoverContent
         align="start"

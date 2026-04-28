@@ -210,13 +210,17 @@ class _ReactorTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayName = profile?.label ?? '${pubkey.substring(0, 8)}...';
+    final displayName =
+        profile?.label ??
+        (pubkey.length >= 8 ? '${pubkey.substring(0, 8)}...' : pubkey);
     final about = profile?.about;
 
     return ListTile(
       leading: _ReactorAvatar(
         avatarUrl: profile?.avatarUrl,
-        initial: profile?.initial ?? pubkey[0].toUpperCase(),
+        initial:
+            profile?.initial ??
+            (pubkey.isNotEmpty ? pubkey[0].toUpperCase() : '?'),
       ),
       title: Text(
         displayName,
