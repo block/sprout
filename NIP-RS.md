@@ -56,9 +56,9 @@ The `<slot-id>` MUST be a non-empty ASCII string of 1–64 characters.
 
 #### `t` Tag
 
-Clients MUST include a `["t", "read-state"]` tag. This enables relay-side filtering without fetching all `kind:30078` events for the user.
+Events MUST include exactly one `["t", "read-state"]` tag. This enables relay-side filtering without fetching all `kind:30078` events for the user.
 
-Events with zero `t` tags, more than one `t` tag with value `read-state`, or a `t` tag value other than `read-state` MUST be ignored during merge — even if the event was fetched by `#d` during a read-before-write.
+Events with zero `t` tags with value `read-state`, or more than one `t` tag with value `read-state`, MUST be ignored.
 
 #### Content
 
@@ -146,6 +146,8 @@ This is a grow-only max-register state-based CvRDT with an associative, commutat
 ### Writing
 
 Clients MUST NOT publish read state without explicit user opt-in. Opt-in is a persistent user preference, not enabled by default.
+
+Clients SHOULD publish read state blobs to the same relays they use for general event storage. Clients that implement NIP-65 (relay list metadata) SHOULD publish to their write relays and fetch from their read relays.
 
 Each client instance maintains its own blob (one `kind:30078` event per `<slot-id>`). Writing replaces the previous blob via parameterized replaceable event semantics ([NIP-33](33.md)).
 
@@ -307,6 +309,43 @@ Event tags:
 ```
 
 Device A's own blob is identified because its decrypted `client_id` (`client-aabbccdd`) matches Device A's locally stored `client_id`. Device B's blob is merged but not overwritten by Device A.
+
+### Ciphertext Test Vector
+
+The following vector demonstrates the full encrypt-to-self pipeline using NIP-44 v2. The private key is the well-known secp256k1 scalar `1`.
+
+```text
+private_key = 0000000000000000000000000000000000000000000000000000000000000001
+public_key  = 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+```
+
+Plaintext:
+```json
+{"v":1,"client_id":"test-vector-client","contexts":{"group:general":1700001000,"group:dev":1700000500}}
+```
+
+Ciphertext (NIP-44 v2, base64):
+```text
+Akt10yui5aDIjfH+xED2Dr1NJ/SGWp85SC/r/bloiLRtj8K59rJrYhcfsNQMoMhpLlvhKqrN0HIGb9/V9BcYKxWV8HT/jjDdvfHLUVfo688I6WpapcX41GzL4VnGGDdFyUom53odJncjHszS3dpTrG1OKp2x9dtdG+924/+Ne49KN4nztd1pikqYeqQuxflKCmh+VcCFbDclQ8a9NUpqWkPpeoweISVVuZDnP9WFoKG5X6YcpXBWH6wjc69xK4cs6KkJ
+```
+
+The conversation key is `nip44_conversation_key(private_key, public_key)` — ECDH of the key with itself. NIP-44 v2 uses a random nonce, so re-encryption will produce different ciphertext. Verification is decrypt-only: any conforming NIP-44 implementation MUST satisfy `decrypt(private_key, public_key, ciphertext) == plaintext`.
+
+### Conflict Detection Vector
+
+Device A has `slot-id` = `aaa111` and `client_id` = `client-A`. It fetches its own `d` tag coordinate `read-state:aaa111` and decrypts the blob. The decrypted `client_id` is `client-B` (not `client-A`). This is a slot-id conflict — another device has claimed this coordinate.
+
+Device A MUST NOT publish to `read-state:aaa111`. Device A MUST generate a new random `slot-id` (e.g., `ccc333`) and publish its blob under `read-state:ccc333`.
+
+### Clock Skew Vector
+
+Device A fetches its own blob from two relays:
+- Relay 1 returns the blob with `created_at` = 1700001000
+- Relay 2 returns the blob with `created_at` = 1700001500
+
+Device A's local clock reads 1700001200 (behind Relay 2). The maximum fetched `created_at` is 1700001500.
+
+Device A MUST publish with `created_at` = 1700001501 (max_fetched + 1), not 1700001200.
 
 ## Invalid Cases
 
