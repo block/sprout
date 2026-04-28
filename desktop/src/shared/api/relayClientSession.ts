@@ -48,6 +48,62 @@ export class RelayClient {
   private notifyReconnectListeners = false;
   private onMessageChannel: Channel<unknown> | null = null;
 
+  /**
+   * Cleanly tear down the connection without scheduling a reconnect.
+   * Used during workspace switches to reset the singleton before the
+   * new workspace applies.
+   */
+  disconnect() {
+    const error = new Error("Relay disconnected for workspace switch.");
+
+    if (this.reconnectTimeout) {
+      window.clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.keepAliveRequested = false;
+    this.relayUrl = null;
+    this.hasConnectedOnce = false;
+    this.notifyReconnectListeners = false;
+
+    if (this.wsId !== null) {
+      void invoke("plugin:websocket|disconnect", { id: this.wsId }).catch(
+        () => {},
+      );
+      this.wsId = null;
+    }
+
+    this.connectPromise = null;
+
+    if (this.authRequest) {
+      window.clearTimeout(this.authRequest.timeout);
+      this.authRequest.reject(error);
+      this.authRequest = null;
+    }
+
+    for (const [subId, sub] of this.subscriptions) {
+      if (sub.mode === "history") {
+        window.clearTimeout(sub.timeout);
+        sub.reject(error);
+      }
+      this.subscriptions.delete(subId);
+    }
+
+    for (const [eventId, pending] of this.pendingEvents) {
+      window.clearTimeout(pending.timeout);
+      pending.reject(error);
+      this.pendingEvents.delete(eventId);
+    }
+
+    if (this.flushTimeout !== null) {
+      window.clearTimeout(this.flushTimeout);
+      this.flushTimeout = null;
+    }
+    this.eventBuffer = [];
+    this.reconnectListeners.clear();
+    this.onMessageChannel = null;
+    this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+  }
+
   async fetchChannelHistory(channelId: string, limit = 50) {
     return this.fetchHistory(this.buildChannelFilter(channelId, limit));
   }

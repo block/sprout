@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "@/app/App";
 import "@/shared/styles/globals.css";
+import { WorkspacesProvider } from "@/features/workspaces/useWorkspaces";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
 import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
@@ -29,12 +30,14 @@ function renderApp() {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <ThemeProvider defaultTheme="houston">
-          <TooltipProvider delayDuration={300}>
-            <App />
-            <Toaster />
-          </TooltipProvider>
-        </ThemeProvider>
+        <WorkspacesProvider>
+          <ThemeProvider defaultTheme="houston">
+            <TooltipProvider delayDuration={300}>
+              <App />
+              <Toaster />
+            </TooltipProvider>
+          </ThemeProvider>
+        </WorkspacesProvider>
       </QueryClientProvider>
     </React.StrictMode>,
   );
