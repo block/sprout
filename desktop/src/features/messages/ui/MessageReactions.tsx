@@ -107,7 +107,7 @@ function ReactionPill({
     openTimeout.current = setTimeout(() => setOpen(true), 200);
   }, [reaction.users.length, clearTimers]);
 
-  const handleMouseLeave = React.useCallback(() => {
+  const scheduleClose = React.useCallback(() => {
     clearTimers();
     closeTimeout.current = setTimeout(() => setOpen(false), 150);
   }, [clearTimers]);
@@ -117,11 +117,6 @@ function ReactionPill({
     clearTimers();
     setOpen(true);
   }, [reaction.users.length, clearTimers]);
-
-  const handleBlur = React.useCallback(() => {
-    clearTimers();
-    closeTimeout.current = setTimeout(() => setOpen(false), 150);
-  }, [clearTimers]);
 
   React.useEffect(() => {
     return clearTimers;
@@ -165,9 +160,9 @@ function ReactionPill({
         <span
           className="inline-flex"
           onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
+          onMouseLeave={scheduleClose}
           onFocus={handleFocus}
-          onBlur={handleBlur}
+          onBlur={scheduleClose}
         >
           <button
             aria-label={`Toggle ${reaction.emoji} reaction`}
@@ -188,7 +183,7 @@ function ReactionPill({
         sideOffset={6}
         className="w-auto min-w-48 max-w-64 p-3"
         onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
+        onMouseLeave={scheduleClose}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
       >

@@ -59,6 +59,24 @@ String relativeTime(int unixSeconds) {
   return '${time.month}/${time.day}/${time.year}';
 }
 
+/// Compact time label: "HH:MM" for today, "M/D HH:MM" for older messages.
+String formatMessageTime(int unixSeconds) {
+  final dt = DateTime.fromMillisecondsSinceEpoch(
+    unixSeconds * 1000,
+    isUtc: true,
+  ).toLocal();
+  final now = DateTime.now();
+  final diff = now.difference(dt);
+
+  final hh = dt.hour.toString().padLeft(2, '0');
+  final mm = dt.minute.toString().padLeft(2, '0');
+
+  if (diff.inDays > 0) {
+    return '${dt.month}/${dt.day} $hh:$mm';
+  }
+  return '$hh:$mm';
+}
+
 /// Truncates a hex pubkey to the first 8 characters with an ellipsis.
 String shortPubkey(String pubkey) {
   if (pubkey.length > 12) return '${pubkey.substring(0, 8)}\u2026';

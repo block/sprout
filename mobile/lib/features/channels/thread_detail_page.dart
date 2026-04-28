@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -13,9 +12,12 @@ import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';
+import 'date_formatters.dart';
+import 'message_actions.dart';
 import 'message_content.dart';
 import 'reaction_row.dart';
 import 'send_message_provider.dart';
+import 'small_avatar.dart';
 import 'timeline_message.dart';
 
 /// Full-screen thread detail page.
@@ -299,7 +301,7 @@ class _NestedThreadSummaryRow extends ConsumerWidget {
                   for (var i = 0; i < summary.participantPubkeys.length; i++)
                     Positioned(
                       left: i * 12.0,
-                      child: _SmallAvatar(
+                      child: SmallAvatar(
                         pubkey: summary.participantPubkeys[i],
                         userCache: userCache,
                       ),
@@ -323,45 +325,6 @@ class _NestedThreadSummaryRow extends ConsumerWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SmallAvatar extends StatelessWidget {
-  final String pubkey;
-  final Map<String, UserProfile> userCache;
-
-  const _SmallAvatar({required this.pubkey, required this.userCache});
-
-  @override
-  Widget build(BuildContext context) {
-    final profile = userCache[pubkey.toLowerCase()];
-    final avatarUrl = profile?.avatarUrl;
-    final initial =
-        profile?.initial ?? (pubkey.isNotEmpty ? pubkey[0].toUpperCase() : '?');
-
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: context.colors.surface, width: 1.5),
-      ),
-      child: CircleAvatar(
-        radius: 9,
-        backgroundColor: context.colors.primaryContainer,
-        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-        child: avatarUrl == null
-            ? Text(
-                initial,
-                style: TextStyle(
-                  fontSize: 8,
-                  fontWeight: FontWeight.w600,
-                  color: context.colors.onPrimaryContainer,
-                ),
-              )
-            : null,
       ),
     );
   }
@@ -398,7 +361,7 @@ class _ThreadMessage extends ConsumerWidget {
     final profile =
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
-    final displayName = profile?.label ?? _shortPubkey(message.pubkey);
+    final displayName = profile?.label ?? shortPubkey(message.pubkey);
 
     final userCache = ref.watch(userCacheProvider);
     final mentionNames = <String, String>{};
@@ -411,7 +374,7 @@ class _ThreadMessage extends ConsumerWidget {
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPress: () => _showThreadMessageActions(
+      onLongPress: () => showMessageActions(
         context: context,
         ref: ref,
         message: message,
@@ -451,7 +414,7 @@ class _ThreadMessage extends ConsumerWidget {
                           ),
                           const SizedBox(width: Grid.xxs),
                           Text(
-                            _formatTime(message.createdAt),
+                            formatMessageTime(message.createdAt),
                             style: context.textTheme.labelSmall?.copyWith(
                               color: context.colors.outline,
                             ),
@@ -506,10 +469,6 @@ class _ThreadMessage extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Thread compose bar
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Thread-scoped typing indicator
 // ---------------------------------------------------------------------------
 
@@ -525,7 +484,7 @@ class _ThreadTypingIndicator extends ConsumerWidget {
       final profile =
           userCache[e.pubkey.toLowerCase()] ??
           ref.read(userCacheProvider.notifier).get(e.pubkey.toLowerCase());
-      return profile?.label ?? _shortPubkey(e.pubkey);
+      return profile?.label ?? shortPubkey(e.pubkey);
     }).toList();
     final text = switch (names.length) {
       1 => '${names[0]} is typing...',
@@ -551,146 +510,7 @@ class _ThreadTypingIndicator extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Thread message actions (long-press sheet — reactions, copy, edit, delete)
-// ---------------------------------------------------------------------------
-
-const _quickEmojis = [
-  '\u{1F44D}',
-  '\u{2764}\u{FE0F}',
-  '\u{1F602}',
-  '\u{1F389}',
-  '\u{1F440}',
-  '\u{1F64F}',
-];
-
-void _showThreadMessageActions({
-  required BuildContext context,
-  required WidgetRef ref,
-  required TimelineMessage message,
-  required String channelId,
-  required bool isOwnMessage,
-  List<TimelineMessage>? allMessages,
-  String? currentPubkey,
-  bool isMember = false,
-  bool isArchived = false,
-}) {
-  showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(Grid.xs, 0, Grid.xs, Grid.xs),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                for (final emoji in _quickEmojis)
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      ref
-                          .read(channelActionsProvider)
-                          .addReaction(message.id, emoji);
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          sheetContext,
-                        ).colorScheme.surfaceContainerHighest,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(emoji, style: const TextStyle(fontSize: 20)),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: Grid.xs),
-            if (allMessages != null)
-              ListTile(
-                leading: const Icon(LucideIcons.messageSquareReply),
-                title: const Text('Reply in thread'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => ThreadDetailPage(
-                        threadHead: message,
-                        allMessages: allMessages,
-                        channelId: channelId,
-                        currentPubkey: currentPubkey,
-                        isMember: isMember,
-                        isArchived: isArchived,
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ListTile(
-              leading: const Icon(LucideIcons.copy),
-              title: const Text('Copy text'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                Clipboard.setData(ClipboardData(text: message.content));
-              },
-            ),
-            if (isOwnMessage) ...[
-              ListTile(
-                leading: Icon(
-                  LucideIcons.trash2,
-                  color: Theme.of(sheetContext).colorScheme.error,
-                ),
-                title: Text(
-                  'Delete message',
-                  style: TextStyle(
-                    color: Theme.of(sheetContext).colorScheme.error,
-                  ),
-                ),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  showDialog<void>(
-                    context: context,
-                    builder: (dialogContext) => AlertDialog(
-                      title: const Text('Delete message'),
-                      content: const Text('This cannot be undone.'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.of(dialogContext).pop(),
-                          child: const Text('Cancel'),
-                        ),
-                        FilledButton(
-                          onPressed: () {
-                            Navigator.of(dialogContext).pop();
-                            ref
-                                .read(channelActionsProvider)
-                                .deleteMessage(message.id);
-                          },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: Theme.of(
-                              dialogContext,
-                            ).colorScheme.error,
-                          ),
-                          child: const Text('Delete'),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ],
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers (duplicated here to keep the file self-contained)
+// Shared helpers
 // ---------------------------------------------------------------------------
 
 class _Avatar extends StatelessWidget {
@@ -721,24 +541,3 @@ class _Avatar extends StatelessWidget {
     );
   }
 }
-
-String _shortPubkey(String pubkey) {
-  if (pubkey.length > 12) return '${pubkey.substring(0, 8)}...';
-  return pubkey;
-}
-
-String _formatTime(int createdAt) {
-  final dt = DateTime.fromMillisecondsSinceEpoch(
-    createdAt * 1000,
-    isUtc: true,
-  ).toLocal();
-  final now = DateTime.now();
-  final diff = now.difference(dt);
-
-  if (diff.inDays > 0) {
-    return '${dt.month}/${dt.day} ${_pad(dt.hour)}:${_pad(dt.minute)}';
-  }
-  return '${_pad(dt.hour)}:${_pad(dt.minute)}';
-}
-
-String _pad(int n) => n.toString().padLeft(2, '0');
