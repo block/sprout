@@ -1477,13 +1477,42 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         .join(format!("{repo_id}.git"));
 
     // If repo already exists, this is an update to the announcement — nothing to do on disk.
+    // Backfill the name reservation if missing (handles upgrade from pre-uniqueness-check state).
     if repo_dir.exists() {
+        let names_dir = git_repo_root.join(".names");
+        let _ = std::fs::create_dir_all(&names_dir);
+        let _ = std::fs::create_dir(names_dir.join(&repo_id));
         info!(
             repo_id = %repo_id,
             owner = %owner_hex,
             "kind:30617 repo announcement updated (repo already exists)"
         );
         return Ok(());
+    }
+
+    // Global uniqueness: repo names are unique across all owners (relay = single namespace).
+    // The relay signs kind:30618 ref-state with d-tag = repo_name, so collisions would
+    // cause one owner's ref state to overwrite another's.
+    //
+    // Atomicity: std::fs::create_dir fails with AlreadyExists if the directory exists,
+    // preventing TOCTOU races between concurrent kind:30617 events. The .names/ directory
+    // acts as a global name reservation index.
+    let names_dir = git_repo_root.join(".names");
+    std::fs::create_dir_all(&names_dir)
+        .map_err(|e| anyhow::anyhow!("failed to create name reservation index: {e}"))?;
+    let reservation = names_dir.join(&repo_id);
+    match std::fs::create_dir(&reservation) {
+        Ok(()) => {} // Name claimed successfully.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(anyhow::anyhow!(
+                "repo name '{repo_id}' already taken by another owner"
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "failed to reserve repo name '{repo_id}': {e}"
+            ));
+        }
     }
 
     // Per-pubkey repo count limit.
@@ -1494,27 +1523,40 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             .unwrap_or(0);
         let limit = state.config.git_max_repos_per_pubkey as usize;
         if count >= limit {
+            let _ = std::fs::remove_dir(&reservation);
             return Err(anyhow::anyhow!("repo limit exceeded: {count} >= {limit}"));
         }
     }
 
     // Create parent directory.
-    tokio::fs::create_dir_all(&repo_dir).await.map_err(|e| {
-        anyhow::anyhow!(
+    if let Err(e) = tokio::fs::create_dir_all(&repo_dir).await {
+        let _ = std::fs::remove_dir(&reservation);
+        return Err(anyhow::anyhow!(
             "failed to create repo directory {}: {e}",
             repo_dir.display()
-        )
-    })?;
+        ));
+    }
 
     // Path canonicalization: verify resolved path is under the repo root.
-    let canonical_root = git_repo_root
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("failed to canonicalize repo root: {e}"))?;
-    let canonical_repo = repo_dir
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("failed to canonicalize repo path: {e}"))?;
+    let canonical_root = match git_repo_root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("failed to canonicalize repo root: {e}"));
+        }
+    };
+    let canonical_repo = match repo_dir.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("failed to canonicalize repo path: {e}"));
+        }
+    };
     if !canonical_repo.starts_with(&canonical_root) {
         let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+        let _ = std::fs::remove_dir(&reservation);
         return Err(anyhow::anyhow!(
             "repo path escapes root: {} not under {}",
             canonical_repo.display(),
@@ -1523,7 +1565,7 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
     }
 
     // Initialize bare repo.
-    let output = Command::new("git")
+    let output = match Command::new("git")
         .arg("init")
         .arg("--bare")
         .arg(&repo_dir)
@@ -1534,11 +1576,19 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         .env("HOME", "/dev/null")
         .output()
         .await
-        .map_err(|e| anyhow::anyhow!("git init --bare failed to spawn: {e}"))?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("git init --bare failed to spawn: {e}"));
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+        let _ = std::fs::remove_dir(&reservation);
         return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
     }
 
