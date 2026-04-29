@@ -359,14 +359,14 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_PERSONA_NAME")]
     pub persona_name: Option<String>,
 
-    /// Local bind address for the read-only ACP observer feed.
+    /// Local bind address for the ACP observer API.
     ///
     /// Intended for the desktop app. The feed stays on localhost and is not
     /// part of relay-visible Sprout history.
     #[arg(long, env = "SPROUT_ACP_OBSERVER_ADDR")]
     pub observer_addr: Option<String>,
 
-    /// Optional query token required by the observer /events endpoint.
+    /// Optional token required by the observer API.
     #[arg(long, env = "SPROUT_ACP_OBSERVER_TOKEN")]
     pub observer_token: Option<String>,
 }

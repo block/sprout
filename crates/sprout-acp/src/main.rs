@@ -2647,6 +2647,8 @@ mod build_mcp_servers_tests {
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
             persona_env_vars: vec![],
+            observer_addr: None,
+            observer_token: None,
         }
     }
 

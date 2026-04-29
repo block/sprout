@@ -30,13 +30,18 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 const OBSERVER_BUFFER_CAP: usize = 1_000;
 
+/// Best-effort metadata attached to observer events.
 #[derive(Clone, Debug, Default)]
 pub struct ObserverContext {
+    /// Sprout channel UUID for the current turn, when channel-scoped.
     pub channel_id: Option<String>,
+    /// ACP session ID associated with the current turn, once known.
     pub session_id: Option<String>,
+    /// Local UUID for one prompt turn.
     pub turn_id: Option<String>,
 }
 
+/// Handle used by the harness to publish local observer events.
 #[derive(Clone)]
 pub struct ObserverHandle {
     inner: Arc<ObserverInner>,
@@ -49,37 +54,53 @@ struct ObserverInner {
     addr: SocketAddr,
 }
 
+/// Event delivered over the local observer SSE stream.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObserverEvent {
+    /// Monotonic process-local sequence number.
     pub seq: u64,
+    /// RFC3339 UTC timestamp.
     pub timestamp: String,
+    /// Observer event kind, for example `acp_read` or `turn_started`.
     pub kind: String,
+    /// Pool slot index for the agent process that emitted the event.
     pub agent_index: Option<usize>,
+    /// Sprout channel UUID for channel-scoped events.
     pub channel_id: Option<String>,
+    /// ACP session ID when known.
     pub session_id: Option<String>,
+    /// Local UUID for one prompt turn.
     pub turn_id: Option<String>,
+    /// Raw or semantic event payload.
     pub payload: serde_json::Value,
 }
 
+/// Commands accepted by the observer control loop.
 #[derive(Debug)]
 pub enum ObserverControlCommand {
+    /// Stop the active turn for a channel, if one exists.
     CancelTurn {
         channel_id: uuid::Uuid,
         respond_to: oneshot::Sender<CancelTurnResponse>,
     },
 }
 
+/// Response returned by observer control commands.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelTurnResponse {
+    /// Result of attempting to send the cancel signal.
     pub status: CancelTurnStatus,
 }
 
+/// Status for a cancel-turn request.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CancelTurnStatus {
+    /// A cancel signal was sent to an in-flight channel turn.
     Sent,
+    /// The channel had no active turn at the time of the request.
     NoActiveTurn,
 }
 
@@ -101,6 +122,7 @@ struct CancelTurnRequest {
     channel_id: uuid::Uuid,
 }
 
+/// Start the loopback observer HTTP server.
 pub async fn spawn_observer_server(
     bind_addr: &str,
     token: Option<String>,
@@ -142,14 +164,17 @@ pub async fn spawn_observer_server(
 }
 
 impl ObserverHandle {
+    /// Return the bound loopback address.
     pub fn addr(&self) -> SocketAddr {
         self.inner.addr
     }
 
+    /// Subscribe to live observer events.
     pub fn subscribe(&self) -> broadcast::Receiver<ObserverEvent> {
         self.inner.tx.subscribe()
     }
 
+    /// Return the current replay buffer.
     pub fn snapshot(&self) -> Vec<ObserverEvent> {
         match self.inner.buffer.lock() {
             Ok(buffer) => buffer.iter().cloned().collect(),
@@ -160,6 +185,7 @@ impl ObserverHandle {
         }
     }
 
+    /// Emit a local observer event.
     pub fn emit(
         &self,
         kind: impl Into<String>,
@@ -334,6 +360,7 @@ fn event_to_sse(event: ObserverEvent) -> Result<Event, Infallible> {
     Ok(Event::default().id(event.seq.to_string()).data(data))
 }
 
+/// Build observer context values from optional channel/session/turn IDs.
 pub fn context_for(
     channel_id: Option<uuid::Uuid>,
     session_id: Option<String>,

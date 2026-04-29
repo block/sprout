@@ -34,6 +34,9 @@ export function useObserverEvents(
       try {
         const parsed = JSON.parse(event.data) as ObserverEvent;
         setEvents((current) => {
+          if (current.some((existing) => existing.seq === parsed.seq)) {
+            return current;
+          }
           const next = [...current, parsed];
           return next.length > MAX_OBSERVER_EVENTS
             ? next.slice(next.length - MAX_OBSERVER_EVENTS)

@@ -166,15 +166,17 @@ export function ChannelScreen({
   });
   const managedAgentsQuery = useManagedAgentsQuery();
   const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
-    const agentSet = new Set(
-      (managedAgentsQuery.data ?? []).map((a) => a.pubkey.toLowerCase()),
+    const localAgentSet = new Set(
+      (managedAgentsQuery.data ?? [])
+        .filter((agent) => agent.backend.type === "local")
+        .map((agent) => agent.pubkey.toLowerCase()),
     );
     return {
       humanTypingPubkeys: mainTypingPubkeys.filter(
-        (pk) => !agentSet.has(pk.toLowerCase()),
+        (pk) => !localAgentSet.has(pk.toLowerCase()),
       ),
       botTypingPubkeys: mainTypingPubkeys.filter((pk) =>
-        agentSet.has(pk.toLowerCase()),
+        localAgentSet.has(pk.toLowerCase()),
       ),
     };
   }, [mainTypingPubkeys, managedAgentsQuery.data]);
