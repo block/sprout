@@ -5,6 +5,7 @@ import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
+import { resetStore as resetPresenceStore } from "@/features/presence/presenceStore";
 
 import type { Workspace } from "./types";
 
@@ -19,6 +20,7 @@ function resetWorkspaceState(): void {
   resetMediaCaches();
   clearSearchHitEventCache();
   clearAllDrafts();
+  resetPresenceStore();
 }
 
 type WorkspaceInitResult =

@@ -7,7 +7,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use nostr::{EventBuilder, Kind};
 use serde::Deserialize;
+use sprout_core::event::StoredEvent;
+use sprout_core::kind::KIND_PRESENCE_UPDATE;
 use sprout_core::PresenceStatus;
 use sprout_pubsub::presence::PRESENCE_TTL_SECS;
 
@@ -54,7 +57,10 @@ pub async fn presence_handler(
         .pubsub
         .get_presence_bulk(&pubkeys)
         .await
-        .unwrap_or_default();
+        .map_err(|e| {
+            tracing::error!("presence bulk lookup failed: {e}");
+            super::internal_error(&format!("presence store error: {e}"))
+        })?;
 
     let mut result = serde_json::Map::new();
     for pk in &pubkeys {
@@ -98,11 +104,13 @@ pub async fn set_presence_handler(
         .map_err(super::scope_error)?;
     let pubkey = ctx.pubkey;
 
+    let status_str = body.status.as_str().to_string();
+
     match body.status {
         PresenceStatus::Online | PresenceStatus::Away => {
             state
                 .pubsub
-                .set_presence(&pubkey, body.status.as_str())
+                .set_presence(&pubkey, &status_str)
                 .await
                 .map_err(|e| super::internal_error(&format!("presence error: {e}")))?;
         }
@@ -112,6 +120,46 @@ pub async fn set_presence_handler(
                 .clear_presence(&pubkey)
                 .await
                 .map_err(|e| super::internal_error(&format!("presence error: {e}")))?;
+        }
+    }
+
+    // Fan out a synthetic kind:20001 event to WebSocket subscribers so clients
+    // that subscribe to presence updates receive REST-originated changes too.
+    //
+    // We build the event with the authenticated user's pubkey as author (so
+    // `authors` filters match correctly), then sign it with the relay keypair.
+    // The signature is relay-issued rather than user-issued — this is an
+    // internal synthetic event that is never persisted or forwarded externally,
+    // and the relay does not re-verify signatures during fan-out.
+    match EventBuilder::new(Kind::Custom(KIND_PRESENCE_UPDATE as u16), &status_str, [])
+        .build(pubkey)
+        .sign_with_keys(&state.relay_keypair)
+    {
+        Ok(event) => {
+            let stored = StoredEvent::new(event.clone(), None);
+            let matches = state.sub_registry.fan_out(&stored);
+            metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
+            let event_json = serde_json::to_string(&event)
+                .expect("nostr::Event serialization is infallible for well-formed events");
+            let mut drop_count = 0u32;
+            for (target_conn_id, sub_id) in &matches {
+                let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+                if !state.conn_manager.send_to(*target_conn_id, msg) {
+                    drop_count += 1;
+                }
+            }
+            if drop_count > 0 {
+                tracing::warn!(
+                    pubkey = %pubkey.to_hex(),
+                    drop_count,
+                    "presence fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+                );
+            }
+        }
+        Err(e) => {
+            // Non-fatal: presence was written to Redis; fan-out failure is logged but
+            // does not roll back the write or fail the request.
+            tracing::warn!(pubkey = %pubkey.to_hex(), "presence fan-out: failed to build synthetic event: {e}");
         }
     }
 
