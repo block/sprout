@@ -1564,10 +1564,12 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         ));
     }
 
-    // Initialize bare repo.
+    // Initialize bare repo with main as default branch.
     let output = match Command::new("git")
         .arg("init")
         .arg("--bare")
+        .arg("-b")
+        .arg("main")
         .arg(&repo_dir)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
