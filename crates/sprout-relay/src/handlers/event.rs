@@ -731,7 +731,9 @@ mod tests {
         .sign_with_keys(&agent)
         .expect("sign event");
 
-        let route = super::agent_observer_route(&event).expect("observer route");
+        let route = super::agent_observer_route(&event)
+            .expect("observer route")
+            .expect("route should be Some");
         assert_eq!(route.agent, agent.public_key());
         assert_eq!(route.owner, owner.public_key());
         assert_eq!(route.direction, super::AgentObserverDirection::Telemetry);
@@ -759,7 +761,9 @@ mod tests {
         .sign_with_keys(&owner)
         .expect("sign event");
 
-        let route = super::agent_observer_route(&event).expect("observer route");
+        let route = super::agent_observer_route(&event)
+            .expect("observer route")
+            .expect("route should be Some");
         assert_eq!(route.agent, agent.public_key());
         assert_eq!(route.owner, owner.public_key());
         assert_eq!(route.direction, super::AgentObserverDirection::Control);
