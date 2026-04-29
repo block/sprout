@@ -68,6 +68,17 @@ pub struct Config {
     /// Example: `SPROUT_EPHEMERAL_TTL_OVERRIDE=60` → all ephemeral channels expire
     /// 60 seconds after the last message.
     pub ephemeral_ttl_override: Option<i32>,
+
+    // ── Git server configuration ─────────────────────────────────────────────
+    /// Root directory for bare git repositories.
+    /// Repos are stored at `{git_repo_path}/{owner_hex}/{repo_id}.git/`.
+    pub git_repo_path: std::path::PathBuf,
+    /// Maximum pack file size for git push (bytes). Default: 500 MB.
+    pub git_max_pack_bytes: u64,
+    /// Maximum number of repos per pubkey. Default: 100.
+    pub git_max_repos_per_pubkey: u32,
+    /// Maximum concurrent git subprocess operations. Default: 20.
+    pub git_max_concurrent_ops: usize,
 }
 
 impl Config {
@@ -217,6 +228,23 @@ impl Config {
             );
         }
 
+        // Git server config
+        let git_repo_path: std::path::PathBuf = std::env::var("SPROUT_GIT_REPO_PATH")
+            .unwrap_or_else(|_| "./repos".to_string())
+            .into();
+        let git_max_pack_bytes: u64 = std::env::var("SPROUT_GIT_MAX_PACK_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500 * 1024 * 1024); // 500 MB
+        let git_max_repos_per_pubkey: u32 = std::env::var("SPROUT_GIT_MAX_REPOS_PER_PUBKEY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100);
+        let git_max_concurrent_ops: usize = std::env::var("SPROUT_GIT_MAX_CONCURRENT_OPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -237,6 +265,10 @@ impl Config {
             pubkey_allowlist_enabled,
             media,
             ephemeral_ttl_override,
+            git_repo_path,
+            git_max_pack_bytes,
+            git_max_repos_per_pubkey,
+            git_max_concurrent_ops,
         })
     }
 }
