@@ -252,6 +252,7 @@ export type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  observer_url: string | null;
   start_on_app_launch: boolean;
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
@@ -795,6 +796,7 @@ export async function removeReaction(
 export async function signRelayEvent(input: {
   kind: number;
   content: string;
+  createdAt?: number;
   tags: string[][];
 }): Promise<RelayEvent> {
   const eventJson = await invokeTauri<string>("sign_event", input);
@@ -861,6 +863,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     lastExitCode: agent.last_exit_code,
     lastError: agent.last_error,
     logPath: agent.log_path,
+    observerUrl: agent.observer_url,
     startOnAppLaunch: agent.start_on_app_launch,
     backend: agent.backend,
     backendAgentId: agent.backend_agent_id,
@@ -1095,6 +1098,18 @@ export async function probeBackendProvider(
   return invokeTauri<BackendProviderProbeResult>("probe_backend_provider", {
     binaryPath,
   });
+}
+
+// ── NIP-44 encrypt-to-self ───────────────────────────────────────────────────
+
+export async function nip44EncryptToSelf(plaintext: string): Promise<string> {
+  return invokeTauri<string>("nip44_encrypt_to_self", { plaintext });
+}
+
+export async function nip44DecryptFromSelf(
+  ciphertext: string,
+): Promise<string> {
+  return invokeTauri<string>("nip44_decrypt_from_self", { ciphertext });
 }
 
 // ── NIP-AB device pairing ───────────────────────────────────────────────────

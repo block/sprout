@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nostr/nostr.dart' as nostr;
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
@@ -19,6 +21,8 @@ class SettingsPage extends HookConsumerWidget {
     final config = ref.watch(relayConfigProvider);
     final selectedAccent = ref.watch(accentProvider);
     final selectedScheme = ref.watch(schemeProvider);
+    final packageInfoFuture = useMemoized(() => PackageInfo.fromPlatform());
+    final packageInfo = useFuture(packageInfoFuture);
 
     return FrostedScaffold(
       appBar: const FrostedAppBar(title: Text('Settings')),
@@ -153,6 +157,17 @@ class SettingsPage extends HookConsumerWidget {
                 ),
             ],
           ),
+          if (packageInfo.hasData) ...[
+            const SizedBox(height: Grid.sm),
+            Center(
+              child: Text(
+                'v${packageInfo.data!.version}',
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant.withValues(alpha: 0.6),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

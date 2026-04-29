@@ -68,6 +68,7 @@ const MOBILE_SCOPES: &[&str] = &[
     "channels:read",
     "channels:write",
     "users:read",
+    "users:write",
     "files:read",
     "files:write",
 ];
@@ -491,6 +492,11 @@ mod tests {
     #[test]
     fn mobile_pairing_token_includes_file_write_scope() {
         assert!(MOBILE_SCOPES.contains(&"files:write"));
+    }
+
+    #[test]
+    fn mobile_pairing_token_includes_users_write_scope() {
+        assert!(MOBILE_SCOPES.contains(&"users:write"));
     }
 
     #[test]

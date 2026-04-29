@@ -331,6 +331,7 @@ type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  observer_url: string | null;
   start_on_app_launch: boolean;
   backend:
     | { type: "local" }
@@ -681,6 +682,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     last_exit_code: agent.last_exit_code,
     last_error: agent.last_error,
     log_path: agent.log_path,
+    observer_url: agent.observer_url ?? null,
     start_on_app_launch: agent.start_on_app_launch,
     backend: agent.backend ?? { type: "local" as const },
     backend_agent_id: agent.backend_agent_id ?? null,
@@ -1973,11 +1975,12 @@ function createMockEvent(
   content: string,
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
+  createdAt = Math.floor(Date.now() / 1000),
 ): RelayEvent {
   return {
     id: crypto.randomUUID().replace(/-/g, ""),
     pubkey,
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: createdAt,
     kind,
     tags,
     content,
@@ -1990,6 +1993,7 @@ async function signWithIdentity(
   template: {
     kind: number;
     content: string;
+    createdAt?: number;
     tags: string[][];
   },
 ) {
@@ -2000,7 +2004,7 @@ async function signWithIdentity(
       kind: template.kind,
       content: template.content,
       tags: template.tags,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: template.createdAt ?? Math.floor(Date.now() / 1000),
     },
     secretKey,
   );
@@ -3642,6 +3646,9 @@ async function handleCreateManagedAgent(args: {
     last_exit_code: null,
     last_error: null,
     log_path: `/tmp/mock-agent-${pubkey}.log`,
+    observer_url: args.input.spawnAfterCreate
+      ? `http://127.0.0.1:42000/events?token=mock-${pubkey.slice(0, 8)}`
+      : null,
     start_on_app_launch: args.input.startOnAppLaunch ?? true,
     backend: args.input.backend ?? { type: "local" as const },
     backend_agent_id: null,
@@ -3688,6 +3695,9 @@ async function handleStartManagedAgent(args: {
   const now = new Date().toISOString();
   agent.status = "running";
   agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
+  agent.observer_url =
+    agent.observer_url ??
+    `http://127.0.0.1:${agent.pid}/events?token=mock-${agent.pubkey.slice(0, 8)}`;
   agent.updated_at = now;
   agent.last_started_at = now;
   agent.last_error = null;
@@ -3703,6 +3713,7 @@ async function handleStopManagedAgent(args: {
   const now = new Date().toISOString();
   agent.status = "stopped";
   agent.pid = null;
+  agent.observer_url = null;
   agent.updated_at = now;
   agent.last_stopped_at = now;
   agent.log_lines.push(`stopped mock harness at ${now}`);
@@ -4487,6 +4498,8 @@ export function maybeInstallE2eTauriMocks() {
         return handleStopManagedAgent(
           payload as Parameters<typeof handleStopManagedAgent>[0],
         );
+      case "cancel_managed_agent_turn":
+        return { status: "sent" };
       case "set_managed_agent_start_on_app_launch":
         return handleSetManagedAgentStartOnAppLaunch(
           payload as Parameters<
@@ -4622,6 +4635,7 @@ export function maybeInstallE2eTauriMocks() {
             await signWithIdentity(identity, {
               kind: (payload as { kind: number }).kind,
               content: (payload as { content: string }).content,
+              createdAt: (payload as { createdAt?: number }).createdAt,
               tags: (payload as { tags: string[][] }).tags,
             }),
           );
@@ -4632,6 +4646,8 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { kind: number }).kind,
             (payload as { content: string }).content,
             (payload as { tags: string[][] }).tags,
+            DEFAULT_MOCK_IDENTITY.pubkey,
+            (payload as { createdAt?: number }).createdAt,
           ),
         );
       case "create_auth_event":

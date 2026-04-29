@@ -26,6 +26,9 @@ import 'manage_channel_sheet.dart';
 import 'members_sheet.dart';
 import 'message_actions.dart';
 import 'message_content.dart';
+import 'read_state/deferred_read_state_update.dart';
+import 'read_state/read_state_provider.dart';
+import 'read_state/read_state_time.dart';
 import 'reaction_row.dart';
 import 'send_message_provider.dart';
 import 'small_avatar.dart';
@@ -53,6 +56,30 @@ Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
   }
 }
 
+int? _channelReadTimestamp({
+  required Channel channel,
+  required AsyncValue<List<NostrEvent>> messagesState,
+}) {
+  if (channel.isForum) {
+    return dateTimeToUnixSeconds(channel.lastMessageAt);
+  }
+
+  final events = messagesState.value;
+  if (events != null && events.isNotEmpty) {
+    var latest = 0;
+    for (final event in events) {
+      if (event.createdAt > latest) {
+        latest = event.createdAt;
+      }
+    }
+    if (latest > 0) {
+      return latest;
+    }
+  }
+
+  return dateTimeToUnixSeconds(channel.lastMessageAt);
+}
+
 class ChannelDetailPage extends HookConsumerWidget {
   final Channel channel;
 
@@ -63,6 +90,7 @@ class ChannelDetailPage extends HookConsumerWidget {
     final detailsAsync = ref.watch(channelDetailsProvider(channel.id));
     final channelsAsync = ref.watch(channelsProvider);
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
+    final readState = ref.watch(readStateProvider);
     final currentPubkey = ref
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
@@ -89,12 +117,27 @@ class ChannelDetailPage extends HookConsumerWidget {
         channel;
     final resolvedChannel =
         detailsAsync.whenData(baseChannel.mergeDetails).value ?? baseChannel;
+    final readTimestamp = _channelReadTimestamp(
+      channel: resolvedChannel,
+      messagesState: messagesState,
+    );
 
     // Preload channel member profiles so @mentions resolve correctly.
     useEffect(() {
       _preloadMembers(ref, channel.id);
       return null;
     }, [channel.id]);
+
+    useEffect(() {
+      if (!readState.isReady || readTimestamp == null) {
+        return null;
+      }
+      return deferReadStateUpdate(context, () {
+        ref
+            .read(readStateProvider.notifier)
+            .markContextRead(channel.id, readTimestamp);
+      });
+    }, [channel.id, readState.isReady, readTimestamp]);
 
     return FrostedScaffold(
       appBar: FrostedAppBar(

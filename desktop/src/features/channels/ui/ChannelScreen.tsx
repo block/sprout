@@ -1,12 +1,14 @@
 import * as React from "react";
 import { useAppShell } from "@/app/AppShellContext";
-import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
-import { getChannelDescription } from "@/features/channels/lib/channelDescription";
-import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
-import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
+import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
+import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader";
+import {
+  ChannelPane,
+  ForumView,
+} from "@/features/channels/ui/ChannelScreenLazyViews";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
@@ -29,7 +31,6 @@ import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
-import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type {
@@ -40,16 +41,8 @@ import type {
 } from "@/shared/api/types";
 import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
-
-const ChannelPane = React.lazy(async () => {
-  const module = await import("@/features/channels/ui/ChannelPane");
-  return { default: module.ChannelPane };
-});
-
-const ForumView = React.lazy(async () => {
-  const module = await import("@/features/forum/ui/ForumView");
-  return { default: module.ForumView };
-});
+import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
+import { useChannelAgentSessions } from "./useChannelAgentSessions";
 
 type ChannelScreenProps = {
   activeChannel: Channel | null;
@@ -172,6 +165,21 @@ export function ChannelScreen({
     enabled: messageProfilePubkeys.length > 0,
   });
   const managedAgentsQuery = useManagedAgentsQuery();
+  const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
+    const localAgentSet = new Set(
+      (managedAgentsQuery.data ?? [])
+        .filter((agent) => agent.backend.type === "local")
+        .map((agent) => agent.pubkey.toLowerCase()),
+    );
+    return {
+      humanTypingPubkeys: mainTypingPubkeys.filter(
+        (pk) => !localAgentSet.has(pk.toLowerCase()),
+      ),
+      botTypingPubkeys: mainTypingPubkeys.filter((pk) =>
+        localAgentSet.has(pk.toLowerCase()),
+      ),
+    };
+  }, [mainTypingPubkeys, managedAgentsQuery.data]);
   const messageProfiles = React.useMemo(() => {
     const base =
       mergeCurrentProfileIntoLookup(
@@ -322,8 +330,26 @@ export function ChannelScreen({
     () => (canReact ? handleToggleReaction : undefined),
     [canReact, handleToggleReaction],
   );
+  const {
+    channelAgentSessionAgents,
+    closeAgentSession: handleCloseAgentSession,
+    openAgentSession: handleOpenAgentSession,
+    openAgentSessionPubkey,
+    openThreadAndCloseAgentSession: handleOpenThreadAndCloseAgentSession,
+  } = useChannelAgentSessions({
+    activeChannel,
+    activeChannelId,
+    channelMembers,
+    handleOpenThread,
+    managedAgents: managedAgentsQuery.data ?? [],
+    setExpandedThreadReplyIds,
+    setOpenThreadHeadId,
+    setThreadReplyTargetId,
+    setThreadScrollTargetId,
+    targetMessageId,
+    timelineMessages,
+  });
 
-  const channelDescription = getChannelDescription(activeChannel);
   const shouldLoadTimeline =
     activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
@@ -336,9 +362,10 @@ export function ChannelScreen({
       setExpandedThreadReplyIds(new Set());
       setThreadScrollTargetId(null);
       setThreadReplyTargetId(null);
+      handleCloseAgentSession();
       setEditTargetId(null);
     },
-    [],
+    [handleCloseAgentSession],
   );
   const handleThreadScrollTargetResolved = React.useCallback(() => {
     setThreadScrollTargetId(null);
@@ -377,45 +404,16 @@ export function ChannelScreen({
 
   useLoadMissingAncestors(activeChannel, resolvedMessages);
 
-  const activeChannelEphemeralBadge = activeChannelEphemeralDisplay ? (
-    <EphemeralChannelBadge
-      display={activeChannelEphemeralDisplay}
-      testId="chat-ephemeral-badge"
-      variant="header"
-    />
-  ) : null;
-
-  const headerStatusBadge =
-    activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
-      <>
-        <PresenceBadge
-          data-testid="chat-presence-badge"
-          status={activeDmPresenceStatus}
-        />
-        {activeChannelEphemeralBadge}
-      </>
-    ) : (
-      activeChannelEphemeralBadge
-    );
-
   return (
-    <>
-      <ChatHeader
-        actions={
-          activeChannel ? (
-            <ChannelMembersBar
-              channel={activeChannel}
-              currentPubkey={currentPubkey}
-              onManageChannel={openChannelManagement}
-              onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
-            />
-          ) : null
-        }
-        channelType={activeChannel?.channelType}
-        visibility={activeChannel?.visibility}
-        description={channelDescription}
-        statusBadge={headerStatusBadge}
-        title={activeChannelTitle}
+    <AgentSessionProvider onOpenAgentSession={handleOpenAgentSession}>
+      <ChannelScreenHeader
+        activeChannel={activeChannel}
+        activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}
+        activeChannelTitle={activeChannelTitle}
+        activeDmPresenceStatus={activeDmPresenceStatus}
+        currentPubkey={currentPubkey}
+        onManageChannel={openChannelManagement}
+        onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
       />
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -435,6 +433,8 @@ export function ChannelScreen({
             <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
               <ChannelPane
                 activeChannel={activeChannel}
+                agentSessionAgents={channelAgentSessionAgents}
+                botTypingPubkeys={botTypingPubkeys}
                 channelFind={channelFind}
                 currentPubkey={currentPubkey}
                 fetchOlder={fetchOlder}
@@ -454,17 +454,20 @@ export function ChannelScreen({
                 messages={timelineMessages}
                 onCancelEdit={handleCancelEdit}
                 onCancelThreadReply={handleCancelThreadReply}
+                onCloseAgentSession={handleCloseAgentSession}
                 onCloseThread={handleCloseThread}
                 onDelete={handleDelete}
                 onEdit={handleEdit}
                 onEditSave={handleEditSave}
                 onExpandThreadReplies={handleExpandThreadReplies}
-                onOpenThread={handleOpenThread}
+                onOpenAgentSession={handleOpenAgentSession}
+                onOpenThread={handleOpenThreadAndCloseAgentSession}
                 onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
                 onSendMessage={handleSendMessage}
                 onSendThreadReply={handleSendThreadReply}
                 onThreadScrollTargetResolved={handleThreadScrollTargetResolved}
                 onToggleReaction={effectiveToggleReaction}
+                openAgentSessionPubkey={openAgentSessionPubkey}
                 openThreadHeadId={openThreadHeadId}
                 personaLookup={personaLookup}
                 profiles={messageProfiles}
@@ -475,16 +478,12 @@ export function ChannelScreen({
                 threadReplyTargetId={threadReplyTargetId}
                 threadReplyTargetMessage={threadReplyTargetMessage}
                 threadScrollTargetId={threadScrollTargetId}
-                typingPubkeys={mainTypingPubkeys}
+                typingPubkeys={humanTypingPubkeys}
               />
             </React.Suspense>
           )
         ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
-            <p className="text-sm text-muted-foreground">
-              Select a channel to view messages.
-            </p>
-          </div>
+          <ChannelScreenEmptyState />
         )}
       </div>
 
@@ -493,7 +492,8 @@ export function ChannelScreen({
         currentPubkey={currentPubkey}
         open={isMembersSidebarOpen}
         onOpenChange={setIsMembersSidebarOpen}
+        onViewActivity={handleOpenAgentSession}
       />
-    </>
+    </AgentSessionProvider>
   );
 }

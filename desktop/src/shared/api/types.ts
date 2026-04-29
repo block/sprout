@@ -307,6 +307,7 @@ export type ManagedAgent = {
   lastExitCode: number | null;
   lastError: string | null;
   logPath: string;
+  observerUrl: string | null;
   startOnAppLaunch: boolean;
   backend: ManagedAgentBackend;
   backendAgentId: string | null;
@@ -371,6 +372,10 @@ export type MintManagedAgentTokenResponse = {
 export type ManagedAgentLog = {
   content: string;
   logPath: string;
+};
+
+export type CancelManagedAgentTurnResult = {
+  status: "sent" | "no_active_turn";
 };
 
 export type AcpProvider = {

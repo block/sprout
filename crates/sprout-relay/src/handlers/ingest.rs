@@ -22,7 +22,7 @@ use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP,
     KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
     KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
-    KIND_PRESENCE_UPDATE, KIND_PROFILE, KIND_REACTION, KIND_STREAM_MESSAGE,
+    KIND_PRESENCE_UPDATE, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
     KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
     KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
@@ -154,7 +154,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
-        KIND_CONTACT_LIST => Ok(Scope::UsersWrite),
+        KIND_CONTACT_LIST | KIND_READ_STATE => Ok(Scope::UsersWrite),
         KIND_DELETION
         | KIND_REACTION
         | KIND_GIFT_WRAP
@@ -289,6 +289,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_TEXT_NOTE
             | KIND_CONTACT_LIST
             | KIND_LONG_FORM
+            | KIND_READ_STATE
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
             | KIND_GIT_REPO_ANNOUNCEMENT

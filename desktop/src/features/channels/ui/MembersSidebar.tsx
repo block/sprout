@@ -29,6 +29,7 @@ type MembersSidebarProps = {
   currentPubkey?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onViewActivity?: (pubkey: string) => void;
 };
 
 export function MembersSidebar({
@@ -36,6 +37,7 @@ export function MembersSidebar({
   currentPubkey,
   open,
   onOpenChange,
+  onViewActivity,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
   const queryClient = useQueryClient();
@@ -168,6 +170,14 @@ export function MembersSidebar({
           void handleAgentLifecycleAction(agent);
         }}
         onRemoveMember={handleRemoveMember}
+        onViewActivity={
+          onViewActivity
+            ? (pubkey: string) => {
+                onOpenChange(false);
+                onViewActivity(pubkey);
+              }
+            : undefined
+        }
         presenceStatus={
           memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null
         }

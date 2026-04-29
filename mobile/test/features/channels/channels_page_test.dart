@@ -5,6 +5,7 @@ import 'package:hooks_riverpod/misc.dart';
 import 'package:sprout_mobile/features/channels/channel.dart';
 import 'package:sprout_mobile/features/channels/channels_page.dart';
 import 'package:sprout_mobile/features/channels/channels_provider.dart';
+import 'package:sprout_mobile/features/channels/read_state/read_state_provider.dart';
 import 'package:sprout_mobile/features/profile/profile_provider.dart';
 import 'package:sprout_mobile/features/profile/user_profile.dart';
 import 'package:sprout_mobile/shared/theme/theme.dart';
@@ -147,6 +148,142 @@ void main() {
     expect(find.text('Could not load channels'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
   });
+
+  testWidgets('renders and clears unread indicator', (tester) async {
+    final channels = [
+      Channel(
+        id: '1',
+        name: 'general',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'General discussion',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 10,
+        lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+          20 * 1000,
+          isUtc: true,
+        ),
+        isMember: true,
+      ),
+    ];
+    final readState = _FakeReadStateNotifier(
+      const ReadStateState(
+        isReady: true,
+        pubkey: 'pk',
+        contexts: {'1': 10},
+        version: 0,
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+          readStateProvider.overrideWith(() => readState),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('channel-unread-1')), findsOneWidget);
+
+    readState.markContextRead('1', 20);
+    await tester.pump();
+
+    expect(find.byKey(const Key('channel-unread-1')), findsNothing);
+  });
+
+  testWidgets('seeds first loaded channels as read', (tester) async {
+    final channels = [
+      Channel(
+        id: '1',
+        name: 'general',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'General discussion',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 10,
+        lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+          20 * 1000,
+          isUtc: true,
+        ),
+        isMember: true,
+      ),
+    ];
+    final readState = _FakeReadStateNotifier(
+      const ReadStateState(
+        isReady: true,
+        pubkey: 'pk',
+        contexts: {},
+        version: 0,
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+          readStateProvider.overrideWith(() => readState),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(readState.seededContexts, {'1': 20});
+    expect(readState.markedContexts, isEmpty);
+    expect(find.byKey(const Key('channel-unread-1')), findsNothing);
+  });
+
+  testWidgets('waits for read-state readiness before initial seeding', (
+    tester,
+  ) async {
+    final channels = [
+      Channel(
+        id: '1',
+        name: 'general',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'General discussion',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 10,
+        lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+          20 * 1000,
+          isUtc: true,
+        ),
+        isMember: true,
+      ),
+    ];
+    final readState = _FakeReadStateNotifier(
+      const ReadStateState(
+        isReady: false,
+        pubkey: 'pk',
+        contexts: {},
+        version: 0,
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+          readStateProvider.overrideWith(() => readState),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(readState.seededContexts, isEmpty);
+    expect(readState.markedContexts, isEmpty);
+
+    readState.setReady();
+    await tester.pumpAndSettle();
+
+    expect(readState.seededContexts, {'1': 20});
+    expect(readState.markedContexts, isEmpty);
+  });
 }
 
 class _FakeNotifier extends ChannelsNotifier {
@@ -171,4 +308,36 @@ class _FakeProfileNotifier extends ProfileNotifier {
 class _FakePresenceNotifier extends PresenceNotifier {
   @override
   Future<String> build() async => 'online';
+}
+
+class _FakeReadStateNotifier extends ReadStateNotifier {
+  final ReadStateState _initialState;
+  final Map<String, int> seededContexts = {};
+  final Map<String, int> markedContexts = {};
+
+  _FakeReadStateNotifier(this._initialState);
+
+  @override
+  ReadStateState build() => _initialState;
+
+  void setReady() {
+    state = ReadStateState(
+      isReady: true,
+      pubkey: state.pubkey,
+      contexts: state.contexts,
+      version: state.version + 1,
+    );
+  }
+
+  @override
+  void seedContextRead(String contextId, int unixTimestamp) {
+    seededContexts[contextId] = unixTimestamp;
+    state = state.copyWithContext(contextId, unixTimestamp);
+  }
+
+  @override
+  void markContextRead(String contextId, int unixTimestamp) {
+    markedContexts[contextId] = unixTimestamp;
+    state = state.copyWithContext(contextId, unixTimestamp);
+  }
 }

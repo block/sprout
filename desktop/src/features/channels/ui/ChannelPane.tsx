@@ -5,11 +5,13 @@ import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
+import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
+import { BotActivityBar } from "@/features/channels/ui/BotActivityBar";
 import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
-import type { Channel } from "@/shared/api/types";
+import type { Channel, ManagedAgent } from "@/shared/api/types";
 
 const THREAD_PANEL_DEFAULT_WIDTH_PX = 380;
 const THREAD_PANEL_MIN_WIDTH_PX = 320;
@@ -47,6 +49,8 @@ function getInitialThreadPanelWidth(): number {
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
+  agentSessionAgents: ManagedAgent[];
+  botTypingPubkeys: string[];
   channelFind: ReturnType<typeof useChannelFind>;
   currentPubkey?: string;
   editTarget?: {
@@ -62,11 +66,13 @@ type ChannelPaneProps = {
   messages: TimelineMessage[];
   onCancelEdit?: () => void;
   onCancelThreadReply: () => void;
+  onCloseAgentSession: () => void;
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
   onExpandThreadReplies: (message: TimelineMessage) => void;
+  onOpenAgentSession: (pubkey: string) => void;
   onOpenThread: (message: TimelineMessage) => void;
   onSelectThreadReplyTarget: (message: TimelineMessage) => void;
   onSendMessage: (
@@ -90,6 +96,7 @@ type ChannelPaneProps = {
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
   openThreadHeadId: string | null;
+  openAgentSessionPubkey: string | null;
   threadHeadMessage: TimelineMessage | null;
   threadMessages: MainTimelineEntry[];
   threadTypingPubkeys: string[];
@@ -102,6 +109,8 @@ type ChannelPaneProps = {
 
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
+  agentSessionAgents,
+  botTypingPubkeys,
   channelFind,
   currentPubkey,
   editTarget = null,
@@ -113,11 +122,13 @@ export const ChannelPane = React.memo(function ChannelPane({
   messages,
   onCancelEdit,
   onCancelThreadReply,
+  onCloseAgentSession,
   onCloseThread,
   onDelete,
   onEdit,
   onEditSave,
   onExpandThreadReplies,
+  onOpenAgentSession,
   onOpenThread,
   onSelectThreadReplyTarget,
   onSendMessage,
@@ -128,6 +139,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   personaLookup,
   profiles,
   openThreadHeadId,
+  openAgentSessionPubkey,
   targetMessageId,
   threadHeadMessage,
   threadMessages,
@@ -199,6 +211,16 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel.channelType === "forum" ||
     isSending;
 
+  const selectedAgent = React.useMemo(
+    () =>
+      openAgentSessionPubkey
+        ? (agentSessionAgents.find(
+            (agent) => agent.pubkey === openAgentSessionPubkey,
+          ) ?? null)
+        : null,
+    [agentSessionAgents, openAgentSessionPubkey],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -267,12 +289,22 @@ export const ChannelPane = React.memo(function ChannelPane({
                     : "Select a channel"
           }
         />
-        <TypingIndicatorRow
-          channel={activeChannel}
-          currentPubkey={currentPubkey}
-          profiles={profiles}
-          typingPubkeys={typingPubkeys}
-        />
+        <div className="relative bg-background">
+          <TypingIndicatorRow
+            channel={activeChannel}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+            typingPubkeys={typingPubkeys}
+          />
+          <div className="absolute right-0 top-0 flex h-8 items-center pr-8 sm:pr-10">
+            <BotActivityBar
+              agents={agentSessionAgents}
+              onOpenAgentSession={onOpenAgentSession}
+              openAgentSessionPubkey={openAgentSessionPubkey}
+              typingBotPubkeys={botTypingPubkeys}
+            />
+          </div>
+        </div>
       </div>
 
       {threadHeadMessage ? (
@@ -306,6 +338,20 @@ export const ChannelPane = React.memo(function ChannelPane({
           widthPx={threadPanelWidthPx}
           threadReplies={threadMessages}
           threadTypingPubkeys={threadTypingPubkeys}
+        />
+      ) : activeChannel && selectedAgent ? (
+        <AgentSessionThreadPanel
+          agent={selectedAgent}
+          canResetWidth={canResetThreadPanelWidth}
+          channel={activeChannel}
+          isWorking={botTypingPubkeys.some(
+            (pubkey) =>
+              pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
+          )}
+          onClose={onCloseAgentSession}
+          onResetWidth={handleThreadPanelWidthReset}
+          onResizeStart={handleThreadPanelResizeStart}
+          widthPx={threadPanelWidthPx}
         />
       ) : null}
     </div>
