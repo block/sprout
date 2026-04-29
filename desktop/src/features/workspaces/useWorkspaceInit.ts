@@ -5,6 +5,7 @@ import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
+import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 
 import type { Workspace } from "./types";
 
@@ -16,6 +17,7 @@ import type { Workspace } from "./types";
  */
 function resetWorkspaceState(): void {
   relayClient.disconnect();
+  resetAgentObserverStore();
   resetMediaCaches();
   clearSearchHitEventCache();
   clearAllDrafts();

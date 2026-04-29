@@ -31,7 +31,7 @@ export function AgentSessionThreadPanel({
   onResizeStart,
   widthPx,
 }: AgentSessionThreadPanelProps) {
-  const isLive = agent.status === "running" && Boolean(agent.observerUrl);
+  const isLive = agent.status === "running";
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
 
   async function handleInterruptTurn() {
