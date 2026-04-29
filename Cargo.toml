@@ -18,6 +18,7 @@ members = [
     "crates/sprout-pairing-cli",
     "crates/sprout-sdk",
     "crates/sprout-persona",
+    "crates/git-credential-nostr",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"

@@ -181,6 +181,11 @@ pub struct AppState {
     pub conn_semaphore: Arc<Semaphore>,
     /// Semaphore limiting concurrent message handler tasks.
     pub handler_semaphore: Arc<Semaphore>,
+    /// Semaphore limiting concurrent git subprocess operations.
+    pub git_semaphore: Arc<Semaphore>,
+    /// Per-repo mutex map — prevents concurrent pushes to the same bare repo.
+    /// Key: canonical repo path. Value: mutex guarding exclusive push access.
+    pub git_repo_locks: Arc<DashMap<std::path::PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     /// Workflow engine for background processing.
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).
@@ -301,6 +306,7 @@ impl AppState {
             tracing::warn!("audit log worker exited (expected on shutdown)");
         });
 
+        let git_max_concurrent_ops = config.git_max_concurrent_ops;
         let state = Self {
             config: Arc::new(config),
             db,
@@ -313,6 +319,8 @@ impl AppState {
             conn_manager: Arc::new(ConnectionManager::new()),
             conn_semaphore: Arc::new(Semaphore::new(max_connections)),
             handler_semaphore: Arc::new(Semaphore::new(max_concurrent_handlers)),
+            git_semaphore: Arc::new(Semaphore::new(git_max_concurrent_ops)),
+            git_repo_locks: Arc::new(DashMap::new()),
             workflow_engine,
             relay_keypair,
             mint_rate_limiter: Arc::new(MintRateLimiter::new()),
