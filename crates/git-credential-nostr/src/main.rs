@@ -15,11 +15,11 @@ use zeroize::Zeroize;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Write an empty credential response so git fails gracefully, then exit 1.
+/// Write an error to stderr and exit 1.
+/// Does NOT write to stdout — git's credential protocol interprets any stdout
+/// as credential data, and a bare newline could confuse the client.
 fn fail(msg: &str) -> ! {
     eprintln!("error: {msg}");
-    print!("\n");
-    let _ = io::stdout().flush();
     process::exit(1);
 }
 
@@ -111,7 +111,10 @@ fn parse_stdin() -> CredRequest {
         } else if let Some(v) = line.strip_prefix("path=") {
             req.path = Some(v.to_string());
         } else if let Some(v) = line.strip_prefix("wwwauth[]=") {
-            req.wwwauth = Some(v.to_string());
+            // Only capture Nostr challenges — ignore Basic, Bearer, etc.
+            if v.starts_with("Nostr ") && req.wwwauth.is_none() {
+                req.wwwauth = Some(v.to_string());
+            }
         }
         // ignore unknown lines
     }
@@ -121,11 +124,18 @@ fn parse_stdin() -> CredRequest {
 
 /// Extract the HTTP method from a WWW-Authenticate value like:
 ///   Nostr realm="sprout", method="GET"
+///
+/// Splits on ", " first to isolate parameters — prevents matching inside
+/// quoted values like `realm="evil method=\"DELETE\""`.
 fn parse_method(wwwauth: &str) -> Option<HttpMethod> {
-    let idx = wwwauth.find("method=\"")?;
-    let rest = &wwwauth[idx + 8..];
-    let end = rest.find('"')?;
-    rest[..end].parse().ok()
+    for param in wwwauth.split(", ") {
+        let param = param.trim();
+        if let Some(rest) = param.strip_prefix("method=\"") {
+            let end = rest.find('"')?;
+            return rest[..end].parse().ok();
+        }
+    }
+    None
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -134,8 +144,9 @@ fn main() {
     let req = parse_stdin();
 
     // Old git without authtype capability — nothing we can do.
+    // The blank line signals "no credential available" per git's protocol.
     if !req.has_authtype_capability {
-        print!("\n");
+        println!();
         let _ = io::stdout().flush();
         return;
     }

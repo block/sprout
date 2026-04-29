@@ -41,8 +41,16 @@ pub enum Scope {
     /// Upload files and attachments.
     FilesWrite,
     /// Clone git repositories.
+    ///
+    /// Reserved for future use. Not currently enforced by git HTTP routes —
+    /// those use NIP-98 auth directly. Will be enforced when collaborator
+    /// access (read-only, maintainer) is added in v2.
     ReposRead,
     /// Push to git repositories and create repos (kind:30617).
+    ///
+    /// Enforced for kind:30617/30618 events via WebSocket ingest, but NOT
+    /// enforced by git HTTP push routes (which use NIP-98 + owner check).
+    /// Full enforcement deferred to v2 collaborator model.
     ReposWrite,
     /// Submit events on behalf of other pubkeys (proxy service accounts only).
     ProxySubmit,

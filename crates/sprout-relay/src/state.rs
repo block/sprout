@@ -186,6 +186,7 @@ pub struct AppState {
     /// Per-repo mutex map — prevents concurrent pushes to the same bare repo.
     /// Key: canonical repo path. Value: mutex guarding exclusive push access.
     pub git_repo_locks: Arc<DashMap<std::path::PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+
     /// Workflow engine for background processing.
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).

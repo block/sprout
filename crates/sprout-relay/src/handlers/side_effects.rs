@@ -1529,6 +1529,9 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         .arg(&repo_dir)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("HOME", "/dev/null")
         .output()
         .await
         .map_err(|e| anyhow::anyhow!("git init --bare failed to spawn: {e}"))?;
@@ -1539,13 +1542,16 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
     }
 
-    // Security: disable git hooks (RCE prevention — Lep finding N1).
+    // Security: disable git hooks (RCE prevention).
     let _ = Command::new("git")
         .args(["config", "--file"])
         .arg(repo_dir.join("config"))
         .args(["core.hooksPath", "/dev/null"])
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("HOME", "/dev/null")
         .output()
         .await;
 
@@ -1562,6 +1568,9 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             .args([key, value])
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", "/dev/null")
             .output()
             .await;
     }

@@ -28,6 +28,13 @@ use tracing::{error, info, warn};
 
 use crate::state::AppState;
 
+// ── Timeouts ─────────────────────────────────────────────────────────────────
+
+/// Timeout for `info/refs` — ref advertisement is fast (essentially `git show-ref`).
+const INFO_REFS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Timeout for pack operations (upload-pack, receive-pack) — large repos need time.
+const PACK_OPS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 // ── NIP-98 Auth Extractor ────────────────────────────────────────────────────
 
 /// NIP-98 auth extractor for git routes.
@@ -134,14 +141,26 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
             })
             .unwrap_or_else(|| method.to_owned());
 
+        // SECURITY: method intentionally not verified for git routes. The tautological
+        // check (event.method == event.method) is deliberate — see comment block above.
+        // Git's credential protocol signs once with GET and reuses for POST. The URL tag
+        // provides the real security boundary (±60s timestamp + URL lock + HTTPS).
+
         // body=None: can't buffer streaming pack data to verify payload hash.
         // Token is time-bounded (±60s) and URL-locked — acceptable trade-off.
         let pubkey =
             sprout_auth::nip98::verify_nip98_event(&event_json, &expected_url, &event_method, None)
                 .map_err(|e| {
                     warn!(error = %e, "git NIP-98 auth failed");
-                    (StatusCode::UNAUTHORIZED, format!("NIP-98 auth failed: {e}")).into_response()
+                    (StatusCode::UNAUTHORIZED, "NIP-98 auth failed").into_response()
                 })?;
+
+        // NOTE: NIP-98 event-ID dedup intentionally NOT implemented here.
+        // Git's credential protocol reuses one signed token across multiple requests
+        // in a session (info_refs GET → upload-pack/receive-pack POST). Rejecting
+        // replayed event IDs would break normal clone/push operations.
+        // The ±60s timestamp window + URL scoping + HTTPS transport provide sufficient
+        // replay protection for v1. Per-request signing requires protocol changes.
 
         Ok(GitAuth { pubkey })
     }
@@ -156,6 +175,7 @@ struct ValidatedRepoPath {
 /// Validate and resolve a git repo path from URL parameters.
 ///
 /// Security: allowlist characters, canonicalize, verify under repo root.
+#[allow(clippy::result_large_err)] // Response is the natural error type for axum handlers
 fn validate_repo_path(
     owner: &str,
     repo: &str,
@@ -213,12 +233,14 @@ fn validate_repo_path(
 /// - `PATH` — so git can find its own helpers
 /// - `GIT_HTTP_EXPORT_ALL` — required for Smart HTTP
 /// - `GIT_CONFIG_NOSYSTEM=1` — ignore system-wide gitconfig
+/// - `GIT_CONFIG_GLOBAL=/dev/null` — prevent reading global gitconfig
 /// - `HOME=/dev/null` — prevent reading ~/.gitconfig
 fn harden_git_env(cmd: &mut Command) {
     cmd.env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("GIT_HTTP_EXPORT_ALL", "1")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("HOME", "/dev/null");
 }
 
@@ -257,11 +279,13 @@ pub async fn info_refs(
         return Err((StatusCode::NOT_FOUND, "repository not found").into_response());
     }
 
-    let _permit = state
-        .git_semaphore
-        .acquire()
-        .await
-        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "git service busy").into_response())?;
+    let _permit = state.git_semaphore.try_acquire().map_err(|_| {
+        Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("Retry-After", "5")
+            .body(Body::from("git service busy"))
+            .unwrap()
+    })?;
 
     let mut cmd = Command::new("git");
     // Git's smart HTTP protocol uses service names like "git-upload-pack" and
@@ -271,12 +295,31 @@ pub async fn info_refs(
     cmd.arg(git_subcmd)
         .arg("--stateless-rpc")
         .arg("--advertise-refs")
-        .arg(&validated.repo_path);
+        .arg(&validated.repo_path)
+        .kill_on_drop(true);
     harden_git_env(&mut cmd);
-    let output = cmd.output().await.map_err(|e| {
+
+    let child = cmd.spawn().map_err(|e| {
         error!(error = %e, "git subprocess failed to spawn");
         (StatusCode::INTERNAL_SERVER_ERROR, "git error").into_response()
     })?;
+
+    // kill_on_drop requires a Child handle — .output() doesn't expose one.
+    // Spawn first, then wait under a timeout; on timeout the Child is dropped
+    // and kill_on_drop terminates the subprocess.
+    let output = tokio::time::timeout(INFO_REFS_TIMEOUT, child.wait_with_output())
+        .await
+        .map_err(|_| {
+            warn!(
+                "git info_refs subprocess timed out ({}s)",
+                INFO_REFS_TIMEOUT.as_secs()
+            );
+            (StatusCode::GATEWAY_TIMEOUT, "git operation timed out").into_response()
+        })?
+        .map_err(|e| {
+            error!(error = %e, "git subprocess failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "git error").into_response()
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -370,11 +413,13 @@ async fn run_git_service(
         return Err((StatusCode::NOT_FOUND, "repository not found").into_response());
     }
 
-    let _permit = state
-        .git_semaphore
-        .acquire()
-        .await
-        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "git service busy").into_response())?;
+    let _permit = state.git_semaphore.try_acquire().map_err(|_| {
+        Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("Retry-After", "5")
+            .body(Body::from("git service busy"))
+            .unwrap()
+    })?;
 
     let mut cmd = Command::new("git");
     cmd.arg(service)
@@ -382,7 +427,8 @@ async fn run_git_service(
         .arg(&validated.repo_path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
     harden_git_env(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| {
         error!(error = %e, "git subprocess failed to spawn");
@@ -409,13 +455,32 @@ async fn run_git_service(
         }
         drop(stdin); // Close stdin → EOF for git.
     });
+    // Grab an abort handle before moving body_task into the timeout block.
+    // On timeout, we abort it explicitly — dropping a JoinHandle only detaches
+    // the task (it keeps running). A stalled client could otherwise keep the
+    // spawned task alive indefinitely waiting on stream.next().await.
+    let body_abort = body_task.abort_handle();
 
-    let _ = body_task.await;
+    // Timeout covers both body streaming and subprocess completion.
+    // On timeout: child is killed via kill_on_drop, body_task via abort_handle.
+    let timeout_result = tokio::time::timeout(PACK_OPS_TIMEOUT, async {
+        let _ = body_task.await;
+        child.wait_with_output().await
+    })
+    .await;
 
-    let output = child.wait_with_output().await.map_err(|e| {
-        error!(error = %e, "git subprocess failed");
-        (StatusCode::INTERNAL_SERVER_ERROR, "git error").into_response()
-    })?;
+    let output = match timeout_result {
+        Err(_elapsed) => {
+            body_abort.abort();
+            warn!(service = %service, timeout_secs = PACK_OPS_TIMEOUT.as_secs(), "git subprocess timed out");
+            return Err((StatusCode::GATEWAY_TIMEOUT, "git operation timed out").into_response());
+        }
+        Ok(Err(e)) => {
+            error!(error = %e, "git subprocess failed");
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, "git error").into_response());
+        }
+        Ok(Ok(out)) => out,
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -514,7 +579,7 @@ async fn publish_ref_state(
     }
 
     // Pusher pubkey in p tag.
-    tags.push(nostr::Tag::public_key(pusher.clone()));
+    tags.push(nostr::Tag::public_key(*pusher));
 
     info!(
         repo = %repo_name,
