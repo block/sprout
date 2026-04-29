@@ -6,8 +6,7 @@ Agent Observability
 
 `draft` `optional`
 
-This NIP defines ephemeral, encrypted event kinds for streaming internal session
-telemetry between AI agent processes and their owners' desktop clients via Nostr relays.
+This NIP defines ephemeral, encrypted event kinds for streaming internal session telemetry between AI agent processes and their owners' desktop clients via Nostr relays.
 
 ## Motivation
 
@@ -57,8 +56,10 @@ Events MUST have exactly one `p` tag, exactly one `agent` tag, and exactly one
 **Telemetry** (agent → owner): `pubkey`=agent, `p`=owner, `agent`=agent.
 **Control** (owner → agent): `pubkey`=owner, `p`=agent, `agent`=agent (target).
 
-`frame` MUST be `"telemetry"` or `"control"`; unrecognized values MUST be ignored.
-An `h` tag MAY be included when the session runs within a NIP-29 group context.
+`frame` MUST be `"telemetry"` or `"control"`. Relays MUST reject events with
+unrecognized `frame` values. Clients MUST ignore events with unrecognized `frame`
+values. An `h` tag MAY be included when the session runs within a NIP-29 group
+context.
 
 ## Encryption
 
@@ -79,21 +80,27 @@ The `content` field decrypts to an `ObserverEvent` JSON object:
 
 ```json
 {
-  "seq":        <monotonic_integer>,
-  "timestamp":  <unix_timestamp_ms>,
-  "kind":       "<frame_kind>",
-  "agentIndex": <integer>,
-  "channelId":  "<channel_uuid>",
-  "sessionId":  "<session_id>",
-  "turnId":     "<turn_id>",
-  "payload":    { ... }
+  "seq":         <monotonic_integer>,
+  "timestamp":   "<rfc3339_string>",
+  "kind":        "<frame_kind>",
+  "agentIndex":  <integer> | null,
+  "channelId":   "<channel_uuid>" | null,
+  "sessionId":   "<session_id>" | null,
+  "turnId":      "<turn_id>" | null,
+  "payload":     { ... }
 }
 ```
 
-All fields are REQUIRED. `seq` is monotonically increasing per session (drop detection).
-`timestamp` is millisecond-precision Unix time. `agentIndex` identifies the agent in
-multi-agent scenarios. `sessionId`/`turnId` correlate frames across a session and turn.
-`payload` is kind-specific (MAY be `{}`). Unknown `kind` values MUST be ignored.
+`seq`, `timestamp`, `kind`, and `payload` are REQUIRED. `agentIndex`, `channelId`, `sessionId`,
+and `turnId` are OPTIONAL — they MAY be `null` when the value is not yet known
+(e.g., `sessionId` before session establishment). Clients MUST handle `null` values
+gracefully.
+
+`seq` is monotonically increasing per session (drop detection). `timestamp` is an
+RFC 3339 datetime string with sub-second precision (e.g., `"2026-04-29T12:00:41.500Z"`).
+`agentIndex` identifies the agent in multi-agent scenarios. `sessionId`/`turnId`
+correlate frames across a session and turn. `payload` is kind-specific (MAY be `{}`).
+Unknown `kind` values MUST be ignored.
 
 ### Frame Kinds
 
@@ -141,10 +148,9 @@ events with unrecognized `type` values.
 - Relay MUST verify `is_agent_owner(agent, owner)` where agent is resolved from the
   `agent` tag.
 
-Both directions require the relay to confirm the agent-owner relationship via
-database lookup. `#p` tag matching alone is insufficient — this is an authenticated
-ownership check. Unauthorized publish or subscribe attempts MUST be rejected with
-`AUTH required`.
+Both directions require relay confirmation of the agent-owner relationship via
+database lookup. `#p` tag matching alone is insufficient. Unauthorized publish or
+subscribe attempts MUST be rejected with `AUTH required`.
 
 ## Relay Behavior
 
@@ -156,7 +162,7 @@ On receiving a kind 24200 event, a relay MUST:
 4. NOT invoke the normal event ingestion or persistence path.
 
 Relays SHOULD enforce a rate limit of 100 events/second per agent pubkey.
-Relays RECOMMENDED to reject events whose `created_at` falls outside a ±5-minute
+Relays are RECOMMENDED to reject events whose `created_at` falls outside a ±5-minute
 freshness window to prevent replay of captured events.
 
 ## Client Behavior
@@ -170,10 +176,12 @@ Clients subscribe with:
 On receiving an event, a client MUST:
 
 1. Verify the event signature.
-2. Check that the `agent` tag matches a known/trusted agent pubkey before decrypting.
-3. Decrypt `content` using own secret key and `event.pubkey`.
-4. Parse the decrypted payload and dispatch on `kind` (telemetry) or `type` (control).
-5. Ignore unknown `kind`/`type` values.
+2. Decrypt `content` using own secret key and `event.pubkey`.
+3. Parse the decrypted payload and dispatch on `kind` (telemetry) or `type` (control).
+4. Ignore unknown `kind`/`type` values.
+
+Clients SHOULD verify that the `agent` tag matches a known/trusted agent pubkey
+before decrypting.
 
 Clients SHOULD buffer events in a bounded ring buffer (RECOMMENDED maximum: 800 events).
 Clients MUST NOT request historical kind 24200 events (no `since` in the past, no
@@ -182,33 +190,26 @@ Clients MUST NOT request historical kind 24200 events (no `since` in the past, n
 ## Security Considerations
 
 **Metadata leakage.** Routing tags (`p`, `agent`, `frame`, `created_at`) are
-cleartext. A relay operator can observe that agent X is streaming to owner Y, when,
-and at what rate. This is acceptable for most threat models. For maximum metadata
-privacy, implementors MAY wrap events in NIP-59 gift wrap.
+cleartext. A relay operator can observe that agent X is streaming to owner Y at what
+rate. For maximum metadata privacy, implementors MAY wrap events in NIP-59 gift wrap.
 
-**No forward secrecy.** NIP-44 does not provide forward secrecy. Compromise of the
-agent's private key allows decryption of any captured ciphertext. This is the
-standard Nostr security trade-off.
+**No forward secrecy.** NIP-44 does not provide forward secrecy; compromise of the
+agent's private key allows decryption of any captured ciphertext.
 
 **Replay attacks.** A captured, signed event could be replayed without a freshness
 check. Relays are RECOMMENDED to enforce a `created_at` freshness window.
 
-**Rogue relays.** The ephemerality contract is enforced by relay policy, not
-cryptography. A malicious relay can store events. NIP-44 encryption ensures stored
-events remain opaque to the relay operator absent key compromise.
+**Rogue relays.** The ephemerality contract is relay policy, not cryptography.
+NIP-44 encryption ensures stored events remain opaque to the relay operator absent
+key compromise.
 
 **Best-effort delivery.** Control frames can be dropped during reconnect or queue
 overflow. Control commands SHOULD be treated as advisory with idempotent semantics.
 Agents MUST NOT rely on guaranteed delivery of control frames.
 
-**Operational persistence vectors.** Even with relay-level ephemerality, telemetry
-may transiently exist in in-memory pub/sub buffers, process memory, crash dumps,
-browser memory, and application logs. Implementations SHOULD minimize logging of
-decrypted payloads.
-
-**Sensitive content.** Observer payloads may contain tool arguments, API responses,
-or raw protocol frames that include secrets. Implementations MUST NOT log decrypted
-observer frame content at INFO level or above.
+**Operational persistence vectors.** Telemetry may transiently exist in process
+memory, crash dumps, and application logs. Implementations SHOULD minimize logging
+of decrypted payloads and MUST NOT log it at INFO level or above.
 
 ## Relationship to Other NIPs
 
@@ -218,9 +219,9 @@ observer frame content at INFO level or above.
 - **NIP-44**: Required encryption algorithm for all `content` fields.
 - **NIP-29**: An `h` tag MAY be included when the agent session is scoped to a
   NIP-29 group.
-- **NIP-XX (PR #2226)**: NIP-XX defines the agent *output* plane (what the agent
-  produces for users). This NIP defines the *observability* plane (what the agent is
-  doing internally). They are complementary and non-overlapping.
+- **NIP-XX (PR #2226)**: NIP-XX defines the agent *output* plane; this NIP defines
+  the *observability* plane (internal agent activity). They are complementary and
+  non-overlapping.
 
 ## Examples
 
@@ -233,7 +234,7 @@ observer frame content at INFO level or above.
   "id":         "a1b2c3d4...",
   "kind":       24200,
   "pubkey":     "agent_pubkey_hex",
-  "created_at": 1714000041,
+  "created_at": 1777464041,
   "content":    "<NIP-44 v2 ciphertext>",
   "tags": [
     ["p",     "owner_pubkey_hex"],
@@ -249,7 +250,7 @@ observer frame content at INFO level or above.
 ```json
 {
   "seq":        42,
-  "timestamp":  1714000041500,
+  "timestamp":  "2026-04-29T12:00:41.500Z",
   "kind":       "acp_write",
   "agentIndex": 0,
   "channelId":  "52a85618-0f8f-4542-94ec-599e6e1c6f2e",
@@ -274,7 +275,7 @@ observer frame content at INFO level or above.
   "id":         "e5f6a7b8...",
   "kind":       24200,
   "pubkey":     "owner_pubkey_hex",
-  "created_at": 1714000042,
+  "created_at": 1777464042,
   "content":    "<NIP-44 v2 ciphertext>",
   "tags": [
     ["p",     "agent_pubkey_hex"],
