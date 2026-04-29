@@ -155,6 +155,7 @@ export function AppShell() {
     );
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
   });
 
   const handleDmNotification = React.useEffectEvent(
