@@ -98,6 +98,19 @@ export function MessageThreadPanel({
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
   const isOverlay = useIsThreadPanelOverlay();
+
+  React.useEffect(() => {
+    if (!isOverlay) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOverlay, onClose]);
+
   const threadHeadId = threadHead?.id ?? null;
 
   const composerReplyTarget =
@@ -146,7 +159,8 @@ export function MessageThreadPanel({
       <aside
         className={cn(
           "relative flex h-full shrink-0 flex-col border-l border-border/80 bg-background",
-          isOverlay && "fixed inset-y-0 right-0 z-40 shadow-xl",
+          isOverlay &&
+            "fixed inset-y-0 right-0 z-40 shadow-xl max-w-[calc(100vw-2rem)]",
         )}
         data-testid="message-thread-panel"
         style={{ width: `${widthPx}px` }}
