@@ -1,15 +1,21 @@
-import * as React from "react";
+import type * as React from "react";
 import { Activity, Bot, CircleDot, Octagon, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
 import { cancelManagedAgentTurn } from "@/shared/api/agentControl";
 import type { Channel, ManagedAgent } from "@/shared/api/types";
+import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { useStickToBottom } from "@/shared/hooks/useStickToBottom";
 import { cn } from "@/shared/lib/cn";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import {
+  OverlayPanelBackdrop,
+  PANEL_BASE_CLASS,
+  PANEL_OVERLAY_CLASS,
+} from "@/shared/ui/OverlayPanelBackdrop";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type AgentSessionThreadPanelProps = {
@@ -35,18 +41,7 @@ export function AgentSessionThreadPanel({
 }: AgentSessionThreadPanelProps) {
   const isLive = agent.status === "running" && Boolean(agent.observerUrl);
   const isOverlay = useIsThreadPanelOverlay();
-
-  React.useEffect(() => {
-    if (!isOverlay) return;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !event.defaultPrevented) {
-        event.preventDefault();
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOverlay, onClose]);
+  useEscapeKey(onClose, isOverlay);
 
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
 
@@ -69,19 +64,9 @@ export function AgentSessionThreadPanel({
 
   return (
     <>
-      {isOverlay && (
-        <div
-          className="fixed inset-0 z-30 bg-black/20"
-          onClick={onClose}
-          aria-hidden="true"
-        />
-      )}
+      {isOverlay && <OverlayPanelBackdrop onClose={onClose} />}
       <aside
-        className={cn(
-          "relative flex h-full shrink-0 flex-col border-l border-border/80 bg-background",
-          isOverlay &&
-            "fixed inset-y-0 right-0 z-40 shadow-xl max-w-[calc(100vw-2rem)]",
-        )}
+        className={cn(PANEL_BASE_CLASS, isOverlay && PANEL_OVERLAY_CLASS)}
         data-testid="agent-session-thread-panel"
         style={{ width: `${widthPx}px` }}
       >

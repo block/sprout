@@ -5,9 +5,15 @@ import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
+import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import {
+  OverlayPanelBackdrop,
+  PANEL_BASE_CLASS,
+  PANEL_OVERLAY_CLASS,
+} from "@/shared/ui/OverlayPanelBackdrop";
 import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
@@ -98,18 +104,7 @@ export function MessageThreadPanel({
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
   const isOverlay = useIsThreadPanelOverlay();
-
-  React.useEffect(() => {
-    if (!isOverlay) return;
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && !event.defaultPrevented) {
-        event.preventDefault();
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOverlay, onClose]);
+  useEscapeKey(onClose, isOverlay);
 
   const threadHeadId = threadHead?.id ?? null;
 
@@ -149,19 +144,9 @@ export function MessageThreadPanel({
 
   return (
     <>
-      {isOverlay && (
-        <div
-          className="fixed inset-0 z-30 bg-black/20"
-          onClick={onClose}
-          aria-hidden="true"
-        />
-      )}
+      {isOverlay && <OverlayPanelBackdrop onClose={onClose} />}
       <aside
-        className={cn(
-          "relative flex h-full shrink-0 flex-col border-l border-border/80 bg-background",
-          isOverlay &&
-            "fixed inset-y-0 right-0 z-40 shadow-xl max-w-[calc(100vw-2rem)]",
-        )}
+        className={cn(PANEL_BASE_CLASS, isOverlay && PANEL_OVERLAY_CLASS)}
         data-testid="message-thread-panel"
         style={{ width: `${widthPx}px` }}
       >
