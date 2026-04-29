@@ -1,16 +1,14 @@
-import { describe, expect, test } from "vitest";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 
-import type { MainTimelineEntry } from "./threadPanel";
-import { groupTimelineEntries } from "./groupTimelineEntries";
+import { groupTimelineEntries } from "./groupTimelineEntries.ts";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
 const KIND_SYSTEM_MESSAGE = 40099;
 const KIND_CHAT = 9;
 
-function makeEntry(
-  overrides: Partial<MainTimelineEntry["message"]> = {},
-): MainTimelineEntry {
+function makeEntry(overrides = {}) {
   return {
     message: {
       id: `msg-${Math.random().toString(36).slice(2)}`,
@@ -27,11 +25,7 @@ function makeEntry(
   };
 }
 
-function makeSystemEntry(
-  type: string,
-  actor: string,
-  target?: string,
-): MainTimelineEntry {
+function makeSystemEntry(type, actor, target) {
   return makeEntry({
     kind: KIND_SYSTEM_MESSAGE,
     body: JSON.stringify({ type, actor, target }),
@@ -42,7 +36,7 @@ function makeSystemEntry(
 
 describe("groupTimelineEntries", () => {
   test("returns empty array for empty input", () => {
-    expect(groupTimelineEntries([])).toEqual([]);
+    assert.deepEqual(groupTimelineEntries([]), []);
   });
 
   // ── Single entries (no grouping) ────────────────────────────────────
@@ -50,18 +44,18 @@ describe("groupTimelineEntries", () => {
   test("single chat message is not compacted", () => {
     const entry = makeEntry();
     const result = groupTimelineEntries([entry]);
-    expect(result).toHaveLength(1);
-    expect(result[0].entryType).toBe("message");
+    assert.equal(result.length, 1);
+    assert.equal(result[0].entryType, "message");
     if (result[0].entryType === "message") {
-      expect(result[0].isGroupContinuation).toBe(false);
+      assert.equal(result[0].isGroupContinuation, false);
     }
   });
 
   test("single system event renders as normal message (no accordion)", () => {
     const entry = makeSystemEntry("member_joined", "a", "b");
     const result = groupTimelineEntries([entry]);
-    expect(result).toHaveLength(1);
-    expect(result[0].entryType).toBe("message");
+    assert.equal(result.length, 1);
+    assert.equal(result[0].entryType, "message");
   });
 
   // ── System event grouping ───────────────────────────────────────────
@@ -72,10 +66,10 @@ describe("groupTimelineEntries", () => {
       makeSystemEntry("member_joined", "a", "c"),
     ];
     const result = groupTimelineEntries(entries);
-    expect(result).toHaveLength(1);
-    expect(result[0].entryType).toBe("system-event-group");
+    assert.equal(result.length, 1);
+    assert.equal(result[0].entryType, "system-event-group");
     if (result[0].entryType === "system-event-group") {
-      expect(result[0].entries).toHaveLength(2);
+      assert.equal(result[0].entries.length, 2);
     }
   });
 
@@ -88,10 +82,10 @@ describe("groupTimelineEntries", () => {
       makeSystemEntry("member_left", "e"),
     ];
     const result = groupTimelineEntries(entries);
-    expect(result).toHaveLength(3);
-    expect(result[0].entryType).toBe("system-event-group");
-    expect(result[1].entryType).toBe("message");
-    expect(result[2].entryType).toBe("system-event-group");
+    assert.equal(result.length, 3);
+    assert.equal(result[0].entryType, "system-event-group");
+    assert.equal(result[1].entryType, "message");
+    assert.equal(result[2].entryType, "system-event-group");
   });
 
   // ── Message compacting ──────────────────────────────────────────────
@@ -102,12 +96,12 @@ describe("groupTimelineEntries", () => {
       makeEntry({ createdAt: 1060, pubkey: "a" }),
     ];
     const result = groupTimelineEntries(entries);
-    expect(result).toHaveLength(2);
+    assert.equal(result.length, 2);
     if (result[0].entryType === "message") {
-      expect(result[0].isGroupContinuation).toBe(false);
+      assert.equal(result[0].isGroupContinuation, false);
     }
     if (result[1].entryType === "message") {
-      expect(result[1].isGroupContinuation).toBe(true);
+      assert.equal(result[1].isGroupContinuation, true);
     }
   });
 
@@ -118,7 +112,7 @@ describe("groupTimelineEntries", () => {
     ];
     const result = groupTimelineEntries(entries);
     if (result[1].entryType === "message") {
-      expect(result[1].isGroupContinuation).toBe(false);
+      assert.equal(result[1].isGroupContinuation, false);
     }
   });
 
@@ -129,12 +123,12 @@ describe("groupTimelineEntries", () => {
     ];
     const result = groupTimelineEntries(entries);
     if (result[1].entryType === "message") {
-      expect(result[1].isGroupContinuation).toBe(false);
+      assert.equal(result[1].isGroupContinuation, false);
     }
   });
 
   test("message with thread summary breaks compacting", () => {
-    const entries: MainTimelineEntry[] = [
+    const entries = [
       makeEntry({ createdAt: 1000, pubkey: "a" }),
       {
         message: {
@@ -156,7 +150,7 @@ describe("groupTimelineEntries", () => {
     ];
     const result = groupTimelineEntries(entries);
     if (result[1].entryType === "message") {
-      expect(result[1].isGroupContinuation).toBe(false);
+      assert.equal(result[1].isGroupContinuation, false);
     }
   });
 
@@ -166,9 +160,9 @@ describe("groupTimelineEntries", () => {
       makeSystemEntry("topic_changed", "a"),
     ];
     const result = groupTimelineEntries(entries);
-    expect(result[1].entryType).toBe("message");
+    assert.equal(result[1].entryType, "message");
     if (result[1].entryType === "message") {
-      expect(result[1].isGroupContinuation).toBe(false);
+      assert.equal(result[1].isGroupContinuation, false);
     }
   });
 
@@ -181,7 +175,7 @@ describe("groupTimelineEntries", () => {
     ];
     const result = groupTimelineEntries(entries);
     if (result[1].entryType === "message") {
-      expect(result[1].isGroupContinuation).toBe(true);
+      assert.equal(result[1].isGroupContinuation, true);
     }
   });
 });

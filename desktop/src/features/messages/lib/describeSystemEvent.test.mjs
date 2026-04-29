@@ -1,9 +1,10 @@
-import { describe, expect, test } from "vitest";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 
 import {
   describeSystemEvent,
   parseSystemMessagePayload,
-} from "./describeSystemEvent";
+} from "./describeSystemEvent.ts";
 
 // ── parseSystemMessagePayload ─────────────────────────────────────────
 
@@ -12,7 +13,7 @@ describe("parseSystemMessagePayload", () => {
     const result = parseSystemMessagePayload(
       '{"type":"member_joined","actor":"abc","target":"def"}',
     );
-    expect(result).toEqual({
+    assert.deepEqual(result, {
       type: "member_joined",
       actor: "abc",
       target: "def",
@@ -20,11 +21,11 @@ describe("parseSystemMessagePayload", () => {
   });
 
   test("returns null for invalid JSON", () => {
-    expect(parseSystemMessagePayload("not json")).toBeNull();
+    assert.equal(parseSystemMessagePayload("not json"), null);
   });
 
   test("returns null for empty string", () => {
-    expect(parseSystemMessagePayload("")).toBeNull();
+    assert.equal(parseSystemMessagePayload(""), null);
   });
 });
 
@@ -37,7 +38,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/joined the channel/);
+    assert.match(result, /joined the channel/);
   });
 
   test("member_joined with different target shows 'added ... to the channel'", () => {
@@ -46,7 +47,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/added .* to the channel/);
+    assert.match(result, /added .* to the channel/);
   });
 
   test("member_left shows 'left the channel'", () => {
@@ -55,7 +56,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/left the channel/);
+    assert.match(result, /left the channel/);
   });
 
   test("member_removed shows 'removed ... from the channel'", () => {
@@ -64,7 +65,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/removed .* from the channel/);
+    assert.match(result, /removed .* from the channel/);
   });
 
   test("topic_changed includes the topic text", () => {
@@ -73,7 +74,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/changed the topic to "New Topic"/);
+    assert.match(result, /changed the topic to "New Topic"/);
   });
 
   test("purpose_changed includes the purpose text", () => {
@@ -82,7 +83,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/changed the purpose to "Ship stuff"/);
+    assert.match(result, /changed the purpose to "Ship stuff"/);
   });
 
   test("channel_created shows 'created this channel'", () => {
@@ -91,7 +92,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toMatch(/created this channel/);
+    assert.match(result, /created this channel/);
   });
 
   test("unknown type returns null", () => {
@@ -100,7 +101,7 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toBeNull();
+    assert.equal(result, null);
   });
 
   test("currentPubkey resolves to 'You'", () => {
@@ -109,7 +110,7 @@ describe("describeSystemEvent", () => {
       "aaa",
       undefined,
     );
-    expect(result).toBe("You left the channel");
+    assert.equal(result, "You left the channel");
   });
 
   test("profiles resolve display names", () => {
@@ -121,7 +122,7 @@ describe("describeSystemEvent", () => {
       undefined,
       profiles,
     );
-    expect(result).toMatch(/added Wes to the channel/);
+    assert.match(result, /added Wes to the channel/);
   });
 
   test("missing actor shows 'Someone'", () => {
@@ -130,6 +131,6 @@ describe("describeSystemEvent", () => {
       undefined,
       undefined,
     );
-    expect(result).toBe("Someone created this channel");
+    assert.equal(result, "Someone created this channel");
   });
 });
