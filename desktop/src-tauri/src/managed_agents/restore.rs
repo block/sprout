@@ -86,7 +86,7 @@ pub fn restore_managed_agents_on_launch(
     // ── Phase B (no locks): resolve commands and spawn processes in parallel ──
     let spawn_results: Vec<(
         String,
-        Result<(std::process::Child, std::path::PathBuf), String>,
+        Result<(std::process::Child, std::path::PathBuf, Option<String>), String>,
     )> = std::thread::scope(|scope| {
         let handles: Vec<_> = agents_to_start
             .iter()
@@ -125,7 +125,7 @@ pub fn restore_managed_agents_on_launch(
             Err(_) => continue,
         };
         match result {
-            Ok((child, log_path)) => {
+            Ok((child, log_path, observer_url)) => {
                 let now = util::now_iso();
                 record.updated_at = now.clone();
                 record.runtime_pid = Some(child.id());
@@ -133,7 +133,14 @@ pub fn restore_managed_agents_on_launch(
                 record.last_stopped_at = None;
                 record.last_exit_code = None;
                 record.last_error = None;
-                runtimes.insert(pubkey, ManagedAgentProcess { child, log_path });
+                runtimes.insert(
+                    pubkey,
+                    ManagedAgentProcess {
+                        child,
+                        log_path,
+                        observer_url,
+                    },
+                );
             }
             Err(error) => {
                 record.updated_at = util::now_iso();

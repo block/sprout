@@ -13,6 +13,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
 
+use crate::observer::{ObserverContext, ObserverHandle};
+
 /// Maximum allowed size of a single NDJSON line from the agent's stdout.
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
@@ -137,6 +139,12 @@ pub struct AcpClient {
     /// Inherited by `cancel_with_cleanup` so the drain loop shares the same budget
     /// rather than starting a fresh timer (prevents double-jeopardy).
     current_hard_deadline: Option<tokio::time::Instant>,
+    /// Optional local observer feed used by the desktop app.
+    observer: Option<ObserverHandle>,
+    /// Pool slot index for this agent process.
+    observer_agent_index: Option<usize>,
+    /// Best-effort context attached to raw ACP wire events.
+    observer_context: ObserverContext,
 }
 
 impl AcpClient {
@@ -225,7 +233,33 @@ impl AcpClient {
             permission_responded: false,
             last_prompt_id: None,
             current_hard_deadline: None,
+            observer: None,
+            observer_agent_index: None,
+            observer_context: ObserverContext::default(),
         })
+    }
+
+    /// Attach a local observer feed to this ACP client.
+    pub fn set_observer(&mut self, observer: Option<ObserverHandle>, agent_index: usize) {
+        self.observer = observer;
+        self.observer_agent_index = Some(agent_index);
+    }
+
+    /// Update metadata that will be attached to subsequent raw wire events.
+    pub fn set_observer_context(&mut self, context: ObserverContext) {
+        self.observer_context = context;
+    }
+
+    /// Emit a semantic event to the local observer feed, if enabled.
+    pub fn observe(&self, kind: impl Into<String>, payload: serde_json::Value) {
+        if let Some(observer) = &self.observer {
+            observer.emit(
+                kind,
+                self.observer_agent_index,
+                &self.observer_context,
+                payload,
+            );
+        }
     }
 
     /// Send the `initialize` request and return the agent's response result value.
@@ -429,6 +463,33 @@ impl AcpClient {
             }
         };
 
+        self.cancel_with_cleanup_until(session_id, hard_deadline)
+            .await
+    }
+
+    /// Cancel a user-interrupted turn with a bounded grace window.
+    ///
+    /// Some ACP servers currently keep streaming after `session/cancel`. For an
+    /// explicit Stop button, waiting until the original turn deadline can make
+    /// cancellation look broken. This variant gives the agent a short chance to
+    /// acknowledge cancellation, then returns a timeout so the caller can respawn
+    /// the agent process and actually stop the work.
+    pub async fn cancel_with_cleanup_grace(
+        &mut self,
+        session_id: &str,
+        grace: std::time::Duration,
+    ) -> Result<StopReason, AcpError> {
+        let _ = self.current_hard_deadline.take();
+        let hard_deadline = tokio::time::Instant::now() + grace;
+        self.cancel_with_cleanup_until(session_id, hard_deadline)
+            .await
+    }
+
+    async fn cancel_with_cleanup_until(
+        &mut self,
+        session_id: &str,
+        hard_deadline: tokio::time::Instant,
+    ) -> Result<StopReason, AcpError> {
         // Validate precondition before any side effects — fail fast if there's
         // no in-flight prompt (prevents writing permission responses or cancel
         // notifications to the agent when no prompt is active).
@@ -456,10 +517,8 @@ impl AcpClient {
         tracing::info!(target: "acp::cancel", "sent session/cancel for {session_id}");
         // Use a fixed 30s idle timeout during cleanup — the cancel notification
         // needs time to propagate and the agent may go silent while winding down.
-        // We do NOT use the caller's idle_timeout here: that value was tuned for
-        // normal prompt activity and may be very short (e.g. 5s). Using it during
-        // cancel would cause premature IdleTimeout before the cancelled response
-        // arrives, leaving the session in an inconsistent state.
+        // The separate hard_deadline bounds agents that keep producing output
+        // but ignore cancellation.
         let cleanup_idle = std::time::Duration::from_secs(30);
         let result = self
             .read_until_response_with_idle_timeout(prompt_id, cleanup_idle, hard_deadline)
@@ -484,7 +543,9 @@ impl AcpClient {
         })
         .await
         .map_err(|_| AcpError::WriteTimeout(WRITE_TIMEOUT))?
-        .map_err(AcpError::Io)
+        .map_err(AcpError::Io)?;
+        self.observe("acp_write", value.clone());
+        Ok(())
     }
 
     /// Default timeout for non-prompt RPCs (initialize, session/new, etc.).
@@ -626,6 +687,13 @@ impl AcpClient {
             let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => v,
                 Err(e) => {
+                    self.observe(
+                        "acp_parse_error",
+                        serde_json::json!({
+                            "line": trimmed,
+                            "error": e.to_string(),
+                        }),
+                    );
                     tracing::warn!(
                         target: "acp::wire",
                         "failed to parse line as JSON: {e} — skipping"
@@ -633,6 +701,7 @@ impl AcpClient {
                     continue;
                 }
             };
+            self.observe("acp_read", msg.clone());
 
             // Check if this is a response to our expected request (has matching id
             // AND no `method` field — a `method` field means it's an agent-initiated
@@ -729,6 +798,13 @@ impl AcpClient {
                     let msg: serde_json::Value = match serde_json::from_str(trimmed) {
                         Ok(v) => v,
                         Err(e) => {
+                            self.observe(
+                                "acp_parse_error",
+                                serde_json::json!({
+                                    "line": trimmed,
+                                    "error": e.to_string(),
+                                }),
+                            );
                             tracing::warn!(
                                 target: "acp::wire",
                                 "failed to parse line as JSON: {e} — skipping"
@@ -736,6 +812,7 @@ impl AcpClient {
                             continue;
                         }
                     };
+                    self.observe("acp_read", msg.clone());
 
                     // Only reset the idle clock on lines that parse as valid JSON.
                     // Malformed lines (skipped above) don't count as real agent activity.
