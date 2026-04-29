@@ -63,6 +63,24 @@ void main() {
       );
     });
 
+    test('RelayException string includes non-empty response body', () {
+      final exception = RelayException(
+        403,
+        '{"message":"missing users:write"}',
+      );
+
+      expect(
+        exception.toString(),
+        'RelayException(403): {"message":"missing users:write"}',
+      );
+    });
+
+    test('RelayException string omits empty response body', () {
+      final exception = RelayException(403, '   ');
+
+      expect(exception.toString(), 'RelayException(403)');
+    });
+
     test('omits Authorization header when no token', () async {
       final mockClient = http_testing.MockClient((request) async {
         expect(request.headers.containsKey('Authorization'), isFalse);

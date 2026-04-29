@@ -65,6 +65,7 @@ void main() {
       await relay.submit(
         kind: 9007,
         content: 'test message',
+        createdAt: 1234567890,
         tags: [
           ['h', 'channel-1'],
         ],
@@ -73,6 +74,7 @@ void main() {
       expect(postedBody, isNotNull);
       expect(postedBody!['kind'], 9007);
       expect(postedBody!['content'], 'test message');
+      expect(postedBody!['created_at'], 1234567890);
       expect(postedBody!['sig'], isNotEmpty);
       expect(postedBody!['pubkey'], keychain.public);
     });

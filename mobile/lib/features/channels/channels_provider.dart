@@ -7,7 +7,8 @@ import 'channel.dart';
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
 class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
-  void Function()? _unsubscribe;
+  final List<void Function()> _unsubscribers = [];
+  int _subscriptionVersion = 0;
 
   @override
   Future<List<Channel>> build() {
@@ -23,23 +24,20 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     });
 
     ref.onDispose(() {
-      _unsubscribe?.call();
-      _unsubscribe = null;
+      _clearLiveSubscriptions();
     });
 
-    // Initial fetch via HTTP (reliable, paginated).
-    final fetchFuture = _fetch();
-
-    // If websocket is connected, subscribe to live channel events to keep
-    // the list up to date without polling.
-    if (sessionState.status == SessionStatus.connected) {
-      _subscribeLive();
+    if (sessionState.status != SessionStatus.connected) {
+      _clearLiveSubscriptions();
     }
 
-    return fetchFuture;
+    // Initial fetch via HTTP (reliable, paginated).
+    return _fetch(
+      subscribeLive: sessionState.status == SessionStatus.connected,
+    );
   }
 
-  Future<List<Channel>> _fetch() async {
+  Future<List<Channel>> _fetch({bool subscribeLive = false}) async {
     final client = ref.read(relayClientProvider);
     final json = await client.get('/api/channels') as List<dynamic>;
     final channels = json
@@ -55,15 +53,56 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       }
       return left.name.compareTo(right.name);
     });
+    if (subscribeLive) {
+      await _subscribeLive(channels);
+    }
     return channels;
   }
 
-  void _subscribeLive() async {
+  Future<void> _subscribeLive(List<Channel> channels) async {
+    _clearLiveSubscriptions();
+    final subscriptionVersion = _subscriptionVersion;
+    if (ref.read(relaySessionProvider).status != SessionStatus.connected) {
+      return;
+    }
+
     final session = ref.read(relaySessionProvider.notifier);
-    _unsubscribe = await session.subscribe(
-      NostrFilter(kinds: EventKind.channelEventKinds, limit: 0),
-      _handleLiveEvent,
+    final channelIds = {
+      for (final channel in channels)
+        if (channel.isMember && !channel.isArchived) channel.id,
+    };
+
+    final subscriptions = await Future.wait(
+      channelIds.map((channelId) async {
+        try {
+          return await session.subscribe(
+            NostrFilter(
+              kinds: EventKind.channelEventKinds,
+              tags: {
+                '#h': [channelId],
+              },
+              limit: 0,
+            ),
+            _handleLiveEvent,
+          );
+        } catch (error) {
+          debugPrint(
+            '[ChannelsNotifier] live subscription failed for $channelId: $error',
+          );
+          return null;
+        }
+      }),
     );
+
+    if (subscriptionVersion != _subscriptionVersion ||
+        ref.read(relaySessionProvider).status != SessionStatus.connected) {
+      for (final unsubscribe in subscriptions.whereType<void Function()>()) {
+        unsubscribe();
+      }
+      return;
+    }
+
+    _unsubscribers.addAll(subscriptions.whereType<void Function()>());
   }
 
   void _handleLiveEvent(NostrEvent event) {
@@ -93,7 +132,19 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   }
 
   Future<void> refresh() async {
-    state = await AsyncValue.guard(_fetch);
+    final sessionState = ref.read(relaySessionProvider);
+    state = await AsyncValue.guard(
+      () =>
+          _fetch(subscribeLive: sessionState.status == SessionStatus.connected),
+    );
+  }
+
+  void _clearLiveSubscriptions() {
+    _subscriptionVersion++;
+    for (final unsubscribe in _unsubscribers) {
+      unsubscribe();
+    }
+    _unsubscribers.clear();
   }
 }
 

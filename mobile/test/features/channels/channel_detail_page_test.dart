@@ -11,6 +11,7 @@ import 'package:sprout_mobile/features/channels/channel_management_provider.dart
 import 'package:sprout_mobile/features/channels/channel_messages_provider.dart';
 import 'package:sprout_mobile/features/channels/channel_typing_provider.dart';
 import 'package:sprout_mobile/features/channels/channels_provider.dart';
+import 'package:sprout_mobile/features/channels/read_state/read_state_provider.dart';
 import 'package:sprout_mobile/features/profile/profile_provider.dart';
 import 'package:sprout_mobile/features/profile/user_cache_provider.dart';
 import 'package:sprout_mobile/features/profile/user_profile.dart';
@@ -120,6 +121,7 @@ Widget _buildTestable({
   List<NavigatorObserver> navigatorObservers = const [],
   Future<List<ChannelMember>> Function()? loadMembers,
   ChannelActions Function(Ref ref)? createChannelActions,
+  ReadStateNotifier? readStateNotifier,
 }) {
   final resolvedChannel = channel ?? _testChannel;
   final fakeChannelsNotifier =
@@ -150,6 +152,8 @@ Widget _buildTestable({
       ),
       if (createChannelActions != null)
         channelActionsProvider.overrideWith(createChannelActions),
+      if (readStateNotifier != null)
+        readStateProvider.overrideWith(() => readStateNotifier),
       // Stub the relay client provider so preloadMembers doesn't crash.
       relayClientProvider.overrideWithValue(
         RelayClient(baseUrl: 'http://localhost:3000'),
@@ -180,6 +184,43 @@ Finder findRichText(String text) {
 
 void main() {
   group('ChannelDetailPage', () {
+    testWidgets('defers read-state mark until after build', (tester) async {
+      final readState = _SynchronousReadStateNotifier(
+        const ReadStateState(
+          isReady: true,
+          pubkey: 'self',
+          contexts: {},
+          version: 0,
+        ),
+      );
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [
+            _textMsg(
+              id: 'msg1',
+              pubkey: 'alice',
+              content: 'First',
+              createdAt: 1100,
+            ),
+            _textMsg(
+              id: 'msg2',
+              pubkey: 'alice',
+              content: 'Latest',
+              createdAt: 1200,
+            ),
+          ],
+          readStateNotifier: readState,
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      await tester.pump();
+
+      expect(readState.markedContexts, {_channelId: 1200});
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('shows forum posts view for forum channels', (tester) async {
       final forumChannel = Channel(
         id: _channelId,
@@ -1077,6 +1118,22 @@ class _FakeTypingNotifier extends ChannelTypingNotifier {
 
   @override
   List<TypingEntry> build() => _entries;
+}
+
+class _SynchronousReadStateNotifier extends ReadStateNotifier {
+  final ReadStateState _initialState;
+  final Map<String, int> markedContexts = {};
+
+  _SynchronousReadStateNotifier(this._initialState);
+
+  @override
+  ReadStateState build() => _initialState;
+
+  @override
+  void markContextRead(String contextId, int unixTimestamp) {
+    markedContexts[contextId] = unixTimestamp;
+    state = state.copyWithContext(contextId, unixTimestamp);
+  }
 }
 
 class _FakeProfileNotifier extends ProfileNotifier {
