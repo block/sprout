@@ -296,6 +296,8 @@ pub async fn info_refs(
         .arg("--stateless-rpc")
         .arg("--advertise-refs")
         .arg(&validated.repo_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     harden_git_env(&mut cmd);
 
