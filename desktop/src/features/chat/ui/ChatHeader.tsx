@@ -10,12 +10,13 @@ import {
 } from "lucide-react";
 import type * as React from "react";
 
+import { cn } from "@/shared/lib/cn";
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
 
 type ChatHeaderProps = {
   actions?: React.ReactNode;
   title: string;
-  description: string;
+  description?: string;
   channelType?: ChannelType;
   visibility?: ChannelVisibility;
   mode?: "home" | "channel" | "agents" | "workflows" | "pulse";
@@ -73,7 +74,10 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   return (
     <header
-      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 pb-3 pt-8 sm:px-6"
+      className={cn(
+        "flex min-w-0 items-center gap-3 bg-background px-4 pb-3 pt-8 sm:px-6",
+        mode === "home" ? "" : "border-b border-border/80",
+      )}
       data-testid="chat-header"
       data-tauri-drag-region
     >
@@ -96,12 +100,14 @@ export function ChatHeader({
             </div>
           ) : null}
         </div>
-        <p
-          className="truncate text-sm text-muted-foreground"
-          data-testid="chat-description"
-        >
-          {description}
-        </p>
+        {description ? (
+          <p
+            className="truncate text-sm text-muted-foreground"
+            data-testid="chat-description"
+          >
+            {description}
+          </p>
+        ) : null}
       </div>
 
       {actions ? <div className="shrink-0">{actions}</div> : null}

@@ -1,14 +1,11 @@
 import {
   ArrowUpRight,
-  Archive,
   CheckCheck,
   CircleDot,
   Mail,
   MailOpen,
-  Forward,
   MoreHorizontal,
   Reply,
-  ReplyAll,
   Trash2,
 } from "lucide-react";
 import * as React from "react";
@@ -22,7 +19,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import {
@@ -42,8 +38,7 @@ type InboxDetailPaneProps = {
   isDeletingMessage?: boolean;
   isSendingReply?: boolean;
   item: InboxItem | null;
-  localReplies?: InboxReply[];
-  onArchive: () => void;
+  replies?: InboxReply[];
   onDelete: () => void;
   onOpenChannel: (channelId: string) => void;
   onSendReply: (
@@ -63,8 +58,7 @@ export function InboxDetailPane({
   isDeletingMessage = false,
   isSendingReply = false,
   item,
-  localReplies = [],
-  onArchive,
+  replies = [],
   onDelete,
   onOpenChannel,
   onSendReply,
@@ -152,22 +146,15 @@ export function InboxDetailPane({
           <div className="flex shrink-0 items-center gap-4">
             <TooltipProvider delayDuration={200}>
               <div className="flex items-center gap-4">
-                <div className="flex items-center gap-0.5">
-                  <HeaderIconAction
-                    label="Reply"
-                    onClick={focusComposer}
-                    icon={<Reply className="h-4 w-4" />}
-                  />
-                  <HeaderIconAction
-                    label="Reply all"
-                    onClick={focusComposer}
-                    icon={<ReplyAll className="h-4 w-4" />}
-                  />
-                  <HeaderIconAction
-                    label="Forward"
-                    icon={<Forward className="h-4 w-4" />}
-                  />
-                </div>
+                {canReply ? (
+                  <div className="flex items-center gap-0.5">
+                    <HeaderIconAction
+                      label="Reply"
+                      onClick={focusComposer}
+                      icon={<Reply className="h-4 w-4" />}
+                    />
+                  </div>
+                ) : null}
                 <div className="flex items-center gap-0.5">
                   {canOpenChannel && channelId ? (
                     <HeaderIconAction
@@ -188,19 +175,15 @@ export function InboxDetailPane({
                     }
                   />
                 </div>
-                <HeaderMoreMenu
-                  canDelete={canDelete}
-                  isDeletingMessage={isDeletingMessage}
-                  onArchive={onArchive}
-                  onDelete={onDelete}
-                />
+                {canDelete ? (
+                  <HeaderMoreMenu
+                    isDeletingMessage={isDeletingMessage}
+                    onDelete={onDelete}
+                  />
+                ) : null}
               </div>
             </TooltipProvider>
           </div>
-        </div>
-
-        <div className="mt-5">
-          <h2 className="text-2xl font-semibold tracking-tight">{item.subject}</h2>
         </div>
       </div>
 
@@ -214,10 +197,18 @@ export function InboxDetailPane({
               tight
             />
           </div>
-          {localReplies.map((reply) => (
+          {replies.length > 0 ? (
             <div
-              className="border-t border-border/60 px-6 py-5"
-              data-testid="home-inbox-local-reply"
+              className="border-t border-border/60 px-6 pt-5 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+              data-testid="home-inbox-replies-header"
+            >
+              {replies.length === 1 ? "1 reply" : `${replies.length} replies`}
+            </div>
+          ) : null}
+          {replies.map((reply) => (
+            <div
+              className="px-6 py-5"
+              data-testid="home-inbox-reply"
               key={reply.id}
             >
               <div className="mb-3 flex items-center gap-3">
@@ -249,12 +240,14 @@ export function InboxDetailPane({
       <MessageComposer
         channelId={item.item.channelId}
         channelName={item.channelLabel ?? "channel"}
+        containerClassName="px-6 pb-4 sm:px-6"
         disabled={!canReply}
+        draftKey={`inbox-reply:${item.id}`}
         isSending={isSendingReply}
         onSend={onSendReply}
         placeholder={
           canReply
-            ? `Reply to ${item.senderLabel}${item.channelLabel ? ` in #${item.channelLabel}` : ""}`
+            ? `Send reply to ${item.channelLabel ? `#${item.channelLabel} thread` : "channel thread"}`
             : (disabledReplyReason ?? "Replies are not available for this item.")
         }
       />
@@ -293,14 +286,10 @@ function HeaderIconAction({
 }
 
 function HeaderMoreMenu({
-  canDelete,
   isDeletingMessage,
-  onArchive,
   onDelete,
 }: {
-  canDelete: boolean;
   isDeletingMessage: boolean;
-  onArchive: () => void;
   onDelete: () => void;
 }) {
   const trigger = (
@@ -324,14 +313,9 @@ function HeaderMoreMenu({
         <TooltipContent>More actions</TooltipContent>
       </Tooltip>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={onArchive}>
-          <Archive className="h-4 w-4" />
-          Archive for now
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
-          disabled={!canDelete || isDeletingMessage}
+          disabled={isDeletingMessage}
           onClick={onDelete}
         >
           <Trash2 className="h-4 w-4" />

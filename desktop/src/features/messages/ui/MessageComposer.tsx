@@ -17,6 +17,7 @@ import {
 } from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
@@ -29,6 +30,7 @@ import { MessageComposerToolbar } from "./MessageComposerToolbar";
 type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
+  containerClassName?: string;
   disabled?: boolean;
   draftKey?: string;
   editTarget?: {
@@ -58,6 +60,7 @@ type MessageComposerProps = {
 export function MessageComposer({
   channelId = null,
   channelName,
+  containerClassName,
   disabled = false,
   draftKey,
   editTarget = null,
@@ -87,6 +90,8 @@ export function MessageComposer({
   const drafts = useDrafts();
   const effectiveDraftKey = draftKey ?? channelId;
   const previousDraftKeyRef = React.useRef<string | null>(null);
+  const effectiveDraftKeyRef = React.useRef(effectiveDraftKey);
+  effectiveDraftKeyRef.current = effectiveDraftKey;
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
@@ -107,13 +112,11 @@ export function MessageComposer({
   const onSendRef = React.useRef(onSend);
   const onEditSaveRef = React.useRef(onEditSave);
   const editTargetRef = React.useRef(editTarget);
-  const channelIdRef = React.useRef(channelId);
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
   onSendRef.current = onSend;
   onEditSaveRef.current = onEditSave;
   editTargetRef.current = editTarget;
-  channelIdRef.current = channelId;
 
   // ── Refs consumed by Tiptap's submitOnEnter extension ──────────────
   const isAutocompleteOpenRef = React.useRef(false);
@@ -352,11 +355,11 @@ export function MessageComposer({
     channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
-    const sendChannelId = channelIdRef.current;
+    const sentDraftKey = effectiveDraftKeyRef.current;
     try {
       await onSendRef.current(finalContent, pubkeys, mediaTags);
-      if (sendChannelId) {
-        drafts.clearDraft(sendChannelId);
+      if (sentDraftKey) {
+        drafts.clearDraft(sentDraftKey);
       }
     } catch {
       setContent(savedContent);
@@ -498,7 +501,12 @@ export function MessageComposer({
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <footer className="relative z-10 -mt-4 px-8 pb-0 pt-0 sm:px-10">
+    <footer
+      className={cn(
+        "relative z-10 -mt-4 px-8 pb-0 pt-0 sm:px-10",
+        containerClassName,
+      )}
+    >
       <div className="flex w-full flex-col gap-3">
         <form
           className="relative rounded-2xl border border-input bg-card px-4 pb-3 pt-4"
@@ -559,16 +567,18 @@ export function MessageComposer({
                   {replyTarget.body}
                 </p>
               </div>
-              <Button
-                aria-label="Cancel reply"
-                className="h-7 w-7 shrink-0 px-0"
-                onClick={onCancelReply}
-                size="icon"
-                type="button"
-                variant="ghost"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+              {onCancelReply ? (
+                <Button
+                  aria-label="Cancel reply"
+                  className="h-7 w-7 shrink-0 px-0"
+                  onClick={onCancelReply}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              ) : null}
             </div>
           ) : null}
 

@@ -2,19 +2,31 @@ import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
-import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
+import { getThreadReference } from "@/features/messages/lib/threading";
+import type {
+  FeedItem,
+  FeedItemCategory,
+  HomeFeedResponse,
+} from "@/shared/api/types";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 
-export type InboxFilter = "all" | "mention" | "needs_action";
+export type InboxFilter =
+  | "all"
+  | "mention"
+  | "needs_action"
+  | "activity"
+  | "agent_activity";
 
 export type InboxItem = {
   avatarUrl: string | null;
   id: string;
   item: FeedItem;
+  categories: FeedItemCategory[];
   categoryLabel: string;
   channelLabel: string | null;
   fullTimestampLabel: string;
   isActionRequired: boolean;
+  latestActivityAt: number;
   mentionNames: string[];
   preview: string;
   searchableText: string;
@@ -126,6 +138,34 @@ function feedPreview(item: FeedItem) {
   return "No additional details were attached to this event.";
 }
 
+function categoryLabelFor(category: FeedItemCategory) {
+  return category === "needs_action"
+    ? "Needs Action"
+    : category === "mention"
+      ? "Mention"
+      : category === "agent_activity"
+        ? "Agent update"
+        : "Activity";
+}
+
+function categoryPriority(category: FeedItemCategory) {
+  switch (category) {
+    case "needs_action":
+      return 0;
+    case "mention":
+      return 1;
+    case "agent_activity":
+      return 2;
+    case "activity":
+      return 3;
+  }
+}
+
+function getInboxThreadKey(item: FeedItem) {
+  const thread = getThreadReference(item.tags);
+  return thread.rootId ?? thread.parentId ?? item.id;
+}
+
 function formatInboxTimestamp(unixSeconds: number) {
   const date = new Date(unixSeconds * 1_000);
   const now = new Date();
@@ -155,7 +195,7 @@ export function groupInboxItems(items: InboxItem[]): InboxGroup[] {
   const now = new Date();
 
   for (const item of items) {
-    const date = new Date(item.item.createdAt * 1_000);
+    const date = new Date(item.latestActivityAt * 1_000);
     const dayDiff = diffInDays(now, date);
     const label =
       dayDiff === 0
@@ -190,46 +230,86 @@ export function buildInboxItems({
     return [];
   }
 
-  const items = [...feed.feed.mentions, ...feed.feed.needsAction].sort(
-    (left, right) => right.createdAt - left.createdAt,
-  );
+  const feedItems = [
+    ...feed.feed.mentions,
+    ...feed.feed.needsAction,
+    ...feed.feed.activity,
+    ...feed.feed.agentActivity,
+  ];
 
-  return items.map((item) => {
-    const senderLabel = resolveUserLabel({
-      pubkey: item.pubkey,
-      currentPubkey,
-      profiles,
-      preferResolvedSelfLabel: true,
-    });
-    const subject = feedHeadline(item);
-    const preview = feedPreview(item);
-    const mentionNames = resolveMentionNames(item.tags, profiles) ?? [];
-    const channelLabel = item.channelName.trim() || null;
-    const categoryLabel =
-      item.category === "needs_action" ? "Needs Action" : "Mention";
+  const threadGroups = new Map<
+    string,
+    {
+      items: FeedItem[];
+      latestActivityAt: number;
+      rootItem: FeedItem | null;
+    }
+  >();
 
-    return {
-      avatarUrl: profiles?.[item.pubkey.toLowerCase()]?.avatarUrl ?? null,
-      id: item.id,
-      item,
-      categoryLabel,
-      channelLabel,
-      fullTimestampLabel: formatInboxFullTimestamp(item.createdAt),
-      isActionRequired: item.category === "needs_action",
-      mentionNames,
-      preview,
-      searchableText: [
+  for (const item of feedItems) {
+    const threadKey = getInboxThreadKey(item);
+    const group = threadGroups.get(threadKey) ?? {
+      items: [],
+      latestActivityAt: 0,
+      rootItem: null,
+    };
+
+    group.items.push(item);
+    group.latestActivityAt = Math.max(group.latestActivityAt, item.createdAt);
+    if (item.id === threadKey) {
+      group.rootItem = item;
+    }
+
+    threadGroups.set(threadKey, group);
+  }
+
+  return [...threadGroups.values()]
+    .sort((left, right) => right.latestActivityAt - left.latestActivityAt)
+    .map((group) => {
+      const latestItem = group.items.reduce((latest, current) =>
+        current.createdAt > latest.createdAt ? current : latest,
+      );
+      const item = group.rootItem ?? latestItem;
+      const categories = [
+        ...new Set(group.items.map((groupItem) => groupItem.category)),
+      ].sort((left, right) => categoryPriority(left) - categoryPriority(right));
+      const senderLabel = resolveUserLabel({
+        pubkey: item.pubkey,
+        currentPubkey,
+        profiles,
+        preferResolvedSelfLabel: true,
+      });
+      const subject = feedHeadline(item);
+      const preview = feedPreview(item);
+      const mentionNames = resolveMentionNames(item.tags, profiles) ?? [];
+      const channelLabel = item.channelName.trim() || null;
+      const categoryLabel = categoryLabelFor(categories[0] ?? item.category);
+
+      return {
+        avatarUrl: profiles?.[item.pubkey.toLowerCase()]?.avatarUrl ?? null,
+        id: item.id,
+        item,
+        categories,
+        categoryLabel,
+        channelLabel,
+        fullTimestampLabel: formatInboxFullTimestamp(item.createdAt),
+        isActionRequired: categories.includes("needs_action"),
+        latestActivityAt: group.latestActivityAt,
+        mentionNames,
+        preview,
+        searchableText: [
+          senderLabel,
+          subject,
+          preview,
+          ...group.items.map(feedPreview),
+          channelLabel ?? "",
+          categoryLabel,
+        ]
+          .join(" ")
+          .toLowerCase(),
         senderLabel,
         subject,
-        preview,
-        channelLabel ?? "",
-        categoryLabel,
-      ]
-        .join(" ")
-        .toLowerCase(),
-      senderLabel,
-      subject,
-      timestampLabel: formatInboxTimestamp(item.createdAt),
-    };
-  });
+        timestampLabel: formatInboxTimestamp(group.latestActivityAt),
+      };
+    });
 }

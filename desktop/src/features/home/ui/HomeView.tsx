@@ -1,6 +1,7 @@
 import * as React from "react";
 import { RefreshCcw } from "lucide-react";
 
+import { useChannelsQuery } from "@/features/channels/hooks";
 import {
   type InboxFilter,
   type InboxReply,
@@ -10,12 +11,22 @@ import {
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { InboxDetailPane } from "@/features/home/ui/InboxDetailPane";
 import { InboxListPane } from "@/features/home/ui/InboxListPane";
+import { useChannelMessagesQuery } from "@/features/messages/hooks";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
 import type { HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
+
+function matchesInboxFilter(item: { categories: InboxFilter[] }, filter: InboxFilter) {
+  if (filter === "all") {
+    return item.categories.some((category) => category !== "activity");
+  }
+
+  return item.categories.includes(filter);
+}
 
 function HomeLoadingState() {
   return (
@@ -77,18 +88,58 @@ export function HomeView({
   >({});
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
   const feedItems = React.useMemo(
-    () => (feed ? [...feed.feed.mentions, ...feed.feed.needsAction] : []),
+    () =>
+      feed
+        ? [
+            ...feed.feed.mentions,
+            ...feed.feed.needsAction,
+            ...feed.feed.activity,
+            ...feed.feed.agentActivity,
+          ]
+        : [],
     [feed],
   );
+
+  const channelsQuery = useChannelsQuery();
+  const channels = channelsQuery.data;
+  const selectedChannelIdCandidate = React.useMemo(() => {
+    if (!selectedItemId) return null;
+    const match = feedItems.find((item) => item.id === selectedItemId);
+    return match?.channelId ?? null;
+  }, [feedItems, selectedItemId]);
+  const selectedChannel = React.useMemo(() => {
+    if (!selectedChannelIdCandidate || !channels) return null;
+    return (
+      channels.find((channel) => channel.id === selectedChannelIdCandidate) ??
+      null
+    );
+  }, [channels, selectedChannelIdCandidate]);
+
+  const channelMessagesQuery = useChannelMessagesQuery(selectedChannel);
+  const channelMessages = channelMessagesQuery.data;
+  const threadEvents = React.useMemo(() => {
+    if (!selectedItemId || !channelMessages) return [];
+    return channelMessages
+      .filter((event) => {
+        if (event.id === selectedItemId) return false;
+        const ref = getThreadReference(event.tags);
+        return (
+          ref.parentId === selectedItemId || ref.rootId === selectedItemId
+        );
+      })
+      .sort((a, b) => a.created_at - b.created_at);
+  }, [channelMessages, selectedItemId]);
+
   const feedProfilePubkeys = React.useMemo(
     () =>
       [
         ...new Set([
           ...feedItems.map((item) => item.pubkey),
+          ...threadEvents.map((event) => event.pubkey),
           ...(currentPubkey ? [currentPubkey] : []),
         ]),
       ],
-    [currentPubkey, feedItems],
+    [currentPubkey, feedItems, threadEvents],
   );
   const feedProfilesQuery = useUsersBatchQuery(
     feedProfilePubkeys,
@@ -110,8 +161,7 @@ export function HomeView({
     const normalizedQuery = searchValue.trim().toLowerCase();
 
     return inboxItems.filter((item) => {
-      const matchesFilter =
-        filter === "all" ? true : item.item.category === filter;
+      const matchesFilter = matchesInboxFilter(item, filter);
       const matchesQuery =
         normalizedQuery.length === 0 ||
         item.searchableText.includes(normalizedQuery);
@@ -121,9 +171,32 @@ export function HomeView({
   }, [filter, inboxItems, searchValue]);
   const selectedItem =
     filteredItems.find((item) => item.id === selectedItemId) ?? null;
-  const selectedItemReplies = selectedItem
-    ? localRepliesByItemId[selectedItem.id] ?? []
-    : [];
+  const threadReplies = React.useMemo<InboxReply[]>(
+    () =>
+      threadEvents.map((event) => ({
+        id: event.id,
+        authorLabel: resolveUserLabel({
+          pubkey: event.pubkey,
+          currentPubkey,
+          profiles: feedProfiles,
+          preferResolvedSelfLabel: true,
+        }),
+        avatarUrl:
+          feedProfiles?.[event.pubkey.toLowerCase()]?.avatarUrl ?? null,
+        content: event.content,
+        fullTimestampLabel: formatInboxFullTimestamp(event.created_at),
+      })),
+    [currentPubkey, feedProfiles, threadEvents],
+  );
+  const selectedItemReplies = React.useMemo<InboxReply[]>(() => {
+    if (!selectedItem) return [];
+    const localReplies = localRepliesByItemId[selectedItem.id] ?? [];
+    const remoteIds = new Set(threadReplies.map((reply) => reply.id));
+    const pendingLocals = localReplies.filter(
+      (reply) => !remoteIds.has(reply.id),
+    );
+    return [...threadReplies, ...pendingLocals];
+  }, [localRepliesByItemId, selectedItem, threadReplies]);
   React.useEffect(() => {
     if (filteredItems.length === 0) {
       setSelectedItemId(null);
@@ -136,6 +209,7 @@ export function HomeView({
   }, [filteredItems, selectedItemId]);
 
   React.useEffect(() => {
+    void selectedItemId;
     setIsDeletingMessage(false);
     setIsSendingReply(false);
   }, [selectedItemId]);
@@ -208,7 +282,10 @@ export function HomeView({
           items={filteredItems}
           onFilterChange={setFilter}
           onSearchChange={setSearchValue}
-          onSelect={setSelectedItemId}
+          onSelect={(itemId) => {
+            setSelectedItemId(itemId);
+            markDone(itemId);
+          }}
           searchValue={searchValue}
           selectedId={selectedItemId}
         />
@@ -225,12 +302,7 @@ export function HomeView({
           isDeletingMessage={isDeletingMessage}
           isSendingReply={isSendingReply}
           item={selectedItem}
-          localReplies={selectedItemReplies}
-          onArchive={() => {
-            if (selectedItem) {
-              handleToggleDone(selectedItem.id);
-            }
-          }}
+          replies={selectedItemReplies}
           onDelete={() => {
             if (!selectedItem || !canDelete) {
               return;

@@ -1,4 +1,4 @@
-import { Search } from "lucide-react";
+import { Inbox, Search } from "lucide-react";
 
 import type { InboxFilter, InboxItem } from "@/features/home/lib/inbox";
 import { groupInboxItems } from "@/features/home/lib/inbox";
@@ -11,6 +11,8 @@ const FILTER_OPTIONS: Array<{ label: string; value: InboxFilter }> = [
   { value: "all", label: "All" },
   { value: "mention", label: "Mentions" },
   { value: "needs_action", label: "Needs Action" },
+  { value: "activity", label: "Activity" },
+  { value: "agent_activity", label: "Agents" },
 ];
 
 type InboxListPaneProps = {
@@ -38,7 +40,19 @@ export function InboxListPane({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/70 bg-background">
-      <div className="border-b border-border/70 px-4 py-4">
+      <div className="border-b border-border/70 px-4 pb-4 pt-8" data-tauri-drag-region>
+        <div
+          className="mb-4 flex min-w-0 items-center gap-2"
+          data-tauri-drag-region
+        >
+          <Inbox className="h-5 w-5 shrink-0 text-primary" />
+          <h1
+            className="min-w-0 truncate text-lg font-semibold tracking-tight"
+            data-testid="chat-title"
+          >
+            Inbox
+          </h1>
+        </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -101,7 +115,6 @@ export function InboxListPane({
                         isSelected
                           ? "border-l-primary bg-muted/30"
                           : "border-l-transparent hover:bg-muted/25 active:bg-muted/40",
-                        isDone ? "opacity-60" : "",
                       )}
                       data-testid={`home-inbox-item-${item.id}`}
                       key={item.id}
@@ -124,7 +137,12 @@ export function InboxListPane({
                         <div className="flex items-start gap-2">
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
-                              <p className="truncate text-sm font-semibold text-foreground">
+                              <p
+                                className={cn(
+                                  "truncate text-sm text-foreground",
+                                  isDone ? "font-normal" : "font-bold",
+                                )}
+                              >
                                 {item.senderLabel}
                               </p>
                               {item.isActionRequired ? (
@@ -134,18 +152,35 @@ export function InboxListPane({
                               ) : null}
                             </div>
                           </div>
-                          <span className="shrink-0 text-xs text-muted-foreground">
+                          <span
+                            className={cn(
+                              "shrink-0 text-xs text-muted-foreground",
+                              isDone ? "font-normal" : "font-semibold",
+                            )}
+                          >
                             {item.timestampLabel}
                           </span>
                         </div>
 
-                        <p className="mt-0.5 line-clamp-2 text-sm leading-5 text-muted-foreground">
+                        <p
+                          className={cn(
+                            "mt-0.5 line-clamp-2 text-sm leading-5",
+                            isDone
+                              ? "font-normal text-muted-foreground"
+                              : "font-semibold text-foreground",
+                          )}
+                        >
                           {item.preview}
                         </p>
 
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           {item.channelLabel ? (
-                            <span className="text-[11px] font-medium text-muted-foreground">
+                            <span
+                              className={cn(
+                                "text-[11px] text-muted-foreground",
+                                isDone ? "font-normal" : "font-semibold",
+                              )}
+                            >
                               #{item.channelLabel}
                             </span>
                           ) : null}
