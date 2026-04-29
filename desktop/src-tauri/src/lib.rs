@@ -373,6 +373,8 @@ pub fn run() {
             discover_managed_agent_prereqs,
             sign_event,
             create_auth_event,
+            nip44_encrypt_to_self,
+            nip44_decrypt_from_self,
             get_channels,
             create_channel,
             open_dm,

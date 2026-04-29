@@ -795,6 +795,7 @@ export async function removeReaction(
 export async function signRelayEvent(input: {
   kind: number;
   content: string;
+  createdAt?: number;
   tags: string[][];
 }): Promise<RelayEvent> {
   const eventJson = await invokeTauri<string>("sign_event", input);
@@ -1095,6 +1096,18 @@ export async function probeBackendProvider(
   return invokeTauri<BackendProviderProbeResult>("probe_backend_provider", {
     binaryPath,
   });
+}
+
+// ── NIP-44 encrypt-to-self ───────────────────────────────────────────────────
+
+export async function nip44EncryptToSelf(plaintext: string): Promise<string> {
+  return invokeTauri<string>("nip44_encrypt_to_self", { plaintext });
+}
+
+export async function nip44DecryptFromSelf(
+  ciphertext: string,
+): Promise<string> {
+  return invokeTauri<string>("nip44_decrypt_from_self", { ciphertext });
 }
 
 // ── NIP-AB device pairing ───────────────────────────────────────────────────

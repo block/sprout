@@ -8,7 +8,13 @@ Cross-Device Read State Sync
 
 ## Abstract
 
-This NIP defines a scheme for synchronizing per-context read state (e.g., "read up to timestamp T") across multiple client instances belonging to the same user, using encrypted `kind:30078` events.
+This NIP defines a scheme for synchronizing a user's own per-context read state
+(e.g., "I have read this channel up to timestamp T") across multiple client
+instances belonging to that same user, using encrypted `kind:30078` events.
+
+This NIP is not a read-receipt protocol. It does not expose what another user
+has read, and it does not tell other users what messages the current user has
+read.
 
 ## Motivation
 
@@ -23,6 +29,8 @@ This NIP does not define cross-client interoperability on context ID format — 
 This NIP does not define mark-as-unread — the merge rule is monotonic by design.
 This NIP does not guarantee ordering of read events across devices.
 This NIP does not require relay-side logic.
+This NIP does not define read receipts, seen-by lists, or any mechanism for
+tracking what other users have read.
 
 ## Specification
 
@@ -145,7 +153,10 @@ This is a grow-only max-register state-based CvRDT with an associative, commutat
 
 ### Writing
 
-Clients MUST NOT publish read state without explicit user opt-in. Opt-in is a persistent user preference, not enabled by default.
+Clients MAY publish read state automatically when read-position sync is part of
+the client's default account state model. This NIP is explicitly not a
+read-receipt protocol; any protocol or feature that exposes what a user has read
+to other users MUST require explicit user consent.
 
 Clients SHOULD publish read state blobs to the same relays they use for general event storage. Clients that implement NIP-65 (relay list metadata) SHOULD publish to their write relays and fetch from their read relays.
 
@@ -374,7 +385,9 @@ Because the merge rule is monotonic, replaying an old event to a relay is harmle
 
 Clients supporting multiple Nostr identities SHOULD use distinct `client_id` values and distinct slot IDs per identity. Reusing identifiers across pubkeys allows relay operators to link those identities.
 
-This feature is opt-in. Clients MUST NOT publish read state events unless the user has explicitly enabled the feature.
+Clients SHOULD describe relay-managed read state wherever they describe
+relay-synced account data. This NIP does not authorize read receipts; clients
+that expose read activity to other users MUST require explicit user consent.
 
 ## Kind Usage
 
