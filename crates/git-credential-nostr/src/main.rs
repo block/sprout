@@ -141,6 +141,13 @@ fn parse_method(wwwauth: &str) -> Option<HttpMethod> {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 fn main() {
+    // Git calls credential helpers with a subcommand: get, store, or erase.
+    // We only handle "get" — store/erase are no-ops for ephemeral credentials.
+    match std::env::args().nth(1).as_deref() {
+        Some("get") | None => {} // proceed — None for backwards compat
+        Some(_) => return,       // store, erase, or unknown → silent exit 0
+    }
+
     let req = parse_stdin();
 
     // Old git without authtype capability — nothing we can do.
