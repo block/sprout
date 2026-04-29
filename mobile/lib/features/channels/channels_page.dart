@@ -185,6 +185,7 @@ class _ChannelsBody extends StatelessWidget {
       return Stack(
         children: [
           RefreshIndicator(
+            edgeOffset: barHeight,
             onRefresh: onRefresh,
             child: CustomScrollView(
               slivers: [
