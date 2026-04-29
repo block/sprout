@@ -178,6 +178,7 @@ export type FeedItem = {
   createdAt: number;
   channelId: string | null;
   channelName: string;
+  channelType?: string;
   tags: string[][];
   category: FeedItemCategory;
 };
@@ -209,6 +210,7 @@ export type GetHomeFeedInput = {
 export type SearchMessagesInput = {
   q: string;
   limit?: number;
+  channelId?: string;
 };
 
 export type SearchHit = {
@@ -305,6 +307,7 @@ export type ManagedAgent = {
   lastExitCode: number | null;
   lastError: string | null;
   logPath: string;
+  observerUrl: string | null;
   startOnAppLaunch: boolean;
   backend: ManagedAgentBackend;
   backendAgentId: string | null;

@@ -67,7 +67,7 @@ const overrides = new Map([
   ["src-tauri/src/huddle/tts.rs", 1030], // TTS pipeline + session warmup + cancel/shutdown handling + apply_fades + 18 unit tests for remote interrupt mechanism
   ["src-tauri/src/commands/pairing.rs", 550], // NIP-AB pairing actor: 3 Tauri commands + background WS task + NIP-42 auth + event parsing helpers
   ["src-tauri/src/lib.rs", 715], // +4 lines for PairingHandle managed state + 3 pairing command registrations
-  ["src/shared/api/tauri.ts", 1110], // +14 lines for 3 NIP-AB pairing command wrappers
+  ["src/shared/api/tauri.ts", 1112], // +14 lines for 3 NIP-AB pairing command wrappers + observer_url field
 ]);
 
 async function walkFiles(directory) {

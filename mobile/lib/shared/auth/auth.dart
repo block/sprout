@@ -1,2 +1,4 @@
 export 'auth_provider.dart';
-export 'credential_storage.dart';
+export '../workspace/workspace.dart';
+export '../workspace/workspace_provider.dart';
+export '../workspace/workspace_storage.dart';

@@ -116,22 +116,34 @@ class MediaImageViewerPage extends StatefulWidget {
   State<MediaImageViewerPage> createState() => _MediaImageViewerPageState();
 }
 
-class _MediaImageViewerPageState extends State<MediaImageViewerPage> {
+class _MediaImageViewerPageState extends State<MediaImageViewerPage>
+    with SingleTickerProviderStateMixin {
   late final TransformationController _transformationController;
+  late final AnimationController _snapBackController;
   bool _isTransformed = false;
   bool _disableHeroOnDismiss = false;
+  double _dragOffset = 0;
+  bool _isDragging = false;
+
+  static const _dismissThreshold = 100.0;
+  static const _backgroundFadeDivisor = 300.0;
 
   @override
   void initState() {
     super.initState();
     _transformationController = TransformationController();
     _transformationController.addListener(_handleTransformChanged);
+    _snapBackController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
   }
 
   @override
   void dispose() {
     _transformationController.removeListener(_handleTransformChanged);
     _transformationController.dispose();
+    _snapBackController.dispose();
     super.dispose();
   }
 
@@ -143,6 +155,58 @@ class _MediaImageViewerPageState extends State<MediaImageViewerPage> {
 
     setState(() {
       _isTransformed = isTransformed;
+      // If the user zooms in while dragging, cancel the drag.
+      if (_isTransformed && _isDragging) {
+        _isDragging = false;
+        _dragOffset = 0;
+      }
+    });
+  }
+
+  void _onInteractionStart(ScaleStartDetails details) {
+    if (!_isTransformed && details.pointerCount == 1) {
+      _isDragging = true;
+    }
+  }
+
+  void _onInteractionUpdate(ScaleUpdateDetails details) {
+    if (_isDragging && !_isTransformed) {
+      setState(() {
+        _dragOffset += details.focalPointDelta.dy;
+      });
+    }
+  }
+
+  void _onInteractionEnd(ScaleEndDetails details) {
+    if (!_isDragging) return;
+    _isDragging = false;
+
+    if (_dragOffset.abs() > _dismissThreshold) {
+      _dismiss();
+    } else {
+      _animateSnapBack();
+    }
+  }
+
+  void _animateSnapBack() {
+    final startOffset = _dragOffset;
+    final tween = Tween<double>(begin: startOffset, end: 0);
+    final curved = CurvedAnimation(
+      parent: _snapBackController,
+      curve: Curves.easeOut,
+    );
+
+    void listener() {
+      setState(() {
+        _dragOffset = tween.evaluate(curved);
+      });
+    }
+
+    _snapBackController
+      ..reset()
+      ..addListener(listener);
+    _snapBackController.forward().whenCompleteOrCancel(() {
+      _snapBackController.removeListener(listener);
     });
   }
 
@@ -180,27 +244,40 @@ class _MediaImageViewerPageState extends State<MediaImageViewerPage> {
       },
       child: Scaffold(
         key: const ValueKey('message-media-image-viewer'),
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.black.withValues(
+          alpha: (1 - (_dragOffset.abs() / _backgroundFadeDivisor)).clamp(
+            0.3,
+            1.0,
+          ),
+        ),
         body: Stack(
           children: [
             Positioned.fill(
-              child: InteractiveViewer(
-                transformationController: _transformationController,
-                minScale: 1,
-                maxScale: 4,
-                child: Center(
-                  child: HeroMode(
-                    key: const ValueKey('message-media-image-viewer-hero-mode'),
-                    enabled: !_disableHeroOnDismiss,
-                    child: Hero(
-                      tag: widget.heroTag,
-                      child: Image.network(
-                        widget.imageUrl,
-                        fit: BoxFit.contain,
-                        semanticLabel: widget.semanticLabel,
-                        errorBuilder: (_, _, _) => const _MediaLoadFailure(
-                          message: 'Failed to load image',
-                          icon: LucideIcons.imageOff,
+              child: Transform.translate(
+                offset: Offset(0, _dragOffset),
+                child: InteractiveViewer(
+                  transformationController: _transformationController,
+                  onInteractionStart: _onInteractionStart,
+                  onInteractionUpdate: _onInteractionUpdate,
+                  onInteractionEnd: _onInteractionEnd,
+                  minScale: 1,
+                  maxScale: 4,
+                  child: Center(
+                    child: HeroMode(
+                      key: const ValueKey(
+                        'message-media-image-viewer-hero-mode',
+                      ),
+                      enabled: !_disableHeroOnDismiss,
+                      child: Hero(
+                        tag: widget.heroTag,
+                        child: Image.network(
+                          widget.imageUrl,
+                          fit: BoxFit.contain,
+                          semanticLabel: widget.semanticLabel,
+                          errorBuilder: (_, _, _) => const _MediaLoadFailure(
+                            message: 'Failed to load image',
+                            icon: LucideIcons.imageOff,
+                          ),
                         ),
                       ),
                     ),

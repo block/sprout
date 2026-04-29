@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -260,6 +261,7 @@ void main() {
         apiToken: 'sprout_test_token',
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
         now: () => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000),
@@ -312,6 +314,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: null,
         nsec: null,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async => null,
       );
 
@@ -344,6 +347,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
       );
@@ -396,6 +400,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_heicBytes, name: 'photo.heic'),
         transcodeImageToJpeg: (bytes) async {
@@ -446,6 +451,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_jpegBytes, name: 'photo.jpg'),
         sanitizeImageBytes: (bytes, mimeType) async {
@@ -497,6 +503,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_heicBytes, name: 'photo.heic'),
         transcodeImageToJpeg: (bytes) async {
@@ -547,6 +554,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_jpegBytes, name: 'photo.jpg'),
         sanitizeImageBytes: (bytes, mimeType) async {
@@ -599,6 +607,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'photo.png'),
         sanitizeImageBytes: (bytes, mimeType) async {
@@ -627,6 +636,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: null,
         nsec: nsec,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_gifBytes, name: 'animated.gif'),
       );
@@ -654,6 +664,7 @@ void main() {
         httpClient: http_testing.MockClient(
           (request) async => http.Response('{}', 200),
         ),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_apngBytes, name: 'animated.png'),
       );
@@ -695,6 +706,7 @@ void main() {
         apiToken: null,
         nsec: nsec,
         httpClient: client,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_staticPngWithActlPayloadBytes, name: 'static.png'),
       );
@@ -719,6 +731,7 @@ void main() {
         httpClient: http_testing.MockClient(
           (request) async => http.Response('{}', 200),
         ),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_animatedWebpBytes, name: 'animated.webp'),
       );
@@ -743,6 +756,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: null,
         nsec: nsec,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async => XFile.fromData(
           Uint8List.fromList(utf8.encode('not an image')),
           name: 'note.txt',
@@ -759,6 +773,222 @@ void main() {
           ),
         ),
       );
+    });
+  });
+
+  group('_isAlreadyMp4Container', () {
+    // ftyp box: [size(4 bytes)][ftyp(4 bytes)][major_brand(4 bytes)]...
+    Uint8List buildFtypHeader(String brand) {
+      final bytes = Uint8List(32);
+      // Box size = 32
+      bytes[0] = 0;
+      bytes[1] = 0;
+      bytes[2] = 0;
+      bytes[3] = 32;
+      // 'ftyp'
+      bytes[4] = 0x66; // f
+      bytes[5] = 0x74; // t
+      bytes[6] = 0x79; // y
+      bytes[7] = 0x70; // p
+      // Major brand
+      final brandBytes = ascii.encode(brand);
+      for (var i = 0; i < 4 && i < brandBytes.length; i++) {
+        bytes[8 + i] = brandBytes[i];
+      }
+      return bytes;
+    }
+
+    test('returns true for isom brand', () {
+      expect(isAlreadyMp4Container(buildFtypHeader('isom')), isTrue);
+    });
+
+    test('returns true for mp41 brand', () {
+      expect(isAlreadyMp4Container(buildFtypHeader('mp41')), isTrue);
+    });
+
+    test('returns true for mp42 brand', () {
+      expect(isAlreadyMp4Container(buildFtypHeader('mp42')), isTrue);
+    });
+
+    test('returns false for QuickTime qt brand', () {
+      expect(isAlreadyMp4Container(buildFtypHeader('qt  ')), isFalse);
+    });
+
+    test('returns false for too-short header', () {
+      expect(isAlreadyMp4Container(Uint8List(8)), isFalse);
+    });
+
+    test('returns false when no ftyp box', () {
+      final bytes = Uint8List(32);
+      bytes[4] = 0x6D; // m
+      bytes[5] = 0x6F; // o
+      bytes[6] = 0x6F; // o
+      bytes[7] = 0x76; // v
+      expect(isAlreadyMp4Container(bytes), isFalse);
+    });
+  });
+
+  group('pickAndUploadVideo', () {
+    // Helper: build ftyp header bytes for a given brand.
+    Uint8List buildFtypHeader(String brand) {
+      final bytes = Uint8List(32);
+      bytes[3] = 32;
+      bytes[4] = 0x66;
+      bytes[5] = 0x74;
+      bytes[6] = 0x79;
+      bytes[7] = 0x70;
+      final brandBytes = ascii.encode(brand);
+      for (var i = 0; i < 4 && i < brandBytes.length; i++) {
+        bytes[8 + i] = brandBytes[i];
+      }
+      return bytes;
+    }
+
+    // Helper: write bytes to a temp file, return its XFile.
+    Future<(XFile, File)> writeTempVideo(Uint8List bytes, String name) async {
+      final dir = await Directory.systemTemp.createTemp('video_test_');
+      final file = File('${dir.path}/$name');
+      await file.writeAsBytes(bytes);
+      return (XFile(file.path), file);
+    }
+
+    test('uploads MP4 container directly without transcoding', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      var transcodeCalled = false;
+      final client = http_testing.MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.mp4',
+            'sha256':
+                '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'size': 32,
+            'type': 'video/mp4',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      final mp4Bytes = buildFtypHeader('isom');
+      final (xfile, tempFile) = await writeTempVideo(mp4Bytes, 'clip.mp4');
+      try {
+        final service = MediaUploadService(
+          baseUrl: 'https://relay.example',
+          apiToken: null,
+          nsec: nsec,
+          httpClient: client,
+          pickGalleryVideo: () async => xfile,
+          pickGalleryImage: () async => null,
+          transcodeVideoToMp4: (path) async {
+            transcodeCalled = true;
+            return path;
+          },
+          now: () => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000),
+        );
+
+        final descriptor = await service.pickAndUploadVideo();
+        expect(descriptor, isNotNull);
+        expect(descriptor!.type, 'video/mp4');
+        expect(transcodeCalled, isFalse);
+      } finally {
+        await tempFile.parent.delete(recursive: true);
+      }
+    });
+
+    test('transcodes non-MP4 container before uploading', () async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+      var transcodeCalled = false;
+      final client = http_testing.MockClient((request) async {
+        expect(request.headers['Content-Type'], 'video/mp4');
+        return http.Response(
+          jsonEncode({
+            'url': 'https://relay.example/media/test.mp4',
+            'sha256':
+                '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'size': 32,
+            'type': 'video/mp4',
+            'uploaded': 1,
+          }),
+          200,
+        );
+      });
+
+      // QuickTime container ('qt  ' brand) — needs transcoding.
+      final movBytes = buildFtypHeader('qt  ');
+      final (xfile, tempFile) = await writeTempVideo(movBytes, 'clip.mov');
+      try {
+        final service = MediaUploadService(
+          baseUrl: 'https://relay.example',
+          apiToken: null,
+          nsec: nsec,
+          httpClient: client,
+          pickGalleryVideo: () async => xfile,
+          pickGalleryImage: () async => null,
+          transcodeVideoToMp4: (path) async {
+            transcodeCalled = true;
+            // Mock transcoding: write an "MP4" file
+            final outDir = await Directory.systemTemp.createTemp('transcode_');
+            final outFile = File('${outDir.path}/out.mp4');
+            await outFile.writeAsBytes(buildFtypHeader('isom'));
+            return outFile.path;
+          },
+          now: () => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000),
+        );
+
+        final descriptor = await service.pickAndUploadVideo();
+        expect(descriptor, isNotNull);
+        expect(descriptor!.type, 'video/mp4');
+        expect(transcodeCalled, isTrue);
+      } finally {
+        await tempFile.parent.delete(recursive: true);
+      }
+    });
+
+    test('returns null when video picker is cancelled', () async {
+      final service = MediaUploadService(
+        baseUrl: 'https://relay.example',
+        apiToken: null,
+        nsec: null,
+        pickGalleryVideo: () async => null,
+        pickGalleryImage: () async => null,
+      );
+
+      final result = await service.pickAndUploadVideo();
+      expect(result, isNull);
+    });
+
+    test('rejects videos over 100MB', () async {
+      // Create a temp file with 101MB of zeros.
+      final dir = await Directory.systemTemp.createTemp('video_size_test_');
+      final file = File('${dir.path}/huge.mp4');
+      final raf = await file.open(mode: FileMode.write);
+      await raf.truncate(101 * 1024 * 1024);
+      await raf.close();
+
+      try {
+        final service = MediaUploadService(
+          baseUrl: 'https://relay.example',
+          apiToken: null,
+          nsec: null,
+          pickGalleryVideo: () async => XFile(file.path),
+          pickGalleryImage: () async => null,
+        );
+
+        await expectLater(
+          () => service.pickAndUploadVideo(),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'message',
+              contains('too large'),
+            ),
+          ),
+        );
+      } finally {
+        await dir.delete(recursive: true);
+      }
     });
   });
 }

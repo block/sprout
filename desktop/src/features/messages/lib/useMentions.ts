@@ -6,20 +6,24 @@ import {
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
+import type { ChannelMember } from "@/shared/api/types";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { hasMention } from "./hasMention";
 
 const MENTION_DEBOUNCE_MS = 120;
 
-export function useMentions(channelId: string | null) {
+export function useMentions(
+  channelId: string | null,
+  externalMembers?: ChannelMember[],
+) {
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = React.useState(0);
   const [mentionSelectedIndex, setMentionSelectedIndex] = React.useState(0);
   const mentionMapRef = React.useRef<Map<string, string>>(new Map());
 
   const membersQuery = useChannelMembersQuery(channelId);
-  const members = membersQuery.data;
+  const members = externalMembers ?? membersQuery.data;
   const managedAgentsQuery = useManagedAgentsQuery();
   const personasQuery = usePersonasQuery();
   const managedAgentNamesByPubkey = React.useMemo(

@@ -7,6 +7,8 @@ import 'package:nostr/nostr.dart' as nostr;
 import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import 'theme_picker_page.dart';
 
 class SettingsPage extends HookConsumerWidget {
@@ -18,10 +20,15 @@ class SettingsPage extends HookConsumerWidget {
     final selectedAccent = ref.watch(accentProvider);
     final selectedScheme = ref.watch(schemeProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+    return FrostedScaffold(
+      appBar: const FrostedAppBar(title: Text('Settings')),
       body: ListView(
-        padding: const EdgeInsets.all(Grid.xs),
+        padding: EdgeInsets.only(
+          top: frostedAppBarHeight(context),
+          left: Grid.xs,
+          right: Grid.xs,
+          bottom: Grid.xs,
+        ),
         children: [
           // Connection info
           Text('Connection', style: context.textTheme.titleMedium),
@@ -85,7 +92,7 @@ class SettingsPage extends HookConsumerWidget {
           OutlinedButton.icon(
             onPressed: () => _confirmSignOut(context, ref),
             icon: const Icon(LucideIcons.logOut),
-            label: const Text('Sign Out'),
+            label: const Text('Remove Workspace'),
             style: OutlinedButton.styleFrom(
               foregroundColor: context.colors.error,
             ),
@@ -155,10 +162,10 @@ class SettingsPage extends HookConsumerWidget {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Sign Out'),
+        title: const Text('Remove Workspace'),
         content: const Text(
-          'You will need to scan a new pairing code from your '
-          'desktop app to reconnect.',
+          'This will disconnect this workspace. You will need '
+          'to scan a new pairing code to reconnect.',
         ),
         actions: [
           TextButton(
@@ -176,7 +183,7 @@ class SettingsPage extends HookConsumerWidget {
             style: FilledButton.styleFrom(
               backgroundColor: Theme.of(ctx).colorScheme.error,
             ),
-            child: const Text('Sign Out'),
+            child: const Text('Remove'),
           ),
         ],
       ),

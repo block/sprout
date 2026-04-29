@@ -35,6 +35,12 @@ type MessageTimelineProps = {
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  /** The message ID of the currently active find-in-channel match. */
+  searchActiveMessageId?: string | null;
+  /** Set of message IDs that match the current find-in-channel query. */
+  searchMatchingMessageIds?: Set<string>;
+  /** The current find-in-channel query string. */
+  searchQuery?: string;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
 };
@@ -56,6 +62,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onEdit,
   onReply,
   onToggleReaction,
+  searchActiveMessageId = null,
+  searchMatchingMessageIds,
+  searchQuery,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
@@ -79,6 +88,29 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     scrollContainerRef,
     targetMessageId,
   });
+
+  // Scroll to the active search match when it changes.
+  const prevSearchActiveRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (
+      !searchActiveMessageId ||
+      searchActiveMessageId === prevSearchActiveRef.current
+    ) {
+      prevSearchActiveRef.current = searchActiveMessageId;
+      return;
+    }
+    prevSearchActiveRef.current = searchActiveMessageId;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const el = container.querySelector<HTMLElement>(
+      `[data-message-id="${searchActiveMessageId}"]`,
+    );
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [searchActiveMessageId]);
 
   useLoadOlderOnScroll({
     fetchOlder,
@@ -161,6 +193,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 onToggleReaction={onToggleReaction}
                 personaLookup={personaLookup}
                 profiles={profiles}
+                searchActiveMessageId={searchActiveMessageId}
+                searchMatchingMessageIds={searchMatchingMessageIds}
+                searchQuery={searchQuery}
               />
             ) : null}
 

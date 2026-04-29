@@ -7,6 +7,10 @@ export function notificationTitle(item: FeedItem) {
     ? ` in #${item.channelName.trim()}`
     : "";
 
+  if (item.channelType === "dm") {
+    return "Direct message";
+  }
+
   if (item.category === "mention") {
     return `@Mention${channelLabel}`;
   }
@@ -43,8 +47,12 @@ export function eligibleFeedNotificationItems(
 ) {
   const items: FeedItem[] = [];
 
+  // DM notifications are handled by the real-time WebSocket hook, so we
+  // exclude DM items here to avoid duplicate toasts.
   if (options.mentions) {
-    items.push(...feed.feed.mentions);
+    items.push(
+      ...feed.feed.mentions.filter((item) => item.channelType !== "dm"),
+    );
   }
 
   if (options.needsAction) {

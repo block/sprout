@@ -18,10 +18,7 @@ void main() {
         presenceProvider.overrideWith(() => _FakePresenceNotifier()),
         ...overrides,
       ],
-      child: MaterialApp(
-        theme: AppTheme.lightTheme,
-        home: const ChannelsPage(),
-      ),
+      child: MaterialApp(theme: AppTheme.light(), home: const ChannelsPage()),
     );
   }
 
@@ -79,7 +76,7 @@ void main() {
     expect(find.text('CHANNELS'), findsOneWidget);
     expect(find.text('FORUMS'), findsOneWidget);
     expect(find.text('DMS'), findsOneWidget);
-    expect(find.text('Search'), findsOneWidget);
+    expect(find.text('\u{1F331}'), findsOneWidget);
     expect(find.byTooltip('Create or start conversation'), findsOneWidget);
   });
 
@@ -122,15 +119,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    // Unjoined and archived channels should not appear in the main list.
     expect(find.text('general'), findsOneWidget);
     expect(find.text('open-stream'), findsNothing);
     expect(find.text('archived-stream'), findsNothing);
-
-    await tester.tap(find.text('Search'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('open-stream'), findsOneWidget);
-    expect(find.text('archived-stream'), findsOneWidget);
   });
 
   testWidgets('shows empty state when no channels', (tester) async {

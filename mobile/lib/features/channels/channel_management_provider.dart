@@ -120,7 +120,7 @@ final currentPubkeyProvider = Provider<String?>((ref) {
   }
 
   final authState = ref.watch(authProvider).whenData((value) => value).value;
-  final credentialPubkey = authState?.credentials?.pubkey?.trim();
+  final credentialPubkey = authState?.workspace?.pubkey?.trim();
   if (credentialPubkey != null && credentialPubkey.isNotEmpty) {
     return credentialPubkey.toLowerCase();
   }

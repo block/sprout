@@ -167,6 +167,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type?: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -330,6 +331,7 @@ type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  observer_url: string | null;
   start_on_app_launch: boolean;
   backend:
     | { type: "local" }
@@ -680,6 +682,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     last_exit_code: agent.last_exit_code,
     last_error: agent.last_error,
     log_path: agent.log_path,
+    observer_url: agent.observer_url ?? null,
     start_on_app_launch: agent.start_on_app_launch,
     backend: agent.backend ?? { type: "local" as const },
     backend_agent_id: agent.backend_agent_id ?? null,
@@ -3641,6 +3644,9 @@ async function handleCreateManagedAgent(args: {
     last_exit_code: null,
     last_error: null,
     log_path: `/tmp/mock-agent-${pubkey}.log`,
+    observer_url: args.input.spawnAfterCreate
+      ? `http://127.0.0.1:42000/events?token=mock-${pubkey.slice(0, 8)}`
+      : null,
     start_on_app_launch: args.input.startOnAppLaunch ?? true,
     backend: args.input.backend ?? { type: "local" as const },
     backend_agent_id: null,
@@ -3687,6 +3693,9 @@ async function handleStartManagedAgent(args: {
   const now = new Date().toISOString();
   agent.status = "running";
   agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
+  agent.observer_url =
+    agent.observer_url ??
+    `http://127.0.0.1:${agent.pid}/events?token=mock-${agent.pubkey.slice(0, 8)}`;
   agent.updated_at = now;
   agent.last_started_at = now;
   agent.last_error = null;
@@ -3702,6 +3711,7 @@ async function handleStopManagedAgent(args: {
   const now = new Date().toISOString();
   agent.status = "stopped";
   agent.pid = null;
+  agent.observer_url = null;
   agent.updated_at = now;
   agent.last_stopped_at = now;
   agent.log_lines.push(`stopped mock harness at ${now}`);

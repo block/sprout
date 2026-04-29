@@ -20,10 +20,13 @@ import {
   type MentionSuggestion,
 } from "@/features/messages/ui/MentionAutocomplete";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
+import type { ChannelMember } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 
 type ForumComposerProps = {
   channelId?: string | null;
+  /** Override mention source when no channel is available (e.g. Pulse). */
+  members?: ChannelMember[];
   placeholder: string;
   disabled?: boolean;
   isSending?: boolean;
@@ -32,13 +35,14 @@ type ForumComposerProps = {
     content: string,
     mentionPubkeys: string[],
     mediaTags?: string[][],
-  ) => void;
+  ) => undefined | Promise<unknown>;
   /** When true, autocomplete renders below the input (for top-of-view composers). */
   autocompleteBelow?: boolean;
 };
 
 export function ForumComposer({
   channelId = null,
+  members,
   placeholder,
   disabled,
   isSending,
@@ -58,7 +62,7 @@ export function ForumComposer({
     setIsFormattingOpen(pressed);
   }, []);
 
-  const mentions = useMentions(channelId);
+  const mentions = useMentions(channelId, members);
   const channelLinks = useChannelLinks();
   const media = useMediaUpload();
 
@@ -200,6 +204,10 @@ export function ForumComposer({
       finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
     }
 
+    // Save draft state so we can restore on failure.
+    const savedContent = contentRef.current;
+    const savedImeta = [...currentPendingImeta];
+
     setContent("");
     contentRef.current = "";
     richText.clearContent();
@@ -208,7 +216,17 @@ export function ForumComposer({
     channelLinks.clearChannels();
     setIsEmojiPickerOpen(false);
 
-    onSubmitRef.current(finalContent, pubkeys, mediaTags);
+    const result = onSubmitRef.current(finalContent, pubkeys, mediaTags);
+
+    // If onSubmit returns a promise, restore draft on failure.
+    if (result && typeof result.then === "function") {
+      result.catch(() => {
+        setContent(savedContent);
+        contentRef.current = savedContent;
+        richText.setContent(savedContent);
+        media.setPendingImeta(savedImeta);
+      });
+    }
   }, [
     media.pendingImetaRef,
     media.setPendingImeta,
@@ -216,6 +234,7 @@ export function ForumComposer({
     mentions.clearMentions,
     channelLinks.clearChannels,
     richText.clearContent,
+    richText.setContent,
   ]);
   submitMessageRef.current = submitMessage;
 

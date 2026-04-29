@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -119,7 +120,7 @@ Widget _buildComposeBar({
       ),
     ],
     child: MaterialApp(
-      theme: AppTheme.lightTheme,
+      theme: AppTheme.light(),
       home: Scaffold(
         body: SafeArea(
           child: ComposeBar(channelId: 'channel-1', onSend: onSend),
@@ -174,6 +175,7 @@ void main() {
             200,
           );
         }),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
       );
@@ -196,7 +198,8 @@ void main() {
       );
 
       await tester.tap(find.byIcon(LucideIcons.paperclip));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Photo'));
       await tester.pumpAndSettle();
 
       expect(find.byTooltip('Remove attachment'), findsOneWidget);
@@ -237,6 +240,7 @@ void main() {
             200,
           );
         }),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
       );
@@ -254,7 +258,8 @@ void main() {
       );
 
       await tester.tap(find.byIcon(LucideIcons.paperclip));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Photo'));
       await tester.pumpAndSettle();
 
       final attachmentFinder = find.byKey(
@@ -293,6 +298,7 @@ void main() {
         httpClient: http_testing.MockClient((request) async {
           return http.Response('bad upload', 401);
         }),
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_pngBytes, name: 'tiny.png'),
       );
@@ -310,7 +316,8 @@ void main() {
       );
 
       await tester.tap(find.byIcon(LucideIcons.paperclip));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Photo'));
       await tester.pumpAndSettle();
 
       expect(find.textContaining('upload failed'), findsOneWidget);
@@ -323,6 +330,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: 'sprout_test_token',
         nsec: nsec,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_gifBytes, name: 'animated.gif'),
       );
@@ -340,7 +348,8 @@ void main() {
       );
 
       await tester.tap(find.byIcon(LucideIcons.paperclip));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Photo'));
       await tester.pumpAndSettle();
 
       expect(
@@ -358,6 +367,7 @@ void main() {
         baseUrl: 'https://relay.example',
         apiToken: 'sprout_test_token',
         nsec: nsec,
+        pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
             XFile.fromData(_apngBytes, name: 'animated.png'),
       );
@@ -375,13 +385,97 @@ void main() {
       );
 
       await tester.tap(find.byIcon(LucideIcons.paperclip));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Photo'));
       await tester.pumpAndSettle();
 
       expect(
         find.textContaining('Animated PNG uploads are not supported on mobile'),
         findsOneWidget,
       );
+    });
+
+    // Skip: video upload relies on native platform bridging
+    // (transcodeVideoToMp4) that can't be fully mocked in widget tests.
+    testWidgets('taps Video in chooser sheet and uploads video', skip: true, (
+      tester,
+    ) async {
+      final keychain = nostr.Keychain.generate();
+      final nsec = nostr.Nip19.encodePrivkey(keychain.private);
+
+      // Build a temp file with a valid MP4 ftyp header (isom brand).
+      final mp4Bytes = Uint8List(32);
+      mp4Bytes[3] = 32;
+      mp4Bytes[4] = 0x66; // f
+      mp4Bytes[5] = 0x74; // t
+      mp4Bytes[6] = 0x79; // y
+      mp4Bytes[7] = 0x70; // p
+      mp4Bytes[8] = 0x69; // i
+      mp4Bytes[9] = 0x73; // s
+      mp4Bytes[10] = 0x6F; // o
+      mp4Bytes[11] = 0x6D; // m
+      final tempDir = await Directory.systemTemp.createTemp('compose_video_');
+      final tempFile = File('${tempDir.path}/clip.mp4');
+      await tempFile.writeAsBytes(mp4Bytes);
+
+      try {
+        final uploadService = MediaUploadService(
+          baseUrl: 'https://relay.example',
+          apiToken: 'sprout_test_token',
+          nsec: nsec,
+          httpClient: http_testing.MockClient((request) async {
+            return http.Response(
+              jsonEncode({
+                'url': 'https://relay.example/media/test.mp4',
+                'sha256':
+                    '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                'size': 1024,
+                'type': 'video/mp4',
+                'uploaded': 1,
+              }),
+              200,
+            );
+          }),
+          pickGalleryVideo: () async => XFile(tempFile.path),
+          pickGalleryImage: () async => null,
+        );
+
+        String? sentContent;
+        await tester.pumpWidget(
+          _buildComposeBar(
+            uploadService: uploadService,
+            onSend:
+                (
+                  content,
+                  mentionPubkeys, {
+                  mediaTags = const <List<String>>[],
+                }) async {
+                  sentContent = content;
+                },
+          ),
+        );
+
+        await tester.tap(find.byIcon(LucideIcons.paperclip));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Video'));
+        // Pump enough frames for the async file read + upload to complete.
+        // Can't use pumpAndSettle here — the upload spinner's animation
+        // prevents settling while the async upload is in-flight.
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+
+        // Video attachment should show a video icon (not a broken image).
+        expect(find.byIcon(LucideIcons.video), findsOneWidget);
+
+        await tester.tap(find.byIcon(LucideIcons.sendHorizontal));
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        expect(sentContent, '\n![video](https://relay.example/media/test.mp4)');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
     });
   });
 }

@@ -148,6 +148,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -251,6 +252,7 @@ export type RawManagedAgent = {
   last_exit_code: number | null;
   last_error: string | null;
   log_path: string;
+  observer_url: string | null;
   start_on_app_launch: boolean;
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
@@ -394,6 +396,7 @@ function fromRawFeedItem(item: RawFeedItem) {
     createdAt: item.created_at,
     channelId: item.channel_id,
     channelName: item.channel_name,
+    channelType: item.channel_type,
     tags: item.tags,
     category: item.category,
   };
@@ -681,10 +684,11 @@ export async function getHomeFeed(
 export async function searchMessages(
   input: SearchMessagesInput,
 ): Promise<SearchMessagesResponse> {
-  const response = await invokeTauri<RawSearchResponse>(
-    "search_messages",
-    input,
-  );
+  const response = await invokeTauri<RawSearchResponse>("search_messages", {
+    q: input.q,
+    limit: input.limit,
+    channelId: input.channelId,
+  });
 
   return {
     hits: response.hits.map(fromRawSearchHit),
@@ -854,6 +858,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     lastExitCode: agent.last_exit_code,
     lastError: agent.last_error,
     logPath: agent.log_path,
+    observerUrl: agent.observer_url,
     startOnAppLaunch: agent.start_on_app_launch,
     backend: agent.backend,
     backendAgentId: agent.backend_agent_id,

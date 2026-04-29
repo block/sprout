@@ -1,3 +1,4 @@
+import AVFoundation
 import Flutter
 import UIKit
 
@@ -103,8 +104,69 @@ import UIKit
       }
 
       result(FlutterStandardTypedData(bytes: jpegData))
+    case "transcodeVideoToMp4":
+      guard let sourcePath = call.arguments as? String else {
+        result(
+          FlutterError(
+            code: "invalid_arguments",
+            message: "Expected source file path as String.",
+            details: nil
+          )
+        )
+        return
+      }
+      transcodeVideoToMp4(sourcePath: sourcePath, result: result)
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func transcodeVideoToMp4(
+    sourcePath: String,
+    result: @escaping FlutterResult
+  ) {
+    let sourceURL = URL(fileURLWithPath: sourcePath)
+    let asset = AVURLAsset(url: sourceURL)
+
+    guard let exportSession = AVAssetExportSession(
+      asset: asset,
+      presetName: AVAssetExportPresetPassthrough
+    ) else {
+      result(
+        FlutterError(
+          code: "transcode_failed",
+          message: "Unable to create export session.",
+          details: nil
+        )
+      )
+      return
+    }
+
+    let outputURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("mp4")
+
+    exportSession.outputURL = outputURL
+    exportSession.outputFileType = .mp4
+    exportSession.shouldOptimizeForNetworkUse = true
+
+    exportSession.exportAsynchronously {
+      switch exportSession.status {
+      case .completed:
+        result(outputURL.path)
+      default:
+        let errorMessage = exportSession.error?.localizedDescription
+          ?? "Video transcoding failed with status \(exportSession.status.rawValue)."
+        result(
+          FlutterError(
+            code: "transcode_failed",
+            message: errorMessage,
+            details: nil
+          )
+        )
+        // Clean up partial output on failure.
+        try? FileManager.default.removeItem(at: outputURL)
+      }
     }
   }
 }

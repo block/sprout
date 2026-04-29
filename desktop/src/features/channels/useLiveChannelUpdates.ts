@@ -11,6 +11,7 @@ import type { Channel, RelayEvent } from "@/shared/api/types";
 
 export type UseLiveChannelUpdatesOptions = {
   currentPubkey?: string;
+  onDmMessage?: (event: RelayEvent, channel: Channel) => void;
   onLiveMention?: () => void;
 };
 
@@ -27,19 +28,16 @@ function isExternalMentionEvent(event: RelayEvent, currentPubkey: string) {
   );
 }
 
-function rememberMentionEvent(
-  seenMentionEventIds: Set<string>,
-  eventId: string,
-): boolean {
-  if (seenMentionEventIds.has(eventId)) {
+function trackSeenEvent(seenEventIds: Set<string>, eventId: string): boolean {
+  if (seenEventIds.has(eventId)) {
     return false;
   }
 
-  seenMentionEventIds.add(eventId);
-  if (seenMentionEventIds.size > 200) {
-    const oldestEventId = seenMentionEventIds.values().next().value;
+  seenEventIds.add(eventId);
+  if (seenEventIds.size > 200) {
+    const oldestEventId = seenEventIds.values().next().value;
     if (oldestEventId) {
-      seenMentionEventIds.delete(oldestEventId);
+      seenEventIds.delete(oldestEventId);
     }
   }
 
@@ -64,6 +62,24 @@ export function useLiveChannelUpdates(
       ),
     [channels],
   );
+  const dmChannelMap = React.useMemo(
+    () =>
+      new Map(
+        channels
+          .filter((channel) => channel.channelType === "dm")
+          .map((channel) => [channel.id, channel]),
+      ),
+    [channels],
+  );
+  const seenDmEventIdsRef = React.useRef(new Set<string>());
+  const dmSubscriptionStartedAtRef = React.useRef(0);
+
+  // Reset subscription timestamp when identity changes.
+  React.useEffect(() => {
+    void normalizedCurrentPubkey;
+    dmSubscriptionStartedAtRef.current = 0;
+  }, [normalizedCurrentPubkey]);
+
   // Effect deps use primitive keys so refetches that produce new refs with
   // identical contents don't churn subscriptions. The Set/array memos are
   // still handy for closure reads via useEffectEvent.
@@ -73,19 +89,62 @@ export function useLiveChannelUpdates(
     [channels],
   );
 
+  const handleDmEvent = React.useEffectEvent((event: RelayEvent) => {
+    // Suppress backlog events that predate our subscription — these are
+    // historical replays, not live messages.
+    if (event.created_at < dmSubscriptionStartedAtRef.current) {
+      return;
+    }
+
+    const channelId = getChannelIdFromTags(event.tags);
+    if (!channelId) {
+      return;
+    }
+
+    if (!isExternalMentionEvent(event, normalizedCurrentPubkey)) {
+      return;
+    }
+
+    const dmChannel = dmChannelMap.get(channelId);
+    if (!dmChannel) {
+      return;
+    }
+
+    if (!trackSeenEvent(seenDmEventIdsRef.current, event.id)) {
+      return;
+    }
+
+    // Don't fire a notification for the channel the user is already viewing.
+    if (channelId === activeChannelId) {
+      return;
+    }
+
+    options.onDmMessage?.(event, dmChannel);
+  });
+
   const handleIncomingMessage = React.useEffectEvent((event: RelayEvent) => {
     const channelId = getChannelIdFromTags(event.tags);
-    if (!channelId || channelId === activeChannelId) {
+    if (!channelId) {
       return;
     }
+
+    // Track DM events even for the active channel so the dedup set stays
+    // current. The handler itself skips firing the notification callback
+    // when the user is already viewing the DM.
+    handleDmEvent(event);
 
     if (!liveChannelIds.has(channelId)) {
-      void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+      if (channelId !== activeChannelId) {
+        void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+      }
       return;
     }
 
+    // Always update the cache — even for the active channel.
+    // useChannelSubscription also writes to this cache, but there's a
+    // race window where it hasn't connected yet. Writes are idempotent
+    // (mergeTimelineCacheMessages deduplicates by event ID).
     const messageTimestamp = getMessageTimestamp(event);
-
     updateChannelLastMessageAt(queryClient, channelId, messageTimestamp);
     queryClient.setQueryData<RelayEvent[]>(
       channelMessagesKey(channelId),
@@ -104,7 +163,7 @@ export function useLiveChannelUpdates(
       return;
     }
 
-    if (!rememberMentionEvent(seenMentionEventIdsRef.current, event.id)) {
+    if (!trackSeenEvent(seenMentionEventIdsRef.current, event.id)) {
       return;
     }
 
@@ -114,6 +173,10 @@ export function useLiveChannelUpdates(
   React.useEffect(() => {
     return relayClient.subscribeToReconnects(() => {
       void queryClient.invalidateQueries({ queryKey: channelsQueryKey });
+
+      // Update the subscription timestamp so replayed backlog events
+      // (which have created_at in the past) are naturally suppressed.
+      dmSubscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
     });
   }, [queryClient]);
 
@@ -124,6 +187,10 @@ export function useLiveChannelUpdates(
 
     let isDisposed = false;
     let cleanup: (() => Promise<void>) | undefined;
+
+    // Record the subscription start time so handleDmEvent can distinguish
+    // backlog replays (created_at < startedAt) from live messages.
+    dmSubscriptionStartedAtRef.current = Math.floor(Date.now() / 1000);
 
     relayClient
       .subscribeToAllStreamMessages((event) => {

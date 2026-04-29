@@ -5,6 +5,8 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../channels/compose_bar.dart';
 import '../channels/message_content.dart';
 import '../profile/user_cache_provider.dart';
@@ -55,8 +57,8 @@ class ForumThreadPage extends HookConsumerWidget {
             .value ??
         false;
 
-    return Scaffold(
-      appBar: AppBar(
+    return FrostedScaffold(
+      appBar: FrostedAppBar(
         title: const Text('Thread'),
         actions: [
           if (isOwnPost)
@@ -69,12 +71,18 @@ class ForumThreadPage extends HookConsumerWidget {
         ],
       ),
       body: threadAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(
-          child: Text(
-            'Failed to load thread',
-            style: context.textTheme.bodyMedium?.copyWith(
-              color: context.colors.error,
+        loading: () => Padding(
+          padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+        error: (e, _) => Padding(
+          padding: EdgeInsets.only(top: frostedAppBarHeight(context)),
+          child: Center(
+            child: Text(
+              'Failed to load thread',
+              style: context.textTheme.bodyMedium?.copyWith(
+                color: context.colors.error,
+              ),
             ),
           ),
         ),
@@ -208,7 +216,10 @@ class _ThreadContent extends HookConsumerWidget {
       children: [
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.only(bottom: Grid.xs),
+            padding: EdgeInsets.only(
+              top: frostedAppBarHeight(context),
+              bottom: Grid.xs,
+            ),
             children: [
               // Original post
               _OriginalPost(post: post),
