@@ -430,16 +430,7 @@ class PairingNotifier extends Notifier<PairingState> {
       _validateRelayUrl(relayUrl);
 
       // Validate credentials against the relay.
-      final client = RelayClient(
-        baseUrl: relayUrl,
-        apiToken: token,
-        httpClient: ref.read(pairingHttpClientProvider),
-      );
-      try {
-        await client.get('/api/users/me/profile');
-      } finally {
-        client.dispose();
-      }
+      await _validateCredentials(relayUrl: relayUrl, token: token);
 
       // Send complete only after credentials are validated.
       _sendComplete(true);
@@ -545,16 +536,10 @@ class PairingNotifier extends Notifier<PairingState> {
     try {
       final workspace = _parseLegacyInput(rawInput);
 
-      final client = RelayClient(
-        baseUrl: workspace.relayUrl,
-        apiToken: workspace.token,
-        httpClient: ref.read(pairingHttpClientProvider),
+      await _validateCredentials(
+        relayUrl: workspace.relayUrl,
+        token: workspace.token,
       );
-      try {
-        await client.get('/api/users/me/profile');
-      } finally {
-        client.dispose();
-      }
 
       await ref
           .read(authProvider.notifier)
@@ -580,6 +565,20 @@ class PairingNotifier extends Notifier<PairingState> {
             'relay server.',
       );
     }
+  }
+
+  Future<void> _validateCredentials({
+    required String relayUrl,
+    required String token,
+  }) async {
+    final client = RelayClient(
+      baseUrl: relayUrl,
+      apiToken: token,
+      httpClient: ref.read(pairingHttpClientProvider),
+    );
+    // The HTTP client is owned by pairingHttpClientProvider. Closing this
+    // short-lived wrapper would close the provider client for future attempts.
+    await client.get('/api/users/me/profile');
   }
 
   Workspace _parseLegacyInput(String raw) {
