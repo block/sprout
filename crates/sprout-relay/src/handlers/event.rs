@@ -506,8 +506,25 @@ async fn handle_agent_observer_event(
         }
     }
 
+    // Freshness check: reject observer frames with stale/future timestamps
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).unsigned_abs() > 300 {
+        conn.send(RelayMessage::ok(
+            event_id_hex,
+            false,
+            "invalid: observer frame timestamp outside ±5 minute freshness window",
+        ));
+        return;
+    }
+
     let route = match agent_observer_route(&event) {
-        Ok(route) => route,
+        Ok(Some(route)) => route,
+        Ok(None) => {
+            // Unknown frame value — silently drop, no error to publisher.
+            conn.send(RelayMessage::ok(event_id_hex, true, ""));
+            return;
+        }
         Err(message) => {
             reject("invalid");
             conn.send(RelayMessage::ok(event_id_hex, false, &message));
@@ -588,7 +605,7 @@ async fn handle_agent_observer_event(
     conn.send(RelayMessage::ok(event_id_hex, true, ""));
 }
 
-fn agent_observer_route(event: &Event) -> Result<AgentObserverRoute, String> {
+fn agent_observer_route(event: &Event) -> Result<Option<AgentObserverRoute>, String> {
     if !content_looks_like_nip44(&event.content) {
         return Err("invalid: observer content must be NIP-44 encrypted".into());
     }
@@ -617,16 +634,15 @@ fn agent_observer_route(event: &Event) -> Result<AgentObserverRoute, String> {
     };
 
     if frame != expected_frame {
-        return Err(format!(
-            "invalid: observer {direction:?} frame must use frame={expected_frame}"
-        ));
+        // Unknown frame value — silently drop without notifying the publisher.
+        return Ok(None);
     }
 
-    Ok(AgentObserverRoute {
+    Ok(Some(AgentObserverRoute {
         agent,
         owner,
         direction,
-    })
+    }))
 }
 
 fn parse_single_pubkey_tag(event: &Event, tag_name: &str) -> Result<PublicKey, String> {
