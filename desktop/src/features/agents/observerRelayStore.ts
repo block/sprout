@@ -18,6 +18,10 @@ type ObserverSnapshot = {
 const listeners = new Set<() => void>();
 const eventsByAgent = new Map<string, ObserverEvent[]>();
 
+// Normalized pubkeys of agents we are actively managing. Only events whose
+// "agent" tag matches an entry here will be decrypted (defense-in-depth).
+const knownAgentPubkeys = new Set<string>();
+
 let connectionState: ConnectionState = "idle";
 let errorMessage: string | null = null;
 let unsubscribeRelay: (() => Promise<void>) | null = null;
@@ -86,6 +90,12 @@ async function handleRelayObserverEvent(
   const agentPubkey = observerTag(event, "agent");
   const frame = observerTag(event, "frame");
   if (!agentPubkey || frame !== "telemetry") {
+    return;
+  }
+
+  // Verify agent is known/trusted before decrypting.
+  // Silently drop events from agents we are not managing.
+  if (!knownAgentPubkeys.has(normalizePubkey(agentPubkey))) {
     return;
   }
 
@@ -189,6 +199,14 @@ export function useManagedAgentObserverBridge(agents: readonly ManagedAgent[]) {
       ),
     [agents],
   );
+
+  // Keep the trusted-pubkey set in sync with the current managed agent list.
+  React.useEffect(() => {
+    knownAgentPubkeys.clear();
+    for (const agent of agents) {
+      knownAgentPubkeys.add(normalizePubkey(agent.pubkey));
+    }
+  }, [agents]);
 
   React.useEffect(() => {
     if (!hasActiveAgent) {
