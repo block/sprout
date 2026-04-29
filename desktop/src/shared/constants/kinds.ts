@@ -16,19 +16,22 @@ export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
 export const KIND_TYPING_INDICATOR = 20002;
+export const KIND_READ_STATE = 30078;
 
-// Keep this in sync with the Home-feed mention query in sprout-db.
-export const HOME_MENTION_EVENT_KINDS = [
+const CHANNEL_MESSAGE_EVENT_KINDS = [
   KIND_STREAM_MESSAGE,
   KIND_STREAM_MESSAGE_V2,
   KIND_FORUM_POST,
   KIND_FORUM_COMMENT,
 ] as const;
 
+// Keep this in sync with the Home-feed mention query in sprout-db.
+export const HOME_MENTION_EVENT_KINDS = [...CHANNEL_MESSAGE_EVENT_KINDS];
+
 export const CHANNEL_EVENT_KINDS = [
   KIND_DELETION, // 5 — NIP-09 event deletions
   KIND_REACTION, // 7 — NIP-25 reactions
-  KIND_STREAM_MESSAGE, // 9 — NIP-29 group chat messages
+  ...CHANNEL_MESSAGE_EVENT_KINDS,
   40001, // legacy: pre-migration stream messages
   KIND_STREAM_MESSAGE_EDIT, // 40003 — message edits
   KIND_STREAM_MESSAGE_DIFF, // 40008 — message diffs

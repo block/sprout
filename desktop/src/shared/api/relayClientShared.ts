@@ -3,6 +3,7 @@ import type { RelayEvent } from "@/shared/api/types";
 export type RelaySubscriptionFilter = {
   kinds: number[];
   limit: number;
+  authors?: string[];
   since?: number;
   until?: number;
 } & Partial<Record<`#${string}`, string[]>>;

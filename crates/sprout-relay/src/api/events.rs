@@ -21,11 +21,13 @@ use super::{
 };
 
 use sprout_core::kind::{
-    event_kind_u32, KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_TEXT_NOTE,
+    event_kind_u32, KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_READ_STATE,
+    KIND_TEXT_NOTE,
 };
 
 /// Global event kinds that require `UsersRead` scope.
-pub(crate) const GLOBAL_USER_DATA_KINDS: [u32; 2] = [KIND_PROFILE, KIND_CONTACT_LIST];
+pub(crate) const GLOBAL_USER_DATA_KINDS: [u32; 3] =
+    [KIND_PROFILE, KIND_CONTACT_LIST, KIND_READ_STATE];
 /// Global event kinds that require `MessagesRead` scope.
 pub(crate) const GLOBAL_MESSAGE_KINDS: [u32; 2] = [KIND_TEXT_NOTE, KIND_LONG_FORM];
 

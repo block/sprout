@@ -54,12 +54,7 @@ export function useLiveChannelUpdates(
     options.currentPubkey?.trim().toLowerCase() ?? "";
   const seenMentionEventIdsRef = React.useRef(new Set<string>());
   const liveChannelIds = React.useMemo(
-    () =>
-      new Set(
-        channels
-          .filter((channel) => channel.channelType !== "forum")
-          .map((channel) => channel.id),
-      ),
+    () => new Set(channels.map((channel) => channel.id)),
     [channels],
   );
   const dmChannelMap = React.useMemo(
@@ -167,6 +162,7 @@ export function useLiveChannelUpdates(
       return;
     }
 
+    handleIncomingMessage(event);
     options.onLiveMention?.();
   });
 

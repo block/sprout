@@ -116,6 +116,10 @@ export class RelayClient {
     return this.fetchHistory(this.buildChannelFilter(channelId, limit, before));
   }
 
+  async fetchEvents(filter: RelaySubscriptionFilter): Promise<RelayEvent[]> {
+    return this.fetchHistory(filter);
+  }
+
   private async fetchHistory(filter: RelaySubscriptionFilter) {
     await this.ensureConnected();
 
@@ -279,6 +283,13 @@ export class RelayClient {
 
   async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
+  }
+
+  async subscribeLive(
+    filter: RelaySubscriptionFilter,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(filter, onEvent);
   }
 
   async subscribeToChannelMentionEvents(
@@ -516,7 +527,7 @@ export class RelayClient {
     await this.sendRaw(["CLOSE", subId]);
   }
 
-  private publishEvent(
+  publishEvent(
     event: RelayEvent,
     timeoutMessage: string,
     sendErrorMessage: string,

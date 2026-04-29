@@ -214,6 +214,8 @@ export function AppShell() {
     // advancing unread state for the active channel.
     null,
     {
+      pubkey: identityQuery.data?.pubkey,
+      relayClient,
       currentPubkey: identityQuery.data?.pubkey,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
