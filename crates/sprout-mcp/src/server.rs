@@ -178,6 +178,10 @@ pub struct SendMessageParams {
     /// Pubkeys to @mention in the message.
     #[serde(default)]
     pub mention_pubkeys: Option<Vec<String>>,
+    /// Optional file paths to upload and attach as media. Each file is uploaded
+    /// to the relay and included as an imeta tag + markdown image in the message.
+    #[serde(default)]
+    pub file_paths: Option<Vec<String>>,
 }
 fn default_kind() -> Option<u16> {
     Some(sprout_core::kind::KIND_STREAM_MESSAGE as u16)
@@ -805,6 +809,13 @@ fn infer_language(file_path: &str) -> Option<String> {
     Some(lang.to_string())
 }
 
+/// Parameters for the `upload_file` tool.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UploadFileParams {
+    /// Local filesystem path to the file to upload.
+    pub file_path: String,
+}
+
 /// The MCP server that exposes Sprout relay functionality as tools.
 #[derive(Clone)]
 pub struct SproutMcpServer {
@@ -938,11 +949,53 @@ Default kind is 9 (stream message)."
         let mention_refs: Vec<&str> = mentions.iter().map(String::as_str).collect();
         let broadcast = p.broadcast_to_channel.unwrap_or(false);
 
+        // Upload files and build media tags
+        let mut media_tags: Vec<Vec<String>> = Vec::new();
+        let mut media_content = String::new();
+        if let Some(ref paths) = p.file_paths {
+            for path in paths {
+                match crate::upload::upload_file(
+                    self.client.http_client(),
+                    self.client.keys(),
+                    &self.client.relay_http_url(),
+                    self.client.api_token(),
+                    self.client.server_domain().as_deref(),
+                    path,
+                )
+                .await
+                {
+                    Ok(desc) => {
+                        media_tags.push(crate::upload::build_imeta_tag(&desc));
+                        if desc.mime_type.starts_with("video/") {
+                            media_content.push_str("\n![video](");
+                        } else {
+                            media_content.push_str("\n![image](");
+                        }
+                        media_content.push_str(&desc.url);
+                        media_content.push(')');
+                    }
+                    Err(e) => {
+                        return format!("Error uploading {}: {e}", path);
+                    }
+                }
+            }
+        }
+        let final_content = if media_content.is_empty() {
+            p.content.clone()
+        } else {
+            format!("{}{}", p.content, media_content)
+        };
+
         // Build the event builder via SDK, routing by kind.
         let builder = match kind_num as u32 {
             sprout_core::kind::KIND_FORUM_POST => {
                 // kind 45001: forum post (no thread ref, no broadcast)
-                match sprout_sdk::build_forum_post(channel_uuid, &p.content, &mention_refs, &[]) {
+                match sprout_sdk::build_forum_post(
+                    channel_uuid,
+                    &final_content,
+                    &mention_refs,
+                    &media_tags,
+                ) {
                     Ok(b) => b,
                     Err(e) => return format!("Error: {e}"),
                 }
@@ -964,10 +1017,10 @@ Default kind is 9 (stream message)."
                 };
                 match sprout_sdk::build_forum_comment(
                     channel_uuid,
-                    &p.content,
+                    &final_content,
                     &thread_ref,
                     &mention_refs,
-                    &[],
+                    &media_tags,
                 ) {
                     Ok(b) => b,
                     Err(e) => return format!("Error: {e}"),
@@ -989,11 +1042,11 @@ Default kind is 9 (stream message)."
                 };
                 match sprout_sdk::build_message(
                     channel_uuid,
-                    &p.content,
+                    &final_content,
                     thread_ref.as_ref(),
                     &mention_refs,
                     broadcast && p.parent_event_id.is_some(),
-                    &[],
+                    &media_tags,
                 ) {
                     Ok(b) => b,
                     Err(e) => return format!("Error: {e}"),
@@ -2617,6 +2670,33 @@ with kind:45003 comments)."
         let path = format!("/api/users/{}/contact-list", p.pubkey);
         match self.client.get(&path).await {
             Ok(body) => body,
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    /// Upload a local file to the Sprout relay.
+    #[tool(
+        name = "upload_file",
+        description = "Upload a local file (image or video) to the Sprout relay. \
+Returns a BlobDescriptor with the URL, hash, dimensions, and other metadata. \
+Supported types: JPEG, PNG, GIF, WebP, MP4. \
+The returned URL can be included in messages, or use the file_paths parameter \
+on send_message to upload and attach in one step."
+    )]
+    pub async fn upload_file(&self, Parameters(p): Parameters<UploadFileParams>) -> String {
+        match crate::upload::upload_file(
+            self.client.http_client(),
+            self.client.keys(),
+            &self.client.relay_http_url(),
+            self.client.api_token(),
+            self.client.server_domain().as_deref(),
+            &p.file_path,
+        )
+        .await
+        {
+            Ok(desc) => {
+                serde_json::to_string_pretty(&desc).unwrap_or_else(|e| format!("Error: {e}"))
+            }
             Err(e) => format!("Error: {e}"),
         }
     }

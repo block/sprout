@@ -3717,6 +3717,8 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "clap",
+ "hex",
+ "infer",
  "nostr",
  "reqwest 0.13.2",
  "serde",
@@ -3726,6 +3728,7 @@ dependencies = [
  "sprout-sdk",
  "thiserror 2.0.18",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -3771,7 +3774,10 @@ name = "sprout-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "futures-util",
+ "hex",
+ "infer",
  "nostr",
  "reqwest 0.13.2",
  "rmcp",
@@ -3779,6 +3785,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "sprout-core",
  "sprout-sdk",
  "thiserror 2.0.18",
