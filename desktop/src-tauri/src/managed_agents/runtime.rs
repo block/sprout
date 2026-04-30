@@ -502,6 +502,11 @@ pub fn spawn_agent_child(
     command.env("SPROUT_ACP_AGENTS", record.parallelism.to_string());
     command.env("SPROUT_ACP_MULTIPLE_EVENT_HANDLING", "owner-interrupt");
     command.env("SPROUT_ACP_DEDUP", "queue");
+    // Desktop-managed channel agents should answer explicit @mentions from any
+    // channel member, not just the human who created the local process. The ACP
+    // harness still requires mention matching by default, so this does not make
+    // agents react to ordinary channel chatter.
+    command.env("SPROUT_ACP_RESPOND_TO", "anyone");
     command.env(
         "GOOSE_MODE",
         std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),

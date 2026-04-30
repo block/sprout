@@ -6,7 +6,7 @@ import {
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
-import type { ChannelMember } from "@/shared/api/types";
+import type { ChannelMember, UserProfileSummary } from "@/shared/api/types";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { hasMention } from "./hasMention";
@@ -16,6 +16,7 @@ const MENTION_DEBOUNCE_MS = 120;
 export function useMentions(
   channelId: string | null,
   externalMembers?: ChannelMember[],
+  profiles?: Record<string, UserProfileSummary>,
 ) {
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = React.useState(0);
@@ -49,15 +50,35 @@ export function useMentions(
     }
     return lookup;
   }, [managedAgentsQuery.data, personasQuery.data]);
+  const profileNamesByPubkey = React.useMemo(() => {
+    const lookup = new Map<string, string>();
+    for (const [pubkey, profile] of Object.entries(profiles ?? {})) {
+      const name = profile.displayName?.trim() || profile.nip05Handle?.trim();
+      if (name) {
+        lookup.set(pubkey.toLowerCase(), name);
+      }
+    }
+    return lookup;
+  }, [profiles]);
+
+  const resolveMentionName = React.useCallback(
+    (member: ChannelMember) => {
+      const pubkeyLower = member.pubkey.toLowerCase();
+      return (
+        member.displayName ??
+        managedAgentNamesByPubkey.get(pubkeyLower) ??
+        profileNamesByPubkey.get(pubkeyLower)
+      );
+    },
+    [managedAgentNamesByPubkey, profileNamesByPubkey],
+  );
 
   const knownNames = React.useMemo<string[]>(() => {
     if (!members) return [];
     const names: string[] = [];
     const seen = new Set<string>();
     for (const member of members) {
-      const name =
-        member.displayName ??
-        managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
+      const name = resolveMentionName(member);
       if (name) {
         names.push(name);
         seen.add(name.toLowerCase());
@@ -70,7 +91,7 @@ export function useMentions(
       }
     }
     return names;
-  }, [members, managedAgentNamesByPubkey, personaNameByPubkey]);
+  }, [members, personaNameByPubkey, resolveMentionName]);
 
   /** Lower-cased version of knownNames, used for case-insensitive prefix matching. */
   const knownNamesLower = React.useMemo<string[]>(
@@ -123,8 +144,7 @@ export function useMentions(
       .map((member) => {
         const pubkeyLower = member.pubkey.toLowerCase();
 
-        const actualName =
-          member.displayName ?? managedAgentNamesByPubkey.get(pubkeyLower);
+        const actualName = resolveMentionName(member);
         const personaName = personaNameByPubkey.get(pubkeyLower) ?? null;
         const label = actualName ?? member.pubkey.slice(0, 8);
 
@@ -155,7 +175,7 @@ export function useMentions(
         role: member.role === "admin" ? "admin" : null,
         personaName,
       }));
-  }, [managedAgentNamesByPubkey, members, mentionQuery, personaNameByPubkey]);
+  }, [members, mentionQuery, personaNameByPubkey, resolveMentionName]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
 
@@ -236,9 +256,7 @@ export function useMentions(
         if (pubkeys.includes(member.pubkey)) {
           continue;
         }
-        const name =
-          member.displayName ??
-          managedAgentNamesByPubkey.get(member.pubkey.toLowerCase());
+        const name = resolveMentionName(member);
         if (name && hasMention(text, name)) {
           pubkeys.push(member.pubkey);
         }
@@ -246,7 +264,7 @@ export function useMentions(
 
       return [...new Set(pubkeys)];
     },
-    [members, managedAgentNamesByPubkey],
+    [members, resolveMentionName],
   );
 
   const clearMentions = React.useCallback(() => {

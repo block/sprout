@@ -327,10 +327,38 @@ where
         return Err(relay_error_message(response).await);
     }
 
-    response
-        .json::<T>()
+    let status = response.status();
+    let url = response.url().clone();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    let body = response
+        .bytes()
         .await
-        .map_err(|error| format!("parse failed: {error}"))
+        .map_err(|error| format!("read response body failed: {error}"))?;
+
+    serde_json::from_slice::<T>(&body).map_err(|error| {
+        let snippet = String::from_utf8_lossy(&body)
+            .chars()
+            .take(240)
+            .collect::<String>()
+            .replace(['\n', '\r', '\t'], " ")
+            .trim()
+            .to_string();
+
+        if content_type.contains("text/html") && snippet.contains("Cloudflare Access") {
+            return format!(
+                "relay returned Cloudflare Access sign-in instead of JSON for {url}. Check the active workspace token or Cloudflare/WARP access."
+            );
+        }
+
+        format!(
+            "parse failed: {error}; relay returned {status} {content_type} for {url}: {snippet}"
+        )
+    })
 }
 
 pub async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), String> {

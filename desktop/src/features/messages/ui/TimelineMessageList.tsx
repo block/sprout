@@ -120,7 +120,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           renderedTrailingContent = true;
           elements.push(
             <div
-              className="flex min-w-0 items-center gap-3"
+              className="flex min-w-0 items-center gap-1.5"
               data-testid="message-thread-summary-with-footer"
               key={`thread-summary-with-footer-${message.id}`}
             >

@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { Bot, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ManagedAgent } from "@/shared/api/types";
@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const AGENT_LIST_HEIGHT_ESTIMATE_PX = 220;
+const MAX_INLINE_AGENT_AVATARS = 3;
 
 type BotActivityBarProps = {
   agents: ManagedAgent[];
@@ -96,8 +97,9 @@ export function BotActivityBar({
     : null;
   const label =
     typingAgents.length === 1
-      ? "1 active agent"
-      : `${typingAgents.length} active agents`;
+      ? typingAgents[0]?.name
+      : `${typingAgents[0]?.name ?? "Agent"} +${typingAgents.length - 1}`;
+  const visibleInlineAgents = typingAgents.slice(0, MAX_INLINE_AGENT_AVATARS);
 
   return (
     <div className="min-w-0" data-testid="bot-activity-bar">
@@ -118,7 +120,24 @@ export function BotActivityBar({
             onPointerLeave={scheduleCloseAgentList}
             type="button"
           >
-            <Bot className="h-3 w-3 shrink-0" />
+            <div className="flex shrink-0 items-center">
+              {visibleInlineAgents.map((agent, index) => (
+                <div
+                  className={cn(index > 0 && "-ml-1.5")}
+                  key={agent.pubkey}
+                  style={{ zIndex: visibleInlineAgents.length - index }}
+                >
+                  <UserAvatar
+                    avatarUrl={
+                      profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null
+                    }
+                    className="rounded-full border border-background shadow-none"
+                    displayName={agent.name}
+                    size="xs"
+                  />
+                </div>
+              ))}
+            </div>
             <span className="min-w-0 truncate">{label}</span>
             <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-60" />
           </button>

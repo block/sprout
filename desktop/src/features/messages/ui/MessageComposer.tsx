@@ -19,6 +19,7 @@ import {
 } from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
@@ -49,6 +50,7 @@ type MessageComposerProps = {
     mediaTags?: string[][],
   ) => Promise<void>;
   placeholder?: string;
+  profiles?: UserProfileLookup;
   replyTarget?: {
     author: string;
     body: string;
@@ -70,6 +72,7 @@ export function MessageComposer({
   onEditSave,
   onSend,
   placeholder,
+  profiles,
   replyTarget = null,
   typingParentEventId = null,
   typingRootEventId = null,
@@ -91,7 +94,7 @@ export function MessageComposer({
   const effectiveDraftKey = draftKey ?? channelId;
   const previousDraftKeyRef = React.useRef<string | null>(null);
 
-  const mentions = useMentions(channelId);
+  const mentions = useMentions(channelId, undefined, profiles);
   const channelLinks = useChannelLinks();
   const emojiAutocomplete = useEmojiAutocomplete();
   const notifyTyping = useTypingBroadcast(
