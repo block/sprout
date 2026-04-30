@@ -198,16 +198,8 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 searchActiveMessageId={searchActiveMessageId}
                 searchMatchingMessageIds={searchMatchingMessageIds}
                 searchQuery={searchQuery}
+                trailingContent={conversationFooter}
               />
-            ) : null}
-
-            {conversationFooter ? (
-              <div
-                className="flex min-w-0 pb-1"
-                data-testid="message-timeline-footer"
-              >
-                {conversationFooter}
-              </div>
             ) : null}
 
             <div aria-hidden className="h-px" ref={bottomAnchorRef} />

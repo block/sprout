@@ -114,7 +114,6 @@ export function BotActivityBar({
             )}
             data-agent-key={typingAgentKey}
             data-testid="bot-chip-overflow"
-            key={typingAgentKey}
             onPointerEnter={openAgentListFromTrigger}
             onPointerLeave={scheduleCloseAgentList}
             type="button"

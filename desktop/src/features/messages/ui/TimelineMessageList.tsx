@@ -35,6 +35,7 @@ type TimelineMessageListProps = {
   searchMatchingMessageIds?: Set<string>;
   /** The current find-in-channel query string. */
   searchQuery?: string;
+  trailingContent?: React.ReactNode;
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
@@ -51,8 +52,10 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
+  trailingContent,
 }: TimelineMessageListProps) {
   const elements: React.ReactNode[] = [];
+  let renderedTrailingContent = false;
   const entries = React.useMemo(
     () => buildMainTimelineEntries(messages),
     [messages],
@@ -111,16 +114,50 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       );
 
       if (summary && onReply) {
-        elements.push(
-          <MessageThreadSummaryRow
-            key={`thread-summary-${message.id}`}
-            message={message}
-            onOpenThread={onReply}
-            summary={summary}
-          />,
-        );
+        const isLastEntry = i === entries.length - 1;
+
+        if (trailingContent && isLastEntry) {
+          renderedTrailingContent = true;
+          elements.push(
+            <div
+              className="flex min-w-0 items-center gap-3"
+              data-testid="message-thread-summary-with-footer"
+              key={`thread-summary-with-footer-${message.id}`}
+            >
+              <div className="min-w-0 shrink">
+                <MessageThreadSummaryRow
+                  message={message}
+                  onOpenThread={onReply}
+                  summary={summary}
+                />
+              </div>
+              <div className="shrink-0">{trailingContent}</div>
+            </div>,
+          );
+        } else {
+          elements.push(
+            <MessageThreadSummaryRow
+              key={`thread-summary-${message.id}`}
+              message={message}
+              onOpenThread={onReply}
+              summary={summary}
+            />,
+          );
+        }
       }
     }
+  }
+
+  if (trailingContent && !renderedTrailingContent) {
+    elements.push(
+      <div
+        className="flex min-w-0 justify-start pb-1"
+        data-testid="message-timeline-footer"
+        key="message-timeline-footer"
+      >
+        {trailingContent}
+      </div>,
+    );
   }
 
   return elements;

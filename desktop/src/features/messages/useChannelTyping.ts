@@ -11,6 +11,7 @@ import {
   KIND_STREAM_MESSAGE_DIFF,
   KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
+import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 
 export type TypingIndicatorEntry = {
   pubkey: string;
@@ -27,7 +28,7 @@ type TypingState = Record<string, TypingEntry>;
 
 const TYPING_INDICATOR_TTL_MS = 8_000;
 const TYPING_PRUNE_INTERVAL_MS = 1_000;
-const TYPING_POST_MESSAGE_SUPPRESS_MS = 2_000;
+const TYPING_POST_MESSAGE_SUPPRESS_MS = 5_000;
 
 function pruneTypingState(state: TypingState, now = Date.now()) {
   let changed = false;
@@ -64,6 +65,15 @@ function getTypingStateKey(pubkey: string, threadHeadId: string | null) {
   return `${pubkey}:${threadHeadId ?? "channel"}`;
 }
 
+function getTypingPubkey(event: RelayEvent) {
+  return resolveEventAuthorPubkey({
+    pubkey: event.pubkey,
+    tags: event.tags,
+    preferActorTag: true,
+    requireChannelTagForPTags: true,
+  }).toLowerCase();
+}
+
 export function useChannelTyping(
   channel: Channel | null,
   currentPubkey?: string,
@@ -73,6 +83,9 @@ export function useChannelTyping(
   const channelType = channel?.channelType ?? null;
   const [typingByPubkey, setTypingByPubkey] = useState<TypingState>({});
   const normalizedCurrentPubkey = currentPubkey?.toLowerCase();
+  const hasSeededCompletionEventsRef = useRef(false);
+  const processedCompletionEventIdsRef = useRef<Set<string>>(new Set());
+  const typingSuppressUntilByAgentRef = useRef<Record<string, number>>({});
   const typingSuppressUntilByPubkeyRef = useRef<Record<string, number>>({});
   const latestMessageCreatedAtByPubkeyRef = useRef<Record<string, number>>({});
 
@@ -85,11 +98,20 @@ export function useChannelTyping(
       return;
     }
 
-    const typingPubkey = event.pubkey.toLowerCase();
+    const typingPubkey = getTypingPubkey(event);
     const threadHeadId = getTypingScopeId(event);
     const typingKey = getTypingStateKey(typingPubkey, threadHeadId);
     if (normalizedCurrentPubkey && typingPubkey === normalizedCurrentPubkey) {
       return;
+    }
+
+    const agentSuppressUntil =
+      typingSuppressUntilByAgentRef.current[typingPubkey] ?? 0;
+    if (agentSuppressUntil > Date.now()) {
+      return;
+    }
+    if (agentSuppressUntil > 0) {
+      delete typingSuppressUntilByAgentRef.current[typingPubkey];
     }
 
     const suppressUntil =
@@ -126,6 +148,9 @@ export function useChannelTyping(
   // biome-ignore lint/correctness/useExhaustiveDependencies: channel changes should clear local typing state
   useEffect(() => {
     setTypingByPubkey({});
+    hasSeededCompletionEventsRef.current = false;
+    processedCompletionEventIdsRef.current = new Set();
+    typingSuppressUntilByAgentRef.current = {};
     typingSuppressUntilByPubkeyRef.current = {};
     latestMessageCreatedAtByPubkeyRef.current = {};
   }, [channelId]);
@@ -144,15 +169,30 @@ export function useChannelTyping(
         continue;
       }
 
-      const authorPubkey = event.pubkey.toLowerCase();
+      const authorPubkey = getTypingPubkey(event);
       const threadHeadId = getTypingScopeId(event);
       const typingKey = getTypingStateKey(authorPubkey, threadHeadId);
       latestMessageCreatedAtByPubkeyRef.current[typingKey] = Math.max(
         latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0,
         event.created_at,
       );
+
+      if (!hasSeededCompletionEventsRef.current) {
+        processedCompletionEventIdsRef.current.add(event.id);
+        continue;
+      }
+
+      if (processedCompletionEventIdsRef.current.has(event.id)) {
+        continue;
+      }
+
+      processedCompletionEventIdsRef.current.add(event.id);
+      typingSuppressUntilByAgentRef.current[authorPubkey] =
+        Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
       completionKeys.add(typingKey);
     }
+
+    hasSeededCompletionEventsRef.current = true;
 
     if (completionKeys.size === 0) {
       return;
@@ -163,14 +203,25 @@ export function useChannelTyping(
       let updated: TypingState | null = null;
 
       for (const typingKey of completionKeys) {
-        if (!(typingKey in next)) {
-          continue;
+        const pubkey = typingKey.slice(0, typingKey.indexOf(":"));
+        const keysToClear = Object.keys(next).filter((currentKey) =>
+          currentKey.startsWith(`${pubkey}:`),
+        );
+
+        if (keysToClear.length === 0) {
+          keysToClear.push(typingKey);
         }
 
-        updated ??= { ...next };
-        delete updated[typingKey];
-        typingSuppressUntilByPubkeyRef.current[typingKey] =
-          Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
+        for (const keyToClear of keysToClear) {
+          if (!(keyToClear in next)) {
+            continue;
+          }
+
+          updated ??= { ...next };
+          delete updated[keyToClear];
+          typingSuppressUntilByPubkeyRef.current[keyToClear] =
+            Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
+        }
       }
 
       if (!updated) {
