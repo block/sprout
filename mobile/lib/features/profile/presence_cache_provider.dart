@@ -68,7 +68,7 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
   /// On each event, updates the in-memory cache for that pubkey without
   /// triggering a REST refetch. Matches the desktop's
   /// `usePresenceSubscription()` pattern.
-  void _subscribePresenceUpdates() async {
+  Future<void> _subscribePresenceUpdates() async {
     _presenceUnsub?.call();
     _presenceUnsub = null;
 
