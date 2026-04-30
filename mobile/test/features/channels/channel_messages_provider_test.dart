@@ -144,8 +144,9 @@ class _RecordingRelaySessionNotifier extends RelaySessionNotifier {
   @override
   Future<void Function()> subscribe(
     NostrFilter filter,
-    void Function(NostrEvent) onEvent,
-  ) async {
+    void Function(NostrEvent) onEvent, {
+    void Function(String message)? onClosed,
+  }) async {
     operations.add('subscribe');
     liveFilters.add(filter);
     if (!_subscribed.isCompleted) {

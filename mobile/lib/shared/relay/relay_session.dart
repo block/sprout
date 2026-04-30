@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../auth/auth.dart';
@@ -38,12 +38,14 @@ class _HistorySubscription {
 class _LiveSubscription {
   final NostrFilter filter;
   final void Function(NostrEvent) onEvent;
+  final void Function(String message)? onClosed;
   Completer<void>? readyCompleter;
   int? lastSeenCreatedAt;
 
   _LiveSubscription({
     required this.filter,
     required this.onEvent,
+    this.onClosed,
     this.readyCompleter,
   });
 }
@@ -145,24 +147,36 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   /// `since: lastSeenCreatedAt - 5s` on reconnect.
   Future<void Function()> subscribe(
     NostrFilter filter,
-    void Function(NostrEvent) onEvent,
-  ) async {
+    void Function(NostrEvent) onEvent, {
+    void Function(String message)? onClosed,
+  }) async {
     final subId = _nextSubId('l');
     final readyCompleter = Completer<void>();
 
     _liveSubscriptions[subId] = _LiveSubscription(
       filter: filter,
       onEvent: onEvent,
+      onClosed: onClosed,
       readyCompleter: readyCompleter,
     );
 
     _sendReq(subId, filter);
 
     // Wait for EOSE or a short fallback timeout.
-    await readyCompleter.future.timeout(
-      const Duration(milliseconds: 500),
-      onTimeout: () {},
-    );
+    try {
+      await readyCompleter.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
+    } catch (_) {
+      _liveSubscriptions.remove(subId);
+      _recentDeliveryKeys.removeWhere((key) => key.startsWith('$subId:'));
+      rethrow;
+    }
+    final liveSub = _liveSubscriptions[subId];
+    if (liveSub != null && liveSub.readyCompleter == readyCompleter) {
+      liveSub.readyCompleter = null;
+    }
 
     return () => _unsubscribe(subId);
   }
@@ -329,6 +343,8 @@ class RelaySessionNotifier extends Notifier<SessionState> {
         _handleEvent(data);
       case 'EOSE':
         _handleEose(data);
+      case 'CLOSED':
+        _handleClosed(data);
       case 'OK':
         _handleOk(data);
     }
@@ -383,6 +399,35 @@ class RelaySessionNotifier extends Notifier<SessionState> {
       liveSub.readyCompleter!.complete();
       liveSub.readyCompleter = null;
     }
+  }
+
+  void _handleClosed(List<dynamic> data) {
+    if (data.length < 2) return;
+    final subId = data[1] as String;
+    final message = data.length >= 3 && data[2] is String
+        ? data[2] as String
+        : 'subscription closed by relay';
+
+    final historySub = _historySubscriptions.remove(subId);
+    if (historySub != null) {
+      historySub.timeout.cancel();
+      if (!historySub.completer.isCompleted) {
+        historySub.completer.completeError(Exception(message));
+      }
+      return;
+    }
+
+    final liveSub = _liveSubscriptions.remove(subId);
+    if (liveSub == null) return;
+    _recentDeliveryKeys.removeWhere((key) => key.startsWith('$subId:'));
+
+    final readyCompleter = liveSub.readyCompleter;
+    if (readyCompleter != null && !readyCompleter.isCompleted) {
+      readyCompleter.completeError(Exception(message));
+      return;
+    }
+
+    liveSub.onClosed?.call(message);
   }
 
   void _handleOk(List<dynamic> data) {

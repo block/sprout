@@ -39,6 +39,57 @@ void main() {
     unsubscribeFirst();
     unsubscribeSecond();
   });
+
+  test('live subscribe fails when relay closes before ready', () async {
+    final session = RelaySessionNotifier();
+    const filter = NostrFilter(kinds: [EventKind.agentObserverFrame], limit: 0);
+
+    final subscribe = session.subscribe(filter, (_) {});
+    session.debugHandleMessage([
+      'CLOSED',
+      'l-1',
+      'restricted: p-gated events require #p matching your pubkey',
+    ]);
+
+    await expectLater(
+      subscribe,
+      throwsA(
+        isA<Exception>().having(
+          (error) => error.toString(),
+          'message',
+          contains('p-gated events require #p'),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'live onClosed callback runs when relay closes an open subscription',
+    () async {
+      final session = RelaySessionNotifier();
+      final closedMessages = <String>[];
+      const filter = NostrFilter(
+        kinds: [EventKind.agentObserverFrame],
+        limit: 0,
+      );
+
+      final subscribe = session.subscribe(
+        filter,
+        (_) {},
+        onClosed: closedMessages.add,
+      );
+      session.debugHandleMessage(['EOSE', 'l-1']);
+      final unsubscribe = await subscribe;
+      session.debugHandleMessage([
+        'CLOSED',
+        'l-1',
+        'restricted: no longer valid',
+      ]);
+
+      expect(closedMessages, ['restricted: no longer valid']);
+      unsubscribe();
+    },
+  );
 }
 
 const _channelId = '11111111-1111-4111-8111-111111111111';
