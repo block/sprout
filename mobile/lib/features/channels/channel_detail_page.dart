@@ -609,7 +609,7 @@ class _SystemMessageRow extends ConsumerWidget {
                   child: Icon(
                     LucideIcons.arrowLeftRight,
                     size: 12,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(width: Grid.xxs),
@@ -624,7 +624,7 @@ class _SystemMessageRow extends ConsumerWidget {
                 Text(
                   formatMessageTime(message.createdAt),
                   style: context.textTheme.labelSmall?.copyWith(
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -821,7 +821,7 @@ class _MessageBubble extends ConsumerWidget {
                           Text(
                             formatMessageTime(message.createdAt),
                             style: context.textTheme.labelSmall?.copyWith(
-                              color: context.colors.outline,
+                              color: context.colors.onSurfaceVariant,
                             ),
                           ),
                           if (message.edited) ...[
@@ -829,7 +829,7 @@ class _MessageBubble extends ConsumerWidget {
                             Text(
                               '(edited)',
                               style: context.textTheme.labelSmall?.copyWith(
-                                color: context.colors.outline,
+                                color: context.colors.onSurfaceVariant,
                                 fontStyle: FontStyle.italic,
                               ),
                             ),
