@@ -35,6 +35,7 @@ NostrEvent _replyMsg({
   String pubkey = 'alice',
   String content = 'reply',
   int createdAt = 2000,
+  List<List<String>> extraTags = const [],
 }) {
   final root = rootId ?? parentId;
   final eTags = parentId == root
@@ -50,7 +51,7 @@ NostrEvent _replyMsg({
     pubkey: pubkey,
     content: content,
     createdAt: createdAt,
-    extraTags: eTags,
+    extraTags: [...eTags, ...extraTags],
   );
 }
 
@@ -589,6 +590,24 @@ void main() {
       expect(entries, hasLength(2));
       expect(entries[0].message.id, 'a');
       expect(entries[1].message.id, 'b');
+    });
+
+    test('includes broadcast replies in the main timeline', () {
+      final messages = formatTimeline([
+        _textMsg(id: 'a', createdAt: 1000),
+        _replyMsg(id: 'hidden', parentId: 'a', createdAt: 2000),
+        _replyMsg(
+          id: 'broadcast',
+          parentId: 'a',
+          createdAt: 3000,
+          extraTags: const [
+            ['broadcast', '1'],
+          ],
+        ),
+      ]);
+
+      final entries = buildMainTimelineEntries(messages);
+      expect(entries.map((entry) => entry.message.id), ['a', 'broadcast']);
     });
 
     test('root without replies has null summary', () {

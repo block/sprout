@@ -5,7 +5,23 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import 'channel_management_provider.dart';
 import 'timeline_message.dart';
+
+/// Toggle a reaction on [message]. If the current user already reacted with
+/// [emoji], removes the reaction; otherwise adds it.
+///
+/// Used by channel detail, thread detail, and system message rows to avoid
+/// duplicating the toggle wiring.
+void toggleReaction(WidgetRef ref, TimelineMessage message, String emoji) {
+  final actions = ref.read(channelActionsProvider);
+  final reaction = message.reactions.firstWhere((r) => r.emoji == emoji);
+  if (reaction.reactedByCurrentUser && reaction.currentUserReactionId != null) {
+    actions.removeReaction(reaction.currentUserReactionId!, emoji);
+  } else {
+    actions.addReaction(message.id, emoji);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Reaction pills row (shared between channel + thread detail pages)

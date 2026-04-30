@@ -18,16 +18,19 @@ use clap::Parser;
 use config::{Config, DedupMode, ModelsArgs, MultipleEventHandling, RespondTo, SubscribeMode};
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
-use nostr::ToBech32;
+use nostr::{PublicKey, ToBech32};
 use pool::{
     AgentPool, CancelMode, OwnedAgent, PromptContext, PromptOutcome, PromptResult, PromptSource,
     SessionState,
 };
 use queue::{EventQueue, QueuedEvent, ThreadTags};
-use relay::HarnessRelay;
+use relay::{HarnessRelay, RelayEventPublisher};
 use sprout_core::kind::{
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_STREAM_MESSAGE,
     KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+};
+use sprout_core::observer::{
+    decrypt_observer_payload, encrypt_observer_payload, OBSERVER_FRAME_TELEMETRY,
 };
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
@@ -293,6 +296,305 @@ async fn is_owner_or_sibling(
     }
 }
 
+fn spawn_relay_observer_publisher(
+    observer: observer::ObserverHandle,
+    publisher: RelayEventPublisher,
+    keys: nostr::Keys,
+    agent_pubkey_hex: String,
+    owner_pubkey_hex: String,
+    owner_pubkey: PublicKey,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut coalescer = ObserverChunkCoalescer::default();
+        for event in observer.snapshot() {
+            for event in coalescer.ingest(event) {
+                publish_relay_observer_event(
+                    &publisher,
+                    &keys,
+                    &agent_pubkey_hex,
+                    &owner_pubkey_hex,
+                    &owner_pubkey,
+                    event,
+                )
+                .await;
+            }
+        }
+
+        let mut rx = observer.subscribe();
+        let mut flush_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            for event in coalescer.ingest(event) {
+                                publish_relay_observer_event(
+                                    &publisher, &keys, &agent_pubkey_hex,
+                                    &owner_pubkey_hex, &owner_pubkey, event,
+                                ).await;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                            for event in coalescer.flush() {
+                                publish_relay_observer_event(
+                                    &publisher, &keys, &agent_pubkey_hex,
+                                    &owner_pubkey_hex, &owner_pubkey, event,
+                                ).await;
+                            }
+                            tracing::warn!(dropped = count, "relay observer publisher lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            for event in coalescer.flush() {
+                                publish_relay_observer_event(
+                                    &publisher, &keys, &agent_pubkey_hex,
+                                    &owner_pubkey_hex, &owner_pubkey, event,
+                                ).await;
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ = flush_interval.tick() => {
+                    // Periodic flush ensures live streaming even during continuous chunk delivery.
+                    for event in coalescer.flush() {
+                        publish_relay_observer_event(
+                            &publisher, &keys, &agent_pubkey_hex,
+                            &owner_pubkey_hex, &owner_pubkey, event,
+                        ).await;
+                    }
+                }
+            }
+        }
+    })
+}
+
+#[derive(Default)]
+struct ObserverChunkCoalescer {
+    pending: Vec<PendingObserverChunk>,
+}
+
+struct PendingObserverChunk {
+    key: ObserverChunkKey,
+    event: observer::ObserverEvent,
+    text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObserverChunkKey {
+    update_type: String,
+    message_id: Option<String>,
+    channel_id: Option<String>,
+    session_id: Option<String>,
+    turn_id: Option<String>,
+    agent_index: Option<usize>,
+}
+
+/// Flush coalesced chunks before they exceed the NIP-44 plaintext limit (65,535 bytes).
+/// Leave headroom for the JSON envelope wrapping the text.
+const OBSERVER_CHUNK_MAX_TEXT_BYTES: usize = 60_000;
+
+impl ObserverChunkCoalescer {
+    fn ingest(&mut self, event: observer::ObserverEvent) -> Vec<observer::ObserverEvent> {
+        let Some((key, text)) = observer_chunk_key_and_text(&event) else {
+            let mut events = self.flush();
+            events.push(event);
+            return events;
+        };
+
+        if let Some(pending) = self.pending.iter_mut().find(|pending| pending.key == key) {
+            // Flush before appending if this would exceed the plaintext size limit.
+            if pending.text.len() + text.len() >= OBSERVER_CHUNK_MAX_TEXT_BYTES {
+                let events = self.flush();
+                // Start a new pending entry with the current chunk.
+                self.pending.push(PendingObserverChunk { key, event, text });
+                return events;
+            }
+            pending.text.push_str(&text);
+            pending.event.seq = event.seq;
+            pending.event.timestamp = event.timestamp;
+            return Vec::new();
+        }
+
+        self.pending.push(PendingObserverChunk { key, event, text });
+        Vec::new()
+    }
+
+    fn flush(&mut self) -> Vec<observer::ObserverEvent> {
+        self.pending
+            .drain(..)
+            .map(|mut pending| {
+                set_observer_chunk_text(&mut pending.event.payload, pending.text);
+                pending.event
+            })
+            .collect()
+    }
+}
+
+fn observer_chunk_key_and_text(
+    event: &observer::ObserverEvent,
+) -> Option<(ObserverChunkKey, String)> {
+    let update = event.payload.get("params")?.get("update")?;
+    let update_type = update.get("sessionUpdate")?.as_str()?;
+    if !matches!(
+        update_type,
+        "agent_message_chunk" | "user_message_chunk" | "agent_thought_chunk"
+    ) {
+        return None;
+    }
+
+    let text = update.get("content")?.get("text")?.as_str()?.to_string();
+    let message_id = update
+        .get("messageId")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+
+    Some((
+        ObserverChunkKey {
+            update_type: update_type.to_string(),
+            message_id,
+            channel_id: event.channel_id.clone(),
+            session_id: event.session_id.clone(),
+            turn_id: event.turn_id.clone(),
+            agent_index: event.agent_index,
+        },
+        text,
+    ))
+}
+
+fn set_observer_chunk_text(payload: &mut serde_json::Value, text: String) {
+    let Some(content) = payload
+        .get_mut("params")
+        .and_then(|params| params.get_mut("update"))
+        .and_then(|update| update.get_mut("content"))
+    else {
+        return;
+    };
+
+    if let Some(content_object) = content.as_object_mut() {
+        content_object.insert("text".to_string(), serde_json::Value::String(text));
+    }
+}
+
+async fn publish_relay_observer_event(
+    publisher: &RelayEventPublisher,
+    keys: &nostr::Keys,
+    agent_pubkey_hex: &str,
+    owner_pubkey_hex: &str,
+    owner_pubkey: &PublicKey,
+    event: observer::ObserverEvent,
+) {
+    let encrypted = match encrypt_observer_payload(keys, owner_pubkey, &event) {
+        Ok(encrypted) => encrypted,
+        Err(error) => {
+            tracing::warn!("failed to encrypt relay observer event: {error}");
+            return;
+        }
+    };
+    let builder = match sprout_sdk::build_agent_observer_frame(
+        owner_pubkey_hex,
+        agent_pubkey_hex,
+        OBSERVER_FRAME_TELEMETRY,
+        &encrypted,
+    ) {
+        Ok(builder) => builder,
+        Err(error) => {
+            tracing::warn!("failed to build relay observer event: {error}");
+            return;
+        }
+    };
+    let signed = match builder.sign_with_keys(keys) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!("failed to sign relay observer event: {error}");
+            return;
+        }
+    };
+    if let Err(error) = publisher.publish_event(signed).await {
+        tracing::debug!("relay observer event dropped: {error}");
+    }
+}
+
+/// Maximum age (seconds) for an observer control frame to be considered fresh.
+const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
+
+fn handle_relay_observer_control_event(
+    keys: &nostr::Keys,
+    event: nostr::Event,
+    pool: &mut AgentPool,
+    observer: Option<&observer::ObserverHandle>,
+    owner_pubkey_hex: &str,
+) {
+    // Defense-in-depth: verify signature even though the relay already checked.
+    if let Err(e) = sprout_core::verify_event(&event) {
+        tracing::warn!(error = %e, "observer control frame failed signature verification");
+        return;
+    }
+
+    // Defense-in-depth: verify the sender is the resolved owner.
+    if event.pubkey.to_hex() != owner_pubkey_hex {
+        tracing::warn!(
+            sender = %event.pubkey,
+            expected = %owner_pubkey_hex,
+            "observer control frame from non-owner — dropping"
+        );
+        return;
+    }
+
+    // Freshness: reject stale/replayed frames outside ±5 minute window.
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).unsigned_abs() > OBSERVER_CONTROL_FRESHNESS_SECS as u64 {
+        tracing::warn!(
+            event_ts,
+            now,
+            "observer control frame outside freshness window — dropping"
+        );
+        return;
+    }
+
+    let payload = match decrypt_observer_payload::<serde_json::Value>(keys, &event) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!("failed to decrypt observer control frame: {error}");
+            return;
+        }
+    };
+
+    let command_type = payload.get("type").and_then(|value| value.as_str());
+    if command_type != Some("cancel_turn") {
+        tracing::debug!(payload = %payload, "ignoring unknown observer control frame");
+        return;
+    }
+
+    let Some(channel_id) = payload
+        .get("channelId")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.parse::<Uuid>().ok())
+    else {
+        tracing::warn!("observer cancel_turn control frame missing valid channelId");
+        return;
+    };
+
+    let fired = cancel_in_flight_task(pool, channel_id, CancelMode::Stop);
+    let status = if fired { "sent" } else { "no_active_turn" };
+    if let Some(observer) = observer {
+        observer.emit(
+            "control_result",
+            None,
+            &observer::ObserverContext {
+                channel_id: Some(channel_id.to_string()),
+                session_id: None,
+                turn_id: None,
+            },
+            serde_json::json!({
+                "type": "cancel_turn",
+                "status": status,
+            }),
+        );
+    }
+}
+
 /// Maximum crashes in a 60-second window before a slot's circuit opens.
 const CIRCUIT_BREAKER_THRESHOLD: usize = 3;
 /// Window for circuit-breaker crash counting.
@@ -531,44 +833,23 @@ async fn tokio_main() -> Result<()> {
     let config = Config::from_cli().map_err(|e| anyhow::anyhow!("configuration error: {e}"))?;
     tracing::info!("sprout-acp starting: {}", config.summary());
 
-    let (observer_control_tx, mut observer_control_rx) =
-        mpsc::channel::<observer::ObserverControlCommand>(32);
-
-    let observer = match config.observer_addr.as_deref() {
-        Some(addr) => {
-            match observer::spawn_observer_server(
-                addr,
-                config.observer_token.clone(),
-                Some(observer_control_tx.clone()),
-            )
-            .await
-            {
-                Ok(handle) => {
-                    tracing::info!(target: "observer", "ACP observer listening on http://{}", handle.addr());
-                    handle.emit(
-                        "harness_started",
-                        None,
-                        &observer::ObserverContext::default(),
-                        serde_json::json!({
-                            "relayUrl": config.relay_url,
-                            "agentCommand": config.agent_command,
-                            "agentArgs": config.agent_args,
-                            "parallelism": config.agents,
-                        }),
-                    );
-                    Some(handle)
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        target: "observer",
-                        "failed to start local ACP observer at {addr}: {error}"
-                    );
-                    None
-                }
-            }
-        }
-        None => None,
-    };
+    let observer = config
+        .relay_observer
+        .then(observer::ObserverHandle::in_process);
+    if let Some(handle) = &observer {
+        handle.emit(
+            "harness_started",
+            None,
+            &observer::ObserverContext::default(),
+            serde_json::json!({
+                "relayUrl": config.relay_url,
+                "agentCommand": config.agent_command,
+                "agentArgs": config.agent_args,
+                "parallelism": config.agents,
+                "relayObserver": config.relay_observer,
+            }),
+        );
+    }
 
     // ── Step 1: Spawn N ACP agent subprocesses and initialize ─────────────────
     //
@@ -738,6 +1019,41 @@ async fn tokio_main() -> Result<()> {
     }
     let mut owner_cache = OwnerCache::new(startup_owner);
     let mut sibling_cache = SiblingCache::new();
+
+    let mut relay_observer_control_rx = None;
+    let mut relay_observer_publisher_task = None;
+    if config.relay_observer {
+        if let (Some(observer), Some(owner_pubkey_hex)) =
+            (observer.clone(), owner_cache.pubkey.clone())
+        {
+            match PublicKey::from_hex(&owner_pubkey_hex) {
+                Ok(owner_pubkey) => {
+                    relay_observer_publisher_task = Some(spawn_relay_observer_publisher(
+                        observer,
+                        relay.event_publisher(),
+                        config.keys.clone(),
+                        pubkey_hex.clone(),
+                        owner_pubkey_hex,
+                        owner_pubkey,
+                    ));
+                    relay
+                        .subscribe_observer_controls()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("observer control subscribe error: {e}"))?;
+                    relay_observer_control_rx = relay.take_observer_control_rx();
+                    tracing::info!("relay observer enabled");
+                }
+                Err(error) => {
+                    tracing::warn!("relay observer disabled: invalid owner pubkey: {error}");
+                }
+            }
+        } else {
+            tracing::warn!(
+                "relay observer requested but no agent owner was resolved at startup; \
+                 observer frames will not be published"
+            );
+        }
+    }
 
     // ── Step 3: Discover channels and build subscription rules ────────────────
     let channel_info_map = relay
@@ -1039,25 +1355,24 @@ async fn tokio_main() -> Result<()> {
                 Some(Err(e)) = join_set.join_next(), if !join_set.is_empty() => {
                     Some(PoolEvent::Panic(e))
                 }
-                control = observer_control_rx.recv() => {
+                control_event = async {
+                    match relay_observer_control_rx.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
                     let _ = result_rx;
-                    if let Some(command) = control {
-                        match command {
-                            observer::ObserverControlCommand::CancelTurn { channel_id, respond_to } => {
-                                let fired = cancel_in_flight_task(&mut pool, channel_id, CancelMode::Stop);
-                                if !fired {
-                                    tracing::warn!(
-                                        channel_id = %channel_id,
-                                        "observer cancel requested but no in-flight task — no-op"
-                                    );
-                                }
-                                let status = if fired {
-                                    observer::CancelTurnStatus::Sent
-                                } else {
-                                    observer::CancelTurnStatus::NoActiveTurn
-                                };
-                                let _ = respond_to.send(observer::CancelTurnResponse { status });
+                    match control_event {
+                        Some(event) => {
+                            if let Some(ref owner_hex) = owner_cache.pubkey {
+                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex);
+                            } else {
+                                tracing::warn!("observer control frame received but no owner resolved — dropping");
                             }
+                        }
+                        None => {
+                            relay_observer_control_rx = None;
+                            tracing::warn!("relay observer control channel closed");
                         }
                     }
                     None
@@ -1591,6 +1906,10 @@ async fn tokio_main() -> Result<()> {
             Ok(Err(e)) => tracing::warn!("failed to set offline presence: {e}"),
             Err(_) => tracing::warn!("offline presence timed out"),
         }
+    }
+
+    if let Some(handle) = relay_observer_publisher_task.take() {
+        handle.abort();
     }
 
     // Graceful relay shutdown — sends WebSocket close frame and waits up to 5s
@@ -2436,6 +2755,102 @@ mod owner_cache_tests {
 }
 
 #[cfg(test)]
+mod observer_chunk_coalescer_tests {
+    use super::*;
+
+    fn chunk_event(
+        seq: u64,
+        update_type: &str,
+        message_id: &str,
+        text: &str,
+    ) -> observer::ObserverEvent {
+        observer::ObserverEvent {
+            seq,
+            timestamp: format!("2026-04-29T04:00:0{seq}Z"),
+            kind: "acp_read".to_string(),
+            agent_index: Some(0),
+            channel_id: Some("channel-1".to_string()),
+            session_id: Some("session-1".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            payload: serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "update": {
+                        "sessionUpdate": update_type,
+                        "messageId": message_id,
+                        "content": {
+                            "type": "text",
+                            "text": text,
+                        },
+                    },
+                },
+            }),
+        }
+    }
+
+    fn non_chunk_event(seq: u64) -> observer::ObserverEvent {
+        observer::ObserverEvent {
+            seq,
+            timestamp: format!("2026-04-29T04:00:0{seq}Z"),
+            kind: "turn_started".to_string(),
+            agent_index: Some(0),
+            channel_id: Some("channel-1".to_string()),
+            session_id: Some("session-1".to_string()),
+            turn_id: Some("turn-1".to_string()),
+            payload: serde_json::json!({ "type": "turn_started" }),
+        }
+    }
+
+    fn chunk_text(event: &observer::ObserverEvent) -> &str {
+        event.payload["params"]["update"]["content"]["text"]
+            .as_str()
+            .expect("chunk text")
+    }
+
+    #[test]
+    fn coalesces_chunks_until_non_chunk_event() {
+        let mut coalescer = ObserverChunkCoalescer::default();
+
+        assert!(coalescer
+            .ingest(chunk_event(1, "agent_message_chunk", "message-1", "hello "))
+            .is_empty());
+        assert!(coalescer
+            .ingest(chunk_event(2, "agent_message_chunk", "message-1", "world"))
+            .is_empty());
+
+        let events = coalescer.ingest(non_chunk_event(3));
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 2);
+        assert_eq!(chunk_text(&events[0]), "hello world");
+        assert_eq!(events[1].kind, "turn_started");
+    }
+
+    #[test]
+    fn keeps_independent_chunk_streams_separate() {
+        let mut coalescer = ObserverChunkCoalescer::default();
+
+        assert!(coalescer
+            .ingest(chunk_event(1, "agent_message_chunk", "message-1", "answer"))
+            .is_empty());
+        assert!(coalescer
+            .ingest(chunk_event(
+                2,
+                "agent_thought_chunk",
+                "thought-1",
+                "thinking"
+            ))
+            .is_empty());
+
+        let events = coalescer.flush();
+        assert_eq!(events.len(), 2);
+        assert_eq!(chunk_text(&events[0]), "answer");
+        assert_eq!(chunk_text(&events[1]), "thinking");
+    }
+}
+
+#[cfg(test)]
 mod sibling_cache_tests {
     use super::*;
 
@@ -2647,8 +3062,7 @@ mod build_mcp_servers_tests {
             respond_to: config::RespondTo::Anyone,
             respond_to_allowlist: std::collections::HashSet::new(),
             persona_env_vars: vec![],
-            observer_addr: None,
-            observer_token: None,
+            relay_observer: false,
         }
     }
 

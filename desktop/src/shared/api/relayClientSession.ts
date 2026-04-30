@@ -285,10 +285,7 @@ export class RelayClient {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
   }
 
-  /**
-   * Subscribe to kind:20001 presence events broadcast by the relay.
-   * limit:0 means no historical backfill — only live events.
-   */
+  /** Subscribe to kind:20001 presence events (live only, no backfill). */
   async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
     return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
   }

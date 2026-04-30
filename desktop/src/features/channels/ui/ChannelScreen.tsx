@@ -2,7 +2,10 @@ import * as React from "react";
 import { useAppShell } from "@/app/AppShellContext";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
-import { useChannelMembersQuery } from "@/features/channels/hooks";
+import {
+  useChannelMembersQuery,
+  useJoinChannelMutation,
+} from "@/features/channels/hooks";
 import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
 import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader";
 import {
@@ -14,6 +17,7 @@ import {
   useManagedAgentsQuery,
   usePersonasQuery,
 } from "@/features/agents/hooks";
+import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import {
   mergeMessages,
   useChannelMessagesQuery,
@@ -43,7 +47,6 @@ import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
 import { useChannelAgentSessions } from "./useChannelAgentSessions";
-
 type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
@@ -72,9 +75,9 @@ export function ChannelScreen({
   const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
     null,
   );
-  const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState<
-    Set<string>
-  >(new Set());
+  const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState(
+    () => new Set<string>(),
+  );
   const [threadScrollTargetId, setThreadScrollTargetId] = React.useState<
     string | null
   >(null);
@@ -84,7 +87,6 @@ export function ChannelScreen({
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
-
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, isFetchingOlder } =
@@ -96,12 +98,12 @@ export function ChannelScreen({
     : (activeChannel?.lastMessageAt ?? null);
 
   React.useEffect(() => {
-    if (!activeChannelId) {
+    if (!activeChannelId || activeChannel?.isMember === false) {
       return;
     }
 
     markChannelRead(activeChannelId, activeReadAt);
-  }, [activeChannelId, activeReadAt, markChannelRead]);
+  }, [activeChannel?.isMember, activeChannelId, activeReadAt, markChannelRead]);
 
   const {
     activeChannelTitle,
@@ -115,14 +117,11 @@ export function ChannelScreen({
   const toggleReactionMutation = useToggleReactionMutation();
   const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
   const editMessageMutation = useEditMessageMutation(activeChannel);
+  const joinChannelMutation = useJoinChannelMutation(activeChannelId);
 
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
-
-    if (!activeChannel || !targetMessageEvent) {
-      return currentMessages;
-    }
-
+    if (!activeChannel || !targetMessageEvent) return currentMessages;
     return mergeMessages(currentMessages, targetMessageEvent);
   }, [activeChannel, messagesQuery.data, targetMessageEvent]);
   const messageAuthorPubkeys = React.useMemo(
@@ -165,6 +164,7 @@ export function ChannelScreen({
     enabled: messageProfilePubkeys.length > 0,
   });
   const managedAgentsQuery = useManagedAgentsQuery();
+  useManagedAgentObserverBridge(managedAgentsQuery.data ?? []);
   const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
     const localAgentSet = new Set(
       (managedAgentsQuery.data ?? [])
@@ -253,17 +253,12 @@ export function ChannelScreen({
 
   const directReplyIdsByParentId = React.useMemo(() => {
     const map = new Map<string, string[]>();
-
     for (const message of timelineMessages) {
-      if (!message.parentId) {
-        continue;
-      }
-
+      if (!message.parentId) continue;
       const currentReplies = map.get(message.parentId) ?? [];
       currentReplies.push(message.id);
       map.set(message.parentId, currentReplies);
     }
-
     return map;
   }, [timelineMessages]);
   const getFirstReplyIdForMessage = React.useCallback(
@@ -325,10 +320,12 @@ export function ChannelScreen({
     toggleReactionMutation,
   });
 
-  const canReact = activeChannel !== null && activeChannel.archivedAt === null;
   const effectiveToggleReaction = React.useMemo(
-    () => (canReact ? handleToggleReaction : undefined),
-    [canReact, handleToggleReaction],
+    () =>
+      activeChannel && !activeChannel.archivedAt && activeChannel.isMember
+        ? handleToggleReaction
+        : undefined,
+    [activeChannel, handleToggleReaction],
   );
   const {
     channelAgentSessionAgents,
@@ -350,10 +347,9 @@ export function ChannelScreen({
     timelineMessages,
   });
 
-  const shouldLoadTimeline =
-    activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
-    shouldLoadTimeline &&
+    activeChannel !== null &&
+    activeChannel.channelType !== "forum" &&
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
   const resetComposerTargets = React.useCallback(
@@ -412,6 +408,8 @@ export function ChannelScreen({
         activeChannelTitle={activeChannelTitle}
         activeDmPresenceStatus={activeDmPresenceStatus}
         currentPubkey={currentPubkey}
+        isJoining={joinChannelMutation.isPending}
+        onJoinChannel={joinChannelMutation.mutateAsync}
         onManageChannel={openChannelManagement}
         onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
       />
@@ -478,6 +476,8 @@ export function ChannelScreen({
                 threadReplyTargetId={threadReplyTargetId}
                 threadReplyTargetMessage={threadReplyTargetMessage}
                 threadScrollTargetId={threadScrollTargetId}
+                isJoining={joinChannelMutation.isPending}
+                onJoinChannel={joinChannelMutation.mutateAsync}
                 typingPubkeys={humanTypingPubkeys}
               />
             </React.Suspense>

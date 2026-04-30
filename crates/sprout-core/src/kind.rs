@@ -88,6 +88,8 @@ pub const KIND_PRESENCE_UPDATE: u32 = 20001;
 pub const KIND_PAIRING: u32 = 24134;
 /// Ephemeral: typing indicator for a channel.
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
+/// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
+pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
@@ -233,6 +235,28 @@ pub const KIND_HUDDLE_GUIDELINES: u32 = 48106;
 /// Internal kind for media upload audit entries. Not a relay event kind.
 pub const KIND_MEDIA_UPLOAD: u32 = 49001;
 
+// ── NIP-34: Git repository events ────────────────────────────────────────────
+/// NIP-34: Repository announcement (parameterized replaceable, d-tag = repo-id).
+pub const KIND_GIT_REPO_ANNOUNCEMENT: u32 = 30617;
+/// NIP-34: Repository state — current branch/tag refs (parameterized replaceable, d-tag = repo-id).
+pub const KIND_GIT_REPO_STATE: u32 = 30618;
+/// NIP-34: Patch (git format-patch output).
+pub const KIND_GIT_PATCH: u32 = 1617;
+/// NIP-34: Pull request.
+pub const KIND_GIT_PULL_REQUEST: u32 = 1618;
+/// NIP-34: Pull request update (tip commit change).
+pub const KIND_GIT_PR_UPDATE: u32 = 1619;
+/// NIP-34: Issue.
+pub const KIND_GIT_ISSUE: u32 = 1621;
+/// NIP-34: Status — Open.
+pub const KIND_GIT_STATUS_OPEN: u32 = 1630;
+/// NIP-34: Status — Applied / Merged.
+pub const KIND_GIT_STATUS_MERGED: u32 = 1631;
+/// NIP-34: Status — Closed.
+pub const KIND_GIT_STATUS_CLOSED: u32 = 1632;
+/// NIP-34: Status — Draft.
+pub const KIND_GIT_STATUS_DRAFT: u32 = 1633;
+
 /// All registered kind constants — used for duplicate detection and iteration.
 pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -262,6 +286,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
     KIND_PAIRING,
+    KIND_AGENT_OBSERVER_FRAME,
     KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
     KIND_STREAM_MESSAGE_EDIT,
@@ -319,7 +344,18 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_HUDDLE_ENDED,
     KIND_HUDDLE_TRACK_PUBLISHED,
     KIND_HUDDLE_RECORDING_AVAILABLE,
+    KIND_HUDDLE_GUIDELINES,
     KIND_MEDIA_UPLOAD,
+    KIND_GIT_REPO_ANNOUNCEMENT,
+    KIND_GIT_REPO_STATE,
+    KIND_GIT_PATCH,
+    KIND_GIT_PULL_REQUEST,
+    KIND_GIT_PR_UPDATE,
+    KIND_GIT_ISSUE,
+    KIND_GIT_STATUS_OPEN,
+    KIND_GIT_STATUS_MERGED,
+    KIND_GIT_STATUS_CLOSED,
+    KIND_GIT_STATUS_DRAFT,
 ];
 
 /// Returns `true` if `kind` is in the ephemeral range (20000–29999).
@@ -358,6 +394,16 @@ pub fn event_kind_u32(event: &nostr::Event) -> u32 {
 pub fn event_kind_i32(event: &nostr::Event) -> i32 {
     event.kind.as_u16() as i32
 }
+
+// Compile-time: NIP-34 parameterized replaceable kinds are in the correct range.
+const _: () = assert!(
+    KIND_GIT_REPO_ANNOUNCEMENT >= PARAM_REPLACEABLE_KIND_MIN
+        && KIND_GIT_REPO_ANNOUNCEMENT <= PARAM_REPLACEABLE_KIND_MAX
+);
+const _: () = assert!(
+    KIND_GIT_REPO_STATE >= PARAM_REPLACEABLE_KIND_MIN
+        && KIND_GIT_REPO_STATE <= PARAM_REPLACEABLE_KIND_MAX
+);
 
 // Compile-time: all Sprout kind constants fit in nostr's u16-backed Kind.
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);

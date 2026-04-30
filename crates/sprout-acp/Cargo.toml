@@ -25,7 +25,6 @@ tokio = { workspace = true }
 
 # WebSocket
 tokio-tungstenite = { workspace = true }
-axum = { workspace = true }
 
 # Codec (bounded line reads)
 tokio-util = { workspace = true }

@@ -9,7 +9,8 @@ use hex;
 use nostr::Filter;
 use sprout_core::filter::filters_match;
 use sprout_core::kind::{
-    KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_AGENT_OBSERVER_FRAME, KIND_GIFT_WRAP, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION,
 };
 use sprout_db::EventQuery;
 
@@ -21,6 +22,12 @@ use crate::state::AppState;
 
 const MAX_HISTORICAL_LIMIT: i64 = 500;
 const MAX_SUBSCRIPTIONS: usize = 1024;
+const P_GATED_KINDS: [u32; 4] = [
+    KIND_AGENT_OBSERVER_FRAME,
+    KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_GIFT_WRAP,
+];
 
 /// Handle a REQ message: register the subscription, deliver historical events, then send EOSE.
 pub async fn handle_req(
@@ -113,33 +120,14 @@ pub async fn handle_req(
     // Only applies to GLOBAL subscriptions (channel_id = None). Channel-scoped
     // subscriptions can never receive globally-stored events — the fan_out()
     // invariant in subscription.rs prevents it.
-    const P_GATED_KINDS: [u32; 3] = [
-        KIND_MEMBER_ADDED_NOTIFICATION,
-        KIND_MEMBER_REMOVED_NOTIFICATION,
-        KIND_GIFT_WRAP,
-    ];
-
     if channel_id.is_none() {
         let authed_pubkey_hex = hex::encode(&pubkey_bytes);
-        let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
-
-        for filter in &filters {
-            let can_match_p_gated = filter.kinds.as_ref().is_none_or(|ks| {
-                ks.iter()
-                    .any(|k| P_GATED_KINDS.contains(&(k.as_u16() as u32)))
-            });
-            if can_match_p_gated {
-                let has_matching_p = filter.generic_tags.get(&p_tag).is_some_and(|values| {
-                    !values.is_empty() && values.iter().all(|v| *v == authed_pubkey_hex)
-                });
-                if !has_matching_p {
-                    conn.send(RelayMessage::closed(
-                        &sub_id,
-                        "restricted: p-gated events require #p matching your pubkey",
-                    ));
-                    return;
-                }
-            }
+        if !p_gated_filters_authorized(&filters, &authed_pubkey_hex) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: p-gated events require #p matching your pubkey",
+            ));
+            return;
         }
     }
 
@@ -581,6 +569,23 @@ fn extract_channel_id_from_filters(filters: &[Filter]) -> Option<uuid::Uuid> {
     found_id
 }
 
+fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: &str) -> bool {
+    let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
+    filters.iter().all(|filter| {
+        let can_match_p_gated = filter.kinds.as_ref().is_none_or(|ks| {
+            ks.iter()
+                .any(|kind| P_GATED_KINDS.contains(&(kind.as_u16() as u32)))
+        });
+        if !can_match_p_gated {
+            return true;
+        }
+
+        filter.generic_tags.get(&p_tag).is_some_and(|values| {
+            !values.is_empty() && values.iter().all(|value| value == authed_pubkey_hex)
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,6 +666,32 @@ mod tests {
         let has_non_search = filters.iter().any(|f| f.search.is_none());
         assert!(has_search);
         assert!(!has_non_search, "all-search filters should not be mixed");
+    }
+
+    #[test]
+    fn agent_observer_subscription_requires_matching_p_tag() {
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        let authed = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        let missing_p = Filter::new().kind(nostr::Kind::Custom(
+            sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+        ));
+        assert!(!p_gated_filters_authorized(&[missing_p], authed));
+
+        let wrong_p = Filter::new()
+            .kind(nostr::Kind::Custom(
+                sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+            ))
+            .custom_tag(p_tag, [other]);
+        assert!(!p_gated_filters_authorized(&[wrong_p], authed));
+
+        let matching_p = Filter::new()
+            .kind(nostr::Kind::Custom(
+                sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+            ))
+            .custom_tag(p_tag, [authed]);
+        assert!(p_gated_filters_authorized(&[matching_p], authed));
     }
 
     #[test]

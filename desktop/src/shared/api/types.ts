@@ -307,7 +307,6 @@ export type ManagedAgent = {
   lastExitCode: number | null;
   lastError: string | null;
   logPath: string;
-  observerUrl: string | null;
   startOnAppLaunch: boolean;
   backend: ManagedAgentBackend;
   backendAgentId: string | null;

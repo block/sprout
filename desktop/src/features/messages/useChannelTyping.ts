@@ -11,6 +11,7 @@ import {
   KIND_STREAM_MESSAGE_DIFF,
   KIND_TYPING_INDICATOR,
 } from "@/shared/constants/kinds";
+import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 
 export type TypingIndicatorEntry = {
   pubkey: string;
@@ -143,7 +144,12 @@ export function useChannelTyping(
       return;
     }
 
-    const authorPubkey = latestMessageEvent.pubkey.toLowerCase();
+    const authorPubkey = resolveEventAuthorPubkey({
+      pubkey: latestMessageEvent.pubkey,
+      tags: latestMessageEvent.tags,
+      preferActorTag: true,
+      requireChannelTagForPTags: true,
+    }).toLowerCase();
     const threadHeadId = getTypingScopeId(latestMessageEvent);
     const typingKey = getTypingStateKey(authorPubkey, threadHeadId);
     latestMessageCreatedAtByPubkeyRef.current[typingKey] = Math.max(
