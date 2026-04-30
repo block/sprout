@@ -130,13 +130,9 @@ export function MessageActionBar({
                     return;
                   }
 
-                  void onReactionSelect(emoji.native)
-                    .then(() => {
-                      setIsReactionPickerOpen(false);
-                    })
-                    .catch(() => {
-                      return;
-                    });
+                  void onReactionSelect(emoji.native).finally(() => {
+                    setIsReactionPickerOpen(false);
+                  });
                 }}
                 theme="auto"
                 previewPosition="none"

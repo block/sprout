@@ -7,7 +7,6 @@ import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
-import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
@@ -442,21 +441,7 @@ class _ThreadMessage extends ConsumerWidget {
                   if (message.reactions.isNotEmpty)
                     ReactionRow(
                       reactions: message.reactions,
-                      onToggle: (emoji) {
-                        final actions = ref.read(channelActionsProvider);
-                        final reaction = message.reactions.firstWhere(
-                          (r) => r.emoji == emoji,
-                        );
-                        if (reaction.reactedByCurrentUser &&
-                            reaction.currentUserReactionId != null) {
-                          actions.removeReaction(
-                            reaction.currentUserReactionId!,
-                            emoji,
-                          );
-                        } else {
-                          actions.addReaction(message.id, emoji);
-                        }
-                      },
+                      onToggle: (emoji) => toggleReaction(ref, message, emoji),
                     ),
                 ],
               ),

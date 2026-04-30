@@ -75,12 +75,11 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       elements.push(
         <SystemMessageRow
           key={message.id}
-          body={message.body}
-          createdAt={message.createdAt}
+          message={message}
           currentPubkey={currentPubkey}
+          onToggleReaction={onToggleReaction}
           personaLookup={personaLookup}
           profiles={profiles}
-          time={message.time}
         />,
       );
     } else {

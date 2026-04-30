@@ -489,7 +489,14 @@ class _MessageList extends HookConsumerWidget {
                 if (showDayDivider)
                   DayDivider(label: formatDayHeading(message.createdAt)),
                 if (message.isSystem)
-                  _SystemMessageRow(message: message)
+                  _SystemMessageRow(
+                    message: message,
+                    channelId: channelId,
+                    currentPubkey: currentPubkey,
+                    allMessages: null,
+                    isMember: isMember,
+                    isArchived: isArchived,
+                  )
                 else ...[
                   _MessageBubble(
                     message: message,
@@ -549,8 +556,20 @@ class _MessageList extends HookConsumerWidget {
 
 class _SystemMessageRow extends ConsumerWidget {
   final TimelineMessage message;
+  final String channelId;
+  final String? currentPubkey;
+  final List<TimelineMessage>? allMessages;
+  final bool isMember;
+  final bool isArchived;
 
-  const _SystemMessageRow({required this.message});
+  const _SystemMessageRow({
+    required this.message,
+    required this.channelId,
+    this.currentPubkey,
+    this.allMessages,
+    this.isMember = false,
+    this.isArchived = false,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -569,39 +588,66 @@ class _SystemMessageRow extends ConsumerWidget {
 
     final description = systemEvent.describe(resolveLabel);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
-      child: Row(
-        children: [
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              color: context.colors.surfaceContainerHighest,
-              shape: BoxShape.circle,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () => showMessageActions(
+        context: context,
+        ref: ref,
+        message: message,
+        channelId: channelId,
+        isOwnMessage: false,
+        allMessages: null,
+        currentPubkey: currentPubkey,
+        isMember: isMember,
+        isArchived: isArchived,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: context.colors.surfaceContainerHighest,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    LucideIcons.arrowLeftRight,
+                    size: 12,
+                    color: context.colors.outline,
+                  ),
+                ),
+                const SizedBox(width: Grid.xxs),
+                Expanded(
+                  child: Text(
+                    description,
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Text(
+                  formatMessageTime(message.createdAt),
+                  style: context.textTheme.labelSmall?.copyWith(
+                    color: context.colors.outline,
+                  ),
+                ),
+              ],
             ),
-            child: Icon(
-              LucideIcons.arrowLeftRight,
-              size: 12,
-              color: context.colors.outline,
-            ),
-          ),
-          const SizedBox(width: Grid.xxs),
-          Expanded(
-            child: Text(
-              description,
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
+            if (message.reactions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 28),
+                child: ReactionRow(
+                  reactions: message.reactions,
+                  onToggle: (emoji) => toggleReaction(ref, message, emoji),
+                ),
               ),
-            ),
-          ),
-          Text(
-            formatMessageTime(message.createdAt),
-            style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -830,21 +876,7 @@ class _MessageBubble extends ConsumerWidget {
                   if (message.reactions.isNotEmpty)
                     ReactionRow(
                       reactions: message.reactions,
-                      onToggle: (emoji) {
-                        final actions = ref.read(channelActionsProvider);
-                        final reaction = message.reactions.firstWhere(
-                          (r) => r.emoji == emoji,
-                        );
-                        if (reaction.reactedByCurrentUser &&
-                            reaction.currentUserReactionId != null) {
-                          actions.removeReaction(
-                            reaction.currentUserReactionId!,
-                            emoji,
-                          );
-                        } else {
-                          actions.addReaction(message.id, emoji);
-                        }
-                      },
+                      onToggle: (emoji) => toggleReaction(ref, message, emoji),
                     ),
                 ],
               ),

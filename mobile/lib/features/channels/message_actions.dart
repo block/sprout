@@ -97,7 +97,7 @@ void showMessageActions({
               ],
             ),
             const SizedBox(height: Grid.xs),
-            if (allMessages != null)
+            if (allMessages != null && !message.isSystem)
               ListTile(
                 leading: const Icon(LucideIcons.messageSquareReply),
                 title: const Text('Reply in thread'),
@@ -117,16 +117,17 @@ void showMessageActions({
                   );
                 },
               ),
-            ListTile(
-              leading: const Icon(LucideIcons.copy),
-              title: const Text('Copy text'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                // Copy to clipboard
-                final data = ClipboardData(text: message.content);
-                Clipboard.setData(data);
-              },
-            ),
+            if (!message.isSystem)
+              ListTile(
+                leading: const Icon(LucideIcons.copy),
+                title: const Text('Copy text'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  // Copy to clipboard
+                  final data = ClipboardData(text: message.content);
+                  Clipboard.setData(data);
+                },
+              ),
             if (isOwnMessage) ...[
               ListTile(
                 leading: const Icon(LucideIcons.pencil),
