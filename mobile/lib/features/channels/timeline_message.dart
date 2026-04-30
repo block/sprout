@@ -265,6 +265,23 @@ List<TimelineMessage> formatTimeline(
     if (event.kind == EventKind.systemMessage) {
       final systemEvent = SystemEvent.fromContent(event.content);
       if (systemEvent != null) {
+        final emojiMap = reactionMap[event.id];
+        final reactions = <TimelineReaction>[
+          if (emojiMap != null)
+            for (final entry in emojiMap.entries)
+              TimelineReaction(
+                emoji: entry.key,
+                count: entry.value.length,
+                reactedByCurrentUser:
+                    normalizedCurrentPubkey != null &&
+                    entry.value.containsKey(normalizedCurrentPubkey),
+                userPubkeys: entry.value.keys.toList(),
+                currentUserReactionId: normalizedCurrentPubkey != null
+                    ? entry.value[normalizedCurrentPubkey]
+                    : null,
+              ),
+        ];
+
         result.add(
           TimelineMessage(
             id: event.id,
@@ -274,6 +291,7 @@ List<TimelineMessage> formatTimeline(
             tags: event.tags,
             isSystem: true,
             systemEvent: systemEvent,
+            reactions: reactions,
           ),
         );
       }
