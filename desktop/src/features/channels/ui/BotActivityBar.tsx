@@ -1,135 +1,91 @@
+import * as React from "react";
+
 import { Bot, Loader2 } from "lucide-react";
 
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/shared/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
+
+const AGENT_LIST_HEIGHT_ESTIMATE_PX = 220;
 
 type BotActivityBarProps = {
   agents: ManagedAgent[];
   onOpenAgentSession: (pubkey: string) => void;
   openAgentSessionPubkey: string | null;
+  profiles?: UserProfileLookup;
   typingBotPubkeys: string[];
 };
 
-const COMPACT_THRESHOLD = 4;
-const OVERFLOW_THRESHOLD = 6;
-const MAX_VISIBLE_WITH_OVERFLOW = 5;
-
 /**
- * Compact right-aligned row of clickable bot pills.
- * Only renders pills for bots that are currently typing (actively working).
+ * Single collected active-agent pill. The dropdown exposes the individual
+ * active agents while keeping the composer area visually quiet.
  */
 export function BotActivityBar({
   agents,
   onOpenAgentSession,
   openAgentSessionPubkey,
+  profiles,
   typingBotPubkeys,
 }: BotActivityBarProps) {
-  if (typingBotPubkeys.length === 0) {
-    return null;
-  }
+  const [isOpen, setIsOpen] = React.useState(false);
+  const [contentSide, setContentSide] = React.useState<"top" | "bottom">(
+    "bottom",
+  );
+  const closeTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const typingSet = React.useMemo(
+    () => new Set(typingBotPubkeys.map((pubkey) => pubkey.toLowerCase())),
+    [typingBotPubkeys],
+  );
+  const typingAgents = React.useMemo(
+    () => agents.filter((agent) => typingSet.has(agent.pubkey.toLowerCase())),
+    [agents, typingSet],
+  );
+  const typingAgentKey = typingAgents
+    .map((agent) => agent.pubkey.toLowerCase())
+    .join("|");
 
-  const typingSet = new Set(
-    typingBotPubkeys.map((pubkey) => pubkey.toLowerCase()),
+  const clearCloseTimeout = React.useCallback(() => {
+    if (closeTimeoutRef.current) {
+      window.clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+  }, []);
+
+  const openAgentList = React.useCallback(() => {
+    clearCloseTimeout();
+    setIsOpen(true);
+  }, [clearCloseTimeout]);
+
+  const openAgentListFromTrigger = React.useCallback(
+    (event: React.PointerEvent<HTMLButtonElement>) => {
+      const triggerRect = event.currentTarget.getBoundingClientRect();
+      const availableBelow = window.innerHeight - triggerRect.bottom;
+      setContentSide(
+        availableBelow < AGENT_LIST_HEIGHT_ESTIMATE_PX ? "top" : "bottom",
+      );
+      openAgentList();
+    },
+    [openAgentList],
   );
 
-  const typingAgents = agents.filter((agent) =>
-    typingSet.has(agent.pubkey.toLowerCase()),
-  );
+  const scheduleCloseAgentList = React.useCallback(() => {
+    clearCloseTimeout();
+    closeTimeoutRef.current = window.setTimeout(() => {
+      setIsOpen(false);
+      closeTimeoutRef.current = null;
+    }, 250);
+  }, [clearCloseTimeout]);
+
+  React.useEffect(() => {
+    return clearCloseTimeout;
+  }, [clearCloseTimeout]);
 
   if (typingAgents.length === 0) {
     return null;
-  }
-
-  const { hiddenAgents, visibleAgents } = splitVisibleAgents(
-    typingAgents,
-    openAgentSessionPubkey,
-  );
-  const isCompact = typingAgents.length >= COMPACT_THRESHOLD;
-
-  return (
-    <div
-      className="flex min-w-0 shrink items-center justify-end gap-1 overflow-hidden"
-      data-testid="bot-activity-bar"
-    >
-      {visibleAgents.map((agent) => {
-        const isSelected =
-          openAgentSessionPubkey?.toLowerCase() === agent.pubkey.toLowerCase();
-        return (
-          <Tooltip key={agent.pubkey}>
-            <TooltipTrigger asChild>
-              <button
-                className={cn(
-                  "inline-flex min-w-0 shrink items-center gap-1 rounded-full border py-1 text-xs font-medium transition-colors",
-                  isCompact ? "max-w-[6.5rem] px-2" : "max-w-[9rem] px-2.5",
-                  isSelected
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:bg-primary/5 hover:text-foreground",
-                )}
-                data-testid={`bot-chip-${agent.pubkey}`}
-                onClick={() => onOpenAgentSession(agent.pubkey)}
-                type="button"
-              >
-                <Bot className="h-3 w-3 shrink-0" />
-                <span className="min-w-0 truncate">{agent.name}</span>
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-60" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              {agent.name} is working — click to view activity
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
-
-      {hiddenAgents.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              aria-label={`Show ${hiddenAgents.length} more working agents`}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border/60 bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground data-[state=open]:border-primary/40 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
-              data-testid="bot-chip-overflow"
-              type="button"
-            >
-              +{hiddenAgents.length}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel className="px-2 py-1 text-xs text-muted-foreground">
-              More agents working
-            </DropdownMenuLabel>
-            {hiddenAgents.map((agent) => (
-              <DropdownMenuItem
-                className="cursor-pointer"
-                data-testid={`bot-chip-overflow-item-${agent.pubkey}`}
-                key={agent.pubkey}
-                onClick={() => onOpenAgentSession(agent.pubkey)}
-              >
-                <Bot className="h-4 w-4 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
-    </div>
-  );
-}
-
-function splitVisibleAgents(
-  typingAgents: ManagedAgent[],
-  openAgentSessionPubkey: string | null,
-): { visibleAgents: ManagedAgent[]; hiddenAgents: ManagedAgent[] } {
-  if (typingAgents.length < OVERFLOW_THRESHOLD) {
-    return { visibleAgents: typingAgents, hiddenAgents: [] };
   }
 
   const selectedAgent = openAgentSessionPubkey
@@ -138,20 +94,78 @@ function splitVisibleAgents(
           agent.pubkey.toLowerCase() === openAgentSessionPubkey.toLowerCase(),
       )
     : null;
+  const label =
+    typingAgents.length === 1
+      ? "1 active agent"
+      : `${typingAgents.length} active agents`;
 
-  const visibleAgents = typingAgents.slice(0, MAX_VISIBLE_WITH_OVERFLOW);
-
-  if (
-    selectedAgent &&
-    !visibleAgents.some((agent) => agent.pubkey === selectedAgent.pubkey)
-  ) {
-    visibleAgents[visibleAgents.length - 1] = selectedAgent;
-  }
-
-  const visibleSet = new Set(visibleAgents.map((agent) => agent.pubkey));
-  const hiddenAgents = typingAgents.filter(
-    (agent) => !visibleSet.has(agent.pubkey),
+  return (
+    <div className="min-w-0" data-testid="bot-activity-bar">
+      <Popover open={isOpen} onOpenChange={setIsOpen}>
+        <PopoverTrigger asChild>
+          <button
+            aria-label={`Show ${typingAgents.length} active agents`}
+            className={cn(
+              "inline-flex max-w-[18rem] items-center gap-1 rounded-full border bg-background px-2 py-1 text-xs font-medium transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground data-[state=open]:border-primary/40 data-[state=open]:bg-primary/10 data-[state=open]:text-primary",
+              "animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none",
+              selectedAgent
+                ? "border-primary/40 text-primary"
+                : "border-border/60 text-muted-foreground",
+            )}
+            data-agent-key={typingAgentKey}
+            data-testid="bot-chip-overflow"
+            key={typingAgentKey}
+            onPointerEnter={openAgentListFromTrigger}
+            onPointerLeave={scheduleCloseAgentList}
+            type="button"
+          >
+            <Bot className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+            <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-60" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          collisionPadding={12}
+          className="w-56 p-1"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onPointerEnter={openAgentList}
+          onPointerLeave={scheduleCloseAgentList}
+          side={contentSide}
+          sideOffset={8}
+        >
+          <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">
+            Active agents
+          </div>
+          {typingAgents.map((agent) => (
+            <button
+              className={cn(
+                "flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
+                "animate-in fade-in-0 duration-150 motion-reduce:animate-none",
+                selectedAgent?.pubkey === agent.pubkey && "bg-primary/10",
+              )}
+              data-testid={`bot-chip-overflow-item-${agent.pubkey}`}
+              key={agent.pubkey}
+              onClick={() => {
+                setIsOpen(false);
+                onOpenAgentSession(agent.pubkey);
+              }}
+              type="button"
+            >
+              <UserAvatar
+                avatarUrl={
+                  profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null
+                }
+                className="rounded-full"
+                displayName={agent.name}
+                size="sm"
+              />
+              <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
+            </button>
+          ))}
+        </PopoverContent>
+      </Popover>
+    </div>
   );
-
-  return { visibleAgents, hiddenAgents };
 }

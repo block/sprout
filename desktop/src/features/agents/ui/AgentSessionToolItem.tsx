@@ -42,13 +42,13 @@ export function ToolItem({
   );
 
   return (
-    <div className="not-prose w-full px-1">
+    <div className="not-prose w-full px-0">
       <details
         className="group w-full"
         onToggle={handleToggle}
         open={isExpanded}
       >
-        <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-px">
+        <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-0.5 text-left">
           {ToolIcon ? (
             <ToolIcon
               className={cn(

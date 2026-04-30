@@ -256,6 +256,17 @@ export const ChannelPane = React.memo(function ChannelPane({
                 : "No messages yet"
               : "No channel selected"
           }
+          conversationFooter={
+            botTypingPubkeys.length > 0 ? (
+              <BotActivityBar
+                agents={agentSessionAgents}
+                onOpenAgentSession={onOpenAgentSession}
+                openAgentSessionPubkey={openAgentSessionPubkey}
+                profiles={profiles}
+                typingBotPubkeys={botTypingPubkeys}
+              />
+            ) : null
+          }
           isLoading={isTimelineLoading}
           messages={messages}
           onDelete={onDelete}
@@ -277,6 +288,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           onCancelEdit={onCancelEdit}
           onEditSave={onEditSave}
           onSend={onSendMessage}
+          profiles={profiles}
           placeholder={
             activeChannel?.archivedAt
               ? "Archived channels are read-only."
@@ -296,14 +308,6 @@ export const ChannelPane = React.memo(function ChannelPane({
             profiles={profiles}
             typingPubkeys={typingPubkeys}
           />
-          <div className="absolute right-0 top-0 flex h-8 items-center pr-8 sm:pr-10">
-            <BotActivityBar
-              agents={agentSessionAgents}
-              onOpenAgentSession={onOpenAgentSession}
-              openAgentSessionPubkey={openAgentSessionPubkey}
-              typingBotPubkeys={botTypingPubkeys}
-            />
-          </div>
         </div>
       </div>
 

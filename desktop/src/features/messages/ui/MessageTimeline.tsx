@@ -19,6 +19,7 @@ type MessageTimelineProps = {
   isLoading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
+  conversationFooter?: React.ReactNode;
   activeReplyTargetId?: string | null;
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
@@ -51,6 +52,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   isLoading = false,
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
+  conversationFooter,
   activeReplyTargetId = null,
   currentPubkey,
   fetchOlder,
@@ -197,6 +199,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 searchMatchingMessageIds={searchMatchingMessageIds}
                 searchQuery={searchQuery}
               />
+            ) : null}
+
+            {conversationFooter ? (
+              <div
+                className="flex min-w-0 pb-1"
+                data-testid="message-timeline-footer"
+              >
+                {conversationFooter}
+              </div>
             ) : null}
 
             <div aria-hidden className="h-px" ref={bottomAnchorRef} />

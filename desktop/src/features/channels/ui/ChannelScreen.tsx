@@ -128,14 +128,10 @@ export function ChannelScreen({
     () => collectMessageAuthorPubkeys(resolvedMessages),
     [resolvedMessages],
   );
-  const latestMessageEvent = React.useMemo(
-    () => resolvedMessages[resolvedMessages.length - 1] ?? null,
-    [resolvedMessages],
-  );
   const typingEntries = useChannelTyping(
     activeChannel,
     currentPubkey,
-    latestMessageEvent,
+    resolvedMessages,
   );
   const mainTypingPubkeys = React.useMemo(
     () =>
@@ -175,11 +171,15 @@ export function ChannelScreen({
       humanTypingPubkeys: mainTypingPubkeys.filter(
         (pk) => !localAgentSet.has(pk.toLowerCase()),
       ),
-      botTypingPubkeys: mainTypingPubkeys.filter((pk) =>
-        localAgentSet.has(pk.toLowerCase()),
-      ),
+      botTypingPubkeys: [
+        ...new Set(
+          typingEntries
+            .map((entry) => entry.pubkey)
+            .filter((pk) => localAgentSet.has(pk.toLowerCase())),
+        ),
+      ],
     };
-  }, [mainTypingPubkeys, managedAgentsQuery.data]);
+  }, [mainTypingPubkeys, managedAgentsQuery.data, typingEntries]);
   const messageProfiles = React.useMemo(() => {
     const base =
       mergeCurrentProfileIntoLookup(

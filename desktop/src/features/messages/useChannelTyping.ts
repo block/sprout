@@ -67,7 +67,7 @@ function getTypingStateKey(pubkey: string, threadHeadId: string | null) {
 export function useChannelTyping(
   channel: Channel | null,
   currentPubkey?: string,
-  latestMessageEvent?: RelayEvent | null,
+  completionEvents: RelayEvent[] = [],
 ) {
   const channelId = channel?.id ?? null;
   const channelType = channel?.channelType ?? null;
@@ -131,38 +131,55 @@ export function useChannelTyping(
   }, [channelId]);
 
   useEffect(() => {
-    if (
-      !channelId ||
-      !latestMessageEvent ||
-      !isTypingCompletionEvent(latestMessageEvent)
-    ) {
+    if (!channelId || completionEvents.length === 0) {
       return;
     }
 
-    if (getChannelIdFromTags(latestMessageEvent.tags) !== channelId) {
+    const completionKeys = new Set<string>();
+    for (const event of completionEvents) {
+      if (
+        !isTypingCompletionEvent(event) ||
+        getChannelIdFromTags(event.tags) !== channelId
+      ) {
+        continue;
+      }
+
+      const authorPubkey = event.pubkey.toLowerCase();
+      const threadHeadId = getTypingScopeId(event);
+      const typingKey = getTypingStateKey(authorPubkey, threadHeadId);
+      latestMessageCreatedAtByPubkeyRef.current[typingKey] = Math.max(
+        latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0,
+        event.created_at,
+      );
+      completionKeys.add(typingKey);
+    }
+
+    if (completionKeys.size === 0) {
       return;
     }
 
-    const authorPubkey = latestMessageEvent.pubkey.toLowerCase();
-    const threadHeadId = getTypingScopeId(latestMessageEvent);
-    const typingKey = getTypingStateKey(authorPubkey, threadHeadId);
-    latestMessageCreatedAtByPubkeyRef.current[typingKey] = Math.max(
-      latestMessageCreatedAtByPubkeyRef.current[typingKey] ?? 0,
-      latestMessageEvent.created_at,
-    );
-    typingSuppressUntilByPubkeyRef.current[typingKey] =
-      Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
     setTypingByPubkey((current) => {
       const next = pruneTypingState(current);
-      if (!(typingKey in next)) {
+      let updated: TypingState | null = null;
+
+      for (const typingKey of completionKeys) {
+        if (!(typingKey in next)) {
+          continue;
+        }
+
+        updated ??= { ...next };
+        delete updated[typingKey];
+        typingSuppressUntilByPubkeyRef.current[typingKey] =
+          Date.now() + TYPING_POST_MESSAGE_SUPPRESS_MS;
+      }
+
+      if (!updated) {
         return next;
       }
 
-      const updated = { ...next };
-      delete updated[typingKey];
       return updated;
     });
-  }, [channelId, latestMessageEvent]);
+  }, [channelId, completionEvents]);
 
   useEffect(() => {
     if (!channelId || channelType === "forum") {

@@ -28,11 +28,11 @@ export function AgentSessionTranscriptList({
     <div
       aria-label="Live ACP transcript"
       aria-live="polite"
-      className="mx-auto w-full max-w-3xl py-1"
+      className="w-full space-y-3 py-1"
       role="log"
     >
       {items.map((item) => (
-        <div className="mt-4 first:mt-0" key={item.id}>
+        <div key={item.id}>
           <TranscriptItemView agentName={agentName} item={item} />
         </div>
       ))}
@@ -71,32 +71,26 @@ function MessageItem({
 }) {
   const isAssistant = item.role === "assistant";
   const text = item.text.trim();
+  const label = isAssistant ? agentName : item.title;
   return (
     <div
-      className={cn(
-        "flex px-1 py-1 animate-in fade-in duration-200 motion-reduce:animate-none",
-        isAssistant ? "flex-row" : "ml-auto flex-row-reverse",
-      )}
+      className="flex px-0 py-0.5 animate-in fade-in duration-200 motion-reduce:animate-none"
       data-role={isAssistant ? "assistant-message" : "user-message"}
     >
-      <div
-        className={cn(
-          "group relative min-w-0 flex flex-col gap-1",
-          isAssistant ? "w-full items-start" : "max-w-[85%] items-end",
-        )}
-      >
-        {isAssistant ? (
-          <div className="mb-0.5 flex items-center gap-1 text-xs">
+      <div className="group relative flex min-w-0 flex-1 flex-col items-start gap-1">
+        <div className="flex items-center gap-1.5 text-xs">
+          {isAssistant ? (
             <span className="flex h-5 w-5 items-center justify-center">
               <Bot className="h-3.5 w-3.5 text-muted-foreground" />
             </span>
-            <span className="font-normal text-foreground">{agentName}</span>
-          </div>
-        ) : null}
+          ) : null}
+          <span className="font-medium text-foreground">{label}</span>
+        </div>
         <div
           className={cn(
-            "w-full min-w-0 text-sm leading-relaxed",
-            !isAssistant && "rounded-2xl bg-muted p-3 text-foreground",
+            "w-full min-w-0 text-left text-sm leading-relaxed",
+            !isAssistant &&
+              "rounded-xl border border-border/60 bg-muted/35 px-3 py-2 text-foreground",
           )}
         >
           {isAssistant ? (
@@ -116,8 +110,8 @@ function ThoughtItem({
   item: Extract<TranscriptItem, { type: "thought" }>;
 }) {
   return (
-    <details className="group not-prose w-full px-1">
-      <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-px text-muted-foreground">
+    <details className="group not-prose w-full px-0">
+      <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-0.5 text-left text-muted-foreground">
         <Brain className="h-4 w-4" />
         <span className="truncate text-sm font-medium">{item.title}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
@@ -135,8 +129,8 @@ function MetadataItem({
   item: Extract<TranscriptItem, { type: "metadata" }>;
 }) {
   return (
-    <details className="group not-prose w-full px-1">
-      <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-px text-muted-foreground">
+    <details className="group not-prose w-full px-0">
+      <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-0.5 text-left text-muted-foreground">
         <TerminalSquare className="h-4 w-4" />
         <span className="truncate text-sm font-medium">{item.title}</span>
         <span className="shrink-0 text-xs">
@@ -173,7 +167,7 @@ function LifecycleItem({
   return (
     <div
       className={cn(
-        "px-4 py-2 text-center text-xs",
+        "px-0 py-1 text-left text-xs leading-5",
         isError ? "text-destructive" : "text-muted-foreground",
       )}
     >
