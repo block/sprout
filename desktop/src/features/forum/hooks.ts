@@ -8,6 +8,7 @@ import type {
   ForumThreadResponse,
 } from "@/shared/api/types";
 import { KIND_FORUM_COMMENT, KIND_FORUM_POST } from "@/shared/constants/kinds";
+import { useReactiveSubscription } from "@/shared/hooks/useReactiveSubscription";
 
 export function forumPostsQueryKey(channelId: string) {
   return ["forum-posts", channelId] as const;
@@ -25,7 +26,8 @@ export function useForumPostsQuery(channel: Channel | null) {
     queryKey: forumPostsQueryKey(channelId),
     queryFn: () => getForumPosts(channelId, 50),
     staleTime: 15_000,
-    refetchInterval: 15_000,
+    // Live updates via useForumSubscription; 60s backstop for edge cases.
+    refetchInterval: 60_000,
   });
 }
 
@@ -38,8 +40,32 @@ export function useForumThreadQuery(
     queryKey: forumThreadQueryKey(channelId ?? "", eventId ?? ""),
     queryFn: () => getForumThread(channelId ?? "", eventId ?? ""),
     staleTime: 10_000,
-    refetchInterval: 10_000,
+    // Live updates via useForumSubscription; 60s backstop for edge cases.
+    refetchInterval: 60_000,
   });
+}
+
+/**
+ * Subscribe to forum post and comment events for a channel.
+ * Invalidates forum queries on incoming events and reconnects.
+ */
+export function useForumSubscription(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  useReactiveSubscription(
+    channelId
+      ? { kinds: [KIND_FORUM_POST, KIND_FORUM_COMMENT], "#h": [channelId] }
+      : null,
+    () => {
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          (query.queryKey[0] === "forum-posts" ||
+            query.queryKey[0] === "forum-thread") &&
+          query.queryKey[1] === channelId,
+      });
+    },
+    "forum",
+  );
 }
 
 export function useCreateForumPostMutation(channel: Channel | null) {

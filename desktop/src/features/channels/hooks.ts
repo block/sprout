@@ -110,7 +110,9 @@ export function useChannelsQuery() {
     queryKey: channelsQueryKey,
     queryFn: async () => sortChannels(await getChannels()),
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    // Live updates handled by useLiveChannelUpdates (subscribes to channel
+    // events and invalidates on reconnect). 5-minute backstop for edge cases.
+    refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,
   });
 }

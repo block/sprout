@@ -92,6 +92,18 @@ simple and testable.
 thread root events. Any code that inserts replies must update these counters —
 check existing reply handlers for the pattern.
 
+### Subscriptions, Not Polling
+
+The desktop app uses WebSocket subscriptions (NIP-29 relay protocol) instead of polling for real-time data. When adding new data-fetching hooks:
+
+- **Subscribe to events** via `relayClient.subscribeLive()` or existing `subscribe*` methods
+- **Update TanStack Query cache** directly with `setQueriesData` (targeted) or `invalidateQueries` (broad)
+- **Handle reconnects** via `relayClient.subscribeToReconnects()` to recover missed events
+- **Backstop polling** (60s+) is acceptable ONLY for data written by non-WS clients (e.g., ACP agents via REST)
+- **CRUD-driven data** (agents, personas, teams) should invalidate cache in mutations, not poll
+
+Reference: `usePresenceSubscription()` in `features/presence/hooks.ts`
+
 ---
 
 ## Testing

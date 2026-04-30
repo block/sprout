@@ -6,6 +6,7 @@ import {
   useTriggerWorkflowMutation,
   useWorkflowQuery,
   useWorkflowRunsQuery,
+  useWorkflowSubscription,
 } from "@/features/workflows/hooks";
 import { WorkflowRunTrace } from "@/features/workflows/ui/WorkflowRunTrace";
 import type { Workflow } from "@/shared/api/types";
@@ -29,6 +30,7 @@ export function WorkflowDetailPanel({
   onClose,
   onEdit,
 }: WorkflowDetailPanelProps) {
+  useWorkflowSubscription();
   const workflowQuery = useWorkflowQuery(workflowId);
   const runsQuery = useWorkflowRunsQuery(workflowId);
   const triggerMutation = useTriggerWorkflowMutation(workflowId);

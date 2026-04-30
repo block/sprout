@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { WorkflowRun, WorkflowRunStatus } from "@/shared/api/types";
+import { KIND_APPROVAL_REQUEST } from "@/shared/constants/kinds";
+import { useReactiveSubscription } from "@/shared/hooks/useReactiveSubscription";
 import {
   createWorkflow,
   deleteWorkflow,
@@ -71,10 +73,12 @@ export function useWorkflowRunsQuery(workflowId: string | null) {
       getWorkflowRuns(resolvedWorkflowId),
     enabled: workflowId !== null,
     staleTime: 10_000,
+    // Live updates via useWorkflowSubscription (kind:46010).
+    // 10s backstop only when a workflow is actively running.
     refetchInterval: (query) => {
       const runs = query.state.data as WorkflowRun[] | undefined;
       return runs?.some((run) => isActiveWorkflowRunStatus(run.status))
-        ? 1_000
+        ? 10_000
         : false;
     },
   });
@@ -90,8 +94,35 @@ export function useRunApprovalsQuery(
       getRunApprovals(resolvedWorkflowId, resolvedRunId),
     enabled: workflowId !== null && runId !== null,
     staleTime: 10_000,
-    refetchInterval: 10_000,
+    // Live updates via useWorkflowSubscription (kind:46010); 30s backstop.
+    refetchInterval: 30_000,
   });
+}
+
+/**
+ * Subscribe to workflow status change events (kind:46010).
+ * Invalidates workflow run and approval queries on incoming events.
+ *
+ * NOTE: This subscription is forward-looking — the executor does not emit
+ * kind:46010 events yet.  The subscription is wired up now so the UI will
+ * react automatically once the relay-side publish is implemented.  Until then,
+ * refetchInterval backstops in the queries above drive updates.
+ */
+export function useWorkflowSubscription() {
+  const queryClient = useQueryClient();
+
+  useReactiveSubscription(
+    { kinds: [KIND_APPROVAL_REQUEST] },
+    () => {
+      void queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.queryKey[0] === "workflow-runs" ||
+          query.queryKey[0] === "run-approvals" ||
+          query.queryKey[0] === "workflow",
+      });
+    },
+    "workflow",
+  );
 }
 
 export function useCreateWorkflowMutation(channelId: string) {

@@ -614,17 +614,13 @@ async fn test_workflow_update_and_delete() {
     );
 }
 
-// ── Test 7: Approval gate (WF-08 stub) ────────────────────────────────────────
+// ── Test 7: Approval gate round-trip (WF-08) ──────────────────────────────────
 
-/// Create a workflow with a `request_approval` step, trigger it, and verify
-/// the run fails with the "approval gates not yet implemented" message.
-///
-/// This test documents the current stub behavior. When WF-08 is implemented,
-/// this test should be updated to verify the full approval round-trip:
-/// create → trigger → poll for waiting_approval → grant → verify completed.
+/// Full approval round-trip: create workflow with `request_approval` step,
+/// trigger, poll for `waiting_approval`, fetch the approval token, grant it,
+/// and verify the run completes.
 #[tokio::test]
-#[ignore]
-async fn test_approval_gate_stub_fails_gracefully() {
+async fn test_approval_gate_round_trip() {
     let client = http_client();
     let pubkey_hex: &str = SEEDED_PUBKEY;
     let base = relay_http_url();
@@ -683,10 +679,10 @@ steps:
         .expect("trigger response must include 'run_id'")
         .to_string();
 
-    // ── Step 3: Poll until the run reaches a terminal status ──────────────────
+    // ── Step 3: Poll until the run reaches waiting_approval ──────────────────
     let runs_url = format!("{base}/api/workflows/{workflow_id}/runs");
-    let mut final_run: Option<serde_json::Value> = None;
-    for _ in 0..10 {
+    let mut waiting_run: Option<serde_json::Value> = None;
+    for _ in 0..20 {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let runs_resp = client
             .get(&runs_url)
@@ -698,6 +694,78 @@ steps:
         let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs must be JSON array");
         if let Some(run) = runs.iter().find(|r| r["id"].as_str() == Some(&run_id)) {
             let status = run["status"].as_str().unwrap_or("");
+            if status == "waiting_approval" {
+                waiting_run = Some(run.clone());
+                break;
+            }
+            if matches!(status, "completed" | "failed" | "cancelled") {
+                panic!("run reached terminal status '{status}' instead of waiting_approval");
+            }
+        }
+    }
+
+    let _run = waiting_run.expect("run must reach waiting_approval within 2 seconds");
+
+    // ── Step 4: Fetch the approval token ─────────────────────────────────────
+    let approvals_url = format!("{base}/api/workflows/{workflow_id}/runs/{run_id}/approvals");
+    let approvals_resp = client
+        .get(&approvals_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("GET approvals failed");
+    assert_eq!(
+        approvals_resp.status(),
+        200,
+        "GET approvals must return 200"
+    );
+    let approvals: Vec<serde_json::Value> = approvals_resp
+        .json()
+        .await
+        .expect("approvals must be JSON array");
+    assert!(
+        !approvals.is_empty(),
+        "there must be at least one pending approval"
+    );
+    let approval = &approvals[0];
+    assert_eq!(
+        approval["status"].as_str().unwrap_or(""),
+        "pending",
+        "approval must be pending"
+    );
+    let approval_token_hash = approval["token"]
+        .as_str()
+        .expect("approval must have a token hash");
+
+    // ── Step 5: Grant the approval (using by-hash endpoint since the listing
+    // returns the stored hash, not the raw token) ─────────────────────────────
+    let grant_url = format!("{base}/api/approvals/by-hash/{approval_token_hash}/grant");
+    let grant_resp = client
+        .post(&grant_url)
+        .header("X-Pubkey", pubkey_hex)
+        .send()
+        .await
+        .expect("POST grant failed");
+    assert!(
+        grant_resp.status().is_success(),
+        "grant must succeed, got {}",
+        grant_resp.status()
+    );
+
+    // ── Step 6: Poll until the run completes ─────────────────────────────────
+    let mut final_run: Option<serde_json::Value> = None;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let runs_resp = client
+            .get(&runs_url)
+            .header("X-Pubkey", pubkey_hex)
+            .send()
+            .await
+            .expect("GET runs failed");
+        assert_eq!(runs_resp.status(), 200);
+        let runs: Vec<serde_json::Value> = runs_resp.json().await.expect("runs JSON");
+        if let Some(run) = runs.iter().find(|r| r["id"].as_str() == Some(&run_id)) {
+            let status = run["status"].as_str().unwrap_or("");
             if matches!(status, "completed" | "failed" | "cancelled") {
                 final_run = Some(run.clone());
                 break;
@@ -705,22 +773,14 @@ steps:
         }
     }
 
-    // ── Step 4: Assert the run failed with the expected stub error ────────────
-    let run = final_run.expect("run must reach a terminal status within 1 second");
-
+    let run = final_run.expect("run must reach terminal status after approval");
     assert_eq!(
         run["status"].as_str().unwrap_or(""),
-        "failed",
-        "approval gate stub must cause the run to fail"
+        "completed",
+        "run must complete after approval grant"
     );
 
-    let error_msg = run["error_message"].as_str().unwrap_or("");
-    assert!(
-        error_msg.contains("approval gates not yet implemented"),
-        "run error must contain 'approval gates not yet implemented', got: {error_msg:?}"
-    );
-
-    // ── Step 5: Clean up ──────────────────────────────────────────────────────
+    // ── Step 7: Clean up ──────────────────────────────────────────────────────
     let del_status = delete_workflow(&client, &base, pubkey_hex, &workflow_id).await;
     assert_eq!(del_status, 204, "cleanup DELETE should return 204");
 }

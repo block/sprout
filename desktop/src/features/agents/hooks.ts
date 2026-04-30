@@ -119,7 +119,7 @@ export function usePersonasQuery() {
     queryKey: personasQueryKey,
     queryFn: listPersonas,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    // CRUD-driven: mutations invalidate cache directly, no polling needed.
   });
 }
 
@@ -150,7 +150,7 @@ export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    // CRUD-driven: mutations invalidate cache directly, no polling needed.
     enabled: options?.enabled,
   });
 }
@@ -166,9 +166,10 @@ export function useManagedAgentsQuery(options?: { enabled?: boolean }) {
       // Only local "running" agents need fast polling (process state can
       // change). "deployed" is static control-plane state — presence polling
       // handles the live signal for remote agents separately.
+      // CRUD-driven: mutations invalidate cache directly, no idle polling.
       return agents?.some((agent) => agent.status === "running")
         ? 5_000
-        : 30_000;
+        : false;
     },
   });
 }
@@ -484,7 +485,8 @@ export function useManagedAgentLogQuery(
     enabled: pubkey !== null,
     retry: false,
     staleTime: 3_000,
-    refetchInterval: pubkey ? 30_000 : false,
+    // Logs are local process state; keep polling while viewing.
+    refetchInterval: pubkey ? 5_000 : false,
   });
 }
 
@@ -493,7 +495,7 @@ export function useTeamsQuery() {
     queryKey: teamsQueryKey,
     queryFn: listTeams,
     staleTime: 30_000,
-    refetchInterval: 30_000,
+    // CRUD-driven: mutations invalidate cache directly, no polling needed.
   });
 }
 

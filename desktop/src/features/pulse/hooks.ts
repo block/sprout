@@ -1,5 +1,7 @@
+import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useReactiveSubscription } from "@/shared/hooks/useReactiveSubscription";
 import {
   getContactList,
   getNotesTimeline,
@@ -46,7 +48,8 @@ export function useMyNotesQuery(pubkey?: string) {
     enabled: !!pubkey,
     staleTime: 15_000,
     gcTime: 5 * 60_000,
-    refetchInterval: 30_000,
+    // Invalidated by usePublishNoteMutation; 120s backstop.
+    refetchInterval: 120_000,
   });
 }
 
@@ -59,8 +62,44 @@ export function useTimelineQuery(contactPubkeys: string[], enabled: boolean) {
     enabled: enabled && contactPubkeys.length > 0,
     staleTime: 15_000,
     gcTime: 5 * 60_000,
-    refetchInterval: 30_000,
+    // Live updates via usePulseSubscription; 120s backstop.
+    refetchInterval: 120_000,
   });
+}
+
+/**
+ * Subscribe to note events (kind:1) from contacts.
+ * Invalidates timeline and my-notes queries on incoming events and reconnects.
+ */
+export function usePulseSubscription(
+  contactPubkeys: string[],
+  currentPubkey: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const normalizedPubkey = currentPubkey?.trim().toLowerCase() ?? "";
+
+  const authors = React.useMemo(() => {
+    const set = new Set(contactPubkeys);
+    if (normalizedPubkey.length > 0) {
+      set.add(normalizedPubkey);
+    }
+    return [...set].sort();
+  }, [contactPubkeys, normalizedPubkey]);
+
+  useReactiveSubscription(
+    authors.length > 0 ? { kinds: [1], authors } : null,
+    () => {
+      void queryClient.invalidateQueries({
+        queryKey: pulseQueryKeys.allTimelines,
+      });
+      if (normalizedPubkey) {
+        void queryClient.invalidateQueries({
+          queryKey: pulseQueryKeys.myNotes(normalizedPubkey),
+        });
+      }
+    },
+    "pulse",
+  );
 }
 
 // ── Publish note mutation ───────────────────────────────────────────────────

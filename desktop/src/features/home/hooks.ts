@@ -2,9 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 
 import { getHomeFeed } from "@/shared/api/tauri";
 
+const homeFeedQueryKey = ["home-feed"] as const;
+
 export function useHomeFeedQuery() {
   return useQuery({
-    queryKey: ["home-feed"],
+    queryKey: homeFeedQueryKey,
     queryFn: () =>
       getHomeFeed({
         limit: 12,

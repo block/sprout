@@ -552,6 +552,7 @@ pub async fn dispatch_action(
     engine: &WorkflowEngine,
     run_id: Uuid,
     trigger_ctx: &TriggerContext,
+    step_index: usize,
 ) -> Result<StepResult, WorkflowError> {
     use ActionDef::*;
 
@@ -680,10 +681,58 @@ pub async fn dispatch_action(
                 "RequestApproval from={from} timeout={timeout_str}: {message}"
             );
 
+            // Validate the approver spec: only "any" or a 64-char hex pubkey
+            // are supported today. Role-based specs (e.g. "@engineering-lead")
+            // will need relay-side group role resolution — reject them early so
+            // workflow authors get a clear error at trigger time.
+            let is_valid_approver =
+                from == "any" || (from.len() == 64 && from.chars().all(|c| c.is_ascii_hexdigit()));
+            if !is_valid_approver {
+                return Err(WorkflowError::InvalidDefinition(format!(
+                    "unsupported approver spec \"{from}\" — only \"any\" or a 64-char hex pubkey are supported"
+                )));
+            }
+
             let token = generate_approval_token(run_id, step_id);
 
-            // TODO (WF-08): create approval record in DB, emit kind:46010.
-            // For now, return Suspended with the token so the caller can persist state.
+            // Parse timeout duration and compute expiry.
+            // TODO: expires_at is stored but not yet enforced — there is no
+            // background sweep that auto-denies approvals past their deadline.
+            // Until that is added, expired approvals remain in "pending" state
+            // and the run stays in WaitingApproval indefinitely.
+            let timeout_secs = parse_duration_secs(timeout_str)?;
+            let expires_at = chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64);
+
+            // Look up workflow metadata for the approval record.
+            let wf_run = engine.db.get_workflow_run(run_id).await.map_err(|e| {
+                WorkflowError::WebhookError(format!(
+                    "RequestApproval: failed to load workflow run {run_id}: {e}"
+                ))
+            })?;
+
+            // Persist the approval record in the database.
+            engine
+                .db
+                .create_approval(sprout_db::workflow::CreateApprovalParams {
+                    token: &token,
+                    workflow_id: wf_run.workflow_id,
+                    run_id,
+                    step_id,
+                    step_index: step_index as i32,
+                    approver_spec: from,
+                    expires_at,
+                })
+                .await
+                .map_err(|e| {
+                    WorkflowError::WebhookError(format!(
+                        "RequestApproval: failed to create approval record: {e}"
+                    ))
+                })?;
+
+            info!(
+                run_id = %run_id, step = step_id,
+                "Approval record created — token persisted, awaiting approval"
+            );
 
             Ok(StepResult::Suspended {
                 approval_token: token,
@@ -1162,7 +1211,7 @@ async fn execute_steps(
             .unwrap_or(engine.config.default_timeout_secs);
         let dispatch_result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            dispatch_action(&step.id, &resolved_action, engine, run_id, trigger_ctx),
+            dispatch_action(&step.id, &resolved_action, engine, run_id, trigger_ctx, i),
         )
         .await;
 
@@ -1205,6 +1254,10 @@ async fn execute_steps(
                     run_id = %run_id, step = %step.id,
                     "Step suspended — awaiting approval (token: <redacted>)"
                 );
+                trace.push(serde_json::json!({
+                    "step_id": step.id,
+                    "status": "waiting_approval",
+                }));
                 // Return the token and current state so the caller can persist the
                 // approval record and update the run's execution trace.
                 return Ok(ExecutionResult {

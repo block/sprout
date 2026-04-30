@@ -8,6 +8,7 @@ import {
   useFollowMutation,
   useMyNotesQuery,
   usePublishNoteMutation,
+  usePulseSubscription,
   useTimelineQuery,
   useUnfollowMutation,
 } from "@/features/pulse/hooks";
@@ -181,6 +182,9 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     () => [...new Set([...peoplePubkeys, ...agentPubkeys])],
     [peoplePubkeys, agentPubkeys],
   );
+
+  // ── Live subscription for note events ───────────────────────────────
+  usePulseSubscription(forYouPubkeys, currentPubkey);
 
   // ── Queries per tab ────────────────────────────────────────────────────
   const forYouQuery = useTimelineQuery(forYouPubkeys, activeTab === "foryou");

@@ -156,27 +156,29 @@ impl WorkflowEngine {
                 let step_count = result.step_index as i32;
 
                 if result.approval_token.is_some() {
-                    // Approval gates are not yet implemented (WF-08).
-                    // Fail explicitly rather than creating unreachable WaitingApproval rows.
-                    tracing::warn!(
+                    // WF-08: Approval gate reached — suspend the run.
+                    // The approval record was already created by the executor's
+                    // dispatch_action. Mark the run as WaitingApproval so the
+                    // resume path can pick up at step_index + 1 after grant.
+                    tracing::info!(
                         run_id = %run_id,
                         step_index = result.step_index,
-                        "Workflow hit approval gate — not yet implemented, marking as failed"
+                        "Workflow suspended — waiting for approval"
                     );
                     if let Err(e) = self
                         .db
                         .update_workflow_run(
                             run_id,
-                            RunStatus::Failed,
+                            RunStatus::WaitingApproval,
                             step_count,
                             &trace_json,
-                            Some("approval gates not yet implemented — see WF-08"),
+                            None,
                         )
                         .await
                     {
                         tracing::error!(
                             run_id = %run_id,
-                            "Failed to update run to Failed (approval gate): {e}"
+                            "Failed to update run to WaitingApproval: {e}"
                         );
                     }
                 } else {

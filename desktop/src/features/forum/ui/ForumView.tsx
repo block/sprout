@@ -12,6 +12,7 @@ import {
   useDeleteForumPostMutation,
   useDeleteForumReplyMutation,
   useForumPostsQuery,
+  useForumSubscription,
   useForumThreadQuery,
 } from "../hooks";
 import { ForumComposer } from "./ForumComposer";
@@ -47,6 +48,7 @@ export function ForumView({
   const [isComposerOpen, setIsComposerOpen] = React.useState(false);
 
   const profileQuery = useProfileQuery();
+  useForumSubscription(channel.id);
   const postsQuery = useForumPostsQuery(channel);
   const threadQuery = useForumThreadQuery(
     selectedPostId ? channel.id : null,
