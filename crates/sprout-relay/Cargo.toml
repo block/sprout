@@ -44,6 +44,9 @@ bytes = "1"
 infer = "0.19"
 serde_yaml      = { workspace = true }
 sha2            = { workspace = true }
+hmac            = { workspace = true }
+subtle          = { workspace = true }
+rand            = { workspace = true }
 hex             = { workspace = true }
 url             = { workspace = true }
 moka            = { workspace = true }

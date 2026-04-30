@@ -36,3 +36,4 @@ typesense-data/
 # Hermit (toolchain manager cache)
 .hermit/
 doc/
+repos/

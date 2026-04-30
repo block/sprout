@@ -79,6 +79,9 @@ pub struct Config {
     pub git_max_repos_per_pubkey: u32,
     /// Maximum concurrent git subprocess operations. Default: 20.
     pub git_max_concurrent_ops: usize,
+    /// HMAC secret for git pre-receive hook callbacks.
+    /// Used to authenticate internal policy endpoint requests.
+    pub git_hook_hmac_secret: String,
 }
 
 impl Config {
@@ -244,6 +247,12 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
+        let git_hook_hmac_secret: String = std::env::var("SPROUT_GIT_HOOK_HMAC_SECRET")
+            .unwrap_or_else(|_| {
+                // Generate a random secret if not configured (dev mode).
+                let secret: [u8; 32] = rand::random();
+                hex::encode(secret)
+            });
 
         Ok(Self {
             bind_addr,
@@ -269,6 +278,7 @@ impl Config {
             git_max_pack_bytes,
             git_max_repos_per_pubkey,
             git_max_concurrent_ops,
+            git_hook_hmac_secret,
         })
     }
 }

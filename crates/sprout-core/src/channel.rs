@@ -96,6 +96,10 @@ impl FromStr for ChannelType {
 // ── Member role ──────────────────────────────────────────────────────────────
 
 /// A member's role within a channel.
+///
+/// The hierarchy for permission checks is: Owner > Admin > Member > Guest.
+/// Bot is a **separate designation** — it is not part of the linear hierarchy.
+/// Use [`MemberRole::permission_level`] for numeric comparisons in authorization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemberRole {
     /// Full control — can manage members and delete the channel.
@@ -106,7 +110,7 @@ pub enum MemberRole {
     Member,
     /// Read-only external participant.
     Guest,
-    /// Automated agent or integration.
+    /// Automated agent or integration (not in the role hierarchy).
     Bot,
 }
 
@@ -125,6 +129,27 @@ impl MemberRole {
     /// Elevated roles that only existing owners/admins may grant.
     pub fn is_elevated(&self) -> bool {
         matches!(self, Self::Owner | Self::Admin)
+    }
+
+    /// Numeric permission level for authorization comparisons.
+    ///
+    /// Higher = more privileged. Bot returns 0 (must use explicit grants).
+    /// Use `role.permission_level() >= required.permission_level()` for checks.
+    pub fn permission_level(self) -> u8 {
+        match self {
+            Self::Owner => 4,
+            Self::Admin => 3,
+            Self::Member => 2,
+            Self::Guest => 1,
+            Self::Bot => 0,
+        }
+    }
+
+    /// Returns true if this role meets or exceeds the required role's permission level.
+    ///
+    /// Bot never meets any requirement (returns false for all non-Bot requirements).
+    pub fn has_at_least(self, required: MemberRole) -> bool {
+        self.permission_level() >= required.permission_level()
     }
 }
 
