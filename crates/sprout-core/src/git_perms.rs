@@ -469,13 +469,17 @@ pub fn evaluate_ref_update(
     }
 
     // Check push role.
-    if let Some(min_role) = effective.push_role {
-        if !role.has_at_least(min_role) {
-            return Err(Denial {
-                ref_name: update.ref_name.clone(),
-                reason: format!("requires {} role (you have {})", min_role, role),
-            });
-        }
+    // If explicit rules matched but none specified a push:role, still enforce the
+    // built-in default minimum role. Only an explicit `push:<role>` overrides the default.
+    // This prevents a Guest from pushing to a branch that only has `no-force-push` set.
+    let min_role = effective
+        .push_role
+        .unwrap_or_else(|| default_min_role(&update.ref_name, update.kind));
+    if !role.has_at_least(min_role) {
+        return Err(Denial {
+            ref_name: update.ref_name.clone(),
+            reason: format!("requires {} role (you have {})", min_role, role),
+        });
     }
 
     // Check no-force-push.
@@ -795,6 +799,23 @@ mod tests {
         };
         // Bot has permission_level 0, cannot meet Member requirement
         assert!(evaluate_ref_update(&update, MemberRole::Bot, &rules).is_err());
+    }
+
+    #[test]
+    fn evaluate_guest_denied_even_with_only_no_force_push_rule() {
+        // Regression test: a rule that only sets no-force-push (no push:role)
+        // should NOT let a Guest bypass the built-in default (Member required).
+        let rules = vec![parse_protection_tag(&["refs/heads/main", "no-force-push"]).unwrap()];
+        let update = RefUpdate {
+            ref_name: "refs/heads/main".to_string(),
+            kind: UpdateKind::FastForward,
+            old_oid: "a".repeat(40),
+            new_oid: "b".repeat(40),
+        };
+        // Guest should be denied — built-in default requires Member for FF push.
+        assert!(evaluate_ref_update(&update, MemberRole::Guest, &rules).is_err());
+        // Member should be allowed (meets default requirement).
+        assert!(evaluate_ref_update(&update, MemberRole::Member, &rules).is_ok());
     }
 
     #[test]
