@@ -33,78 +33,84 @@ const PRE_RECEIVE_HOOK: &str = r#"#!/bin/sh
 # ANY error, timeout, or non-200 response → reject the push.
 set -e
 
-# Collect ref updates from stdin
+ZERO="0000000000000000000000000000000000000000"
+TMPDIR="${TMPDIR:-/tmp}"
+REFS_FILE="$TMPDIR/sprout_hook_refs.$$"
+HMAC_FILE="$TMPDIR/sprout_hook_hmac.$$"
+RESP_FILE="$TMPDIR/sprout_hook_resp.$$"
+trap 'rm -f "$REFS_FILE" "$HMAC_FILE" "$RESP_FILE"' EXIT
+
+# Phase 1: Read ref updates from stdin, classify each, build JSON + HMAC lines.
+# We write two files in parallel:
+#   REFS_FILE: JSON entries (unsorted, for the request body)
+#   HMAC_FILE: "ref_name old_oid new_oid" lines (for sorting → HMAC input)
 REFS=""
 while read old_oid new_oid ref_name; do
-    # Determine if this is a fast-forward (ancestry check)
-    ZERO="0000000000000000000000000000000000000000"
+    # Ancestry check for FF detection.
+    # CRITICAL: GIT_OBJECT_DIRECTORY and GIT_ALTERNATE_OBJECT_DIRECTORIES are
+    # inherited from our environment (git sets them for quarantine). Any git
+    # subprocess we call sees the quarantined objects automatically.
     IS_ANCESTOR="false"
     if [ "$old_oid" != "$ZERO" ] && [ "$new_oid" != "$ZERO" ]; then
-        # CRITICAL: git merge-base inherits GIT_OBJECT_DIRECTORY and
-        # GIT_ALTERNATE_OBJECT_DIRECTORIES automatically (they're in our env).
-        # Exit 0 = is ancestor (FF), exit 1 = not ancestor (NFF), exit 128 = error (treat as NFF).
+        # Exit 0 = is ancestor (FF), exit 1 = not ancestor (NFF),
+        # exit 128 = error → treat as NFF (fail-closed).
         if git merge-base --is-ancestor "$old_oid" "$new_oid" 2>/dev/null; then
             IS_ANCESTOR="true"
         fi
     fi
 
-    # Build JSON entry (no jq dependency — manual construction)
+    # JSON entry for request body.
     if [ -n "$REFS" ]; then
         REFS="${REFS},"
     fi
     REFS="${REFS}{\"old_oid\":\"${old_oid}\",\"new_oid\":\"${new_oid}\",\"ref_name\":\"${ref_name}\",\"is_ancestor\":${IS_ANCESTOR}}"
+
+    # HMAC line: ref_name first (for sorting), then oids.
+    echo "${ref_name} ${old_oid} ${new_oid}" >> "$HMAC_FILE"
 done
 
-# Compute timestamp
+# Phase 2: Compute HMAC-SHA256 signature.
+# Payload format MUST match relay's compute_hmac() in policy.rs:
+#   repo_id | pusher_pubkey | (old_oid + new_oid + ref_name) per ref sorted by ref_name | timestamp
 TIMESTAMP=$(date +%s)
 
-# Build HMAC payload: repo_id|pusher_pubkey|sorted_refs_concat|timestamp
-# Sort refs by ref_name for deterministic HMAC
-SORTED_REFS=$(echo "$REFS" | tr ',' '\n' | sort -t'"' -k8 | tr '\n' ',')
-SORTED_REFS="${SORTED_REFS%,}"
-
-# Compute HMAC-SHA256 signature
-# Payload format matches relay's compute_hmac: repo_id|pusher|old+new+ref per sorted ref|timestamp
 HMAC_INPUT="${SPROUT_REPO_ID}|${SPROUT_PUSHER_PUBKEY}|"
-# Extract oids and refs in sorted order for HMAC
-for entry in $(echo "$SORTED_REFS" | tr ',' ' '); do
-    OLD=$(echo "$entry" | sed 's/.*"old_oid":"\([^"]*\)".*/\1/')
-    NEW=$(echo "$entry" | sed 's/.*"new_oid":"\([^"]*\)".*/\1/')
-    REF=$(echo "$entry" | sed 's/.*"ref_name":"\([^"]*\)".*/\1/')
-    HMAC_INPUT="${HMAC_INPUT}${OLD}${NEW}${REF}"
-done
+# Sort by ref_name (field 1) — matches Rust's sort_by(|a, b| a.ref_name.cmp(&b.ref_name))
+if [ -f "$HMAC_FILE" ]; then
+    sort "$HMAC_FILE" | while IFS=' ' read ref_name old_oid new_oid; do
+        printf '%s%s%s' "$old_oid" "$new_oid" "$ref_name"
+    done > "$HMAC_FILE.concat"
+    HMAC_INPUT="${HMAC_INPUT}$(cat "$HMAC_FILE.concat")"
+    rm -f "$HMAC_FILE.concat"
+fi
 HMAC_INPUT="${HMAC_INPUT}|${TIMESTAMP}"
 
 SIGNATURE=$(printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$SPROUT_HOOK_SECRET" -hex 2>/dev/null | sed 's/.*= //')
+if [ -z "$SIGNATURE" ]; then
+    echo "error: failed to compute HMAC signature" >&2
+    exit 1
+fi
 
-# Build request body
+# Phase 3: POST to policy endpoint — FAIL-CLOSED.
 BODY="{\"repo_id\":\"${SPROUT_REPO_ID}\",\"pusher_pubkey\":\"${SPROUT_PUSHER_PUBKEY}\",\"ref_updates\":[${REFS}],\"timestamp\":${TIMESTAMP},\"signature\":\"${SIGNATURE}\"}"
 
-# POST to policy endpoint — FAIL-CLOSED
-# --fail: exit non-zero on HTTP errors (4xx, 5xx)
-# --max-time 10: timeout after 10s (push is synchronous, relay is local)
-# --silent: no progress output
 HTTP_CODE=$(curl --fail --silent --max-time 10 \
-    -o /tmp/sprout_hook_response.$$ \
+    -o "$RESP_FILE" \
     -w "%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$BODY" \
     "$SPROUT_HOOK_URL" 2>/dev/null) || {
     echo "error: push authorization failed (could not reach policy service)" >&2
-    rm -f /tmp/sprout_hook_response.$$
     exit 1
 }
 
 if [ "$HTTP_CODE" != "200" ]; then
     echo "error: push denied by policy" >&2
-    # Print denial reasons if available
-    cat /tmp/sprout_hook_response.$$ >&2 2>/dev/null
-    rm -f /tmp/sprout_hook_response.$$
+    cat "$RESP_FILE" >&2 2>/dev/null
     exit 1
 fi
 
-rm -f /tmp/sprout_hook_response.$$
 exit 0
 "#;
 
