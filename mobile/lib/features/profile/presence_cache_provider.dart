@@ -21,6 +21,7 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
   Timer? _batchTimer;
   Timer? _refreshTimer;
   void Function()? _presenceUnsub;
+  int _subscriptionVersion = 0;
 
   @override
   Map<String, String> build() {
@@ -71,13 +72,22 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
   Future<void> _subscribePresenceUpdates() async {
     _presenceUnsub?.call();
     _presenceUnsub = null;
+    _subscriptionVersion++;
+    final version = _subscriptionVersion;
 
     final session = ref.read(relaySessionProvider.notifier);
     try {
-      _presenceUnsub = await session.subscribe(
+      final unsub = await session.subscribe(
         const NostrFilter(kinds: [EventKind.presenceUpdate], limit: 0),
         _handlePresenceEvent,
       );
+      // Guard: if build() re-fired while we were awaiting, discard this
+      // subscription to avoid leaking it.
+      if (version != _subscriptionVersion) {
+        unsub();
+        return;
+      }
+      _presenceUnsub = unsub;
     } catch (error) {
       debugPrint(
         '[PresenceCacheNotifier] presence subscription failed: $error',

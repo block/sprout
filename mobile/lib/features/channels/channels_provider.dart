@@ -116,8 +116,13 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     // Start a lightweight REST backstop so newly created channels (which we
     // don't have a WS subscription for) get picked up within 60s.
+    // Uses _backstopRefresh instead of refresh() to preserve existing state
+    // on transient REST failures (avoids AsyncError overwriting good data).
     _backstopTimer?.cancel();
-    _backstopTimer = Timer.periodic(_backstopInterval, (_) => refresh());
+    _backstopTimer = Timer.periodic(
+      _backstopInterval,
+      (_) => _backstopRefresh(),
+    );
   }
 
   void _handleLiveEvent(NostrEvent event) {
@@ -144,6 +149,23 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       }
       return updated;
     });
+  }
+
+  /// Backstop refresh that preserves existing state on transient REST failure.
+  ///
+  /// Unlike [refresh], this won't overwrite state with [AsyncError] if the
+  /// network request fails — keeping WS live-event handling functional.
+  Future<void> _backstopRefresh() async {
+    try {
+      final sessionState = ref.read(relaySessionProvider);
+      final channels = await _fetch(
+        subscribeLive: sessionState.status == SessionStatus.connected,
+      );
+      state = AsyncData(channels);
+    } catch (error) {
+      debugPrint('[ChannelsNotifier] backstop refresh failed: $error');
+      // Keep current state — WS events continue working.
+    }
   }
 
   Future<void> refresh() async {
