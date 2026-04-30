@@ -415,7 +415,7 @@ class _ThreadMessage extends ConsumerWidget {
                           Text(
                             formatMessageTime(message.createdAt),
                             style: context.textTheme.labelSmall?.copyWith(
-                              color: context.colors.outline,
+                              color: context.colors.onSurfaceVariant,
                             ),
                           ),
                           if (message.edited) ...[
@@ -423,7 +423,7 @@ class _ThreadMessage extends ConsumerWidget {
                             Text(
                               '(edited)',
                               style: context.textTheme.labelSmall?.copyWith(
-                                color: context.colors.outline,
+                                color: context.colors.onSurfaceVariant,
                                 fontStyle: FontStyle.italic,
                               ),
                             ),
@@ -486,7 +486,7 @@ class _ThreadTypingIndicator extends ConsumerWidget {
       child: Text(
         text,
         style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
+          color: context.colors.onSurfaceVariant,
           fontStyle: FontStyle.italic,
         ),
       ),

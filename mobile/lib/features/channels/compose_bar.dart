@@ -701,7 +701,11 @@ class _MentionSuggestions extends StatelessWidget {
             ),
             title: Text(name, style: context.textTheme.bodyMedium),
             trailing: member.isBot
-                ? Icon(LucideIcons.bot, size: 14, color: context.colors.outline)
+                ? Icon(
+                    LucideIcons.bot,
+                    size: 14,
+                    color: context.colors.onSurfaceVariant,
+                  )
                 : null,
             onTap: () => onSelect(member),
           );
@@ -778,7 +782,7 @@ class _ChannelSuggestions extends StatelessWidget {
             trailing: Text(
               channel.channelType,
               style: context.textTheme.labelSmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
             ),
             onTap: () => onSelect(channel),

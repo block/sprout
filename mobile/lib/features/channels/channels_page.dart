@@ -396,7 +396,7 @@ class _ChannelSection extends StatelessWidget {
               child: Text(
                 emptyLabel,
                 style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.outline,
+                  color: context.colors.onSurfaceVariant,
                 ),
               ),
             )
@@ -428,7 +428,7 @@ class _EmptyState extends StatelessWidget {
             Icon(
               LucideIcons.messagesSquare,
               size: Grid.xl,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
             const SizedBox(height: Grid.xs),
             Text(

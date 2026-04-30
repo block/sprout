@@ -395,7 +395,7 @@ class _MessageList extends HookConsumerWidget {
             Icon(
               LucideIcons.messageSquare,
               size: Grid.xl,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
             const SizedBox(height: Grid.xxs),
             Text(
@@ -408,7 +408,7 @@ class _MessageList extends HookConsumerWidget {
             Text(
               'Be the first to say something!',
               style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
             ),
           ],
@@ -1031,7 +1031,7 @@ class _TypingIndicator extends ConsumerWidget {
       child: Text(
         text,
         style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
+          color: context.colors.onSurfaceVariant,
           fontStyle: FontStyle.italic,
         ),
       ),

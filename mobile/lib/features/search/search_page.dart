@@ -404,7 +404,7 @@ class _MessageTile extends StatelessWidget {
           Text(
             timeAgo,
             style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
         ],
@@ -450,7 +450,7 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         label.toUpperCase(),
         style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
+          color: context.colors.onSurfaceVariant,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.8,
         ),

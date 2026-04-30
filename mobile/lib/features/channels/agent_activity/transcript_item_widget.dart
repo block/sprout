@@ -40,7 +40,7 @@ class _MessageItemWidget extends StatelessWidget {
     final isAssistant = item.role == 'assistant';
     final badgeColor = isAssistant
         ? context.colors.primary
-        : context.colors.outline;
+        : context.colors.onSurfaceVariant;
     final badgeLabel = isAssistant ? 'Assistant' : 'User';
 
     return Padding(
@@ -122,14 +122,14 @@ class _ThoughtItemWidget extends HookWidget {
                   Icon(
                     LucideIcons.brain,
                     size: 14,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                   const SizedBox(width: Grid.half),
                   Expanded(
                     child: Text(
                       item.title,
                       style: context.textTheme.labelMedium?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                         fontWeight: FontWeight.w600,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -140,7 +140,7 @@ class _ThoughtItemWidget extends HookWidget {
                         ? LucideIcons.chevronUp
                         : LucideIcons.chevronDown,
                     size: 14,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ],
               ),
@@ -178,7 +178,7 @@ class _LifecycleItemWidget extends StatelessWidget {
         child: Text(
           '${item.title}${item.text.isNotEmpty ? ' \u2014 ${item.text}' : ''}',
           style: context.textTheme.labelSmall?.copyWith(
-            color: context.colors.outline,
+            color: context.colors.onSurfaceVariant,
           ),
           textAlign: TextAlign.center,
         ),
@@ -226,14 +226,14 @@ class _MetadataItemWidget extends HookWidget {
                   Icon(
                     LucideIcons.fileText,
                     size: 14,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                   const SizedBox(width: Grid.half),
                   Expanded(
                     child: Text(
                       '${item.title} (${item.sections.length} sections)',
                       style: context.textTheme.labelMedium?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                         fontWeight: FontWeight.w600,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -244,7 +244,7 @@ class _MetadataItemWidget extends HookWidget {
                         ? LucideIcons.chevronUp
                         : LucideIcons.chevronDown,
                     size: 14,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ],
               ),
@@ -265,7 +265,7 @@ class _MetadataItemWidget extends HookWidget {
                           ? '${section.body.substring(0, 500)}\u2026'
                           : section.body,
                       style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -371,7 +371,7 @@ class _ToolItemWidget extends HookWidget {
                     Text(
                       'Arguments',
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                     const SizedBox(width: Grid.half),
@@ -380,7 +380,7 @@ class _ToolItemWidget extends HookWidget {
                           ? LucideIcons.chevronUp
                           : LucideIcons.chevronDown,
                       size: 12,
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                   ],
                 ),
@@ -402,7 +402,7 @@ class _ToolItemWidget extends HookWidget {
                       style: context.textTheme.labelSmall?.copyWith(
                         color: item.isError
                             ? context.colors.error
-                            : context.colors.outline,
+                            : context.colors.onSurfaceVariant,
                       ),
                     ),
                     const SizedBox(width: Grid.half),
@@ -413,7 +413,7 @@ class _ToolItemWidget extends HookWidget {
                       size: 12,
                       color: item.isError
                           ? context.colors.error
-                          : context.colors.outline,
+                          : context.colors.onSurfaceVariant,
                     ),
                   ],
                 ),
@@ -451,7 +451,7 @@ class _ToolItemWidget extends HookWidget {
     return (context.appColors.success, 'Done', LucideIcons.circleCheck);
   }
   if (status == ToolStatus.pending) {
-    return (context.colors.outline, 'Pending', LucideIcons.circleDot);
+    return (context.colors.onSurfaceVariant, 'Pending', LucideIcons.circleDot);
   }
   return (context.appColors.warning, 'Running', LucideIcons.clock3);
 }
