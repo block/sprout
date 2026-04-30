@@ -58,13 +58,14 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
     });
 
     if (sessionState.status == SessionStatus.connected) {
-      _subscribeLive();
+      Future.microtask(_subscribeLive);
     }
 
     return const ObserverState.initial();
   }
 
   void _subscribeLive() async {
+    if (_disposed) return;
     final config = ref.read(relayConfigProvider);
     final nsec = config.nsec;
     if (nsec == null || nsec.isEmpty) return;
@@ -75,7 +76,7 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
     } catch (_) {
       state = ObserverState(
         connection: ObserverConnectionState.error,
-        transcript: state.transcript,
+        transcript: buildTranscript(_buffer),
         errorMessage: 'Failed to decode private key',
       );
       return;
@@ -87,7 +88,7 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
     } catch (_) {
       state = ObserverState(
         connection: ObserverConnectionState.error,
-        transcript: state.transcript,
+        transcript: buildTranscript(_buffer),
         errorMessage: 'Failed to derive conversation key',
       );
       return;
@@ -100,15 +101,20 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
     } catch (_) {
       state = ObserverState(
         connection: ObserverConnectionState.error,
-        transcript: state.transcript,
+        transcript: buildTranscript(_buffer),
         errorMessage: 'Failed to derive pubkey',
       );
       return;
     }
 
+    debugPrint(
+      '[ObserverSub] subscribing as $myPubkey for agent ${_key.agentPubkey} '
+      'in channel ${_key.channelId}',
+    );
+
     state = ObserverState(
       connection: ObserverConnectionState.connecting,
-      transcript: state.transcript,
+      transcript: buildTranscript(_buffer),
     );
 
     final session = ref.read(relaySessionProvider.notifier);
@@ -120,6 +126,7 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
             '#p': [myPubkey],
           },
           since: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          limit: 0,
         ),
         (event) => _handleEvent(event, conversationKey, myPubkey),
       );
@@ -131,16 +138,20 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
       }
       _unsubscribe = unsub;
 
+      debugPrint('[ObserverSub] subscription open');
+
       state = ObserverState(
         connection: ObserverConnectionState.open,
-        transcript: state.transcript,
+        transcript: buildTranscript(_buffer),
       );
     } catch (e) {
-      state = ObserverState(
-        connection: ObserverConnectionState.error,
-        transcript: state.transcript,
-        errorMessage: 'Subscription failed: $e',
-      );
+      if (!_disposed) {
+        state = ObserverState(
+          connection: ObserverConnectionState.error,
+          transcript: buildTranscript(_buffer),
+          errorMessage: 'Subscription failed: $e',
+        );
+      }
     }
   }
 
@@ -149,18 +160,30 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
     Uint8List conversationKey,
     String myPubkey,
   ) {
+    debugPrint(
+      '[ObserverSub] event received: kind=${event.kind} '
+      'pubkey=${event.pubkey.substring(0, 8)}…',
+    );
+
     // Filter to only this agent's frames.
-    if (event.pubkey.toLowerCase() != _key.agentPubkey.toLowerCase()) return;
+    if (event.pubkey.toLowerCase() != _key.agentPubkey.toLowerCase()) {
+      debugPrint('[ObserverSub] filtered: pubkey mismatch');
+      return;
+    }
 
     // Defense-in-depth: verify event.pubkey matches claimed agent tag.
     final agentTag = event.getTagValue('agent');
     if (agentTag == null ||
         event.pubkey.toLowerCase() != agentTag.toLowerCase()) {
+      debugPrint('[ObserverSub] filtered: agent tag mismatch');
       return;
     }
 
     // Must be a telemetry frame.
-    if (event.getTagValue('frame') != 'telemetry') return;
+    if (event.getTagValue('frame') != 'telemetry') {
+      debugPrint('[ObserverSub] filtered: not a telemetry frame');
+      return;
+    }
 
     ObserverFrame frame;
     try {
@@ -168,6 +191,7 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
       final json = jsonDecode(plaintext) as Map<String, dynamic>;
       frame = ObserverFrame.fromJson(json);
     } catch (e) {
+      debugPrint('[ObserverSub] decrypt failed: $e');
       state = ObserverState(
         connection: ObserverConnectionState.error,
         transcript: state.transcript,
@@ -178,11 +202,20 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
 
     // Deduplicate by (seq, timestamp).
     final dedupeKey = '${frame.seq}:${frame.timestamp}';
-    if (_dedupeKeys.contains(dedupeKey)) return;
+    if (_dedupeKeys.contains(dedupeKey)) {
+      debugPrint('[ObserverSub] filtered: duplicate $dedupeKey');
+      return;
+    }
     _dedupeKeys.add(dedupeKey);
 
     // Scope to this channel (null channelId = not channel-scoped, let through).
-    if (frame.channelId != null && frame.channelId != _key.channelId) return;
+    if (frame.channelId != null && frame.channelId != _key.channelId) {
+      debugPrint(
+        '[ObserverSub] filtered: channel mismatch '
+        '(frame=${frame.channelId}, expected=${_key.channelId})',
+      );
+      return;
+    }
 
     // Add to buffer and sort.
     _buffer.add(frame);
@@ -198,9 +231,14 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
     }
 
     // Rebuild transcript.
+    final transcript = buildTranscript(_buffer);
+    debugPrint(
+      '[ObserverSub] frame accepted: seq=${frame.seq} kind=${frame.kind} '
+      '→ ${transcript.length} transcript items',
+    );
     state = ObserverState(
       connection: ObserverConnectionState.open,
-      transcript: buildTranscript(_buffer),
+      transcript: transcript,
     );
   }
 
