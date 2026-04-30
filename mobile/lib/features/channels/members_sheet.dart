@@ -6,6 +6,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import 'agent_activity/agent_activity_sheet.dart';
+import 'agent_activity/working_bots_provider.dart';
 import 'channel.dart';
 import 'channel_management_provider.dart';
 
@@ -26,6 +28,7 @@ class MembersSheet extends HookConsumerWidget {
     final people = allMembers.where((member) => !member.isBot).toList();
     final bots = allMembers.where((member) => member.isBot).toList();
     final userCache = ref.watch(userCacheProvider);
+    final typingBotPubkeys = ref.watch(workingBotPubkeysProvider(channel.id));
 
     // Determine if the current user can manage members.
     final currentMember = allMembers.cast<ChannelMember?>().firstWhere(
@@ -101,6 +104,26 @@ class MembersSheet extends HookConsumerWidget {
                             canManage: canManage,
                             isSelf: false,
                             channelId: channel.id,
+                            isWorking: typingBotPubkeys.contains(
+                              bot.pubkey.toLowerCase(),
+                            ),
+                            onActivityTap:
+                                typingBotPubkeys.contains(
+                                  bot.pubkey.toLowerCase(),
+                                )
+                                ? () {
+                                    Navigator.of(context).pop();
+                                    showModalBottomSheet<void>(
+                                      context: context,
+                                      isScrollControlled: true,
+                                      showDragHandle: true,
+                                      builder: (_) => AgentActivitySheet(
+                                        channelId: channel.id,
+                                        agentPubkey: bot.pubkey,
+                                      ),
+                                    );
+                                  }
+                                : null,
                           ),
                       ],
                       if (people.isEmpty && bots.isEmpty)
@@ -164,6 +187,8 @@ class _MemberTile extends ConsumerWidget {
   final bool canManage;
   final bool isSelf;
   final String channelId;
+  final bool isWorking;
+  final VoidCallback? onActivityTap;
 
   const _MemberTile({
     required this.member,
@@ -172,6 +197,8 @@ class _MemberTile extends ConsumerWidget {
     required this.canManage,
     required this.isSelf,
     required this.channelId,
+    this.isWorking = false,
+    this.onActivityTap,
   });
 
   @override
@@ -184,12 +211,34 @@ class _MemberTile extends ConsumerWidget {
       contentPadding: EdgeInsets.zero,
       leading: _MemberAvatar(avatarUrl: profile?.avatarUrl, initial: initial),
       title: Text(label),
-      subtitle: Text(
-        _roleLabel(member.role),
-        style: context.textTheme.bodySmall?.copyWith(
-          color: context.colors.outline,
-        ),
-      ),
+      subtitle: isWorking
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: context.appColors.success,
+                  ),
+                ),
+                const SizedBox(width: Grid.half),
+                Text(
+                  'Working\u2026',
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.appColors.success,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            )
+          : Text(
+              _roleLabel(member.role),
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.outline,
+              ),
+            ),
       trailing: showMenu
           ? IconButton(
               icon: const Icon(LucideIcons.ellipsis, size: 18),
@@ -197,6 +246,7 @@ class _MemberTile extends ConsumerWidget {
               visualDensity: VisualDensity.compact,
             )
           : null,
+      onTap: onActivityTap,
     );
   }
 

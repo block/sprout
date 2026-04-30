@@ -15,6 +15,7 @@ import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 import '../forum/forum_posts_view.dart';
 import 'channel.dart';
+import 'agent_activity/working_bots_provider.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
@@ -182,20 +183,10 @@ class ChannelDetailPage extends HookConsumerWidget {
                 ],
               ),
         actions: [
-          IconButton(
-            onPressed: () {
-              showModalBottomSheet<void>(
-                context: context,
-                isScrollControlled: true,
-                showDragHandle: true,
-                builder: (_) => MembersSheet(
-                  channel: resolvedChannel,
-                  currentPubkey: currentPubkey,
-                ),
-              );
-            },
-            tooltip: 'View members',
-            icon: const Icon(LucideIcons.users),
+          _MembersButton(
+            channelId: resolvedChannel.id,
+            channel: resolvedChannel,
+            currentPubkey: currentPubkey,
           ),
           if (!resolvedChannel.isDm)
             IconButton(
@@ -1043,6 +1034,62 @@ class _TypingIndicator extends ConsumerWidget {
           color: context.colors.outline,
           fontStyle: FontStyle.italic,
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Members button with activity dot badge
+// ---------------------------------------------------------------------------
+
+class _MembersButton extends ConsumerWidget {
+  final String channelId;
+  final Channel channel;
+  final String? currentPubkey;
+
+  const _MembersButton({
+    required this.channelId,
+    required this.channel,
+    required this.currentPubkey,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final hasWorkingBot = ref
+        .watch(workingBotPubkeysProvider(channelId))
+        .isNotEmpty;
+
+    return IconButton(
+      onPressed: () {
+        showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (_) =>
+              MembersSheet(channel: channel, currentPubkey: currentPubkey),
+        );
+      },
+      tooltip: 'View members',
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(LucideIcons.users),
+          if (hasWorkingBot)
+            Positioned(
+              top: -2,
+              right: -2,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: context.appColors.success,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: context.colors.surface, width: 1.5),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
