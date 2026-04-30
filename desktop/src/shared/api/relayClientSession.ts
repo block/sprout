@@ -281,6 +281,11 @@ export class RelayClient {
     );
   }
 
+  /** Subscribe to kind:20001 presence events (live only, no backfill). */
+  async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
+    return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
+  }
+
   async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
   }

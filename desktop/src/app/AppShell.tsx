@@ -27,7 +27,10 @@ import {
   setDesktopAppBadgeCount,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
-import { usePresenceSession } from "@/features/presence/hooks";
+import {
+  usePresenceSession,
+  usePresenceSubscription,
+} from "@/features/presence/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -147,6 +150,7 @@ export function AppShell() {
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
+  usePresenceSubscription();
   const presenceSession = usePresenceSession(deferredPubkey);
   const { homeBadgeCount, homeFeedQuery, notificationSettings } =
     useHomeFeedNotifications(
