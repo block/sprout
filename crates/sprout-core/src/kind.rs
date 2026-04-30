@@ -88,6 +88,8 @@ pub const KIND_PRESENCE_UPDATE: u32 = 20001;
 pub const KIND_PAIRING: u32 = 24134;
 /// Ephemeral: typing indicator for a channel.
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
+/// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
+pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
@@ -284,6 +286,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
     KIND_PAIRING,
+    KIND_AGENT_OBSERVER_FRAME,
     KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
     KIND_STREAM_MESSAGE_EDIT,
