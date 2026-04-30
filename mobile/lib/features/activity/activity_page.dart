@@ -9,6 +9,7 @@ import '../../shared/widgets/frosted_scaffold.dart';
 import '../channels/channel.dart';
 import '../channels/channel_detail_page.dart';
 import '../channels/channels_provider.dart';
+import '../channels/small_avatar.dart';
 import '../profile/user_cache_provider.dart';
 import 'activity_provider.dart';
 import 'feed_item.dart';
@@ -240,9 +241,8 @@ class _FeedItemTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profile = ref.watch(
-      userCacheProvider.select((cache) => cache[item.pubkey.toLowerCase()]),
-    );
+    final userCache = ref.watch(userCacheProvider);
+    final profile = userCache[item.pubkey.toLowerCase()];
     final authorLabel = profile?.label ?? _shortPubkey(item.pubkey);
 
     return InkWell(
@@ -274,6 +274,8 @@ class _FeedItemTile extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(width: Grid.xxs),
+                      SmallAvatar(pubkey: item.pubkey, userCache: userCache),
+                      const SizedBox(width: Grid.quarter),
                       Flexible(
                         child: Text(
                           authorLabel,

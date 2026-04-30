@@ -13,6 +13,7 @@ import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Spinner } from "@/shared/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { MessageTimestamp } from "./MessageTimestamp";
 
 type SystemMessagePayload = {
@@ -43,36 +44,165 @@ function resolvePersonaSuffix(
   return personaName ? ` (${personaName})` : "";
 }
 
-function describeSystemEvent(
+function resolveAvatarUrl(
+  pubkey: string | undefined,
+  profiles: UserProfileLookup | undefined,
+): string | null {
+  if (!pubkey || !profiles) return null;
+  return profiles[pubkey.toLowerCase()]?.avatarUrl ?? null;
+}
+
+function UserChip({
+  pubkey,
+  currentPubkey,
+  profiles,
+  suffix,
+}: {
+  pubkey: string | undefined;
+  currentPubkey: string | undefined;
+  profiles: UserProfileLookup | undefined;
+  suffix?: string;
+}) {
+  const label = resolveLabel(pubkey, currentPubkey, profiles);
+  return (
+    <span className="inline-flex items-center gap-1">
+      <UserAvatar
+        avatarUrl={resolveAvatarUrl(pubkey, profiles)}
+        displayName={label}
+        size="xs"
+      />
+      <span className="font-medium">
+        {label}
+        {suffix}
+      </span>
+    </span>
+  );
+}
+
+function describeSystemEventStructured(
   payload: SystemMessagePayload,
   currentPubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
   personaLookup?: Map<string, string>,
-): string | null {
-  const actor = resolveLabel(payload.actor, currentPubkey, profiles);
+): React.ReactNode | null {
+  const personaSuffix = resolvePersonaSuffix(payload.target, personaLookup);
 
   switch (payload.type) {
     case "member_joined": {
-      const target = resolveLabel(payload.target, currentPubkey, profiles);
-      const personaSuffix = resolvePersonaSuffix(payload.target, personaLookup);
       if (payload.actor === payload.target) {
-        return `${actor}${personaSuffix} joined the channel`;
+        return (
+          <span className="inline-flex flex-wrap items-center gap-1">
+            <UserChip
+              pubkey={payload.actor}
+              currentPubkey={currentPubkey}
+              profiles={profiles}
+              suffix={personaSuffix}
+            />
+            <span>joined the channel</span>
+          </span>
+        );
       }
-      return `${actor} added ${target}${personaSuffix} to the channel`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>added</span>
+          <UserChip
+            pubkey={payload.target}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+            suffix={personaSuffix}
+          />
+          <span>to the channel</span>
+        </span>
+      );
     }
-    case "member_left": {
-      return `${actor} left the channel`;
-    }
-    case "member_removed": {
-      const target = resolveLabel(payload.target, currentPubkey, profiles);
-      return `${actor} removed ${target} from the channel`;
-    }
+    case "member_left":
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>left the channel</span>
+        </span>
+      );
+    case "member_removed":
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>removed</span>
+          <UserChip
+            pubkey={payload.target}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>from the channel</span>
+        </span>
+      );
     case "topic_changed":
-      return `${actor} changed the topic to "${payload.topic}"`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>changed the topic to &ldquo;{payload.topic}&rdquo;</span>
+        </span>
+      );
     case "purpose_changed":
-      return `${actor} changed the purpose to "${payload.purpose}"`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>changed the purpose to &ldquo;{payload.purpose}&rdquo;</span>
+        </span>
+      );
     case "channel_created":
-      return `${actor} created this channel`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>created this channel</span>
+        </span>
+      );
+    case "channel_archived":
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>archived this channel</span>
+        </span>
+      );
+    case "channel_unarchived":
+      return (
+        <span className="inline-flex flex-wrap items-center gap-1">
+          <UserChip
+            pubkey={payload.actor}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+          />
+          <span>unarchived this channel</span>
+        </span>
+      );
     default:
       return null;
   }
@@ -112,7 +242,7 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
     return null;
   }
 
-  const description = describeSystemEvent(
+  const description = describeSystemEventStructured(
     payload,
     currentPubkey,
     profiles,

@@ -12,6 +12,7 @@ import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 function formatSearchUserName(user: UserSearchResult) {
   return (
@@ -179,6 +180,11 @@ export function ChannelMemberInviteCard({
                   data-testid={`selected-invitee-${invitee.pubkey}`}
                   key={invitee.pubkey}
                 >
+                  <UserAvatar
+                    avatarUrl={invitee.avatarUrl ?? null}
+                    displayName={formatSearchUserName(invitee)}
+                    size="xs"
+                  />
                   <span className="font-medium">
                     {formatSearchUserName(invitee)}
                   </span>
@@ -219,13 +225,20 @@ export function ChannelMemberInviteCard({
                       }}
                       type="button"
                     >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium leading-5">
-                          {formatSearchUserName(result)}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {formatSearchUserSecondary(result)}
-                        </p>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <UserAvatar
+                          avatarUrl={result.avatarUrl}
+                          displayName={formatSearchUserName(result)}
+                          size="xs"
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium leading-5">
+                            {formatSearchUserName(result)}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {formatSearchUserSecondary(result)}
+                          </p>
+                        </div>
                       </div>
                       <span className="text-xs text-muted-foreground">Add</span>
                     </button>
