@@ -122,15 +122,18 @@ Widget _buildTestable({
   Future<List<ChannelMember>> Function()? loadMembers,
   ChannelActions Function(Ref ref)? createChannelActions,
   ReadStateNotifier? readStateNotifier,
+  _FakeMessagesNotifier? messagesNotifier,
 }) {
   final resolvedChannel = channel ?? _testChannel;
   final fakeChannelsNotifier =
       channelsNotifier ?? _FakeChannelsNotifier(channels ?? [resolvedChannel]);
+  final fakeMessagesNotifier =
+      messagesNotifier ?? _FakeMessagesNotifier(messages);
   return ProviderScope(
     overrides: [
       channelMessagesProvider(
         _channelId,
-      ).overrideWith(() => _FakeMessagesNotifier(messages)),
+      ).overrideWith(() => fakeMessagesNotifier),
       channelTypingProvider(
         _channelId,
       ).overrideWith(() => _FakeTypingNotifier(typing)),
@@ -419,6 +422,63 @@ void main() {
       expect(findRichText('Hey Alice!'), findsOneWidget);
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Bob'), findsOneWidget);
+    });
+
+    testWidgets('can jump back to latest when newer messages are offscreen', (
+      tester,
+    ) async {
+      final initialMessages = [
+        for (var i = 0; i < 40; i++)
+          _textMsg(
+            id: 'msg$i',
+            pubkey: 'alice',
+            content: 'Message $i',
+            createdAt: 1000 + i,
+          ),
+      ];
+      final messagesNotifier = _FakeMessagesNotifier(initialMessages);
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          messagesNotifier: messagesNotifier,
+          users: const {
+            'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final listView = tester.widget<ListView>(
+        find.byKey(const ValueKey('channel-message-list')),
+      );
+      final controller = listView.controller!;
+      expect(controller.position.maxScrollExtent, greaterThan(0));
+
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('channel-jump-to-latest')),
+        findsOneWidget,
+      );
+
+      messagesNotifier.setMessages([
+        ...initialMessages,
+        _textMsg(
+          id: 'newest',
+          pubkey: 'alice',
+          content: 'Newest live update',
+          createdAt: 2000,
+        ),
+      ]);
+      await tester.pump();
+
+      expect(findRichText('Newest live update'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('channel-jump-to-latest')));
+      await tester.pumpAndSettle();
+
+      expect(controller.position.pixels, lessThanOrEqualTo(1));
+      expect(findRichText('Newest live update'), findsOneWidget);
     });
 
     testWidgets('groups consecutive messages from same author', (tester) async {
@@ -1097,11 +1157,22 @@ void main() {
 // ---------------------------------------------------------------------------
 
 class _FakeMessagesNotifier extends ChannelMessagesNotifier {
-  final List<NostrEvent> _messages;
+  List<NostrEvent> _messages;
   _FakeMessagesNotifier(this._messages) : super(_channelId);
 
   @override
   AsyncValue<List<NostrEvent>> build() => AsyncData(_messages);
+
+  @override
+  bool get reachedOldest => true;
+
+  @override
+  Future<bool> fetchOlder() async => false;
+
+  void setMessages(List<NostrEvent> messages) {
+    _messages = messages;
+    state = AsyncData(messages);
+  }
 }
 
 class _ErrorMessagesNotifier extends ChannelMessagesNotifier {

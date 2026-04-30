@@ -31,6 +31,13 @@ type ThreadDescendantStats = {
 
 const MAX_SUMMARY_PARTICIPANTS = 3;
 
+function isBroadcastReply(message: TimelineMessage): boolean {
+  return (
+    message.tags?.some((tag) => tag[0] === "broadcast" && tag[1] === "1") ??
+    false
+  );
+}
+
 function normalizeHeadMessage(message: TimelineMessage): TimelineMessage {
   return {
     ...message,
@@ -215,7 +222,7 @@ export function buildMainTimelineEntries(
   const descendantStatsByMessageId = buildDescendantStatsByMessageId(messages);
 
   return messages
-    .filter((message) => message.parentId == null)
+    .filter((message) => message.parentId == null || isBroadcastReply(message))
     .map((message) => {
       return {
         message,

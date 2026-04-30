@@ -345,12 +345,18 @@ List<MainTimelineEntry> buildMainTimelineEntries(
 
   return [
     for (final msg in messages)
-      if (msg.parentId == null)
+      if (msg.parentId == null || _isBroadcastReply(msg))
         MainTimelineEntry(
           message: msg,
           summary: _buildSummary(msg.id, childrenByParent),
         ),
   ];
+}
+
+bool _isBroadcastReply(TimelineMessage message) {
+  return message.tags.any(
+    (tag) => tag.length >= 2 && tag[0] == 'broadcast' && tag[1] == '1',
+  );
 }
 
 ThreadSummary? _buildSummary(
