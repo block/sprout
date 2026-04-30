@@ -65,7 +65,8 @@ use futures_util::{SinkExt, StreamExt};
 use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
 use serde_json::{json, Value};
 use sprout_core::kind::{
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_TYPING_INDICATOR,
+    KIND_AGENT_OBSERVER_FRAME, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_TYPING_INDICATOR,
 };
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -325,6 +326,8 @@ enum RelayMessage {
 
 /// Subscription ID for the global membership notification subscription.
 const MEMBERSHIP_NOTIF_SUB_ID: &str = "membership-notif";
+/// Subscription ID for encrypted owner-to-agent observer control frames.
+const OBSERVER_CONTROL_SUB_ID: &str = "agent-observer-control";
 
 /// Commands sent from `HarnessRelay` to the background WebSocket task.
 enum RelayCommand {
@@ -342,6 +345,8 @@ enum RelayCommand {
     Shutdown,
     /// Subscribe to global membership notifications.
     SubscribeMembership,
+    /// Subscribe to encrypted observer control frames addressed to this agent.
+    SubscribeObserverControls,
     /// Publish a signed event to the relay (for typing indicators, etc.).
     PublishEvent { event: Box<Event> },
     /// Set the startup watermark timestamp for Finding #22.
@@ -366,6 +371,8 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 pub struct HarnessRelay {
     /// Receiver for events forwarded by the background task.
     event_rx: mpsc::Receiver<Option<SproutEvent>>,
+    /// Receiver for encrypted observer control events addressed to this agent.
+    observer_control_rx: Option<mpsc::Receiver<Event>>,
     /// Sender for commands to the background task.
     cmd_tx: mpsc::Sender<RelayCommand>,
     /// HTTP client for REST API calls.
@@ -385,6 +392,24 @@ pub struct HarnessRelay {
     bg_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
+/// Cloneable publisher handle for signed events on the relay background socket.
+#[derive(Clone)]
+pub struct RelayEventPublisher {
+    cmd_tx: mpsc::Sender<RelayCommand>,
+}
+
+impl RelayEventPublisher {
+    /// Publish a signed event through the relay background task.
+    pub async fn publish_event(&self, event: Event) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::PublishEvent {
+                event: Box::new(event),
+            })
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)
+    }
+}
+
 impl HarnessRelay {
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -401,6 +426,8 @@ impl HarnessRelay {
         let (ws, handshake_buffer) = do_connect(relay_url, keys, api_token).await?;
 
         let (event_tx, event_rx) = mpsc::channel::<Option<SproutEvent>>(event_channel_capacity());
+        let (observer_control_tx, observer_control_rx) =
+            mpsc::channel::<Event>(event_channel_capacity());
         let (cmd_tx, cmd_rx) = mpsc::channel::<RelayCommand>(CMD_CHANNEL_CAPACITY);
 
         let bg_keys = keys.clone();
@@ -413,6 +440,7 @@ impl HarnessRelay {
                 ws,
                 handshake_buffer,
                 event_tx,
+                observer_control_tx,
                 cmd_rx,
                 bg_keys,
                 bg_relay_url,
@@ -424,6 +452,7 @@ impl HarnessRelay {
 
         Ok(Self {
             event_rx,
+            observer_control_rx: Some(observer_control_rx),
             cmd_tx,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
@@ -515,6 +544,27 @@ impl HarnessRelay {
             .await
             .map_err(|_| RelayError::ConnectionClosed)?;
         Ok(())
+    }
+
+    /// Subscribe to encrypted observer control frames addressed to this agent.
+    pub async fn subscribe_observer_controls(&mut self) -> Result<(), RelayError> {
+        self.cmd_tx
+            .send(RelayCommand::SubscribeObserverControls)
+            .await
+            .map_err(|_| RelayError::ConnectionClosed)?;
+        Ok(())
+    }
+
+    /// Take the observer-control receiver for polling outside this relay object.
+    pub fn take_observer_control_rx(&mut self) -> Option<mpsc::Receiver<Event>> {
+        self.observer_control_rx.take()
+    }
+
+    /// Return a cloneable publisher handle for signed relay events.
+    pub fn event_publisher(&self) -> RelayEventPublisher {
+        RelayEventPublisher {
+            cmd_tx: self.cmd_tx.clone(),
+        }
     }
 
     /// Unsubscribe from a channel.
@@ -717,6 +767,8 @@ struct BgState {
     membership_last_seen: Option<u64>,
     /// Whether the membership notification subscription is active.
     membership_sub_active: bool,
+    /// Whether the observer control subscription is active.
+    observer_control_sub_active: bool,
     /// Oldest dropped channel-event timestamp per channel, keyed by channel_id.
     /// Mirrors `membership_dropped_since` but for ordinary channel events.
     /// On reconnect resubscribe, `since` = min(last_seen, channel_dropped_since).
@@ -749,6 +801,7 @@ impl BgState {
             membership_dropped_since: None,
             membership_last_seen: None,
             membership_sub_active: false,
+            observer_control_sub_active: false,
             channel_dropped_since: HashMap::new(),
             proactive_resubscribe_needed: false,
             startup_watermark: None,
@@ -840,6 +893,9 @@ fn apply_command_to_state(state: &mut BgState, cmd: RelayCommand) {
         }
         RelayCommand::SubscribeMembership => {
             state.membership_sub_active = true;
+        }
+        RelayCommand::SubscribeObserverControls => {
+            state.observer_control_sub_active = true;
         }
         RelayCommand::SetStartupWatermark { ts } => {
             state.startup_watermark = Some(ts);
@@ -942,6 +998,17 @@ async fn execute_connected_command(
                 false
             }
         }
+        RelayCommand::SubscribeObserverControls => {
+            let sent = send_observer_control_subscribe(ws, agent_pubkey_hex).await;
+            if sent {
+                state.observer_control_sub_active = true;
+                true
+            } else {
+                warn!("observer control subscribe REQ failed — recording intent for reconnect");
+                state.observer_control_sub_active = true;
+                false
+            }
+        }
         RelayCommand::PublishEvent { event } => {
             let msg = json!(["EVENT", event]);
             if let Ok(text) = serde_json::to_string(&msg) {
@@ -984,6 +1051,7 @@ async fn run_background_task(
     mut ws: WsStream,
     initial_handshake_buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: mpsc::Sender<Option<SproutEvent>>,
+    observer_control_tx: mpsc::Sender<Event>,
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
     relay_url: String,
@@ -998,6 +1066,7 @@ async fn run_background_task(
         &mut ws,
         initial_handshake_buffer,
         &event_tx,
+        &observer_control_tx,
         &mut state,
         &keys,
         &relay_url,
@@ -1019,6 +1088,7 @@ async fn run_background_task(
             api_token.as_deref(),
             &agent_pubkey_hex,
             &event_tx,
+            &observer_control_tx,
         )
         .await
         {
@@ -1042,6 +1112,7 @@ async fn run_background_task(
                         api_token.as_deref(),
                         &agent_pubkey_hex,
                         &event_tx,
+                        &observer_control_tx,
                         true,
                     )
                     .await,
@@ -1082,6 +1153,7 @@ async fn run_background_task(
                     api_token.as_deref(),
                     &agent_pubkey_hex,
                     &event_tx,
+                    &observer_control_tx,
                 )
                 .await
                 {
@@ -1111,6 +1183,7 @@ async fn run_background_task(
                                 api_token.as_deref(),
                                 &agent_pubkey_hex,
                                 &event_tx,
+                                &observer_control_tx,
                                 true,
                             )
                             .await,
@@ -1143,6 +1216,7 @@ async fn run_background_task(
                                 msg,
                                 &mut ws,
                                 &event_tx,
+                                &observer_control_tx,
                                 &mut state,
                                 &keys,
                                 &relay_url,
@@ -1176,6 +1250,7 @@ async fn run_background_task(
                         api_token.as_deref(),
                         &agent_pubkey_hex,
                         &event_tx,
+                    &observer_control_tx,
                     )
                     .await;
                     match outcome {
@@ -1195,7 +1270,7 @@ async fn run_background_task(
                         if matches!(
                             wait_for_reconnect(
                                 &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                api_token.as_deref(), &agent_pubkey_hex, &event_tx, true,
+                                api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
                             ).await,
                             ReconnectOutcome::Shutdown
                         ) { return; }
@@ -1215,7 +1290,7 @@ async fn run_background_task(
                         if matches!(
                             wait_for_reconnect(
                                 &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                api_token.as_deref(), &agent_pubkey_hex, &event_tx, true,
+                                api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
                             ).await,
                             ReconnectOutcome::Shutdown
                         ) { return; }
@@ -1249,6 +1324,7 @@ async fn run_background_task(
                             match try_autonomous_reconnect(
                                 &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
                                 api_token.as_deref(), &agent_pubkey_hex, &event_tx,
+                            &observer_control_tx,
                             ).await {
                                 ReconnectOutcome::Shutdown => return,
                                 ReconnectOutcome::Ok => {
@@ -1261,7 +1337,7 @@ async fn run_background_task(
                                     if matches!(
                                         wait_for_reconnect(
                                             &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                            api_token.as_deref(), &agent_pubkey_hex, &event_tx, true,
+                                            api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
                                         ).await,
                                         ReconnectOutcome::Shutdown
                                     ) { return; }
@@ -1286,6 +1362,7 @@ async fn run_background_task(
                     match try_autonomous_reconnect(
                         &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
                         api_token.as_deref(), &agent_pubkey_hex, &event_tx,
+                    &observer_control_tx,
                     ).await {
                         ReconnectOutcome::Shutdown => return,
                         ReconnectOutcome::Ok => {
@@ -1298,7 +1375,7 @@ async fn run_background_task(
                             if matches!(
                                 wait_for_reconnect(
                                     &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                    api_token.as_deref(), &agent_pubkey_hex, &event_tx, true,
+                                    api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
                                 ).await,
                                 ReconnectOutcome::Shutdown
                             ) { return; }
@@ -1316,6 +1393,7 @@ async fn run_background_task(
                         match try_autonomous_reconnect(
                             &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
                             api_token.as_deref(), &agent_pubkey_hex, &event_tx,
+                        &observer_control_tx,
                         ).await {
                             ReconnectOutcome::Shutdown => return,
                             ReconnectOutcome::Ok => {
@@ -1328,7 +1406,7 @@ async fn run_background_task(
                                 if matches!(
                                     wait_for_reconnect(
                                         &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                        api_token.as_deref(), &agent_pubkey_hex, &event_tx, true,
+                                        api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
                                     ).await,
                                     ReconnectOutcome::Shutdown
                                 ) { return; }
@@ -1365,6 +1443,7 @@ async fn handle_ws_message(
     msg: Message,
     ws: &mut WsStream,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
@@ -1386,7 +1465,15 @@ async fn handle_ws_message(
                     subscription_id,
                     event,
                 } => {
-                    if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
+                    if subscription_id == OBSERVER_CONTROL_SUB_ID {
+                        match observer_control_tx.try_send(*event) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                warn!("observer control event dropped because control channel is full");
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                        }
+                    } else if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
                         // Membership notification — extract channel UUID from h tag.
                         let channel_uuid = match extract_h_tag_uuid(&event) {
                             Some(uuid) => uuid,
@@ -1535,7 +1622,15 @@ async fn handle_ws_message(
                     // the attempt — if the send fails and triggers reconnect,
                     // resubscribe_after_reconnect() needs the subscription to
                     // still be in state so it can restore it.
-                    if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
+                    if subscription_id == OBSERVER_CONTROL_SUB_ID {
+                        let sent = send_observer_control_subscribe(ws, agent_pubkey_hex).await;
+                        if sent {
+                            state.observer_control_sub_active = true;
+                        } else {
+                            warn!("observer control resubscribe failed after CLOSED — triggering reconnect");
+                            return false;
+                        }
+                    } else if subscription_id == MEMBERSHIP_NOTIF_SUB_ID {
                         let since =
                             match (state.membership_dropped_since, state.membership_last_seen) {
                                 (Some(d), Some(l)) => Some(d.min(l)),
@@ -1652,6 +1747,7 @@ async fn process_handshake_buffer(
     ws: &mut WsStream,
     buffer: std::collections::VecDeque<RelayMessage>,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    observer_control_tx: &mpsc::Sender<Event>,
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
@@ -1694,6 +1790,7 @@ async fn process_handshake_buffer(
                 Message::Text(text.into()),
                 ws,
                 event_tx,
+                observer_control_tx,
                 state,
                 keys,
                 relay_url,
@@ -1767,6 +1864,13 @@ async fn resubscribe_after_reconnect(
             warn!("failed to resubscribe membership after reconnect");
             all_ok = false;
         }
+    }
+
+    if state.observer_control_sub_active
+        && !send_observer_control_subscribe(ws, agent_pubkey_hex).await
+    {
+        warn!("failed to resubscribe observer controls after reconnect");
+        all_ok = false;
     }
 
     all_ok
@@ -1855,6 +1959,7 @@ async fn try_autonomous_reconnect(
     api_token: Option<&str>,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    observer_control_tx: &mpsc::Sender<Event>,
 ) -> ReconnectOutcome {
     // Finding #42: 5 attempts, up to 16s base backoff.
     let backoffs = [
@@ -1880,6 +1985,7 @@ async fn try_autonomous_reconnect(
                     ws,
                     handshake_buffer,
                     event_tx,
+                    observer_control_tx,
                     state,
                     keys,
                     relay_url,
@@ -1956,6 +2062,7 @@ async fn wait_for_reconnect(
     api_token: Option<&str>,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
+    observer_control_tx: &mpsc::Sender<Event>,
     skip_drain: bool,
 ) -> ReconnectOutcome {
     if !skip_drain {
@@ -1993,6 +2100,7 @@ async fn wait_for_reconnect(
                     ws,
                     handshake_buffer,
                     event_tx,
+                    observer_control_tx,
                     state,
                     keys,
                     relay_url,
@@ -2165,6 +2273,41 @@ async fn send_membership_subscribe(
         }
         Err(e) => {
             warn!("failed to serialize membership notification REQ: {e}");
+            false
+        }
+    }
+}
+
+/// Send a NIP-01 REQ for owner-to-agent observer control frames.
+async fn send_observer_control_subscribe(ws: &mut WsStream, agent_pubkey_hex: &str) -> bool {
+    let req = json!([
+        "REQ",
+        OBSERVER_CONTROL_SUB_ID,
+        {
+            "kinds": [KIND_AGENT_OBSERVER_FRAME],
+            "#p": [agent_pubkey_hex],
+            "since": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    ]);
+
+    match serde_json::to_string(&req) {
+        Ok(text) => {
+            match ws_send_timeout(ws, Message::Text(text.into()), WS_SEND_TIMEOUT_SECS).await {
+                Ok(()) => {
+                    debug!("subscribed to observer control frames");
+                    true
+                }
+                Err(e) => {
+                    warn!("failed to send observer control REQ: {e}");
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            warn!("failed to serialize observer control REQ: {e}");
             false
         }
     }

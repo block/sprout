@@ -17,6 +17,7 @@ import {
   useManagedAgentsQuery,
   usePersonasQuery,
 } from "@/features/agents/hooks";
+import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import {
   mergeMessages,
   useChannelMessagesQuery,
@@ -46,7 +47,6 @@ import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
 import { useChannelAgentSessions } from "./useChannelAgentSessions";
-
 type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
@@ -87,7 +87,6 @@ export function ChannelScreen({
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
-
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, isFetchingOlder } =
@@ -165,6 +164,7 @@ export function ChannelScreen({
     enabled: messageProfilePubkeys.length > 0,
   });
   const managedAgentsQuery = useManagedAgentsQuery();
+  useManagedAgentObserverBridge(managedAgentsQuery.data ?? []);
   const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
     const localAgentSet = new Set(
       (managedAgentsQuery.data ?? [])

@@ -1,4 +1,8 @@
 use nostr::{nips::nip44, EventBuilder, JsonUtil, Kind, Tag, Timestamp, ToBech32};
+use nostr_compat::{
+    Event as CompatEvent, JsonUtil as CompatJsonUtil, Keys as CompatKeys,
+    PublicKey as CompatPublicKey,
+};
 use tauri::State;
 
 use crate::{
@@ -73,6 +77,64 @@ pub fn sign_event(
         .sign_with_keys(&keys)
         .map_err(|error| format!("sign failed: {error}"))?;
 
+    Ok(event.as_json())
+}
+
+#[tauri::command]
+pub fn decrypt_observer_event(
+    event_json: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let nsec = {
+        let keys = state.keys.lock().map_err(|error| error.to_string())?;
+        keys.secret_key()
+            .to_bech32()
+            .map_err(|error| format!("encode nsec: {error}"))?
+    };
+    let keys = CompatKeys::parse(&nsec).map_err(|error| format!("parse nsec: {error}"))?;
+    let event =
+        CompatEvent::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
+
+    // Defense-in-depth: verify event ID and signature before decrypting.
+    if !event.verify_id() {
+        return Err("observer event has invalid ID".into());
+    }
+    if !event.verify_signature() {
+        return Err("observer event has invalid signature".into());
+    }
+
+    sprout_core::observer::decrypt_observer_payload(&keys, &event)
+        .map_err(|error| format!("decrypt observer event failed: {error}"))
+}
+
+#[tauri::command]
+pub fn build_observer_control_event(
+    agent_pubkey: String,
+    payload: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let nsec = {
+        let keys = state.keys.lock().map_err(|error| error.to_string())?;
+        keys.secret_key()
+            .to_bech32()
+            .map_err(|error| format!("encode nsec: {error}"))?
+    };
+    let keys = CompatKeys::parse(&nsec).map_err(|error| format!("parse nsec: {error}"))?;
+    let agent_pubkey = CompatPublicKey::from_hex(agent_pubkey.trim())
+        .map_err(|error| format!("invalid agent pubkey: {error}"))?;
+    let agent_pubkey_hex = agent_pubkey.to_hex();
+    let encrypted = sprout_core::observer::encrypt_observer_payload(&keys, &agent_pubkey, &payload)
+        .map_err(|error| format!("encrypt observer control failed: {error}"))?;
+    let builder = sprout_sdk::build_agent_observer_frame(
+        &agent_pubkey_hex,
+        &agent_pubkey_hex,
+        sprout_core::observer::OBSERVER_FRAME_CONTROL,
+        &encrypted,
+    )
+    .map_err(|error| format!("build observer control failed: {error}"))?;
+    let event = builder
+        .sign_with_keys(&keys)
+        .map_err(|error| format!("sign observer control failed: {error}"))?;
     Ok(event.as_json())
 }
 

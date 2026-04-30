@@ -359,16 +359,9 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_PERSONA_NAME")]
     pub persona_name: Option<String>,
 
-    /// Local bind address for the ACP observer API.
-    ///
-    /// Intended for the desktop app. The feed stays on localhost and is not
-    /// part of relay-visible Sprout history.
-    #[arg(long, env = "SPROUT_ACP_OBSERVER_ADDR")]
-    pub observer_addr: Option<String>,
-
-    /// Optional token required by the observer API.
-    #[arg(long, env = "SPROUT_ACP_OBSERVER_TOKEN")]
-    pub observer_token: Option<String>,
+    /// Publish encrypted ACP observer frames over the relay.
+    #[arg(long, env = "SPROUT_ACP_RELAY_OBSERVER", default_value_t = false)]
+    pub relay_observer: bool,
 }
 
 // ── Merged NIP-01 filter ──────────────────────────────────────────────────────
@@ -423,10 +416,8 @@ pub struct Config {
     /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL).
     /// Populated from persona pack resolution. Empty when no pack is configured.
     pub persona_env_vars: Vec<(String, String)>,
-    /// Local observer bind address, when enabled.
-    pub observer_addr: Option<String>,
-    /// Local observer token, when configured.
-    pub observer_token: Option<String>,
+    /// Whether to publish encrypted observer frames through the relay.
+    pub relay_observer: bool,
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
@@ -762,8 +753,7 @@ impl Config {
             respond_to: args.respond_to,
             respond_to_allowlist,
             persona_env_vars,
-            observer_addr: args.observer_addr,
-            observer_token: args.observer_token,
+            relay_observer: args.relay_observer,
         };
 
         Ok(config)
@@ -1124,8 +1114,7 @@ mod tests {
             respond_to: RespondTo::Anyone,
             respond_to_allowlist: HashSet::new(),
             persona_env_vars: vec![],
-            observer_addr: None,
-            observer_token: None,
+            relay_observer: false,
         }
     }
 

@@ -13,6 +13,7 @@ import {
 } from "@/features/agents/hooks";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import type {
   Channel,
   CreateManagedAgentResponse,
@@ -69,6 +70,7 @@ export function useManagedAgentActions() {
       }),
     [managedAgentsQuery.data],
   );
+  useManagedAgentObserverBridge(managedAgents);
 
   const managedPubkeys = React.useMemo(
     () => new Set(managedAgents.map((agent) => agent.pubkey)),
