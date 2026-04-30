@@ -7,6 +7,7 @@ abstract final class EventKind {
   static const deletion = 5;
   static const reaction = 7;
   static const streamMessage = 9;
+  static const presenceUpdate = 20001;
   static const typingIndicator = 20002;
   static const auth = 22242;
   static const agentObserverFrame = 24200;
