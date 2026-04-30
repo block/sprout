@@ -349,6 +349,12 @@ class RelaySessionNotifier extends Notifier<SessionState> {
 
     // Live subscriptions get batched.
     final liveSub = _liveSubscriptions[subId];
+    if (liveSub == null) {
+      debugPrint(
+        '[RelaySession] EVENT for unknown subId=$subId kind=${event.kind} '
+        '(live subs: ${_liveSubscriptions.keys.join(', ')})',
+      );
+    }
     if (liveSub != null) {
       // Track last seen timestamp for reconnect replay.
       if (liveSub.lastSeenCreatedAt == null ||
