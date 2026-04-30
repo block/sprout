@@ -361,19 +361,17 @@ pub async fn upload_pack(
 /// `POST /git/{owner}/{repo}/git-receive-pack`
 ///
 /// Handles push — client sends ref updates + pack data.
-/// Authorization: only the repo owner (whose pubkey matches `{owner}` in the URL)
-/// can push. Maintainer lists from kind:30617 are a future enhancement.
+/// Authorization: NIP-98 authenticates the pusher. The pre-receive hook
+/// calls back to the internal policy endpoint for ref-level authorization
+/// (channel role + protection rules). Any authenticated user can attempt a push;
+/// the hook enforces the actual permissions.
 pub async fn receive_pack(
     State(state): State<Arc<AppState>>,
     auth: GitAuth,
     AxumPath(params): AxumPath<GitRepoParams>,
     body: Body,
 ) -> Result<Response, Response> {
-    // Push authorization: authenticated pubkey must match the repo owner.
     let pusher_hex = hex::encode(auth.pubkey.serialize());
-    if pusher_hex != params.owner {
-        return Err((StatusCode::FORBIDDEN, "push denied: not the repo owner").into_response());
-    }
 
     // Per-repo lock: prevent concurrent pushes to the same bare repo.
     // git receive-pack is not safe for concurrent access.
@@ -385,8 +383,34 @@ pub async fn receive_pack(
         .clone();
     let _repo_guard = repo_lock.lock().await;
 
-    let response =
-        run_git_service(&state, &params.owner, &params.repo, "receive-pack", body).await?;
+    // Resolve repo name (strip .git suffix if present).
+    let repo_name = params.repo.strip_suffix(".git").unwrap_or(&params.repo);
+
+    // Build hook env vars for the pre-receive hook.
+    // The hook uses these to call back to the internal policy endpoint.
+    let hook_url = format!(
+        "http://127.0.0.1:{}/internal/git/policy",
+        state.config.bind_addr.port()
+    );
+    let hook_env = vec![
+        ("SPROUT_HOOK_URL", hook_url),
+        (
+            "SPROUT_HOOK_SECRET",
+            state.config.git_hook_hmac_secret.clone(),
+        ),
+        ("SPROUT_REPO_ID", repo_name.to_string()),
+        ("SPROUT_PUSHER_PUBKEY", pusher_hex.clone()),
+    ];
+
+    let response = run_git_service_with_env(
+        &state,
+        &params.owner,
+        &params.repo,
+        "receive-pack",
+        body,
+        &hook_env,
+    )
+    .await?;
 
     // Post-push: publish kind:30618 ref state event (fire-and-forget).
     let state_clone = state.clone();
@@ -410,6 +434,21 @@ async fn run_git_service(
     service: &str,
     body: Body,
 ) -> Result<Response, Response> {
+    run_git_service_with_env(state, owner, repo, service, body, &[]).await
+}
+
+/// Shared git service runner with extra environment variables.
+///
+/// The `extra_env` pairs are set AFTER `harden_git_env` clears the environment,
+/// so they're available to the git subprocess and any hooks it spawns.
+async fn run_git_service_with_env(
+    state: &Arc<AppState>,
+    owner: &str,
+    repo: &str,
+    service: &str,
+    body: Body,
+    extra_env: &[(&str, String)],
+) -> Result<Response, Response> {
     let validated = validate_repo_path(owner, repo, &state.config.git_repo_path)?;
     if !validated.repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found").into_response());
@@ -432,6 +471,10 @@ async fn run_git_service(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     harden_git_env(&mut cmd);
+    // Pass extra env vars (e.g., hook callback URL and HMAC secret).
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
     let mut child = cmd.spawn().map_err(|e| {
         error!(error = %e, "git subprocess failed to spawn");
         (StatusCode::INTERNAL_SERVER_ERROR, "git error").into_response()

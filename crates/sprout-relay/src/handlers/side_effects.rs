@@ -1594,19 +1594,6 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
     }
 
-    // Security: disable git hooks (RCE prevention).
-    let _ = Command::new("git")
-        .args(["config", "--file"])
-        .arg(repo_dir.join("config"))
-        .args(["core.hooksPath", "/dev/null"])
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("HOME", "/dev/null")
-        .output()
-        .await;
-
     // Git config for Smart HTTP compatibility.
     for (key, value) in [
         ("http.receivepack", "true"),
@@ -1627,10 +1614,14 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             .await;
     }
 
-    // Belt-and-suspenders: remove hooks directory entirely.
-    let hooks_dir = repo_dir.join("hooks");
-    if hooks_dir.exists() {
-        let _ = tokio::fs::remove_dir_all(&hooks_dir).await;
+    // Install pre-receive hook for permission enforcement.
+    // This replaces the old "disable all hooks" approach — we now have our own
+    // hook that calls back to the relay's internal policy endpoint.
+    // Only pre-receive is installed; all other hook slots remain empty (RCE prevention).
+    if let Err(e) = crate::api::git::hook::install_hook(&repo_dir).await {
+        // Non-fatal: repo is usable but pushes won't be permission-checked.
+        // The receive_pack handler has a fallback check as well.
+        warn!(error = %e, repo_id = %repo_id, "failed to install pre-receive hook");
     }
 
     info!(
