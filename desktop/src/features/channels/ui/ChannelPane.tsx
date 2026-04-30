@@ -355,6 +355,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           onClose={onCloseAgentSession}
           onResetWidth={handleThreadPanelWidthReset}
           onResizeStart={handleThreadPanelResizeStart}
+          profiles={profiles}
           widthPx={threadPanelWidthPx}
         />
       ) : null}

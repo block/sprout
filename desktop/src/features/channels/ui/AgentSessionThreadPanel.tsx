@@ -1,14 +1,16 @@
 import type * as React from "react";
-import { Activity, Bot, CircleDot, Octagon, X } from "lucide-react";
+import { Activity, CircleDot, Octagon, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { cancelManagedAgentTurn } from "@/shared/api/agentControl";
 import type { Channel, ManagedAgent } from "@/shared/api/types";
 import { useStickToBottom } from "@/shared/hooks/useStickToBottom";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 type AgentSessionThreadPanelProps = {
   agent: ManagedAgent;
@@ -18,6 +20,7 @@ type AgentSessionThreadPanelProps = {
   onClose: () => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  profiles?: UserProfileLookup;
   widthPx: number;
 };
 
@@ -29,10 +32,13 @@ export function AgentSessionThreadPanel({
   onClose,
   onResetWidth,
   onResizeStart,
+  profiles,
   widthPx,
 }: AgentSessionThreadPanelProps) {
   const isLive = agent.status === "running";
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
+  const agentAvatarUrl =
+    profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null;
 
   async function handleInterruptTurn() {
     try {
@@ -74,7 +80,12 @@ export function AgentSessionThreadPanel({
       </button>
 
       <div className="flex items-center gap-3 border-b border-border/70 px-4 py-2.5">
-        <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <UserAvatar
+          avatarUrl={agentAvatarUrl}
+          className="shrink-0 rounded-full shadow-none"
+          displayName={agent.name}
+          size="sm"
+        />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold tracking-tight">
             {agent.name}
@@ -141,6 +152,7 @@ export function AgentSessionThreadPanel({
           channelId={channel.id}
           className="border-0 bg-transparent p-0 shadow-none"
           emptyDescription={`Mention ${agent.name} in the channel to see its work here.`}
+          agentAvatarUrl={agentAvatarUrl}
           showHeader={false}
           showRaw={false}
         />

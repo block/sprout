@@ -25,6 +25,7 @@ import { useObserverEvents } from "./useObserverEvents";
 
 type ManagedAgentSessionPanelProps = {
   agent: ManagedAgent;
+  agentAvatarUrl?: string | null;
   channelId?: string | null;
   className?: string;
   emptyDescription?: string;
@@ -34,6 +35,7 @@ type ManagedAgentSessionPanelProps = {
 
 export function ManagedAgentSessionPanel({
   agent,
+  agentAvatarUrl = null,
   channelId = null,
   className,
   emptyDescription = "Mention this agent in a channel to watch the next turn.",
@@ -78,6 +80,7 @@ export function ManagedAgentSessionPanel({
       ) : null}
 
       <SessionBody
+        agentAvatarUrl={agentAvatarUrl}
         agentName={agent.name}
         connectionState={connectionState}
         emptyDescription={emptyDescription}
@@ -127,6 +130,7 @@ function SessionHeader({
 }
 
 function SessionBody({
+  agentAvatarUrl,
   agentName,
   connectionState,
   emptyDescription,
@@ -136,6 +140,7 @@ function SessionBody({
   showRaw,
   transcript,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   connectionState: ConnectionState;
   emptyDescription: string;
@@ -160,6 +165,7 @@ function SessionBody({
           )}
         >
           <AgentSessionTranscriptList
+            agentAvatarUrl={agentAvatarUrl}
             agentName={agentName}
             emptyDescription={emptyDescription}
             items={transcript}

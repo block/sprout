@@ -1,15 +1,18 @@
-import { Bot, Brain, ChevronDown, Radio, TerminalSquare } from "lucide-react";
+import { Brain, ChevronDown, Radio, TerminalSquare } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import { Markdown } from "@/shared/ui/markdown";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { TranscriptItem } from "./agentSessionTypes";
 import { ToolItem } from "./AgentSessionToolItem";
 
 export function AgentSessionTranscriptList({
+  agentAvatarUrl,
   agentName,
   emptyDescription,
   items,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   emptyDescription: string;
   items: TranscriptItem[];
@@ -33,7 +36,11 @@ export function AgentSessionTranscriptList({
     >
       {items.map((item) => (
         <div key={item.id}>
-          <TranscriptItemView agentName={agentName} item={item} />
+          <TranscriptItemView
+            agentAvatarUrl={agentAvatarUrl}
+            agentName={agentName}
+            item={item}
+          />
         </div>
       ))}
     </div>
@@ -41,14 +48,22 @@ export function AgentSessionTranscriptList({
 }
 
 function TranscriptItemView({
+  agentAvatarUrl,
   agentName,
   item,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   item: TranscriptItem;
 }) {
   if (item.type === "message") {
-    return <MessageItem agentName={agentName} item={item} />;
+    return (
+      <MessageItem
+        agentAvatarUrl={agentAvatarUrl}
+        agentName={agentName}
+        item={item}
+      />
+    );
   }
   if (item.type === "tool") {
     return <ToolItem item={item} />;
@@ -63,9 +78,11 @@ function TranscriptItemView({
 }
 
 function MessageItem({
+  agentAvatarUrl,
   agentName,
   item,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   item: Extract<TranscriptItem, { type: "message" }>;
 }) {
@@ -80,9 +97,12 @@ function MessageItem({
       <div className="group relative flex min-w-0 flex-1 flex-col items-start gap-1">
         <div className="flex items-center gap-1.5 text-xs">
           {isAssistant ? (
-            <span className="flex h-5 w-5 items-center justify-center">
-              <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-            </span>
+            <UserAvatar
+              avatarUrl={agentAvatarUrl}
+              className="rounded-full shadow-none"
+              displayName={agentName}
+              size="xs"
+            />
           ) : null}
           <span className="font-medium text-foreground">{label}</span>
         </div>
