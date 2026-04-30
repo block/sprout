@@ -47,12 +47,10 @@ export function AgentSessionThreadPanel({
 
   async function handleInterruptTurn() {
     try {
-      const result = await cancelManagedAgentTurn(agent.pubkey, channel.id);
-      if (result.status === "sent") {
-        toast.success(`Stop signal sent to ${agent.name}.`);
-      } else {
-        toast.info(`${agent.name} has no active turn in this channel.`);
-      }
+      await cancelManagedAgentTurn(agent.pubkey, channel.id);
+      toast.success(
+        `Stop signal sent to ${agent.name}. It may take a moment to respond.`,
+      );
     } catch (error) {
       toast.error(
         error instanceof Error

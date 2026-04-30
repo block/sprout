@@ -99,6 +99,12 @@ async function handleRelayObserverEvent(
     return;
   }
 
+  // Defense-in-depth: verify the event sender matches the claimed agent pubkey.
+  // The relay gates on is_agent_owner, but a compromised relay could misroute.
+  if (normalizePubkey(event.pubkey) !== normalizePubkey(agentPubkey)) {
+    return;
+  }
+
   try {
     const parsed = (await decryptObserverEvent(event)) as ObserverEvent;
     if (activeGeneration !== generation) {
@@ -223,6 +229,7 @@ export function resetAgentObserverStore() {
   startPromise = null;
   eventProcessingQueue = Promise.resolve();
   eventsByAgent.clear();
+  knownAgentPubkeys.clear();
   connectionState = "idle";
   errorMessage = null;
   notifyListeners();

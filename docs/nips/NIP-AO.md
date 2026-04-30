@@ -56,9 +56,9 @@ Events MUST have exactly one `p` tag, exactly one `agent` tag, and exactly one
 **Telemetry** (agent → owner): `pubkey`=agent, `p`=owner, `agent`=agent.
 **Control** (owner → agent): `pubkey`=owner, `p`=agent, `agent`=agent (target).
 
-`frame` MUST be `"telemetry"` or `"control"`. Relays MUST reject events with
-unrecognized `frame` values. Clients MUST ignore events with unrecognized `frame`
-values. An `h` tag MAY be included when the session runs within a NIP-29 group
+`frame` MUST be `"telemetry"` or `"control"`. Relays SHOULD silently drop events
+with unrecognized `frame` values (returning OK to the publisher for forward
+compatibility). Clients MUST ignore events with unrecognized `frame` values. An `h` tag MAY be included when the session runs within a NIP-29 group
 context.
 
 ## Encryption

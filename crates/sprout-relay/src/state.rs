@@ -225,6 +225,16 @@ pub struct AppState {
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
     pub started_at: Instant,
+    /// Per-agent sliding-window rate limiter for observer frames (kind 24200).
+    /// Key: agent pubkey bytes (32). Value: (count, window_start).
+    /// 100 events/sec per agent — prevents relay/DB pressure from bursty telemetry.
+    pub observer_rate_limiter: Arc<DashMap<[u8; 32], (u32, Instant)>>,
+    /// Cache for observer agent-owner authorization (kind 24200).
+    /// Key: (agent_pubkey_bytes, owner_pubkey_bytes). Value: is_owner.
+    /// agent_owner_pubkey is immutable so a long TTL (5 min) is safe.
+    /// Prevents repeated DB lookups from bursty observer traffic.
+    #[allow(clippy::type_complexity)]
+    pub observer_owner_cache: Arc<moka::sync::Cache<(Vec<u8>, Vec<u8>), bool>>,
 }
 
 impl AppState {
@@ -351,6 +361,13 @@ impl AppState {
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
+            observer_rate_limiter: Arc::new(DashMap::new()),
+            observer_owner_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(1_000)
+                    .time_to_live(std::time::Duration::from_secs(300))
+                    .build(),
+            ),
         };
         (
             state,

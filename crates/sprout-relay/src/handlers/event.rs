@@ -534,25 +534,62 @@ async fn handle_agent_observer_event(
 
     let agent_bytes = route.agent.serialize().to_vec();
     let owner_bytes = route.owner.serialize().to_vec();
-    match state.db.is_agent_owner(&agent_bytes, &owner_bytes).await {
-        Ok(true) => {}
-        Ok(false) => {
-            reject("auth");
-            conn.send(RelayMessage::ok(
-                event_id_hex,
-                false,
-                "restricted: observer frame is not authorized for this agent owner",
-            ));
-            return;
+    let cache_key = (agent_bytes.clone(), owner_bytes.clone());
+    let is_owner = match state.observer_owner_cache.get(&cache_key) {
+        Some(cached) => cached,
+        None => {
+            let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
+            match result {
+                Ok(v) => {
+                    state.observer_owner_cache.insert(cache_key, v);
+                    v
+                }
+                Err(e) => {
+                    warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
+                    conn.send(RelayMessage::ok(
+                        event_id_hex,
+                        false,
+                        "error: internal server error",
+                    ));
+                    return;
+                }
+            }
         }
-        Err(e) => {
-            warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
-            conn.send(RelayMessage::ok(
-                event_id_hex,
-                false,
-                "error: internal server error",
-            ));
-            return;
+    };
+    if !is_owner {
+        reject("auth");
+        conn.send(RelayMessage::ok(
+            event_id_hex,
+            false,
+            "restricted: observer frame is not authorized for this agent owner",
+        ));
+        return;
+    }
+
+    // Rate limit telemetry frames only (100/sec per agent).
+    // Control frames (owner → agent) bypass the limiter — they are rare and must not
+    // be starved by bursty telemetry from the agent.
+    if matches!(route.direction, AgentObserverDirection::Telemetry) {
+        let agent_key: [u8; 32] = agent_bytes.as_slice().try_into().unwrap_or([0u8; 32]);
+        let now = std::time::Instant::now();
+        let mut entry = state
+            .observer_rate_limiter
+            .entry(agent_key)
+            .or_insert((0, now));
+        let (count, window_start) = entry.value_mut();
+        if now.duration_since(*window_start).as_secs() >= 1 {
+            *count = 1;
+            *window_start = now;
+        } else {
+            *count += 1;
+            if *count > 100 {
+                conn.send(RelayMessage::ok(
+                    event_id_hex,
+                    false,
+                    "rate-limited: observer frame rate exceeded (100/sec per agent)",
+                ));
+                return;
+            }
         }
     }
 
