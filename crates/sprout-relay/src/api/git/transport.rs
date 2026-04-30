@@ -384,6 +384,23 @@ pub async fn receive_pack(
         .clone();
     let _repo_guard = repo_lock.lock().await;
 
+    // SECURITY: Verify pre-receive hook exists before allowing push.
+    // If the hook is missing (install failed, disk error, race condition),
+    // deny the push rather than allowing it without permission checks.
+    let hook_path = validated.repo_path.join("hooks").join("pre-receive");
+    if !hook_path.exists() {
+        warn!(
+            repo = %params.repo,
+            hook = %hook_path.display(),
+            "push denied: pre-receive hook missing — repo has no permission enforcement"
+        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "push denied: repository permission hook not installed",
+        )
+            .into_response());
+    }
+
     // Resolve repo name (strip .git suffix if present).
     let repo_name = params.repo.strip_suffix(".git").unwrap_or(&params.repo);
 

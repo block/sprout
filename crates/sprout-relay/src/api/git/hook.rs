@@ -31,14 +31,14 @@ use tracing::{error, info};
 const PRE_RECEIVE_HOOK: &str = r#"#!/bin/sh
 # Sprout pre-receive hook — FAIL-CLOSED
 # ANY error, timeout, or non-200 response → reject the push.
-set -e
+set -eo pipefail
 
 ZERO="0000000000000000000000000000000000000000"
 TMPDIR="${TMPDIR:-/tmp}"
 REFS_FILE="$TMPDIR/sprout_hook_refs.$$"
 HMAC_FILE="$TMPDIR/sprout_hook_hmac.$$"
 RESP_FILE="$TMPDIR/sprout_hook_resp.$$"
-trap 'rm -f "$REFS_FILE" "$HMAC_FILE" "$RESP_FILE"' EXIT
+trap 'rm -f "$REFS_FILE" "$HMAC_FILE" "$HMAC_FILE.concat" "$RESP_FILE"' EXIT
 
 # Phase 1: Read ref updates from stdin, classify each, build JSON + HMAC lines.
 # We write two files in parallel:

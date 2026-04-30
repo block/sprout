@@ -6,9 +6,18 @@
 //! - `hook` — Pre-receive hook script and injection
 //! - `policy` — Internal policy endpoint (HMAC-authenticated callback from hook)
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{routing::post, Router};
+use axum::{
+    body::Body,
+    extract::ConnectInfo,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::post,
+    Router,
+};
 
 use crate::state::AppState;
 
@@ -18,6 +27,24 @@ pub mod transport;
 
 pub use transport::git_router;
 
+/// Middleware that rejects requests from non-loopback addresses.
+///
+/// Defense-in-depth: the internal policy endpoint should only be reachable
+/// from localhost (the pre-receive hook runs on the same host as the relay).
+async fn require_localhost(req: Request<Body>, next: Next) -> Response {
+    let is_loopback = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().is_loopback())
+        .unwrap_or(false);
+
+    if !is_loopback {
+        return (StatusCode::FORBIDDEN, "internal endpoint: localhost only").into_response();
+    }
+
+    next.run(req).await
+}
+
 /// Build the internal git policy router.
 ///
 /// Mounted at `/internal/git/policy` — only accessible from localhost.
@@ -25,5 +52,6 @@ pub use transport::git_router;
 pub fn git_policy_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/internal/git/policy", post(policy::hook_policy_check))
+        .layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }
