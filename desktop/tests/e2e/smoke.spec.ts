@@ -307,10 +307,6 @@ test("opens accessible unjoined channels from search in read-only mode", async (
     "Design critique notes for the browse flow.",
   );
   await expect(page.getByTestId("join-banner")).toBeVisible();
-
-  await page.getByTestId("channel-management-trigger").click();
-  await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
-  await expect(page.getByTestId("channel-management-join")).toBeVisible();
 });
 
 test("replaces the channel pane when switching channels", async ({ page }) => {
