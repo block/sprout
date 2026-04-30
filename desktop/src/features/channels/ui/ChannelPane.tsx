@@ -281,7 +281,10 @@ export const ChannelPane = React.memo(function ChannelPane({
           targetMessageId={targetMessageId}
         />
         {isNonMemberView ? (
-          <div className="flex items-center gap-3 border-t border-border/80 bg-card/50 px-4 py-3">
+          <div
+            data-testid="join-banner"
+            className="flex items-center gap-3 border-t border-border/80 bg-card/50 px-4 py-3"
+          >
             <div className="flex min-w-0 flex-1 items-center gap-2 text-sm text-muted-foreground">
               <Hash className="h-4 w-4 shrink-0" />
               <span className="truncate">

@@ -306,10 +306,7 @@ test("opens accessible unjoined channels from search in read-only mode", async (
   await expect(page.getByTestId("message-timeline")).toContainText(
     "Design critique notes for the browse flow.",
   );
-  await expect(page.getByTestId("message-input")).toHaveAttribute(
-    "contenteditable",
-    "false",
-  );
+  await expect(page.getByTestId("join-banner")).toBeVisible();
 
   await page.getByTestId("channel-management-trigger").click();
   await expect(page.getByTestId("channel-management-sheet")).toBeVisible();
