@@ -275,6 +275,11 @@ pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParse
             let role: MemberRole = role_str
                 .parse()
                 .map_err(|_| RuleParseError::InvalidRole(role_str.to_string()))?;
+            // Reject push:bot and push:guest — they're almost certainly user errors.
+            // push:bot means "anyone can push" (level 0), push:guest is similarly permissive.
+            if matches!(role, MemberRole::Bot | MemberRole::Guest) {
+                return Err(RuleParseError::InvalidRole(role_str.to_string()));
+            }
             // Take the strictest (highest permission level).
             push_role = Some(match push_role {
                 None => role,
@@ -307,7 +312,7 @@ pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParse
 
 /// Parse all `sprout-protect` tags from a kind:30617 event's tag list.
 ///
-/// Returns the parsed rules, skipping malformed tags (logged but not fatal).
+/// Returns an error if any `sprout-protect` tag is malformed (fail-closed).
 /// Enforces the per-repo rule count limit.
 pub fn parse_protection_tags(tags: &[Vec<String>]) -> Result<Vec<ProtectionRule>, RuleParseError> {
     let mut rules = Vec::new();
@@ -663,6 +668,19 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn parse_protection_tag_rejects_push_bot_and_guest() {
+        // push:bot and push:guest are rejected — they're almost certainly user errors.
+        assert!(matches!(
+            parse_protection_tag(&["refs/heads/main", "push:bot"]),
+            Err(RuleParseError::InvalidRole(_))
+        ));
+        assert!(matches!(
+            parse_protection_tag(&["refs/heads/main", "push:guest"]),
+            Err(RuleParseError::InvalidRole(_))
+        ));
+    }
+
     // ── Effective rules (union semantics) ────────────────────────────────
 
     #[test]
@@ -724,6 +742,22 @@ mod tests {
         };
         // Owner is blocked by no-force-push!
         assert!(evaluate_ref_update(&update, MemberRole::Owner, &rules).is_err());
+    }
+
+    #[test]
+    fn evaluate_no_force_push_allows_fast_forward() {
+        let rules =
+            vec![
+                parse_protection_tag(&["refs/heads/main", "push:member", "no-force-push"]).unwrap(),
+            ];
+        let update = RefUpdate {
+            ref_name: "refs/heads/main".to_string(),
+            kind: UpdateKind::FastForward,
+            old_oid: "a".repeat(40),
+            new_oid: "b".repeat(40),
+        };
+        // no-force-push should NOT block fast-forward pushes.
+        assert!(evaluate_ref_update(&update, MemberRole::Member, &rules).is_ok());
     }
 
     #[test]
