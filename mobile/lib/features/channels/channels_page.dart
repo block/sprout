@@ -471,12 +471,12 @@ class _SectionHeader extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(icon, size: 14, color: context.colors.outline),
+            Icon(icon, size: 14, color: context.colors.onSurfaceVariant),
             const SizedBox(width: Grid.half),
             Text(
               label.toUpperCase(),
               style: context.textTheme.labelSmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.8,
               ),
@@ -485,7 +485,7 @@ class _SectionHeader extends StatelessWidget {
             Icon(
               expanded ? LucideIcons.chevronDown : LucideIcons.chevronRight,
               size: 14,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ],
         ),
@@ -531,7 +531,7 @@ class _ChannelTile extends ConsumerWidget {
                 size: 18,
                 color: hasActivity
                     ? context.colors.onSurface
-                    : context.colors.outline,
+                    : context.colors.onSurfaceVariant,
               ),
             const SizedBox(width: Grid.xxs),
             Expanded(
