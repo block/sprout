@@ -1453,7 +1453,7 @@ fn validate_repo_id(repo_id: &str) -> bool {
 /// - Repo name validated: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`
 /// - Owner pubkey validated: exactly 64 lowercase hex chars
 /// - Path canonicalized and verified to start with repo root
-/// - Git hooks disabled via `core.hooksPath=/dev/null` + hooks dir removed
+/// - Pre-receive hook installed for permission enforcement (only hook enabled)
 /// - Per-pubkey repo count limit enforced
 async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     use tokio::process::Command;
@@ -1619,9 +1619,9 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
     // hook that calls back to the relay's internal policy endpoint.
     // Only pre-receive is installed; all other hook slots remain empty (RCE prevention).
     if let Err(e) = crate::api::git::hook::install_hook(&repo_dir).await {
-        // Non-fatal: repo is usable but pushes won't be permission-checked.
-        // The receive_pack handler has a fallback check as well.
-        warn!(error = %e, repo_id = %repo_id, "failed to install pre-receive hook");
+        // Non-fatal: repo is created but pushes won't be permission-checked
+        // until the hook is manually installed. Log prominently.
+        warn!(error = %e, repo_id = %repo_id, "failed to install pre-receive hook — pushes will be unprotected");
     }
 
     info!(

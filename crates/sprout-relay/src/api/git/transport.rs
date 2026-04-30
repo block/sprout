@@ -42,8 +42,9 @@ const PACK_OPS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300
 /// Validates the `Authorization: Nostr <base64>` header before the request body
 /// is read. Same pattern as `AuthenticatedUpload` in media.rs.
 ///
-/// Authorization model (v1): any authenticated pubkey can clone; only the repo
-/// owner can push. Maintainer lists from kind:30617 are a future enhancement.
+/// Authorization model: any authenticated pubkey can clone; push authorization
+/// is handled by the pre-receive hook (calls back to the internal policy endpoint
+/// which checks channel role + protection rules from kind:30617).
 pub struct GitAuth {
     /// The authenticated user's public key, extracted from the NIP-98 event.
     pub pubkey: nostr::PublicKey,

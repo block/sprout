@@ -296,7 +296,11 @@ pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParse
                 "no-force-push" => no_force_push = true,
                 "no-delete" => no_delete = true,
                 "require-patch" => require_patch = true,
-                other => return Err(RuleParseError::UnknownRule(other.to_string())),
+                // Forward-compatibility: unknown rules are silently skipped.
+                // A future relay version may add new rule types (e.g., "require-review").
+                // The safe behavior is to enforce what we understand and ignore the rest.
+                // The repo owner explicitly added known rules — those should still work.
+                _ => {}
             }
         }
     }
@@ -653,11 +657,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_protection_tag_unknown_rule() {
-        assert!(matches!(
-            parse_protection_tag(&["refs/heads/main", "yolo"]),
-            Err(RuleParseError::UnknownRule(_))
-        ));
+    fn parse_protection_tag_unknown_rule_skipped() {
+        // Forward-compatibility: unknown rules are silently skipped.
+        let rule = parse_protection_tag(&["refs/heads/main", "yolo", "no-force-push"]).unwrap();
+        // "yolo" was skipped, but "no-force-push" was still applied.
+        assert!(rule.no_force_push);
+        assert!(rule.push_role.is_none());
     }
 
     #[test]
