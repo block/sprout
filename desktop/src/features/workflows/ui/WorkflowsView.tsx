@@ -14,6 +14,7 @@ import {
   triggerWorkflow,
 } from "@/shared/api/tauriWorkflows";
 import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 type WorkflowsViewProps = {
@@ -38,10 +39,7 @@ function WorkflowsListSkeleton() {
   return (
     <div className="space-y-2">
       {["first", "second", "third", "fourth"].map((card) => (
-        <div
-          className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
-          key={card}
-        >
+        <Card className="p-4" key={card}>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1 space-y-3">
               <div className="flex items-center gap-2">
@@ -60,7 +58,7 @@ function WorkflowsListSkeleton() {
               <Skeleton className="h-8 w-8 rounded-lg" />
             </div>
           </div>
-        </div>
+        </Card>
       ))}
     </div>
   );

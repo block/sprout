@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{Read as _, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -58,7 +58,25 @@ pub fn save_managed_agents(app: &AppHandle, records: &[ManagedAgentRecord]) -> R
     fs::write(&path, payload).map_err(|error| format!("failed to write agent store: {error}"))
 }
 
+/// Maximum log file size before rotation (10 MB).
+const MAX_LOG_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// If `path` exceeds [`MAX_LOG_FILE_SIZE`], rotate it to `<path>.1`.
+fn maybe_rotate_log(path: &Path) {
+    let size = match fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if size <= MAX_LOG_FILE_SIZE {
+        return;
+    }
+    let mut rotated = path.as_os_str().to_owned();
+    rotated.push(".1");
+    let _ = fs::rename(path, &rotated);
+}
+
 pub(crate) fn open_log_file(path: &Path) -> Result<File, String> {
+    maybe_rotate_log(path);
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -118,13 +136,49 @@ pub fn read_log_tail(path: &Path, max_lines: usize) -> Result<String, String> {
         return Ok(String::new());
     }
 
-    let file = File::open(path)
+    let mut file = File::open(path)
         .map_err(|error| format!("failed to read log file {}: {error}", path.display()))?;
-    let reader = BufReader::new(file);
-    let lines = reader
-        .lines()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to read log lines: {error}"))?;
+
+    let file_len = file
+        .seek(SeekFrom::End(0))
+        .map_err(|error| format!("failed to seek log file: {error}"))?;
+
+    if file_len == 0 {
+        return Ok(String::new());
+    }
+
+    // Read backward in chunks to find enough newlines.
+    const CHUNK_SIZE: u64 = 8 * 1024;
+    let mut buf = Vec::new();
+    let mut remaining = file_len;
+    let mut newline_count: usize = 0;
+    // We need max_lines + 1 newlines to delimit max_lines lines (the trailing
+    // newline of the last line counts as one).
+    let target_newlines = max_lines + 1;
+
+    while remaining > 0 && newline_count < target_newlines {
+        let chunk = remaining.min(CHUNK_SIZE);
+        remaining -= chunk;
+        file.seek(SeekFrom::Start(remaining))
+            .map_err(|error| format!("failed to seek log file: {error}"))?;
+
+        let mut tmp = vec![0u8; chunk as usize];
+        file.read_exact(&mut tmp)
+            .map_err(|error| format!("failed to read log chunk: {error}"))?;
+
+        // Prepend this chunk so buf always has the tail of the file.
+        tmp.append(&mut buf);
+        buf = tmp;
+
+        newline_count = bytecount_newlines(&buf);
+    }
+
+    let text = String::from_utf8_lossy(&buf);
+    let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(max_lines);
     Ok(lines[start..].join("\n"))
+}
+
+fn bytecount_newlines(buf: &[u8]) -> usize {
+    buf.iter().filter(|&&b| b == b'\n').count()
 }

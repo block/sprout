@@ -9,6 +9,8 @@ abstract final class EventKind {
   static const streamMessage = 9;
   static const typingIndicator = 20002;
   static const auth = 22242;
+  static const agentObserverFrame = 24200;
+  static const readState = 30078;
   static const streamMessageV2 = 40002;
   static const streamMessageEdit = 40003;
   static const streamMessageDiff = 40008;
@@ -16,12 +18,20 @@ abstract final class EventKind {
   static const forumPost = 45001;
   static const forumComment = 45003;
 
+  /// Event kinds that represent user-visible channel messages.
+  static const channelMessageEventKinds = [
+    streamMessage, // 9
+    streamMessageV2, // 40002
+    forumPost, // 45001
+    forumComment, // 45003
+  ];
+
   /// Event kinds that represent channel activity (messages, edits, reactions,
   /// deletions, system events). Matches the desktop's `CHANNEL_EVENT_KINDS`.
   static const channelEventKinds = [
     deletion, // 5
     reaction, // 7
-    streamMessage, // 9
+    ...channelMessageEventKinds,
     40001, // legacy pre-migration stream messages
     streamMessageEdit, // 40003
     streamMessageDiff, // 40008
@@ -87,8 +97,39 @@ class NostrEvent {
   /// The channel/group ID from the `h` tag (NIP-29).
   String? get channelId => getTagValue('h');
 
+  /// Extract thread parent and root IDs from `e` tags.
+  ///
+  /// Matches the desktop's `getThreadReference` logic:
+  /// - Tags with marker `"reply"` identify the direct parent.
+  /// - Tags with marker `"root"` identify the thread root.
+  /// - If no markers are present, falls back to null (top-level message).
+  ({String? parentId, String? rootId}) get threadReference {
+    final eTags = [
+      for (final tag in tags)
+        if (tag.length >= 2 && tag[0] == 'e') tag,
+    ];
+
+    if (eTags.isEmpty) return (parentId: null, rootId: null);
+
+    // Find tagged root and reply markers (desktop convention).
+    List<String>? rootTag;
+    List<String>? replyTag;
+    for (final tag in eTags) {
+      if (tag.length >= 4) {
+        if (tag[3] == 'root') rootTag = tag;
+        if (tag[3] == 'reply') replyTag = tag;
+      }
+    }
+
+    if (replyTag == null) return (parentId: null, rootId: null);
+
+    final parentId = replyTag[1];
+    final rootId = rootTag?[1] ?? parentId;
+    return (parentId: parentId, rootId: rootId);
+  }
+
   /// The parent event ID from the `e` tag.
-  String? get parentEventId => getTagValue('e');
+  String? get parentEventId => threadReference.parentId;
 
   @override
   bool operator ==(Object other) =>
@@ -102,6 +143,7 @@ class NostrEvent {
 @immutable
 class NostrFilter {
   final List<int> kinds;
+  final List<String>? authors;
   final int limit;
   final int? since;
   final int? until;
@@ -111,6 +153,7 @@ class NostrFilter {
 
   const NostrFilter({
     required this.kinds,
+    this.authors,
     this.limit = 100,
     this.since,
     this.until,
@@ -120,6 +163,7 @@ class NostrFilter {
   /// Return a copy with an updated `since` value.
   NostrFilter copyWithSince(int since) => NostrFilter(
     kinds: kinds,
+    authors: authors,
     limit: limit,
     since: since,
     until: until,
@@ -128,6 +172,7 @@ class NostrFilter {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'kinds': kinds, 'limit': limit};
+    if (authors != null) json['authors'] = authors;
     if (since != null) json['since'] = since;
     if (until != null) json['until'] = until;
     for (final entry in tags.entries) {

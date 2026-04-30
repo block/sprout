@@ -24,16 +24,24 @@
         "hiddenTitle": true,
         "dragDropEnabled": false,
         "trafficLightPosition": { "x": 12, "y": 22 },
-        "backgroundThrottling": "disabled"
+        "backgroundThrottling": "disabled",
+        "minWidth": 800,
+        "minHeight": 500
       }
     ],
     "security": {
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/sprout-acp", "binaries/sprout-mcp-server"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

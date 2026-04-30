@@ -26,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Smart HTTP git transport (clone, fetch, push).
+pub mod git;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.
@@ -429,6 +431,28 @@ pub fn check_token_channel_access(
     Ok(())
 }
 
+/// Intersect an owner-accessible channel list with a token's `channel_ids`, when present.
+pub(crate) fn constrain_channel_ids(
+    mut channel_ids: Vec<Uuid>,
+    allowed: Option<&[Uuid]>,
+) -> Vec<Uuid> {
+    if let Some(allowed) = allowed {
+        channel_ids.retain(|channel_id| allowed.contains(channel_id));
+    }
+    channel_ids
+}
+
+/// Filter accessible channel records against a token's `channel_ids`, when present.
+pub(crate) fn constrain_accessible_channels(
+    mut channels: Vec<sprout_db::channel::AccessibleChannel>,
+    allowed: Option<&[Uuid]>,
+) -> Vec<sprout_db::channel::AccessibleChannel> {
+    if let Some(allowed) = allowed {
+        channels.retain(|channel| allowed.contains(&channel.channel.id));
+    }
+    channels
+}
+
 /// Convert a scope-check failure into a 403 Forbidden response.
 ///
 /// Used by handlers to propagate `require_scope` errors via `?`.
@@ -498,8 +522,7 @@ pub(crate) async fn check_channel_membership(
     pubkey_bytes: &[u8],
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let is_member = state
-        .db
-        .is_member(channel_id, pubkey_bytes)
+        .is_member_cached(channel_id, pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
     if is_member {
@@ -557,7 +580,40 @@ where
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
+
+    fn accessible_channel(id: Uuid) -> sprout_db::channel::AccessibleChannel {
+        let now = Utc::now();
+        sprout_db::channel::AccessibleChannel {
+            channel: sprout_db::channel::ChannelRecord {
+                id,
+                name: "restricted".to_string(),
+                channel_type: "stream".to_string(),
+                visibility: "private".to_string(),
+                description: None,
+                canvas: None,
+                created_by: vec![0; 32],
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                deleted_at: None,
+                nip29_group_id: None,
+                topic_required: false,
+                max_members: None,
+                topic: None,
+                topic_set_by: None,
+                topic_set_at: None,
+                purpose: None,
+                purpose_set_by: None,
+                purpose_set_at: None,
+                ttl_seconds: None,
+                ttl_deadline: None,
+            },
+            is_member: true,
+        }
+    }
 
     // ── decode_jwt_payload_unverified ─────────────────────────────────────────
     //
@@ -762,5 +818,39 @@ mod tests {
         let (status, body) = not_found("approval not found");
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body.0["error"], "approval not found");
+    }
+
+    #[test]
+    fn constrain_channel_ids_intersects_with_token_allowlist() {
+        let allowed = uuid::Uuid::new_v4();
+        let denied = uuid::Uuid::new_v4();
+
+        let constrained = constrain_channel_ids(vec![allowed, denied], Some(&[allowed]));
+
+        assert_eq!(constrained, vec![allowed]);
+    }
+
+    #[test]
+    fn constrain_channel_ids_leaves_unrestricted_lists_unchanged() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+
+        let constrained = constrain_channel_ids(vec![a, b], None);
+
+        assert_eq!(constrained, vec![a, b]);
+    }
+
+    #[test]
+    fn constrain_accessible_channels_respects_token_allowlist() {
+        let allowed = uuid::Uuid::new_v4();
+        let denied = uuid::Uuid::new_v4();
+
+        let constrained = constrain_accessible_channels(
+            vec![accessible_channel(allowed), accessible_channel(denied)],
+            Some(&[allowed]),
+        );
+
+        assert_eq!(constrained.len(), 1);
+        assert_eq!(constrained[0].channel.id, allowed);
     }
 }

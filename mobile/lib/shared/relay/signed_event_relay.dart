@@ -13,10 +13,20 @@ class SignedEventRelay {
     : _client = client,
       _nsec = nsec;
 
+  /// The hex pubkey derived from the signing key, or null if no key.
+  String? get pubkey {
+    final nsec = _nsec;
+    if (nsec == null || nsec.isEmpty) return null;
+    final privkeyHex = nostr.Nip19.decodePrivkey(nsec);
+    if (privkeyHex.isEmpty) return null;
+    return nostr.Keychain(privkeyHex).public;
+  }
+
   Future<void> submit({
     required int kind,
     required String content,
     required List<List<String>> tags,
+    int? createdAt,
   }) async {
     final nsec = _nsec;
     if (nsec == null || nsec.isEmpty) {
@@ -33,6 +43,7 @@ class SignedEventRelay {
       content: content,
       tags: tags,
       privkey: privkeyHex,
+      createdAt: createdAt,
       verify: false,
     );
 

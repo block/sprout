@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import type { BlobDescriptor } from "@/shared/api/tauri";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { shortHash } from "@/features/messages/lib/useMediaUpload";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type ComposerAttachmentsProps = {
   attachments: BlobDescriptor[];
@@ -108,14 +109,18 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                       </DialogPrimitive.Content>
                     </DialogPrimitive.Portal>
                   </DialogPrimitive.Root>
-                  <button
-                    type="button"
-                    onClick={() => onRemove(attachment.url)}
-                    className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-foreground text-background group-hover:flex"
-                    title="Remove attachment"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => onRemove(attachment.url)}
+                        className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-foreground text-background group-hover:flex"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Remove attachment</TooltipContent>
+                  </Tooltip>
                 </div>
               </motion.div>
             );

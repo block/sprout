@@ -10,6 +10,7 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { changeChannelMemberRole } from "@/shared/api/tauri";
 import type { Channel, ChannelMember } from "@/shared/api/types";
+import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   Sheet,
@@ -28,6 +29,7 @@ type MembersSidebarProps = {
   currentPubkey?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onViewActivity?: (pubkey: string) => void;
 };
 
 export function MembersSidebar({
@@ -35,6 +37,7 @@ export function MembersSidebar({
   currentPubkey,
   open,
   onOpenChange,
+  onViewActivity,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
   const queryClient = useQueryClient();
@@ -138,6 +141,8 @@ export function MembersSidebar({
     onOpenChange,
   });
 
+  useFeedbackToasts(actionNoticeMessage, actionErrorMessage);
+
   if (!channel) {
     return null;
   }
@@ -165,6 +170,14 @@ export function MembersSidebar({
           void handleAgentLifecycleAction(agent);
         }}
         onRemoveMember={handleRemoveMember}
+        onViewActivity={
+          onViewActivity
+            ? (pubkey: string) => {
+                onOpenChange(false);
+                onViewActivity(pubkey);
+              }
+            : undefined
+        }
         presenceStatus={
           memberPresenceQuery.data?.[member.pubkey.toLowerCase()] ?? null
         }
@@ -263,21 +276,12 @@ export function MembersSidebar({
             </div>
           </section>
 
-          {actionNoticeMessage ? (
-            <p
-              className="text-sm text-muted-foreground"
-              data-testid="members-sidebar-action-notice"
-            >
-              {actionNoticeMessage}
-            </p>
-          ) : null}
-
-          {actionErrorMessage || changeRoleError ? (
+          {changeRoleError ? (
             <p
               className="text-sm text-destructive"
               data-testid="members-sidebar-action-error"
             >
-              {actionErrorMessage ?? changeRoleError}
+              {changeRoleError}
             </p>
           ) : null}
         </div>

@@ -193,7 +193,12 @@ pub(crate) async fn maybe_start_tts_pipeline(state: &AppState) -> Result<bool, S
 
     // Construct outside the lock — this spawns the TTS worker thread and
     // loads ONNX sessions (~200ms). If this fails, clear the sentinel.
-    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active, tts_cancel) {
+    let output_device = state
+        .audio_output_device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active, tts_cancel, output_device) {
         Ok(p) => Arc::new(p),
         Err(e) => {
             let hs = state.huddle()?;
@@ -243,6 +248,7 @@ pub(crate) fn spawn_transcription_task(
         Err(_) => return,
     };
     let configured_api_token = state.configured_api_token.clone();
+    let relay_base_url = crate::relay::relay_api_base_url_with_override(state);
 
     tauri::async_runtime::spawn(async move {
         // recv().await yields (not blocks) until text arrives or sender is dropped.
@@ -283,9 +289,14 @@ pub(crate) fn spawn_transcription_task(
             let api_token_ref = configured_api_token.as_deref();
             let pubkey_hex = keys.public_key().to_hex();
 
-            if let Err(e) =
-                crate::events::post_event_raw(&http_client, api_token_ref, &pubkey_hex, event_json)
-                    .await
+            if let Err(e) = crate::events::post_event_raw(
+                &http_client,
+                api_token_ref,
+                &pubkey_hex,
+                event_json,
+                &relay_base_url,
+            )
+            .await
             {
                 eprintln!("sprout-desktop: STT kind:9 post failed: {e}");
             }

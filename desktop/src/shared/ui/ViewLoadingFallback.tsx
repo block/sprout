@@ -1,3 +1,4 @@
+import { Card } from "@/shared/ui/card";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 type ViewLoadingFallbackKind =
@@ -64,10 +65,7 @@ function AgentsLoadingBody() {
           </div>
           <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
             {["first", "second", "third", "fourth"].map((card) => (
-              <div
-                className="rounded-xl border border-border/70 bg-card/80 p-3 shadow-sm"
-                key={card}
-              >
+              <Card className="p-3" key={card}>
                 <div className="flex items-center gap-2.5">
                   <Skeleton className="h-8 w-8 rounded-lg" />
                   <div className="min-w-0 flex-1 space-y-2">
@@ -75,7 +73,7 @@ function AgentsLoadingBody() {
                     <Skeleton className="h-3 w-16 rounded-full" />
                   </div>
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
         </section>
@@ -87,10 +85,7 @@ function AgentsLoadingBody() {
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {["alpha", "beta", "gamma"].map((card) => (
-              <div
-                className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
-                key={card}
-              >
+              <Card className="p-4" key={card}>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="space-y-2">
@@ -102,7 +97,7 @@ function AgentsLoadingBody() {
                   <Skeleton className="h-4 w-full" />
                   <Skeleton className="h-4 w-4/5" />
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
         </section>
@@ -112,7 +107,7 @@ function AgentsLoadingBody() {
             <Skeleton className="h-5 w-36" />
             <Skeleton className="h-4 w-72 max-w-full" />
           </div>
-          <div className="overflow-hidden rounded-xl border border-border/70 bg-card/80 shadow-sm">
+          <Card className="overflow-hidden">
             {["one", "two", "three"].map((row) => (
               <div
                 className="flex items-center gap-4 border-b border-border/60 px-4 py-3 last:border-b-0"
@@ -124,7 +119,7 @@ function AgentsLoadingBody() {
                 <Skeleton className="ml-auto h-8 w-24 rounded-lg" />
               </div>
             ))}
-          </div>
+          </Card>
         </section>
       </div>
     </div>
@@ -133,59 +128,38 @@ function AgentsLoadingBody() {
 
 function WorkflowsLoadingBody() {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-4">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Skeleton className="h-6 w-28" />
-            <Skeleton className="h-8 w-8 rounded-lg" />
-          </div>
-          <Skeleton className="h-9 w-36 rounded-lg" />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-6 w-28" />
+          <Skeleton className="h-8 w-8 rounded-lg" />
         </div>
-
-        <div className="space-y-2">
-          {["first", "second", "third", "fourth"].map((card) => (
-            <div
-              className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
-              key={card}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Skeleton className="h-5 w-44" />
-                    <Skeleton className="h-5 w-16 rounded-full" />
-                  </div>
-                  <Skeleton className="h-4 w-full max-w-2xl" />
-                  <div className="flex flex-wrap gap-2">
-                    <Skeleton className="h-5 w-20 rounded-full" />
-                    <Skeleton className="h-5 w-24 rounded-full" />
-                    <Skeleton className="h-5 w-16 rounded-full" />
-                  </div>
-                </div>
-                <div className="hidden shrink-0 gap-2 sm:flex">
-                  <Skeleton className="h-8 w-8 rounded-lg" />
-                  <Skeleton className="h-8 w-8 rounded-lg" />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        <Skeleton className="h-9 w-36 rounded-lg" />
       </div>
 
-      <div className="hidden w-[400px] shrink-0 border-l border-border/60 bg-background/70 lg:block">
-        <div className="space-y-4 p-4">
-          <div className="space-y-2">
-            <Skeleton className="h-5 w-40" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-4/5" />
-          </div>
-          <Skeleton className="h-40 w-full rounded-xl" />
-          <div className="space-y-2">
-            <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-16 w-full rounded-xl" />
-            <Skeleton className="h-16 w-full rounded-xl" />
-          </div>
-        </div>
+      <div className="space-y-2">
+        {["first", "second", "third", "fourth"].map((card) => (
+          <Card className="p-4" key={card}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 flex-1 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-5 w-44" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+                <Skeleton className="h-4 w-full max-w-2xl" />
+                <div className="flex flex-wrap gap-2">
+                  <Skeleton className="h-5 w-20 rounded-full" />
+                  <Skeleton className="h-5 w-24 rounded-full" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+              </div>
+              <div className="hidden shrink-0 gap-2 sm:flex">
+                <Skeleton className="h-8 w-8 rounded-lg" />
+                <Skeleton className="h-8 w-8 rounded-lg" />
+              </div>
+            </div>
+          </Card>
+        ))}
       </div>
     </div>
   );
@@ -224,10 +198,7 @@ function ForumLoadingBody() {
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-3">
           {["first", "second", "third"].map((card) => (
-            <div
-              className="rounded-xl border border-border/70 bg-card/80 p-4 shadow-sm"
-              key={card}
-            >
+            <Card className="p-4" key={card}>
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Skeleton className="h-4 w-40" />
@@ -241,7 +212,7 @@ function ForumLoadingBody() {
                   <Skeleton className="h-4 w-14" />
                 </div>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       </div>

@@ -35,18 +35,21 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 infer = "0.19"
 hex = "0.4"
-tokio = { version = "1", features = ["fs", "sync", "rt"] }
+tokio = { version = "1", features = ["fs", "sync", "rt", "macros", "time"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"
 opus = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-nostr = "0.37"
-reqwest = { version = "0.13", features = ["json", "query"] }
+nostr = { version = "0.37", features = ["nip44"] }
+nostr-compat = { package = "nostr", version = "0.36" }
+zeroize = "1"
+reqwest = { version = "0.13", features = ["json", "query", "stream"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
 sprout-persona = { path = "../../crates/sprout-persona" }
+sprout-sdk = { path = "../../crates/sprout-sdk" }
 base64 = "0.22"
 sha2 = "0.11"
 tar = "0.4"
@@ -61,6 +64,7 @@ sherpa-onnx = "1.12"
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-23", "coreml"] }
 ndarray = { version = "0.17", features = ["rayon"] }
 regex = "1"
+axum = "0.8"
 rodio = "0.22"
 earshot = "1.0"
 rubato = "2.0"

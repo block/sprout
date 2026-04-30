@@ -3,6 +3,10 @@ import { Activity, Bot, Home, PenSquare, Plus, Search, Zap } from "lucide-react"
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import type { Workspace } from "@/features/workspaces/types";
+import { AddWorkspaceDialog } from "@/features/workspaces/ui/AddWorkspaceDialog";
+import { WorkspaceSwitcher } from "@/features/workspaces/ui/WorkspaceSwitcher";
+import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -51,10 +55,12 @@ const SECTION_ICON_BUTTON_CLASS =
 type CreateChannelKind = "stream" | "forum";
 
 type AppSidebarProps = {
+  activeWorkspace: Workspace | null;
   channels: Channel[];
   currentPubkey?: string;
   fallbackDisplayName?: string;
   homeBadgeCount: number;
+  isAddWorkspaceOpen?: boolean;
   isLoading: boolean;
   isCreatingChannel: boolean;
   isCreatingForum: boolean;
@@ -65,6 +71,9 @@ type AppSidebarProps = {
   selectedChannelId: string | null;
   selectedView: "home" | "channel" | "agents" | "workflows" | "pulse";
   unreadChannelIds: Set<string>;
+  workspaces: Workspace[];
+  onAddWorkspace: (workspace: Workspace) => void;
+  onAddWorkspaceOpenChange?: (open: boolean) => void;
   onCreateChannel: (input: {
     name: string;
     description?: string;
@@ -77,11 +86,17 @@ type AppSidebarProps = {
     visibility: ChannelVisibility;
     ttlSeconds?: number;
   }) => Promise<void>;
+  onOpenAddWorkspace: () => void;
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
   onOpenSearch: () => void;
   onHideDm: (channelId: string) => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
+  onUpdateWorkspace: (
+    id: string,
+    updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
+  ) => void;
+  onRemoveWorkspace: (id: string) => void;
   onSelectAgents: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
@@ -89,46 +104,11 @@ type AppSidebarProps = {
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
+  onSwitchWorkspace: (id: string) => void;
   isPresencePending?: boolean;
+  isNewDmOpen?: boolean;
+  onNewDmOpenChange?: (open: boolean) => void;
 };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function useDeferredSidebarLoad(
-  activateImmediately: boolean,
-  timeoutMs: number,
-) {
-  const [shouldLoad, setShouldLoad] = React.useState(activateImmediately);
-
-  React.useEffect(() => {
-    if (shouldLoad || activateImmediately) {
-      if (!shouldLoad) {
-        setShouldLoad(true);
-      }
-      return;
-    }
-
-    const load = () => {
-      setShouldLoad(true);
-    };
-
-    if ("requestIdleCallback" in window) {
-      const idleId = window.requestIdleCallback(load, { timeout: timeoutMs });
-      return () => {
-        window.cancelIdleCallback(idleId);
-      };
-    }
-
-    const timeoutId = globalThis.setTimeout(load, timeoutMs);
-    return () => {
-      globalThis.clearTimeout(timeoutId);
-    };
-  }, [activateImmediately, shouldLoad, timeoutMs]);
-
-  return shouldLoad;
-}
 
 // ---------------------------------------------------------------------------
 // SectionHeaderActions — browse + create icon buttons for section headers
@@ -148,7 +128,7 @@ function SectionHeaderActions({
   onCreateClick: () => void;
 }) {
   return (
-    <div className="absolute right-1 top-3 flex items-center gap-0.5">
+    <div className="absolute right-1 top-3 z-10 flex items-center gap-0.5">
       <button
         aria-label={browseAriaLabel}
         className={SECTION_ICON_BUTTON_CLASS}
@@ -238,10 +218,12 @@ function ChannelGroupSection({
 // ---------------------------------------------------------------------------
 
 export function AppSidebar({
+  activeWorkspace,
   channels,
   currentPubkey,
   fallbackDisplayName,
   homeBadgeCount,
+  isAddWorkspaceOpen,
   isLoading,
   isCreatingChannel,
   isCreatingForum,
@@ -252,13 +234,19 @@ export function AppSidebar({
   selectedChannelId,
   selectedView,
   unreadChannelIds,
+  workspaces,
+  onAddWorkspace,
+  onAddWorkspaceOpenChange,
   onCreateChannel,
   onCreateForum,
+  onOpenAddWorkspace,
   onOpenBrowseChannels,
   onOpenBrowseForums,
   onOpenSearch,
   onHideDm,
   onOpenDm,
+  onUpdateWorkspace,
+  onRemoveWorkspace,
   onSelectAgents,
   onSelectPulse,
   onSelectWorkflows,
@@ -266,34 +254,38 @@ export function AppSidebar({
   onSelectChannel,
   onSelectSettings,
   onSetPresenceStatus,
+  onSwitchWorkspace,
   isPresencePending,
+  isNewDmOpen: isNewDmOpenProp,
+  onNewDmOpenChange,
 }: AppSidebarProps) {
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
-  const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
+  const [isNewDmOpenInternal, setIsNewDmOpenInternal] = React.useState(false);
+  const isNewDmOpen = isNewDmOpenProp ?? isNewDmOpenInternal;
+  const setIsNewDmOpen = onNewDmOpenChange ?? setIsNewDmOpenInternal;
   const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
 
-  const visibleChannels = channels.filter(
-    (channel) => channel.archivedAt === null,
+  const streamChannels = React.useMemo(
+    () => channels.filter((channel) => channel.channelType === "stream"),
+    [channels],
   );
-
-  const streamChannels = visibleChannels.filter(
-    (channel) => channel.channelType === "stream",
+  const forumChannels = React.useMemo(
+    () => channels.filter((channel) => channel.channelType === "forum"),
+    [channels],
   );
-  const forumChannels = visibleChannels.filter(
-    (channel) => channel.channelType === "forum",
-  );
-  const directMessages = visibleChannels.filter(
-    (channel) => channel.channelType === "dm",
+  const directMessages = React.useMemo(
+    () => channels.filter((channel) => channel.channelType === "dm"),
+    [channels],
   );
   const isSelectedDirectMessage =
     selectedView === "channel" &&
     directMessages.some((channel) => channel.id === selectedChannelId);
-  const shouldLoadDmMetadata = useDeferredSidebarLoad(
-    isSelectedDirectMessage,
-    400,
-  );
+  const shouldLoadDmMetadata = useDeferredLoad({
+    immediate: isSelectedDirectMessage,
+    timeoutMs: 400,
+  });
   const { dmChannelLabels, dmParticipantsByChannelId, dmPresenceByChannelId } =
     useDmSidebarMetadata({
       currentPubkey,
@@ -302,10 +294,10 @@ export function AppSidebar({
       fallbackDisplayName,
       profileDisplayName: profile?.displayName,
     });
-  const shouldLoadAgentCount = useDeferredSidebarLoad(
-    selectedView === "agents",
-    250,
-  );
+  const shouldLoadAgentCount = useDeferredLoad({
+    immediate: selectedView === "agents",
+    timeoutMs: 250,
+  });
   const managedAgentsQuery = useManagedAgentsQuery({
     enabled: shouldLoadAgentCount,
   });
@@ -347,6 +339,16 @@ export function AppSidebar({
       variant="sidebar"
     >
       <SidebarHeader className="gap-3 pt-10" data-tauri-drag-region>
+        <div className="px-0.5">
+          <WorkspaceSwitcher
+            activeWorkspace={activeWorkspace}
+            onAddWorkspace={onOpenAddWorkspace}
+            onRemoveWorkspace={onRemoveWorkspace}
+            onSwitchWorkspace={onSwitchWorkspace}
+            onUpdateWorkspace={onUpdateWorkspace}
+            workspaces={workspaces}
+          />
+        </div>
         <Button
           className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
           data-testid="open-search"
@@ -583,6 +585,12 @@ export function AppSidebar({
         onOpenChange={setIsNewDmOpen}
         onSubmit={onOpenDm}
         open={isNewDmOpen}
+      />
+
+      <AddWorkspaceDialog
+        onOpenChange={onAddWorkspaceOpenChange ?? (() => {})}
+        onSubmit={onAddWorkspace}
+        open={isAddWorkspaceOpen ?? false}
       />
     </Sidebar>
   );

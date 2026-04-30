@@ -1,163 +1,88 @@
-import { useState } from "react";
-import { check } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
-
-type UpdateStatus =
-  | { state: "idle" }
-  | { state: "checking" }
-  | { state: "up-to-date" }
-  | { state: "available"; version: string }
-  | { state: "downloading"; progress?: number }
-  | { state: "installing" }
-  | { state: "ready" }
-  | { state: "error"; message: string };
+import { useUpdaterContext } from "./hooks/UpdaterProvider";
+import { Button } from "@/shared/ui/button";
+import { Badge } from "@/shared/ui/badge";
 
 export function UpdateChecker() {
-  const [status, setStatus] = useState<UpdateStatus>({ state: "idle" });
-
-  async function checkForUpdate() {
-    try {
-      setStatus({ state: "checking" });
-      const update = await check();
-
-      if (update) {
-        setStatus({ state: "available", version: update.version });
-      } else {
-        setStatus({ state: "up-to-date" });
-      }
-    } catch (err) {
-      setStatus({
-        state: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  async function downloadAndInstall() {
-    try {
-      setStatus({ state: "downloading" });
-      const update = await check();
-      if (!update) {
-        setStatus({ state: "up-to-date" });
-        return;
-      }
-
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started" && event.data.contentLength) {
-          setStatus({ state: "downloading", progress: 0 });
-        } else if (event.event === "Progress") {
-          // Could track progress here
-        } else if (event.event === "Finished") {
-          setStatus({ state: "installing" });
-        }
-      });
-
-      setStatus({ state: "ready" });
-    } catch (err) {
-      setStatus({
-        state: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  async function handleRelaunch() {
-    await relaunch();
-  }
+  const { status, checkForUpdate, downloadAndInstall, relaunch } =
+    useUpdaterContext();
 
   return (
-    <div className="rounded-lg bg-zinc-900 p-4">
-      <h3 className="mb-3 text-sm font-medium text-zinc-200">
-        Software Updates
-      </h3>
+    <section className="min-w-0">
+      <div className="mb-3 min-w-0">
+        <h2 className="text-sm font-semibold tracking-tight">
+          Software Updates
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Keep Sprout up to date with the latest features and fixes.
+        </p>
+      </div>
 
       {status.state === "idle" && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-muted-foreground">
             Check if a new version is available.
           </p>
-          <button
-            type="button"
-            onClick={checkForUpdate}
-            className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-          >
+          <Button size="sm" onClick={checkForUpdate}>
             Check for Updates
-          </button>
+          </Button>
         </div>
       )}
 
       {status.state === "checking" && (
-        <p className="text-sm text-zinc-400">Checking for updates…</p>
+        <p className="text-sm text-muted-foreground">Checking for updates...</p>
       )}
 
       {status.state === "up-to-date" && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-zinc-300">
-            ✓ You're on the latest version.
+          <p className="text-sm text-foreground">
+            You're on the latest version.
           </p>
-          <button
-            type="button"
-            onClick={checkForUpdate}
-            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm font-medium text-zinc-300 hover:bg-zinc-700"
-          >
+          <Button variant="outline" size="sm" onClick={checkForUpdate}>
             Check Again
-          </button>
+          </Button>
         </div>
       )}
 
       {status.state === "available" && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-zinc-300">
-            Version <span className="font-semibold">{status.version}</span> is
-            available.
+          <p className="text-sm text-foreground">
+            Version <Badge variant="info">{status.version}</Badge> is available.
           </p>
-          <button
-            type="button"
-            onClick={downloadAndInstall}
-            className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-          >
+          <Button size="sm" onClick={downloadAndInstall}>
             Download &amp; Install
-          </button>
+          </Button>
         </div>
       )}
 
       {status.state === "downloading" && (
-        <p className="text-sm text-zinc-400">Downloading update…</p>
+        <p className="text-sm text-muted-foreground">Downloading update...</p>
       )}
 
       {status.state === "installing" && (
-        <p className="text-sm text-zinc-400">Installing update…</p>
+        <p className="text-sm text-muted-foreground">Installing update...</p>
       )}
 
       {status.state === "ready" && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-zinc-300">
+          <p className="text-sm text-foreground">
             Update installed. Restart to apply.
           </p>
-          <button
-            type="button"
-            onClick={handleRelaunch}
-            className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-          >
+          <Button size="sm" onClick={relaunch}>
             Restart Now
-          </button>
+          </Button>
         </div>
       )}
 
       {status.state === "error" && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-red-400">
+          <p className="text-sm text-destructive">
             Update failed: {status.message}
           </p>
-          <button
-            type="button"
-            onClick={checkForUpdate}
-            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-sm font-medium text-zinc-300 hover:bg-zinc-700"
-          >
+          <Button variant="outline" size="sm" onClick={checkForUpdate}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
-    </div>
+    </section>
   );
 }

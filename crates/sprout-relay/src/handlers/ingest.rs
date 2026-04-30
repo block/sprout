@@ -14,15 +14,18 @@ use sprout_auth::Scope;
 use sprout_core::kind::{
     event_kind_u32, is_parameterized_replaceable, KIND_AUTH, KIND_CANVAS, KIND_CONTACT_LIST,
     KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
-    KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
-    KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE, KIND_HUDDLE_STARTED,
-    KIND_HUDDLE_TRACK_PUBLISHED, KIND_LONG_FORM, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
-    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
-    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_PRESENCE_UPDATE,
-    KIND_PROFILE, KIND_REACTION, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
+    KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
+    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
+    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
+    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE,
+    KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED, KIND_LONG_FORM,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP,
+    KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
+    KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_PRESENCE_UPDATE, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
 };
 use sprout_core::verification::verify_event;
 
@@ -52,6 +55,8 @@ pub enum IngestAuth {
         pubkey: nostr::PublicKey,
         /// Permission scopes granted to this connection.
         scopes: Vec<Scope>,
+        /// Token-level channel restriction, if the WebSocket auth used an API token.
+        channel_ids: Option<Vec<Uuid>>,
         /// WebSocket connection identifier.
         conn_id: Uuid,
     },
@@ -101,7 +106,11 @@ impl IngestAuth {
     /// Token-level channel restriction (Http/ApiToken only).
     pub fn channel_ids(&self) -> Option<&[Uuid]> {
         match self {
-            Self::Http {
+            Self::Nip42 {
+                channel_ids: Some(ids),
+                ..
+            }
+            | Self::Http {
                 channel_ids: Some(ids),
                 ..
             } => Some(ids),
@@ -145,7 +154,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
-        KIND_CONTACT_LIST => Ok(Scope::UsersWrite),
+        KIND_CONTACT_LIST | KIND_READ_STATE => Ok(Scope::UsersWrite),
         KIND_DELETION
         | KIND_REACTION
         | KIND_GIFT_WRAP
@@ -186,6 +195,16 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_HUDDLE_TRACK_PUBLISHED
         | KIND_HUDDLE_RECORDING_AVAILABLE
         | KIND_HUDDLE_GUIDELINES => Ok(Scope::ChannelsWrite),
+        // NIP-34: Git repository events
+        KIND_GIT_REPO_ANNOUNCEMENT | KIND_GIT_REPO_STATE => Ok(Scope::ReposWrite),
+        KIND_GIT_PATCH
+        | KIND_GIT_PULL_REQUEST
+        | KIND_GIT_PR_UPDATE
+        | KIND_GIT_ISSUE
+        | KIND_GIT_STATUS_OPEN
+        | KIND_GIT_STATUS_MERGED
+        | KIND_GIT_STATUS_CLOSED
+        | KIND_GIT_STATUS_DRAFT => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -266,7 +285,23 @@ pub(crate) async fn derive_reaction_channel(
 pub(crate) fn is_global_only_kind(kind: u32) -> bool {
     matches!(
         kind,
-        KIND_PROFILE | KIND_TEXT_NOTE | KIND_CONTACT_LIST | KIND_LONG_FORM
+        KIND_PROFILE
+            | KIND_TEXT_NOTE
+            | KIND_CONTACT_LIST
+            | KIND_LONG_FORM
+            | KIND_READ_STATE
+            // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
+            // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
+            | KIND_GIT_REPO_ANNOUNCEMENT
+            | KIND_GIT_REPO_STATE
+            | KIND_GIT_PATCH
+            | KIND_GIT_PULL_REQUEST
+            | KIND_GIT_PR_UPDATE
+            | KIND_GIT_ISSUE
+            | KIND_GIT_STATUS_OPEN
+            | KIND_GIT_STATUS_MERGED
+            | KIND_GIT_STATUS_CLOSED
+            | KIND_GIT_STATUS_DRAFT
     )
 }
 
@@ -310,7 +345,7 @@ pub(crate) async fn check_channel_membership(
     ch_id: Uuid,
     pubkey_bytes: &[u8],
 ) -> Result<(), String> {
-    match state.db.is_member(ch_id, pubkey_bytes).await {
+    match state.is_member_cached(ch_id, pubkey_bytes).await {
         Ok(true) => return Ok(()),
         Ok(false) => {}
         Err(e) => return Err(format!("error: database error: {e}")),
@@ -697,15 +732,11 @@ fn validate_diff_event(event: &Event) -> Result<(), String> {
                     return Err("parent-commit SHA must be at least 7 hex characters".to_string());
                 }
             }
-            "branch" => {
-                if parts.len() < 3 || parts[1].is_empty() || parts[2].is_empty() {
-                    return Err("branch tag requires both source and target".to_string());
-                }
+            "branch" if (parts.len() < 3 || parts[1].is_empty() || parts[2].is_empty()) => {
+                return Err("branch tag requires both source and target".to_string());
             }
-            "pr" => {
-                if parts[1].parse::<u32>().map(|n| n == 0).unwrap_or(true) {
-                    return Err("pr number must be a positive integer".to_string());
-                }
+            "pr" if parts[1].parse::<u32>().map(|n| n == 0).unwrap_or(true) => {
+                return Err("pr number must be a positive integer".to_string());
             }
             _ => {}
         }
@@ -1304,6 +1335,7 @@ pub async fn ingest_event(
                     if let Err(re) = state.db.soft_delete_channel(ch_id).await {
                         warn!(event_id = %event_id_hex, "channel compensation failed: {re}");
                     }
+                    state.invalidate_channel_deleted();
                 }
                 return Err(match e {
                     sprout_db::DbError::AuthEventRejected => {
@@ -1536,6 +1568,7 @@ mod tests {
         let ws_auth = IngestAuth::Nip42 {
             pubkey: keys.public_key(),
             scopes: vec![],
+            channel_ids: None,
             conn_id: uuid::Uuid::new_v4(),
         };
         assert!(

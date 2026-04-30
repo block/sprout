@@ -41,7 +41,8 @@ CREATE TABLE channels (
     purpose_set_at  TIMESTAMPTZ,
     participant_hash BYTEA,
     ttl_seconds     INT,
-    ttl_deadline    TIMESTAMPTZ
+    ttl_deadline    TIMESTAMPTZ,
+    CONSTRAINT chk_channels_id_not_nil CHECK (id <> '00000000-0000-0000-0000-000000000000'::uuid)
 );
 
 CREATE INDEX idx_channels_type ON channels (channel_type);
@@ -64,6 +65,9 @@ CREATE TABLE channel_members (
     hidden_at   TIMESTAMPTZ,
     PRIMARY KEY (channel_id, pubkey)
 );
+
+CREATE INDEX idx_channel_members_pubkey ON channel_members (pubkey)
+    WHERE removed_at IS NULL;
 
 -- ── Users ─────────────────────────────────────────────────────────────────────
 

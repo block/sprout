@@ -285,13 +285,12 @@ export function useFeedDesktopNotifications(
   settings: NotificationSettings,
 ) {
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
-  const seenItemIdsRef = React.useRef<Set<string>>(new Set());
-  const hasInitializedFeedRef = React.useRef(false);
+  const seenItemIdsRef = React.useRef<Set<string>>(
+    new Set(readStoredSeenFeedIds(normalizedPubkey)),
+  );
 
   React.useEffect(() => {
-    void normalizedPubkey;
-    seenItemIdsRef.current = new Set();
-    hasInitializedFeedRef.current = false;
+    seenItemIdsRef.current = new Set(readStoredSeenFeedIds(normalizedPubkey));
   }, [normalizedPubkey]);
 
   const deliverFeedNotification = React.useEffectEvent(
@@ -318,9 +317,12 @@ export function useFeedDesktopNotifications(
     }
 
     const currentFeedItems = collectHomeAlertItems(feed);
-    if (!hasInitializedFeedRef.current) {
-      hasInitializedFeedRef.current = true;
+
+    // Guard: empty seen set + populated feed means first load or cleared
+    // storage. Seed the seen set without notifying to prevent a flood.
+    if (seenItemIdsRef.current.size === 0 && currentFeedItems.length > 0) {
       seenItemIdsRef.current = new Set(currentFeedItems.map((item) => item.id));
+      writeStoredSeenFeedIds(normalizedPubkey, [...seenItemIdsRef.current]);
       return;
     }
 
@@ -337,9 +339,8 @@ export function useFeedDesktopNotifications(
     }
 
     // Prevent unbounded growth — keep only the most recent entries.
-    const MAX_SEEN_FEED_ITEMS = 500;
-    if (nextSeenItemIds.size > MAX_SEEN_FEED_ITEMS) {
-      const excess = nextSeenItemIds.size - MAX_SEEN_FEED_ITEMS;
+    if (nextSeenItemIds.size > HOME_FEED_SEEN_MAX_ITEMS) {
+      const excess = nextSeenItemIds.size - HOME_FEED_SEEN_MAX_ITEMS;
       let removed = 0;
       for (const id of nextSeenItemIds) {
         if (removed >= excess) break;
@@ -349,11 +350,18 @@ export function useFeedDesktopNotifications(
     }
 
     seenItemIdsRef.current = nextSeenItemIds;
+    writeStoredSeenFeedIds(normalizedPubkey, [...nextSeenItemIds]);
 
     for (const item of newItems) {
       void deliverFeedNotification(item);
     }
-  }, [feed, settings.desktopEnabled, settings.mentions, settings.needsAction]);
+  }, [
+    feed,
+    normalizedPubkey,
+    settings.desktopEnabled,
+    settings.mentions,
+    settings.needsAction,
+  ]);
 }
 
 export function useHomeFeedNotificationState(

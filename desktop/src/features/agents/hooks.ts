@@ -145,12 +145,13 @@ export function useManagedAgentPrereqsQuery(
   });
 }
 
-export function useRelayAgentsQuery() {
+export function useRelayAgentsQuery(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: relayAgentsQueryKey,
     queryFn: listRelayAgents,
     staleTime: 30_000,
     refetchInterval: 30_000,
+    enabled: options?.enabled,
   });
 }
 
@@ -483,7 +484,7 @@ export function useManagedAgentLogQuery(
     enabled: pubkey !== null,
     retry: false,
     staleTime: 3_000,
-    refetchInterval: pubkey ? 5_000 : false,
+    refetchInterval: pubkey ? 30_000 : false,
   });
 }
 

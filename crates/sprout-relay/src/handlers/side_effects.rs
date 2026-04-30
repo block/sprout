@@ -7,8 +7,9 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
-    KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_REACTION,
+    event_kind_u32, KIND_GIT_REPO_ANNOUNCEMENT, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
+    KIND_NIP29_GROUP_METADATA, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -27,7 +28,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// handled in `ingest_event()` before storage so we can short-circuit on
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 9000..=9022 | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | 41001..=41003 | 40099)
 }
 
 async fn evict_live_channel_subscriptions(
@@ -85,6 +86,8 @@ pub async fn handle_side_effects(
         }
         9021 => handle_join_request(event, state).await,
         9022 => handle_leave_request(event, state).await,
+        // NIP-34: Git repo announcement → create bare repo on disk.
+        KIND_GIT_REPO_ANNOUNCEMENT => handle_git_repo_announcement(event, state).await,
         // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
     }
@@ -301,7 +304,7 @@ pub async fn validate_admin_event(
                 }
             } else {
                 // topic/purpose: any member
-                let is_member = state.db.is_member(channel_id, &actor_bytes).await?;
+                let is_member = state.is_member_cached(channel_id, &actor_bytes).await?;
                 if is_member {
                     Ok(())
                 } else {
@@ -698,6 +701,7 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         .db
         .add_member(channel_id, &target_pubkey, role, Some(&actor_bytes))
         .await?;
+    state.invalidate_membership(channel_id, &target_pubkey);
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     let target_hex = nostr::util::hex::encode(&target_pubkey);
@@ -756,6 +760,7 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
         .db
         .remove_member(channel_id, &target_pubkey, &actor_bytes)
         .await?;
+    state.invalidate_membership(channel_id, &target_pubkey);
     evict_live_channel_subscriptions(state, channel_id, &target_pubkey).await;
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
@@ -1033,6 +1038,14 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
             .await?
     };
 
+    // Creator becomes owner — evict any stale negative membership lookup.
+    state.invalidate_membership(channel.id, &actor_bytes);
+    // Open channels appear in everyone's accessible set; private channels only
+    // affect the creator (the sole initial member).
+    if visibility == sprout_db::channel::ChannelVisibility::Open {
+        state.invalidate_all_accessible_channels();
+    }
+
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
         state,
@@ -1088,6 +1101,10 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         warn!(channel = %channel_id, error = %e, "failed to clean up NIP-29 discovery events");
     }
 
+    // Deleted channel: clear both membership and accessible-channels caches.
+    // Stale is_member=true entries would bypass the DB's deleted_at guard.
+    state.invalidate_channel_deleted();
+
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
         state,
@@ -1121,7 +1138,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 
     // Skip if already an active member — prevents duplicate join notifications.
     // Fail closed on DB errors rather than falling through to add_member.
-    if state.db.is_member(channel_id, &actor_bytes).await? {
+    if state.is_member_cached(channel_id, &actor_bytes).await? {
         info!(channel = %channel_id, "kind:9021 join — already a member, skipping");
         return Ok(());
     }
@@ -1136,6 +1153,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
             None,
         )
         .await?;
+    state.invalidate_membership(channel_id, &actor_bytes);
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
     emit_system_message(
@@ -1191,6 +1209,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
         .db
         .remove_member(channel_id, &actor_bytes, &actor_bytes)
         .await?;
+    state.invalidate_membership(channel_id, &actor_bytes);
     evict_live_channel_subscriptions(state, channel_id, &actor_bytes).await;
 
     let actor_hex = nostr::util::hex::encode(&actor_bytes);
@@ -1408,4 +1427,218 @@ fn extract_tag_value(event: &Event, tag_name: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ── NIP-34: Git repository side effects ──────────────────────────────────────
+
+/// Validate a git repo identifier (d-tag value from kind:30617).
+///
+/// Rules: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`.
+fn validate_repo_id(repo_id: &str) -> bool {
+    !repo_id.is_empty()
+        && repo_id.len() <= 64
+        && !repo_id.starts_with('.')
+        && !repo_id.contains("..")
+        && repo_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+/// Handle kind:30617 (NIP-34 Git Repository Announcement).
+///
+/// Creates a bare git repo on disk when a repo announcement event is stored.
+/// The event's `d` tag is the repo identifier; the pubkey is the owner.
+///
+/// Security hardening:
+/// - Repo name validated: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`
+/// - Owner pubkey validated: exactly 64 lowercase hex chars
+/// - Path canonicalized and verified to start with repo root
+/// - Git hooks disabled via `core.hooksPath=/dev/null` + hooks dir removed
+/// - Per-pubkey repo count limit enforced
+async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
+    use tokio::process::Command;
+
+    // Extract repo identifier from d tag (required for NIP-33 parameterized replaceable events).
+    let repo_id =
+        extract_tag_value(event, "d").ok_or_else(|| anyhow::anyhow!("kind:30617 missing d tag"))?;
+
+    if !validate_repo_id(&repo_id) {
+        return Err(anyhow::anyhow!(
+            "invalid repo identifier: must be [a-zA-Z0-9._-]{{1,64}}, no leading dots, no '..'"
+        ));
+    }
+
+    let owner_hex = nostr::util::hex::encode(event.pubkey.serialize());
+
+    // Resolve repo path.
+    let git_repo_root = &state.config.git_repo_path;
+    let repo_dir = git_repo_root
+        .join(&owner_hex)
+        .join(format!("{repo_id}.git"));
+
+    // If repo already exists, this is an update to the announcement — nothing to do on disk.
+    // Backfill the name reservation if missing (handles upgrade from pre-uniqueness-check state).
+    if repo_dir.exists() {
+        let names_dir = git_repo_root.join(".names");
+        let _ = std::fs::create_dir_all(&names_dir);
+        let _ = std::fs::create_dir(names_dir.join(&repo_id));
+        info!(
+            repo_id = %repo_id,
+            owner = %owner_hex,
+            "kind:30617 repo announcement updated (repo already exists)"
+        );
+        return Ok(());
+    }
+
+    // Global uniqueness: repo names are unique across all owners (relay = single namespace).
+    // The relay signs kind:30618 ref-state with d-tag = repo_name, so collisions would
+    // cause one owner's ref state to overwrite another's.
+    //
+    // Atomicity: std::fs::create_dir fails with AlreadyExists if the directory exists,
+    // preventing TOCTOU races between concurrent kind:30617 events. The .names/ directory
+    // acts as a global name reservation index.
+    let names_dir = git_repo_root.join(".names");
+    std::fs::create_dir_all(&names_dir)
+        .map_err(|e| anyhow::anyhow!("failed to create name reservation index: {e}"))?;
+    let reservation = names_dir.join(&repo_id);
+    match std::fs::create_dir(&reservation) {
+        Ok(()) => {} // Name claimed successfully.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(anyhow::anyhow!(
+                "repo name '{repo_id}' already taken by another owner"
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "failed to reserve repo name '{repo_id}': {e}"
+            ));
+        }
+    }
+
+    // Per-pubkey repo count limit.
+    let owner_dir = git_repo_root.join(&owner_hex);
+    if owner_dir.exists() {
+        let count = std::fs::read_dir(&owner_dir)
+            .map(|entries| entries.filter_map(|e| e.ok()).count())
+            .unwrap_or(0);
+        let limit = state.config.git_max_repos_per_pubkey as usize;
+        if count >= limit {
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("repo limit exceeded: {count} >= {limit}"));
+        }
+    }
+
+    // Create parent directory.
+    if let Err(e) = tokio::fs::create_dir_all(&repo_dir).await {
+        let _ = std::fs::remove_dir(&reservation);
+        return Err(anyhow::anyhow!(
+            "failed to create repo directory {}: {e}",
+            repo_dir.display()
+        ));
+    }
+
+    // Path canonicalization: verify resolved path is under the repo root.
+    let canonical_root = match git_repo_root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("failed to canonicalize repo root: {e}"));
+        }
+    };
+    let canonical_repo = match repo_dir.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("failed to canonicalize repo path: {e}"));
+        }
+    };
+    if !canonical_repo.starts_with(&canonical_root) {
+        let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+        let _ = std::fs::remove_dir(&reservation);
+        return Err(anyhow::anyhow!(
+            "repo path escapes root: {} not under {}",
+            canonical_repo.display(),
+            canonical_root.display()
+        ));
+    }
+
+    // Initialize bare repo with main as default branch.
+    let output = match Command::new("git")
+        .arg("init")
+        .arg("--bare")
+        .arg("-b")
+        .arg("main")
+        .arg(&repo_dir)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("HOME", "/dev/null")
+        .output()
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+            let _ = std::fs::remove_dir(&reservation);
+            return Err(anyhow::anyhow!("git init --bare failed to spawn: {e}"));
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = tokio::fs::remove_dir_all(&repo_dir).await;
+        let _ = std::fs::remove_dir(&reservation);
+        return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
+    }
+
+    // Security: disable git hooks (RCE prevention).
+    let _ = Command::new("git")
+        .args(["config", "--file"])
+        .arg(repo_dir.join("config"))
+        .args(["core.hooksPath", "/dev/null"])
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("HOME", "/dev/null")
+        .output()
+        .await;
+
+    // Git config for Smart HTTP compatibility.
+    for (key, value) in [
+        ("http.receivepack", "true"),
+        ("receive.denyNonFastForwards", "false"),
+        ("uploadpack.allowTipSHA1InWant", "true"),
+        ("uploadpack.allowReachableSHA1InWant", "true"),
+    ] {
+        let _ = Command::new("git")
+            .args(["config", "--file"])
+            .arg(repo_dir.join("config"))
+            .args([key, value])
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("HOME", "/dev/null")
+            .output()
+            .await;
+    }
+
+    // Belt-and-suspenders: remove hooks directory entirely.
+    let hooks_dir = repo_dir.join("hooks");
+    if hooks_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(&hooks_dir).await;
+    }
+
+    info!(
+        repo_id = %repo_id,
+        owner = %owner_hex,
+        path = %repo_dir.display(),
+        "bare git repo created from kind:30617 announcement"
+    );
+
+    Ok(())
 }

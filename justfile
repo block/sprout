@@ -85,9 +85,29 @@ desktop-tauri-fmt:
 desktop-tauri-fmt-check:
     cargo fmt --manifest-path {{desktop_tauri_manifest}} --all -- --check
 
+# Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
+_ensure-sidecar-stubs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    mkdir -p desktop/src-tauri/binaries
+    for bin in sprout-acp sprout-mcp-server; do
+        touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
+    done
+
 # Check the desktop Tauri Rust crate compiles
-desktop-tauri-check:
+desktop-tauri-check: _ensure-sidecar-stubs
     cargo check --manifest-path {{desktop_tauri_manifest}}
+
+# Build the full desktop Tauri app locally (unsigned, for testing)
+desktop-release-build target="aarch64-apple-darwin":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TARGET={{target}}
+    mkdir -p desktop/src-tauri/binaries
+    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
+    touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+    cd {{desktop_dir}} && pnpm install && pnpm tauri build --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-tauri-fmt-check desktop-build desktop-tauri-check
@@ -140,7 +160,7 @@ proxy-release:
     cargo run -p sprout-proxy --release
 
 # Run the desktop Tauri app in dev mode (ports and identity derived from worktree)
-dev *ARGS:
+dev *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
@@ -150,7 +170,7 @@ dev *ARGS:
     pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
-staging *ARGS:
+staging *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
@@ -177,47 +197,21 @@ desktop-dev:
 desktop-app *ARGS:
     just dev {{ARGS}}
 
-# ─── Desktop Release ──────────────────────────────────────────────────────────
-
-# Tag and push to trigger the desktop release workflow (CI handles version bumping)
-desktop-release version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    git tag "desktop/v{{version}}"
-    git push origin "desktop/v{{version}}"
-
-    echo "Pushed tag desktop/v{{version}} — CI will set the version, build, and publish the release."
-
-# Set the desktop app version (patches package.json, tauri.conf.json, Cargo.toml)
-desktop-set-version version:
-    cd {{desktop_dir}} && node scripts/set-version-from-tag.mjs "{{version}}"
-    cd {{desktop_dir}}/src-tauri && cargo generate-lockfile
-
-# Build a local desktop release (for testing). Optionally set a version first.
-desktop-release-build version="" target="aarch64-apple-darwin" *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -n "{{version}}" ]; then
-        just desktop-set-version "{{version}}"
-    fi
-    cd {{desktop_dir}} && pnpm exec tauri build --target {{target}} --config src-tauri/tauri.release.conf.json {{args}}
-
 # ─── Mobile ──────────────────────────────────────────────────────────────────
 
 mobile_dir := "mobile"
 
 # Install mobile Flutter dependencies
 mobile-install:
-    cd {{mobile_dir}} && flutter pub get
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter pub get
 
 # Run mobile lint and format checks
 mobile-check:
-    cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
 
 # Run mobile tests
 mobile-test:
-    cd {{mobile_dir}} && flutter test
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

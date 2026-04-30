@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../auth/auth.dart';
@@ -38,12 +38,14 @@ class _HistorySubscription {
 class _LiveSubscription {
   final NostrFilter filter;
   final void Function(NostrEvent) onEvent;
+  final void Function(String message)? onClosed;
   Completer<void>? readyCompleter;
   int? lastSeenCreatedAt;
 
   _LiveSubscription({
     required this.filter,
     required this.onEvent,
+    this.onClosed,
     this.readyCompleter,
   });
 }
@@ -73,13 +75,14 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   static const _maxReconnectDelayMs = 30000;
   static const _eventBatchMs = 16;
   static const _reconnectReplaySkewSeconds = 5;
+  static const _maxRecentDeliveryKeys = 5000;
 
   RelaySocket? _socket;
   final Map<String, _HistorySubscription> _historySubscriptions = {};
   final Map<String, _LiveSubscription> _liveSubscriptions = {};
   final Map<String, _PendingEvent> _pendingEvents = {};
   final List<_BufferedEvent> _eventBuffer = [];
-  final Set<String> _recentEventIds = {};
+  final Set<String> _recentDeliveryKeys = {};
   Timer? _reconnectTimer;
   Timer? _flushTimer;
   Timer? _backgroundGraceTimer;
@@ -91,6 +94,10 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   SessionState build() {
     final config = ref.watch(relayConfigProvider);
     final authState = ref.watch(authProvider);
+
+    // Reset disposed flag — build() may re-run on the same Notifier instance
+    // after a provider dependency changes (e.g. auth completing).
+    _disposed = false;
 
     ref.onDispose(_dispose);
 
@@ -140,24 +147,36 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   /// `since: lastSeenCreatedAt - 5s` on reconnect.
   Future<void Function()> subscribe(
     NostrFilter filter,
-    void Function(NostrEvent) onEvent,
-  ) async {
+    void Function(NostrEvent) onEvent, {
+    void Function(String message)? onClosed,
+  }) async {
     final subId = _nextSubId('l');
     final readyCompleter = Completer<void>();
 
     _liveSubscriptions[subId] = _LiveSubscription(
       filter: filter,
       onEvent: onEvent,
+      onClosed: onClosed,
       readyCompleter: readyCompleter,
     );
 
     _sendReq(subId, filter);
 
     // Wait for EOSE or a short fallback timeout.
-    await readyCompleter.future.timeout(
-      const Duration(milliseconds: 500),
-      onTimeout: () {},
-    );
+    try {
+      await readyCompleter.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
+    } catch (_) {
+      _liveSubscriptions.remove(subId);
+      _recentDeliveryKeys.removeWhere((key) => key.startsWith('$subId:'));
+      rethrow;
+    }
+    final liveSub = _liveSubscriptions[subId];
+    if (liveSub != null && liveSub.readyCompleter == readyCompleter) {
+      liveSub.readyCompleter = null;
+    }
 
     return () => _unsubscribe(subId);
   }
@@ -188,6 +207,18 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _socket?.send(['EVENT', event.toJson()]);
     return completer.future;
   }
+
+  /// Send a raw message over the WebSocket without waiting for acknowledgement.
+  /// Used for ephemeral events like typing indicators.
+  void sendRaw(List<dynamic> payload) {
+    _socket?.send(payload);
+  }
+
+  @visibleForTesting
+  void debugHandleMessage(List<dynamic> data) => _handleMessage(data);
+
+  @visibleForTesting
+  void debugFlushEventBuffer() => _flushEventBuffer();
 
   /// Force a reconnect (e.g., returning from background).
   Future<void> reconnect() async {
@@ -312,6 +343,8 @@ class RelaySessionNotifier extends Notifier<SessionState> {
         _handleEvent(data);
       case 'EOSE':
         _handleEose(data);
+      case 'CLOSED':
+        _handleClosed(data);
       case 'OK':
         _handleOk(data);
     }
@@ -368,6 +401,35 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     }
   }
 
+  void _handleClosed(List<dynamic> data) {
+    if (data.length < 2) return;
+    final subId = data[1] as String;
+    final message = data.length >= 3 && data[2] is String
+        ? data[2] as String
+        : 'subscription closed by relay';
+
+    final historySub = _historySubscriptions.remove(subId);
+    if (historySub != null) {
+      historySub.timeout.cancel();
+      if (!historySub.completer.isCompleted) {
+        historySub.completer.completeError(Exception(message));
+      }
+      return;
+    }
+
+    final liveSub = _liveSubscriptions.remove(subId);
+    if (liveSub == null) return;
+    _recentDeliveryKeys.removeWhere((key) => key.startsWith('$subId:'));
+
+    final readyCompleter = liveSub.readyCompleter;
+    if (readyCompleter != null && !readyCompleter.isCompleted) {
+      readyCompleter.completeError(Exception(message));
+      return;
+    }
+
+    liveSub.onClosed?.call(message);
+  }
+
   void _handleOk(List<dynamic> data) {
     if (data.length < 3) return;
     final eventId = data[1] as String;
@@ -420,19 +482,22 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _eventBuffer.clear();
 
     for (final buffered in batch) {
-      // Deduplication: skip events we've already seen recently.
-      if (_recentEventIds.contains(buffered.event.id)) continue;
-      _recentEventIds.add(buffered.event.id);
+      final sub = _liveSubscriptions[buffered.subId];
+      if (sub == null) continue;
+
+      // Deduplicate per subscription. The same relay event can legitimately
+      // match multiple live subscriptions, e.g. the channel list unread listener
+      // and the open channel message listener.
+      final deliveryKey = '${buffered.subId}:${buffered.event.id}';
+      if (_recentDeliveryKeys.contains(deliveryKey)) continue;
 
       // Cap the dedup set to prevent unbounded memory growth.
-      if (_recentEventIds.length > 5000) {
-        _recentEventIds.clear();
+      if (_recentDeliveryKeys.length >= _maxRecentDeliveryKeys) {
+        _recentDeliveryKeys.clear();
       }
+      _recentDeliveryKeys.add(deliveryKey);
 
-      final sub = _liveSubscriptions[buffered.subId];
-      if (sub != null) {
-        sub.onEvent(buffered.event);
-      }
+      sub.onEvent(buffered.event);
     }
   }
 
@@ -455,6 +520,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
 
   void _unsubscribe(String subId) {
     _liveSubscriptions.remove(subId);
+    _recentDeliveryKeys.removeWhere((key) => key.startsWith('$subId:'));
     _sendClose(subId);
   }
 
@@ -485,6 +551,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _backgroundGraceTimer?.cancel();
     _cancelAllHistory(null);
     _rejectAllPending(null);
+    _recentDeliveryKeys.clear();
     _socket?.dispose();
     _socket = null;
   }

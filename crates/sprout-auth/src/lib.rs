@@ -68,6 +68,10 @@ pub struct AuthContext {
     pub pubkey: nostr::PublicKey,
     /// Permission scopes granted to this connection.
     pub scopes: Vec<Scope>,
+    /// Token-level channel restriction, if authentication used a scoped API token.
+    ///
+    /// `None` means unrestricted or not token-authenticated.
+    pub channel_ids: Option<Vec<uuid::Uuid>>,
     /// How the connection was authenticated.
     pub auth_method: AuthMethod,
 }
@@ -187,6 +191,7 @@ impl AuthService {
         Ok(AuthContext {
             pubkey: verified_pubkey,
             scopes,
+            channel_ids: None,
             auth_method,
         })
     }
@@ -417,6 +422,7 @@ mod tests {
         let ctx = AuthContext {
             pubkey: keys.public_key(),
             scopes: vec![Scope::MessagesRead, Scope::ChannelsRead],
+            channel_ids: None,
             auth_method: AuthMethod::Nip42PubkeyOnly,
         };
         assert!(ctx.has_scope(&Scope::MessagesRead));

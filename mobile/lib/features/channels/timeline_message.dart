@@ -133,6 +133,7 @@ class TimelineMessage {
   final String pubkey;
   final int createdAt;
   final String content;
+  final List<List<String>> tags;
   final bool isSystem;
   final bool edited;
   final SystemEvent? systemEvent;
@@ -143,17 +144,54 @@ class TimelineMessage {
   /// Aggregated reactions on this message.
   final List<TimelineReaction> reactions;
 
+  /// Direct parent event ID (null for top-level messages).
+  final String? parentId;
+
+  /// Root event ID of the thread (null for top-level messages).
+  final String? rootId;
+
   const TimelineMessage({
     required this.id,
     required this.pubkey,
     required this.createdAt,
     required this.content,
+    this.tags = const [],
     this.isSystem = false,
     this.edited = false,
     this.systemEvent,
     this.mentionPubkeys = const [],
     this.reactions = const [],
+    this.parentId,
+    this.rootId,
   });
+}
+
+// ---------------------------------------------------------------------------
+// ThreadSummary — inline thread indicator on the main timeline
+// ---------------------------------------------------------------------------
+
+@immutable
+class ThreadSummary {
+  final String threadHeadId;
+  final int replyCount;
+
+  /// Up to 3 most recent unique participant pubkeys.
+  final List<String> participantPubkeys;
+
+  const ThreadSummary({
+    required this.threadHeadId,
+    required this.replyCount,
+    required this.participantPubkeys,
+  });
+}
+
+/// A main-timeline entry: a root message with an optional thread summary.
+@immutable
+class MainTimelineEntry {
+  final TimelineMessage message;
+  final ThreadSummary? summary;
+
+  const MainTimelineEntry({required this.message, this.summary});
 }
 
 // ---------------------------------------------------------------------------
@@ -227,14 +265,33 @@ List<TimelineMessage> formatTimeline(
     if (event.kind == EventKind.systemMessage) {
       final systemEvent = SystemEvent.fromContent(event.content);
       if (systemEvent != null) {
+        final emojiMap = reactionMap[event.id];
+        final reactions = <TimelineReaction>[
+          if (emojiMap != null)
+            for (final entry in emojiMap.entries)
+              TimelineReaction(
+                emoji: entry.key,
+                count: entry.value.length,
+                reactedByCurrentUser:
+                    normalizedCurrentPubkey != null &&
+                    entry.value.containsKey(normalizedCurrentPubkey),
+                userPubkeys: entry.value.keys.toList(),
+                currentUserReactionId: normalizedCurrentPubkey != null
+                    ? entry.value[normalizedCurrentPubkey]
+                    : null,
+              ),
+        ];
+
         result.add(
           TimelineMessage(
             id: event.id,
             pubkey: event.pubkey,
             createdAt: event.createdAt,
             content: event.content,
+            tags: event.tags,
             isSystem: true,
             systemEvent: systemEvent,
+            reactions: reactions,
           ),
         );
       }
@@ -267,21 +324,79 @@ List<TimelineMessage> formatTimeline(
             ),
       ];
 
+      final threadRef = event.threadReference;
+
       result.add(
         TimelineMessage(
           id: event.id,
           pubkey: event.pubkey,
           createdAt: event.createdAt,
           content: edit?.content ?? event.content,
+          tags: event.tags,
           edited: edit != null,
           mentionPubkeys: mentions,
           reactions: reactions,
+          parentId: threadRef.parentId,
+          rootId: threadRef.rootId,
         ),
       );
     }
   }
 
   return result;
+}
+
+/// Build main-timeline entries: only root messages (parentId == null),
+/// each with an optional [ThreadSummary] when replies exist.
+///
+/// Mirrors the desktop's `buildMainTimelineEntries`.
+List<MainTimelineEntry> buildMainTimelineEntries(
+  List<TimelineMessage> messages,
+) {
+  // Index direct children by parentId.
+  final childrenByParent = <String, List<TimelineMessage>>{};
+  for (final msg in messages) {
+    final pid = msg.parentId;
+    if (pid == null) continue;
+    childrenByParent.putIfAbsent(pid, () => []).add(msg);
+  }
+
+  return [
+    for (final msg in messages)
+      if (msg.parentId == null || _isBroadcastReply(msg))
+        MainTimelineEntry(
+          message: msg,
+          summary: _buildSummary(msg.id, childrenByParent),
+        ),
+  ];
+}
+
+bool _isBroadcastReply(TimelineMessage message) {
+  return message.tags.any(
+    (tag) => tag.length >= 2 && tag[0] == 'broadcast' && tag[1] == '1',
+  );
+}
+
+ThreadSummary? _buildSummary(
+  String messageId,
+  Map<String, List<TimelineMessage>> childrenByParent,
+) {
+  final replies = childrenByParent[messageId];
+  if (replies == null || replies.isEmpty) return null;
+
+  // Up to 3 most recent unique participants (walk backwards).
+  final seen = <String>{};
+  final participants = <String>[];
+  for (var i = replies.length - 1; i >= 0 && participants.length < 3; i--) {
+    final pk = replies[i].pubkey.toLowerCase();
+    if (seen.add(pk)) participants.add(pk);
+  }
+
+  return ThreadSummary(
+    threadHeadId: messageId,
+    replyCount: replies.length,
+    participantPubkeys: participants.reversed.toList(),
+  );
 }
 
 // ---------------------------------------------------------------------------

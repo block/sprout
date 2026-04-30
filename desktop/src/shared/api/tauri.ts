@@ -148,6 +148,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -289,7 +290,6 @@ type RawCommandAvailability = {
 };
 
 type RawManagedAgentPrereqs = {
-  admin: RawCommandAvailability;
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
 };
@@ -395,6 +395,7 @@ function fromRawFeedItem(item: RawFeedItem) {
     createdAt: item.created_at,
     channelId: item.channel_id,
     channelName: item.channel_name,
+    channelType: item.channel_type,
     tags: item.tags,
     category: item.category,
   };
@@ -525,6 +526,10 @@ export async function setPresence(
     status: response.status,
     ttlSeconds: response.ttl_seconds,
   };
+}
+
+export function getDefaultRelayUrl(): Promise<string> {
+  return invokeTauri<string>("get_default_relay_url");
 }
 
 export function getRelayWsUrl(): Promise<string> {
@@ -682,10 +687,11 @@ export async function getHomeFeed(
 export async function searchMessages(
   input: SearchMessagesInput,
 ): Promise<SearchMessagesResponse> {
-  const response = await invokeTauri<RawSearchResponse>(
-    "search_messages",
-    input,
-  );
+  const response = await invokeTauri<RawSearchResponse>("search_messages", {
+    q: input.q,
+    limit: input.limit,
+    channelId: input.channelId,
+  });
 
   return {
     hits: response.hits.map(fromRawSearchHit),
@@ -789,6 +795,7 @@ export async function removeReaction(
 export async function signRelayEvent(input: {
   kind: number;
   content: string;
+  createdAt?: number;
   tags: string[][];
 }): Promise<RelayEvent> {
   const eventJson = await invokeTauri<string>("sign_event", input);
@@ -1046,7 +1053,6 @@ export async function discoverManagedAgentPrereqs(input: {
   );
 
   return {
-    admin: fromRawCommandAvailability(response.admin),
     acp: fromRawCommandAvailability(response.acp),
     mcp: fromRawCommandAvailability(response.mcp),
   };
@@ -1089,5 +1095,43 @@ export async function probeBackendProvider(
 ): Promise<BackendProviderProbeResult> {
   return invokeTauri<BackendProviderProbeResult>("probe_backend_provider", {
     binaryPath,
+  });
+}
+
+// ── NIP-44 encrypt-to-self ───────────────────────────────────────────────────
+
+export async function nip44EncryptToSelf(plaintext: string): Promise<string> {
+  return invokeTauri<string>("nip44_encrypt_to_self", { plaintext });
+}
+
+export async function nip44DecryptFromSelf(
+  ciphertext: string,
+): Promise<string> {
+  return invokeTauri<string>("nip44_decrypt_from_self", { ciphertext });
+}
+
+// ── NIP-AB device pairing ───────────────────────────────────────────────────
+
+export async function startPairing(): Promise<string> {
+  return invokeTauri<string>("start_pairing");
+}
+
+export async function confirmPairingSas(): Promise<void> {
+  await invokeTauri("confirm_pairing_sas");
+}
+
+export async function cancelPairing(): Promise<void> {
+  await invokeTauri("cancel_pairing");
+}
+
+export async function applyWorkspace(
+  relayUrl: string,
+  nsec?: string,
+  token?: string,
+): Promise<void> {
+  await invokeTauri("apply_workspace", {
+    relayUrl,
+    nsec: nsec ?? null,
+    token: token ?? null,
   });
 }

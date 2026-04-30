@@ -699,6 +699,8 @@ pub struct RelayClient {
     http: reqwest::Client,
     /// Optional API token for Bearer auth on REST endpoints.
     api_token: Option<String>,
+    /// Optional NIP-OA auth tag injected into every signed event.
+    auth_tag: Option<nostr::Tag>,
 }
 
 impl RelayClient {
@@ -706,10 +708,14 @@ impl RelayClient {
     ///
     /// Performs the initial NIP-42 handshake synchronously so startup failures
     /// are surfaced immediately. After that, reconnection is automatic.
+    ///
+    /// `auth_tag` is an optional NIP-OA tag that will be injected into every
+    /// event signed via [`sign_event`](Self::sign_event).
     pub async fn connect(
         relay_url: &str,
         keys: &Keys,
         api_token: Option<&str>,
+        auth_tag: Option<nostr::Tag>,
     ) -> Result<Self, RelayClientError> {
         let ws = do_connect(relay_url, keys, api_token).await?;
 
@@ -734,12 +740,45 @@ impl RelayClient {
                 .build()
                 .map_err(|e| RelayClientError::Url(format!("HTTP client build failed: {e}")))?,
             api_token: api_token.map(|t| t.to_string()),
+            auth_tag,
         })
     }
 
-    /// Returns the Nostr keypair used for signing and authentication.
-    pub fn keys(&self) -> &Keys {
-        &self.keys
+    /// Sign an event builder, injecting the NIP-OA auth tag if configured.
+    ///
+    /// This is the canonical signing path in the MCP server. All event creation
+    /// should go through this method to ensure consistent auth tag injection.
+    ///
+    /// **Callers MUST NOT add `auth` tags to the builder before calling this
+    /// method.** The only `auth` tag that may appear in the signed event is the
+    /// one injected by this method. Any pre-existing `auth` tag — whether
+    /// `self.auth_tag` is configured or not — is rejected immediately.
+    pub fn sign_event(&self, builder: EventBuilder) -> Result<Event, RelayClientError> {
+        let builder = if let Some(ref tag) = self.auth_tag {
+            builder.add_tags([tag.clone()])
+        } else {
+            builder
+        };
+        let event = builder
+            .sign_with_keys(&self.keys)
+            .map_err(RelayClientError::from)?;
+
+        // Enforce: auth tags may only come from self.auth_tag injection.
+        // - If auth_tag is Some: exactly 1 auth tag must exist (the one we injected)
+        // - If auth_tag is None: zero auth tags must exist (no caller bypass)
+        let auth_count = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("auth"))
+            .count();
+        let expected = if self.auth_tag.is_some() { 1 } else { 0 };
+        if auth_count != expected {
+            return Err(RelayClientError::EventBuilder(format!(
+                "event has {auth_count} auth tags — expected {expected}; callers must not add auth tags manually"
+            )));
+        }
+
+        Ok(event)
     }
 
     /// Returns the WebSocket URL the client connected to.
@@ -753,8 +792,45 @@ impl RelayClient {
         relay_ws_to_http(&self.relay_url)
     }
 
-    fn pubkey_hex(&self) -> String {
+    pub(crate) fn pubkey_hex(&self) -> String {
         self.keys.public_key().to_hex()
+    }
+
+    /// Returns a reference to the shared reqwest HTTP client.
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Returns a reference to the Nostr signing keys.
+    pub fn keys(&self) -> &nostr::Keys {
+        &self.keys
+    }
+
+    /// Returns the API token, if configured.
+    pub fn api_token(&self) -> Option<&str> {
+        self.api_token.as_deref()
+    }
+
+    /// Returns the relay's server authority (host or host:port) for BUD-11 server tags.
+    ///
+    /// Uses the same logic as the desktop client's `extract_server_authority`:
+    /// default ports (80/443) are omitted, non-default ports are included.
+    /// Returns `None` for localhost (no server tag in dev mode).
+    pub fn server_domain(&self) -> Option<String> {
+        // Convert ws:// → http://, wss:// → https:// for url::Url parsing.
+        let http_url = self
+            .relay_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
+        let parsed = url::Url::parse(&http_url).ok()?;
+        let host = parsed.host_str()?;
+        if host.is_empty() || host == "localhost" {
+            return None;
+        }
+        match parsed.port() {
+            Some(port) => Some(format!("{host}:{port}")),
+            None => Some(host.to_string()),
+        }
     }
 
     /// Returns the appropriate auth header for REST requests.
@@ -850,7 +926,55 @@ impl RelayClient {
     }
 
     /// Publish a signed Nostr event to the relay and wait for the `OK` acknowledgement.
+    ///
+    /// Defense-in-depth: validates that the event carries the expected number of
+    /// `auth` tags before publishing. This catches any code path that bypasses
+    /// [`sign_event`](Self::sign_event).
     pub async fn send_event(&self, event: Event) -> Result<OkResponse, RelayClientError> {
+        // Verify the event was authored by this client's keypair.
+        if event.pubkey != self.keys.public_key() {
+            return Err(RelayClientError::EventBuilder(format!(
+                "send_event rejected: event pubkey {} does not match client pubkey {}",
+                event.pubkey.to_hex(),
+                self.keys.public_key().to_hex()
+            )));
+        }
+
+        // Defense-in-depth: validate auth tags match configuration exactly.
+        let auth_tags: Vec<&nostr::Tag> = event
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("auth"))
+            .collect();
+
+        match (&self.auth_tag, auth_tags.as_slice()) {
+            // Configured: exactly 1 auth tag that matches our configured tag byte-for-byte
+            (Some(expected), [actual]) => {
+                if actual.as_slice() != expected.as_slice() {
+                    return Err(RelayClientError::EventBuilder(
+                        "send_event rejected: auth tag does not match configured attestation"
+                            .into(),
+                    ));
+                }
+            }
+            // Configured but wrong count
+            (Some(_), tags) => {
+                return Err(RelayClientError::EventBuilder(format!(
+                    "send_event rejected: expected 1 auth tag, found {}",
+                    tags.len()
+                )));
+            }
+            // Unconfigured: no auth tags allowed
+            (None, tags) if !tags.is_empty() => {
+                return Err(RelayClientError::EventBuilder(format!(
+                    "send_event rejected: auth tags not allowed when unconfigured, found {}",
+                    tags.len()
+                )));
+            }
+            // Unconfigured, no auth tags: OK
+            (None, _) => {}
+        }
+
         let (reply_tx, reply_rx) = oneshot::channel();
         self.bg
             .cmd_tx
@@ -1213,6 +1337,168 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ── sign_event auth tag injection ────────────────────────────────────────
+
+    /// Build a minimal `RelayClient` without a live relay connection.
+    ///
+    /// Only `keys` and `auth_tag` matter for `sign_event`; the other fields
+    /// are inert stubs (the background task immediately exits, the HTTP
+    /// client is never used).
+    fn make_client(keys: Keys, auth_tag: Option<nostr::Tag>) -> RelayClient {
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+        let handle = tokio::runtime::Handle::current().spawn(async {});
+        RelayClient {
+            bg: std::sync::Arc::new(BgTaskHandle { cmd_tx, handle }),
+            keys,
+            relay_url: "ws://127.0.0.1:1".to_string(),
+            http: reqwest::Client::new(),
+            api_token: None,
+            auth_tag,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sign_event_injects_auth_tag() {
+        let keys = Keys::generate();
+        // Real NIP-OA tag format: ["auth", "<64-char-hex-pubkey>", "<conditions>", "<128-char-hex-sig>"]
+        let owner_pubkey = "a".repeat(64);
+        let conditions = "";
+        let signature = "b".repeat(128);
+        let auth_tag = nostr::Tag::parse(&["auth", &owner_pubkey, conditions, &signature]).unwrap();
+
+        // With auth_tag: the signed event must contain it.
+        let client = make_client(keys.clone(), Some(auth_tag.clone()));
+        let event = client
+            .sign_event(EventBuilder::new(Kind::TextNote, "hello", []))
+            .expect("sign_event should succeed");
+
+        let tag_values: Vec<Vec<String>> = event
+            .tags
+            .iter()
+            .map(|t| t.as_slice().iter().map(|s| s.to_string()).collect())
+            .collect();
+        assert!(
+            tag_values
+                .iter()
+                .any(|t| t.first().map(|s| s.as_str()) == Some("auth")
+                    && t.get(1).map(|s| s.as_str()) == Some(owner_pubkey.as_str())
+                    && t.get(3).map(|s| s.as_str()) == Some(signature.as_str())),
+            "expected NIP-OA auth tag in event; got: {tag_values:?}"
+        );
+
+        // Without auth_tag: the signed event must NOT contain an auth tag.
+        let client_no_auth = make_client(keys, None);
+        let event_no_auth = client_no_auth
+            .sign_event(EventBuilder::new(Kind::TextNote, "hello", []))
+            .expect("sign_event should succeed");
+
+        let has_auth_tag = event_no_auth
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|s| s.as_str()).unwrap_or("") == "auth");
+        assert!(!has_auth_tag, "expected no auth tag when auth_tag is None");
+    }
+
+    #[tokio::test]
+    async fn test_sign_event_rejects_duplicate_auth_tag() {
+        let keys = Keys::generate();
+        // Real NIP-OA tag format: ["auth", "<64-char-hex-pubkey>", "<conditions>", "<128-char-hex-sig>"]
+        let owner_pubkey = "c".repeat(64);
+        let conditions = "";
+        let signature = "d".repeat(128);
+        let auth_tag = nostr::Tag::parse(&["auth", &owner_pubkey, conditions, &signature]).unwrap();
+
+        // Case 1: client has auth_tag configured, caller also pre-adds one → duplicate → reject.
+        let client = make_client(keys.clone(), Some(auth_tag.clone()));
+        let builder = EventBuilder::new(Kind::TextNote, "oops", [auth_tag.clone()]);
+        let result = client.sign_event(builder);
+        assert!(
+            result.is_err(),
+            "sign_event should return an error when the event would have duplicate auth tags"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("auth tags"),
+            "error message should mention auth tags; got: {err_msg}"
+        );
+
+        // Case 2: client has NO auth_tag configured, but caller manually adds one → bypass → reject.
+        let client_no_auth = make_client(keys, None);
+        let builder_with_manual = EventBuilder::new(Kind::TextNote, "bypass", [auth_tag]);
+        let result2 = client_no_auth.sign_event(builder_with_manual);
+        assert!(
+            result2.is_err(),
+            "sign_event should reject a manually added auth tag even when auth_tag is None"
+        );
+        let err_msg2 = result2.unwrap_err().to_string();
+        assert!(
+            err_msg2.contains("auth tags"),
+            "error message should mention auth tags; got: {err_msg2}"
+        );
+    }
+
+    // ── send_event auth tag validation ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_send_event_rejects_forged_auth_tag() {
+        let keys = Keys::generate();
+        let real_tag = nostr::Tag::parse(&["auth", &"a".repeat(64), "", &"b".repeat(128)]).unwrap();
+        let forged_tag =
+            nostr::Tag::parse(&["auth", &"c".repeat(64), "", &"d".repeat(128)]).unwrap();
+
+        let client = make_client(keys.clone(), Some(real_tag));
+
+        // Build event with forged auth tag, bypassing sign_event
+        let event = EventBuilder::new(Kind::TextNote, "forged", [forged_tag])
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let result = client.send_event(event).await;
+        assert!(result.is_err(), "send_event should reject forged auth tag");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("does not match"),
+            "error should mention mismatch: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_event_rejects_auth_tag_when_unconfigured() {
+        let keys = Keys::generate();
+        let sneaky_tag =
+            nostr::Tag::parse(&["auth", &"a".repeat(64), "", &"b".repeat(128)]).unwrap();
+
+        let client = make_client(keys.clone(), None);
+
+        let event = EventBuilder::new(Kind::TextNote, "sneaky", [sneaky_tag])
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let result = client.send_event(event).await;
+        assert!(
+            result.is_err(),
+            "send_event should reject auth tags when unconfigured"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_event_rejects_wrong_pubkey() {
+        let client_keys = Keys::generate();
+        let other_keys = Keys::generate();
+        let client = make_client(client_keys, None);
+
+        // Event signed by a different keypair
+        let event = EventBuilder::new(Kind::TextNote, "wrong author", [])
+            .sign_with_keys(&other_keys)
+            .unwrap();
+
+        let result = client.send_event(event).await;
+        assert!(
+            result.is_err(),
+            "send_event should reject events from wrong pubkey"
+        );
+    }
+
     // ── Integration tests: mini relay ─────────────────────────────────────────
     //
     // Each test spins up a lightweight in-process WebSocket server that performs
@@ -1296,7 +1582,7 @@ mod tests {
             .await;
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
             // Give the background task a moment to process the Ping.
             tokio::time::sleep(Duration::from_millis(200)).await;
             let _ = client.close().await;
@@ -1337,7 +1623,7 @@ mod tests {
             .await;
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
             tokio::time::sleep(Duration::from_millis(200)).await;
             let _ = client.close().await;
         }
@@ -1366,7 +1652,7 @@ mod tests {
             .await;
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
             let event = EventBuilder::new(Kind::Custom(9), "test", [])
                 .sign_with_keys(&keys)
@@ -1418,7 +1704,7 @@ mod tests {
             .await;
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
             let events = client
                 .subscribe("sub-1", vec![Filter::new()])
@@ -1444,7 +1730,7 @@ mod tests {
             .await;
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
             let event = EventBuilder::new(Kind::Custom(9), "timeout-test", [])
                 .sign_with_keys(&keys)
@@ -1517,7 +1803,7 @@ mod tests {
             .await;
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
             // Subscribe (EOSE comes back immediately).
             client
@@ -1634,7 +1920,7 @@ mod tests {
             });
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
             // Wait for the second relay to complete auth (background task reconnected).
             tokio::time::timeout(Duration::from_secs(5), ok_rx)
@@ -1697,7 +1983,7 @@ mod tests {
             });
 
             let keys = Keys::generate();
-            let client = RelayClient::connect(&url, &keys, None).await.unwrap();
+            let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
             // Give the background task time to notice the close and enter
             // the reconnect backoff loop.

@@ -57,7 +57,7 @@ pub(crate) async fn connect_audio_relay(
 ) -> Result<(CancellationToken, tokio::sync::mpsc::Sender<Vec<u8>>), String> {
     use nostr::JsonUtil;
 
-    let relay_url = crate::relay::relay_ws_url();
+    let relay_url = crate::relay::relay_ws_url_with_override(state);
     let ws_url = format!("{relay_url}/huddle/{channel_id}/audio");
 
     let keys = state.keys.lock().map_err(|e| e.to_string())?.clone();
@@ -162,6 +162,11 @@ pub(crate) async fn connect_audio_relay(
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     let (pcm_tx, pcm_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(50);
+    let output_device_name = state
+        .audio_output_device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
 
     tokio::spawn(async move {
         if let Err(e) = audio_relay_pipeline(
@@ -173,6 +178,7 @@ pub(crate) async fn connect_audio_relay(
             initial_peers,
             tts_cancel,
             tts_active,
+            output_device_name,
         )
         .await
         {
@@ -206,6 +212,7 @@ async fn audio_relay_pipeline(
     initial_peers: Vec<(u8, String)>,
     tts_cancel: Arc<AtomicBool>,
     tts_active: Arc<AtomicBool>,
+    output_device_name: Option<String>,
 ) -> Result<(), String> {
     let mut encoder = opus::Encoder::new(48000, opus::Channels::Mono, opus::Application::Voip)
         .map_err(|e| format!("opus encoder: {e}"))?;
@@ -216,8 +223,7 @@ async fn audio_relay_pipeline(
         .set_dtx(true)
         .map_err(|e| format!("opus dtx: {e}"))?;
 
-    let sink_handle =
-        rodio::DeviceSinkBuilder::open_default_sink().map_err(|e| format!("audio output: {e}"))?;
+    let sink_handle = super::audio_output::open_output_sink_by_name(output_device_name.as_deref())?;
     let player = rodio::Player::connect_new(&sink_handle.mixer());
 
     let decoders: std::collections::HashMap<u8, opus::Decoder> = std::collections::HashMap::new();

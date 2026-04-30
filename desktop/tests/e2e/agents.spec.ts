@@ -171,8 +171,10 @@ test("built-in personas are chosen from the dialog and can be selected", async (
     .getByTestId("persona-catalog-card-target-builtin:reviewer")
     .click();
   await expect(
-    page.getByTestId("persona-catalog-feedback-notice"),
-  ).toContainText("Selected Reviewer for My Agents.");
+    page
+      .locator("[data-sonner-toast]")
+      .filter({ hasText: "Selected Reviewer for My Agents." }),
+  ).toBeVisible();
 
   await expect(page.getByTestId("agents-library-personas")).toContainText(
     "Reviewer",
@@ -186,8 +188,10 @@ test("built-in personas are chosen from the dialog and can be selected", async (
     .getByTestId("persona-catalog-card-target-builtin:reviewer")
     .click();
   await expect(
-    page.getByTestId("persona-catalog-feedback-notice"),
-  ).toContainText("Deselected Reviewer from My Agents.");
+    page
+      .locator("[data-sonner-toast]")
+      .filter({ hasText: "Deselected Reviewer from My Agents." }),
+  ).toBeVisible();
   await expect(page.getByTestId("agents-library-personas")).not.toContainText(
     "Reviewer",
   );
@@ -228,8 +232,10 @@ test("persona catalog chooser order stays stable when selection changes", async 
 
   await page.getByTestId("persona-catalog-card-target-builtin:solo").click();
   await expect(
-    page.getByTestId("persona-catalog-feedback-notice"),
-  ).toContainText("Selected Solo for My Agents.");
+    page
+      .locator("[data-sonner-toast]")
+      .filter({ hasText: "Selected Solo for My Agents." }),
+  ).toBeVisible();
 
   expect(await getCatalogOrder(page)).toEqual(before);
 });
@@ -313,8 +319,10 @@ test("built-in deselection failures show up in Persona Catalog", async ({
     .click();
 
   await expect(
-    page.getByTestId("persona-catalog-feedback-error"),
-  ).toContainText("Reviewer is still referenced by a team.");
+    page
+      .locator("[data-sonner-toast]")
+      .filter({ hasText: "Reviewer is still referenced by a team." }),
+  ).toBeVisible();
 });
 
 test("channel quick add falls back to added personas when defaults are absent", async ({

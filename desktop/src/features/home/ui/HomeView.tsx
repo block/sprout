@@ -5,6 +5,7 @@ import { useRelayAgentsQuery } from "@/features/agents/hooks";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useContactListQuery, useTimelineQuery } from "@/features/pulse/hooks";
+import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -30,7 +31,7 @@ function HomeLoadingState() {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4">
           {["mentions", "actions"].map((section) => (
             <div key={section}>
               <Skeleton className="mb-2 h-4 w-24" />
@@ -79,18 +80,22 @@ export function HomeView({
   const [filter, setFilter] = React.useState<FeedFilter>("all");
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
 
+  // Defer Pulse widget queries until the shell is interactive
+  const startupReady = useDeferredStartup();
+  const deferredPubkey = startupReady ? currentPubkey : undefined;
+
   // Recent notes for the Pulse widget
-  const contactListQuery = useContactListQuery(currentPubkey);
+  const contactListQuery = useContactListQuery(deferredPubkey);
   const contactPubkeys = React.useMemo(
     () => (contactListQuery.data?.contacts ?? []).map((c) => c.pubkey),
     [contactListQuery.data],
   );
   const notesPubkeys = React.useMemo(
     () =>
-      currentPubkey
-        ? [...new Set([currentPubkey, ...contactPubkeys])]
+      deferredPubkey
+        ? [...new Set([deferredPubkey, ...contactPubkeys])]
         : contactPubkeys,
-    [currentPubkey, contactPubkeys],
+    [deferredPubkey, contactPubkeys],
   );
   const notesTimelineQuery = useTimelineQuery(
     notesPubkeys,
@@ -105,7 +110,7 @@ export function HomeView({
     enabled: noteAuthorPubkeys.length > 0,
   });
   const noteProfiles = noteProfilesQuery.data?.profiles ?? {};
-  const relayAgentsQuery = useRelayAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery({ enabled: startupReady });
   const agentPubkeySet = React.useMemo(
     () => new Set((relayAgentsQuery.data ?? []).map((a) => a.pubkey)),
     [relayAgentsQuery.data],
@@ -156,8 +161,6 @@ export function HomeView({
   const showNeedsAction = filter === "all" || filter === "needs_action";
   const showActivity = filter === "all" || filter === "activity";
   const showAgentActivity = filter === "all" || filter === "agent_activity";
-  const singleColumn = filter !== "all";
-
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
@@ -188,7 +191,7 @@ export function HomeView({
         ) : null}
 
         <React.Suspense fallback={null}>
-          <div className={`grid gap-5 ${singleColumn ? "" : "xl:grid-cols-2"}`}>
+          <div className="grid gap-5">
             {showMentions ? (
               <FeedSection
                 availableChannelIds={availableChannelIds}

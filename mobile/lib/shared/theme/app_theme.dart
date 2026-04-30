@@ -19,10 +19,10 @@ class Radii {
 class AppTheme {
   static ThemeData light({ColorScheme? colorScheme}) {
     final scheme = colorScheme ?? lightColorScheme;
-    const appColors = AppColors(
-      success: Color(0xFF40A02B), // Latte Green
-      warning: Color(0xFFDF8E1D), // Latte Yellow
-      accent: Color(0xFF1E66F5), // Latte Blue
+    final appColors = AppColors(
+      success: const Color(0xFF40A02B), // Catppuccin Latte Green — universal
+      warning: const Color(0xFFDF8E1D), // Latte Yellow
+      accent: scheme.tertiary,
     );
 
     return _buildTheme(
@@ -36,10 +36,12 @@ class AppTheme {
 
   static ThemeData dark({ColorScheme? colorScheme}) {
     final scheme = colorScheme ?? darkColorScheme;
-    const appColors = AppColors(
-      success: Color(0xFFA6DA95), // Macchiato Green
-      warning: Color(0xFFEED49F), // Macchiato Yellow
-      accent: Color(0xFF8AADF4), // Macchiato Blue
+    final appColors = AppColors(
+      success: const Color(
+        0xFFA6DA95,
+      ), // Catppuccin Macchiato Green — universal
+      warning: const Color(0xFFEED49F), // Macchiato Yellow
+      accent: scheme.tertiary,
     );
 
     return _buildTheme(
@@ -50,10 +52,6 @@ class AppTheme {
       statusBarBrightness: Brightness.dark,
     );
   }
-
-  /// Legacy getters for backwards compatibility.
-  static ThemeData get lightTheme => light();
-  static ThemeData get darkTheme => dark();
 
   static ThemeData _buildTheme({
     required ColorScheme scheme,
@@ -66,12 +64,14 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       extensions: [appColors],
+      fontFamily: 'Geist',
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
-        backgroundColor: scheme.surface,
+        backgroundColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
+        scrolledUnderElevation: 0,
         titleTextStyle: textTheme.titleMedium?.copyWith(
           color: scheme.onSurface,
         ),

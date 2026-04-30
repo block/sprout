@@ -19,22 +19,30 @@ export function useChannelPaneHandlers({
   deleteMessageMutation,
   editMessageMutation,
   editTargetId,
+  expandedThreadReplyIds,
+  getFirstReplyIdForMessage,
   openThreadHeadId,
   sendMessageMutation,
+  setExpandedThreadReplyIds,
   setEditTargetId,
-  setThreadHeadPath,
+  setOpenThreadHeadId,
   setThreadReplyTargetId,
+  setThreadScrollTargetId,
   threadReplyTargetId,
   toggleReactionMutation,
 }: {
   deleteMessageMutation: ReturnType<typeof useDeleteMessageMutation>;
   editMessageMutation: ReturnType<typeof useEditMessageMutation>;
   editTargetId: string | null;
+  expandedThreadReplyIds: ReadonlySet<string>;
+  getFirstReplyIdForMessage: (messageId: string) => string | null;
   openThreadHeadId: string | null;
   sendMessageMutation: ReturnType<typeof useSendMessageMutation>;
+  setExpandedThreadReplyIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   setEditTargetId: React.Dispatch<React.SetStateAction<string | null>>;
-  setThreadHeadPath: React.Dispatch<React.SetStateAction<string[]>>;
+  setOpenThreadHeadId: React.Dispatch<React.SetStateAction<string | null>>;
   setThreadReplyTargetId: React.Dispatch<React.SetStateAction<string | null>>;
+  setThreadScrollTargetId: React.Dispatch<React.SetStateAction<string | null>>;
   threadReplyTargetId: string | null;
   toggleReactionMutation: ReturnType<typeof useToggleReactionMutation>;
 }) {
@@ -47,6 +55,9 @@ export function useChannelPaneHandlers({
 
   const editTargetIdRef = React.useRef(editTargetId);
   editTargetIdRef.current = editTargetId;
+
+  const expandedThreadReplyIdsRef = React.useRef(expandedThreadReplyIds);
+  expandedThreadReplyIdsRef.current = expandedThreadReplyIds;
 
   const sendMutateRef = React.useRef(sendMessageMutation.mutateAsync);
   sendMutateRef.current = sendMessageMutation.mutateAsync;
@@ -65,20 +76,16 @@ export function useChannelPaneHandlers({
   }, [setThreadReplyTargetId]);
 
   const handleCloseThread = React.useCallback(() => {
-    setThreadHeadPath([]);
+    setOpenThreadHeadId(null);
     setThreadReplyTargetId(null);
-  }, [setThreadHeadPath, setThreadReplyTargetId]);
-
-  const handleBackThread = React.useCallback(() => {
-    setThreadHeadPath((current) => {
-      if (current.length <= 1) {
-        return current;
-      }
-      const nextPath = current.slice(0, -1);
-      setThreadReplyTargetId(nextPath[nextPath.length - 1] ?? null);
-      return nextPath;
-    });
-  }, [setThreadHeadPath, setThreadReplyTargetId]);
+    setThreadScrollTargetId(null);
+    setExpandedThreadReplyIds(new Set());
+  }, [
+    setExpandedThreadReplyIds,
+    setOpenThreadHeadId,
+    setThreadReplyTargetId,
+    setThreadScrollTargetId,
+  ]);
 
   const handleCancelEdit = React.useCallback(() => {
     setEditTargetId(null);
@@ -114,31 +121,61 @@ export function useChannelPaneHandlers({
   const handleOpenThread = React.useCallback(
     (message: { id: string }) => {
       if (openThreadHeadIdRef.current === message.id) {
-        setThreadHeadPath([]);
+        setOpenThreadHeadId(null);
         setThreadReplyTargetId(null);
+        setThreadScrollTargetId(null);
+        setExpandedThreadReplyIds(new Set());
         setEditTargetId(null);
         return;
       }
 
-      setThreadHeadPath([message.id]);
+      setOpenThreadHeadId(message.id);
       setThreadReplyTargetId(message.id);
+      setThreadScrollTargetId(null);
+      setExpandedThreadReplyIds(new Set());
       setEditTargetId(null);
     },
-    [setEditTargetId, setThreadHeadPath, setThreadReplyTargetId],
+    [
+      setEditTargetId,
+      setExpandedThreadReplyIds,
+      setOpenThreadHeadId,
+      setThreadReplyTargetId,
+      setThreadScrollTargetId,
+    ],
   );
 
-  const handleOpenNestedThread = React.useCallback(
+  const handleSelectThreadReplyTarget = React.useCallback(
     (message: { id: string }) => {
-      setThreadHeadPath((current) => {
-        if (current[current.length - 1] === message.id) {
-          return current;
-        }
-        return [...current, message.id];
-      });
-      setThreadReplyTargetId(message.id);
+      if (threadReplyTargetIdRef.current === message.id) {
+        setThreadReplyTargetId(openThreadHeadIdRef.current);
+      } else {
+        setThreadReplyTargetId(message.id);
+      }
       setEditTargetId(null);
     },
-    [setEditTargetId, setThreadHeadPath, setThreadReplyTargetId],
+    [setEditTargetId, setThreadReplyTargetId],
+  );
+
+  const handleExpandThreadReplies = React.useCallback(
+    (message: { id: string }) => {
+      const firstReplyId = getFirstReplyIdForMessage(message.id);
+      if (!expandedThreadReplyIdsRef.current.has(message.id)) {
+        setExpandedThreadReplyIds((current) => {
+          const next = new Set(current);
+          next.add(message.id);
+          return next;
+        });
+      }
+
+      if (firstReplyId) {
+        setThreadScrollTargetId(firstReplyId);
+      }
+    },
+    [
+      getFirstReplyIdForMessage,
+      setExpandedThreadReplyIds,
+      setThreadScrollTargetId,
+    ],
   );
 
   const handleSendMessage = React.useCallback(
@@ -162,21 +199,41 @@ export function useChannelPaneHandlers({
       mentionPubkeys: string[],
       mediaTags?: string[][],
     ) => {
+      const activeThreadHeadId = openThreadHeadIdRef.current;
       const parentEventId =
-        threadReplyTargetIdRef.current ?? openThreadHeadIdRef.current;
+        threadReplyTargetIdRef.current ?? activeThreadHeadId;
       if (!parentEventId) {
         return;
       }
 
-      await sendMutateRef.current({
+      if (
+        activeThreadHeadId &&
+        parentEventId !== activeThreadHeadId &&
+        !expandedThreadReplyIdsRef.current.has(parentEventId)
+      ) {
+        setExpandedThreadReplyIds((current) => {
+          const next = new Set(current);
+          next.add(parentEventId);
+          return next;
+        });
+      }
+
+      const sentMessage = await sendMutateRef.current({
         content,
         mentionPubkeys,
         parentEventId,
         mediaTags,
       });
-      setThreadReplyTargetId(openThreadHeadIdRef.current);
+      setThreadReplyTargetId(activeThreadHeadId);
+      if (activeThreadHeadId && parentEventId !== activeThreadHeadId) {
+        setThreadScrollTargetId(sentMessage.id);
+      }
     },
-    [setThreadReplyTargetId],
+    [
+      setExpandedThreadReplyIds,
+      setThreadReplyTargetId,
+      setThreadScrollTargetId,
+    ],
   );
 
   const handleToggleReaction = React.useCallback(
@@ -193,15 +250,15 @@ export function useChannelPaneHandlers({
   return {
     handleCancelEdit,
     handleCancelThreadReply,
-    handleBackThread,
     handleCloseThread,
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleOpenNestedThread,
+    handleExpandThreadReplies,
     handleOpenThread,
     handleSendMessage,
     handleSendThreadReply,
+    handleSelectThreadReplyTarget,
     handleToggleReaction,
   };
 }

@@ -103,13 +103,13 @@ pub const ALL_TOOLS: &[(&str, &str, bool)] = &[
     ("get_event", "social", true),
     ("get_user_notes", "social", true),
     ("get_contact_list", "social", true),
-    // Deferred tools (not yet implemented): upload_file, subscribe, unsubscribe
+    // ── media ────────────────────────────────────────────────────────────────
+    ("upload_file", "media", false),
 ];
 
 /// Tools planned but not yet implemented. These will be added to ALL_TOOLS
 /// when their #[tool] handlers are created in server.rs.
 pub const DEFERRED_TOOLS: &[(&str, &str, bool)] = &[
-    ("upload_file", "media", false),
     ("subscribe", "realtime", true),
     ("unsubscribe", "realtime", false),
 ];
@@ -383,13 +383,13 @@ mod tests {
     }
 
     #[test]
-    fn all_tools_count_is_48() {
-        assert_eq!(ALL_TOOLS.len(), 48);
+    fn all_tools_count_is_49() {
+        assert_eq!(ALL_TOOLS.len(), 49);
     }
 
     #[test]
-    fn deferred_tools_count_is_3() {
-        assert_eq!(DEFERRED_TOOLS.len(), 3);
+    fn deferred_tools_count_is_2() {
+        assert_eq!(DEFERRED_TOOLS.len(), 2);
     }
 
     #[test]
@@ -408,15 +408,16 @@ mod tests {
 
     #[test]
     fn all_toolsets_returns_correct_count() {
-        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity, forums, social
-        // (media and realtime have no implemented tools yet)
+        // ALL_TOOLS covers: default, channel_admin, dms, canvas, workflow_admin, identity, forums, social, media
+        // (realtime has no implemented tools yet)
         let defs = all_toolsets();
-        assert_eq!(defs.len(), 8);
+        assert_eq!(defs.len(), 9);
         let names: Vec<_> = defs.iter().map(|d| d.name).collect();
         assert!(names.contains(&"default"));
         assert!(names.contains(&"canvas"));
         assert!(names.contains(&"forums"));
         assert!(names.contains(&"social"));
+        assert!(names.contains(&"media"));
     }
 
     // ── Cross-check: ALL_TOOLS integrity ────────────────────────────────────

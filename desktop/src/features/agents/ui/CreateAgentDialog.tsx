@@ -34,6 +34,7 @@ import {
   coerceConfigValues,
   ProviderConfigFields,
 } from "./ProviderConfigFields";
+import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ export function CreateAgentDialog({
   const createMutation = useCreateManagedAgentMutation();
   const providersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
+  const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
@@ -99,11 +101,9 @@ export function CreateAgentDialog({
   // Use this everywhere instead of raw `mintToken` for validation/rendering.
   const effectiveMintToken = isProviderMode || mintToken;
 
-  const isMintSupported = prereqs?.admin.available ?? false;
   const isSpawnSupported =
     prereqs?.acp.available === true && prereqs?.mcp.available === true;
-  const mintToggleDisabled =
-    prereqsQuery.isLoading || (prereqs !== null && !isMintSupported);
+  const mintToggleDisabled = prereqsQuery.isLoading;
   const spawnToggleDisabled =
     prereqsQuery.isLoading || (prereqs !== null && !isSpawnSupported);
   const isDiscoveryPending = providersQuery.isLoading || prereqsQuery.isLoading;
@@ -113,27 +113,29 @@ export function CreateAgentDialog({
       return;
     }
 
-    const matchingProvider =
-      providers.find((provider) => provider.command === agentCommand) ?? null;
-    if (matchingProvider) {
-      setSelectedProviderId(matchingProvider.id);
+    // Prefer last-used provider from localStorage
+    const remembered = lastProviderId
+      ? providers.find((provider) => provider.id === lastProviderId)
+      : null;
+    if (remembered) {
+      setSelectedProviderId(remembered.id);
+      setAgentCommand(remembered.command);
+      setAgentArgs(remembered.defaultArgs.join(","));
+    } else {
+      const matchingProvider =
+        providers.find((provider) => provider.command === agentCommand) ?? null;
+      if (matchingProvider) {
+        setSelectedProviderId(matchingProvider.id);
+      }
     }
     setHasSyncedProviderSelection(true);
   }, [
     agentCommand,
     hasSyncedProviderSelection,
+    lastProviderId,
     providers,
     providersQuery.isLoading,
   ]);
-
-  React.useEffect(() => {
-    // Don't auto-disable minting in provider mode — it's required.
-    if (!prereqs || prereqs.admin.available || !mintToken || isProviderMode) {
-      return;
-    }
-
-    setMintToken(false);
-  }, [mintToken, prereqs, isProviderMode]);
 
   React.useEffect(() => {
     if (
@@ -280,6 +282,7 @@ export function CreateAgentDialog({
       return;
     }
 
+    setLastProvider(nextProviderId);
     setAgentCommand(provider.command);
     setAgentArgs(provider.defaultArgs.join(","));
   }
@@ -305,7 +308,6 @@ export function CreateAgentDialog({
     name.trim().length > 0 &&
     (!effectiveMintToken || selectedScopes.size > 0) &&
     !isDiscoveryPending &&
-    !(effectiveMintToken && prereqs !== null && !isMintSupported) &&
     !(
       !isProviderMode &&
       spawnAfterCreate &&
@@ -464,7 +466,6 @@ export function CreateAgentDialog({
             ) : null}
 
             <CreateAgentOptionToggles
-              isMintSupported={isMintSupported}
               isSpawnSupported={isSpawnSupported}
               mintToken={effectiveMintToken}
               mintToggleDisabled={isProviderMode || mintToggleDisabled}

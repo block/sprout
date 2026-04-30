@@ -1,12 +1,6 @@
 import Picker from "@emoji-mart/react";
 import data from "@emoji-mart/data";
-import {
-  CornerUpLeft,
-  LoaderCircle,
-  Pencil,
-  SmilePlus,
-  Trash2,
-} from "lucide-react";
+import { CornerUpLeft, Pencil, SmilePlus, Trash2 } from "lucide-react";
 import * as React from "react";
 
 import type {
@@ -26,6 +20,8 @@ import {
 } from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { Spinner } from "@/shared/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 export function MessageActionBar({
   activeReplyTargetId = null,
@@ -88,28 +84,32 @@ export function MessageActionBar({
             onOpenChange={setIsReactionPickerOpen}
             open={isReactionPickerOpen}
           >
-            <PopoverTrigger asChild>
-              <Button
-                aria-label="Open reactions"
-                className="h-6 w-6 rounded-full p-0"
-                data-testid={`react-message-${message.id}`}
-                disabled={reactionPending}
-                size="sm"
-                title="React"
-                type="button"
-                variant={
-                  isReactionPickerOpen || selectedReactionCount > 0
-                    ? "secondary"
-                    : "ghost"
-                }
-              >
-                {reactionPending ? (
-                  <LoaderCircle className="h-3 w-3 animate-spin" />
-                ) : (
-                  <SmilePlus className="h-3 w-3" />
-                )}
-              </Button>
-            </PopoverTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    aria-label="Open reactions"
+                    className="h-6 w-6 rounded-full p-0"
+                    data-testid={`react-message-${message.id}`}
+                    disabled={reactionPending}
+                    size="sm"
+                    type="button"
+                    variant={
+                      isReactionPickerOpen || selectedReactionCount > 0
+                        ? "secondary"
+                        : "ghost"
+                    }
+                  >
+                    {reactionPending ? (
+                      <Spinner className="h-3 w-3" />
+                    ) : (
+                      <SmilePlus className="h-3 w-3" />
+                    )}
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>React</TooltipContent>
+            </Tooltip>
             <PopoverContent
               align="end"
               className="w-auto p-0 rounded-2xl overflow-hidden border-0 bg-transparent shadow-none"
@@ -130,13 +130,9 @@ export function MessageActionBar({
                     return;
                   }
 
-                  void onReactionSelect(emoji.native)
-                    .then(() => {
-                      setIsReactionPickerOpen(false);
-                    })
-                    .catch(() => {
-                      return;
-                    });
+                  void onReactionSelect(emoji.native).finally(() => {
+                    setIsReactionPickerOpen(false);
+                  });
                 }}
                 theme="auto"
                 previewPosition="none"
@@ -150,38 +146,46 @@ export function MessageActionBar({
         ) : null}
 
         {hasEditAction ? (
-          <Button
-            aria-label="Edit"
-            className="h-6 w-6 rounded-full p-0"
-            data-testid={`edit-message-${message.id}`}
-            onClick={() => {
-              onEdit?.(message);
-            }}
-            size="sm"
-            title="Edit"
-            type="button"
-            variant="ghost"
-          >
-            <Pencil className="h-3 w-3" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Edit"
+                className="h-6 w-6 rounded-full p-0"
+                data-testid={`edit-message-${message.id}`}
+                onClick={() => {
+                  onEdit?.(message);
+                }}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Edit</TooltipContent>
+          </Tooltip>
         ) : null}
 
         {hasDeleteAction ? (
           <>
-            <Button
-              aria-label="Delete"
-              className="h-6 w-6 rounded-full p-0"
-              data-testid={`delete-message-${message.id}`}
-              onClick={() => {
-                setIsDeleteDialogOpen(true);
-              }}
-              size="sm"
-              title="Delete"
-              type="button"
-              variant="ghost"
-            >
-              <Trash2 className="h-3 w-3" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="Delete"
+                  className="h-6 w-6 rounded-full p-0"
+                  data-testid={`delete-message-${message.id}`}
+                  onClick={() => {
+                    setIsDeleteDialogOpen(true);
+                  }}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Delete</TooltipContent>
+            </Tooltip>
 
             <AlertDialog
               onOpenChange={setIsDeleteDialogOpen}
@@ -217,20 +221,26 @@ export function MessageActionBar({
         ) : null}
 
         {hasReplyAction ? (
-          <Button
-            aria-label={isReplyingToMessage ? "Cancel reply" : "Reply"}
-            className="h-6 w-6 rounded-full p-0"
-            data-testid={`reply-message-${message.id}`}
-            onClick={() => {
-              onReply?.(message);
-            }}
-            size="sm"
-            title={isReplyingToMessage ? "Cancel reply" : "Reply"}
-            type="button"
-            variant={isReplyingToMessage ? "secondary" : "ghost"}
-          >
-            <CornerUpLeft className="h-3 w-3" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={isReplyingToMessage ? "Cancel reply" : "Reply"}
+                className="h-6 w-6 rounded-full p-0"
+                data-testid={`reply-message-${message.id}`}
+                onClick={() => {
+                  onReply?.(message);
+                }}
+                size="sm"
+                type="button"
+                variant={isReplyingToMessage ? "secondary" : "ghost"}
+              >
+                <CornerUpLeft className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {isReplyingToMessage ? "Cancel reply" : "Reply"}
+            </TooltipContent>
+          </Tooltip>
         ) : null}
       </div>
     </div>

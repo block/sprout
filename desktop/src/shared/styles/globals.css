@@ -188,6 +188,11 @@
     @apply border-border;
   }
 
+  mark {
+    background-color: transparent;
+    color: inherit;
+  }
+
   html.dark {
     color-scheme: dark;
   }

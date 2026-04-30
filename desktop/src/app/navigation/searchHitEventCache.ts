@@ -38,6 +38,10 @@ export function cacheSearchHitEvent(hit: SearchHit): RelayEvent {
   return event;
 }
 
+export function clearSearchHitEventCache(): void {
+  searchHitEventCache.clear();
+}
+
 export function getCachedSearchHitEvent(
   eventId: string | null | undefined,
 ): RelayEvent | null {

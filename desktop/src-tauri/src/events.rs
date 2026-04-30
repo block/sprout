@@ -66,6 +66,7 @@ fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     let mut seen = std::collections::HashSet::new();
     let mut tags = Vec::new();
     for &hex in mentions {
+        check_pubkey(hex)?;
         let lower = hex.to_ascii_lowercase();
         if seen.insert(lower.clone()) {
             tags.push(tag(vec!["p", &lower])?);
@@ -428,12 +429,16 @@ pub fn build_huddle_guidelines(
 pub fn build_note(
     content: &str,
     reply_to_event_id: Option<EventId>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = Vec::new();
     if let Some(parent) = reply_to_event_id {
         tags.push(tag(vec!["e", &parent.to_hex(), "", "reply"])?);
     }
+    tags.extend(mention_tags(mentions)?);
+    imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::TextNote, content).tags(tags))
 }
 
@@ -472,8 +477,8 @@ pub fn build_contact_list(
 /// Post a pre-signed event to the relay.
 ///
 /// Standalone helper for async tasks that don't have access to `&AppState`.
-/// The caller pre-captures `http_client`, `api_token`, and `pubkey_hex` at
-/// spawn time and passes them here.
+/// The caller pre-captures `http_client`, `api_token`, `pubkey_hex`, and
+/// `relay_base_url` at spawn time and passes them here.
 ///
 /// Returns `Err` on transport failure OR non-2xx HTTP status.
 pub async fn post_event_raw(
@@ -481,8 +486,9 @@ pub async fn post_event_raw(
     api_token: Option<&str>,
     pubkey_hex: &str,
     event_json: String,
+    relay_base_url: &str,
 ) -> Result<(), String> {
-    let url = format!("{}/api/events", crate::relay::relay_api_base_url());
+    let url = format!("{relay_base_url}/api/events");
     let req = match api_token {
         Some(token) => http_client
             .post(&url)

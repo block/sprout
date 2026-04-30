@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io::Write, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io::Write,
+    sync::{atomic::AtomicU16, Mutex},
+};
 
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, Manager};
@@ -11,6 +15,9 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub configured_api_token: Option<String>,
     pub session_token: Mutex<Option<String>>,
+    /// Workspace-provided relay URL override. Set by `apply_workspace` on app
+    /// init and takes priority over env vars and compile-time defaults.
+    pub relay_url_override: Mutex<Option<String>>,
     pub managed_agents_store_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<String, ManagedAgentProcess>>,
     pub huddle_state: Mutex<HuddleState>,
@@ -20,6 +27,11 @@ pub struct AppState {
     ///
     /// Set once during `setup()` in `lib.rs`; never cleared.
     pub app_handle: Mutex<Option<AppHandle>>,
+    /// Selected audio output device name. `None` = system default.
+    /// Used by `connect_audio_relay` and TTS pipeline when opening sinks.
+    pub audio_output_device: Mutex<Option<String>>,
+    /// Port of the localhost media streaming proxy (set during setup).
+    pub media_proxy_port: AtomicU16,
 }
 
 pub fn build_app_state() -> AppState {
@@ -61,10 +73,13 @@ pub fn build_app_state() -> AppState {
         http_client: reqwest::Client::new(),
         configured_api_token: api_token,
         session_token: Mutex::new(None),
+        relay_url_override: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),
         app_handle: Mutex::new(None),
+        audio_output_device: Mutex::new(None),
+        media_proxy_port: AtomicU16::new(0),
     }
 }
 

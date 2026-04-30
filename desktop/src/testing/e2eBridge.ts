@@ -11,10 +11,32 @@ type TestIdentity = {
   username: string;
 };
 
+type MockAcpProvider = {
+  id: string;
+  label: string;
+  command: string;
+  binaryPath: string;
+  defaultArgs: string[];
+};
+
+type MockCommandAvailability = {
+  available?: boolean;
+  command?: string;
+  resolvedPath?: string | null;
+};
+
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    acpProviders?: MockAcpProvider[];
+    managedAgentPrereqs?: {
+      acp?: MockCommandAvailability;
+      mcp?: MockCommandAvailability;
+    };
     mintTokenError?: string;
+    profileReadDelayMs?: number;
+    profileReadError?: string;
+    profileUpdateError?: string;
     seededTokens?: RawMockTokenSeed[];
   };
   relayHttpUrl?: string;
@@ -145,6 +167,7 @@ type RawFeedItem = {
   created_at: number;
   channel_id: string | null;
   channel_name: string;
+  channel_type?: string;
   tags: string[][];
   category: "mention" | "needs_action" | "activity" | "agent_activity";
 };
@@ -348,7 +371,6 @@ type RawCommandAvailability = {
 };
 
 type RawManagedAgentPrereqs = {
-  admin: RawCommandAvailability;
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
 };
@@ -402,6 +424,7 @@ declare global {
     __SPROUT_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
       content: string;
+      parentEventId?: string | null;
       pubkey?: string;
     }) => RelayEvent;
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
@@ -418,6 +441,7 @@ declare global {
 
 const DEFAULT_RELAY_HTTP_URL = "http://localhost:3000";
 const DEFAULT_RELAY_WS_URL = "ws://localhost:3000";
+const E2E_IDENTITY_OVERRIDE_STORAGE_KEY = "sprout:e2e-identity-override.v1";
 const DEFAULT_MOCK_IDENTITY = {
   pubkey: "deadbeef".repeat(8),
   display_name: "npub1mock...",
@@ -457,7 +481,12 @@ function cloneMembers(members: RawChannelMember[]): RawChannelMember[] {
   return members.map((member) => ({ ...member }));
 }
 
-function toRawChannel(channel: MockChannel): RawChannelWithMembership {
+function toRawChannel(
+  channel: MockChannel,
+  config?: E2eConfig,
+): RawChannelWithMembership {
+  const currentPubkey = getMockMemberPubkey(config).toLowerCase();
+
   return {
     id: channel.id,
     name: channel.name,
@@ -474,16 +503,17 @@ function toRawChannel(channel: MockChannel): RawChannelWithMembership {
     ttl_seconds: channel.ttl_seconds ?? null,
     ttl_deadline: channel.ttl_deadline ?? null,
     is_member: channel.members.some(
-      (member) =>
-        member.pubkey === MOCK_IDENTITY_PUBKEY ||
-        member.pubkey === DEFAULT_REAL_IDENTITY.pubkey,
+      (member) => member.pubkey.toLowerCase() === currentPubkey,
     ),
   };
 }
 
-function toRawChannelDetail(channel: MockChannel): RawChannelDetail {
+function toRawChannelDetail(
+  channel: MockChannel,
+  config?: E2eConfig,
+): RawChannelDetail {
   return {
-    ...toRawChannel(channel),
+    ...toRawChannel(channel, config),
     created_by: channel.created_by,
     created_at: channel.created_at,
     updated_at: channel.updated_at,
@@ -758,8 +788,8 @@ function listMockProfiles(): RawProfile[] {
     .filter((profile): profile is RawProfile => profile !== null);
 }
 
-function listMockChannels(): RawChannelWithMembership[] {
-  return mockChannels.map(toRawChannel);
+function listMockChannels(config?: E2eConfig): RawChannelWithMembership[] {
+  return mockChannels.map((channel) => toRawChannel(channel, config));
 }
 
 function getMockChannel(channelId: string): MockChannel {
@@ -772,11 +802,11 @@ function getMockChannel(channelId: string): MockChannel {
 }
 
 function getMockMemberPubkey(config: E2eConfig | undefined): string {
-  return getIdentity(config)?.pubkey ?? getMockIdentity().pubkey;
+  return getActiveIdentity(config)?.pubkey ?? getMockIdentity().pubkey;
 }
 
 function getMockMemberDisplayName(config: E2eConfig | undefined): string {
-  return getIdentity(config)?.username ?? getMockIdentity().displayName;
+  return getActiveIdentity(config)?.username ?? getMockIdentity().displayName;
 }
 
 function createCurrentMember(
@@ -1016,10 +1046,10 @@ const mockChannels: MockChannel[] = [
     created_minutes_ago: 720,
     updated_minutes_ago: 720,
     participants: ["alice", "tyler"],
-    participant_pubkeys: [ALICE_PUBKEY, DEFAULT_REAL_IDENTITY.pubkey],
+    participant_pubkeys: [ALICE_PUBKEY, MOCK_IDENTITY_PUBKEY],
     members: [
       createMockMember(ALICE_PUBKEY, "member", 720),
-      createMockMember(DEFAULT_REAL_IDENTITY.pubkey, "member", 720),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 720),
     ],
   }),
   createMockChannel({
@@ -1043,10 +1073,10 @@ const mockChannels: MockChannel[] = [
     created_minutes_ago: 700,
     updated_minutes_ago: 700,
     participants: ["bob", "tyler"],
-    participant_pubkeys: [BOB_PUBKEY, DEFAULT_REAL_IDENTITY.pubkey],
+    participant_pubkeys: [BOB_PUBKEY, MOCK_IDENTITY_PUBKEY],
     members: [
       createMockMember(BOB_PUBKEY, "member", 700),
-      createMockMember(DEFAULT_REAL_IDENTITY.pubkey, "member", 700),
+      createMockMember(MOCK_IDENTITY_PUBKEY, "member", 700),
     ],
   }),
 ];
@@ -1374,6 +1404,36 @@ function getConfig(): E2eConfig | undefined {
   return window.__SPROUT_E2E__;
 }
 
+function readStoredIdentityOverride(): TestIdentity | undefined {
+  try {
+    const rawValue = window.localStorage.getItem(
+      E2E_IDENTITY_OVERRIDE_STORAGE_KEY,
+    );
+    if (!rawValue) {
+      return undefined;
+    }
+
+    const parsed = JSON.parse(rawValue);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.privateKey !== "string" ||
+      typeof parsed.pubkey !== "string" ||
+      typeof parsed.username !== "string"
+    ) {
+      return undefined;
+    }
+
+    return {
+      privateKey: parsed.privateKey,
+      pubkey: parsed.pubkey,
+      username: parsed.username,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function isRelayMode(config: E2eConfig | undefined): boolean {
   return config?.mode === "relay";
 }
@@ -1392,6 +1452,10 @@ function getIdentity(config: E2eConfig | undefined): TestIdentity | undefined {
   }
 
   return config?.identity ?? DEFAULT_REAL_IDENTITY;
+}
+
+function getActiveIdentity(config: E2eConfig | undefined) {
+  return readStoredIdentityOverride() ?? getIdentity(config);
 }
 
 function ensureMockProfile(config: E2eConfig | undefined): RawProfile {
@@ -1657,9 +1721,39 @@ function recordMockMessage(channelId: string, event: RelayEvent) {
 function emitMockChannelMessage(
   channelId: string,
   content: string,
+  parentEventId?: string | null,
   pubkey?: string,
 ) {
-  const event = createMockEvent(9, content, [["h", channelId]], pubkey);
+  if (!parentEventId) {
+    const event = createMockEvent(9, content, [["h", channelId]], pubkey);
+    recordMockMessage(channelId, event);
+    emitMockLiveEvent(channelId, event);
+    return event;
+  }
+
+  const history = getMockMessageStore(channelId);
+  const parentEvent =
+    history.find((event) => event.id === parentEventId) ?? null;
+  const parentThread = parentEvent
+    ? getThreadReferenceFromTags(parentEvent.tags)
+    : {
+        parentEventId: null,
+        rootEventId: null,
+      };
+  const rootEventId = parentThread.rootEventId ?? parentEventId;
+  const authorPubkey = pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey;
+  const event = createMockEvent(
+    9,
+    content,
+    buildReplyMessageTags(
+      channelId,
+      authorPubkey,
+      parentEventId,
+      rootEventId,
+      undefined,
+    ),
+    authorPubkey,
+  );
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
   return event;
@@ -1879,11 +1973,12 @@ function createMockEvent(
   content: string,
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
+  createdAt = Math.floor(Date.now() / 1000),
 ): RelayEvent {
   return {
     id: crypto.randomUUID().replace(/-/g, ""),
     pubkey,
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: createdAt,
     kind,
     tags,
     content,
@@ -1896,6 +1991,7 @@ async function signWithIdentity(
   template: {
     kind: number;
     content: string;
+    createdAt?: number;
     tags: string[][];
   },
 ) {
@@ -1906,7 +2002,7 @@ async function signWithIdentity(
       kind: template.kind,
       content: template.content,
       tags: template.tags,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: template.createdAt ?? Math.floor(Date.now() / 1000),
     },
     secretKey,
   );
@@ -1986,7 +2082,7 @@ async function submitSignedEvent(
 async function handleGetChannels(config: E2eConfig | undefined) {
   const identity = getIdentity(config);
   if (!identity) {
-    return listMockChannels();
+    return listMockChannels(config);
   }
 
   return relayJsonRequest<RawChannel[]>(config, "/api/channels");
@@ -1995,6 +2091,18 @@ async function handleGetChannels(config: E2eConfig | undefined) {
 async function handleGetProfile(config: E2eConfig | undefined) {
   const identity = getIdentity(config);
   if (!identity) {
+    const profileReadDelayMs = config?.mock?.profileReadDelayMs ?? 0;
+    if (profileReadDelayMs > 0) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, profileReadDelayMs);
+      });
+    }
+
+    const profileReadError = config?.mock?.profileReadError;
+    if (profileReadError) {
+      throw new Error(profileReadError);
+    }
+
     return cloneProfile(ensureMockProfile(config));
   }
 
@@ -2012,6 +2120,14 @@ async function handleUpdateProfile(
 ) {
   const identity = getIdentity(config);
   if (!identity) {
+    const profileUpdateError = config?.mock?.profileUpdateError;
+    if (profileUpdateError) {
+      if (config?.mock) {
+        config.mock.profileUpdateError = undefined;
+      }
+      throw new Error(profileUpdateError);
+    }
+
     const profile = ensureMockProfile(config);
     const nextDisplayName = args.displayName?.trim();
     const nextAvatarUrl = args.avatarUrl?.trim();
@@ -2271,7 +2387,7 @@ async function handleCreateChannel(
       members: [owner],
     });
     mockChannels.push(channel);
-    return toRawChannel(channel);
+    return toRawChannel(channel, config);
   }
 
   const channelId = crypto.randomUUID();
@@ -2319,7 +2435,7 @@ async function handleOpenDm(
   ]);
   const existingChannel = findMockDmByParticipantPubkeys(participantPubkeys);
   if (existingChannel) {
-    return toRawChannel(existingChannel);
+    return toRawChannel(existingChannel, config);
   }
 
   const identity = getIdentity(config);
@@ -2354,7 +2470,7 @@ async function handleOpenDm(
     });
     syncMockChannel(channel);
     mockChannels.push(channel);
-    return toRawChannel(channel);
+    return toRawChannel(channel, config);
   }
 
   const response = await relayJsonRequest<RawOpenDmResponse>(
@@ -2402,7 +2518,7 @@ async function handleGetChannelDetails(
 ) {
   const identity = getIdentity(config);
   if (!identity) {
-    return toRawChannelDetail(getMockChannel(args.channelId));
+    return toRawChannelDetail(getMockChannel(args.channelId), config);
   }
 
   return relayJsonRequest<RawChannelDetail>(
@@ -2448,7 +2564,7 @@ async function handleUpdateChannel(
       channel.description = args.description;
     }
     touchMockChannel(channel);
-    return toRawChannelDetail(channel);
+    return toRawChannelDetail(channel, config);
   }
 
   const tags: string[][] = [["h", args.channelId]];
@@ -2757,81 +2873,218 @@ async function handleGetFeed(
     const includeType = (type: string) =>
       wantedTypes.length === 0 || wantedTypes.includes(type);
 
-    const defaultFeed: RawHomeFeedResponse["feed"] = {
-      mentions: [
-        {
-          id: "mock-feed-mention",
-          kind: 9,
-          pubkey:
-            "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f",
-          content: "Please review the release checklist.",
-          created_at: now - 90,
-          channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
-          channel_name: "general",
-          tags: [
-            ["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
-            ["p", DEFAULT_MOCK_IDENTITY.pubkey],
-          ],
-          category: "mention" as const,
-        },
-      ],
-      needs_action: [
-        {
-          id: "mock-feed-reminder",
-          kind: 40007,
-          pubkey:
-            "0000000000000000000000000000000000000000000000000000000000000000",
-          content: "Reminder: update the launch plan before lunch.",
-          created_at: now - 15 * 60,
-          channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
-          channel_name: "agents",
-          tags: [
-            ["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"],
-            ["p", DEFAULT_MOCK_IDENTITY.pubkey],
-          ],
-          category: "needs_action" as const,
-        },
-      ],
-      activity: [
-        {
-          id: "mock-feed-self-activity",
-          kind: 9,
-          pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
-          content: "I posted a note about the launch checklist.",
-          created_at: now - 25 * 60,
-          channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
-          channel_name: "general",
-          tags: [["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"]],
-          category: "activity" as const,
-        },
-        {
-          id: "mock-feed-activity",
-          kind: 9,
-          pubkey:
-            "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260",
-          content: "Engineering shipped the desktop build.",
-          created_at: now - 42 * 60,
-          channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
-          channel_name: "engineering",
-          tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
-          category: "activity" as const,
-        },
-      ],
-      agent_activity: [
-        {
-          id: "mock-feed-agent",
-          kind: 43003,
-          pubkey:
-            "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
-          content: "Agent progress: channel index complete.",
-          created_at: now - 2 * 60 * 60,
-          channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
-          channel_name: "agents",
-          tags: [["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"]],
-          category: "agent_activity" as const,
-        },
-      ],
-    };
+    const currentPubkey = getMockMemberPubkey(config).toLowerCase();
+    const defaultFeed: RawHomeFeedResponse["feed"] =
+      currentPubkey === ALICE_PUBKEY
+        ? {
+            mentions: [
+              {
+                id: "mock-feed-alice-mention",
+                kind: 9,
+                pubkey: BOB_PUBKEY,
+                content: "Alice, can you sanity-check the new design mocks?",
+                created_at: now - 90,
+                channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+                channel_name: "design",
+                tags: [
+                  ["e", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"],
+                  ["p", ALICE_PUBKEY],
+                ],
+                category: "mention" as const,
+              },
+            ],
+            needs_action: [
+              {
+                id: "mock-feed-alice-reminder",
+                kind: 40007,
+                pubkey:
+                  "0000000000000000000000000000000000000000000000000000000000000000",
+                content: "Reminder: post the engineering launch note.",
+                created_at: now - 15 * 60,
+                channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+                channel_name: "engineering",
+                tags: [
+                  ["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"],
+                  ["p", ALICE_PUBKEY],
+                ],
+                category: "needs_action" as const,
+              },
+            ],
+            activity: [
+              {
+                id: "mock-feed-alice-self-activity",
+                kind: 9,
+                pubkey: ALICE_PUBKEY,
+                content: "I posted the latest design review summary.",
+                created_at: now - 25 * 60,
+                channel_id: "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e",
+                channel_name: "design",
+                tags: [["e", "b5e2f8a1-3c44-5912-9e67-4a8d1f2b3c4e"]],
+                category: "activity" as const,
+              },
+              {
+                id: "mock-feed-alice-activity",
+                kind: 9,
+                pubkey: BOB_PUBKEY,
+                content: "Engineering signed off on the desktop build.",
+                created_at: now - 42 * 60,
+                channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+                channel_name: "engineering",
+                tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+                category: "activity" as const,
+              },
+            ],
+            agent_activity: [
+              {
+                id: "mock-feed-alice-agent",
+                kind: 43003,
+                pubkey:
+                  "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
+                content: "Agent progress: design review summary complete.",
+                created_at: now - 2 * 60 * 60,
+                channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+                channel_name: "engineering",
+                tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+                category: "agent_activity" as const,
+              },
+            ],
+          }
+        : currentPubkey === DEFAULT_REAL_IDENTITY.pubkey.toLowerCase()
+          ? {
+              mentions: [
+                {
+                  id: "mock-feed-tyler-mention",
+                  kind: 9,
+                  pubkey: ALICE_PUBKEY,
+                  content: "Tyler, can you review the DM onboarding copy?",
+                  created_at: now - 90,
+                  channel_id: "f48efb06-0c93-5025-aac9-2e646bb6bfa8",
+                  channel_name: "alice-tyler",
+                  tags: [
+                    ["e", "f48efb06-0c93-5025-aac9-2e646bb6bfa8"],
+                    ["p", DEFAULT_REAL_IDENTITY.pubkey],
+                  ],
+                  category: "mention" as const,
+                },
+              ],
+              needs_action: [
+                {
+                  id: "mock-feed-tyler-reminder",
+                  kind: 40007,
+                  pubkey:
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                  content: "Reminder: answer Bob in the launch DM thread.",
+                  created_at: now - 15 * 60,
+                  channel_id: "7eb9f239-9393-50b0-bd76-d85eef0511c7",
+                  channel_name: "bob-tyler",
+                  tags: [
+                    ["e", "7eb9f239-9393-50b0-bd76-d85eef0511c7"],
+                    ["p", DEFAULT_REAL_IDENTITY.pubkey],
+                  ],
+                  category: "needs_action" as const,
+                },
+              ],
+              activity: [
+                {
+                  id: "mock-feed-tyler-self-activity",
+                  kind: 9,
+                  pubkey: DEFAULT_REAL_IDENTITY.pubkey,
+                  content: "I sent the follow-up in the Alice DM.",
+                  created_at: now - 25 * 60,
+                  channel_id: "f48efb06-0c93-5025-aac9-2e646bb6bfa8",
+                  channel_name: "alice-tyler",
+                  tags: [["e", "f48efb06-0c93-5025-aac9-2e646bb6bfa8"]],
+                  category: "activity" as const,
+                },
+              ],
+              agent_activity: [
+                {
+                  id: "mock-feed-tyler-agent",
+                  kind: 43003,
+                  pubkey:
+                    "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
+                  content: "Agent progress: DM summary complete.",
+                  created_at: now - 2 * 60 * 60,
+                  channel_id: "f48efb06-0c93-5025-aac9-2e646bb6bfa8",
+                  channel_name: "alice-tyler",
+                  tags: [["e", "f48efb06-0c93-5025-aac9-2e646bb6bfa8"]],
+                  category: "agent_activity" as const,
+                },
+              ],
+            }
+          : {
+              mentions: [
+                {
+                  id: "mock-feed-mention",
+                  kind: 9,
+                  pubkey: ALICE_PUBKEY,
+                  content: "Please review the release checklist.",
+                  created_at: now - 90,
+                  channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+                  channel_name: "general",
+                  tags: [
+                    ["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"],
+                    ["p", currentPubkey],
+                  ],
+                  category: "mention" as const,
+                },
+              ],
+              needs_action: [
+                {
+                  id: "mock-feed-reminder",
+                  kind: 40007,
+                  pubkey:
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                  content: "Reminder: update the launch plan before lunch.",
+                  created_at: now - 15 * 60,
+                  channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+                  channel_name: "agents",
+                  tags: [
+                    ["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"],
+                    ["p", currentPubkey],
+                  ],
+                  category: "needs_action" as const,
+                },
+              ],
+              activity: [
+                {
+                  id: "mock-feed-self-activity",
+                  kind: 9,
+                  pubkey: currentPubkey,
+                  content: "I posted a note about the launch checklist.",
+                  created_at: now - 25 * 60,
+                  channel_id: "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50",
+                  channel_name: "general",
+                  tags: [["e", "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"]],
+                  category: "activity" as const,
+                },
+                {
+                  id: "mock-feed-activity",
+                  kind: 9,
+                  pubkey: BOB_PUBKEY,
+                  content: "Engineering shipped the desktop build.",
+                  created_at: now - 42 * 60,
+                  channel_id: "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9",
+                  channel_name: "engineering",
+                  tags: [["e", "1c7e1c02-87bb-5e88-b2da-5a7a9432d0c9"]],
+                  category: "activity" as const,
+                },
+              ],
+              agent_activity: [
+                {
+                  id: "mock-feed-agent",
+                  kind: 43003,
+                  pubkey:
+                    "db0b028cd36f4d3e36c8300cce87252c1f7fc9495ffecc53f393fcac341ffd36",
+                  content: "Agent progress: channel index complete.",
+                  created_at: now - 2 * 60 * 60,
+                  channel_id: "94a444a4-c0a3-5966-ab05-530c6ddc2301",
+                  channel_name: "agents",
+                  tags: [["e", "94a444a4-c0a3-5966-ab05-530c6ddc2301"]],
+                  category: "agent_activity" as const,
+                },
+              ],
+            };
 
     const mergeFeedCategory = (
       category: keyof RawHomeFeedResponse["feed"],
@@ -2999,7 +3252,20 @@ async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
   return mockRelayAgents.map(cloneRelayAgent);
 }
 
-async function handleDiscoverAcpProviders(): Promise<RawAcpProvider[]> {
+async function handleDiscoverAcpProviders(
+  config: E2eConfig | undefined,
+): Promise<RawAcpProvider[]> {
+  const configuredProviders = config?.mock?.acpProviders;
+  if (configuredProviders) {
+    return configuredProviders.map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      command: provider.command,
+      binary_path: provider.binaryPath,
+      default_args: [...provider.defaultArgs],
+    }));
+  }
+
   return [
     {
       id: "goose",
@@ -3018,27 +3284,37 @@ async function handleDiscoverAcpProviders(): Promise<RawAcpProvider[]> {
   ];
 }
 
-async function handleDiscoverManagedAgentPrereqs(args: {
-  input?: {
-    acpCommand?: string;
-    mcpCommand?: string;
-  };
-}): Promise<RawManagedAgentPrereqs> {
+async function handleDiscoverManagedAgentPrereqs(
+  args: {
+    input?: {
+      acpCommand?: string;
+      mcpCommand?: string;
+    };
+  },
+  config: E2eConfig | undefined,
+): Promise<RawManagedAgentPrereqs> {
+  const configuredPrereqs = config?.mock?.managedAgentPrereqs;
+
   return {
-    admin: {
-      command: "sprout-admin",
-      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-admin",
-      available: true,
-    },
     acp: {
-      command: args.input?.acpCommand ?? "sprout-acp",
-      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-acp",
-      available: true,
+      command:
+        configuredPrereqs?.acp?.command ??
+        args.input?.acpCommand ??
+        "sprout-acp",
+      resolved_path:
+        configuredPrereqs?.acp?.resolvedPath ??
+        "/Users/wesb/dev/sprout/target/debug/sprout-acp",
+      available: configuredPrereqs?.acp?.available ?? true,
     },
     mcp: {
-      command: args.input?.mcpCommand ?? "sprout-mcp-server",
-      resolved_path: "/Users/wesb/dev/sprout/target/debug/sprout-mcp-server",
-      available: true,
+      command:
+        configuredPrereqs?.mcp?.command ??
+        args.input?.mcpCommand ??
+        "sprout-mcp-server",
+      resolved_path:
+        configuredPrereqs?.mcp?.resolvedPath ??
+        "/Users/wesb/dev/sprout/target/debug/sprout-mcp-server",
+      available: configuredPrereqs?.mcp?.available ?? true,
     },
   };
 }
@@ -3933,15 +4209,29 @@ function sendToMockSocket(args: {
 
   if (type === "REQ") {
     const subId = rest[0] as string;
-    const filter = rest[1] as { "#h"?: string[] };
-    const channelId = filter["#h"]?.[0];
 
     if (subId.startsWith("live-")) {
-      socket.subscriptions.set(subId, channelId ?? GLOBAL_MOCK_SUBSCRIPTION);
+      // Collect channel IDs from all filters in the REQ
+      const channelIds = new Set<string>();
+      for (let i = 1; i < rest.length; i++) {
+        const f = rest[i] as { "#h"?: string[] };
+        const cid = f["#h"]?.[0];
+        if (cid) channelIds.add(cid);
+      }
+      const onlyChannelId =
+        channelIds.size === 1
+          ? (channelIds.values().next().value as string)
+          : undefined;
+      socket.subscriptions.set(
+        subId,
+        onlyChannelId ?? GLOBAL_MOCK_SUBSCRIPTION,
+      );
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
     }
 
+    const filter = rest[1] as { "#h"?: string[] };
+    const channelId = filter["#h"]?.[0];
     if (!channelId) {
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
@@ -4007,6 +4297,7 @@ export function maybeInstallE2eTauriMocks() {
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,
+    parentEventId,
     pubkey,
   }) => {
     const channel = mockChannels.find(
@@ -4016,7 +4307,7 @@ export function maybeInstallE2eTauriMocks() {
       throw new Error(`Mock channel ${channelName} not found.`);
     }
 
-    return emitMockChannelMessage(channel.id, content, pubkey);
+    return emitMockChannelMessage(channel.id, content, parentEventId, pubkey);
   };
   window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
     const channel = mockChannels.find(
@@ -4046,7 +4337,7 @@ export function maybeInstallE2eTauriMocks() {
   };
   const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
-    const identity = getIdentity(activeConfig);
+    const identity = getActiveIdentity(activeConfig);
     window.__SPROUT_E2E_COMMANDS__?.push(command);
 
     switch (command) {
@@ -4059,6 +4350,10 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return DEFAULT_MOCK_IDENTITY;
+      case "get_nsec":
+        return "nsec1mock000000000000000000000000000000000000000000000000000000";
+      case "apply_workspace":
+        return;
       case "get_profile":
         return handleGetProfile(activeConfig);
       case "update_profile":
@@ -4100,10 +4395,12 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "get_relay_ws_url":
         return getRelayWsUrl(activeConfig);
+      case "get_default_relay_url":
+        return getRelayWsUrl(activeConfig);
       case "get_relay_http_url":
         return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
-        return handleDiscoverAcpProviders();
+        return handleDiscoverAcpProviders(activeConfig);
       case "discover_backend_providers":
         return [];
       case "probe_backend_provider":
@@ -4111,6 +4408,7 @@ export function maybeInstallE2eTauriMocks() {
       case "discover_managed_agent_prereqs":
         return handleDiscoverManagedAgentPrereqs(
           payload as Parameters<typeof handleDiscoverManagedAgentPrereqs>[0],
+          activeConfig,
         );
       case "get_channels":
         return handleGetChannels(activeConfig);
@@ -4326,6 +4624,7 @@ export function maybeInstallE2eTauriMocks() {
             await signWithIdentity(identity, {
               kind: (payload as { kind: number }).kind,
               content: (payload as { content: string }).content,
+              createdAt: (payload as { createdAt?: number }).createdAt,
               tags: (payload as { tags: string[][] }).tags,
             }),
           );
@@ -4336,6 +4635,8 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { kind: number }).kind,
             (payload as { content: string }).content,
             (payload as { tags: string[][] }).tags,
+            DEFAULT_MOCK_IDENTITY.pubkey,
+            (payload as { createdAt?: number }).createdAt,
           ),
         );
       case "create_auth_event":

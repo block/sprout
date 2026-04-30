@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import * as React from "react";
 
-import { relayClient } from "@/shared/api/relayClient";
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
+import { useAudioDevices } from "./lib/useAudioDevices";
+import { useTtsSubscription } from "./lib/useTtsSubscription";
 
 /**
  * Huddle lifecycle (React context):
@@ -41,6 +42,22 @@ interface HuddleContextValue {
   setVoiceInputMode: (mode: VoiceInputMode) => Promise<void>;
   /** Pubkeys of currently speaking participants (from Rust backend) */
   activeSpeakers: string[];
+  /** Available audio input devices */
+  audioDevices: MediaDeviceInfo[];
+  /** Currently selected mic device ID (empty string = system default) */
+  selectedDeviceId: string;
+  /** Select a different mic — takes effect on next huddle start/join */
+  setSelectedDeviceId: (id: string) => void;
+  /** Mic input gain 0–1 */
+  micGain: number;
+  /** Adjust mic input gain — applied immediately to the active audio graph */
+  setMicGain: (value: number) => void;
+  /** Available audio output devices */
+  outputDevices: { name: string; is_default: boolean }[];
+  /** Currently selected output device name (empty = system default) */
+  selectedOutputDevice: string;
+  /** Select a different speaker — takes effect on next huddle start/join */
+  setSelectedOutputDevice: (name: string) => void;
   /** Start a new huddle — calls Rust start_huddle, then connects mic + AudioWorklet */
   startHuddle: (
     parentChannelId: string,
@@ -90,6 +107,59 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   const selfPubkeyRef = React.useRef<string | null>(null);
   /** Pubkeys of participants currently speaking (from Rust backend via Tauri event) */
   const [activeSpeakers, setActiveSpeakers] = React.useState<string[]>([]);
+  const {
+    audioDevices,
+    selectedDeviceId,
+    setSelectedDeviceId,
+    micGain,
+    setMicGain,
+  } = useAudioDevices(workletRef);
+  /** Audio output devices from Rust backend */
+  const [outputDevices, setOutputDevices] = React.useState<
+    { name: string; is_default: boolean }[]
+  >([]);
+  const [selectedOutputDevice, setSelectedOutputDeviceState] =
+    React.useState("");
+  const setSelectedOutputDevice = React.useCallback((name: string) => {
+    setSelectedOutputDeviceState(name);
+    invoke("set_audio_output_device", { name }).catch(() => {
+      /* best-effort */
+    });
+  }, []);
+
+  // Fetch output devices on mount and when system devices change.
+  React.useEffect(() => {
+    function refreshOutputDevices() {
+      invoke<{ name: string; is_default: boolean }[]>(
+        "list_audio_output_devices",
+      )
+        .then(setOutputDevices)
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+    refreshOutputDevices();
+    invoke<string>("get_audio_output_device")
+      .then(setSelectedOutputDeviceState)
+      .catch(() => {
+        /* best-effort */
+      });
+    navigator.mediaDevices.addEventListener(
+      "devicechange",
+      refreshOutputDevices,
+    );
+    return () => {
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        refreshOutputDevices,
+      );
+    };
+  }, []);
+
+  /** Ref tracking latest micGain — read inside connectAndSetupMedia to
+   *  avoid stale closure capture. */
+  const micGainRef = React.useRef(1);
+  micGainRef.current = micGain;
 
   // Bootstrap voice input mode from Rust backend on mount.
   // Ensures frontend stays in sync after remount/recovery.
@@ -296,12 +366,16 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
 
       // Get mic — Rust backend owns the audio WS connection.
       // Request 48 kHz to match the Opus encoder and worklet buffer size (960 samples = 20ms).
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: 48000,
+      };
+      if (selectedDeviceId) {
+        audioConstraints.deviceId = { exact: selectedDeviceId };
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 48000,
-        },
+        audio: audioConstraints,
       });
       const audioTrack = stream.getAudioTracks()[0];
 
@@ -322,6 +396,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
           audioTrack,
           initialTransmitting,
         );
+        // Apply current gain level to the new audio graph.
+        worklet.setGain(micGainRef.current);
 
         if (tokenRef.current !== myToken) {
           worklet.stop();
@@ -343,7 +419,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         throw err;
       }
     },
-    [],
+    [selectedDeviceId],
   );
 
   const startHuddle = React.useCallback(
@@ -354,6 +430,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       tokenRef.current += 1;
       const myToken = tokenRef.current;
 
+      setHuddleError(null);
       setIsStarting(true);
       try {
         // Step 1: Call Rust to create ephemeral channel
@@ -394,6 +471,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       busyRef.current = true;
       tokenRef.current += 1;
       const myToken = tokenRef.current;
+      setHuddleError(null);
       setIsStarting(true);
 
       try {
@@ -430,104 +508,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     [cleanupFailedStart, connectAndSetupMedia],
   );
 
-  // TTS subscription — pipe AGENT messages from ephemeral channel to speak_agent_message.
-  // Human STT transcripts are also kind:9 in this channel, so we must filter them out
-  // using an authoritative agent list fetched from the relay membership API.
-  React.useEffect(() => {
-    if (!ephemeralChannelId) return;
-
-    let disposed = false;
-    let cleanup: (() => void) | null = null;
-
-    // ── Agent identity (authoritative, fail-closed) ───────────────────────
-    //
-    // Fetch the ephemeral channel's member list from the relay REST API and
-    // identify agents by their "bot" role. This is authoritative — it works
-    // for both creators and joiners, and reflects mid-huddle agent additions.
-    //
-    // FAIL-CLOSED: agentsLoaded starts false. Until the fetch succeeds and
-    // populates agentPubkeys, NO messages are spoken. An empty set after a
-    // successful fetch means "no agents in the huddle" → still mute.
-    let agentsLoaded = false;
-    const agentPubkeys = new Set<string>();
-
-    async function loadAgentPubkeys() {
-      try {
-        const pubkeys = await invoke<string[]>("get_huddle_agent_pubkeys");
-        agentPubkeys.clear();
-        for (const pk of pubkeys) agentPubkeys.add(pk);
-        agentsLoaded = true;
-      } catch (e) {
-        // Fail-closed on ALL failures, including refresh after prior success.
-        // Clear the set and mark as not loaded — TTS goes mute until the
-        // next successful refresh. Stale membership must never authorize speech.
-        agentPubkeys.clear();
-        agentsLoaded = false;
-        console.error("[huddle] Failed to load agent pubkeys:", e);
-      }
-    }
-
-    // Initial load + periodic refresh (catches mid-huddle agent additions).
-    void loadAgentPubkeys();
-    const agentRefreshId = window.setInterval(() => {
-      void loadAgentPubkeys();
-    }, 10_000);
-
-    // ── Live-only subscription ───────────────────────────────────────────
-    // subscribeToChannelLive uses `since: now` — the relay never sends
-    // historical backlog. Every event delivered is a live message.
-    // Event-ID dedup handles reconnect replay (same event arriving twice).
-    const seenEventIds = new Set<string>();
-    const seenOrder: string[] = [];
-    const MAX_SEEN_EVENTS = 5000;
-
-    relayClient
-      .subscribeToChannelLive(ephemeralChannelId, (event) => {
-        if (disposed) return;
-        // Defense-in-depth: subscription already filters to kind:9 only.
-        if (event.kind !== 9) return;
-
-        // Dedup by event ID (covers reconnect replay).
-        if (seenEventIds.has(event.id)) return;
-        seenEventIds.add(event.id);
-        seenOrder.push(event.id);
-        if (seenOrder.length > MAX_SEEN_EVENTS) {
-          const oldest = seenOrder.shift();
-          if (oldest !== undefined) seenEventIds.delete(oldest);
-        }
-
-        // Fail-closed: don't speak until agent list is loaded.
-        if (!agentsLoaded) return;
-        // Only speak agent messages — skip human STT transcripts.
-        if (!agentPubkeys.has(event.pubkey)) return;
-        if (event.pubkey === selfPubkeyRef.current) return;
-        if (event.content.trim().length <= 1) return;
-        // Legacy: skip [System]-prefixed messages from before kind:48106.
-        if (event.content.startsWith("[System]")) return;
-        invoke("speak_agent_message", { text: event.content }).catch((err) => {
-          console.warn(
-            "[huddle] TTS speak failed (backpressure or pipeline unavailable):",
-            err,
-          );
-        });
-      })
-      .then((dispose) => {
-        if (disposed) {
-          void dispose();
-          return;
-        }
-        cleanup = () => void dispose();
-      })
-      .catch((err) => {
-        console.error("[huddle] TTS subscription failed:", err);
-      });
-
-    return () => {
-      disposed = true;
-      cleanup?.();
-      window.clearInterval(agentRefreshId);
-    };
-  }, [ephemeralChannelId]);
+  useTtsSubscription(ephemeralChannelId, selfPubkeyRef);
 
   // Pipeline hot-start — check if voice models finished downloading mid-huddle
   React.useEffect(() => {
@@ -620,6 +601,14 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         voiceInputMode,
         setVoiceInputMode,
         activeSpeakers,
+        audioDevices,
+        selectedDeviceId,
+        setSelectedDeviceId,
+        micGain,
+        setMicGain,
+        outputDevices,
+        selectedOutputDevice,
+        setSelectedOutputDevice,
         startHuddle,
         joinHuddle,
         leaveHuddle,

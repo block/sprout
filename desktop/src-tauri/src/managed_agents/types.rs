@@ -67,6 +67,13 @@ pub struct ManagedAgentRecord {
     #[serde(default)]
     pub persona_id: Option<String>,
     pub private_key_nsec: String,
+    /// NIP-OA auth tag JSON. Computed at agent creation time.
+    ///
+    /// Pre-existing agents created before NIP-OA will have `None` here.
+    /// This is intentional — they continue to work without attestation.
+    /// Re-attestation requires agent recreation (v2 migration scope).
+    #[serde(default)]
+    pub auth_tag: Option<String>,
     pub api_token: Option<String>,
     pub relay_url: String,
     pub acp_command: String,
@@ -273,7 +280,6 @@ pub struct DiscoverManagedAgentPrereqsRequest {
 pub struct ManagedAgentPrereqsInfo {
     pub acp: CommandAvailabilityInfo,
     pub mcp: CommandAvailabilityInfo,
-    pub admin: CommandAvailabilityInfo,
 }
 
 /// Patch request for updating a managed agent's mutable fields.
@@ -374,7 +380,6 @@ pub struct UpdateTeamRequest {
 }
 
 pub const DEFAULT_ACP_COMMAND: &str = "sprout-acp";
-pub const DEFAULT_ADMIN_COMMAND: &str = "sprout-admin";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
 pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
 /// ~5 min (320s) — matches the CLI harness default (SPROUT_ACP_IDLE_TIMEOUT).
@@ -397,7 +402,7 @@ fn default_record_active() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::PersonaRecord;
+    use super::{ManagedAgentRecord, PersonaRecord};
 
     #[test]
     fn persona_record_defaults_active_when_field_is_missing() {
@@ -418,5 +423,75 @@ mod tests {
         assert_eq!(record.provider, None);
         assert_eq!(record.model, None);
         assert!(record.name_pool.is_empty());
+    }
+
+    /// Legacy agent records (created before NIP-OA) lack the `auth_tag` field.
+    /// `#[serde(default)]` must ensure they deserialize with `auth_tag: None`.
+    #[test]
+    fn managed_agent_record_without_auth_tag_deserializes() {
+        let record: ManagedAgentRecord = serde_json::from_str(
+            r#"{
+                "pubkey": "abcd1234",
+                "name": "test-agent",
+                "private_key_nsec": "nsec1fake",
+                "api_token": "sprt_tok_fake",
+                "relay_url": "wss://localhost:3000",
+                "acp_command": "sprout-acp",
+                "agent_command": "goose",
+                "agent_args": [],
+                "mcp_command": "sprout-mcp-server",
+                "turn_timeout_seconds": 320,
+                "system_prompt": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_started_at": null,
+                "last_stopped_at": null,
+                "last_exit_code": null,
+                "last_error": null
+            }"#,
+        )
+        .expect("legacy agent record without auth_tag should deserialize");
+
+        assert_eq!(record.auth_tag, None);
+        assert_eq!(record.pubkey, "abcd1234");
+    }
+
+    /// Agent records WITH an auth_tag round-trip correctly through serde.
+    #[test]
+    fn managed_agent_record_with_auth_tag_round_trips() {
+        let json = r#"{
+            "pubkey": "abcd1234",
+            "name": "test-agent",
+            "private_key_nsec": "nsec1fake",
+            "auth_tag": "[\"auth\",\"deadbeef\",\"\",\"cafebabe\"]",
+            "api_token": "sprt_tok_fake",
+            "relay_url": "wss://localhost:3000",
+            "acp_command": "sprout-acp",
+            "agent_command": "goose",
+            "agent_args": [],
+            "mcp_command": "sprout-mcp-server",
+            "turn_timeout_seconds": 320,
+            "system_prompt": null,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_started_at": null,
+            "last_stopped_at": null,
+            "last_exit_code": null,
+            "last_error": null
+        }"#;
+
+        let record: ManagedAgentRecord =
+            serde_json::from_str(json).expect("record with auth_tag should deserialize");
+
+        assert_eq!(
+            record.auth_tag.as_deref(),
+            Some(r#"["auth","deadbeef","","cafebabe"]"#)
+        );
+
+        // Round-trip: serialize and deserialize again.
+        let serialized = serde_json::to_string(&record).expect("should serialize");
+        let record2: ManagedAgentRecord =
+            serde_json::from_str(&serialized).expect("round-trip should deserialize");
+        assert_eq!(record.auth_tag, record2.auth_tag);
     }
 }

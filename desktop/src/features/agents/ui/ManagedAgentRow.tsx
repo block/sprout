@@ -14,8 +14,10 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { Badge } from "@/shared/ui/badge";
 import type {
   ManagedAgent,
   PresenceLookup,
@@ -43,6 +45,7 @@ export function ManagedAgentRow({
   logError,
   logLoading,
   personaLabelsById,
+  presenceLoaded,
   presenceLookup,
   onAddToChannel,
   onDelete,
@@ -60,6 +63,7 @@ export function ManagedAgentRow({
   logError: Error | null;
   logLoading: boolean;
   personaLabelsById: Record<string, string>;
+  presenceLoaded: boolean;
   presenceLookup: PresenceLookup;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
@@ -116,7 +120,8 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
-                isActive={isActive}
+                presenceLoaded={presenceLoaded}
+                presenceStatus={presenceStatus}
                 processDetail={processDetail}
                 status={agent.status}
               />
@@ -135,7 +140,8 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
-                isActive={isActive}
+                presenceLoaded={presenceLoaded}
+                presenceStatus={presenceStatus}
                 processDetail={processDetail}
                 status={agent.status}
               />
@@ -215,9 +221,7 @@ function AgentSummary({
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate font-medium text-foreground">{agent.name}</p>
             {personaLabel ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                {personaLabel}
-              </span>
+              <Badge variant="secondary">{personaLabel}</Badge>
             ) : null}
             <AgentOriginBadge agent={agent} />
           </div>
@@ -234,12 +238,9 @@ function AgentSummary({
           {channelNames.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {channelNames.map((name) => (
-                <span
-                  className="inline-flex rounded-md bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                  key={name}
-                >
+                <Badge className="normal-case" key={name} variant="secondary">
                   # {name}
-                </span>
+                </Badge>
               ))}
             </div>
           ) : null}
@@ -250,11 +251,13 @@ function AgentSummary({
 }
 
 function StatusBlock({
-  isActive,
+  presenceLoaded,
+  presenceStatus,
   processDetail,
   status,
 }: {
-  isActive: boolean;
+  presenceLoaded: boolean;
+  presenceStatus: PresenceStatus | undefined;
   processDetail: string;
   status: ManagedAgent["status"];
 }) {
@@ -263,7 +266,11 @@ function StatusBlock({
       <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground lg:hidden">
         Status
       </p>
-      <AgentStatusBadge isActive={isActive} status={status} />
+      <AgentStatusBadge
+        presenceLoaded={presenceLoaded}
+        presenceStatus={presenceStatus}
+        status={status}
+      />
       <p className="text-xs text-muted-foreground">{processDetail}</p>
     </div>
   );
@@ -393,7 +400,10 @@ function AgentActionsMenu({
           </DropdownMenuItem>
 
           <DropdownMenuItem
-            onClick={() => navigator.clipboard.writeText(agent.pubkey)}
+            onClick={async () => {
+              await navigator.clipboard.writeText(agent.pubkey);
+              toast.success("Copied pubkey to clipboard");
+            }}
           >
             <Clipboard className="h-4 w-4" />
             Copy pubkey
@@ -444,29 +454,43 @@ function AgentActionsMenu({
 
 function AgentOriginBadge({ agent }: { agent: ManagedAgent }) {
   return (
-    <span className="rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+    <Badge variant="outline">
       {agent.backend.type === "local" ? "Local" : "Remote"}
-    </span>
+    </Badge>
   );
 }
 
+/** Grace period after mount before treating "running + no presence" as "Starting…" */
+const PRESENCE_GRACE_MS = 15_000;
+
 function AgentStatusBadge({
-  isActive,
+  presenceLoaded,
+  presenceStatus,
   status,
 }: {
-  isActive: boolean;
+  presenceLoaded: boolean;
+  presenceStatus: PresenceStatus | undefined;
   status: ManagedAgent["status"];
 }) {
+  const [inGracePeriod, setInGracePeriod] = React.useState(true);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setInGracePeriod(false), PRESENCE_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const isActive = status === "running" || status === "deployed";
+  const isStarting =
+    !inGracePeriod &&
+    presenceLoaded &&
+    status === "running" &&
+    (!presenceStatus || presenceStatus === "offline");
+
+  const variant = isStarting ? "warning" : isActive ? "default" : "secondary";
+
   return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em]",
-        isActive
-          ? "bg-primary text-primary-foreground"
-          : "bg-muted text-muted-foreground",
-      )}
-    >
-      {status.replace(/_/g, " ")}
-    </span>
+    <Badge variant={variant}>
+      {isStarting ? "Starting\u2026" : status.replace(/_/g, " ")}
+    </Badge>
   );
 }

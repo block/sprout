@@ -178,6 +178,7 @@ export type FeedItem = {
   createdAt: number;
   channelId: string | null;
   channelName: string;
+  channelType?: string;
   tags: string[][];
   category: FeedItemCategory;
 };
@@ -209,6 +210,7 @@ export type GetHomeFeedInput = {
 export type SearchMessagesInput = {
   q: string;
   limit?: number;
+  channelId?: string;
 };
 
 export type SearchHit = {
@@ -371,6 +373,10 @@ export type ManagedAgentLog = {
   logPath: string;
 };
 
+export type CancelManagedAgentTurnResult = {
+  status: "sent" | "no_active_turn";
+};
+
 export type AcpProvider = {
   id: string;
   label: string;
@@ -386,7 +392,6 @@ export type CommandAvailability = {
 };
 
 export type ManagedAgentPrereqs = {
-  admin: CommandAvailability;
   acp: CommandAvailability;
   mcp: CommandAvailability;
 };

@@ -1,13 +1,20 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:gpt_markdown/custom_widgets/markdown_config.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../shared/theme/theme.dart';
+import 'media_viewer_page.dart';
+import 'message_media.dart';
 
-/// Renders message content with markdown formatting, @mentions, and
-/// #channel links using [GptMarkdown] plus custom inline components for
-/// Sprout-specific tokens.
+const _messageMediaMaxInlineWidth = 320.0;
+const _messageMediaMaxImageHeight = 240.0;
+
+/// Renders message content with markdown formatting, @mentions, #channel links,
+/// and media-aware markdown images/videos.
 class MessageContent extends StatelessWidget {
   final String content;
 
@@ -19,6 +26,9 @@ class MessageContent extends StatelessWidget {
   /// names, values are channel IDs.
   final Map<String, String> channelNames;
 
+  /// Raw event tags, used for `imeta` media metadata lookups.
+  final List<List<String>> tags;
+
   /// Called when a #channel link is tapped.
   final void Function(String channelId)? onChannelTap;
 
@@ -29,6 +39,7 @@ class MessageContent extends StatelessWidget {
     required this.content,
     this.mentionNames = const {},
     this.channelNames = const {},
+    this.tags = const [],
     this.onChannelTap,
     this.baseStyle,
   });
@@ -38,18 +49,66 @@ class MessageContent extends StatelessWidget {
     final style =
         baseStyle ??
         context.textTheme.bodyMedium?.copyWith(color: context.colors.onSurface);
+    final imetaByUrl = parseImetaTags(tags);
+
+    // Convert autolinks and bare URLs to standard markdown links,
+    // but skip content inside backticks (inline code / fenced blocks).
+    final buffer = StringBuffer();
+    final parts = content.split('`');
+    for (var i = 0; i < parts.length; i++) {
+      if (i.isOdd) {
+        // Inside backticks — preserve as-is.
+        buffer.write('`${parts[i]}`');
+      } else {
+        // 1. Angle-bracket autolinks: <https://...>
+        var segment = parts[i].replaceAllMapped(
+          RegExp(r'<(https?://[^>]+)>'),
+          (m) => '[${m[1]}](${m[1]})',
+        );
+        // 2. Bare URLs not already inside markdown link/image syntax.
+        //    Negative lookbehind avoids matching URLs preceded by ]( or =
+        //    which are already part of markdown links or imeta tags.
+        segment = segment.replaceAllMapped(
+          RegExp(r'(?<![(\]=])https?://[^\s)>\]]+'),
+          (m) {
+            final url = m[0]!;
+            // Skip if this URL is already a markdown link label that equals
+            // the URL (produced by step 1 or authored as [url](url)).
+            final start = m.start;
+            if (start >= 1 && segment[start - 1] == '[') return url;
+            return '[$url]($url)';
+          },
+        );
+        buffer.write(segment);
+      }
+    }
+    final processed = buffer.toString();
 
     return GptMarkdown(
-      content,
+      processed,
       style: style,
       followLinkColor: false,
       linkBuilder: (context, linkText, url, linkStyle) =>
           _buildLink(context, linkText, url, linkStyle, style),
+      imageBuilder: (context, imageUrl) =>
+          _buildMedia(context, imageUrl, imetaByUrl[imageUrl]),
       inlineComponents: [
         _MentionMd(mentionNames: mentionNames),
         _ChannelLinkMd(channelNames: channelNames, onChannelTap: onChannelTap),
         ...MarkdownComponent.inlineComponents,
       ],
+    );
+  }
+
+  Widget _buildMedia(BuildContext context, String imageUrl, ImetaEntry? imeta) {
+    final mediaKind = classifyMediaUrl(imageUrl, imeta: imeta);
+    if (mediaKind == MessageMediaKind.video) {
+      return _MessageVideoPreview(url: imageUrl, imeta: imeta);
+    }
+    return _MessageImagePreview(
+      url: imageUrl,
+      imeta: imeta,
+      semanticLabel: imeta?.alt ?? 'Message image',
     );
   }
 
@@ -87,6 +146,265 @@ class MessageContent extends StatelessWidget {
           color: context.colors.primary,
           decoration: TextDecoration.underline,
           decorationColor: context.colors.primary,
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageImagePreview extends StatefulWidget {
+  final String url;
+  final ImetaEntry? imeta;
+  final String semanticLabel;
+
+  const _MessageImagePreview({
+    required this.url,
+    required this.imeta,
+    required this.semanticLabel,
+  });
+
+  @override
+  State<_MessageImagePreview> createState() => _MessageImagePreviewState();
+}
+
+class _MessageImagePreviewState extends State<_MessageImagePreview> {
+  late final Object _heroTag = Object();
+
+  @override
+  Widget build(BuildContext context) {
+    final layout = _resolveImagePreviewLayout(
+      context,
+      widget.imeta?.aspectRatio,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: Grid.half),
+      child: GestureDetector(
+        onTap: () => openImageViewer(
+          context,
+          imageUrl: widget.url,
+          heroTag: _heroTag,
+          semanticLabel: widget.semanticLabel,
+        ),
+        child: _MessageMediaPreviewFrame(
+          previewKey: ValueKey('message-media-image-preview:${widget.url}'),
+          backgroundColor: context.colors.surfaceContainerHighest,
+          width: layout.width,
+          height: layout.height,
+          constraints: layout.constraints,
+          child: Hero(
+            tag: _heroTag,
+            child: Image.network(
+              widget.url,
+              fit: layout.fit,
+              semanticLabel: widget.semanticLabel,
+              errorBuilder: (_, _, _) => _MediaPreviewFallback(
+                icon: LucideIcons.imageOff,
+                label: 'Image unavailable',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageVideoPreview extends StatelessWidget {
+  final String url;
+  final ImetaEntry? imeta;
+
+  const _MessageVideoPreview({required this.url, required this.imeta});
+
+  @override
+  Widget build(BuildContext context) {
+    final rawAspectRatio = imeta?.aspectRatio ?? (16 / 9);
+    final aspectRatio = rawAspectRatio.clamp(0.75, 1.91);
+    final posterUrl = imeta?.posterUrl;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: Grid.half),
+      child: GestureDetector(
+        onTap: () =>
+            openVideoViewer(context, videoUrl: url, posterUrl: posterUrl),
+        child: _MessageMediaPreviewFrame(
+          previewKey: ValueKey('message-media-video-preview:$url'),
+          backgroundColor: Colors.black,
+          child: AspectRatio(
+            aspectRatio: aspectRatio.toDouble(),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (posterUrl != null)
+                  Image.network(
+                    posterUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const _MediaPreviewFallback(
+                      icon: LucideIcons.video,
+                      label: 'Video preview unavailable',
+                    ),
+                  )
+                else
+                  const _MediaPreviewFallback(
+                    icon: LucideIcons.video,
+                    label: 'Video attachment',
+                  ),
+                const ColoredBox(color: Color.fromRGBO(0, 0, 0, 0.28)),
+                Center(
+                  child: Container(
+                    width: 52,
+                    height: 52,
+                    decoration: const BoxDecoration(
+                      color: Color.fromRGBO(0, 0, 0, 0.6),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      LucideIcons.play,
+                      color: Colors.white,
+                      size: 24,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: Grid.xxs,
+                  right: Grid.xxs,
+                  bottom: Grid.xxs,
+                  child: Text(
+                    'Video',
+                    style: context.textTheme.labelSmall?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageMediaPreviewFrame extends StatelessWidget {
+  final Key previewKey;
+  final Color backgroundColor;
+  final double? width;
+  final double? height;
+  final BoxConstraints? constraints;
+  final Widget child;
+
+  const _MessageMediaPreviewFrame({
+    required this.previewKey,
+    required this.backgroundColor,
+    this.width,
+    this.height,
+    this.constraints,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final resolvedWidth = constraints == null
+        ? (width ?? _messageMediaMaxWidth(context))
+        : width;
+
+    return Container(
+      key: previewKey,
+      width: resolvedWidth,
+      height: height,
+      constraints: constraints,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: context.colors.outlineVariant),
+      ),
+      child: child,
+    );
+  }
+}
+
+double _messageMediaMaxWidth(BuildContext context) {
+  return math
+      .min(MediaQuery.sizeOf(context).width * 0.72, _messageMediaMaxInlineWidth)
+      .toDouble();
+}
+
+_ImagePreviewLayout _resolveImagePreviewLayout(
+  BuildContext context,
+  double? aspectRatio,
+) {
+  if (aspectRatio == null) {
+    return _ImagePreviewLayout(
+      constraints: BoxConstraints(
+        maxWidth: _messageMediaMaxWidth(context),
+        maxHeight: _messageMediaMaxImageHeight,
+      ),
+      fit: BoxFit.contain,
+    );
+  }
+
+  final previewSize = _imagePreviewSize(context, aspectRatio);
+  return _ImagePreviewLayout(
+    width: previewSize.width,
+    height: previewSize.height,
+    fit: BoxFit.cover,
+  );
+}
+
+Size _imagePreviewSize(BuildContext context, double? aspectRatio) {
+  final maxWidth = _messageMediaMaxWidth(context);
+  final safeAspectRatio = (aspectRatio ?? 1.0).clamp(0.2, 4.0).toDouble();
+
+  var width = maxWidth;
+  var height = width / safeAspectRatio;
+  if (height > _messageMediaMaxImageHeight) {
+    height = _messageMediaMaxImageHeight;
+    width = height * safeAspectRatio;
+  }
+
+  return Size(width, height);
+}
+
+class _ImagePreviewLayout {
+  final double? width;
+  final double? height;
+  final BoxConstraints? constraints;
+  final BoxFit fit;
+
+  const _ImagePreviewLayout({
+    this.width,
+    this.height,
+    this.constraints,
+    required this.fit,
+  });
+}
+
+class _MediaPreviewFallback extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _MediaPreviewFallback({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: context.colors.surfaceContainerHighest,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: context.colors.onSurfaceVariant),
+            const SizedBox(height: Grid.quarter),
+            Text(
+              label,
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       ),
     );

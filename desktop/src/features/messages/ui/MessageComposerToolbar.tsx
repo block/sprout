@@ -9,8 +9,10 @@ import {
   X,
 } from "lucide-react";
 
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
-import { Toggle } from "@/shared/ui/toggle";
+import { Spinner } from "@/shared/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
 import { FormattingToolbar } from "./FormattingToolbar";
 
@@ -25,6 +27,7 @@ export const MessageComposerToolbar = React.memo(
   function MessageComposerToolbar({
     composerDisabled,
     editor,
+    extraActions,
     formattingDisabled,
     isEmojiPickerOpen,
     isFormattingOpen,
@@ -40,6 +43,7 @@ export const MessageComposerToolbar = React.memo(
   }: {
     composerDisabled: boolean;
     editor: Editor | null;
+    extraActions?: React.ReactNode;
     formattingDisabled: boolean;
     isEmojiPickerOpen: boolean;
     isFormattingOpen: boolean;
@@ -54,7 +58,7 @@ export const MessageComposerToolbar = React.memo(
     sendDisabled: boolean;
   }) {
     return (
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-1 py-1 min-h-11">
           {/*
            * AnimatePresence with mode="popLayout" — exiting elements
@@ -84,16 +88,30 @@ export const MessageComposerToolbar = React.memo(
                   exit={{ x: 8, opacity: 0 }}
                   transition={presenceSpring}
                 >
-                  <Toggle
-                    aria-label="Toggle formatting"
-                    disabled={composerDisabled}
-                    pressed={isFormattingOpen}
-                    onPressedChange={onFormattingToggle}
-                    size="sm"
-                    title="Formatting"
-                  >
-                    <ALargeSmall className="h-4 w-4" />
-                  </Toggle>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Toggle formatting"
+                        aria-pressed={isFormattingOpen}
+                        disabled={composerDisabled}
+                        onClick={() => onFormattingToggle(!isFormattingOpen)}
+                        className={cn(
+                          "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors",
+                          "hover:bg-muted hover:text-foreground",
+                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          "disabled:pointer-events-none disabled:opacity-50",
+                          "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+                          isFormattingOpen
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-transparent text-muted-foreground",
+                        )}
+                      >
+                        <ALargeSmall className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Formatting</TooltipContent>
+                  </Tooltip>
                 </motion.div>
                 <motion.div
                   className="flex items-center gap-1"
@@ -102,18 +120,22 @@ export const MessageComposerToolbar = React.memo(
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ ...presenceSpring, delay: 0.15 }}
                 >
-                  <Button
-                    aria-label="Close formatting"
-                    disabled={composerDisabled}
-                    onClick={() => onFormattingToggle(false)}
-                    size="icon"
-                    title="Close formatting"
-                    type="button"
-                    variant="ghost"
-                    className="h-7 w-7 shrink-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="Close formatting"
+                        disabled={composerDisabled}
+                        onClick={() => onFormattingToggle(false)}
+                        size="icon"
+                        type="button"
+                        variant="ghost"
+                        className="h-7 w-7 shrink-0"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Close formatting</TooltipContent>
+                  </Tooltip>
                   <div className="mx-1 h-5 w-px shrink-0 bg-border/60" />
                 </motion.div>
                 <motion.div
@@ -141,38 +163,42 @@ export const MessageComposerToolbar = React.memo(
                 exit={{ opacity: 0, x: -12 }}
                 transition={presenceSpring}
               >
-                <Button
-                  aria-label="Mention someone"
-                  data-testid="message-insert-mention"
-                  disabled={composerDisabled}
-                  onClick={onOpenMentionPicker}
-                  onMouseDown={onCaptureSelection}
-                  size="icon"
-                  title="Mention someone"
-                  type="button"
-                  variant="ghost"
-                >
-                  <AtSign className="h-4 w-4" />
-                </Button>
-                <Button
-                  aria-label="Attach image"
-                  disabled={composerDisabled || isUploading}
-                  onClick={onPaperclip}
-                  size="icon"
-                  title="Attach image"
-                  type="button"
-                  variant="ghost"
-                >
-                  {isUploading ? (
-                    <span
-                      className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
-                      role="status"
-                      aria-label="Uploading"
-                    />
-                  ) : (
-                    <Paperclip className="h-4 w-4" />
-                  )}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Mention someone"
+                      data-testid="message-insert-mention"
+                      disabled={composerDisabled}
+                      onClick={onOpenMentionPicker}
+                      onMouseDown={onCaptureSelection}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <AtSign className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Mention someone</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Attach image"
+                      disabled={composerDisabled || isUploading}
+                      onClick={onPaperclip}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      {isUploading ? (
+                        <Spinner className="h-4 w-4" />
+                      ) : (
+                        <Paperclip className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Attach image</TooltipContent>
+                </Tooltip>
                 <ComposerEmojiPicker
                   disabled={composerDisabled}
                   onEmojiSelect={onEmojiSelect}
@@ -186,40 +212,61 @@ export const MessageComposerToolbar = React.memo(
                   exit={{ x: -8, opacity: 0 }}
                   transition={presenceSpring}
                 >
-                  <Toggle
-                    aria-label="Toggle formatting"
-                    disabled={composerDisabled}
-                    pressed={isFormattingOpen}
-                    onPressedChange={onFormattingToggle}
-                    size="sm"
-                    title="Formatting"
-                  >
-                    <ALargeSmall className="h-4 w-4" />
-                  </Toggle>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Toggle formatting"
+                        aria-pressed={isFormattingOpen}
+                        disabled={composerDisabled}
+                        onClick={() => onFormattingToggle(!isFormattingOpen)}
+                        className={cn(
+                          "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors",
+                          "hover:bg-muted hover:text-foreground",
+                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          "disabled:pointer-events-none disabled:opacity-50",
+                          "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+                          isFormattingOpen
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-transparent text-muted-foreground",
+                        )}
+                      >
+                        <ALargeSmall className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Formatting</TooltipContent>
+                  </Tooltip>
                 </motion.div>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
-        <Button
-          aria-label={isSending ? "Sending" : "Send message"}
-          className="rounded-full"
-          data-testid="send-message"
-          disabled={sendDisabled || isSending}
-          size="icon"
-          title={isSending ? "Sending..." : "Send (Enter)"}
-          type="submit"
-        >
-          {isSending ? (
-            <span
-              aria-hidden
-              className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
-            />
-          ) : (
-            <ArrowUp aria-hidden className="h-4 w-4" />
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          {extraActions}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={isSending ? "Sending" : "Send message"}
+                className="rounded-full"
+                data-testid="send-message"
+                disabled={sendDisabled || isSending}
+                size="icon"
+                type="submit"
+              >
+                {isSending ? (
+                  <span
+                    aria-hidden
+                    className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
+                  />
+                ) : (
+                  <ArrowUp aria-hidden className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Send (Enter)</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
     );
   },

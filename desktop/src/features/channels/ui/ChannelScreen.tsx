@@ -1,16 +1,23 @@
 import * as React from "react";
 import { useAppShell } from "@/app/AppShellContext";
-import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
-import { useChannelMembersQuery } from "@/features/channels/hooks";
-import { ChannelMembersBar } from "@/features/channels/ui/ChannelMembersBar";
-import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
+import {
+  useChannelMembersQuery,
+  useJoinChannelMutation,
+} from "@/features/channels/hooks";
+import { ChannelScreenEmptyState } from "@/features/channels/ui/ChannelScreenEmptyState";
+import { ChannelScreenHeader } from "@/features/channels/ui/ChannelScreenHeader";
+import {
+  ChannelPane,
+  ForumView,
+} from "@/features/channels/ui/ChannelScreenLazyViews";
 import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
   usePersonasQuery,
 } from "@/features/agents/hooks";
+import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import {
   mergeMessages,
   useChannelMessagesQuery,
@@ -28,7 +35,6 @@ import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
-import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type {
@@ -37,18 +43,10 @@ import type {
   Profile,
   RelayEvent,
 } from "@/shared/api/types";
+import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
-
-const ChannelPane = React.lazy(async () => {
-  const module = await import("@/features/channels/ui/ChannelPane");
-  return { default: module.ChannelPane };
-});
-
-const ForumView = React.lazy(async () => {
-  const module = await import("@/features/forum/ui/ForumView");
-  return { default: module.ForumView };
-});
-
+import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
+import { useChannelAgentSessions } from "./useChannelAgentSessions";
 type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
@@ -74,15 +72,21 @@ export function ChannelScreen({
 }: ChannelScreenProps) {
   const { markChannelRead, openChannelManagement } = useAppShell();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
-  const [threadHeadPath, setThreadHeadPath] = React.useState<string[]>([]);
+  const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
+    null,
+  );
+  const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState(
+    () => new Set<string>(),
+  );
+  const [threadScrollTargetId, setThreadScrollTargetId] = React.useState<
+    string | null
+  >(null);
   const [threadReplyTargetId, setThreadReplyTargetId] = React.useState<
     string | null
   >(null);
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const currentPubkey = currentIdentity?.pubkey;
   const activeChannelId = activeChannel?.id ?? null;
-  const openThreadHeadId = threadHeadPath[threadHeadPath.length - 1] ?? null;
-
   const messagesQuery = useChannelMessagesQuery(activeChannel);
   useChannelSubscription(activeChannel);
   const { fetchOlder, hasOlderMessages, isFetchingOlder } =
@@ -94,12 +98,12 @@ export function ChannelScreen({
     : (activeChannel?.lastMessageAt ?? null);
 
   React.useEffect(() => {
-    if (!activeChannelId) {
+    if (!activeChannelId || activeChannel?.isMember === false) {
       return;
     }
 
     markChannelRead(activeChannelId, activeReadAt);
-  }, [activeChannelId, activeReadAt, markChannelRead]);
+  }, [activeChannel?.isMember, activeChannelId, activeReadAt, markChannelRead]);
 
   const {
     activeChannelTitle,
@@ -113,14 +117,11 @@ export function ChannelScreen({
   const toggleReactionMutation = useToggleReactionMutation();
   const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
   const editMessageMutation = useEditMessageMutation(activeChannel);
+  const joinChannelMutation = useJoinChannelMutation(activeChannelId);
 
   const resolvedMessages = React.useMemo(() => {
     const currentMessages = messagesQuery.data ?? [];
-
-    if (!activeChannel || !targetMessageEvent) {
-      return currentMessages;
-    }
-
+    if (!activeChannel || !targetMessageEvent) return currentMessages;
     return mergeMessages(currentMessages, targetMessageEvent);
   }, [activeChannel, messagesQuery.data, targetMessageEvent]);
   const messageAuthorPubkeys = React.useMemo(
@@ -163,6 +164,22 @@ export function ChannelScreen({
     enabled: messageProfilePubkeys.length > 0,
   });
   const managedAgentsQuery = useManagedAgentsQuery();
+  useManagedAgentObserverBridge(managedAgentsQuery.data ?? []);
+  const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
+    const localAgentSet = new Set(
+      (managedAgentsQuery.data ?? [])
+        .filter((agent) => agent.backend.type === "local")
+        .map((agent) => agent.pubkey.toLowerCase()),
+    );
+    return {
+      humanTypingPubkeys: mainTypingPubkeys.filter(
+        (pk) => !localAgentSet.has(pk.toLowerCase()),
+      ),
+      botTypingPubkeys: mainTypingPubkeys.filter((pk) =>
+        localAgentSet.has(pk.toLowerCase()),
+      ),
+    };
+  }, [mainTypingPubkeys, managedAgentsQuery.data]);
   const messageProfiles = React.useMemo(() => {
     const base =
       mergeCurrentProfileIntoLookup(
@@ -229,19 +246,44 @@ export function ChannelScreen({
       resolvedMessages,
     ],
   );
+  const channelFind = useChannelFind({
+    channelId: activeChannelId,
+    messages: timelineMessages,
+  });
+
+  const directReplyIdsByParentId = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const message of timelineMessages) {
+      if (!message.parentId) continue;
+      const currentReplies = map.get(message.parentId) ?? [];
+      currentReplies.push(message.id);
+      map.set(message.parentId, currentReplies);
+    }
+    return map;
+  }, [timelineMessages]);
+  const getFirstReplyIdForMessage = React.useCallback(
+    (messageId: string) => directReplyIdsByParentId.get(messageId)?.[0] ?? null,
+    [directReplyIdsByParentId],
+  );
   const threadPanelData = React.useMemo(
     () =>
       buildThreadPanelData(
         timelineMessages,
         openThreadHeadId,
         threadReplyTargetId,
+        expandedThreadReplyIds,
       ),
-    [openThreadHeadId, threadReplyTargetId, timelineMessages],
+    [
+      expandedThreadReplyIds,
+      openThreadHeadId,
+      threadReplyTargetId,
+      timelineMessages,
+    ],
   );
   const openThreadHeadMessage = threadPanelData.threadHead;
   const threadMessages = threadPanelData.visibleReplies;
   const threadReplyTargetMessage = threadPanelData.replyTargetMessage;
-  const threadTotalReplyCount = threadPanelData.totalReplyCount;
+
   const editTargetMessage = React.useMemo(
     () =>
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
@@ -251,71 +293,88 @@ export function ChannelScreen({
   const {
     handleCancelEdit,
     handleCancelThreadReply,
-    handleBackThread,
     handleCloseThread,
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleOpenNestedThread,
+    handleExpandThreadReplies,
     handleOpenThread,
     handleSendMessage,
     handleSendThreadReply,
+    handleSelectThreadReplyTarget,
     handleToggleReaction,
   } = useChannelPaneHandlers({
     deleteMessageMutation,
     editMessageMutation,
     editTargetId,
+    expandedThreadReplyIds,
+    getFirstReplyIdForMessage,
     openThreadHeadId,
     sendMessageMutation,
+    setExpandedThreadReplyIds,
     setEditTargetId,
-    setThreadHeadPath,
+    setOpenThreadHeadId,
     setThreadReplyTargetId,
+    setThreadScrollTargetId,
     threadReplyTargetId,
     toggleReactionMutation,
   });
 
-  const canReact = activeChannel !== null && activeChannel.archivedAt === null;
   const effectiveToggleReaction = React.useMemo(
-    () => (canReact ? handleToggleReaction : undefined),
-    [canReact, handleToggleReaction],
+    () =>
+      activeChannel && !activeChannel.archivedAt && activeChannel.isMember
+        ? handleToggleReaction
+        : undefined,
+    [activeChannel, handleToggleReaction],
   );
+  const {
+    channelAgentSessionAgents,
+    closeAgentSession: handleCloseAgentSession,
+    openAgentSession: handleOpenAgentSession,
+    openAgentSessionPubkey,
+    openThreadAndCloseAgentSession: handleOpenThreadAndCloseAgentSession,
+  } = useChannelAgentSessions({
+    activeChannel,
+    activeChannelId,
+    channelMembers,
+    handleOpenThread,
+    managedAgents: managedAgentsQuery.data ?? [],
+    setExpandedThreadReplyIds,
+    setOpenThreadHeadId,
+    setThreadReplyTargetId,
+    setThreadScrollTargetId,
+    targetMessageId,
+    timelineMessages,
+  });
 
-  const channelDescription = activeChannel
-    ? [
-        activeChannel.archivedAt ? "Archived." : null,
-        !activeChannel.isMember
-          ? "Read-only until you join this open channel."
-          : null,
-        activeChannel.topic,
-        activeChannel.description,
-        activeChannel.purpose,
-        null,
-      ]
-        .filter((value) => value && value.trim().length > 0)
-        .join(" ") || "Channel details and activity."
-    : "Connect to the relay to browse channels and read messages.";
-  const shouldLoadTimeline =
-    activeChannel !== null && activeChannel.channelType !== "forum";
   const isTimelineLoading =
-    shouldLoadTimeline &&
+    activeChannel !== null &&
+    activeChannel.channelType !== "forum" &&
     (messagesQuery.isPending ||
       (messagesQuery.isFetching && resolvedMessages.length === 0));
   const resetComposerTargets = React.useCallback(
     (_channelId: string | null) => {
-      setThreadHeadPath([]);
+      setOpenThreadHeadId(null);
+      setExpandedThreadReplyIds(new Set());
+      setThreadScrollTargetId(null);
       setThreadReplyTargetId(null);
+      handleCloseAgentSession();
       setEditTargetId(null);
     },
-    [],
+    [handleCloseAgentSession],
   );
+  const handleThreadScrollTargetResolved = React.useCallback(() => {
+    setThreadScrollTargetId(null);
+  }, []);
 
   React.useEffect(() => {
     resetComposerTargets(activeChannelId);
   }, [activeChannelId, resetComposerTargets]);
-
   React.useEffect(() => {
     if (openThreadHeadId && !openThreadHeadMessage) {
-      setThreadHeadPath((current) => current.slice(0, -1));
+      setOpenThreadHeadId(null);
+      setExpandedThreadReplyIds(new Set());
+      setThreadScrollTargetId(null);
       return;
     }
 
@@ -341,120 +400,91 @@ export function ChannelScreen({
 
   useLoadMissingAncestors(activeChannel, resolvedMessages);
 
-  const activeChannelEphemeralBadge = activeChannelEphemeralDisplay ? (
-    <EphemeralChannelBadge
-      display={activeChannelEphemeralDisplay}
-      testId="chat-ephemeral-badge"
-      variant="header"
-    />
-  ) : null;
-
-  const headerStatusBadge =
-    activeChannel?.channelType === "dm" && activeDmPresenceStatus ? (
-      <>
-        <PresenceBadge
-          data-testid="chat-presence-badge"
-          status={activeDmPresenceStatus}
-        />
-        {activeChannelEphemeralBadge}
-      </>
-    ) : (
-      activeChannelEphemeralBadge
-    );
-
   return (
-    <>
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="absolute inset-x-0 top-0 z-20">
-          <ChatHeader
-            actions={
-              activeChannel ? (
-                <ChannelMembersBar
-                  channel={activeChannel}
-                  currentPubkey={currentPubkey}
-                  onManageChannel={openChannelManagement}
-                  onToggleMembers={() =>
-                    setIsMembersSidebarOpen((prev) => !prev)
-                  }
-                />
-              ) : null
-            }
-            channelType={activeChannel?.channelType}
-            visibility={activeChannel?.visibility}
-            description={channelDescription}
-            statusBadge={headerStatusBadge}
-            title={activeChannelTitle}
-          />
-        </div>
+    <AgentSessionProvider onOpenAgentSession={handleOpenAgentSession}>
+      <ChannelScreenHeader
+        activeChannel={activeChannel}
+        activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}
+        activeChannelTitle={activeChannelTitle}
+        activeDmPresenceStatus={activeDmPresenceStatus}
+        currentPubkey={currentPubkey}
+        isJoining={joinChannelMutation.isPending}
+        onJoinChannel={joinChannelMutation.mutateAsync}
+        onManageChannel={openChannelManagement}
+        onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
+      />
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {activeChannel ? (
-            activeChannel.channelType === "forum" ? (
-              <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
-                <ForumView
-                  channel={activeChannel}
-                  currentPubkey={currentPubkey}
-                  onClosePost={onCloseForumPost}
-                  onSelectPost={onSelectForumPost}
-                  selectedPostId={selectedForumPostId}
-                  targetReplyId={targetForumReplyId}
-                />
-              </React.Suspense>
-            ) : (
-              <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
-                <ChannelPane
-                  activeChannel={activeChannel}
-                  currentPubkey={currentPubkey}
-                  fetchOlder={fetchOlder}
-                  hasOlderMessages={hasOlderMessages}
-                  isFetchingOlder={isFetchingOlder}
-                  editTarget={
-                    editTargetMessage
-                      ? {
-                          author: editTargetMessage.author,
-                          body: editTargetMessage.body,
-                          id: editTargetMessage.id,
-                        }
-                      : null
-                  }
-                  isSending={sendMessageMutation.isPending}
-                  isTimelineLoading={isTimelineLoading}
-                  messages={timelineMessages}
-                  onCancelEdit={handleCancelEdit}
-                  onCancelThreadReply={handleCancelThreadReply}
-                  onBackThread={handleBackThread}
-                  onCloseThread={handleCloseThread}
-                  onDelete={handleDelete}
-                  onEdit={handleEdit}
-                  onEditSave={handleEditSave}
-                  onOpenNestedThread={handleOpenNestedThread}
-                  onOpenThread={handleOpenThread}
-                  onSendMessage={handleSendMessage}
-                  onSendThreadReply={handleSendThreadReply}
-                  onToggleReaction={effectiveToggleReaction}
-                  canGoBackThread={threadHeadPath.length > 1}
-                  openThreadHeadId={openThreadHeadId}
-                  personaLookup={personaLookup}
-                  profiles={messageProfiles}
-                  targetMessageId={targetMessageId}
-                  threadHeadMessage={openThreadHeadMessage}
-                  threadMessages={threadMessages}
-                  threadTypingPubkeys={threadTypingPubkeys}
-                  threadTotalReplyCount={threadTotalReplyCount}
-                  threadReplyTargetId={threadReplyTargetId}
-                  threadReplyTargetMessage={threadReplyTargetMessage}
-                  typingPubkeys={mainTypingPubkeys}
-                />
-              </React.Suspense>
-            )
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {activeChannel ? (
+          activeChannel.channelType === "forum" ? (
+            <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
+              <ForumView
+                channel={activeChannel}
+                currentPubkey={currentPubkey}
+                onClosePost={onCloseForumPost}
+                onSelectPost={onSelectForumPost}
+                selectedPostId={selectedForumPostId}
+                targetReplyId={targetForumReplyId}
+              />
+            </React.Suspense>
           ) : (
-            <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8">
-              <p className="text-sm text-muted-foreground">
-                Select a channel to view messages.
-              </p>
-            </div>
-          )}
-        </div>
+            <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
+              <ChannelPane
+                activeChannel={activeChannel}
+                agentSessionAgents={channelAgentSessionAgents}
+                botTypingPubkeys={botTypingPubkeys}
+                channelFind={channelFind}
+                currentPubkey={currentPubkey}
+                fetchOlder={fetchOlder}
+                hasOlderMessages={hasOlderMessages}
+                isFetchingOlder={isFetchingOlder}
+                editTarget={
+                  editTargetMessage
+                    ? {
+                        author: editTargetMessage.author,
+                        body: editTargetMessage.body,
+                        id: editTargetMessage.id,
+                      }
+                    : null
+                }
+                isSending={sendMessageMutation.isPending}
+                isTimelineLoading={isTimelineLoading}
+                messages={timelineMessages}
+                onCancelEdit={handleCancelEdit}
+                onCancelThreadReply={handleCancelThreadReply}
+                onCloseAgentSession={handleCloseAgentSession}
+                onCloseThread={handleCloseThread}
+                onDelete={handleDelete}
+                onEdit={handleEdit}
+                onEditSave={handleEditSave}
+                onExpandThreadReplies={handleExpandThreadReplies}
+                onOpenAgentSession={handleOpenAgentSession}
+                onOpenThread={handleOpenThreadAndCloseAgentSession}
+                onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
+                onSendMessage={handleSendMessage}
+                onSendThreadReply={handleSendThreadReply}
+                onThreadScrollTargetResolved={handleThreadScrollTargetResolved}
+                onToggleReaction={effectiveToggleReaction}
+                openAgentSessionPubkey={openAgentSessionPubkey}
+                openThreadHeadId={openThreadHeadId}
+                personaLookup={personaLookup}
+                profiles={messageProfiles}
+                targetMessageId={targetMessageId}
+                threadHeadMessage={openThreadHeadMessage}
+                threadMessages={threadMessages}
+                threadTypingPubkeys={threadTypingPubkeys}
+                threadReplyTargetId={threadReplyTargetId}
+                threadReplyTargetMessage={threadReplyTargetMessage}
+                threadScrollTargetId={threadScrollTargetId}
+                isJoining={joinChannelMutation.isPending}
+                onJoinChannel={joinChannelMutation.mutateAsync}
+                typingPubkeys={humanTypingPubkeys}
+              />
+            </React.Suspense>
+          )
+        ) : (
+          <ChannelScreenEmptyState />
+        )}
       </div>
 
       <MembersSidebar
@@ -462,7 +492,8 @@ export function ChannelScreen({
         currentPubkey={currentPubkey}
         open={isMembersSidebarOpen}
         onOpenChange={setIsMembersSidebarOpen}
+        onViewActivity={handleOpenAgentSession}
       />
-    </>
+    </AgentSessionProvider>
   );
 }

@@ -66,44 +66,44 @@ export function TypingIndicatorRow({
     [channel, currentPubkey, profiles, typingPubkeys],
   );
 
-  if (labels.length === 0) {
-    return null;
-  }
-
   return (
     <div
       aria-live="polite"
       className="shrink-0 bg-transparent px-4 py-2 sm:px-6"
-      data-testid="message-typing-indicator"
+      {...(labels.length > 0
+        ? { "data-testid": "message-typing-indicator" }
+        : {})}
     >
-      <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
-        <div className="flex shrink-0 items-center">
-          {typingPubkeys.map((pubkey, index) => {
-            const profile = profiles?.[pubkey.toLowerCase()];
-            const label = labels[index] ?? pubkey.slice(0, 8);
-            return (
-              <div
-                key={pubkey}
-                className={`relative h-5 w-5 shrink-0 rounded-full ring-1 ring-background${index > 0 ? " -ml-1.5" : ""}`}
-                data-testid="message-typing-avatar"
-              >
-                <ProfileAvatar
-                  avatarUrl={profile?.avatarUrl ?? null}
-                  label={label}
-                  className="h-5 w-5 rounded-full text-[8px]"
-                  iconClassName="h-3 w-3"
-                />
-              </div>
-            );
-          })}
+      {labels.length > 0 && (
+        <div className="mx-auto flex w-full max-w-4xl items-center gap-2">
+          <div className="flex shrink-0 items-center">
+            {typingPubkeys.map((pubkey, index) => {
+              const profile = profiles?.[pubkey.toLowerCase()];
+              const label = labels[index] ?? pubkey.slice(0, 8);
+              return (
+                <div
+                  key={pubkey}
+                  className={`relative h-5 w-5 shrink-0 rounded-full ring-1 ring-background${index > 0 ? " -ml-1.5" : ""}`}
+                  data-testid="message-typing-avatar"
+                >
+                  <ProfileAvatar
+                    avatarUrl={profile?.avatarUrl ?? null}
+                    label={label}
+                    className="h-5 w-5 rounded-full text-[8px]"
+                    iconClassName="h-3 w-3"
+                  />
+                </div>
+              );
+            })}
+          </div>
+          <p
+            className="truncate text-sm text-muted-foreground"
+            data-testid="message-typing-indicator-label"
+          >
+            {formatTypingLabel(labels)}
+          </p>
         </div>
-        <p
-          className="truncate text-sm text-muted-foreground"
-          data-testid="message-typing-indicator-label"
-        >
-          {formatTypingLabel(labels)}
-        </p>
-      </div>
+      )}
     </div>
   );
 }

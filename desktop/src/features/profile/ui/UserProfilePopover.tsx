@@ -1,13 +1,19 @@
 import * as React from "react";
+import { Activity } from "lucide-react";
 
 import {
   useUserNotesQuery,
   useUserProfileQuery,
 } from "@/features/profile/hooks";
+import {
+  useRelayAgentsQuery,
+  useManagedAgentsQuery,
+} from "@/features/agents/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { useAgentSession } from "@/shared/context/AgentSessionContext";
 import { Markdown } from "@/shared/ui/markdown";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
@@ -20,6 +26,25 @@ type UserProfilePopoverProps = {
   /** Value used to generate the BotIdenticon glyph (typically the author name). */
   botIdenticonValue?: string;
 };
+
+const RUNTIME_LABELS: Record<string, string> = {
+  goose: "Goose",
+  "claude-code": "Claude Code",
+  "codex-acp": "Codex",
+  aider: "Aider",
+};
+
+function runtimeLabel(command: string): string {
+  return RUNTIME_LABELS[command] ?? command;
+}
+
+function InfoBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+      {children}
+    </span>
+  );
+}
 
 function truncatePubkey(pubkey: string) {
   if (pubkey.length <= 16) {
@@ -41,10 +66,25 @@ export function UserProfilePopover({
   const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
     limit: showAllNotes ? 20 : 3,
   });
+  const relayAgentsQuery = useRelayAgentsQuery({
+    enabled: open && role === "bot",
+  });
+  const managedAgentsQuery = useManagedAgentsQuery({
+    enabled: open && role === "bot",
+  });
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
   });
 
+  const { onOpenAgentSession } = useAgentSession();
+  const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
+  const managedAgent = managedAgentsQuery.data?.find(
+    (a) => a.pubkey === pubkey,
+  );
+  const canViewActivity =
+    role === "bot" &&
+    managedAgent?.backend.type === "local" &&
+    Boolean(onOpenAgentSession);
   const profile = profileQuery.data;
   const notes = notesQuery.data?.notes ?? [];
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
@@ -93,10 +133,41 @@ export function UserProfilePopover({
             {presenceStatus ? <PresenceBadge status={presenceStatus} /> : null}
           </div>
 
+          {role === "bot" && (managedAgent || relayAgent) ? (
+            <div className="flex flex-wrap gap-1.5">
+              {managedAgent?.agentCommand ? (
+                <InfoBadge>{runtimeLabel(managedAgent.agentCommand)}</InfoBadge>
+              ) : relayAgent?.agentType ? (
+                <InfoBadge>{runtimeLabel(relayAgent.agentType)}</InfoBadge>
+              ) : null}
+              {managedAgent?.model ? (
+                <InfoBadge>{managedAgent.model}</InfoBadge>
+              ) : null}
+              {managedAgent?.acpCommand ? (
+                <InfoBadge>ACP: {managedAgent.acpCommand}</InfoBadge>
+              ) : null}
+            </div>
+          ) : null}
+
           {profile?.about ? (
             <p className="text-xs leading-relaxed text-muted-foreground">
               {profile.about}
             </p>
+          ) : null}
+
+          {canViewActivity ? (
+            <button
+              className="flex w-full items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-muted/50"
+              data-testid={`user-profile-view-activity-${pubkey}`}
+              onClick={() => {
+                setOpen(false);
+                onOpenAgentSession?.(pubkey);
+              }}
+              type="button"
+            >
+              <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+              View activity log
+            </button>
           ) : null}
 
           <p className="truncate font-mono text-[10px] text-muted-foreground/60">

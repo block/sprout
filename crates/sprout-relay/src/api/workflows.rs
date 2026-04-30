@@ -68,6 +68,61 @@ pub struct CreateWorkflowBody {
     pub yaml_definition: String,
 }
 
+fn require_workflow_owner(
+    workflow: &sprout_db::workflow::WorkflowRecord,
+    caller_pubkey: &[u8],
+    action: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if workflow.owner_pubkey != caller_pubkey {
+        return Err(forbidden(&format!(
+            "not authorized to {action} this workflow"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_send_message_targets(
+    def: &sprout_workflow::WorkflowDef,
+    workflow_channel_id: Option<uuid::Uuid>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    for step in &def.steps {
+        if let sprout_workflow::ActionDef::SendMessage {
+            channel: Some(channel),
+            ..
+        } = &step.action
+        {
+            let trimmed = channel.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let target_channel = uuid::Uuid::parse_str(trimmed).map_err(|_| {
+                api_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!(
+                        "invalid workflow YAML: step '{}' has an invalid send_message.channel UUID",
+                        step.id
+                    ),
+                )
+            })?;
+
+            if let Some(workflow_channel_id) = workflow_channel_id {
+                if target_channel != workflow_channel_id {
+                    return Err(api_error(
+                        StatusCode::BAD_REQUEST,
+                        &format!(
+                            "invalid workflow YAML: step '{}' cannot override send_message.channel outside workflow channel {}",
+                            step.id, workflow_channel_id
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Create a new workflow in a channel.
 ///
 /// Parses and validates the YAML definition, generates a webhook secret if needed,
@@ -96,6 +151,7 @@ pub async fn create_workflow(
                 &format!("invalid workflow YAML: {e}"),
             )
         })?;
+    validate_send_message_targets(&def, Some(channel_id))?;
 
     validate_webhook_urls(&def)
         .await
@@ -210,9 +266,8 @@ pub async fn update_workflow(
     if let Some(channel_id) = existing.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if existing.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&existing, &pubkey_bytes, "update")?;
 
     let (def, definition_json_str) =
         sprout_workflow::WorkflowEngine::parse_yaml(&body.yaml_definition).map_err(|e| {
@@ -221,6 +276,7 @@ pub async fn update_workflow(
                 &format!("invalid workflow YAML: {e}"),
             )
         })?;
+    validate_send_message_targets(&def, existing.channel_id)?;
 
     validate_webhook_urls(&def)
         .await
@@ -271,7 +327,7 @@ pub async fn update_workflow(
 
 // ── DELETE /api/workflows/:id ─────────────────────────────────────────────────
 
-/// Delete a workflow. Only the owner or a channel member may delete.
+/// Delete a workflow. Only the workflow owner may delete it.
 pub async fn delete_workflow(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -291,16 +347,13 @@ pub async fn delete_workflow(
         .await
         .map_err(|_| not_found("workflow not found"))?;
 
-    if workflow.owner_pubkey != pubkey_bytes {
-        if let Some(channel_id) = workflow.channel_id {
-            check_token_channel_access(&ctx, &channel_id)?;
-            check_channel_access(&state, channel_id, &pubkey_bytes)
-                .await
-                .map_err(|_| forbidden("not authorized to delete this workflow"))?;
-        } else {
-            return Err(forbidden("not authorized to delete this workflow"));
-        }
+    if let Some(channel_id) = workflow.channel_id {
+        check_token_channel_access(&ctx, &channel_id)?;
+        check_channel_access(&state, channel_id, &pubkey_bytes)
+            .await
+            .map_err(|_| forbidden("not authorized to delete this workflow"))?;
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "delete")?;
 
     state
         .db
@@ -345,9 +398,8 @@ pub async fn list_workflow_runs(
     if let Some(channel_id) = workflow.channel_id {
         check_token_channel_access(&ctx, &channel_id)?;
         check_channel_access(&state, channel_id, &pubkey_bytes).await?;
-    } else if workflow.owner_pubkey != pubkey_bytes {
-        return Err(forbidden("not authorized to access this workflow"));
     }
+    require_workflow_owner(&workflow, &pubkey_bytes, "trigger")?;
 
     let limit = params.limit.unwrap_or(20).min(100) as i64;
     let runs = state
@@ -430,7 +482,13 @@ pub async fn trigger_workflow(
         return Err(forbidden("not authorized to access this workflow"));
     }
 
-    let trigger_ctx = sprout_workflow::executor::TriggerContext::default();
+    let trigger_ctx = sprout_workflow::executor::TriggerContext {
+        channel_id: workflow
+            .channel_id
+            .map(|channel_id| channel_id.to_string())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
     let trigger_ctx_json = serde_json::to_value(&trigger_ctx).ok();
 
     let run_id = state
@@ -533,7 +591,13 @@ pub async fn workflow_webhook(
 
     // Build trigger context from webhook body fields before creating the run so
     // we can persist it immediately (needed for post-approval resume).
-    let mut trigger_ctx = sprout_workflow::executor::TriggerContext::default();
+    let mut trigger_ctx = sprout_workflow::executor::TriggerContext {
+        channel_id: workflow
+            .channel_id
+            .map(|channel_id| channel_id.to_string())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
     if let Some(serde_json::Value::Object(ref map)) = body_json {
         for (k, v) in map {
             let val_str = match v {
@@ -567,4 +631,81 @@ pub async fn workflow_webhook(
             "status": "pending",
         })),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use nostr::Keys;
+    use sprout_db::workflow::{WorkflowRecord, WorkflowStatus};
+    use sprout_workflow::{ActionDef, Step, TriggerDef, WorkflowDef};
+
+    use super::*;
+
+    fn workflow_record(owner_pubkey: Vec<u8>) -> WorkflowRecord {
+        WorkflowRecord {
+            id: uuid::Uuid::new_v4(),
+            name: "regression".to_string(),
+            owner_pubkey,
+            channel_id: Some(uuid::Uuid::new_v4()),
+            definition: serde_json::json!({}),
+            definition_hash: vec![0; 32],
+            status: WorkflowStatus::Active,
+            enabled: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn workflow_with_send_message_target(channel_id: uuid::Uuid) -> WorkflowDef {
+        WorkflowDef {
+            name: "cross-channel".to_string(),
+            description: None,
+            trigger: TriggerDef::MessagePosted { filter: None },
+            steps: vec![Step {
+                id: "notify".to_string(),
+                name: None,
+                if_expr: None,
+                timeout_secs: None,
+                action: ActionDef::SendMessage {
+                    text: "hello".to_string(),
+                    channel: Some(channel_id.to_string()),
+                },
+            }],
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn workflow_mutations_require_the_owner_pubkey() {
+        let owner = Keys::generate().public_key().serialize().to_vec();
+        let caller = Keys::generate().public_key().serialize().to_vec();
+        let workflow = workflow_record(owner);
+
+        let err = require_workflow_owner(&workflow, &caller, "update")
+            .expect_err("non-owners must not be able to update workflows");
+
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            err.1 .0["error"].as_str(),
+            Some("not authorized to update this workflow")
+        );
+    }
+
+    #[test]
+    fn channel_workflows_cannot_override_send_message_destination() {
+        let workflow_channel_id = uuid::Uuid::new_v4();
+        let other_channel_id = uuid::Uuid::new_v4();
+        let def = workflow_with_send_message_target(other_channel_id);
+
+        let err = validate_send_message_targets(&def, Some(workflow_channel_id))
+            .expect_err("channel workflows must not be able to send outside their channel");
+        let expected = format!(
+            "invalid workflow YAML: step 'notify' cannot override send_message.channel outside workflow channel {}",
+            workflow_channel_id
+        );
+
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert_eq!(err.1 .0["error"].as_str(), Some(expected.as_str()));
+    }
 }

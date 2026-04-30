@@ -8,7 +8,9 @@ import {
 } from "lucide-react";
 
 import type { AgentPersona } from "@/shared/api/types";
+import { useFeedbackToasts } from "@/shared/hooks/useToastEffect";
 import { useFileImportZone } from "@/shared/hooks/useFileImportZone";
+import { Card } from "@/shared/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,6 +65,8 @@ export function PersonasSection({
     openFilePicker,
   } = useFileImportZone({ onImportFile });
 
+  useFeedbackToasts(feedbackNoticeMessage, feedbackErrorMessage);
+
   return (
     <section
       className="relative space-y-4"
@@ -107,10 +111,7 @@ export function PersonasSection({
       {isLoading ? (
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {["first", "second", "third", "fourth"].map((key) => (
-            <div
-              className="rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
-              key={key}
-            >
+            <Card className="p-2" key={key}>
               <div className="flex items-center gap-2.5">
                 <Skeleton className="h-8 w-8 rounded-lg" />
                 <div className="space-y-2">
@@ -118,7 +119,7 @@ export function PersonasSection({
                   <Skeleton className="h-3 w-14 rounded-full" />
                 </div>
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       ) : null}
@@ -126,8 +127,8 @@ export function PersonasSection({
       {!isLoading && personas.length > 0 ? (
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
           {personas.map((persona) => (
-            <div
-              className="overflow-hidden rounded-xl border border-border/70 bg-card/80 p-2 shadow-sm"
+            <Card
+              className="overflow-hidden p-2"
               data-testid={`library-persona-${persona.id}`}
               key={persona.id}
             >
@@ -199,7 +200,7 @@ export function PersonasSection({
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-            </div>
+            </Card>
           ))}
           <button
             className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-primary p-2 text-primary transition-colors hover:bg-primary/5"
@@ -239,24 +240,6 @@ export function PersonasSection({
       {error ? (
         <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error.message}
-        </p>
-      ) : null}
-
-      {feedbackNoticeMessage ? (
-        <p
-          className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm text-primary"
-          data-testid="personas-library-feedback-notice"
-        >
-          {feedbackNoticeMessage}
-        </p>
-      ) : null}
-
-      {feedbackErrorMessage ? (
-        <p
-          className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-          data-testid="personas-library-feedback-error"
-        >
-          {feedbackErrorMessage}
         </p>
       ) : null}
     </section>

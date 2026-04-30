@@ -32,6 +32,8 @@ use uuid::Uuid;
 use sprout_auth::generate_challenge;
 use sprout_db::channel::MemberRole;
 
+use sprout_core::StoredEvent;
+
 use crate::audio::room::PeerCtrl;
 use crate::state::AppState;
 
@@ -510,8 +512,7 @@ async fn ensure_membership(
 
     // Fast path: already a member.
     let is_member = state
-        .db
-        .is_member(channel_id, pubkey_bytes)
+        .is_member_cached(channel_id, pubkey_bytes)
         .await
         .map_err(|e| format!("db error: {e}"))?;
 
@@ -535,8 +536,7 @@ async fn ensure_membership(
     if channel.ttl_seconds.is_some() {
         if let Some(parent_id) = parent_channel_id {
             let parent_member = state
-                .db
-                .is_member(parent_id, pubkey_bytes)
+                .is_member_cached(parent_id, pubkey_bytes)
                 .await
                 .map_err(|e| format!("db error: {e}"))?;
 
@@ -551,6 +551,7 @@ async fn ensure_membership(
                     )
                     .await
                     .map_err(|e| format!("auto-add failed: {e}"))?;
+                state.invalidate_membership(channel_id, pubkey_bytes);
 
                 return Ok(());
             }
@@ -595,7 +596,71 @@ async fn emit_participant_event(
         }
     };
 
+    let event_id_hex = event.id.to_hex();
+
+    // 1. Persist to DB so late-joining clients can reconstruct huddle state
+    //    from historical queries. Without this, lifecycle events only exist
+    //    for the duration of the Redis pub/sub delivery and are lost forever.
+    let stored = match state.db.insert_event(&event, Some(parent_channel_id)).await {
+        Ok((stored, true)) => stored,
+        Ok((_, false)) => {
+            // Duplicate — already persisted (e.g. concurrent emit). Skip fan-out
+            // to avoid double-delivery, matching the side_effects.rs pattern.
+            debug!(
+                event_id = %event_id_hex,
+                channel_id = %parent_channel_id,
+                "audio lifecycle event already persisted — skipping fan-out"
+            );
+            return;
+        }
+        Err(e) => {
+            // DB failure during disconnect cleanup. Still broadcast so live
+            // subscribers see the leave/end event immediately — suppressing it
+            // would leave connected clients stale. Late joiners will have an
+            // inconsistent view until the next huddle lifecycle event lands.
+            warn!(
+                event_id = %event_id_hex,
+                channel_id = %parent_channel_id,
+                kind = %event.kind.as_u16(),
+                "audio: failed to persist lifecycle event: {e}"
+            );
+            StoredEvent::new(event.clone(), Some(parent_channel_id))
+        }
+    };
+
+    // 2. Mark as locally-published before Redis broadcast to prevent
+    //    double-delivery when the event echoes back through the subscriber loop.
+    state.mark_local_event(&event.id);
+
+    // 3. Local fan-out to WS subscribers on this node (same pattern as
+    //    dispatch_persistent_event in the ingest handler).
+    let matches = state.sub_registry.fan_out(&stored);
+    if !matches.is_empty() {
+        let event_json = serde_json::to_string(&event)
+            .expect("nostr::Event serialization is infallible for well-formed events");
+        let mut drop_count = 0u32;
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            if !state.conn_manager.send_to(*target_conn_id, msg) {
+                drop_count += 1;
+            }
+        }
+        if drop_count > 0 {
+            warn!(
+                event_id = %event_id_hex,
+                drop_count,
+                "audio lifecycle fan-out: {drop_count} connection(s) dropped"
+            );
+        }
+    }
+
+    // 4. Cross-node broadcast via Redis pub/sub.
     if let Err(e) = state.pubsub.publish_event(parent_channel_id, &event).await {
-        warn!("audio: failed to publish lifecycle event: {e}");
+        state.local_event_ids.invalidate(&event.id.to_bytes());
+        warn!(
+            event_id = %event_id_hex,
+            channel_id = %parent_channel_id,
+            "audio: failed to publish lifecycle event: {e}"
+        );
     }
 }

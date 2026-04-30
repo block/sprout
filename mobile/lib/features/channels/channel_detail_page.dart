@@ -1,23 +1,39 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
+import '../profile/presence_cache_provider.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import '../forum/forum_posts_view.dart';
 import 'channel.dart';
+import 'agent_activity/working_bots_provider.dart';
 import 'channel_management_provider.dart';
 import 'channel_messages_provider.dart';
 import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
+import 'compose_bar.dart';
+import 'date_formatters.dart';
+import 'day_divider.dart';
+import 'manage_channel_sheet.dart';
+import 'members_sheet.dart';
+import 'message_actions.dart';
 import 'message_content.dart';
+import 'read_state/deferred_read_state_update.dart';
+import 'read_state/read_state_provider.dart';
+import 'read_state/read_state_time.dart';
+import 'reaction_row.dart';
 import 'send_message_provider.dart';
+import 'small_avatar.dart';
+import 'thread_detail_page.dart';
 import 'timeline_message.dart';
 
 /// Fetch channel members and preload their profiles into the user cache.
@@ -41,6 +57,30 @@ Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
   }
 }
 
+int? _channelReadTimestamp({
+  required Channel channel,
+  required AsyncValue<List<NostrEvent>> messagesState,
+}) {
+  if (channel.isForum) {
+    return dateTimeToUnixSeconds(channel.lastMessageAt);
+  }
+
+  final events = messagesState.value;
+  if (events != null && events.isNotEmpty) {
+    var latest = 0;
+    for (final event in events) {
+      if (event.createdAt > latest) {
+        latest = event.createdAt;
+      }
+    }
+    if (latest > 0) {
+      return latest;
+    }
+  }
+
+  return dateTimeToUnixSeconds(channel.lastMessageAt);
+}
+
 class ChannelDetailPage extends HookConsumerWidget {
   final Channel channel;
 
@@ -51,11 +91,21 @@ class ChannelDetailPage extends HookConsumerWidget {
     final detailsAsync = ref.watch(channelDetailsProvider(channel.id));
     final channelsAsync = ref.watch(channelsProvider);
     final messagesState = ref.watch(channelMessagesProvider(channel.id));
-    final typingEntries = ref.watch(channelTypingProvider(channel.id));
+    final readState = ref.watch(readStateProvider);
     final currentPubkey = ref
         .watch(profileProvider)
         .whenData((value) => value?.pubkey)
         .value;
+    // Only show channel-level typing (exclude thread-scoped entries and self).
+    final typingEntries = ref
+        .watch(channelTypingProvider(channel.id))
+        .where((e) => e.threadHeadId == null)
+        .where(
+          (e) =>
+              currentPubkey == null ||
+              e.pubkey.toLowerCase() != currentPubkey.toLowerCase(),
+        )
+        .toList();
     final baseChannel =
         channelsAsync
             .whenData(
@@ -68,6 +118,10 @@ class ChannelDetailPage extends HookConsumerWidget {
         channel;
     final resolvedChannel =
         detailsAsync.whenData(baseChannel.mergeDetails).value ?? baseChannel;
+    final readTimestamp = _channelReadTimestamp(
+      channel: resolvedChannel,
+      messagesState: messagesState,
+    );
 
     // Preload channel member profiles so @mentions resolve correctly.
     useEffect(() {
@@ -75,39 +129,64 @@ class ChannelDetailPage extends HookConsumerWidget {
       return null;
     }, [channel.id]);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(
-              channelIcon(resolvedChannel),
-              size: 18,
-              color: context.colors.onSurfaceVariant,
-            ),
-            const SizedBox(width: Grid.half),
-            Expanded(
-              child: Text(
-                resolvedChannel.displayLabel(currentPubkey: currentPubkey),
-                overflow: TextOverflow.ellipsis,
+    useEffect(() {
+      if (!readState.isReady || readTimestamp == null) {
+        return null;
+      }
+      return deferReadStateUpdate(context, () {
+        ref
+            .read(readStateProvider.notifier)
+            .markContextRead(channel.id, readTimestamp);
+      });
+    }, [channel.id, readState.isReady, readTimestamp]);
+
+    return FrostedScaffold(
+      appBar: FrostedAppBar(
+        title: resolvedChannel.isDm
+            ? _DmAppBarTitle(
+                channel: resolvedChannel,
+                currentPubkey: currentPubkey,
+              )
+            : Row(
+                children: [
+                  Icon(
+                    channelIcon(resolvedChannel),
+                    size: 18,
+                    color: context.colors.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: Grid.half),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          resolvedChannel.displayLabel(
+                            currentPubkey: currentPubkey,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (resolvedChannel.isStream)
+                          Text(
+                            resolvedChannel.description.isNotEmpty
+                                ? resolvedChannel.description
+                                : '${resolvedChannel.memberCount} member${resolvedChannel.memberCount == 1 ? '' : 's'}',
+                            style: context.textTheme.bodySmall?.copyWith(
+                              color: context.colors.onSurfaceVariant,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
         actions: [
-          IconButton(
-            onPressed: () {
-              showModalBottomSheet<void>(
-                context: context,
-                isScrollControlled: true,
-                showDragHandle: true,
-                builder: (_) => _MembersSheet(
-                  channel: resolvedChannel,
-                  currentPubkey: currentPubkey,
-                ),
-              );
-            },
-            tooltip: 'View members',
-            icon: const Icon(LucideIcons.users),
+          _MembersButton(
+            channelId: resolvedChannel.id,
+            channel: resolvedChannel,
+            currentPubkey: currentPubkey,
           ),
           if (!resolvedChannel.isDm)
             IconButton(
@@ -116,7 +195,7 @@ class ChannelDetailPage extends HookConsumerWidget {
                   context: context,
                   isScrollControlled: true,
                   showDragHandle: true,
-                  builder: (_) => _ManageChannelSheet(channel: resolvedChannel),
+                  builder: (_) => ManageChannelSheet(channel: resolvedChannel),
                 );
                 if (shouldClose == true && context.mounted) {
                   Navigator.of(context).pop();
@@ -131,15 +210,27 @@ class ChannelDetailPage extends HookConsumerWidget {
         children: [
           Expanded(
             child: resolvedChannel.isForum
-                ? _ForumPlaceholder(channel: resolvedChannel)
+                ? ForumPostsView(
+                    channel: resolvedChannel,
+                    currentPubkey: currentPubkey,
+                  )
                 : messagesState.when(
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (e, _) => Center(
-                      child: Text(
-                        'Failed to load messages',
-                        style: context.textTheme.bodyMedium?.copyWith(
-                          color: context.colors.error,
+                    loading: () => Padding(
+                      padding: EdgeInsets.only(
+                        top: frostedAppBarHeight(context),
+                      ),
+                      child: const Center(child: CircularProgressIndicator()),
+                    ),
+                    error: (e, _) => Padding(
+                      padding: EdgeInsets.only(
+                        top: frostedAppBarHeight(context),
+                      ),
+                      child: Center(
+                        child: Text(
+                          'Failed to load messages',
+                          style: context.textTheme.bodyMedium?.copyWith(
+                            color: context.colors.error,
+                          ),
                         ),
                       ),
                     ),
@@ -148,22 +239,44 @@ class ChannelDetailPage extends HookConsumerWidget {
                         events,
                         currentPubkey: currentPubkey,
                       );
+                      final entries = buildMainTimelineEntries(messages);
                       return _MessageList(
-                        messages: messages,
+                        entries: entries,
+                        allMessages: messages,
                         channelId: channel.id,
                         currentPubkey: currentPubkey,
+                        isMember: resolvedChannel.isMember,
+                        isArchived: resolvedChannel.isArchived,
                       );
                     },
                   ),
+          ),
+          _DetailConnectionBanner(
+            status: ref.watch(relaySessionProvider).status,
           ),
           if (!resolvedChannel.isForum && typingEntries.isNotEmpty)
             _TypingIndicator(entries: typingEntries),
           if (!resolvedChannel.isForum &&
               resolvedChannel.isMember &&
               !resolvedChannel.isArchived)
-            _ComposeBar(channelId: channel.id)
-          else if (!resolvedChannel.isForum &&
-              !resolvedChannel.isDm &&
+            ComposeBar(
+              channelId: channel.id,
+              channelName: resolvedChannel.isDm ? '' : resolvedChannel.name,
+              onSend:
+                  (
+                    content,
+                    mentionPubkeys, {
+                    mediaTags = const <List<String>>[],
+                  }) => ref
+                      .read(sendMessageProvider)
+                      .call(
+                        channelId: channel.id,
+                        content: content,
+                        mentionPubkeys: mentionPubkeys,
+                        mediaTags: mediaTags,
+                      ),
+            )
+          else if (!resolvedChannel.isDm &&
               (!resolvedChannel.isMember || resolvedChannel.isArchived))
             _ReadOnlyNotice(channel: resolvedChannel),
         ],
@@ -172,20 +285,109 @@ class ChannelDetailPage extends HookConsumerWidget {
   }
 }
 
-class _MessageList extends ConsumerWidget {
-  final List<TimelineMessage> messages;
+class _MessageList extends HookConsumerWidget {
+  final List<MainTimelineEntry> entries;
+  final List<TimelineMessage> allMessages;
   final String channelId;
   final String? currentPubkey;
+  final bool isMember;
+  final bool isArchived;
 
   const _MessageList({
-    required this.messages,
+    required this.entries,
+    required this.allMessages,
     required this.channelId,
     required this.currentPubkey,
+    required this.isMember,
+    required this.isArchived,
   });
+
+  static const _fetchOlderThreshold = 200.0;
+  static const _latestThreshold = 48.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (messages.isEmpty) {
+    // Pagination: fetch older messages when scrolling near the top.
+    final scrollController = useScrollController();
+    final isLoadingOlder = useState(false);
+    final isAtLatest = useState(true);
+    final latestEntryId = entries.isEmpty ? null : entries.last.message.id;
+    final previousLatestEntryId = useRef<String?>(null);
+
+    bool nearLatest() {
+      if (!scrollController.hasClients) return true;
+      return scrollController.position.pixels <= _latestThreshold;
+    }
+
+    void updateLatestState() {
+      final next = nearLatest();
+      if (isAtLatest.value != next) {
+        isAtLatest.value = next;
+      }
+    }
+
+    Future<void> scrollToLatest() async {
+      if (!scrollController.hasClients) return;
+      await scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+      if (context.mounted) {
+        isAtLatest.value = true;
+      }
+    }
+
+    useEffect(() {
+      void onScroll() {
+        updateLatestState();
+        if (isLoadingOlder.value) return;
+        final notifier = ref.read(channelMessagesProvider(channelId).notifier);
+        if (notifier.reachedOldest) return;
+        // In a reversed ListView, maxScrollExtent is the oldest messages.
+        final pos = scrollController.position;
+        if (pos.pixels >= pos.maxScrollExtent - _fetchOlderThreshold) {
+          isLoadingOlder.value = true;
+          notifier.fetchOlder().whenComplete(
+            () => isLoadingOlder.value = false,
+          );
+        }
+      }
+
+      scrollController.addListener(onScroll);
+      return () => scrollController.removeListener(onScroll);
+    }, [channelId, scrollController]);
+
+    useEffect(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        updateLatestState();
+      });
+      return null;
+    }, [entries.length, scrollController]);
+
+    useEffect(() {
+      final previous = previousLatestEntryId.value;
+      previousLatestEntryId.value = latestEntryId;
+      if (previous == null ||
+          latestEntryId == null ||
+          previous == latestEntryId ||
+          !isAtLatest.value) {
+        return null;
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted || !scrollController.hasClients) return;
+        scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      });
+      return null;
+    }, [latestEntryId, scrollController]);
+
+    if (entries.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -223,38 +425,118 @@ class _MessageList extends ConsumerWidget {
       }
     });
 
-    return ListView.builder(
-      reverse: true,
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xs,
-        vertical: Grid.xxs,
-      ),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        // Reversed list: index 0 = newest (bottom of screen).
-        final chronIdx = messages.length - 1 - index;
-        final message = messages[chronIdx];
+    return Stack(
+      children: [
+        ListView.builder(
+          key: const ValueKey('channel-message-list'),
+          controller: scrollController,
+          reverse: true,
+          padding: EdgeInsets.only(
+            left: Grid.xs,
+            right: Grid.xs,
+            top: frostedAppBarHeight(context),
+            bottom: Grid.xxs,
+          ),
+          itemCount: entries.length + (isLoadingOlder.value ? 1 : 0),
+          itemBuilder: (context, index) {
+            // Loading indicator at the top (last index in reversed list).
+            if (index >= entries.length) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: Grid.xs),
+                child: Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              );
+            }
 
-        if (message.isSystem) {
-          return _SystemMessageRow(message: message);
-        }
+            // Reversed list: index 0 = newest (bottom of screen).
+            final chronIdx = entries.length - 1 - index;
+            final entry = entries[chronIdx];
+            final message = entry.message;
 
-        // The message visually above is the one earlier in time.
-        final prevMessage = chronIdx > 0 ? messages[chronIdx - 1] : null;
-        final showAuthor =
-            prevMessage == null ||
-            prevMessage.isSystem ||
-            prevMessage.pubkey.toLowerCase() != message.pubkey.toLowerCase() ||
-            (message.createdAt - prevMessage.createdAt) > 300;
+            // Day boundary check — applies to all messages including system.
+            final prevEntry = chronIdx > 0 ? entries[chronIdx - 1] : null;
+            final prevMessage = prevEntry?.message;
+            final showDayDivider =
+                prevMessage == null ||
+                !isSameDay(prevMessage.createdAt, message.createdAt);
 
-        return _MessageBubble(
-          message: message,
-          showAuthor: showAuthor,
-          channelNames: channelNamesMap,
-          currentChannelId: channelId,
-          currentPubkey: currentPubkey,
-        );
-      },
+            final showAuthor =
+                !message.isSystem &&
+                (prevMessage == null ||
+                    prevMessage.isSystem ||
+                    showDayDivider ||
+                    prevMessage.pubkey.toLowerCase() !=
+                        message.pubkey.toLowerCase() ||
+                    (message.createdAt - prevMessage.createdAt) > 300);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (showDayDivider)
+                  DayDivider(label: formatDayHeading(message.createdAt)),
+                if (message.isSystem)
+                  _SystemMessageRow(
+                    message: message,
+                    channelId: channelId,
+                    currentPubkey: currentPubkey,
+                    allMessages: null,
+                    isMember: isMember,
+                    isArchived: isArchived,
+                  )
+                else ...[
+                  _MessageBubble(
+                    message: message,
+                    showAuthor: showAuthor,
+                    channelNames: channelNamesMap,
+                    currentChannelId: channelId,
+                    currentPubkey: currentPubkey,
+                    allMessages: allMessages,
+                    isMember: isMember,
+                    isArchived: isArchived,
+                  ),
+                  if (entry.summary != null)
+                    _ThreadSummaryRow(
+                      summary: entry.summary!,
+                      message: message,
+                      allMessages: allMessages,
+                      channelId: channelId,
+                      currentPubkey: currentPubkey,
+                      isMember: isMember,
+                      isArchived: isArchived,
+                    ),
+                ],
+              ],
+            );
+          },
+        ),
+        if (!isAtLatest.value)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: Grid.xs,
+            child: Center(
+              child: FilledButton.icon(
+                key: const ValueKey('channel-jump-to-latest'),
+                onPressed: scrollToLatest,
+                style: FilledButton.styleFrom(
+                  backgroundColor: context.colors.primaryContainer,
+                  foregroundColor: context.colors.onPrimaryContainer,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Grid.xs,
+                    vertical: Grid.xxs,
+                  ),
+                ),
+                icon: const Icon(LucideIcons.arrowDown, size: 16),
+                label: const Text('Latest'),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -265,8 +547,20 @@ class _MessageList extends ConsumerWidget {
 
 class _SystemMessageRow extends ConsumerWidget {
   final TimelineMessage message;
+  final String channelId;
+  final String? currentPubkey;
+  final List<TimelineMessage>? allMessages;
+  final bool isMember;
+  final bool isArchived;
 
-  const _SystemMessageRow({required this.message});
+  const _SystemMessageRow({
+    required this.message,
+    required this.channelId,
+    this.currentPubkey,
+    this.allMessages,
+    this.isMember = false,
+    this.isArchived = false,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -280,44 +574,160 @@ class _SystemMessageRow extends ConsumerWidget {
       final profile =
           userCache[pubkey.toLowerCase()] ??
           ref.read(userCacheProvider.notifier).get(pubkey.toLowerCase());
-      return profile?.label ?? _shortPubkey(pubkey);
+      return profile?.label ?? shortPubkey(pubkey);
     }
 
     final description = systemEvent.describe(resolveLabel);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Grid.half),
-      child: Row(
-        children: [
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              color: context.colors.surfaceContainerHighest,
-              shape: BoxShape.circle,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onLongPress: () => showMessageActions(
+        context: context,
+        ref: ref,
+        message: message,
+        channelId: channelId,
+        isOwnMessage: false,
+        allMessages: null,
+        currentPubkey: currentPubkey,
+        isMember: isMember,
+        isArchived: isArchived,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: context.colors.surfaceContainerHighest,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    LucideIcons.arrowLeftRight,
+                    size: 12,
+                    color: context.colors.outline,
+                  ),
+                ),
+                const SizedBox(width: Grid.xxs),
+                Expanded(
+                  child: Text(
+                    description,
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Text(
+                  formatMessageTime(message.createdAt),
+                  style: context.textTheme.labelSmall?.copyWith(
+                    color: context.colors.outline,
+                  ),
+                ),
+              ],
             ),
-            child: Icon(
-              LucideIcons.arrowLeftRight,
-              size: 12,
-              color: context.colors.outline,
+            if (message.reactions.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 28),
+                child: ReactionRow(
+                  reactions: message.reactions,
+                  onToggle: (emoji) => toggleReaction(ref, message, emoji),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Thread summary row (shown below messages that have replies)
+// ---------------------------------------------------------------------------
+
+class _ThreadSummaryRow extends ConsumerWidget {
+  final ThreadSummary summary;
+  final TimelineMessage message;
+  final List<TimelineMessage> allMessages;
+  final String channelId;
+  final String? currentPubkey;
+  final bool isMember;
+  final bool isArchived;
+
+  const _ThreadSummaryRow({
+    required this.summary,
+    required this.message,
+    required this.allMessages,
+    required this.channelId,
+    required this.currentPubkey,
+    required this.isMember,
+    required this.isArchived,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final userCache = ref.watch(userCacheProvider);
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ThreadDetailPage(
+              threadHead: message,
+              allMessages: allMessages,
+              channelId: channelId,
+              currentPubkey: currentPubkey,
+              isMember: isMember,
+              isArchived: isArchived,
             ),
           ),
-          const SizedBox(width: Grid.xxs),
-          Expanded(
-            child: Text(
-              description,
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.only(
+          left: 36,
+          top: Grid.half,
+          bottom: Grid.half,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Stacked participant avatars.
+            SizedBox(
+              width: 20.0 + (summary.participantPubkeys.length - 1) * 12.0,
+              height: 20,
+              child: Stack(
+                children: [
+                  for (var i = 0; i < summary.participantPubkeys.length; i++)
+                    Positioned(
+                      left: i * 12.0,
+                      child: SmallAvatar(
+                        pubkey: summary.participantPubkeys[i],
+                        userCache: userCache,
+                      ),
+                    ),
+                ],
               ),
             ),
-          ),
-          Text(
-            _formatTime(message.createdAt),
-            style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline.withValues(alpha: 0.6),
+            const SizedBox(width: Grid.xxs),
+            Text(
+              '${summary.replyCount} ${summary.replyCount == 1 ? 'reply' : 'replies'}',
+              style: context.textTheme.labelMedium?.copyWith(
+                color: context.colors.primary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: Grid.half),
+            Icon(
+              LucideIcons.chevronRight,
+              size: 14,
+              color: context.colors.primary,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -333,6 +743,9 @@ class _MessageBubble extends ConsumerWidget {
   final Map<String, String> channelNames;
   final String currentChannelId;
   final String? currentPubkey;
+  final List<TimelineMessage>? allMessages;
+  final bool isMember;
+  final bool isArchived;
 
   const _MessageBubble({
     required this.message,
@@ -340,6 +753,9 @@ class _MessageBubble extends ConsumerWidget {
     required this.channelNames,
     required this.currentChannelId,
     required this.currentPubkey,
+    this.allMessages,
+    this.isMember = false,
+    this.isArchived = false,
   });
 
   @override
@@ -349,7 +765,7 @@ class _MessageBubble extends ConsumerWidget {
     final profile =
         ref.watch(userCacheProvider.select((cache) => cache[pk])) ??
         ref.read(userCacheProvider.notifier).get(pk);
-    final displayName = profile?.label ?? _shortPubkey(message.pubkey);
+    final displayName = profile?.label ?? shortPubkey(message.pubkey);
 
     // Build mention names map from event p-tags.
     final userCache = ref.watch(userCacheProvider);
@@ -363,16 +779,20 @@ class _MessageBubble extends ConsumerWidget {
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onLongPress: () => _showMessageActions(
+      onLongPress: () => showMessageActions(
         context: context,
         ref: ref,
         message: message,
         channelId: currentChannelId,
         isOwnMessage:
             currentPubkey?.toLowerCase() == message.pubkey.toLowerCase(),
+        allMessages: allMessages,
+        currentPubkey: currentPubkey,
+        isMember: isMember,
+        isArchived: isArchived,
       ),
       child: Padding(
-        padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.quarter),
+        padding: EdgeInsets.only(top: showAuthor ? Grid.xs : Grid.half),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -399,7 +819,7 @@ class _MessageBubble extends ConsumerWidget {
                           ),
                           const SizedBox(width: Grid.xxs),
                           Text(
-                            _formatTime(message.createdAt),
+                            formatMessageTime(message.createdAt),
                             style: context.textTheme.labelSmall?.copyWith(
                               color: context.colors.outline,
                             ),
@@ -421,6 +841,7 @@ class _MessageBubble extends ConsumerWidget {
                     content: message.content,
                     mentionNames: mentionNames,
                     channelNames: channelNames,
+                    tags: message.tags,
                     onChannelTap: (channelId) {
                       if (channelId == currentChannelId) return;
                       final channelsAsync = ref.read(channelsProvider);
@@ -444,23 +865,9 @@ class _MessageBubble extends ConsumerWidget {
                     },
                   ),
                   if (message.reactions.isNotEmpty)
-                    _ReactionRow(
+                    ReactionRow(
                       reactions: message.reactions,
-                      onToggle: (emoji) {
-                        final actions = ref.read(channelActionsProvider);
-                        final reaction = message.reactions.firstWhere(
-                          (r) => r.emoji == emoji,
-                        );
-                        if (reaction.reactedByCurrentUser &&
-                            reaction.currentUserReactionId != null) {
-                          actions.removeReaction(
-                            reaction.currentUserReactionId!,
-                            emoji,
-                          );
-                        } else {
-                          actions.addReaction(message.id, emoji);
-                        }
-                      },
+                      onToggle: (emoji) => toggleReaction(ref, message, emoji),
                     ),
                 ],
               ),
@@ -502,267 +909,6 @@ class _UserAvatar extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Reaction pills row
-// ---------------------------------------------------------------------------
-
-class _ReactionRow extends StatelessWidget {
-  final List<TimelineReaction> reactions;
-  final void Function(String emoji) onToggle;
-
-  const _ReactionRow({required this.reactions, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: Grid.half),
-      child: Wrap(
-        spacing: Grid.half,
-        runSpacing: Grid.half,
-        children: [
-          for (final reaction in reactions)
-            GestureDetector(
-              onTap: () => onToggle(reaction.emoji),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Grid.xxs,
-                  vertical: Grid.quarter,
-                ),
-                decoration: BoxDecoration(
-                  color: reaction.reactedByCurrentUser
-                      ? context.colors.primary.withValues(alpha: 0.12)
-                      : context.colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  border: Border.all(
-                    color: reaction.reactedByCurrentUser
-                        ? context.colors.primary.withValues(alpha: 0.4)
-                        : context.colors.outlineVariant,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(reaction.emoji, style: const TextStyle(fontSize: 14)),
-                    if (reaction.count > 1) ...[
-                      const SizedBox(width: Grid.quarter),
-                      Text(
-                        '${reaction.count}',
-                        style: context.textTheme.labelSmall?.copyWith(
-                          color: reaction.reactedByCurrentUser
-                              ? context.colors.primary
-                              : context.colors.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Message actions (long-press sheet)
-// ---------------------------------------------------------------------------
-
-const _quickEmojis = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
-
-void _showMessageActions({
-  required BuildContext context,
-  required WidgetRef ref,
-  required TimelineMessage message,
-  required String channelId,
-  required bool isOwnMessage,
-}) {
-  showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(Grid.xs, 0, Grid.xs, Grid.xs),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Quick emoji row
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                for (final emoji in _quickEmojis)
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      ref
-                          .read(channelActionsProvider)
-                          .addReaction(message.id, emoji);
-                    },
-                    child: Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          sheetContext,
-                        ).colorScheme.surfaceContainerHighest,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(emoji, style: const TextStyle(fontSize: 20)),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: Grid.xs),
-            ListTile(
-              leading: const Icon(LucideIcons.copy),
-              title: const Text('Copy text'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                // Copy to clipboard
-                final data = ClipboardData(text: message.content);
-                Clipboard.setData(data);
-              },
-            ),
-            if (isOwnMessage) ...[
-              ListTile(
-                leading: const Icon(LucideIcons.pencil),
-                title: const Text('Edit message'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _showEditSheet(
-                    context: context,
-                    ref: ref,
-                    message: message,
-                    channelId: channelId,
-                  );
-                },
-              ),
-              ListTile(
-                leading: Icon(
-                  LucideIcons.trash2,
-                  color: Theme.of(sheetContext).colorScheme.error,
-                ),
-                title: Text(
-                  'Delete message',
-                  style: TextStyle(
-                    color: Theme.of(sheetContext).colorScheme.error,
-                  ),
-                ),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _confirmDelete(
-                    context: context,
-                    ref: ref,
-                    messageId: message.id,
-                  );
-                },
-              ),
-            ],
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-void _showEditSheet({
-  required BuildContext context,
-  required WidgetRef ref,
-  required TimelineMessage message,
-  required String channelId,
-}) {
-  final controller = TextEditingController(text: message.content);
-  showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (sheetContext) => Padding(
-      padding: EdgeInsets.fromLTRB(
-        Grid.xs,
-        0,
-        Grid.xs,
-        MediaQuery.viewInsetsOf(sheetContext).bottom + Grid.xs,
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              autofocus: true,
-              minLines: 1,
-              maxLines: 5,
-              decoration: const InputDecoration(hintText: 'Edit message'),
-            ),
-            const SizedBox(height: Grid.xxs),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(sheetContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: Grid.half),
-                FilledButton(
-                  onPressed: () {
-                    final text = controller.text.trim();
-                    if (text.isEmpty || text == message.content) {
-                      Navigator.of(sheetContext).pop();
-                      return;
-                    }
-                    ref
-                        .read(channelActionsProvider)
-                        .editMessage(
-                          channelId: channelId,
-                          eventId: message.id,
-                          content: text,
-                        );
-                    Navigator.of(sheetContext).pop();
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-void _confirmDelete({
-  required BuildContext context,
-  required WidgetRef ref,
-  required String messageId,
-}) {
-  showDialog<void>(
-    context: context,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('Delete message'),
-      content: const Text('This cannot be undone.'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(dialogContext).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            Navigator.of(dialogContext).pop();
-            ref.read(channelActionsProvider).deleteMessage(messageId);
-          },
-          style: FilledButton.styleFrom(
-            backgroundColor: Theme.of(dialogContext).colorScheme.error,
-          ),
-          child: const Text('Delete'),
-        ),
-      ],
-    ),
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Channel management
 // ---------------------------------------------------------------------------
 
@@ -771,55 +917,6 @@ IconData channelIcon(Channel channel) {
   if (channel.isPrivate) return LucideIcons.lock;
   if (channel.isForum) return LucideIcons.messageSquareText;
   return LucideIcons.hash;
-}
-
-class _ForumPlaceholder extends StatelessWidget {
-  final Channel channel;
-
-  const _ForumPlaceholder({required this.channel});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Grid.sm),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              LucideIcons.messageSquareText,
-              size: Grid.xl,
-              color: context.colors.outline,
-            ),
-            const SizedBox(height: Grid.xs),
-            Text(
-              'Forum threads are not on mobile yet',
-              style: context.textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: Grid.xxs),
-            Text(
-              'You can still view channel context, canvas, and members from the actions above.',
-              style: context.textTheme.bodyMedium?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            if (channel.description.trim().isNotEmpty) ...[
-              const SizedBox(height: Grid.xs),
-              Text(
-                channel.description,
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.outline,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _ReadOnlyNotice extends StatelessWidget {
@@ -854,435 +951,44 @@ class _ReadOnlyNotice extends StatelessWidget {
   }
 }
 
-class _MembersSheet extends HookConsumerWidget {
-  final Channel channel;
-  final String? currentPubkey;
+// ---------------------------------------------------------------------------
+// Connection banner (shown inside channel detail during reconnect)
+// ---------------------------------------------------------------------------
 
-  const _MembersSheet({required this.channel, required this.currentPubkey});
+class _DetailConnectionBanner extends StatelessWidget {
+  final SessionStatus status;
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final membersAsync = ref.watch(channelMembersProvider(channel.id));
-    final allMembers = membersAsync.asData?.value ?? const <ChannelMember>[];
-    final people = allMembers.where((member) => !member.isBot).toList();
-    final userCache = ref.watch(userCacheProvider);
-
-    // Preload profiles for all members so avatars appear.
-    useEffect(() {
-      if (people.isNotEmpty) {
-        ref
-            .read(userCacheProvider.notifier)
-            .preload(people.map((m) => m.pubkey).toList());
-      }
-      return null;
-    }, [people.length]);
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        Grid.xs,
-        0,
-        Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
-      ),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Members', style: context.textTheme.titleMedium),
-              const SizedBox(height: Grid.xxs),
-              Text(
-                'People in ${channel.displayLabel(currentPubkey: currentPubkey)}.',
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.onSurfaceVariant,
-                ),
-              ),
-              if (!channel.isDm) ...[
-                const SizedBox(height: Grid.xxs),
-                Text(
-                  channel.isArchived
-                      ? 'Archived channels are read-only on mobile. Member and bot management stay on desktop.'
-                      : 'Member and bot management stay on desktop.',
-                  style: context.textTheme.bodySmall?.copyWith(
-                    color: context.colors.outline,
-                  ),
-                ),
-              ],
-              if (!channel.isDm) ...[const Divider(height: Grid.sm)],
-              SizedBox(
-                height: 280,
-                child: membersAsync.when(
-                  data: (_) => people.isEmpty
-                      ? Center(
-                          child: Text(
-                            'No people found.',
-                            style: context.textTheme.bodySmall?.copyWith(
-                              color: context.colors.outline,
-                            ),
-                          ),
-                        )
-                      : ListView(
-                          shrinkWrap: true,
-                          children: [
-                            for (final member in people)
-                              Builder(
-                                builder: (context) {
-                                  final profile =
-                                      userCache[member.pubkey.toLowerCase()];
-                                  final avatarUrl = profile?.avatarUrl;
-                                  final label = member.labelFor(currentPubkey);
-                                  final initial = label
-                                      .substring(0, 1)
-                                      .toUpperCase();
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: _MemberAvatar(
-                                      avatarUrl: avatarUrl,
-                                      initial: initial,
-                                    ),
-                                    title: Text(label),
-                                    subtitle: Text(member.role),
-                                  );
-                                },
-                              ),
-                          ],
-                        ),
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, _) => Center(
-                    child: Text(
-                      error.toString(),
-                      style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.error,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MemberAvatar extends HookWidget {
-  final String? avatarUrl;
-  final String initial;
-
-  const _MemberAvatar({required this.avatarUrl, required this.initial});
+  const _DetailConnectionBanner({required this.status});
 
   @override
   Widget build(BuildContext context) {
-    final failed = useState(false);
-
-    useEffect(() {
-      failed.value = false;
-      return null;
-    }, [avatarUrl]);
-
-    final url = avatarUrl;
-    if (url == null || failed.value) {
-      return CircleAvatar(child: Text(initial));
-    }
-    return CircleAvatar(
-      backgroundImage: NetworkImage(url),
-      onBackgroundImageError: (_, _) => failed.value = true,
-      child: null,
-    );
-  }
-}
-
-class _ManageChannelSheet extends HookConsumerWidget {
-  final Channel channel;
-
-  const _ManageChannelSheet({required this.channel});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final canvasAsync = ref.watch(channelCanvasProvider(channel.id));
-    final isEditingCanvas = useState(false);
-    final isSavingCanvas = useState(false);
-    final isBusy = useState(false);
-    final actionError = useState<String?>(null);
-    final canvasController = useTextEditingController();
-
-    useEffect(() {
-      final canvas = canvasAsync.asData?.value;
-      if (!isEditingCanvas.value) {
-        canvasController.text = canvas?.content ?? '';
-      }
-      return null;
-    }, [canvasAsync.asData?.value.content, isEditingCanvas.value]);
-
-    final canJoin =
-        channel.visibility == 'open' &&
-        !channel.isArchived &&
-        !channel.isMember &&
-        !channel.isDm;
-    final canLeave = channel.isMember && !channel.isArchived && !channel.isDm;
-    final canEditCanvas = channel.isMember && !channel.isArchived;
-
-    Future<void> joinChannel() async {
-      if (isBusy.value) return;
-      isBusy.value = true;
-      actionError.value = null;
-      try {
-        await ref.read(channelActionsProvider).joinChannel(channel.id);
-        if (context.mounted) {
-          Navigator.of(context).pop(false);
-        }
-      } catch (error) {
-        actionError.value = error.toString();
-      } finally {
-        isBusy.value = false;
-      }
+    if (status == SessionStatus.connected ||
+        status == SessionStatus.disconnected) {
+      return const SizedBox.shrink();
     }
 
-    Future<void> leaveChannel() async {
-      if (isBusy.value) return;
-      isBusy.value = true;
-      actionError.value = null;
-      try {
-        await ref.read(channelActionsProvider).leaveChannel(channel.id);
-        if (context.mounted) {
-          Navigator.of(context).pop(true);
-        }
-      } catch (error) {
-        actionError.value = error.toString();
-      } finally {
-        isBusy.value = false;
-      }
-    }
-
-    Future<void> saveCanvas() async {
-      if (isSavingCanvas.value) {
-        return;
-      }
-      isSavingCanvas.value = true;
-      actionError.value = null;
-      try {
-        await ref
-            .read(channelActionsProvider)
-            .setCanvas(
-              channelId: channel.id,
-              content: canvasController.text.trim(),
-            );
-        if (context.mounted) {
-          isEditingCanvas.value = false;
-        }
-      } catch (error) {
-        actionError.value = error.toString();
-      } finally {
-        isSavingCanvas.value = false;
-      }
-    }
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        Grid.xs,
-        0,
-        Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
-      ),
-      child: SafeArea(
-        top: false,
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            Text('Manage channel', style: context.textTheme.titleMedium),
-            const SizedBox(height: Grid.xxs),
-            Text(
-              'Basic management for ${channel.name}.',
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-            ),
-            if (actionError.value case final error?) ...[
-              const SizedBox(height: Grid.xs),
-              Text(
-                error,
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.error,
-                ),
-              ),
-            ],
-            if (canJoin || canLeave) ...[
-              const SizedBox(height: Grid.xs),
-              Wrap(
-                spacing: Grid.xxs,
-                children: [
-                  if (canJoin)
-                    FilledButton.tonal(
-                      onPressed: isBusy.value ? null : joinChannel,
-                      child: Text(isBusy.value ? 'Joining…' : 'Join channel'),
-                    ),
-                  if (canLeave)
-                    OutlinedButton(
-                      onPressed: isBusy.value ? null : leaveChannel,
-                      child: Text(isBusy.value ? 'Leaving…' : 'Leave channel'),
-                    ),
-                ],
-              ),
-            ],
-            const SizedBox(height: Grid.sm),
-            Text('Context', style: context.textTheme.labelLarge),
-            const SizedBox(height: Grid.xxs),
-            _ContextCard(
-              label: 'Description',
-              value: channel.description,
-              emptyLabel: 'No description set',
-            ),
-            const SizedBox(height: Grid.xxs),
-            _ContextCard(
-              label: 'Topic',
-              value: channel.topic,
-              emptyLabel: 'No topic set',
-            ),
-            const SizedBox(height: Grid.xxs),
-            _ContextCard(
-              label: 'Purpose',
-              value: channel.purpose,
-              emptyLabel: 'No purpose set',
-            ),
-            if (!channel.isDm) ...[
-              const SizedBox(height: Grid.sm),
-              Text('Canvas', style: context.textTheme.labelLarge),
-              const SizedBox(height: Grid.xxs),
-              canvasAsync.when(
-                data: (canvas) {
-                  if (isEditingCanvas.value) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TextField(
-                          controller: canvasController,
-                          maxLines: 8,
-                          minLines: 6,
-                          decoration: const InputDecoration(
-                            hintText: 'Write your canvas content in Markdown…',
-                          ),
-                        ),
-                        const SizedBox(height: Grid.xxs),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton(
-                              onPressed: isSavingCanvas.value
-                                  ? null
-                                  : () {
-                                      isEditingCanvas.value = false;
-                                      canvasController.text =
-                                          canvas.content ?? '';
-                                    },
-                              child: const Text('Cancel'),
-                            ),
-                            const SizedBox(width: Grid.half),
-                            FilledButton(
-                              onPressed: isSavingCanvas.value
-                                  ? null
-                                  : saveCanvas,
-                              child: Text(
-                                isSavingCanvas.value
-                                    ? 'Saving…'
-                                    : 'Save canvas',
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    );
-                  }
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(Grid.xs),
-                        decoration: BoxDecoration(
-                          color: context.colors.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(Radii.md),
-                        ),
-                        child: Text(
-                          canvas.content?.trim().isNotEmpty == true
-                              ? canvas.content!
-                              : 'No canvas set for this channel.',
-                          style: context.textTheme.bodyMedium?.copyWith(
-                            color: context.colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: Grid.xxs),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: FilledButton.tonal(
-                          onPressed: canEditCanvas
-                              ? () => isEditingCanvas.value = true
-                              : null,
-                          child: Text(
-                            canvas.content?.trim().isNotEmpty == true
-                                ? 'Edit canvas'
-                                : 'Create canvas',
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, _) => Text(
-                  error.toString(),
-                  style: context.textTheme.bodySmall?.copyWith(
-                    color: context.colors.error,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ContextCard extends StatelessWidget {
-  final String label;
-  final String? value;
-  final String emptyLabel;
-
-  const _ContextCard({
-    required this.label,
-    required this.value,
-    required this.emptyLabel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(Grid.xs),
-      decoration: BoxDecoration(
-        color: context.colors.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(Radii.md),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Grid.xs,
+        vertical: Grid.quarter + 2,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      color: context.colors.surfaceContainerHighest,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            label,
-            style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline,
-              fontWeight: FontWeight.w600,
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: Grid.half),
+          const SizedBox(width: Grid.xxs),
           Text(
-            value?.trim().isNotEmpty == true ? value!.trim() : emptyLabel,
-            style: context.textTheme.bodyMedium?.copyWith(
+            'Reconnecting…',
+            style: context.textTheme.labelSmall?.copyWith(
               color: context.colors.onSurfaceVariant,
             ),
           ),
@@ -1308,7 +1014,7 @@ class _TypingIndicator extends ConsumerWidget {
       final profile =
           userCache[e.pubkey.toLowerCase()] ??
           ref.read(userCacheProvider.notifier).get(e.pubkey.toLowerCase());
-      return profile?.label ?? _shortPubkey(e.pubkey);
+      return profile?.label ?? shortPubkey(e.pubkey);
     }).toList();
     final text = switch (names.length) {
       1 => '${names[0]} is typing…',
@@ -1334,120 +1040,174 @@ class _TypingIndicator extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Compose bar
+// Members button with activity dot badge
 // ---------------------------------------------------------------------------
 
-class _ComposeBar extends HookConsumerWidget {
+class _MembersButton extends ConsumerWidget {
   final String channelId;
+  final Channel channel;
+  final String? currentPubkey;
 
-  const _ComposeBar({required this.channelId});
+  const _MembersButton({
+    required this.channelId,
+    required this.channel,
+    required this.currentPubkey,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final controller = useTextEditingController();
-    final isSending = useState(false);
+    final hasWorkingBot = ref
+        .watch(workingBotPubkeysProvider(channelId))
+        .isNotEmpty;
 
-    Future<void> send() async {
-      final text = controller.text.trim();
-      if (text.isEmpty || isSending.value) return;
-
-      isSending.value = true;
-      try {
-        await ref
-            .read(sendMessageProvider)
-            .call(channelId: channelId, content: text);
-        if (context.mounted) controller.clear();
-      } finally {
-        if (context.mounted) isSending.value = false;
-      }
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: context.colors.outlineVariant)),
-        color: context.colors.surface,
-      ),
-      padding: EdgeInsets.only(
-        left: Grid.xs,
-        right: Grid.xxs,
-        top: Grid.xxs,
-        bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xxs,
-      ),
-      child: Row(
+    return IconButton(
+      onPressed: () {
+        showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (_) =>
+              MembersSheet(channel: channel, currentPubkey: currentPubkey),
+        );
+      },
+      tooltip: 'View members',
+      icon: Stack(
+        clipBehavior: Clip.none,
         children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => send(),
-              minLines: 1,
-              maxLines: 5,
-              decoration: InputDecoration(
-                hintText: 'Message…',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.outlineVariant),
+          const Icon(LucideIcons.users),
+          if (hasWorkingBot)
+            Positioned(
+              top: -2,
+              right: -2,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: context.appColors.success,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: context.colors.surface, width: 1.5),
                 ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.outlineVariant),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(Radii.lg),
-                  borderSide: BorderSide(color: context.colors.primary),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: Grid.twelve,
-                  vertical: Grid.xxs,
-                ),
-                isDense: true,
               ),
             ),
-          ),
-          const SizedBox(width: Grid.half),
-          IconButton(
-            onPressed: isSending.value ? null : send,
-            icon: isSending.value
-                ? SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: context.colors.primary,
-                    ),
-                  )
-                : Icon(
-                    LucideIcons.sendHorizontal,
-                    color: context.colors.primary,
-                  ),
-          ),
         ],
       ),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
+class _DmAppBarTitle extends ConsumerWidget {
+  final Channel channel;
+  final String? currentPubkey;
 
-String _shortPubkey(String pubkey) {
-  if (pubkey.length > 12) return '${pubkey.substring(0, 8)}…';
-  return pubkey;
-}
+  const _DmAppBarTitle({required this.channel, required this.currentPubkey});
 
-String _formatTime(int createdAt) {
-  final dt = DateTime.fromMillisecondsSinceEpoch(
-    createdAt * 1000,
-    isUtc: true,
-  ).toLocal();
-  final now = DateTime.now();
-  final diff = now.difference(dt);
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profiles = ref.watch(userCacheProvider);
+    final presenceMap = ref.watch(presenceCacheProvider);
+    final normalizedCurrent = currentPubkey?.toLowerCase();
 
-  if (diff.inDays > 0) {
-    return '${dt.month}/${dt.day} ${_pad(dt.hour)}:${_pad(dt.minute)}';
+    String? otherPubkey;
+    for (final pk in channel.participantPubkeys) {
+      if (pk.toLowerCase() != normalizedCurrent) {
+        otherPubkey = pk.toLowerCase();
+        break;
+      }
+    }
+
+    final profile = otherPubkey != null ? profiles[otherPubkey] : null;
+
+    if (otherPubkey != null) {
+      if (profile == null) {
+        ref.read(userCacheProvider.notifier).preload([otherPubkey]);
+      }
+      ref.read(presenceCacheProvider.notifier).track([otherPubkey]);
+    }
+
+    final avatarUrl = profile?.avatarUrl;
+    final initial =
+        profile?.initial ??
+        (channel.participants.isNotEmpty
+            ? channel.participants.first[0].toUpperCase()
+            : '?');
+    final presence = otherPubkey != null
+        ? (presenceMap[otherPubkey] ?? 'offline')
+        : 'offline';
+    final presenceLabel = switch (presence) {
+      'online' => 'Online',
+      'away' => 'Away',
+      _ => 'Offline',
+    };
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 30,
+          height: 30,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CircleAvatar(
+                radius: 14,
+                backgroundColor: context.colors.primaryContainer,
+                backgroundImage: avatarUrl != null
+                    ? NetworkImage(avatarUrl)
+                    : null,
+                child: avatarUrl == null
+                    ? Text(
+                        initial,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colors.onPrimaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : null,
+              ),
+              Positioned(
+                right: -1,
+                bottom: -1,
+                child: Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(
+                    color: switch (presence) {
+                      'online' => context.appColors.success,
+                      'away' => context.appColors.warning,
+                      _ => context.colors.outline,
+                    },
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: context.colors.surface,
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: Grid.xxs),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                channel.displayLabel(currentPubkey: currentPubkey),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.textTheme.titleSmall,
+              ),
+              Text(
+                presenceLabel,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
-  return '${_pad(dt.hour)}:${_pad(dt.minute)}';
 }
-
-String _pad(int n) => n.toString().padLeft(2, '0');

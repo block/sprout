@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use axum::extract::ws::Message as WsMessage;
 use dashmap::DashMap;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -179,6 +181,12 @@ pub struct AppState {
     pub conn_semaphore: Arc<Semaphore>,
     /// Semaphore limiting concurrent message handler tasks.
     pub handler_semaphore: Arc<Semaphore>,
+    /// Semaphore limiting concurrent git subprocess operations.
+    pub git_semaphore: Arc<Semaphore>,
+    /// Per-repo mutex map — prevents concurrent pushes to the same bare repo.
+    /// Key: canonical repo path. Value: mutex guarding exclusive push access.
+    pub git_repo_locks: Arc<DashMap<std::path::PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+
     /// Workflow engine for background processing.
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).
@@ -196,11 +204,19 @@ pub struct AppState {
     pub local_event_ids: Arc<moka::sync::Cache<[u8; 32], ()>>,
     /// Membership cache: (channel_id, pubkey_bytes) → is_member.
     /// Short TTL (10s) — membership changes are rare but must propagate.
+    /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
     pub membership_cache: Arc<moka::sync::Cache<(Uuid, Vec<u8>), bool>>,
+    /// Accessible channel IDs cache: pubkey_bytes → channel UUIDs.
+    /// Short TTL (10s) — invalidated on membership or channel visibility changes.
+    /// Multi-pod: other pods rely on TTL expiry; only local caches are invalidated.
+    pub accessible_channels_cache: Arc<moka::sync::Cache<Vec<u8>, Vec<Uuid>>>,
 
     /// Bounded channel for search indexing — prevents OOM if Typesense is slow/down.
     /// Capacity 1000: at ~1KB/event that's ~1MB of backlog before we start dropping.
     pub search_index_tx: mpsc::Sender<StoredEvent>,
+    /// Bounded channel for audit logging — backpressure instead of unbounded spawns.
+    /// Uses .send().await (blocks caller if full) because audit entries must not be lost.
+    pub audit_tx: mpsc::Sender<sprout_audit::NewAuditEntry>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
     /// Audio relay room manager — tracks active huddle audio rooms.
@@ -209,10 +225,24 @@ pub struct AppState {
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
     pub started_at: Instant,
+    /// Per-agent sliding-window rate limiter for observer frames (kind 24200).
+    /// Key: agent pubkey bytes (32). Value: (count, window_start).
+    /// 100 events/sec per agent — prevents relay/DB pressure from bursty telemetry.
+    pub observer_rate_limiter: Arc<DashMap<[u8; 32], (u32, Instant)>>,
+    /// Cache for observer agent-owner authorization (kind 24200).
+    /// Key: (agent_pubkey_bytes, owner_pubkey_bytes). Value: is_owner.
+    /// agent_owner_pubkey is immutable so a long TTL (5 min) is safe.
+    /// Prevents repeated DB lookups from bursty observer traffic.
+    #[allow(clippy::type_complexity)]
+    pub observer_owner_cache: Arc<moka::sync::Cache<(Vec<u8>, Vec<u8>), bool>>,
 }
 
 impl AppState {
     /// Constructs `AppState` from its component services.
+    ///
+    /// Returns `(state, audit_shutdown)`. The caller should call
+    /// `audit_shutdown.drain().await` during graceful shutdown so queued
+    /// audit entries are flushed before the process exits.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Config,
@@ -225,7 +255,7 @@ impl AppState {
         workflow_engine: Arc<WorkflowEngine>,
         relay_keypair: nostr::Keys,
         media_storage: MediaStorage,
-    ) -> Self {
+    ) -> (Self, AuditShutdownHandle) {
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
         let search_arc = Arc::new(search);
@@ -252,11 +282,47 @@ impl AppState {
             tracing::warn!("search index worker exited (expected on shutdown)");
         });
 
-        Self {
+        let audit_arc = Arc::new(audit);
+        let (audit_tx, mut audit_rx) = mpsc::channel::<sprout_audit::NewAuditEntry>(1000);
+        let audit_for_worker = Arc::clone(&audit_arc);
+        let audit_cancel = CancellationToken::new();
+        let audit_cancel_worker = audit_cancel.clone();
+        let audit_worker_handle = tokio::spawn(async move {
+            // Normal operation: process entries as they arrive.
+            loop {
+                tokio::select! {
+                    entry = audit_rx.recv() => {
+                        match entry {
+                            Some(entry) => log_audit_entry(&audit_for_worker, entry).await,
+                            None => break, // channel closed
+                        }
+                    }
+                    _ = audit_cancel_worker.cancelled() => {
+                        // Close the receiver: rejects future sends and lets us
+                        // drain everything already buffered without a race.
+                        audit_rx.close();
+                        break;
+                    }
+                }
+            }
+            // Drain: recv() returns buffered entries, then None once empty.
+            let mut drained = 0u32;
+            while let Some(entry) = audit_rx.recv().await {
+                log_audit_entry(&audit_for_worker, entry).await;
+                drained += 1;
+            }
+            if drained > 0 {
+                tracing::info!(drained, "audit worker flushed remaining entries");
+            }
+            tracing::warn!("audit log worker exited (expected on shutdown)");
+        });
+
+        let git_max_concurrent_ops = config.git_max_concurrent_ops;
+        let state = Self {
             config: Arc::new(config),
             db,
             redis_pool,
-            audit: Arc::new(audit),
+            audit: audit_arc,
             pubsub,
             auth: Arc::new(auth),
             search: search_arc,
@@ -264,6 +330,8 @@ impl AppState {
             conn_manager: Arc::new(ConnectionManager::new()),
             conn_semaphore: Arc::new(Semaphore::new(max_connections)),
             handler_semaphore: Arc::new(Semaphore::new(max_concurrent_handlers)),
+            git_semaphore: Arc::new(Semaphore::new(git_max_concurrent_ops)),
+            git_repo_locks: Arc::new(DashMap::new()),
             workflow_engine,
             relay_keypair,
             mint_rate_limiter: Arc::new(MintRateLimiter::new()),
@@ -280,19 +348,133 @@ impl AppState {
                     .time_to_live(std::time::Duration::from_secs(10))
                     .build(),
             ),
+            accessible_channels_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(10))
+                    .build(),
+            ),
 
             search_index_tx,
+            audit_tx,
             media_storage: Arc::new(media_storage),
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
-        }
+            observer_rate_limiter: Arc::new(DashMap::new()),
+            observer_owner_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(1_000)
+                    .time_to_live(std::time::Duration::from_secs(300))
+                    .build(),
+            ),
+        };
+        (
+            state,
+            AuditShutdownHandle {
+                cancel: audit_cancel,
+                handle: audit_worker_handle,
+            },
+        )
     }
 
     /// Record an event ID as locally-published for dedup.
     /// Called before Redis publish so the multi-node consumer can skip the echo.
     pub fn mark_local_event(&self, event_id: &nostr::EventId) {
         self.local_event_ids.insert(event_id.to_bytes(), ());
+    }
+
+    /// Check channel membership with a 10-second cache. Falls back to DB on miss.
+    pub async fn is_member_cached(
+        &self,
+        channel_id: Uuid,
+        pubkey: &[u8],
+    ) -> Result<bool, sprout_db::DbError> {
+        let key = (channel_id, pubkey.to_vec());
+        if let Some(cached) = self.membership_cache.get(&key) {
+            metrics::counter!("sprout_membership_cache_hits_total").increment(1);
+            return Ok(cached);
+        }
+        metrics::counter!("sprout_membership_cache_misses_total").increment(1);
+        let result = self.db.is_member(channel_id, pubkey).await?;
+        self.membership_cache.insert(key, result);
+        Ok(result)
+    }
+
+    /// Invalidate caches after a membership change (add/remove member).
+    pub fn invalidate_membership(&self, channel_id: Uuid, pubkey: &[u8]) {
+        self.membership_cache
+            .invalidate(&(channel_id, pubkey.to_vec()));
+        self.accessible_channels_cache.invalidate(&pubkey.to_vec());
+    }
+
+    /// Invalidate all users' accessible-channels cache (e.g. new open channel created).
+    pub fn invalidate_all_accessible_channels(&self) {
+        self.accessible_channels_cache.invalidate_all();
+    }
+
+    /// Invalidate all caches after a channel is deleted.
+    ///
+    /// Channel deletion is a rare admin operation. We clear the entire membership
+    /// cache because moka doesn't support prefix-based invalidation on composite
+    /// keys, and stale `is_member=true` entries for a deleted channel would bypass
+    /// the DB's `deleted_at IS NULL` guard.
+    pub fn invalidate_channel_deleted(&self) {
+        self.membership_cache.invalidate_all();
+        self.accessible_channels_cache.invalidate_all();
+    }
+
+    /// Get accessible channel IDs with a 10-second cache. Falls back to DB on miss.
+    pub async fn get_accessible_channel_ids_cached(
+        &self,
+        pubkey: &[u8],
+    ) -> Result<Vec<Uuid>, sprout_db::DbError> {
+        let key = pubkey.to_vec();
+        if let Some(cached) = self.accessible_channels_cache.get(&key) {
+            metrics::counter!("sprout_accessible_channels_cache_hits_total").increment(1);
+            return Ok(cached);
+        }
+        metrics::counter!("sprout_accessible_channels_cache_misses_total").increment(1);
+        let result = self.db.get_accessible_channel_ids(pubkey).await?;
+        self.accessible_channels_cache.insert(key, result.clone());
+        Ok(result)
+    }
+}
+
+/// Handle for graceful audit worker shutdown.
+///
+/// Signals the worker to stop accepting new entries, drain its buffer,
+/// and exit. Independent of `Arc<AppState>` lifetime — works even when
+/// background tasks (reaper, pubsub, health) still hold state clones.
+pub struct AuditShutdownHandle {
+    cancel: CancellationToken,
+    handle: JoinHandle<()>,
+}
+
+impl AuditShutdownHandle {
+    /// Signal the audit worker to drain and wait up to `timeout` for it to finish.
+    pub async fn drain(self, timeout: std::time::Duration) {
+        self.cancel.cancel();
+        match tokio::time::timeout(timeout, self.handle).await {
+            Ok(Ok(())) => tracing::info!("Audit worker drained cleanly"),
+            Ok(Err(e)) => tracing::error!("Audit worker panicked: {e}"),
+            Err(_) => tracing::error!(
+                ?timeout,
+                "Audit worker did not drain in time — exiting anyway"
+            ),
+        }
+    }
+}
+
+/// Log a single audit entry with metrics. Extracted so the normal loop
+/// and the post-cancel drain share the same logic.
+async fn log_audit_entry(audit: &sprout_audit::AuditService, entry: sprout_audit::NewAuditEntry) {
+    let t = std::time::Instant::now();
+    if let Err(e) = audit.log(entry).await {
+        metrics::counter!("sprout_audit_log_errors_total").increment(1);
+        tracing::error!("Audit log failed: {e}");
+    } else {
+        metrics::histogram!("sprout_audit_log_seconds").record(t.elapsed().as_secs_f64());
     }
 }
 

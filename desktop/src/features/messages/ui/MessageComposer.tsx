@@ -1,9 +1,12 @@
 import * as React from "react";
 
 import { EditorContent } from "@tiptap/react";
+import { X } from "lucide-react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useDrafts } from "@/features/messages/lib/useDrafts";
+import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
+import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
 
 import {
   ALLOWED_MEDIA_TYPES,
@@ -20,6 +23,7 @@ import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
+import { EmojiAutocomplete } from "./EmojiAutocomplete";
 import {
   MentionAutocomplete,
   type MentionSuggestion,
@@ -30,6 +34,7 @@ type MessageComposerProps = {
   channelId?: string | null;
   channelName: string;
   disabled?: boolean;
+  draftKey?: string;
   editTarget?: {
     author: string;
     body: string;
@@ -59,6 +64,7 @@ export function MessageComposer({
   channelId = null,
   channelName,
   disabled = false,
+  draftKey,
   editTarget = null,
   isSending = false,
   onCancelEdit,
@@ -67,7 +73,7 @@ export function MessageComposer({
   onSend,
   placeholder,
   replyTarget = null,
-  showTopBorder = true,
+  showTopBorder = false,
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
@@ -85,10 +91,12 @@ export function MessageComposer({
   }, []);
 
   const drafts = useDrafts();
-  const previousChannelIdRef = React.useRef<string | null>(null);
+  const effectiveDraftKey = draftKey ?? channelId;
+  const previousDraftKeyRef = React.useRef<string | null>(null);
 
   const mentions = useMentions(channelId);
   const channelLinks = useChannelLinks();
+  const emojiAutocomplete = useEmojiAutocomplete();
   const notifyTyping = useTypingBroadcast(
     channelId,
     typingParentEventId,
@@ -117,7 +125,9 @@ export function MessageComposer({
   // ── Refs consumed by Tiptap's submitOnEnter extension ──────────────
   const isAutocompleteOpenRef = React.useRef(false);
   isAutocompleteOpenRef.current =
-    mentions.isMentionOpen || channelLinks.isChannelOpen;
+    mentions.isMentionOpen ||
+    channelLinks.isChannelOpen ||
+    emojiAutocomplete.isEmojiAutocompleteOpen;
 
   const submitMessageRef = React.useRef<() => void>(() => {});
 
@@ -141,10 +151,11 @@ export function MessageComposer({
       setContent(markdown);
       contentRef.current = markdown;
 
-      // Bridge to existing mention/channel detection hooks.
+      // Bridge to existing mention/channel/emoji detection hooks.
       const { cursor } = richText.getTextAndCursor();
       mentions.updateMentionQuery(text, cursor);
       channelLinks.updateChannelQuery(text, cursor);
+      emojiAutocomplete.updateEmojiQuery(text, cursor);
 
       if (text.trim().length > 0) {
         notifyTyping();
@@ -153,24 +164,17 @@ export function MessageComposer({
   });
 
   // ── Channel switching: save/restore drafts ──────────────────────────
-  // biome-ignore lint/correctness/useExhaustiveDependencies: channelId is the sole trigger
+  // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveDraftKey is the sole trigger
   React.useEffect(() => {
-    const prevId = previousChannelIdRef.current;
-    if (prevId) {
-      const currentContent = contentRef.current;
-      if (currentContent.trim().length > 0) {
-        drafts.saveDraft(prevId, {
-          content: currentContent,
-          selectionEnd: currentContent.length,
-          selectionStart: currentContent.length,
-        });
-      } else {
-        drafts.clearDraft(prevId);
-      }
+    const prevKey = previousDraftKeyRef.current;
+    if (prevKey) {
+      drafts.persistDraft(prevKey, contentRef.current);
     }
-    previousChannelIdRef.current = channelId;
+    previousDraftKeyRef.current = effectiveDraftKey;
 
-    const saved = channelId ? drafts.loadDraft(channelId) : undefined;
+    const saved = effectiveDraftKey
+      ? drafts.loadDraft(effectiveDraftKey)
+      : undefined;
     if (saved) {
       setContent(saved.content);
       contentRef.current = saved.content;
@@ -186,7 +190,14 @@ export function MessageComposer({
     setIsEmojiPickerOpen(false);
     mentions.clearMentions();
     channelLinks.clearChannels();
-  }, [channelId]);
+    emojiAutocomplete.clearEmojis();
+
+    return () => {
+      if (effectiveDraftKey) {
+        drafts.persistDraft(effectiveDraftKey, contentRef.current);
+      }
+    };
+  }, [effectiveDraftKey]);
 
   // ── Edit mode: pre-fill content ─────────────────────────────────────
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger
@@ -232,6 +243,21 @@ export function MessageComposer({
     },
     [
       channelLinks.insertChannel,
+      richText.getTextAndCursor,
+      richText.setContentWithTrailingSpace,
+    ],
+  );
+
+  const applyEmojiInsert = React.useCallback(
+    (suggestion: EmojiSuggestion) => {
+      const { text, cursor } = richText.getTextAndCursor();
+      const result = emojiAutocomplete.insertEmoji(suggestion, text, cursor);
+      richText.setContentWithTrailingSpace(result.nextContent);
+      setContent(result.nextContent);
+      contentRef.current = result.nextContent;
+    },
+    [
+      emojiAutocomplete.insertEmoji,
       richText.getTextAndCursor,
       richText.setContentWithTrailingSpace,
     ],
@@ -293,6 +319,7 @@ export function MessageComposer({
       richText.clearContent();
       mentions.clearMentions();
       channelLinks.clearChannels();
+      emojiAutocomplete.clearEmojis();
       setIsEmojiPickerOpen(false);
 
       try {
@@ -350,6 +377,7 @@ export function MessageComposer({
     media.setPendingImeta([]);
     mentions.clearMentions();
     channelLinks.clearChannels();
+    emojiAutocomplete.clearEmojis();
     setIsEmojiPickerOpen(false);
 
     const sendChannelId = channelIdRef.current;
@@ -373,6 +401,7 @@ export function MessageComposer({
     channelLinks.clearChannels,
     richText.clearContent,
     richText.setContent,
+    emojiAutocomplete.clearEmojis,
   ]);
   submitMessageRef.current = submitMessage;
 
@@ -392,6 +421,14 @@ export function MessageComposer({
   const handleEditorKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       // Let autocomplete handle keys first
+      const emojiResult = emojiAutocomplete.handleEmojiKeyDown(event);
+      if (emojiResult.handled) {
+        if (emojiResult.suggestion) {
+          applyEmojiInsert(emojiResult.suggestion);
+        }
+        return;
+      }
+
       const channelResult = channelLinks.handleChannelKeyDown(event);
       if (channelResult.handled) {
         if (channelResult.suggestion) {
@@ -416,6 +453,8 @@ export function MessageComposer({
       }
     },
     [
+      emojiAutocomplete.handleEmojiKeyDown,
+      applyEmojiInsert,
       channelLinks.handleChannelKeyDown,
       applyChannelInsert,
       mentions.handleMentionKeyDown,
@@ -516,6 +555,15 @@ export function MessageComposer({
             handleSubmit(event);
           }}
         >
+          <EmojiAutocomplete
+            onSelect={applyEmojiInsert}
+            selectedIndex={emojiAutocomplete.emojiSelectedIndex}
+            suggestions={
+              emojiAutocomplete.isEmojiAutocompleteOpen
+                ? emojiAutocomplete.emojiSuggestions
+                : []
+            }
+          />
           <ChannelAutocomplete
             onSelect={applyChannelInsert}
             selectedIndex={channelLinks.channelSelectedIndex}
@@ -565,13 +613,14 @@ export function MessageComposer({
                 </p>
               </div>
               <Button
-                className="shrink-0"
+                aria-label="Cancel reply"
+                className="h-7 w-7 shrink-0 px-0"
                 onClick={onCancelReply}
-                size="sm"
+                size="icon"
                 type="button"
                 variant="ghost"
               >
-                Cancel
+                <X className="h-4 w-4" />
               </Button>
             </div>
           ) : null}
