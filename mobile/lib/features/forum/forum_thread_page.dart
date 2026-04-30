@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
@@ -36,6 +38,16 @@ class ForumThreadPage extends HookConsumerWidget {
     final threadAsync = ref.watch(
       forumThreadProvider((channelId: channelId, eventId: postEventId)),
     );
+
+    // Periodic refresh (every 10s, matching desktop).
+    useEffect(() {
+      final timer = Stream.periodic(const Duration(seconds: 10)).listen((_) {
+        ref.invalidate(
+          forumThreadProvider((channelId: channelId, eventId: postEventId)),
+        );
+      });
+      return timer.cancel;
+    }, [channelId, postEventId]);
 
     final isOwnPost =
         threadAsync

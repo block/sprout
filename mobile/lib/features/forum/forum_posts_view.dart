@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -30,6 +32,14 @@ class ForumPostsView extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final postsAsync = ref.watch(forumPostsProvider(channel.id));
     final isComposing = useState(false);
+
+    // Periodic refresh (every 15s, matching desktop).
+    useEffect(() {
+      final timer = Stream.periodic(const Duration(seconds: 15)).listen((_) {
+        ref.invalidate(forumPostsProvider(channel.id));
+      });
+      return timer.cancel;
+    }, [channel.id]);
 
     final canPost = channel.isMember && !channel.isArchived;
 

@@ -93,7 +93,9 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
     final status = event.content;
     if (status != 'online' && status != 'away' && status != 'offline') return;
     if (state[pubkey] == status) return;
-    state = {...state, pubkey: status};
+    final updated = Map<String, String>.from(state);
+    updated[pubkey] = status;
+    state = updated;
   }
 
   Future<void> _refreshAll() async {
