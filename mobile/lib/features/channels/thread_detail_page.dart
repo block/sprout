@@ -477,18 +477,45 @@ class _ThreadTypingIndicator extends ConsumerWidget {
       _ => '${names[0]} and ${names.length - 1} others are typing...',
     };
 
+    final visibleEntries = entries.take(3).toList();
+    final avatarCount = visibleEntries.length;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.quarter + 2,
       ),
-      child: Text(
-        text,
-        style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.onSurfaceVariant,
-          fontStyle: FontStyle.italic,
-        ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20.0 + (avatarCount - 1) * 12.0,
+            height: 20,
+            child: Stack(
+              children: [
+                for (var i = 0; i < avatarCount; i++)
+                  Positioned(
+                    left: i * 12.0,
+                    child: SmallAvatar(
+                      pubkey: visibleEntries[i].pubkey,
+                      userCache: userCache,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Flexible(
+            child: Text(
+              text,
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.outline,
+                fontStyle: FontStyle.italic,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

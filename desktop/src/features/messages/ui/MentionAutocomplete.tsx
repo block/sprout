@@ -2,10 +2,12 @@ import * as React from "react";
 
 import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type MentionSuggestion = {
   pubkey: string;
   displayName: string;
+  avatarUrl?: string | null;
   role?: string | null;
   personaName?: string | null;
 };
@@ -63,6 +65,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             tabIndex={-1}
             type="button"
           >
+            <UserAvatar
+              avatarUrl={suggestion.avatarUrl ?? null}
+              displayName={suggestion.displayName}
+              size="xs"
+            />
             <span className="truncate font-medium">
               {suggestion.displayName}
             </span>

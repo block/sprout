@@ -316,6 +316,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             onCancelEdit={onCancelEdit}
             onEditSave={onEditSave}
             onSend={onSendMessage}
+            profiles={profiles}
             placeholder={
               activeChannel?.archivedAt
                 ? "Archived channels are read-only."

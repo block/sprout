@@ -599,19 +599,7 @@ class _SystemMessageRow extends ConsumerWidget {
           children: [
             Row(
               children: [
-                Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: context.colors.surfaceContainerHighest,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    LucideIcons.arrowLeftRight,
-                    size: 12,
-                    color: context.colors.onSurfaceVariant,
-                  ),
-                ),
+                _systemEventAvatar(context, systemEvent, userCache),
                 const SizedBox(width: Grid.xxs),
                 Expanded(
                   child: Text(
@@ -642,6 +630,54 @@ class _SystemMessageRow extends ConsumerWidget {
       ),
     );
   }
+}
+
+Widget _systemEventAvatar(
+  BuildContext context,
+  SystemEvent event,
+  Map<String, UserProfile> userCache,
+) {
+  final hasTarget =
+      event.targetPubkey != null && event.targetPubkey != event.actorPubkey;
+
+  if (event.actorPubkey != null && hasTarget) {
+    // Two-avatar stack: actor + target (e.g. "Alice added Bob").
+    return SizedBox(
+      width: 32,
+      height: 20,
+      child: Stack(
+        children: [
+          SmallAvatar(pubkey: event.actorPubkey!, userCache: userCache),
+          Positioned(
+            left: 12,
+            child: SmallAvatar(
+              pubkey: event.targetPubkey!,
+              userCache: userCache,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  if (event.actorPubkey != null) {
+    return SmallAvatar(pubkey: event.actorPubkey!, userCache: userCache);
+  }
+
+  // Fallback: generic icon when no actor is available.
+  return Container(
+    width: 20,
+    height: 20,
+    decoration: BoxDecoration(
+      color: context.colors.surfaceContainerHighest,
+      shape: BoxShape.circle,
+    ),
+    child: Icon(
+      LucideIcons.arrowLeftRight,
+      size: 12,
+      color: context.colors.onSurfaceVariant,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1022,18 +1058,45 @@ class _TypingIndicator extends ConsumerWidget {
       _ => '${names[0]} and ${names.length - 1} others are typing…',
     };
 
+    final visibleEntries = entries.take(3).toList();
+    final avatarCount = visibleEntries.length;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.quarter + 2,
       ),
-      child: Text(
-        text,
-        style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.onSurfaceVariant,
-          fontStyle: FontStyle.italic,
-        ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20.0 + (avatarCount - 1) * 12.0,
+            height: 20,
+            child: Stack(
+              children: [
+                for (var i = 0; i < avatarCount; i++)
+                  Positioned(
+                    left: i * 12.0,
+                    child: SmallAvatar(
+                      pubkey: visibleEntries[i].pubkey,
+                      userCache: userCache,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Flexible(
+            child: Text(
+              text,
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.outline,
+                fontStyle: FontStyle.italic,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }
