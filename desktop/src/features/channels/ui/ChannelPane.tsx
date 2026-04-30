@@ -214,7 +214,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   const isNonMemberView =
     activeChannel !== null &&
     !activeChannel.isMember &&
-    activeChannel.visibility === "open";
+    activeChannel.visibility === "open" &&
+    !activeChannel.archivedAt;
 
   const isComposerDisabled =
     !activeChannel?.isMember ||
