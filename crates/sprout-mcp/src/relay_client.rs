@@ -796,6 +796,43 @@ impl RelayClient {
         self.keys.public_key().to_hex()
     }
 
+    /// Returns a reference to the shared reqwest HTTP client.
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Returns a reference to the Nostr signing keys.
+    pub fn keys(&self) -> &nostr::Keys {
+        &self.keys
+    }
+
+    /// Returns the API token, if configured.
+    pub fn api_token(&self) -> Option<&str> {
+        self.api_token.as_deref()
+    }
+
+    /// Returns the relay's server authority (host or host:port) for BUD-11 server tags.
+    ///
+    /// Uses the same logic as the desktop client's `extract_server_authority`:
+    /// default ports (80/443) are omitted, non-default ports are included.
+    /// Returns `None` for localhost (no server tag in dev mode).
+    pub fn server_domain(&self) -> Option<String> {
+        // Convert ws:// → http://, wss:// → https:// for url::Url parsing.
+        let http_url = self
+            .relay_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
+        let parsed = url::Url::parse(&http_url).ok()?;
+        let host = parsed.host_str()?;
+        if host.is_empty() || host == "localhost" {
+            return None;
+        }
+        match parsed.port() {
+            Some(port) => Some(format!("{host}:{port}")),
+            None => Some(host.to_string()),
+        }
+    }
+
     /// Returns the appropriate auth header for REST requests.
     ///
     /// - If an API token is present: `Authorization: Bearer <token>` (production mode).

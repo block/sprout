@@ -125,3 +125,5 @@ pub mod relay_client;
 pub mod server;
 /// Toolset definitions and configuration for organizing MCP tools.
 pub mod toolsets;
+/// File upload to the Sprout relay (Blossom protocol).
+pub mod upload;
