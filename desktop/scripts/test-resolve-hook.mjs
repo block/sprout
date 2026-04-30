@@ -23,8 +23,8 @@ export function resolve(specifier, context, nextResolve) {
     !mapped.endsWith(".js")
   ) {
     const filePath = fileURLToPath(mapped);
-    if (!existsSync(filePath) && existsSync(filePath + ".ts")) {
-      mapped = mapped + ".ts";
+    if (!existsSync(filePath) && existsSync(`${filePath}.ts`)) {
+      mapped = `${mapped}.ts`;
     }
   }
 
