@@ -26,6 +26,7 @@ class SignedEventRelay {
     required int kind,
     required String content,
     required List<List<String>> tags,
+    int? createdAt,
   }) async {
     final nsec = _nsec;
     if (nsec == null || nsec.isEmpty) {
@@ -42,6 +43,7 @@ class SignedEventRelay {
       content: content,
       tags: tags,
       privkey: privkeyHex,
+      createdAt: createdAt,
       verify: false,
     );
 
