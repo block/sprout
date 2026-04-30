@@ -179,7 +179,7 @@ class _EmptyState extends StatelessWidget {
         child: Text(
           'Not connected',
           style: context.textTheme.bodySmall?.copyWith(
-            color: context.colors.outline,
+            color: context.colors.onSurfaceVariant,
           ),
         ),
       );
@@ -195,14 +195,14 @@ class _EmptyState extends StatelessWidget {
             height: 24,
             child: CircularProgressIndicator(
               strokeWidth: 2,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: Grid.xxs),
           Text(
             'Waiting for activity\u2026',
             style: context.textTheme.bodySmall?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
         ],
@@ -219,7 +219,7 @@ class _ConnectionBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (color, label) = switch (connection) {
-      ObserverConnectionState.idle => (context.colors.outline, 'Idle'),
+      ObserverConnectionState.idle => (context.colors.onSurfaceVariant, 'Idle'),
       ObserverConnectionState.connecting => (
         context.appColors.warning,
         'Connecting',

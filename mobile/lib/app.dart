@@ -103,7 +103,7 @@ class _OfflineScreen extends ConsumerWidget {
                 onPressed: () => ref.read(authProvider.notifier).signOut(),
                 child: Text(
                   'Remove workspace and re-pair',
-                  style: TextStyle(color: context.colors.outline),
+                  style: TextStyle(color: context.colors.onSurfaceVariant),
                 ),
               ),
             ],

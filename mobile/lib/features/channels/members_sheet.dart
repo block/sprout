@@ -138,7 +138,7 @@ class MembersSheet extends HookConsumerWidget {
                           child: Text(
                             'No members found.',
                             style: context.textTheme.bodySmall?.copyWith(
-                              color: context.colors.outline,
+                              color: context.colors.onSurfaceVariant,
                             ),
                           ),
                         ),
@@ -176,7 +176,7 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         label.toUpperCase(),
         style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
+          color: context.colors.onSurfaceVariant,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.8,
         ),
@@ -251,7 +251,7 @@ class _MemberTile extends ConsumerWidget {
           : Text(
               _roleLabel(member.role),
               style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
             ),
       trailing: showMenu
@@ -391,7 +391,7 @@ class _RoleSelector extends StatelessWidget {
           Text(
             'Role',
             style: context.textTheme.labelMedium?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: Grid.xxs),

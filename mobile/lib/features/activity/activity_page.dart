@@ -304,7 +304,7 @@ class _FeedItemTile extends ConsumerWidget {
                 Text(
                   _relativeTime(item.createdAt),
                   style: context.textTheme.labelSmall?.copyWith(
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -407,7 +407,11 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(LucideIcons.bell, size: Grid.xl, color: context.colors.outline),
+          Icon(
+            LucideIcons.bell,
+            size: Grid.xl,
+            color: context.colors.onSurfaceVariant,
+          ),
           const SizedBox(height: Grid.xs),
           Text(
             'No activity yet',
@@ -419,7 +423,7 @@ class _EmptyState extends StatelessWidget {
           Text(
             'Mentions, replies, and reactions will show up here.',
             style: context.textTheme.bodySmall?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
           ),
@@ -451,7 +455,7 @@ class _EmptyFilterState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: Grid.lg, color: context.colors.outline),
+          Icon(icon, size: Grid.lg, color: context.colors.onSurfaceVariant),
           const SizedBox(height: Grid.xxs),
           Text(
             message,

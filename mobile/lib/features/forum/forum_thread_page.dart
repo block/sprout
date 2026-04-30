@@ -237,13 +237,13 @@ class _ThreadContent extends HookConsumerWidget {
                     Icon(
                       LucideIcons.messageSquare,
                       size: 16,
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                     const SizedBox(width: Grid.half),
                     Text(
                       '${replies.length} ${replies.length == 1 ? 'reply' : 'replies'}',
                       style: context.textTheme.labelMedium?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -258,7 +258,7 @@ class _ThreadContent extends HookConsumerWidget {
                   child: Text(
                     'No replies yet. Be the first to respond.',
                     style: context.textTheme.bodyMedium?.copyWith(
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -337,7 +337,7 @@ class _OriginalPost extends ConsumerWidget {
                     Text(
                       formatRelativeTime(post.createdAt),
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -406,7 +406,7 @@ class _ReplyRow extends ConsumerWidget {
                     Text(
                       formatRelativeTime(reply.createdAt),
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -420,7 +420,7 @@ class _ReplyRow extends ConsumerWidget {
                   icon: Icon(
                     LucideIcons.ellipsis,
                     size: 16,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                   padding: EdgeInsets.zero,
                   visualDensity: VisualDensity.compact,

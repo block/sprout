@@ -77,7 +77,7 @@ class ForumPostCard extends ConsumerWidget {
                 Text(
                   formatRelativeTime(post.createdAt),
                   style: context.textTheme.labelSmall?.copyWith(
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(width: Grid.half),
@@ -89,7 +89,7 @@ class ForumPostCard extends ConsumerWidget {
                     icon: Icon(
                       LucideIcons.ellipsis,
                       size: 16,
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                     padding: EdgeInsets.zero,
                     visualDensity: VisualDensity.compact,
@@ -128,13 +128,13 @@ class ForumPostCard extends ConsumerWidget {
                   Icon(
                     LucideIcons.messageSquare,
                     size: 14,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                   const SizedBox(width: Grid.half),
                   Text(
                     '${summary.replyCount} ${summary.replyCount == 1 ? 'reply' : 'replies'}',
                     style: context.textTheme.labelSmall?.copyWith(
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                   ),
                   if (summary.lastReplyAt != null) ...[
@@ -142,14 +142,16 @@ class ForumPostCard extends ConsumerWidget {
                     Text(
                       '\u00b7',
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline.withValues(alpha: 0.5),
+                        color: context.colors.onSurfaceVariant.withValues(
+                          alpha: 0.5,
+                        ),
                       ),
                     ),
                     const SizedBox(width: Grid.half),
                     Text(
                       'last ${formatRelativeTime(summary.lastReplyAt!)}',
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],

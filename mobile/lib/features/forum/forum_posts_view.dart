@@ -186,7 +186,7 @@ class _EmptyState extends StatelessWidget {
             Icon(
               LucideIcons.messageSquareText,
               size: Grid.xl,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
             const SizedBox(height: Grid.xxs),
             Text(
@@ -203,7 +203,7 @@ class _EmptyState extends StatelessWidget {
                   ? 'Start a discussion by creating the first post.'
                   : 'Join this forum to create posts.',
               style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
               textAlign: TextAlign.center,
             ),
