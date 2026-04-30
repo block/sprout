@@ -311,20 +311,51 @@ class _MessageList extends HookConsumerWidget {
     required this.isArchived,
   });
 
+  static const _fetchOlderThreshold = 200.0;
+  static const _latestThreshold = 48.0;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Pagination: fetch older messages when scrolling near the top.
     final scrollController = useScrollController();
     final isLoadingOlder = useState(false);
+    final isAtLatest = useState(true);
+    final latestEntryId = entries.isEmpty ? null : entries.last.message.id;
+    final previousLatestEntryId = useRef<String?>(null);
+
+    bool nearLatest() {
+      if (!scrollController.hasClients) return true;
+      return scrollController.position.pixels <= _latestThreshold;
+    }
+
+    void updateLatestState() {
+      final next = nearLatest();
+      if (isAtLatest.value != next) {
+        isAtLatest.value = next;
+      }
+    }
+
+    Future<void> scrollToLatest() async {
+      if (!scrollController.hasClients) return;
+      await scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+      if (context.mounted) {
+        isAtLatest.value = true;
+      }
+    }
 
     useEffect(() {
       void onScroll() {
+        updateLatestState();
         if (isLoadingOlder.value) return;
         final notifier = ref.read(channelMessagesProvider(channelId).notifier);
         if (notifier.reachedOldest) return;
         // In a reversed ListView, maxScrollExtent is the oldest messages.
         final pos = scrollController.position;
-        if (pos.pixels >= pos.maxScrollExtent - 200) {
+        if (pos.pixels >= pos.maxScrollExtent - _fetchOlderThreshold) {
           isLoadingOlder.value = true;
           notifier.fetchOlder().whenComplete(
             () => isLoadingOlder.value = false,
@@ -334,7 +365,36 @@ class _MessageList extends HookConsumerWidget {
 
       scrollController.addListener(onScroll);
       return () => scrollController.removeListener(onScroll);
-    }, [scrollController]);
+    }, [channelId, scrollController]);
+
+    useEffect(() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        updateLatestState();
+      });
+      return null;
+    }, [entries.length, scrollController]);
+
+    useEffect(() {
+      final previous = previousLatestEntryId.value;
+      previousLatestEntryId.value = latestEntryId;
+      if (previous == null ||
+          latestEntryId == null ||
+          previous == latestEntryId ||
+          !isAtLatest.value) {
+        return null;
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted || !scrollController.hasClients) return;
+        scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        );
+      });
+      return null;
+    }, [latestEntryId, scrollController]);
 
     if (entries.isEmpty) {
       return Center(
@@ -374,84 +434,111 @@ class _MessageList extends HookConsumerWidget {
       }
     });
 
-    return ListView.builder(
-      controller: scrollController,
-      reverse: true,
-      padding: EdgeInsets.only(
-        left: Grid.xs,
-        right: Grid.xs,
-        top: frostedAppBarHeight(context),
-        bottom: Grid.xxs,
-      ),
-      itemCount: entries.length + (isLoadingOlder.value ? 1 : 0),
-      itemBuilder: (context, index) {
-        // Loading indicator at the top (last index in reversed list).
-        if (index >= entries.length) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: Grid.xs),
+    return Stack(
+      children: [
+        ListView.builder(
+          key: const ValueKey('channel-message-list'),
+          controller: scrollController,
+          reverse: true,
+          padding: EdgeInsets.only(
+            left: Grid.xs,
+            right: Grid.xs,
+            top: frostedAppBarHeight(context),
+            bottom: Grid.xxs,
+          ),
+          itemCount: entries.length + (isLoadingOlder.value ? 1 : 0),
+          itemBuilder: (context, index) {
+            // Loading indicator at the top (last index in reversed list).
+            if (index >= entries.length) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: Grid.xs),
+                child: Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              );
+            }
+
+            // Reversed list: index 0 = newest (bottom of screen).
+            final chronIdx = entries.length - 1 - index;
+            final entry = entries[chronIdx];
+            final message = entry.message;
+
+            // Day boundary check — applies to all messages including system.
+            final prevEntry = chronIdx > 0 ? entries[chronIdx - 1] : null;
+            final prevMessage = prevEntry?.message;
+            final showDayDivider =
+                prevMessage == null ||
+                !isSameDay(prevMessage.createdAt, message.createdAt);
+
+            final showAuthor =
+                !message.isSystem &&
+                (prevMessage == null ||
+                    prevMessage.isSystem ||
+                    showDayDivider ||
+                    prevMessage.pubkey.toLowerCase() !=
+                        message.pubkey.toLowerCase() ||
+                    (message.createdAt - prevMessage.createdAt) > 300);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (showDayDivider)
+                  DayDivider(label: formatDayHeading(message.createdAt)),
+                if (message.isSystem)
+                  _SystemMessageRow(message: message)
+                else ...[
+                  _MessageBubble(
+                    message: message,
+                    showAuthor: showAuthor,
+                    channelNames: channelNamesMap,
+                    currentChannelId: channelId,
+                    currentPubkey: currentPubkey,
+                    allMessages: allMessages,
+                    isMember: isMember,
+                    isArchived: isArchived,
+                  ),
+                  if (entry.summary != null)
+                    _ThreadSummaryRow(
+                      summary: entry.summary!,
+                      message: message,
+                      allMessages: allMessages,
+                      channelId: channelId,
+                      currentPubkey: currentPubkey,
+                      isMember: isMember,
+                      isArchived: isArchived,
+                    ),
+                ],
+              ],
+            );
+          },
+        ),
+        if (!isAtLatest.value)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: Grid.xs,
             child: Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+              child: FilledButton.icon(
+                key: const ValueKey('channel-jump-to-latest'),
+                onPressed: scrollToLatest,
+                style: FilledButton.styleFrom(
+                  backgroundColor: context.colors.primaryContainer,
+                  foregroundColor: context.colors.onPrimaryContainer,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Grid.xs,
+                    vertical: Grid.xxs,
+                  ),
+                ),
+                icon: const Icon(LucideIcons.arrowDown, size: 16),
+                label: const Text('Latest'),
               ),
             ),
-          );
-        }
-
-        // Reversed list: index 0 = newest (bottom of screen).
-        final chronIdx = entries.length - 1 - index;
-        final entry = entries[chronIdx];
-        final message = entry.message;
-
-        // Day boundary check — applies to all messages including system.
-        final prevEntry = chronIdx > 0 ? entries[chronIdx - 1] : null;
-        final prevMessage = prevEntry?.message;
-        final showDayDivider =
-            prevMessage == null ||
-            !isSameDay(prevMessage.createdAt, message.createdAt);
-
-        final showAuthor =
-            !message.isSystem &&
-            (prevMessage == null ||
-                prevMessage.isSystem ||
-                showDayDivider ||
-                prevMessage.pubkey.toLowerCase() !=
-                    message.pubkey.toLowerCase() ||
-                (message.createdAt - prevMessage.createdAt) > 300);
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (showDayDivider)
-              DayDivider(label: formatDayHeading(message.createdAt)),
-            if (message.isSystem)
-              _SystemMessageRow(message: message)
-            else ...[
-              _MessageBubble(
-                message: message,
-                showAuthor: showAuthor,
-                channelNames: channelNamesMap,
-                currentChannelId: channelId,
-                currentPubkey: currentPubkey,
-                allMessages: allMessages,
-                isMember: isMember,
-                isArchived: isArchived,
-              ),
-              if (entry.summary != null)
-                _ThreadSummaryRow(
-                  summary: entry.summary!,
-                  message: message,
-                  allMessages: allMessages,
-                  channelId: channelId,
-                  currentPubkey: currentPubkey,
-                  isMember: isMember,
-                  isArchived: isArchived,
-                ),
-            ],
-          ],
-        );
-      },
+          ),
+      ],
     );
   }
 }
