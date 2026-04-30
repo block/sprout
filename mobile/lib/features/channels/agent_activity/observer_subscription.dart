@@ -9,13 +9,13 @@ import '../../../shared/relay/relay.dart';
 import 'observer_models.dart';
 import 'transcript_builder.dart';
 
-/// Maximum observer events to keep per agent (ring buffer cap).
+/// Maximum observer events to keep per agent.
 const _maxObserverEvents = 800;
 
-/// Key for the family provider.
+/// Key for channel-scoped transcript reads.
 typedef ObserverKey = ({String channelId, String agentPubkey});
 
-/// State emitted by the observer subscription provider.
+/// State emitted by the channel-scoped observer transcript provider.
 @immutable
 class ObserverState {
   final ObserverConnectionState connection;
@@ -34,216 +34,284 @@ class ObserverState {
       errorMessage = null;
 }
 
-class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
-  final ObserverKey _key;
-  final List<ObserverFrame> _buffer = [];
-  final Set<String> _dedupeKeys = {};
+@immutable
+class ObserverRelayState {
+  final ObserverConnectionState connection;
+  final Map<String, List<ObserverFrame>> framesByAgent;
+  final String? errorMessage;
+
+  const ObserverRelayState({
+    required this.connection,
+    required this.framesByAgent,
+    this.errorMessage,
+  });
+
+  const ObserverRelayState.initial()
+    : connection = ObserverConnectionState.idle,
+      framesByAgent = const {},
+      errorMessage = null;
+}
+
+class ObserverRelayNotifier extends Notifier<ObserverRelayState> {
+  final Map<String, List<ObserverFrame>> _framesByAgent = {};
+  final Map<String, Set<String>> _dedupeKeysByAgent = {};
+  final Map<String, Uint8List> _conversationKeysByAgent = {};
+
   void Function()? _unsubscribe;
+  Future<void>? _startFuture;
+  String? _privHex;
+  String? _ownerPubkey;
+  String? _identityKey;
+  String? _errorMessage;
+  int _subscriptionEpoch = 0;
   bool _disposed = false;
 
-  ObserverSubscriptionNotifier(this._key);
-
   @override
-  ObserverState build() {
+  ObserverRelayState build() {
+    final config = ref.watch(relayConfigProvider);
     final sessionState = ref.watch(relaySessionProvider);
+    final identityKey = '${config.baseUrl}|${config.nsec ?? ''}';
 
     _disposed = false;
+    if (_identityKey != null && _identityKey != identityKey) {
+      _reset();
+    }
+    _identityKey = identityKey;
 
     ref.onDispose(() {
       _disposed = true;
-      _unsubscribe?.call();
-      _unsubscribe = null;
-      _buffer.clear();
-      _dedupeKeys.clear();
+      _reset();
     });
 
     if (sessionState.status == SessionStatus.connected) {
-      Future.microtask(_subscribeLive);
+      Future.microtask(_ensureSubscribed);
     }
 
-    return const ObserverState.initial();
+    final hasSigningKey = config.nsec?.isNotEmpty == true;
+    return ObserverRelayState(
+      connection: hasSigningKey
+          ? _connectionForSession(sessionState.status)
+          : ObserverConnectionState.idle,
+      framesByAgent: _snapshotFrames(),
+      errorMessage: _errorMessage,
+    );
   }
 
-  void _subscribeLive() async {
-    if (_disposed) return;
-    final config = ref.read(relayConfigProvider);
-    final nsec = config.nsec;
-    if (nsec == null || nsec.isEmpty) return;
+  Future<void> _ensureSubscribed() {
+    if (_disposed) return Future.value();
+    if (_unsubscribe != null) return Future.value();
+    if (_startFuture != null) return _startFuture!;
 
-    String privHex;
+    _startFuture = _subscribe(_subscriptionEpoch);
+    return _startFuture!;
+  }
+
+  Future<void> _subscribe(int epoch) async {
     try {
-      privHex = nostr.Nip19.decodePrivkey(nsec);
-    } catch (_) {
-      state = ObserverState(
-        connection: ObserverConnectionState.error,
-        transcript: buildTranscript(_buffer),
-        errorMessage: 'Failed to decode private key',
-      );
-      return;
-    }
-
-    Uint8List conversationKey;
-    try {
-      conversationKey = getConversationKey(privHex, _key.agentPubkey);
-    } catch (_) {
-      state = ObserverState(
-        connection: ObserverConnectionState.error,
-        transcript: buildTranscript(_buffer),
-        errorMessage: 'Failed to derive conversation key',
-      );
-      return;
-    }
-
-    // Derive our own pubkey from nsec via the nostr library.
-    String myPubkey;
-    try {
-      myPubkey = nostr.Keychain(privHex).public;
-    } catch (_) {
-      state = ObserverState(
-        connection: ObserverConnectionState.error,
-        transcript: buildTranscript(_buffer),
-        errorMessage: 'Failed to derive pubkey',
-      );
-      return;
-    }
-
-    debugPrint(
-      '[ObserverSub] subscribing as $myPubkey for agent ${_key.agentPubkey} '
-      'in channel ${_key.channelId}',
-    );
-
-    state = ObserverState(
-      connection: ObserverConnectionState.connecting,
-      transcript: buildTranscript(_buffer),
-    );
-
-    final session = ref.read(relaySessionProvider.notifier);
-    try {
-      final unsub = await session.subscribe(
-        NostrFilter(
-          kinds: [24200],
-          tags: {
-            '#p': [myPubkey],
-          },
-          since: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          limit: 0,
-        ),
-        (event) => _handleEvent(event, conversationKey, myPubkey),
-      );
-
-      // Guard against dispose during the async subscribe.
-      if (_disposed) {
-        unsub();
+      if (_disposed || epoch != _subscriptionEpoch) {
         return;
       }
-      _unsubscribe = unsub;
 
-      debugPrint('[ObserverSub] subscription open');
+      final config = ref.read(relayConfigProvider);
+      final nsec = config.nsec;
+      if (nsec == null || nsec.isEmpty) {
+        _errorMessage = null;
+        _emit(connection: ObserverConnectionState.idle);
+        return;
+      }
 
-      state = ObserverState(
-        connection: ObserverConnectionState.open,
-        transcript: buildTranscript(_buffer),
+      final privHex = _decodePrivkey(nsec);
+      final ownerPubkey = _derivePubkey(privHex);
+      if (_disposed || epoch != _subscriptionEpoch) {
+        return;
+      }
+      _privHex = privHex;
+      _ownerPubkey = ownerPubkey;
+      _errorMessage = null;
+      _emit(connection: ObserverConnectionState.connecting);
+
+      final session = ref.read(relaySessionProvider.notifier);
+      final unsubscribe = await session.subscribe(
+        NostrFilter(
+          kinds: [EventKind.agentObserverFrame],
+          tags: {
+            '#p': [ownerPubkey],
+          },
+          limit: 0,
+        ),
+        _handleEvent,
+        onClosed: (message) {
+          _unsubscribe = null;
+          _errorMessage = 'Observer subscription closed: $message';
+          _emit(connection: ObserverConnectionState.error);
+        },
       );
-    } catch (e) {
-      if (!_disposed) {
-        state = ObserverState(
-          connection: ObserverConnectionState.error,
-          transcript: buildTranscript(_buffer),
-          errorMessage: 'Subscription failed: $e',
-        );
+
+      if (_disposed || epoch != _subscriptionEpoch) {
+        unsubscribe();
+        return;
+      }
+
+      _unsubscribe = unsubscribe;
+      _emit(connection: ObserverConnectionState.open);
+    } catch (error) {
+      if (_disposed || epoch != _subscriptionEpoch) {
+        return;
+      }
+      _errorMessage = _observerErrorMessage(error);
+      _emit(connection: ObserverConnectionState.error);
+    } finally {
+      if (epoch == _subscriptionEpoch) {
+        _startFuture = null;
       }
     }
   }
 
-  void _handleEvent(
-    NostrEvent event,
-    Uint8List conversationKey,
-    String myPubkey,
-  ) {
-    debugPrint(
-      '[ObserverSub] event received: kind=${event.kind} '
-      'pubkey=${event.pubkey.substring(0, 8)}…',
+  void _handleEvent(NostrEvent event) {
+    final agentPubkey = event.getTagValue('agent');
+    if (agentPubkey == null || event.getTagValue('frame') != 'telemetry') {
+      return;
+    }
+
+    final normalizedAgent = agentPubkey.toLowerCase();
+    if (event.pubkey.toLowerCase() != normalizedAgent) {
+      return;
+    }
+
+    final ownerPubkey = _ownerPubkey;
+    final privHex = _privHex;
+    if (ownerPubkey == null || privHex == null) {
+      return;
+    }
+
+    final pTag = event.getTagValue('p');
+    if (pTag?.toLowerCase() != ownerPubkey.toLowerCase()) {
+      return;
+    }
+
+    final frame = _decryptFrame(event, normalizedAgent, privHex);
+    if (frame == null) return;
+
+    final dedupeKey = '${frame.seq}:${frame.timestamp}';
+    final dedupeKeys = _dedupeKeysByAgent.putIfAbsent(
+      normalizedAgent,
+      () => <String>{},
     );
-
-    // Filter to only this agent's frames.
-    if (event.pubkey.toLowerCase() != _key.agentPubkey.toLowerCase()) {
-      debugPrint('[ObserverSub] filtered: pubkey mismatch');
+    if (!dedupeKeys.add(dedupeKey)) {
       return;
     }
 
-    // Defense-in-depth: verify event.pubkey matches claimed agent tag.
-    final agentTag = event.getTagValue('agent');
-    if (agentTag == null ||
-        event.pubkey.toLowerCase() != agentTag.toLowerCase()) {
-      debugPrint('[ObserverSub] filtered: agent tag mismatch');
-      return;
+    final frames = _framesByAgent.putIfAbsent(
+      normalizedAgent,
+      () => <ObserverFrame>[],
+    );
+    frames.add(frame);
+    frames.sort(_compareObserverFrames);
+
+    if (frames.length > _maxObserverEvents) {
+      final removeCount = frames.length - _maxObserverEvents;
+      for (final removed in frames.take(removeCount)) {
+        dedupeKeys.remove('${removed.seq}:${removed.timestamp}');
+      }
+      frames.removeRange(0, removeCount);
     }
 
-    // Must be a telemetry frame.
-    if (event.getTagValue('frame') != 'telemetry') {
-      debugPrint('[ObserverSub] filtered: not a telemetry frame');
-      return;
-    }
+    _errorMessage = null;
+    _emit(connection: ObserverConnectionState.open);
+  }
 
-    ObserverFrame frame;
+  ObserverFrame? _decryptFrame(
+    NostrEvent event,
+    String normalizedAgent,
+    String privHex,
+  ) {
     try {
+      final conversationKey = _conversationKeysByAgent.putIfAbsent(
+        normalizedAgent,
+        () => getConversationKey(privHex, normalizedAgent),
+      );
       final plaintext = nip44Decrypt(conversationKey, event.content);
       final json = jsonDecode(plaintext) as Map<String, dynamic>;
-      frame = ObserverFrame.fromJson(json);
-    } catch (e) {
-      debugPrint('[ObserverSub] decrypt failed: $e');
-      state = ObserverState(
-        connection: ObserverConnectionState.error,
-        transcript: state.transcript,
-        errorMessage: 'Decrypt failed: $e',
-      );
-      return;
+      return ObserverFrame.fromJson(json);
+    } catch (error) {
+      _errorMessage = 'Observer event decrypt failed: $error';
+      _emit(connection: ObserverConnectionState.error);
+      return null;
     }
+  }
 
-    // Deduplicate by (seq, timestamp).
-    final dedupeKey = '${frame.seq}:${frame.timestamp}';
-    if (_dedupeKeys.contains(dedupeKey)) {
-      debugPrint('[ObserverSub] filtered: duplicate $dedupeKey');
-      return;
-    }
-    _dedupeKeys.add(dedupeKey);
-
-    // Scope to this channel (null channelId = not channel-scoped, let through).
-    if (frame.channelId != null && frame.channelId != _key.channelId) {
-      debugPrint(
-        '[ObserverSub] filtered: channel mismatch '
-        '(frame=${frame.channelId}, expected=${_key.channelId})',
-      );
-      return;
-    }
-
-    // Add to buffer and sort.
-    _buffer.add(frame);
-    _buffer.sort(_compareObserverEvents);
-
-    // Cap buffer size.
-    if (_buffer.length > _maxObserverEvents) {
-      final removed = _buffer.sublist(0, _buffer.length - _maxObserverEvents);
-      for (final r in removed) {
-        _dedupeKeys.remove('${r.seq}:${r.timestamp}');
-      }
-      _buffer.removeRange(0, _buffer.length - _maxObserverEvents);
-    }
-
-    // Rebuild transcript.
-    final transcript = buildTranscript(_buffer);
-    debugPrint(
-      '[ObserverSub] frame accepted: seq=${frame.seq} kind=${frame.kind} '
-      '→ ${transcript.length} transcript items',
-    );
-    state = ObserverState(
-      connection: ObserverConnectionState.open,
-      transcript: transcript,
+  void _emit({required ObserverConnectionState connection}) {
+    if (_disposed) return;
+    state = ObserverRelayState(
+      connection: connection,
+      framesByAgent: _snapshotFrames(),
+      errorMessage: _errorMessage,
     );
   }
 
-  /// Compare observer events: primary by timestamp, secondary by seq.
-  static int _compareObserverEvents(ObserverFrame a, ObserverFrame b) {
+  Map<String, List<ObserverFrame>> _snapshotFrames() {
+    return Map<String, List<ObserverFrame>>.unmodifiable({
+      for (final entry in _framesByAgent.entries)
+        entry.key: List<ObserverFrame>.unmodifiable(entry.value),
+    });
+  }
+
+  void _reset() {
+    _subscriptionEpoch += 1;
+    _unsubscribe?.call();
+    _unsubscribe = null;
+    _startFuture = null;
+    _privHex = null;
+    _ownerPubkey = null;
+    _errorMessage = null;
+    _framesByAgent.clear();
+    _dedupeKeysByAgent.clear();
+    _conversationKeysByAgent.clear();
+  }
+
+  static String _decodePrivkey(String nsec) {
+    try {
+      final privHex = nostr.Nip19.decodePrivkey(nsec);
+      if (privHex.isEmpty) {
+        throw const FormatException('empty private key');
+      }
+      return privHex;
+    } catch (_) {
+      throw const FormatException('failed to decode private key');
+    }
+  }
+
+  static String _derivePubkey(String privHex) {
+    try {
+      return nostr.Keychain(privHex).public;
+    } catch (_) {
+      throw const FormatException('failed to derive pubkey');
+    }
+  }
+
+  ObserverConnectionState _connectionForSession(SessionStatus status) {
+    if (_errorMessage != null && _unsubscribe == null && _startFuture == null) {
+      return ObserverConnectionState.error;
+    }
+    return switch (status) {
+      SessionStatus.connected =>
+        _unsubscribe == null
+            ? ObserverConnectionState.connecting
+            : ObserverConnectionState.open,
+      SessionStatus.connecting ||
+      SessionStatus.reconnecting => ObserverConnectionState.connecting,
+      SessionStatus.disconnected => ObserverConnectionState.idle,
+    };
+  }
+
+  static String _observerErrorMessage(Object error) {
+    if (error is FormatException) {
+      return error.message;
+    }
+    return 'Observer subscription failed: $error';
+  }
+
+  static int _compareObserverFrames(ObserverFrame a, ObserverFrame b) {
     final tsA = DateTime.tryParse(a.timestamp)?.millisecondsSinceEpoch ?? 0;
     final tsB = DateTime.tryParse(b.timestamp)?.millisecondsSinceEpoch ?? 0;
     if (tsA != tsB) return tsA.compareTo(tsB);
@@ -251,9 +319,25 @@ class ObserverSubscriptionNotifier extends Notifier<ObserverState> {
   }
 }
 
+final observerRelayProvider =
+    NotifierProvider<ObserverRelayNotifier, ObserverRelayState>(
+      ObserverRelayNotifier.new,
+    );
+
 final observerSubscriptionProvider =
-    NotifierProvider.family<
-      ObserverSubscriptionNotifier,
-      ObserverState,
-      ObserverKey
-    >(ObserverSubscriptionNotifier.new);
+    Provider.family<ObserverState, ObserverKey>((ref, key) {
+      final relayState = ref.watch(observerRelayProvider);
+      final normalizedAgent = key.agentPubkey.toLowerCase();
+      final frames = relayState.framesByAgent[normalizedAgent] ?? const [];
+      final channelFrames = [
+        for (final frame in frames)
+          if (frame.channelId == null || frame.channelId == key.channelId)
+            frame,
+      ];
+
+      return ObserverState(
+        connection: relayState.connection,
+        transcript: buildTranscript(channelFrames),
+        errorMessage: relayState.errorMessage,
+      );
+    });

@@ -9,6 +9,7 @@ abstract final class EventKind {
   static const streamMessage = 9;
   static const typingIndicator = 20002;
   static const auth = 22242;
+  static const agentObserverFrame = 24200;
   static const readState = 30078;
   static const streamMessageV2 = 40002;
   static const streamMessageEdit = 40003;

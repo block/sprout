@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:nostr/nostr.dart' as nostr;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -158,15 +157,6 @@ class RelaySocket {
 
     if (data.isEmpty) return;
     final type = data[0] as String;
-
-    // Log all incoming relay messages for debugging observer delivery.
-    if (type == 'EVENT') {
-      final subId = data.length > 1 ? data[1] : '?';
-      final kind = data.length > 2 && data[2] is Map ? data[2]['kind'] : '?';
-      debugPrint('[RelaySocket] EVENT subId=$subId kind=$kind');
-    } else if (type != 'OK' && type != 'AUTH') {
-      debugPrint('[RelaySocket] $type ${data.length > 1 ? data[1] : ''}');
-    }
 
     switch (type) {
       case 'AUTH':

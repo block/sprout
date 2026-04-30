@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -86,30 +87,24 @@ class _MessageItemWidget extends StatelessWidget {
 // Thought
 // ---------------------------------------------------------------------------
 
-class _ThoughtItemWidget extends StatefulWidget {
+class _ThoughtItemWidget extends HookWidget {
   final ThoughtItem item;
 
   const _ThoughtItemWidget({required this.item});
 
   @override
-  State<_ThoughtItemWidget> createState() => _ThoughtItemWidgetState();
-}
-
-class _ThoughtItemWidgetState extends State<_ThoughtItemWidget> {
-  late bool _expanded;
-
-  @override
-  void initState() {
-    super.initState();
-    _expanded = widget.item.text.length <= 200;
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final expanded = useState(item.text.length <= 200);
+
+    useEffect(() {
+      expanded.value = item.text.length <= 200;
+      return null;
+    }, [item.id]);
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Grid.half),
       child: GestureDetector(
-        onTap: () => setState(() => _expanded = !_expanded),
+        onTap: () => expanded.value = !expanded.value,
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(Grid.xxs),
@@ -130,25 +125,29 @@ class _ThoughtItemWidgetState extends State<_ThoughtItemWidget> {
                     color: context.colors.outline,
                   ),
                   const SizedBox(width: Grid.half),
-                  Text(
-                    widget.item.title,
-                    style: context.textTheme.labelMedium?.copyWith(
-                      color: context.colors.outline,
-                      fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Text(
+                      item.title,
+                      style: context.textTheme.labelMedium?.copyWith(
+                        color: context.colors.outline,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const Spacer(),
                   Icon(
-                    _expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    expanded.value
+                        ? LucideIcons.chevronUp
+                        : LucideIcons.chevronDown,
                     size: 14,
                     color: context.colors.outline,
                   ),
                 ],
               ),
-              if (_expanded && widget.item.text.isNotEmpty) ...[
+              if (expanded.value && item.text.isNotEmpty) ...[
                 const SizedBox(height: Grid.half),
                 GptMarkdown(
-                  widget.item.text,
+                  item.text,
                   style: context.textTheme.bodySmall?.copyWith(
                     color: context.colors.onSurfaceVariant,
                   ),
@@ -192,24 +191,24 @@ class _LifecycleItemWidget extends StatelessWidget {
 // Metadata
 // ---------------------------------------------------------------------------
 
-class _MetadataItemWidget extends StatefulWidget {
+class _MetadataItemWidget extends HookWidget {
   final MetadataItem item;
 
   const _MetadataItemWidget({required this.item});
 
   @override
-  State<_MetadataItemWidget> createState() => _MetadataItemWidgetState();
-}
-
-class _MetadataItemWidgetState extends State<_MetadataItemWidget> {
-  bool _expanded = false;
-
-  @override
   Widget build(BuildContext context) {
+    final expanded = useState(false);
+
+    useEffect(() {
+      expanded.value = false;
+      return null;
+    }, [item.id]);
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Grid.half),
       child: GestureDetector(
-        onTap: () => setState(() => _expanded = !_expanded),
+        onTap: () => expanded.value = !expanded.value,
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(Grid.xxs),
@@ -230,23 +229,27 @@ class _MetadataItemWidgetState extends State<_MetadataItemWidget> {
                     color: context.colors.outline,
                   ),
                   const SizedBox(width: Grid.half),
-                  Text(
-                    '${widget.item.title} (${widget.item.sections.length} sections)',
-                    style: context.textTheme.labelMedium?.copyWith(
-                      color: context.colors.outline,
-                      fontWeight: FontWeight.w600,
+                  Expanded(
+                    child: Text(
+                      '${item.title} (${item.sections.length} sections)',
+                      style: context.textTheme.labelMedium?.copyWith(
+                        color: context.colors.outline,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const Spacer(),
                   Icon(
-                    _expanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                    expanded.value
+                        ? LucideIcons.chevronUp
+                        : LucideIcons.chevronDown,
                     size: 14,
                     color: context.colors.outline,
                   ),
                 ],
               ),
-              if (_expanded)
-                for (final section in widget.item.sections) ...[
+              if (expanded.value)
+                for (final section in item.sections) ...[
                   const SizedBox(height: Grid.xxs),
                   Text(
                     section.title,
@@ -279,22 +282,22 @@ class _MetadataItemWidgetState extends State<_MetadataItemWidget> {
 // Tool
 // ---------------------------------------------------------------------------
 
-class _ToolItemWidget extends StatefulWidget {
+class _ToolItemWidget extends HookWidget {
   final ToolItem item;
 
   const _ToolItemWidget({required this.item});
 
   @override
-  State<_ToolItemWidget> createState() => _ToolItemWidgetState();
-}
-
-class _ToolItemWidgetState extends State<_ToolItemWidget> {
-  bool _argsExpanded = false;
-  bool _resultExpanded = false;
-
-  @override
   Widget build(BuildContext context) {
-    final item = widget.item;
+    final argsExpanded = useState(false);
+    final resultExpanded = useState(false);
+
+    useEffect(() {
+      argsExpanded.value = false;
+      resultExpanded.value = false;
+      return null;
+    }, [item.id]);
+
     final (statusColor, statusLabel, statusIcon) = _toolStatusDisplay(
       item.status,
       item.isError,
@@ -362,7 +365,7 @@ class _ToolItemWidgetState extends State<_ToolItemWidget> {
             if (item.args.isNotEmpty) ...[
               const SizedBox(height: Grid.half),
               GestureDetector(
-                onTap: () => setState(() => _argsExpanded = !_argsExpanded),
+                onTap: () => argsExpanded.value = !argsExpanded.value,
                 child: Row(
                   children: [
                     Text(
@@ -373,7 +376,7 @@ class _ToolItemWidgetState extends State<_ToolItemWidget> {
                     ),
                     const SizedBox(width: Grid.half),
                     Icon(
-                      _argsExpanded
+                      argsExpanded.value
                           ? LucideIcons.chevronUp
                           : LucideIcons.chevronDown,
                       size: 12,
@@ -382,7 +385,7 @@ class _ToolItemWidgetState extends State<_ToolItemWidget> {
                   ],
                 ),
               ),
-              if (_argsExpanded) ...[
+              if (argsExpanded.value) ...[
                 const SizedBox(height: Grid.quarter),
                 _CodeBlock(text: _prettyJson(item.args)),
               ],
@@ -391,7 +394,7 @@ class _ToolItemWidgetState extends State<_ToolItemWidget> {
             if (item.result.isNotEmpty) ...[
               const SizedBox(height: Grid.half),
               GestureDetector(
-                onTap: () => setState(() => _resultExpanded = !_resultExpanded),
+                onTap: () => resultExpanded.value = !resultExpanded.value,
                 child: Row(
                   children: [
                     Text(
@@ -404,7 +407,7 @@ class _ToolItemWidgetState extends State<_ToolItemWidget> {
                     ),
                     const SizedBox(width: Grid.half),
                     Icon(
-                      _resultExpanded
+                      resultExpanded.value
                           ? LucideIcons.chevronUp
                           : LucideIcons.chevronDown,
                       size: 12,
@@ -415,7 +418,7 @@ class _ToolItemWidgetState extends State<_ToolItemWidget> {
                   ],
                 ),
               ),
-              if (_resultExpanded) ...[
+              if (resultExpanded.value) ...[
                 const SizedBox(height: Grid.quarter),
                 _CodeBlock(
                   text: item.result.length > 2000
@@ -488,14 +491,18 @@ class _CodeBlock extends StatelessWidget {
             : context.colors.surface,
         borderRadius: BorderRadius.circular(6),
       ),
-      child: Text(
-        text,
-        style: context.textTheme.bodySmall?.copyWith(
-          fontFamily: 'monospace',
-          fontSize: 11,
-          color: isError
-              ? context.colors.error
-              : context.colors.onSurfaceVariant,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Text(
+          text,
+          softWrap: false,
+          style: context.textTheme.bodySmall?.copyWith(
+            fontFamily: 'monospace',
+            fontSize: 11,
+            color: isError
+                ? context.colors.error
+                : context.colors.onSurfaceVariant,
+          ),
         ),
       ),
     );

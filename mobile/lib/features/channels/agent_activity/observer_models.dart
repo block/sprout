@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 /// Connection state for the observer relay subscription.
-enum ObserverConnectionState { idle, connecting, open, closed, error }
+enum ObserverConnectionState { idle, connecting, open, error }
 
 /// Status of a tool execution.
 enum ToolStatus { executing, completed, failed, pending }

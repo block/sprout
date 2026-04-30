@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'features/home/home_page.dart';
 import 'features/pairing/pairing_page.dart';
+import 'features/channels/agent_activity/observer_subscription.dart';
 import 'shared/auth/auth.dart';
 import 'shared/relay/relay.dart';
 import 'shared/theme/theme.dart';
@@ -30,6 +31,7 @@ class App extends HookConsumerWidget {
     // authenticated. These providers connect and manage the websocket.
     if (authState.value?.status == AuthStatus.authenticated) {
       ref.watch(relaySessionProvider);
+      ref.watch(observerRelayProvider);
       ref.watch(appLifecycleProvider);
     }
 

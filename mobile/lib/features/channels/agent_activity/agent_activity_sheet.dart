@@ -74,6 +74,8 @@ class AgentActivitySheet extends HookConsumerWidget {
       expand: false,
       builder: (context, sheetScrollController) {
         sheetControllerRef.value = sheetScrollController;
+        final bottomPadding =
+            MediaQuery.viewPaddingOf(context).bottom + Grid.sm;
         return Column(
           children: [
             // Header
@@ -117,15 +119,20 @@ class AgentActivitySheet extends HookConsumerWidget {
             // Transcript list
             Expanded(
               child: transcript.isEmpty
-                  ? _EmptyState(
-                      connection: connection,
-                      errorMessage: observerState.errorMessage,
+                  ? Padding(
+                      padding: EdgeInsets.only(bottom: bottomPadding),
+                      child: _EmptyState(
+                        connection: connection,
+                        errorMessage: observerState.errorMessage,
+                      ),
                     )
                   : ListView.builder(
                       controller: sheetScrollController,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: Grid.xs,
-                        vertical: Grid.xxs,
+                      padding: EdgeInsets.fromLTRB(
+                        Grid.xs,
+                        Grid.xxs,
+                        Grid.xs,
+                        bottomPadding,
                       ),
                       itemCount: transcript.length,
                       itemBuilder: (context, index) {
@@ -167,8 +174,7 @@ class _EmptyState extends StatelessWidget {
       );
     }
 
-    if (connection == ObserverConnectionState.idle ||
-        connection == ObserverConnectionState.closed) {
+    if (connection == ObserverConnectionState.idle) {
       return Center(
         child: Text(
           'Not connected',
@@ -219,7 +225,6 @@ class _ConnectionBadge extends StatelessWidget {
         'Connecting',
       ),
       ObserverConnectionState.open => (context.appColors.success, 'Live'),
-      ObserverConnectionState.closed => (context.colors.outline, 'Closed'),
       ObserverConnectionState.error => (context.colors.error, 'Error'),
     };
 

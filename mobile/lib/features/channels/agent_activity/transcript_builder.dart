@@ -233,10 +233,13 @@ _parsePromptText(String text) {
     );
   }
 
-  final eventSection = sections.cast<PromptSection?>().firstWhere(
-    (s) => s!.title.toLowerCase().startsWith('sprout event'),
-    orElse: () => null,
-  );
+  PromptSection? eventSection;
+  for (final section in sections) {
+    if (section.title.toLowerCase().startsWith('sprout event')) {
+      eventSection = section;
+      break;
+    }
+  }
   final eventContent = eventSection != null
       ? _extractEventContent(eventSection.body)
       : '';
@@ -331,10 +334,13 @@ Map<String, dynamic> _extractToolArgs(Map<String, dynamic> update) {
     if (knownName != null) break;
   }
   knownName ??= _findSproutToolName(_safeJsonEncode(update), false);
-  final firstSpecific = candidates.cast<String?>().firstWhere(
-    (c) => !_isGenericToolTitle(c!),
-    orElse: () => null,
-  );
+  String? firstSpecific;
+  for (final candidate in candidates) {
+    if (!_isGenericToolTitle(candidate)) {
+      firstSpecific = candidate;
+      break;
+    }
+  }
   final title =
       _asString(update['title']) ?? knownName ?? firstSpecific ?? 'Tool call';
   return (

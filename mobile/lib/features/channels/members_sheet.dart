@@ -40,6 +40,23 @@ class MembersSheet extends HookConsumerWidget {
         currentMember.isElevated &&
         !channel.isArchived;
 
+    void openActivity(ChannelMember bot) {
+      final navigator = Navigator.of(context);
+      navigator.pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!navigator.mounted) return;
+        showModalBottomSheet<void>(
+          context: navigator.context,
+          isScrollControlled: true,
+          showDragHandle: true,
+          builder: (_) => AgentActivitySheet(
+            channelId: channel.id,
+            agentPubkey: bot.pubkey,
+          ),
+        );
+      });
+    }
+
     // Preload profiles for all members so avatars appear.
     useEffect(() {
       if (allMembers.isNotEmpty) {
@@ -107,22 +124,12 @@ class MembersSheet extends HookConsumerWidget {
                             isWorking: typingBotPubkeys.contains(
                               bot.pubkey.toLowerCase(),
                             ),
+                            onViewActivity: () => openActivity(bot),
                             onActivityTap:
                                 typingBotPubkeys.contains(
                                   bot.pubkey.toLowerCase(),
                                 )
-                                ? () {
-                                    Navigator.of(context).pop();
-                                    showModalBottomSheet<void>(
-                                      context: context,
-                                      isScrollControlled: true,
-                                      showDragHandle: true,
-                                      builder: (_) => AgentActivitySheet(
-                                        channelId: channel.id,
-                                        agentPubkey: bot.pubkey,
-                                      ),
-                                    );
-                                  }
+                                ? () => openActivity(bot)
                                 : null,
                           ),
                       ],
@@ -180,6 +187,11 @@ class _SectionLabel extends StatelessWidget {
 
 const _changeableRoles = ['admin', 'member', 'guest'];
 
+String _roleLabel(String role) {
+  if (role.isEmpty) return 'Member';
+  return '${role[0].toUpperCase()}${role.substring(1)}';
+}
+
 class _MemberTile extends ConsumerWidget {
   final ChannelMember member;
   final String? currentPubkey;
@@ -189,6 +201,7 @@ class _MemberTile extends ConsumerWidget {
   final String channelId;
   final bool isWorking;
   final VoidCallback? onActivityTap;
+  final VoidCallback? onViewActivity;
 
   const _MemberTile({
     required this.member,
@@ -199,13 +212,15 @@ class _MemberTile extends ConsumerWidget {
     required this.channelId,
     this.isWorking = false,
     this.onActivityTap,
+    this.onViewActivity,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final label = member.labelFor(currentPubkey);
     final initial = label.substring(0, 1).toUpperCase();
-    final showMenu = canManage && !isSelf && !member.isOwner;
+    final showManagementActions = canManage && !isSelf && !member.isOwner;
+    final showMenu = showManagementActions || onViewActivity != null;
 
     return ListTile(
       contentPadding: EdgeInsets.zero,
@@ -242,7 +257,11 @@ class _MemberTile extends ConsumerWidget {
       trailing: showMenu
           ? IconButton(
               icon: const Icon(LucideIcons.ellipsis, size: 18),
-              onPressed: () => _showMemberActions(context, ref),
+              onPressed: () => _showMemberActions(
+                context,
+                ref,
+                showManagementActions: showManagementActions,
+              ),
               visualDensity: VisualDensity.compact,
             )
           : null,
@@ -250,17 +269,17 @@ class _MemberTile extends ConsumerWidget {
     );
   }
 
-  String _roleLabel(String role) {
-    if (role.isEmpty) return 'Member';
-    return '${role[0].toUpperCase()}${role.substring(1)}';
-  }
-
-  void _showMemberActions(BuildContext context, WidgetRef ref) {
+  void _showMemberActions(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool showManagementActions,
+  }) {
     final label = member.labelFor(currentPubkey);
+    final canChangeRole = showManagementActions && !member.isBot;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (_) => SafeArea(
+      builder: (sheetContext) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -270,86 +289,139 @@ class _MemberTile extends ConsumerWidget {
               child: Text(label, style: context.textTheme.titleSmall),
             ),
             const SizedBox(height: Grid.xxs),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
-              child: Text(
-                'Change role',
-                style: context.textTheme.labelMedium?.copyWith(
-                  color: context.colors.outline,
-                ),
-              ),
-            ),
-            const SizedBox(height: Grid.half),
-            for (final role in _changeableRoles)
+            if (onViewActivity != null)
               ListTile(
-                title: Text(_roleLabel(role)),
-                trailing: role == member.role
-                    ? Icon(
-                        LucideIcons.check,
-                        size: 16,
-                        color: context.colors.primary,
-                      )
-                    : null,
-                enabled: role != member.role,
-                onTap: role == member.role
-                    ? null
-                    : () async {
-                        Navigator.of(context).pop();
-                        await ref
-                            .read(channelActionsProvider)
-                            .changeMemberRole(
-                              channelId: channelId,
-                              pubkey: member.pubkey,
-                              role: role,
-                            );
-                      },
+                leading: Icon(
+                  LucideIcons.activity,
+                  size: 18,
+                  color: context.colors.primary,
+                ),
+                title: const Text('View activity'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    onViewActivity?.call();
+                  });
+                },
               ),
-            const Divider(),
-            ListTile(
-              leading: Icon(
-                LucideIcons.userMinus,
-                size: 18,
-                color: context.colors.error,
-              ),
-              title: Text(
-                'Remove from channel',
-                style: TextStyle(color: context.colors.error),
-              ),
-              onTap: () async {
-                Navigator.of(context).pop();
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Remove member'),
-                    content: Text('Remove $label from this channel?'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(true),
-                        child: Text(
-                          'Remove',
-                          style: TextStyle(color: context.colors.error),
+            if (showManagementActions) ...[
+              if (canChangeRole) ...[
+                const SizedBox(height: Grid.xxs),
+                _RoleSelector(
+                  selectedRole: member.role,
+                  onChanged: (role) async {
+                    Navigator.of(sheetContext).pop();
+                    await ref
+                        .read(channelActionsProvider)
+                        .changeMemberRole(
+                          channelId: channelId,
+                          pubkey: member.pubkey,
+                          role: role,
+                        );
+                  },
+                ),
+                const SizedBox(height: Grid.xs),
+              ],
+              ListTile(
+                leading: Icon(
+                  LucideIcons.userMinus,
+                  size: 18,
+                  color: context.colors.error,
+                ),
+                title: Text(
+                  'Remove from channel',
+                  style: TextStyle(color: context.colors.error),
+                ),
+                onTap: () async {
+                  Navigator.of(context).pop();
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Remove member'),
+                      content: Text('Remove $label from this channel?'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(false),
+                          child: const Text('Cancel'),
                         ),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirmed == true) {
-                  await ref
-                      .read(channelActionsProvider)
-                      .removeMember(
-                        channelId: channelId,
-                        pubkey: member.pubkey,
-                      );
-                }
-              },
-            ),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(true),
+                          child: Text(
+                            'Remove',
+                            style: TextStyle(color: context.colors.error),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    await ref
+                        .read(channelActionsProvider)
+                        .removeMember(
+                          channelId: channelId,
+                          pubkey: member.pubkey,
+                        );
+                  }
+                },
+              ),
+            ],
             const SizedBox(height: Grid.xxs),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _RoleSelector extends StatelessWidget {
+  final String selectedRole;
+  final ValueChanged<String> onChanged;
+
+  const _RoleSelector({required this.selectedRole, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasKnownRole = _changeableRoles.contains(selectedRole);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: Grid.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Role',
+            style: context.textTheme.labelMedium?.copyWith(
+              color: context.colors.outline,
+            ),
+          ),
+          const SizedBox(height: Grid.xxs),
+          SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<String>(
+              segments: [
+                for (final role in _changeableRoles)
+                  ButtonSegment<String>(
+                    value: role,
+                    label: Text(_roleLabel(role)),
+                  ),
+              ],
+              selected: hasKnownRole ? {selectedRole} : const <String>{},
+              emptySelectionAllowed: !hasKnownRole,
+              showSelectedIcon: false,
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                textStyle: WidgetStatePropertyAll(context.textTheme.labelSmall),
+              ),
+              onSelectionChanged: (roles) {
+                if (roles.isEmpty) return;
+                final role = roles.single;
+                if (role == selectedRole) return;
+                onChanged(role);
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
