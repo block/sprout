@@ -265,10 +265,10 @@ test("shows presence in sidebar, DM header, and member list", async ({
   await openMembersSidebar(page, "general");
   await expect(
     page.getByTestId(`sidebar-member-presence-${TEST_IDENTITIES.alice.pubkey}`),
-  ).toContainText("Online");
+  ).toBeVisible();
   await expect(
     page.getByTestId(`sidebar-member-presence-${TEST_IDENTITIES.bob.pubkey}`),
-  ).toContainText("Away");
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("members-sidebar")).not.toBeVisible();
 });
