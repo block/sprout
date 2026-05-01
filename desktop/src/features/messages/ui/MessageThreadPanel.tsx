@@ -54,11 +54,19 @@ type MessageThreadPanelProps = {
   replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
   scrollTargetId: string | null;
+  threadActivity?: React.ReactNode;
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
   threadTypingPubkeys: string[];
   widthPx: number;
 };
+
+const THREAD_TEXT_COLUMN_OFFSET_PX = 8;
+
+function getThreadControlOffsetPx(depth = 0): number {
+  const visibleDepth = Math.min(Math.max(depth, 0), 6);
+  return visibleDepth * 28 + THREAD_TEXT_COLUMN_OFFSET_PX;
+}
 
 function canManageMessage(
   message: TimelineMessage,
@@ -97,6 +105,7 @@ export function MessageThreadPanel({
   replyTargetId,
   replyTargetMessage,
   scrollTargetId,
+  threadActivity,
   threadHead,
   threadReplies,
   threadTypingPubkeys,
@@ -223,6 +232,11 @@ export function MessageThreadPanel({
                     const nextDepth =
                       threadReplies[index + 1]?.message.depth ?? -1;
                     const isExpanded = nextDepth > entry.message.depth;
+                    const isLastEntry = index === threadReplies.length - 1;
+                    const showSummary = Boolean(entry.summary && !isExpanded);
+                    const showThreadActivity = Boolean(
+                      threadActivity && isLastEntry,
+                    );
 
                     return (
                       <div key={entry.message.id}>
@@ -246,13 +260,23 @@ export function MessageThreadPanel({
                           onToggleReaction={onToggleReaction}
                           profiles={profiles}
                         />
-                        {entry.summary && !isExpanded ? (
-                          <MessageThreadSummaryRow
-                            depth={entry.message.depth}
-                            message={entry.message}
-                            onOpenThread={onExpandReplies}
-                            summary={entry.summary}
-                          />
+                        {showSummary || showThreadActivity ? (
+                          <div
+                            className="mt-1 flex min-w-0 items-start gap-1.5"
+                            style={{
+                              marginLeft: `${getThreadControlOffsetPx(entry.message.depth)}px`,
+                            }}
+                          >
+                            {entry.summary && showSummary ? (
+                              <MessageThreadSummaryRow
+                                alignWithText={false}
+                                message={entry.message}
+                                onOpenThread={onExpandReplies}
+                                summary={entry.summary}
+                              />
+                            ) : null}
+                            {showThreadActivity ? threadActivity : null}
+                          </div>
                         ) : null}
                       </div>
                     );
@@ -268,6 +292,15 @@ export function MessageThreadPanel({
                   </p>
                 </div>
               )}
+              {threadActivity && threadReplies.length === 0 ? (
+                <div
+                  className="mt-2 flex min-w-0 justify-start"
+                  data-testid="message-thread-activity"
+                  style={{ marginLeft: `${THREAD_TEXT_COLUMN_OFFSET_PX}px` }}
+                >
+                  {threadActivity}
+                </div>
+              ) : null}
               <div aria-hidden className="h-px" ref={bottomAnchorRef} />
             </div>
           </div>

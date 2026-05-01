@@ -102,6 +102,7 @@ type ChannelPaneProps = {
   openThreadHeadId: string | null;
   openAgentSessionPubkey: string | null;
   threadHeadMessage: TimelineMessage | null;
+  threadBotTypingPubkeys: string[];
   threadMessages: MainTimelineEntry[];
   threadTypingPubkeys: string[];
   threadReplyTargetId: string | null;
@@ -148,6 +149,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   openAgentSessionPubkey,
   targetMessageId,
   threadHeadMessage,
+  threadBotTypingPubkeys,
   threadMessages,
   threadScrollTargetId,
   threadTypingPubkeys,
@@ -373,6 +375,17 @@ export const ChannelPane = React.memo(function ChannelPane({
           replyTargetId={threadReplyTargetId}
           replyTargetMessage={threadReplyTargetMessage}
           scrollTargetId={threadScrollTargetId}
+          threadActivity={
+            threadBotTypingPubkeys.length > 0 ? (
+              <BotActivityBar
+                agents={agentSessionAgents}
+                onOpenAgentSession={onOpenAgentSession}
+                openAgentSessionPubkey={openAgentSessionPubkey}
+                profiles={profiles}
+                typingBotPubkeys={threadBotTypingPubkeys}
+              />
+            ) : null
+          }
           canResetWidth={canResetThreadPanelWidth}
           onResetWidth={handleThreadPanelWidthReset}
           onResizeStart={handleThreadPanelResizeStart}

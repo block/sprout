@@ -140,7 +140,7 @@ export function ChannelScreen({
         .map((entry) => entry.pubkey),
     [typingEntries],
   );
-  const threadTypingPubkeys = React.useMemo(
+  const allThreadTypingPubkeys = React.useMemo(
     () =>
       typingEntries
         .filter((entry) => entry.threadHeadId === openThreadHeadId)
@@ -161,7 +161,12 @@ export function ChannelScreen({
   });
   const managedAgentsQuery = useManagedAgentsQuery();
   useManagedAgentObserverBridge(managedAgentsQuery.data ?? []);
-  const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
+  const {
+    humanTypingPubkeys,
+    botTypingPubkeys,
+    threadTypingPubkeys,
+    threadBotTypingPubkeys,
+  } = React.useMemo(() => {
     const localAgentSet = new Set(
       (managedAgentsQuery.data ?? [])
         .filter((agent) => agent.backend.type === "local")
@@ -173,13 +178,21 @@ export function ChannelScreen({
       ),
       botTypingPubkeys: [
         ...new Set(
-          typingEntries
-            .map((entry) => entry.pubkey)
-            .filter((pk) => localAgentSet.has(pk.toLowerCase())),
+          mainTypingPubkeys.filter((pk) => localAgentSet.has(pk.toLowerCase())),
+        ),
+      ],
+      threadTypingPubkeys: allThreadTypingPubkeys.filter(
+        (pk) => !localAgentSet.has(pk.toLowerCase()),
+      ),
+      threadBotTypingPubkeys: [
+        ...new Set(
+          allThreadTypingPubkeys.filter((pk) =>
+            localAgentSet.has(pk.toLowerCase()),
+          ),
         ),
       ],
     };
-  }, [mainTypingPubkeys, managedAgentsQuery.data, typingEntries]);
+  }, [allThreadTypingPubkeys, mainTypingPubkeys, managedAgentsQuery.data]);
   const messageProfiles = React.useMemo(() => {
     const base =
       mergeCurrentProfileIntoLookup(
@@ -471,6 +484,7 @@ export function ChannelScreen({
                 profiles={messageProfiles}
                 targetMessageId={targetMessageId}
                 threadHeadMessage={openThreadHeadMessage}
+                threadBotTypingPubkeys={threadBotTypingPubkeys}
                 threadMessages={threadMessages}
                 threadTypingPubkeys={threadTypingPubkeys}
                 threadReplyTargetId={threadReplyTargetId}

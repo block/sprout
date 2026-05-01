@@ -34,16 +34,17 @@ export function MessageThreadSummaryRow({
   message,
   onOpenThread,
   summary,
+  textColumnOffsetPx = 60,
 }: {
   alignWithText?: boolean;
   depth?: number;
   message: TimelineMessage;
   onOpenThread: (message: TimelineMessage) => void;
   summary: TimelineThreadSummary;
+  textColumnOffsetPx?: number;
 }) {
   const visibleDepth = Math.min(Math.max(depth, 0), 6);
-  const messageTextOffsetPx = 60;
-  const marginLeftPx = visibleDepth * 28 + messageTextOffsetPx;
+  const marginLeftPx = visibleDepth * 28 + textColumnOffsetPx;
   const depthGuideOffsets = Array.from(
     { length: visibleDepth },
     (_, index) => 14 + index * 28,
