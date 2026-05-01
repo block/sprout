@@ -1,10 +1,8 @@
 import { useUpdaterContext } from "./hooks/UpdaterProvider";
 import { Button } from "@/shared/ui/button";
-import { Badge } from "@/shared/ui/badge";
 
 export function UpdateChecker() {
-  const { status, checkForUpdate, downloadAndInstall, relaunch } =
-    useUpdaterContext();
+  const { status, checkForUpdate, relaunch } = useUpdaterContext();
 
   return (
     <section className="min-w-0">
@@ -44,14 +42,7 @@ export function UpdateChecker() {
       )}
 
       {status.state === "available" && (
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-foreground">
-            Version <Badge variant="info">{status.version}</Badge> is available.
-          </p>
-          <Button size="sm" onClick={downloadAndInstall}>
-            Download &amp; Install
-          </Button>
-        </div>
+        <p className="text-sm text-muted-foreground">Preparing update...</p>
       )}
 
       {status.state === "downloading" && (
