@@ -686,8 +686,9 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 HMAC_FILE="$WORK_DIR/hmac"
 echo "refs/heads/main {old} {new} 1" >> "$HMAC_FILE"
-REPO_ID_LEN=${{#{repo_id_len}}}
-HMAC_INPUT="{repo_id_len_val}:{repo_id}|{owner}|{pusher}|"
+SPROUT_REPO_ID="{repo_id}"
+REPO_ID_LEN=${{#SPROUT_REPO_ID}}
+HMAC_INPUT="${{REPO_ID_LEN}}:${{SPROUT_REPO_ID}}|{owner}|{pusher}|"
 sort "$HMAC_FILE" | while IFS=' ' read -r ref_name old_oid new_oid is_anc; do
     REF_LEN=${{#ref_name}}
     printf '%s%s%s:%s%s' "$old_oid" "$new_oid" "$REF_LEN" "$ref_name" "$is_anc"
@@ -698,8 +699,6 @@ printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "{secret}" -hex 2>/dev/nu
             old = "1".repeat(40),
             new = "2".repeat(40),
             repo_id = repo_id,
-            repo_id_len = format!("SPROUT_REPO_ID=\"{repo_id}\"; echo ${{#SPROUT_REPO_ID}}"),
-            repo_id_len_val = repo_id.len(),
             owner = repo_owner,
             pusher = pusher,
             timestamp = timestamp,
