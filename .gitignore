@@ -26,6 +26,9 @@ playwright-report/
 test-results/
 blob-report/
 
+# Root npm lockfiles are accidental; desktop uses pnpm in /desktop.
+/package-lock.json
+
 # sqlx offline query data (generated, not portable)
 .sqlx/
 
