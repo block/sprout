@@ -13,7 +13,6 @@ import {
   isManagedAgentActive,
 } from "@/features/agents/lib/managedAgentControlActions";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { truncatePubkey } from "@/features/profile/lib/identity";
 import type {
@@ -103,12 +102,22 @@ export function MembersSidebarMemberCard({
       data-testid={`sidebar-member-${member.pubkey}`}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <ProfileAvatar
-          avatarUrl={profileAvatarUrl ?? null}
-          className="h-9 w-9 rounded-full text-[11px] shadow-none"
-          iconClassName="h-4 w-4"
-          label={memberLabel}
-        />
+        <div className="relative shrink-0">
+          <ProfileAvatar
+            avatarUrl={profileAvatarUrl ?? null}
+            className="h-9 w-9 rounded-full text-[11px] shadow-none"
+            iconClassName="h-4 w-4"
+            label={memberLabel}
+          />
+          {presenceStatus ? (
+            <span
+              className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background"
+              data-testid={`sidebar-member-presence-${member.pubkey}`}
+            >
+              <PresenceDot className="h-2 w-2" status={presenceStatus} />
+            </span>
+          ) : null}
+        </div>
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <p className="truncate text-sm font-medium leading-5">
@@ -131,17 +140,6 @@ export function MembersSidebarMemberCard({
             {truncatePubkey(member.pubkey)}
           </p>
         </div>
-      </div>
-      <div
-        className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-        data-testid={`sidebar-member-presence-${member.pubkey}`}
-      >
-        {presenceStatus ? (
-          <>
-            <PresenceDot className="h-2 w-2" status={presenceStatus} />
-            <span>{getPresenceLabel(presenceStatus)}</span>
-          </>
-        ) : null}
       </div>
       {hasActions ? (
         <MemberActionsMenu
