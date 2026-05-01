@@ -53,6 +53,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     // ── Git routes: configurable body limit (default 500 MB) ─────────────────
     let git_router = api::git::git_router(state.clone());
 
+    // ── Internal git policy route (pre-receive hook callback) ────────────────
+    let git_policy_router = api::git::git_policy_router(state.clone());
+
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
         .route("/", get(nip11_or_ws_handler))
@@ -168,6 +171,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     api_router
         .merge(media_router)
         .merge(git_router)
+        .merge(git_policy_router)
         .layer(middleware::from_fn(track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.cors_origins))

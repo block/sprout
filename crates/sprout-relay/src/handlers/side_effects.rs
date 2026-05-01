@@ -1453,7 +1453,7 @@ fn validate_repo_id(repo_id: &str) -> bool {
 /// - Repo name validated: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`
 /// - Owner pubkey validated: exactly 64 lowercase hex chars
 /// - Path canonicalized and verified to start with repo root
-/// - Git hooks disabled via `core.hooksPath=/dev/null` + hooks dir removed
+/// - Pre-receive hook installed for permission enforcement (only hook enabled)
 /// - Per-pubkey repo count limit enforced
 async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     use tokio::process::Command;
@@ -1594,19 +1594,6 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
     }
 
-    // Security: disable git hooks (RCE prevention).
-    let _ = Command::new("git")
-        .args(["config", "--file"])
-        .arg(repo_dir.join("config"))
-        .args(["core.hooksPath", "/dev/null"])
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("HOME", "/dev/null")
-        .output()
-        .await;
-
     // Git config for Smart HTTP compatibility.
     for (key, value) in [
         ("http.receivepack", "true"),
@@ -1627,11 +1614,22 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             .await;
     }
 
-    // Belt-and-suspenders: remove hooks directory entirely.
-    let hooks_dir = repo_dir.join("hooks");
-    if hooks_dir.exists() {
-        let _ = tokio::fs::remove_dir_all(&hooks_dir).await;
-    }
+    // Install pre-receive hook for permission enforcement.
+    // This replaces the old "disable all hooks" approach — we now have our own
+    // hook that calls back to the relay's internal policy endpoint.
+    // Only pre-receive is installed; all other hook slots remain empty (RCE prevention).
+    // SECURITY: Hook installation is FATAL. If the hook can't be installed,
+    // the repo would be unprotected. Better to fail repo creation than allow
+    // an unprotected repo to exist. The receive_pack handler also checks hook
+    // existence as a belt-and-suspenders measure.
+    crate::api::git::hook::install_hook(&repo_dir)
+        .await
+        .map_err(|e| {
+            // Clean up the repo directory since it's unusable without the hook.
+            let _ = std::fs::remove_dir_all(&repo_dir);
+            let _ = std::fs::remove_dir(&reservation);
+            anyhow::anyhow!("failed to install pre-receive hook: {e}")
+        })?;
 
     info!(
         repo_id = %repo_id,
