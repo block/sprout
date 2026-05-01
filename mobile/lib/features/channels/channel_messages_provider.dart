@@ -62,7 +62,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
             tags: {
               '#h': [channelId],
             },
-            limit: 50,
+            limit: 200,
           ),
           _handleLiveEvent,
         );
@@ -87,7 +87,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
           tags: {
             '#h': [channelId],
           },
-          limit: 50,
+          limit: 200,
         ),
       );
       if (!_isCurrentInit(initVersion)) {
@@ -106,6 +106,12 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
       merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       _lastKnownMessages = merged;
       state = AsyncData(merged);
+
+      // Auto-prefetch: if deletions/reactions crowded out displayable messages,
+      // loop fetchOlder() until we have enough content to fill the screen.
+      // Must clear _initInFlight first so fetchOlder() doesn't short-circuit.
+      _initInFlight = false;
+      await _ensureMinDisplayable(initVersion);
     } catch (e, st) {
       if (!_isCurrentInit(initVersion)) {
         return;
@@ -146,6 +152,37 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
         content.contains('member_removed');
   }
 
+  /// Kinds that are metadata rather than displayable content (deletions,
+  /// reactions, edits, legacy pre-migration messages).
+  static const _metadataKinds = {5, 7, 40001, 40003};
+
+  /// Minimum displayable messages we want after the initial history load.
+  static const _minDisplayable = 15;
+
+  /// Max extra fetchOlder rounds during auto-prefetch to avoid hammering the
+  /// relay.
+  static const _maxPrefetchRounds = 3;
+
+  /// After the initial history fetch, check whether enough user-visible
+  /// messages were loaded. If deletion/reaction events consumed most of the
+  /// fetch limit, loop [fetchOlder] to backfill displayable content.
+  Future<void> _ensureMinDisplayable(int initVersion) async {
+    for (var i = 0; i < _maxPrefetchRounds; i++) {
+      if (!_isCurrentInit(initVersion) || _reachedOldest) return;
+
+      final events = state.value;
+      if (events == null) return;
+
+      final displayable = events
+          .where((e) => !_metadataKinds.contains(e.kind))
+          .length;
+      if (displayable >= _minDisplayable) return;
+
+      final loaded = await fetchOlder();
+      if (!loaded) return;
+    }
+  }
+
   /// Merge a new event into the sorted list, deduplicating by ID.
   static List<NostrEvent> _mergeEvent(
     List<NostrEvent> current,
@@ -184,7 +221,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
         tags: {
           '#h': [channelId],
         },
-        limit: 50,
+        limit: 100,
         until: oldest,
       ),
     );
