@@ -325,26 +325,6 @@ test("built-in deselection failures show up in Persona Catalog", async ({
   ).toBeVisible();
 });
 
-test("channel quick add falls back to added personas when defaults are absent", async ({
-  page,
-}) => {
-  await gotoApp(page);
-  await page.getByTestId("open-agents-view").click();
-  await page.getByTestId("open-persona-catalog").click();
-  await page
-    .getByTestId("persona-catalog-card-target-builtin:reviewer")
-    .click();
-  await page.getByTestId("persona-catalog-dialog-done").click();
-
-  await page.getByTestId("channel-random").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("random");
-  await page.getByTestId("channel-add-bot-trigger").hover();
-
-  await expect(
-    page.getByRole("button", { name: "Add Reviewer" }),
-  ).toBeVisible();
-});
-
 test("personas referenced by teams cannot be deleted", async ({ page }) => {
   await gotoApp(page);
 

@@ -14,7 +14,7 @@ import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
-import { Markdown } from "@/shared/ui/markdown";
+
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 
@@ -61,10 +61,9 @@ export function UserProfilePopover({
   botIdenticonValue,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
-  const [showAllNotes, setShowAllNotes] = React.useState(false);
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
   const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
-    limit: showAllNotes ? 20 : 3,
+    limit: 1,
   });
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: open && role === "bot",
@@ -86,7 +85,7 @@ export function UserProfilePopover({
     managedAgent?.backend.type === "local" &&
     Boolean(onOpenAgentSession);
   const profile = profileQuery.data;
-  const notes = notesQuery.data?.notes ?? [];
+  const latestNote = (notesQuery.data?.notes ?? [])[0] ?? null;
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
 
   return (
@@ -128,10 +127,29 @@ export function UserProfilePopover({
                   {profile.nip05Handle}
                 </p>
               ) : null}
+              {profile?.displayName ? (
+                <p className="truncate font-mono text-[10px] text-muted-foreground/50">
+                  {truncatePubkey(pubkey)}
+                </p>
+              ) : null}
             </div>
 
             {presenceStatus ? <PresenceBadge status={presenceStatus} /> : null}
           </div>
+
+          {!notesQuery.isLoading && !notesQuery.isError && latestNote ? (
+            <div
+              className="rounded-lg bg-muted/30 px-3 py-2"
+              data-testid="user-profile-latest-note"
+            >
+              <p className="line-clamp-2 text-xs text-foreground">
+                {latestNote.content}
+              </p>
+              <p className="mt-1 text-[10px] text-muted-foreground/70">
+                {formatRelativeTime(latestNote.createdAt)}
+              </p>
+            </div>
+          ) : null}
 
           {role === "bot" && (managedAgent || relayAgent) ? (
             <div className="flex flex-wrap gap-1.5">
@@ -168,61 +186,6 @@ export function UserProfilePopover({
               <Activity className="h-3.5 w-3.5 text-muted-foreground" />
               View activity log
             </button>
-          ) : null}
-
-          <p className="truncate font-mono text-[10px] text-muted-foreground/60">
-            {truncatePubkey(pubkey)}
-          </p>
-
-          {notesQuery.isLoading ? (
-            <div
-              className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
-              data-testid="user-profile-notes-loading"
-            >
-              Loading recent notes…
-            </div>
-          ) : null}
-
-          {!notesQuery.isLoading && notes.length > 0 ? (
-            <div
-              className="border-t border-border/60 pt-3"
-              data-testid="user-profile-notes"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Recent Notes
-                </p>
-                {notes.length >= 3 ? (
-                  <button
-                    className="text-[11px] text-primary hover:underline"
-                    onClick={() => setShowAllNotes(!showAllNotes)}
-                    type="button"
-                  >
-                    {showAllNotes ? "Show less" : "View all"}
-                  </button>
-                ) : null}
-              </div>
-              <div
-                className={`space-y-2 ${showAllNotes ? "max-h-64 overflow-y-auto" : ""}`}
-              >
-                {notes.map((note) => (
-                  <article
-                    className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
-                    data-testid="user-profile-note"
-                    key={note.id}
-                  >
-                    <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                      {formatRelativeTime(note.createdAt)}
-                    </p>
-                    <Markdown
-                      className="max-w-none text-xs text-foreground"
-                      content={note.content}
-                      tight
-                    />
-                  </article>
-                ))}
-              </div>
-            </div>
           ) : null}
 
           {notesQuery.isError ? (
