@@ -118,9 +118,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // - HTTPS in production (prevents token theft)
         // - Pre-receive hook for push authorization (role + protection rules)
         // - Endpoint routing (clone/push are different HTTP paths)
-        let repo_path = if let Some((prefix, _query)) =
-            path_and_query.split_once("/info/refs")
-        {
+        let repo_path = if let Some((prefix, _query)) = path_and_query.split_once("/info/refs") {
             prefix
         } else if let Some(prefix) = path_and_query.strip_suffix("/git-upload-pack") {
             prefix
