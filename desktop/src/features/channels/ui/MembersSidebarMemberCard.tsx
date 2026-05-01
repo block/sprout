@@ -110,9 +110,23 @@ export function MembersSidebarMemberCard({
           label={memberLabel}
         />
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium leading-5">
-            {memberLabel}
-          </p>
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-sm font-medium leading-5">
+              {memberLabel}
+            </p>
+            <Badge className="shrink-0" variant="secondary">
+              {roleLabel}
+            </Badge>
+            {managedAgent ? (
+              <Badge
+                className="shrink-0"
+                data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
+                variant="secondary"
+              >
+                {formatManagedAgentStatus(managedAgent)}
+              </Badge>
+            ) : null}
+          </div>
           <p className="truncate font-mono text-[10px] text-muted-foreground/50">
             {truncatePubkey(member.pubkey)}
           </p>
@@ -126,19 +140,6 @@ export function MembersSidebarMemberCard({
           <>
             <PresenceDot className="h-2 w-2" status={presenceStatus} />
             <span>{getPresenceLabel(presenceStatus)}</span>
-            <span aria-hidden="true">&middot;</span>
-          </>
-        ) : null}
-        <span>{roleLabel}</span>
-        {managedAgent ? (
-          <>
-            <span aria-hidden="true">&middot;</span>
-            <Badge
-              data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
-              variant="secondary"
-            >
-              {formatManagedAgentStatus(managedAgent)}
-            </Badge>
           </>
         ) : null}
       </div>
