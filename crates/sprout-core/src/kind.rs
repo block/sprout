@@ -25,6 +25,10 @@ pub const KIND_FILE_METADATA: u32 = 1063;
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); author-owned, not channel-scoped.
 pub const KIND_LONG_FORM: u32 = 30023;
+/// NIP-38: User status (general, music, or custom d-tag).
+/// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
+/// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
+pub const KIND_USER_STATUS: u32 = 30315;
 /// NIP-78 / NIP-RS: Per-client read state blob for cross-device read position sync.
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
@@ -341,6 +345,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_LONG_FORM,
+    KIND_USER_STATUS,
     KIND_READ_STATE,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,

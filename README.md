@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="sprout-icon.png" alt="Sprout" width="200">
+  <img src="docs/assets/sprout-icon.png" alt="Sprout" width="200">
 </p>
 
 # sprout

@@ -32,7 +32,7 @@ fn bounded_kind_label(kind: u32) -> String {
         0..=9 | 1059 | 1063 => kind.to_string(),
         9000..=9022 | 9030..=9032 | 9100 | 9110 | 9900 => kind.to_string(),
         20000..=29999 => kind.to_string(),
-        30023 | 39000..=39003 => kind.to_string(),
+        30023 | 30315 | 39000..=39003 => kind.to_string(),
         40002..=40100 => kind.to_string(),
         41001..=41003 => kind.to_string(),
         42001..=42003 => kind.to_string(),

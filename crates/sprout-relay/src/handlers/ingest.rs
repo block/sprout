@@ -25,8 +25,8 @@ use sprout_core::kind::{
     KIND_NIP43_LEAVE_REQUEST, KIND_PRESENCE_UPDATE, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
     KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
     KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE, RELAY_ADMIN_ADD_MEMBER,
-    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_USER_STATUS,
+    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
 };
 use sprout_core::verification::verify_event;
 
@@ -155,7 +155,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
-        KIND_CONTACT_LIST | KIND_READ_STATE => Ok(Scope::UsersWrite),
+        KIND_CONTACT_LIST | KIND_READ_STATE | KIND_USER_STATUS => Ok(Scope::UsersWrite),
         KIND_DELETION
         | KIND_REACTION
         | KIND_GIFT_WRAP
@@ -299,6 +299,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_TEXT_NOTE
             | KIND_CONTACT_LIST
             | KIND_LONG_FORM
+            | KIND_USER_STATUS
             | KIND_READ_STATE
             // NIP-34: git events use `a` tags (repo reference), not `h` tags (channel scope).
             // Parameterized replaceable kinds are keyed by (pubkey, kind, d_tag).
@@ -1529,7 +1530,7 @@ mod tests {
     use super::*;
     use sprout_core::kind::{
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
-        KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
+        KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF, KIND_USER_STATUS,
     };
 
     #[test]
@@ -1616,6 +1617,25 @@ mod tests {
     }
 
     #[test]
+    fn user_status_requires_users_write_scope() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_USER_STATUS, &dummy).unwrap(),
+            Scope::UsersWrite,
+        );
+    }
+
+    #[test]
+    fn user_status_is_global_only() {
+        assert!(is_global_only_kind(KIND_USER_STATUS));
+    }
+
+    #[test]
+    fn user_status_does_not_require_h_tag() {
+        assert!(!requires_h_channel_scope(KIND_USER_STATUS));
+    }
+
+    #[test]
     fn global_only_and_channel_scoped_are_disjoint() {
         // A kind cannot be both global-only and channel-scoped
         for kind in 0..=65535u32 {
@@ -1654,6 +1674,7 @@ mod tests {
             KIND_FORUM_VOTE,
             KIND_FORUM_COMMENT,
             KIND_LONG_FORM,
+            KIND_USER_STATUS,
         ];
         for kind in migrated {
             assert!(

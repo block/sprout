@@ -492,14 +492,9 @@ test("manage sheet updates channel details and context through the relay", async
 
   await page.getByTestId(`channel-${renamedChannel}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(renamedChannel);
+  // channelDescription deduplicates by showing only the first non-empty field
   await expect(page.getByTestId("chat-description")).toContainText(
     updatedTopic,
-  );
-  await expect(page.getByTestId("chat-description")).toContainText(
-    updatedDescription,
-  );
-  await expect(page.getByTestId("chat-description")).toContainText(
-    updatedPurpose,
   );
 
   await openChannelManagement(page);

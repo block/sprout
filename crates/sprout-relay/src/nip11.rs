@@ -7,7 +7,7 @@ use crate::connection::MAX_FRAME_BYTES;
 /// NIPs supported by this relay, advertised in the NIP-11 document.
 /// Kept as a module-level constant so tests can verify it without constructing
 /// a full `Config` (which reads env vars and races with config.rs tests).
-pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 42, 43, 50];
+pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 38, 42, 43, 50];
 
 /// Relay information document served at `GET /` with `Accept: application/nostr+json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +118,14 @@ mod tests {
         assert!(
             SUPPORTED_NIPS.contains(&33),
             "NIP-33 (parameterized replaceable) must be advertised"
+        );
+    }
+
+    #[test]
+    fn supported_nips_includes_nip38() {
+        assert!(
+            SUPPORTED_NIPS.contains(&38),
+            "NIP-38 (user statuses) must be advertised"
         );
     }
 
