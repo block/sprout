@@ -18,6 +18,7 @@ use axum::{
     routing::post,
     Router,
 };
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::state::AppState;
 
@@ -49,9 +50,11 @@ async fn require_localhost(req: Request<Body>, next: Next) -> Response {
 ///
 /// Mounted at `/internal/git/policy` — only accessible from localhost.
 /// The pre-receive hook calls this to authorize pushes.
+/// Body limit: 1 MB (500 refs × ~200 bytes each = ~100 KB typical; 1 MB is generous).
 pub fn git_policy_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/internal/git/policy", post(policy::hook_policy_check))
+        .layer(RequestBodyLimitLayer::new(1024 * 1024)) // 1 MB
         .layer(middleware::from_fn(require_localhost))
         .with_state(state)
 }

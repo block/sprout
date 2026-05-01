@@ -28,17 +28,29 @@ use tracing::{error, info};
 /// Git sets automatically (quarantine):
 /// - `GIT_OBJECT_DIRECTORY` — quarantine object store
 /// - `GIT_ALTERNATE_OBJECT_DIRECTORIES` — includes the real object store
-const PRE_RECEIVE_HOOK: &str = r#"#!/bin/sh
+const PRE_RECEIVE_HOOK: &str = r#"#!/usr/bin/env bash
 # Sprout pre-receive hook — FAIL-CLOSED
 # ANY error, timeout, or non-200 response → reject the push.
 set -eo pipefail
 
+# Force C locale for deterministic sort order and byte-accurate string lengths.
+# Rust uses byte-order comparison and byte lengths — locale-aware sort/strlen would mismatch.
+export LC_ALL=C
+
 ZERO="0000000000000000000000000000000000000000"
-TMPDIR="${TMPDIR:-/tmp}"
-REFS_FILE="$TMPDIR/sprout_hook_refs.$$"
-HMAC_FILE="$TMPDIR/sprout_hook_hmac.$$"
-RESP_FILE="$TMPDIR/sprout_hook_resp.$$"
-trap 'rm -f "$REFS_FILE" "$HMAC_FILE" "$HMAC_FILE.concat" "$RESP_FILE"' EXIT
+
+# Fail-closed: required env vars must be set by the relay.
+: "${SPROUT_REPO_ID:?error: SPROUT_REPO_ID not set}"
+: "${SPROUT_REPO_OWNER:?error: SPROUT_REPO_OWNER not set}"
+: "${SPROUT_PUSHER_PUBKEY:?error: SPROUT_PUSHER_PUBKEY not set}"
+: "${SPROUT_HOOK_URL:?error: SPROUT_HOOK_URL not set}"
+: "${SPROUT_HOOK_SECRET:?error: SPROUT_HOOK_SECRET not set}"
+
+WORK_DIR=$(mktemp -d) || { echo "error: cannot create temp dir" >&2; exit 1; }
+REFS_FILE="$WORK_DIR/refs"
+HMAC_FILE="$WORK_DIR/hmac"
+RESP_FILE="$WORK_DIR/resp"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 # Phase 1: Read ref updates from stdin, classify each, build JSON + HMAC lines.
 # We write two files in parallel:
@@ -60,25 +72,38 @@ while read old_oid new_oid ref_name; do
     fi
 
     # JSON entry for request body.
+    # Escape any special JSON characters in ref_name (defense against injection).
+    # Git ref names can't contain most special chars, but belt-and-suspenders.
+    SAFE_REF=$(printf '%s' "$ref_name" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
     if [ -n "$REFS" ]; then
         REFS="${REFS},"
     fi
-    REFS="${REFS}{\"old_oid\":\"${old_oid}\",\"new_oid\":\"${new_oid}\",\"ref_name\":\"${ref_name}\",\"is_ancestor\":${IS_ANCESTOR}}"
+    REFS="${REFS}{\"old_oid\":\"${old_oid}\",\"new_oid\":\"${new_oid}\",\"ref_name\":\"${SAFE_REF}\",\"is_ancestor\":${IS_ANCESTOR}}"
 
-    # HMAC line: ref_name first (for sorting), then oids.
-    echo "${ref_name} ${old_oid} ${new_oid}" >> "$HMAC_FILE"
+    # HMAC line: ref_name first (for sorting), then oids + is_ancestor.
+    # is_ancestor as "1" or "0" to match Rust's b"1"/b"0".
+    if [ "$IS_ANCESTOR" = "true" ]; then
+        echo "${ref_name} ${old_oid} ${new_oid} 1" >> "$HMAC_FILE"
+    else
+        echo "${ref_name} ${old_oid} ${new_oid} 0" >> "$HMAC_FILE"
+    fi
 done
 
 # Phase 2: Compute HMAC-SHA256 signature.
 # Payload format MUST match relay's compute_hmac() in policy.rs:
-#   repo_id | pusher_pubkey | (old_oid + new_oid + ref_name) per ref sorted by ref_name | timestamp
+#   repo_id | repo_owner | pusher_pubkey | (old_oid + new_oid + ref_name + is_ancestor) per ref sorted by ref_name | timestamp
 TIMESTAMP=$(date +%s)
 
-HMAC_INPUT="${SPROUT_REPO_ID}|${SPROUT_PUSHER_PUBKEY}|"
+# Structurally unambiguous HMAC format (matches Rust's compute_hmac):
+# len(repo_id):repo_id | repo_owner | pusher | (old_oid + new_oid + len(ref):ref + is_anc)* | timestamp
+REPO_ID_LEN=${#SPROUT_REPO_ID}
+HMAC_INPUT="${REPO_ID_LEN}:${SPROUT_REPO_ID}|${SPROUT_REPO_OWNER}|${SPROUT_PUSHER_PUBKEY}|"
 # Sort by ref_name (field 1) — matches Rust's sort_by(|a, b| a.ref_name.cmp(&b.ref_name))
 if [ -f "$HMAC_FILE" ]; then
-    sort "$HMAC_FILE" | while IFS=' ' read ref_name old_oid new_oid; do
-        printf '%s%s%s' "$old_oid" "$new_oid" "$ref_name"
+    sort "$HMAC_FILE" | while IFS=' ' read ref_name old_oid new_oid is_anc; do
+        REF_LEN=${#ref_name}
+        printf '%s%s%s:%s%s' "$old_oid" "$new_oid" "$REF_LEN" "$ref_name" "$is_anc"
     done > "$HMAC_FILE.concat"
     HMAC_INPUT="${HMAC_INPUT}$(cat "$HMAC_FILE.concat")"
     rm -f "$HMAC_FILE.concat"
@@ -92,21 +117,24 @@ if [ -z "$SIGNATURE" ]; then
 fi
 
 # Phase 3: POST to policy endpoint — FAIL-CLOSED.
-BODY="{\"repo_id\":\"${SPROUT_REPO_ID}\",\"pusher_pubkey\":\"${SPROUT_PUSHER_PUBKEY}\",\"ref_updates\":[${REFS}],\"timestamp\":${TIMESTAMP},\"signature\":\"${SIGNATURE}\"}"
+# repo_id is free-form (user-chosen d-tag) — must be escaped for JSON safety.
+# repo_owner and pusher_pubkey are validated 64-char lowercase hex — no escaping needed.
+SAFE_REPO_ID=$(printf '%s' "$SPROUT_REPO_ID" | sed 's/\\/\\\\/g; s/"/\\"/g')
+BODY="{\"repo_id\":\"${SAFE_REPO_ID}\",\"repo_owner\":\"${SPROUT_REPO_OWNER}\",\"pusher_pubkey\":\"${SPROUT_PUSHER_PUBKEY}\",\"ref_updates\":[${REFS}],\"timestamp\":${TIMESTAMP},\"signature\":\"${SIGNATURE}\"}"
 
-HTTP_CODE=$(curl --fail --silent --max-time 10 \
+HTTP_CODE=$(curl --silent --max-time 10 \
     -o "$RESP_FILE" \
     -w "%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$BODY" \
     "$SPROUT_HOOK_URL" 2>/dev/null) || {
-    echo "error: push authorization failed (could not reach policy service)" >&2
+    echo "error: push authorization failed (network error reaching policy service)" >&2
     exit 1
 }
 
 if [ "$HTTP_CODE" != "200" ]; then
-    echo "error: push denied by policy" >&2
+    echo "error: push denied by policy (HTTP $HTTP_CODE)" >&2
     cat "$RESP_FILE" >&2 2>/dev/null
     exit 1
 fi

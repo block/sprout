@@ -104,32 +104,46 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
             .map(|pq| pq.as_str())
             .unwrap_or(parts.uri.path());
 
-        // Bug fix: strip git endpoint suffixes before building the expected URL.
+        // Service-bound URL verification.
         //
-        // Git's credential helper is invoked once — for the initial GET /info/refs —
-        // and signs a NIP-98 token with `u = <repo-root>` (e.g. `/git/{owner}/{repo}.git`).
-        // That same token is reused for all subsequent requests in the session
-        // (git-upload-pack, git-receive-pack). We must verify against the repo-root URL,
-        // not the full endpoint URL, so all three endpoints share a single canonical URL.
-        let repo_path = path_and_query
-            .split_once("/info/refs")
-            .map(|(prefix, _)| prefix)
-            .or_else(|| path_and_query.strip_suffix("/git-upload-pack"))
-            .or_else(|| path_and_query.strip_suffix("/git-receive-pack"))
-            .unwrap_or(path_and_query);
-        let expected_url = format!("{base_url}{repo_path}");
+        // The credential helper signs a NIP-98 token with:
+        //   u = <repo-root>?service=git-upload-pack   (for clone/fetch)
+        //   u = <repo-root>?service=git-receive-pack  (for push)
+        //
+        // All requests in a git session (info/refs GET + pack POST) share the same
+        // service scope. We extract the service from the current request and build
+        // the canonical URL that the token should have been signed against.
+        //
+        // This prevents a clone token from authenticating push endpoints and vice versa.
+        let (repo_path, service) = if let Some((prefix, query)) =
+            path_and_query.split_once("/info/refs")
+        {
+            // GET /info/refs?service=git-upload-pack or git-receive-pack
+            let svc = match query {
+                "?service=git-upload-pack" => "git-upload-pack",
+                "?service=git-receive-pack" => "git-receive-pack",
+                _ => {
+                    return Err((StatusCode::BAD_REQUEST, "invalid git service").into_response());
+                }
+            };
+            (prefix, svc)
+        } else if let Some(prefix) = path_and_query.strip_suffix("/git-upload-pack") {
+            (prefix, "git-upload-pack")
+        } else if let Some(prefix) = path_and_query.strip_suffix("/git-receive-pack") {
+            (prefix, "git-receive-pack")
+        } else {
+            return Err((StatusCode::BAD_REQUEST, "unrecognized git endpoint").into_response());
+        };
+        let expected_url = format!("{base_url}{repo_path}?service={service}");
 
-        // Bug fix: skip the HTTP method check for git routes.
+        // Skip HTTP method check for git routes.
         //
-        // Git's credential helper signs the NIP-98 token with `method=GET` (the method
-        // used for the initial /info/refs discovery request), then reuses that same token
-        // for POST requests (git-upload-pack, git-receive-pack). Verifying against the
-        // actual HTTP method would reject all pack operations after the first request.
+        // Git's credential helper signs with `method=GET` (the initial /info/refs request)
+        // then reuses the token for POST (pack data). Method binding can't work here.
         //
-        // The URL tag already scopes the token to the correct repo — the method tag adds
-        // no meaningful security here since all git endpoints require the same authorization
-        // (repo owner). We pass the method from the event itself so verify_nip98_event
-        // always accepts whatever method the credential helper signed.
+        // Security is provided by: service-binding in the URL (clone vs push scoped),
+        // ±60s timestamp, and the pre-receive hook for push authorization.
+        // We pass the method from the event itself so verify_nip98_event always accepts.
         let event_method = serde_json::from_str::<serde_json::Value>(&event_json)
             .ok()
             .and_then(|v| {
@@ -384,21 +398,40 @@ pub async fn receive_pack(
         .clone();
     let _repo_guard = repo_lock.lock().await;
 
-    // SECURITY: Verify pre-receive hook exists before allowing push.
-    // If the hook is missing (install failed, disk error, race condition),
+    // SECURITY: Verify pre-receive hook is a regular file, executable, and not a symlink.
+    // If the hook is missing, non-executable, or a symlink (potential tampering),
     // deny the push rather than allowing it without permission checks.
     let hook_path = validated.repo_path.join("hooks").join("pre-receive");
-    if !hook_path.exists() {
-        warn!(
-            repo = %params.repo,
-            hook = %hook_path.display(),
-            "push denied: pre-receive hook missing — repo has no permission enforcement"
-        );
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "push denied: repository permission hook not installed",
-        )
-            .into_response());
+    {
+        let hook_ok = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                // Use symlink_metadata to detect symlinks (doesn't follow them).
+                std::fs::symlink_metadata(&hook_path)
+                    .map(|m| {
+                        m.file_type().is_file() // Regular file, not symlink
+                            && m.permissions().mode() & 0o111 != 0 // Executable
+                    })
+                    .unwrap_or(false)
+            }
+            #[cfg(not(unix))]
+            {
+                hook_path.is_file()
+            }
+        };
+        if !hook_ok {
+            warn!(
+                repo = %params.repo,
+                hook = %hook_path.display(),
+                "push denied: pre-receive hook missing, not executable, or symlink"
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "push denied: repository permission hook not installed",
+            )
+                .into_response());
+        }
     }
 
     // Resolve repo name (strip .git suffix if present).
@@ -410,6 +443,10 @@ pub async fn receive_pack(
         "http://127.0.0.1:{}/internal/git/policy",
         state.config.bind_addr.port()
     );
+    // SECURITY: Force core.hooksPath via env to prevent repo-local config from
+    // overriding the hook directory. Without this, a malicious repo config could
+    // set core.hooksPath=/dev/null to bypass the pre-receive hook entirely.
+    let hooks_dir = validated.repo_path.join("hooks").display().to_string();
     let hook_env = vec![
         ("SPROUT_HOOK_URL", hook_url),
         (
@@ -417,7 +454,12 @@ pub async fn receive_pack(
             state.config.git_hook_hmac_secret.clone(),
         ),
         ("SPROUT_REPO_ID", repo_name.to_string()),
+        ("SPROUT_REPO_OWNER", params.owner.clone()),
         ("SPROUT_PUSHER_PUBKEY", pusher_hex.clone()),
+        // Override any repo-local core.hooksPath setting.
+        ("GIT_CONFIG_COUNT", "1".to_string()),
+        ("GIT_CONFIG_KEY_0", "core.hooksPath".to_string()),
+        ("GIT_CONFIG_VALUE_0", hooks_dir),
     ];
 
     let response = run_git_service_with_env(
@@ -431,6 +473,9 @@ pub async fn receive_pack(
     .await?;
 
     // Post-push: publish kind:30618 ref state event (fire-and-forget).
+    // NOTE: This fires even on denied pushes (git returns 200 with in-band rejection).
+    // The publish reads current refs from disk — if nothing changed, it publishes
+    // identical state (idempotent). A future optimization could compare before/after.
     let state_clone = state.clone();
     let owner = params.owner.clone();
     let repo = params.repo.clone();

@@ -42,10 +42,12 @@ use crate::state::AppState;
 const MAX_CALLBACK_AGE_SECS: u64 = 30;
 
 /// Request payload from the pre-receive hook.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct HookCallbackRequest {
     /// Repo identifier (d-tag from kind:30617).
     pub repo_id: String,
+    /// Hex-encoded repo owner pubkey (from URL path, verified against kind:30617).
+    pub repo_owner: String,
     /// Hex-encoded pusher pubkey.
     pub pusher_pubkey: String,
     /// Ref updates from git stdin (old_oid, new_oid, ref_name, is_ancestor).
@@ -107,17 +109,27 @@ impl From<Denial> for DenialResponse {
 fn compute_hmac(secret: &[u8], req: &HookCallbackRequest) -> Vec<u8> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC can take key of any size");
 
+    // Structurally unambiguous format: length-prefixed fields separated by |.
+    // This prevents field confusion attacks (e.g., repo_id="a|b" being parsed differently).
+    mac.update(req.repo_id.len().to_string().as_bytes());
+    mac.update(b":");
     mac.update(req.repo_id.as_bytes());
     mac.update(b"|");
-    mac.update(req.pusher_pubkey.as_bytes());
+    mac.update(req.repo_owner.as_bytes()); // Fixed 64 chars, no ambiguity.
+    mac.update(b"|");
+    mac.update(req.pusher_pubkey.as_bytes()); // Fixed 64 chars, no ambiguity.
     mac.update(b"|");
     // Deterministic ref update representation: sorted by ref_name.
+    // Each ref is length-prefixed to prevent concatenation ambiguity.
     let mut refs_sorted: Vec<&HookRefUpdate> = req.ref_updates.iter().collect();
     refs_sorted.sort_by(|a, b| a.ref_name.cmp(&b.ref_name));
     for r in &refs_sorted {
-        mac.update(r.old_oid.as_bytes());
-        mac.update(r.new_oid.as_bytes());
+        mac.update(r.old_oid.as_bytes()); // Fixed 40 chars.
+        mac.update(r.new_oid.as_bytes()); // Fixed 40 chars.
+        mac.update(r.ref_name.len().to_string().as_bytes());
+        mac.update(b":");
         mac.update(r.ref_name.as_bytes());
+        mac.update(if r.is_ancestor { b"1" } else { b"0" });
     }
     mac.update(b"|");
     mac.update(req.timestamp.to_string().as_bytes());
@@ -146,14 +158,55 @@ pub async fn hook_policy_check(
     State(state): State<Arc<AppState>>,
     Json(req): Json<HookCallbackRequest>,
 ) -> Response {
-    // 1. Validate HMAC signature.
+    // 1. Validate input fields (cheap structural checks before expensive HMAC).
+    // This prevents wasting CPU on malformed payloads.
+    if req.repo_id.is_empty() || req.repo_id.len() > 64 {
+        return (StatusCode::FORBIDDEN, "invalid repo_id").into_response();
+    }
+    if req.repo_owner.len() != 64
+        || !req
+            .repo_owner
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        return (StatusCode::FORBIDDEN, "invalid repo_owner").into_response();
+    }
+    if req.pusher_pubkey.len() != 64
+        || !req
+            .pusher_pubkey
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
+        return (StatusCode::FORBIDDEN, "invalid pusher_pubkey").into_response();
+    }
+    if req.ref_updates.is_empty() || req.ref_updates.len() > 500 {
+        return (StatusCode::FORBIDDEN, "invalid ref_updates count").into_response();
+    }
+    for r in &req.ref_updates {
+        if r.old_oid.len() != 40 || !r.old_oid.chars().all(|c| c.is_ascii_hexdigit()) {
+            return (StatusCode::FORBIDDEN, "invalid old_oid").into_response();
+        }
+        if r.new_oid.len() != 40 || !r.new_oid.chars().all(|c| c.is_ascii_hexdigit()) {
+            return (StatusCode::FORBIDDEN, "invalid new_oid").into_response();
+        }
+        if r.ref_name.is_empty()
+            || r.ref_name.len() > 256
+            || !r.ref_name.starts_with("refs/")
+            || r.ref_name.contains("..")
+            || r.ref_name.bytes().any(|b| b <= 0x20 || b == 0x7f)
+        {
+            return (StatusCode::FORBIDDEN, "invalid ref_name").into_response();
+        }
+    }
+
+    // 2. Verify HMAC signature (now that we know the payload is structurally valid).
     let secret = state.config.git_hook_hmac_secret.as_bytes();
     if !verify_hmac(secret, &req) {
         warn!(repo = %req.repo_id, "hook callback: HMAC verification failed");
         return (StatusCode::FORBIDDEN, "signature verification failed").into_response();
     }
 
-    // 2. Validate timestamp (30s TTL).
+    // 3. Validate timestamp (30s TTL, max 5s future tolerance).
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -162,11 +215,22 @@ pub async fn hook_policy_check(
         warn!(repo = %req.repo_id, age = now.saturating_sub(req.timestamp), "hook callback: expired");
         return (StatusCode::FORBIDDEN, "callback expired").into_response();
     }
+    if req.timestamp.saturating_sub(now) > 5 {
+        warn!(repo = %req.repo_id, "hook callback: timestamp too far in future");
+        return (StatusCode::FORBIDDEN, "callback timestamp invalid").into_response();
+    }
 
-    // 3. Resolve kind:30617 for this repo.
-    // Query by d_tag (repo_id) + kind 30617. The d_tag is globally unique per relay.
+    // 4. Validate and resolve kind:30617 for this repo.
+    // Query by (kind=30617, pubkey=owner, d_tag=repo_id) to prevent spoofing.
+    let owner_bytes = match hex::decode(&req.repo_owner) {
+        Ok(b) if b.len() == 32 => b,
+        _ => {
+            return (StatusCode::FORBIDDEN, "invalid repo owner").into_response();
+        }
+    };
     let query = EventQuery {
         kinds: Some(vec![30617]),
+        pubkey: Some(owner_bytes),
         d_tag: Some(req.repo_id.clone()),
         global_only: true,
         limit: Some(1),
@@ -187,7 +251,7 @@ pub async fn hook_policy_check(
         }
     };
 
-    // 4. Parse protection rules from kind:30617 tags.
+    // 5. Parse protection rules from kind:30617 tags.
     let tags: Vec<Vec<String>> = repo_event
         .event
         .tags
@@ -196,7 +260,13 @@ pub async fn hook_policy_check(
         .collect();
 
     let rules = match parse_protection_tags(&tags) {
-        Ok(rules) => rules,
+        Ok(parsed) => {
+            // Log unknown rules as warnings (helps catch typos).
+            for unknown in &parsed.unknown_rules {
+                warn!(repo = %req.repo_id, rule = %unknown, "unknown sprout-protect rule (skipped)");
+            }
+            parsed.rules
+        }
         Err(e) => {
             warn!(repo = %req.repo_id, error = %e, "hook callback: malformed protection tags");
             // Fail-closed: malformed rules = deny.
@@ -204,18 +274,31 @@ pub async fn hook_policy_check(
         }
     };
 
-    // 5. Resolve pusher's role.
+    // 6. Resolve channel and check archived state (applies to ALL pushers including owner).
+    let channel_id = tags
+        .iter()
+        .find(|t| t.first().map(|s| s.as_str()) == Some("sprout-channel"))
+        .and_then(|t| t.get(1))
+        .and_then(|id| Uuid::parse_str(id).ok());
+
+    if let Some(ch_id) = channel_id {
+        match state.db.get_channel(ch_id).await {
+            Ok(ch) if ch.archived_at.is_some() => {
+                return (StatusCode::FORBIDDEN, "channel is archived (read-only)").into_response();
+            }
+            Err(e) => {
+                error!(error = %e, "hook callback: channel lookup failed");
+                return (StatusCode::FORBIDDEN, "internal error").into_response();
+            }
+            _ => {} // Channel exists and is not archived.
+        }
+    }
+
+    // 7. Resolve pusher's role.
     let repo_owner_hex = hex::encode(repo_event.event.pubkey.to_bytes());
     let role = if req.pusher_pubkey == repo_owner_hex {
         MemberRole::Owner
     } else {
-        // Look up sprout-channel tag to find the bound channel.
-        let channel_id = tags
-            .iter()
-            .find(|t| t.first().map(|s| s.as_str()) == Some("sprout-channel"))
-            .and_then(|t| t.get(1))
-            .and_then(|id| Uuid::parse_str(id).ok());
-
         match channel_id {
             None => {
                 warn!(repo = %req.repo_id, "hook callback: no sprout-channel binding");
@@ -248,7 +331,7 @@ pub async fn hook_policy_check(
         }
     };
 
-    // 6. Classify ref updates and evaluate policy.
+    // 8. Classify ref updates and evaluate policy.
     let updates: Vec<RefUpdate> = req
         .ref_updates
         .iter()
@@ -284,12 +367,14 @@ pub async fn hook_policy_check(
 pub fn generate_hook_hmac(
     secret: &[u8],
     repo_id: &str,
+    repo_owner: &str,
     pusher_pubkey: &str,
     ref_updates: &[HookRefUpdate],
     timestamp: u64,
 ) -> String {
     let req = HookCallbackRequest {
         repo_id: repo_id.to_string(),
+        repo_owner: repo_owner.to_string(),
         pusher_pubkey: pusher_pubkey.to_string(),
         ref_updates: ref_updates.to_vec(),
         timestamp,
@@ -297,4 +382,146 @@ pub fn generate_hook_hmac(
     };
     let mac_bytes = compute_hmac(secret, &req);
     hex::encode(mac_bytes)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_request() -> HookCallbackRequest {
+        HookCallbackRequest {
+            repo_id: "test-repo".to_string(),
+            repo_owner: "a".repeat(64),
+            pusher_pubkey: "b".repeat(64),
+            ref_updates: vec![HookRefUpdate {
+                old_oid: "1".repeat(40),
+                new_oid: "2".repeat(40),
+                ref_name: "refs/heads/main".to_string(),
+                is_ancestor: true,
+            }],
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            signature: String::new(),
+        }
+    }
+
+    fn sign_request(req: &mut HookCallbackRequest, secret: &[u8]) {
+        let mac = compute_hmac(secret, req);
+        req.signature = hex::encode(mac);
+    }
+
+    #[test]
+    fn hmac_valid_signature_accepted() {
+        let secret = b"test-secret-key";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        assert!(verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_wrong_secret_rejected() {
+        let mut req = make_request();
+        sign_request(&mut req, b"correct-secret");
+        assert!(!verify_hmac(b"wrong-secret", &req));
+    }
+
+    #[test]
+    fn hmac_tampered_repo_id_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        req.repo_id = "evil-repo".to_string();
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_tampered_pusher_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        req.pusher_pubkey = "c".repeat(64);
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_tampered_ref_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        req.ref_updates[0].ref_name = "refs/heads/evil".to_string();
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_tampered_is_ancestor_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        req.ref_updates[0].is_ancestor = false; // Flip FF → NFF
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_tampered_owner_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        req.repo_owner = "c".repeat(64);
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_tampered_timestamp_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        sign_request(&mut req, secret);
+        req.timestamp += 1;
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_invalid_hex_rejected() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        req.signature = "not-valid-hex!!!".to_string();
+        assert!(!verify_hmac(secret, &req));
+    }
+
+    #[test]
+    fn hmac_deterministic_across_ref_order() {
+        let secret = b"test-secret";
+        let mut req1 = make_request();
+        req1.ref_updates.push(HookRefUpdate {
+            old_oid: "3".repeat(40),
+            new_oid: "4".repeat(40),
+            ref_name: "refs/heads/develop".to_string(),
+            is_ancestor: false,
+        });
+        let mut req2 = req1.clone();
+        // Reverse the ref order — HMAC should be the same (sorted internally).
+        req2.ref_updates.reverse();
+        let mac1 = compute_hmac(secret, &req1);
+        let mac2 = compute_hmac(secret, &req2);
+        assert_eq!(mac1, mac2);
+    }
+
+    #[test]
+    fn generate_hook_hmac_matches_verify() {
+        let secret = b"test-secret";
+        let mut req = make_request();
+        let sig = generate_hook_hmac(
+            secret,
+            &req.repo_id,
+            &req.repo_owner,
+            &req.pusher_pubkey,
+            &req.ref_updates,
+            req.timestamp,
+        );
+        req.signature = sig;
+        assert!(verify_hmac(secret, &req));
+    }
 }

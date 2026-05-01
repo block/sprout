@@ -47,6 +47,8 @@ enum PatternSegment {
     Literal(String),
     /// Matches any single path segment.
     Wildcard,
+    /// Matches one or more path segments (recursive). Must be the last segment.
+    RecursiveWildcard,
 }
 
 /// Errors from parsing a ref pattern.
@@ -96,8 +98,21 @@ impl RefPattern {
         let mut segments = Vec::new();
         let mut wildcard_count = 0;
 
-        for part in pattern.split('/') {
-            if part == "*" {
+        let parts: Vec<&str> = pattern.split('/').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if *part == "**" {
+                // `**` must be the last segment (recursive match).
+                if i != parts.len() - 1 {
+                    return Err(PatternError::InvalidSegment(
+                        "** must be the last segment".to_string(),
+                    ));
+                }
+                wildcard_count += 1;
+                if wildcard_count > MAX_WILDCARDS_PER_PATTERN {
+                    return Err(PatternError::TooManyWildcards);
+                }
+                segments.push(PatternSegment::RecursiveWildcard);
+            } else if *part == "*" {
                 wildcard_count += 1;
                 if wildcard_count > MAX_WILDCARDS_PER_PATTERN {
                     return Err(PatternError::TooManyWildcards);
@@ -130,9 +145,31 @@ impl RefPattern {
 
     /// Test whether this pattern matches a given ref name.
     ///
-    /// Matching is segment-by-segment; `*` matches exactly one segment.
+    /// Matching is segment-by-segment:
+    /// - `*` matches exactly one path segment
+    /// - `**` (must be last) matches one or more remaining segments
     pub fn matches(&self, ref_name: &str) -> bool {
         let ref_segments: Vec<&str> = ref_name.split('/').collect();
+
+        // Check for recursive wildcard (must be last segment).
+        if let Some(PatternSegment::RecursiveWildcard) = self.segments.last() {
+            let prefix_len = self.segments.len() - 1;
+            // Ref must have at least as many segments as the prefix (+ 1 for the **)
+            if ref_segments.len() <= prefix_len {
+                return false;
+            }
+            // All prefix segments must match.
+            return self.segments[..prefix_len]
+                .iter()
+                .zip(ref_segments[..prefix_len].iter())
+                .all(|(pat, seg)| match pat {
+                    PatternSegment::Wildcard => true,
+                    PatternSegment::Literal(lit) => lit == *seg,
+                    PatternSegment::RecursiveWildcard => unreachable!(),
+                });
+        }
+
+        // Non-recursive: exact segment count match required.
         if ref_segments.len() != self.segments.len() {
             return false;
         }
@@ -141,7 +178,8 @@ impl RefPattern {
             .zip(ref_segments.iter())
             .all(|(pat, seg)| match pat {
                 PatternSegment::Wildcard => true,
-                PatternSegment::Literal(lit) => lit == seg,
+                PatternSegment::Literal(lit) => lit == *seg,
+                PatternSegment::RecursiveWildcard => unreachable!(),
             })
     }
 
@@ -258,17 +296,27 @@ impl std::error::Error for RuleParseError {}
 /// Tag format: `["sprout-protect", "<pattern>", "<rule1>", "<rule2>", ...]`
 /// The first element ("sprout-protect") should already be stripped — pass
 /// the remaining values starting with the pattern.
+/// Parse a single `sprout-protect` tag (simple API, discards unknown rules).
 pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParseError> {
+    let (rule, _unknowns) = parse_protection_tag_with_warnings(values)?;
+    Ok(rule)
+}
+
+/// Parse a single `sprout-protect` tag, returning unknown rules for logging.
+pub fn parse_protection_tag_with_warnings(
+    values: &[&str],
+) -> Result<(ProtectionRule, Vec<String>), RuleParseError> {
     if values.len() < 2 {
         return Err(RuleParseError::TooFewValues);
     }
 
-    let pattern = RefPattern::parse(values[0]).map_err(|e| RuleParseError::InvalidPattern(e))?;
+    let pattern = RefPattern::parse(values[0]).map_err(RuleParseError::InvalidPattern)?;
 
     let mut push_role: Option<MemberRole> = None;
     let mut no_force_push = false;
     let mut no_delete = false;
     let mut require_patch = false;
+    let mut unknown_rules = Vec::new();
 
     for &rule_str in &values[1..] {
         if let Some(role_str) = rule_str.strip_prefix("push:") {
@@ -276,7 +324,6 @@ pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParse
                 .parse()
                 .map_err(|_| RuleParseError::InvalidRole(role_str.to_string()))?;
             // Reject push:bot and push:guest — they're almost certainly user errors.
-            // push:bot means "anyone can push" (level 0), push:guest is similarly permissive.
             if matches!(role, MemberRole::Bot | MemberRole::Guest) {
                 return Err(RuleParseError::InvalidRole(role_str.to_string()));
             }
@@ -296,30 +343,43 @@ pub fn parse_protection_tag(values: &[&str]) -> Result<ProtectionRule, RuleParse
                 "no-force-push" => no_force_push = true,
                 "no-delete" => no_delete = true,
                 "require-patch" => require_patch = true,
-                // Forward-compatibility: unknown rules are silently skipped.
-                // A future relay version may add new rule types (e.g., "require-review").
-                // The safe behavior is to enforce what we understand and ignore the rest.
-                // The repo owner explicitly added known rules — those should still work.
-                _ => {}
+                // Forward-compatibility: unknown rules are skipped but reported.
+                other => unknown_rules.push(other.to_string()),
             }
         }
     }
 
-    Ok(ProtectionRule {
-        pattern,
-        push_role,
-        no_force_push,
-        no_delete,
-        require_patch,
-    })
+    Ok((
+        ProtectionRule {
+            pattern,
+            push_role,
+            no_force_push,
+            no_delete,
+            require_patch,
+        },
+        unknown_rules,
+    ))
+}
+
+/// Result of parsing protection tags — includes rules and any warnings.
+#[derive(Debug, Clone)]
+pub struct ParsedProtection {
+    /// Successfully parsed protection rules.
+    pub rules: Vec<ProtectionRule>,
+    /// Unknown rule strings that were skipped (potential typos or future rules).
+    /// Callers should log these as warnings.
+    pub unknown_rules: Vec<String>,
 }
 
 /// Parse all `sprout-protect` tags from a kind:30617 event's tag list.
 ///
-/// Returns an error if any `sprout-protect` tag is malformed (fail-closed).
+/// Returns an error if any `sprout-protect` tag is structurally malformed.
+/// Unknown rule strings are skipped but reported in `ParsedProtection::unknown_rules`
+/// so callers can log warnings (helps catch typos while maintaining forward-compat).
 /// Enforces the per-repo rule count limit.
-pub fn parse_protection_tags(tags: &[Vec<String>]) -> Result<Vec<ProtectionRule>, RuleParseError> {
+pub fn parse_protection_tags(tags: &[Vec<String>]) -> Result<ParsedProtection, RuleParseError> {
     let mut rules = Vec::new();
+    let mut unknown_rules = Vec::new();
 
     for tag in tags {
         if tag.first().map(|s| s.as_str()) != Some("sprout-protect") {
@@ -329,10 +389,15 @@ pub fn parse_protection_tags(tags: &[Vec<String>]) -> Result<Vec<ProtectionRule>
             return Err(RuleParseError::TooManyRules);
         }
         let values: Vec<&str> = tag[1..].iter().map(|s| s.as_str()).collect();
-        rules.push(parse_protection_tag(&values)?);
+        let (rule, unknowns) = parse_protection_tag_with_warnings(&values)?;
+        rules.push(rule);
+        unknown_rules.extend(unknowns);
     }
 
-    Ok(rules)
+    Ok(ParsedProtection {
+        rules,
+        unknown_rules,
+    })
 }
 
 // ── Built-in Defaults ────────────────────────────────────────────────────────
@@ -478,12 +543,21 @@ pub fn evaluate_ref_update(
     }
 
     // Check push role.
-    // If explicit rules matched but none specified a push:role, still enforce the
-    // built-in default minimum role. Only an explicit `push:<role>` overrides the default.
-    // This prevents a Guest from pushing to a branch that only has `no-force-push` set.
-    let min_role = effective
-        .push_role
-        .unwrap_or_else(|| default_min_role(&update.ref_name, update.kind));
+    // Explicit push:role can NEVER weaken the built-in default. Always take the
+    // HIGHER of (explicit, default). This prevents `push:member` from accidentally
+    // allowing Members to force-push, delete, or overwrite tags.
+    let default_role = default_min_role(&update.ref_name, update.kind);
+    let min_role = match effective.push_role {
+        Some(explicit) => {
+            // Take the stricter (higher permission level) of explicit vs default.
+            if explicit.permission_level() >= default_role.permission_level() {
+                explicit
+            } else {
+                default_role
+            }
+        }
+        None => default_role,
+    };
     if !role.has_at_least(min_role) {
         return Err(Denial {
             ref_name: update.ref_name.clone(),
@@ -590,6 +664,30 @@ mod tests {
             RefPattern::parse("refs/*/*/*/*"),
             Err(PatternError::TooManyWildcards)
         ));
+    }
+
+    #[test]
+    fn pattern_recursive_wildcard_matches_nested() {
+        let p = RefPattern::parse("refs/heads/**").unwrap();
+        assert!(p.matches("refs/heads/main"));
+        assert!(p.matches("refs/heads/feature/foo"));
+        assert!(p.matches("refs/heads/feature/foo/bar"));
+        assert!(!p.matches("refs/tags/v1"));
+    }
+
+    #[test]
+    fn pattern_recursive_wildcard_must_be_last() {
+        assert!(matches!(
+            RefPattern::parse("refs/**/heads"),
+            Err(PatternError::InvalidSegment(_))
+        ));
+    }
+
+    #[test]
+    fn pattern_recursive_requires_at_least_one_segment() {
+        let p = RefPattern::parse("refs/heads/**").unwrap();
+        // Must match at least one segment after prefix
+        assert!(!p.matches("refs/heads"));
     }
 
     // ── UpdateKind tests ─────────────────────────────────────────────────
@@ -855,6 +953,43 @@ mod tests {
         assert!(evaluate_ref_update(&update, MemberRole::Guest, &rules).is_err());
         // Member should be allowed (meets default requirement).
         assert!(evaluate_ref_update(&update, MemberRole::Member, &rules).is_ok());
+    }
+
+    #[test]
+    fn evaluate_push_member_cannot_weaken_destructive_defaults() {
+        // push:member should NOT allow Members to force-push or delete.
+        // The built-in default for NFF/Delete is Admin — explicit push:member
+        // can't weaken that for destructive operations.
+        let rules = vec![parse_protection_tag(&["refs/heads/main", "push:member"]).unwrap()];
+        // Member can FF push (non-destructive, explicit overrides default).
+        let ff_update = RefUpdate {
+            ref_name: "refs/heads/main".to_string(),
+            kind: UpdateKind::FastForward,
+            old_oid: "a".repeat(40),
+            new_oid: "b".repeat(40),
+        };
+        assert!(evaluate_ref_update(&ff_update, MemberRole::Member, &rules).is_ok());
+
+        // Member CANNOT force-push (destructive, default Admin still enforced).
+        let nff_update = RefUpdate {
+            ref_name: "refs/heads/main".to_string(),
+            kind: UpdateKind::NonFastForward,
+            old_oid: "a".repeat(40),
+            new_oid: "b".repeat(40),
+        };
+        assert!(evaluate_ref_update(&nff_update, MemberRole::Member, &rules).is_err());
+
+        // Admin CAN force-push (meets the default Admin requirement).
+        assert!(evaluate_ref_update(&nff_update, MemberRole::Admin, &rules).is_ok());
+
+        // Member CANNOT delete (destructive, default Admin still enforced).
+        let del_update = RefUpdate {
+            ref_name: "refs/heads/main".to_string(),
+            kind: UpdateKind::Delete,
+            old_oid: "a".repeat(40),
+            new_oid: "0".repeat(40),
+        };
+        assert!(evaluate_ref_update(&del_update, MemberRole::Member, &rules).is_err());
     }
 
     #[test]
