@@ -331,7 +331,15 @@ pub async fn hook_policy_check(
         }
     };
 
-    // 8. Classify ref updates and evaluate policy.
+    // 8. Effective git role: bots intentionally added to a channel push as members.
+    // Protection rules (push:admin, no-force-push, require-patch, etc.) still apply.
+    // Bot is a designation (what it is), not a permission tier (what it can do).
+    let git_role = match role {
+        MemberRole::Bot => MemberRole::Member,
+        other => other,
+    };
+
+    // 9. Classify ref updates and evaluate policy.
     let updates: Vec<RefUpdate> = req
         .ref_updates
         .iter()
@@ -343,7 +351,7 @@ pub async fn hook_policy_check(
         })
         .collect();
 
-    match evaluate_push(&updates, role, &rules) {
+    match evaluate_push(&updates, git_role, &rules) {
         Ok(()) => Json(HookCallbackResponse {
             allowed: true,
             denials: vec![],

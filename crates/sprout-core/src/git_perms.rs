@@ -323,7 +323,9 @@ pub fn parse_protection_tag_with_warnings(
             let role: MemberRole = role_str
                 .parse()
                 .map_err(|_| RuleParseError::InvalidRole(role_str.to_string()))?;
-            // Reject push:bot and push:guest — they're almost certainly user errors.
+            // Reject push:bot and push:guest — nonsensical rules.
+            // Bot is promoted to Member at the policy layer; push:bot is meaningless.
+            // Guest cannot push regardless; push:guest would be confusing.
             if matches!(role, MemberRole::Bot | MemberRole::Guest) {
                 return Err(RuleParseError::InvalidRole(role_str.to_string()));
             }
@@ -934,7 +936,10 @@ mod tests {
             old_oid: "a".repeat(40),
             new_oid: "b".repeat(40),
         };
-        // Bot has permission_level 0, cannot meet Member requirement
+        // Bot has permission_level 0 at the core evaluator level.
+        // NOTE: The policy layer (policy.rs) promotes Bot → Member before calling
+        // evaluate_push, so bots in a channel CAN push in practice. This test
+        // verifies the raw evaluator behavior; the promotion is tested in policy.
         assert!(evaluate_ref_update(&update, MemberRole::Bot, &rules).is_err());
     }
 
