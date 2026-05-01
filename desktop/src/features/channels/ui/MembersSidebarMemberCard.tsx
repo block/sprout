@@ -15,6 +15,7 @@ import {
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { truncatePubkey } from "@/features/profile/lib/identity";
 import type {
   ChannelMember,
   ManagedAgent,
@@ -111,6 +112,9 @@ export function MembersSidebarMemberCard({
         <div className="min-w-0 space-y-0.5">
           <p className="truncate text-sm font-medium leading-5">
             {memberLabel}
+          </p>
+          <p className="truncate font-mono text-[10px] text-muted-foreground/50">
+            {truncatePubkey(member.pubkey)}
           </p>
           <div
             className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"

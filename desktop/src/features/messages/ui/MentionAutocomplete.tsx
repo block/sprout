@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { truncatePubkey } from "@/features/profile/lib/identity";
 import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -72,6 +73,9 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             />
             <span className="truncate font-medium">
               {suggestion.displayName}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-muted-foreground/50">
+              {truncatePubkey(suggestion.pubkey)}
             </span>
             {suggestion.personaName ? (
               <span className="text-xs text-muted-foreground">
