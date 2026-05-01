@@ -62,6 +62,18 @@ pub struct Config {
     /// API tokens or Okta JWTs bypass the allowlist entirely.
     /// Applies to all NIP-42 pubkey-only connections, regardless of `require_auth_token`.
     pub pubkey_allowlist_enabled: bool,
+
+    /// When true, every authenticated request must also pass a relay-level
+    /// membership check against the `relay_members` table.
+    /// When false (default), the check is a no-op and all authenticated callers
+    /// are permitted regardless of auth method (API token, JWT, NIP-42).
+    pub require_relay_membership: bool,
+
+    /// Optional hex-encoded pubkey of the relay owner.
+    /// When set, this pubkey is automatically bootstrapped into `relay_members`
+    /// with the `owner` role on first startup.
+    pub relay_owner_pubkey: Option<String>,
+
     /// Media storage configuration (S3/MinIO).
     pub media: sprout_media::MediaConfig,
 
@@ -132,6 +144,30 @@ impl Config {
         let pubkey_allowlist_enabled = std::env::var("SPROUT_PUBKEY_ALLOWLIST")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
+
+        let require_relay_membership = std::env::var("SPROUT_REQUIRE_RELAY_MEMBERSHIP")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        // Note: intentionally not prefixed with SPROUT_ — this is a relay-identity
+        // config that may be shared across multiple services (e.g., ACP agent).
+        let relay_owner_pubkey = std::env::var("RELAY_OWNER_PUBKEY")
+            .ok()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                // Must be exactly 64 lowercase hex characters (32-byte pubkey).
+                let valid = s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit());
+                if valid {
+                    Some(s)
+                } else {
+                    warn!(
+                        "RELAY_OWNER_PUBKEY is not a valid 64-char hex pubkey — ignoring. \
+                         Got: {s:?}"
+                    );
+                    None
+                }
+            });
 
         let mut auth = sprout_auth::AuthConfig::default();
         auth.okta.require_token = require_auth_token;
@@ -284,6 +320,8 @@ impl Config {
             health_port,
             metrics_port,
             pubkey_allowlist_enabled,
+            require_relay_membership,
+            relay_owner_pubkey,
             media,
             ephemeral_ttl_override,
             git_repo_path,
@@ -316,6 +354,14 @@ mod tests {
         assert!(
             !config.pubkey_allowlist_enabled,
             "pubkey_allowlist_enabled should default to false"
+        );
+        assert!(
+            !config.require_relay_membership,
+            "require_relay_membership should default to false"
+        );
+        assert!(
+            config.relay_owner_pubkey.is_none(),
+            "relay_owner_pubkey should default to None"
         );
     }
 

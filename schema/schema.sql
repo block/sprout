@@ -329,3 +329,15 @@ CREATE TABLE pubkey_allowlist (
     added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     note        TEXT
 );
+
+-- ── Relay members (NIP-43) ────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS relay_members (
+    pubkey      TEXT PRIMARY KEY,
+    role        TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+    added_by    TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_relay_members_role ON relay_members(role);

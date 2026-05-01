@@ -50,6 +50,8 @@ pub enum MediaError {
     Unauthorized,
     #[error("insufficient scope")]
     InsufficientScope,
+    #[error("relay membership required")]
+    RelayMembershipRequired,
     #[error("token revoked")]
     TokenRevoked,
     #[error("pubkey mismatch")]
@@ -130,6 +132,7 @@ impl IntoResponse for MediaError {
                 )
             }
             Self::InsufficientScope => (StatusCode::FORBIDDEN, self.to_string()),
+            Self::RelayMembershipRequired => (StatusCode::FORBIDDEN, self.to_string()),
             Self::UnsupportedContainer => (StatusCode::UNSUPPORTED_MEDIA_TYPE, self.to_string()),
             Self::WrongCodec
             | Self::DurationTooLong

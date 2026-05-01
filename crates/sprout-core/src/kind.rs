@@ -53,7 +53,25 @@ pub const KIND_NIP29_JOIN_REQUEST: u32 = 9021;
 /// NIP-29: Request to leave a group.
 pub const KIND_NIP29_LEAVE_REQUEST: u32 = 9022;
 
-// System / admin (9031–9999)
+// NIP-43 relay membership admin commands
+/// NIP-43: Add a pubkey to the relay member list.
+pub const RELAY_ADMIN_ADD_MEMBER: u32 = 9030;
+/// NIP-43: Remove a pubkey from the relay member list.
+pub const RELAY_ADMIN_REMOVE_MEMBER: u32 = 9031;
+/// NIP-43: Change the role of an existing relay member.
+pub const RELAY_ADMIN_CHANGE_ROLE: u32 = 9032;
+
+// NIP-43 relay membership announcement events (relay-signed)
+/// NIP-43: Relay membership list snapshot (relay-signed, replaceable by convention).
+pub const KIND_NIP43_MEMBERSHIP_LIST: u32 = 13534;
+/// NIP-43: Member added announcement (relay-signed).
+pub const KIND_NIP43_MEMBER_ADDED: u32 = 8000;
+/// NIP-43: Member removed announcement (relay-signed).
+pub const KIND_NIP43_MEMBER_REMOVED: u32 = 8001;
+/// NIP-43: User leave request (user-signed, ephemeral).
+pub const KIND_NIP43_LEAVE_REQUEST: u32 = 28936;
+
+// System / admin (9100–9999)
 /// V1 used kind:9001 — moved here due to NIP-29 conflict.
 pub const KIND_SYSTEM_TIMER_FIRED: u32 = 9100;
 /// V1 used kind:9010 — moved here for NIP-29 range safety.
@@ -276,6 +294,13 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_CREATE_INVITE,
     KIND_NIP29_JOIN_REQUEST,
     KIND_NIP29_LEAVE_REQUEST,
+    RELAY_ADMIN_ADD_MEMBER,
+    RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_CHANGE_ROLE,
+    KIND_NIP43_MEMBERSHIP_LIST,
+    KIND_NIP43_MEMBER_ADDED,
+    KIND_NIP43_MEMBER_REMOVED,
+    KIND_NIP43_LEAVE_REQUEST,
     KIND_SYSTEM_TIMER_FIRED,
     KIND_SYSTEM_SLASH_COMMAND,
     KIND_SYSTEM_FLAG,
@@ -381,6 +406,14 @@ pub const fn is_parameterized_replaceable(kind: u32) -> bool {
 /// These must not trigger workflows (prevents infinite loops).
 pub const fn is_workflow_execution_kind(kind: u32) -> bool {
     kind >= KIND_WORKFLOW_TRIGGERED && kind <= KIND_WORKFLOW_APPROVAL_DENIED
+}
+
+/// Returns `true` if `kind` is a NIP-43 relay membership admin command (9030–9032).
+pub const fn is_relay_admin_kind(kind: u32) -> bool {
+    matches!(
+        kind,
+        RELAY_ADMIN_ADD_MEMBER | RELAY_ADMIN_REMOVE_MEMBER | RELAY_ADMIN_CHANGE_ROLE
+    )
 }
 
 /// Extract the kind from a nostr Event as u32.

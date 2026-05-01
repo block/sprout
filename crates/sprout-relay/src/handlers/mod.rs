@@ -5,6 +5,8 @@ pub mod close;
 pub mod event;
 /// Transport-neutral event ingestion pipeline.
 pub mod ingest;
+/// NIP-43 relay membership admin command handler (kinds 9030–9032).
+pub mod relay_admin;
 pub mod req;
 /// NIP-29 and NIP-25 side-effect handlers.
 pub mod side_effects;
