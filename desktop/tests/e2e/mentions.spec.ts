@@ -142,7 +142,7 @@ test("clicking author name opens user profile popover", async ({ page }) => {
   const popover = page.locator("[data-radix-popper-content-wrapper]");
   await expect(popover).toBeVisible();
   await expect(popover).toContainText("deadbeef");
-  await expect(page.getByTestId("user-profile-notes")).toContainText(
+  await expect(page.getByTestId("user-profile-latest-note")).toContainText(
     "Shipped the new desktop sidebar polish today.",
   );
 });
