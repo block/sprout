@@ -109,38 +109,38 @@ export function MembersSidebarMemberCard({
           iconClassName="h-4 w-4"
           label={memberLabel}
         />
-        <div className="min-w-0 space-y-0.5">
+        <div className="min-w-0">
           <p className="truncate text-sm font-medium leading-5">
             {memberLabel}
           </p>
           <p className="truncate font-mono text-[10px] text-muted-foreground/50">
             {truncatePubkey(member.pubkey)}
           </p>
-          <div
-            className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
-            data-testid={`sidebar-member-presence-${member.pubkey}`}
-          >
-            {presenceStatus ? (
-              <>
-                <PresenceDot className="h-2 w-2" status={presenceStatus} />
-                <span>{getPresenceLabel(presenceStatus)}</span>
-                <span aria-hidden="true">&middot;</span>
-              </>
-            ) : null}
-            <span>{roleLabel}</span>
-            {managedAgent ? (
-              <>
-                <span aria-hidden="true">&middot;</span>
-                <Badge
-                  data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
-                  variant="secondary"
-                >
-                  {formatManagedAgentStatus(managedAgent)}
-                </Badge>
-              </>
-            ) : null}
-          </div>
         </div>
+      </div>
+      <div
+        className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+        data-testid={`sidebar-member-presence-${member.pubkey}`}
+      >
+        {presenceStatus ? (
+          <>
+            <PresenceDot className="h-2 w-2" status={presenceStatus} />
+            <span>{getPresenceLabel(presenceStatus)}</span>
+            <span aria-hidden="true">&middot;</span>
+          </>
+        ) : null}
+        <span>{roleLabel}</span>
+        {managedAgent ? (
+          <>
+            <span aria-hidden="true">&middot;</span>
+            <Badge
+              data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
+              variant="secondary"
+            >
+              {formatManagedAgentStatus(managedAgent)}
+            </Badge>
+          </>
+        ) : null}
       </div>
       {hasActions ? (
         <MemberActionsMenu

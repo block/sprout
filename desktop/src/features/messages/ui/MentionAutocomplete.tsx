@@ -74,9 +74,6 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             <span className="truncate font-medium">
               {suggestion.displayName}
             </span>
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground/50">
-              {truncatePubkey(suggestion.pubkey)}
-            </span>
             {suggestion.personaName ? (
               <span className="text-xs text-muted-foreground">
                 ({suggestion.personaName})
@@ -84,6 +81,9 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             ) : suggestion.role ? (
               <Badge variant="secondary">{suggestion.role}</Badge>
             ) : null}
+            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">
+              {truncatePubkey(suggestion.pubkey)}
+            </span>
           </button>
         ))}
       </div>
