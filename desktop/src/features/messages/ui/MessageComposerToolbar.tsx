@@ -244,28 +244,23 @@ export const MessageComposerToolbar = React.memo(
 
         <div className="flex items-center gap-2">
           {extraActions}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label={isSending ? "Sending" : "Send message"}
-                className="rounded-full"
-                data-testid="send-message"
-                disabled={sendDisabled || isSending}
-                size="icon"
-                type="submit"
-              >
-                {isSending ? (
-                  <span
-                    aria-hidden
-                    className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
-                  />
-                ) : (
-                  <ArrowUp aria-hidden className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Send (Enter)</TooltipContent>
-          </Tooltip>
+          <Button
+            aria-label={isSending ? "Sending" : "Send message"}
+            className="rounded-full"
+            data-testid="send-message"
+            disabled={sendDisabled || isSending}
+            size="icon"
+            type="submit"
+          >
+            {isSending ? (
+              <span
+                aria-hidden
+                className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
+              />
+            ) : (
+              <ArrowUp aria-hidden className="h-4 w-4" />
+            )}
+          </Button>
         </div>
       </div>
     );

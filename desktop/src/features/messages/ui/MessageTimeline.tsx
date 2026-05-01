@@ -10,7 +10,6 @@ import { TooltipProvider } from "@/shared/ui/tooltip";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
-import { useStickyDayHeader } from "./useStickyDayHeader";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
@@ -121,21 +120,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     sentinelRef: topSentinelRef,
   });
 
-  const stickyDayLabel = useStickyDayHeader(scrollContainerRef);
-
   return (
     <TooltipProvider delayDuration={200}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {stickyDayLabel && !isAtBottom ? (
-          <div
-            className="pointer-events-none absolute inset-x-0 top-16 z-10 flex justify-center px-4 pt-1 sm:px-6"
-            data-testid="message-timeline-sticky-day"
-          >
-            <p className="rounded-md border border-border/35 bg-background/45 px-2 py-0.5 text-[10px] font-medium leading-none tracking-[0.02em] text-muted-foreground/65 backdrop-blur-sm">
-              {stickyDayLabel}
-            </p>
-          </div>
-        ) : null}
         <div
           className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-12 pt-1 [overflow-anchor:none] sm:px-6"
           data-scroll-restoration-id="message-timeline"
