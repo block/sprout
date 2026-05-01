@@ -31,6 +31,11 @@ import {
   usePresenceSession,
   usePresenceSubscription,
 } from "@/features/presence/hooks";
+import {
+  useSetUserStatusMutation,
+  useUserStatusQuery,
+  useUserStatusSubscription,
+} from "@/features/user-status/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import {
   DEFAULT_SETTINGS_SECTION,
@@ -150,7 +155,12 @@ export function AppShell() {
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   usePresenceSubscription();
+  useUserStatusSubscription();
   const presenceSession = usePresenceSession(deferredPubkey);
+  const selfStatusQuery = useUserStatusQuery(
+    deferredPubkey ? [deferredPubkey] : [],
+  );
+  const setUserStatusMutation = useSetUserStatusMutation(deferredPubkey);
   const { homeBadgeCount, homeFeedQuery, notificationSettings } =
     useHomeFeedNotifications(
       identityQuery.data?.pubkey,
@@ -586,7 +596,19 @@ export function AppShell() {
                 onSetPresenceStatus={(status) =>
                   presenceSession.setStatus(status)
                 }
+                onSetUserStatus={(text, emoji) =>
+                  setUserStatusMutation.mutate({ text, emoji })
+                }
+                onClearUserStatus={() =>
+                  setUserStatusMutation.mutate({ text: "", emoji: "" })
+                }
                 profile={profileQuery.data}
+                selfUserStatus={
+                  deferredPubkey
+                    ? (selfStatusQuery.data?.[deferredPubkey.toLowerCase()] ??
+                      undefined)
+                    : undefined
+                }
                 selectedChannelId={selectedChannelId}
                 selectedView={selectedView}
                 unreadChannelIds={unreadChannelIds}

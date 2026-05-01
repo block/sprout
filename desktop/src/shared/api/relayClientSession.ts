@@ -11,6 +11,7 @@ import {
   HOME_MENTION_EVENT_KINDS,
   KIND_STREAM_MESSAGE,
   KIND_TYPING_INDICATOR,
+  KIND_USER_STATUS,
 } from "@/shared/constants/kinds";
 import {
   getTextPayload,
@@ -284,6 +285,30 @@ export class RelayClient {
   /** Subscribe to kind:20001 presence events (live only, no backfill). */
   async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
     return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
+  }
+
+  async publishUserStatus(text: string, emoji: string): Promise<void> {
+    await this.ensureConnected();
+    const tags: string[][] = [["d", "general"]];
+    if (emoji) tags.push(["emoji", emoji]);
+    const event = await signRelayEvent({
+      kind: KIND_USER_STATUS,
+      content: text,
+      tags,
+    });
+    await this.publishEvent(
+      event,
+      "Timed out publishing user status",
+      "Failed to publish user status",
+    );
+  }
+
+  /** Subscribe to kind:30315 user status events (live only, no backfill). */
+  async subscribeToUserStatusUpdates(onEvent: (event: RelayEvent) => void) {
+    return this.subscribe(
+      { kinds: [KIND_USER_STATUS], "#d": ["general"], limit: 0 },
+      onEvent,
+    );
   }
 
   async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {

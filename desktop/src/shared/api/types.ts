@@ -140,6 +140,14 @@ export type PresenceStatus = "online" | "away" | "offline";
 
 export type PresenceLookup = Record<string, PresenceStatus>;
 
+export type UserStatus = {
+  text: string;
+  emoji: string;
+  updatedAt: number;
+};
+
+export type UserStatusLookup = Record<string, UserStatus | null>;
+
 export type SetPresenceResult = {
   status: PresenceStatus;
   ttlSeconds: number;
