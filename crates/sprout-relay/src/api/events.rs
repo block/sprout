@@ -22,12 +22,16 @@ use super::{
 
 use sprout_core::kind::{
     event_kind_u32, KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_READ_STATE,
-    KIND_TEXT_NOTE,
+    KIND_TEXT_NOTE, KIND_USER_STATUS,
 };
 
 /// Global event kinds that require `UsersRead` scope.
-pub(crate) const GLOBAL_USER_DATA_KINDS: [u32; 3] =
-    [KIND_PROFILE, KIND_CONTACT_LIST, KIND_READ_STATE];
+pub(crate) const GLOBAL_USER_DATA_KINDS: [u32; 4] = [
+    KIND_PROFILE,
+    KIND_CONTACT_LIST,
+    KIND_READ_STATE,
+    KIND_USER_STATUS,
+];
 /// Global event kinds that require `MessagesRead` scope.
 pub(crate) const GLOBAL_MESSAGE_KINDS: [u32; 2] = [KIND_TEXT_NOTE, KIND_LONG_FORM];
 
@@ -151,7 +155,9 @@ pub async fn submit_event(
 
 #[cfg(test)]
 mod tests {
-    use sprout_core::kind::{KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_TEXT_NOTE};
+    use sprout_core::kind::{
+        KIND_CONTACT_LIST, KIND_LONG_FORM, KIND_PROFILE, KIND_TEXT_NOTE, KIND_USER_STATUS,
+    };
 
     use super::{GLOBAL_MESSAGE_KINDS, GLOBAL_USER_DATA_KINDS};
 
@@ -201,6 +207,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn kind30315_user_status_allowed_with_users_read() {
+        assert!(scope_check_for_global_event(
+            KIND_USER_STATUS,
+            &[sprout_auth::Scope::UsersRead],
+        ));
+    }
+
     // ── Negative cases: wrong scope is denied ────────────────────────────
 
     #[test]
@@ -232,6 +246,14 @@ mod tests {
         assert!(!scope_check_for_global_event(
             KIND_LONG_FORM,
             &[sprout_auth::Scope::UsersRead],
+        ));
+    }
+
+    #[test]
+    fn kind30315_user_status_denied_with_only_messages_read() {
+        assert!(!scope_check_for_global_event(
+            KIND_USER_STATUS,
+            &[sprout_auth::Scope::MessagesRead],
         ));
     }
 
