@@ -40,6 +40,8 @@ pub mod nip05;
 pub mod presence;
 /// Reaction endpoints.
 pub mod reactions;
+/// Relay membership enforcement and read endpoints.
+pub mod relay_members;
 /// Full-text search endpoint.
 pub mod search;
 /// Self-service API token minting, listing, and revocation endpoints.
@@ -64,6 +66,7 @@ pub use members::list_members;
 pub use messages::{get_thread, list_messages, validate_imeta_tags, verify_imeta_blobs};
 pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::list_reactions_handler;
+pub use relay_members::{enforce_relay_membership, get_my_relay_membership, list_relay_members};
 pub use search::search_handler;
 pub use users::{
     get_contact_list, get_profile, get_user_notes, get_user_profile, get_users_batch,
@@ -133,7 +136,7 @@ pub struct RestAuthContext {
     pub channel_ids: Option<Vec<Uuid>>,
 }
 
-/// Extract the full auth context from request headers.
+/// Extract the full auth context from request headers and enforce relay membership.
 ///
 /// Auth resolution order:
 /// 1. `Authorization: Bearer sprout_*` — API token; revocation + expiry checked here
@@ -145,8 +148,25 @@ pub struct RestAuthContext {
 /// request that sends a `Nostr` auth header to a non-token endpoint will receive
 /// a 401 with `"nip98_not_supported"`.
 ///
-/// Returns a populated [`RestAuthContext`] on success, or a 401 response on failure.
+/// After successful authentication, relay membership is enforced when
+/// `config.require_relay_membership` is enabled.
+///
+/// Returns a populated [`RestAuthContext`] on success, or a 401/403 response on failure.
 pub(crate) async fn extract_auth_context(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context_inner(headers, state).await?;
+    relay_members::enforce_relay_membership(state, &ctx.pubkey_bytes).await?;
+    Ok(ctx)
+}
+
+/// Inner auth extraction — no relay membership check.
+///
+/// Used by `extract_auth_context` (which layers the membership gate on top)
+/// and by handlers that need auth without the membership gate (e.g. the
+/// `/api/relay/members/me` endpoint which must work for non-members to return 404).
+pub(crate) async fn extract_auth_context_inner(
     headers: &HeaderMap,
     state: &AppState,
 ) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {

@@ -59,6 +59,73 @@ async fn main() -> anyhow::Result<()> {
         error!("Failed to ensure partitions: {e}");
     }
 
+    // NIP-43: if membership enforcement is on, a valid owner pubkey is required.
+    // config.rs already strips invalid values with a warning; catch the resulting
+    // None here so we fail fast with a clear message rather than starting a relay
+    // that no one can administer.
+    if config.require_relay_membership && config.relay_owner_pubkey.is_none() {
+        error!(
+            "SPROUT_REQUIRE_RELAY_MEMBERSHIP=true but RELAY_OWNER_PUBKEY is not set or invalid. \
+             Set RELAY_OWNER_PUBKEY to a valid 64-char hex pubkey."
+        );
+        return Err(anyhow::anyhow!(
+            "RELAY_OWNER_PUBKEY required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true"
+        ));
+    }
+
+    // NIP-43: relay membership requires a stable signing key.
+    // Check this before any DB mutations so we fail fast — no point backfilling
+    // or bootstrapping if we'll reject the config anyway.
+    if config.require_relay_membership && config.relay_private_key.is_none() {
+        return Err(anyhow::anyhow!(
+            "SPROUT_RELAY_PRIVATE_KEY is required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true. \
+             NIP-43 events signed with an ephemeral key become unverifiable after restart."
+        ));
+    }
+
+    // NIP-43: migrate any existing pubkey_allowlist entries to relay_members.
+    // Idempotent — safe to run every startup. Must run before bootstrap_owner
+    // so that existing allowlist users become relay members before the owner
+    // is promoted (otherwise enabling membership locks everyone out).
+    match db.backfill_from_allowlist().await {
+        Ok(0) => {}
+        Ok(n) => info!("Backfilled {n} pubkey_allowlist entries into relay_members"),
+        Err(e) => {
+            if config.require_relay_membership {
+                error!(
+                    "Fatal: failed to backfill allowlist with membership enforcement enabled: {e}"
+                );
+                return Err(anyhow::anyhow!(
+                    "Failed to backfill pubkey_allowlist (required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
+                ));
+            } else {
+                error!("Failed to backfill pubkey_allowlist (non-fatal): {e}");
+            }
+        }
+    }
+
+    // NIP-43: ensure the configured relay owner always holds the owner role.
+    if let Some(ref owner_pubkey) = config.relay_owner_pubkey {
+        match db.bootstrap_owner(owner_pubkey).await {
+            Ok(()) => info!(pubkey = %owner_pubkey, "Relay owner bootstrapped"),
+            Err(e) => {
+                if config.require_relay_membership {
+                    // Membership enforcement is on — a missing owner means no one
+                    // can administer the relay. Fail fast rather than silently start
+                    // in a broken state.
+                    error!("Fatal: failed to bootstrap relay owner with membership enforcement enabled: {e}");
+                    return Err(anyhow::anyhow!(
+                        "Failed to bootstrap relay owner (required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
+                    ));
+                } else {
+                    error!(
+                        "Failed to bootstrap relay owner (non-fatal, membership not required): {e}"
+                    );
+                }
+            }
+        }
+    }
+
     // NIP-33: backfill d_tag for any existing parameterized replaceable events
     // that predate the column addition. Idempotent — no-ops when fully populated.
     match db.backfill_d_tags().await {
@@ -143,6 +210,22 @@ async fn main() -> anyhow::Result<()> {
         media_storage,
     );
     let state = Arc::new(app_state);
+
+    // NIP-43: publish the initial membership list on startup so clients can
+    // REQ kind:13534 immediately without waiting for the next membership change.
+    if config.require_relay_membership {
+        let startup_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(e) =
+                sprout_relay::handlers::side_effects::publish_nip43_membership_list(&startup_state)
+                    .await
+            {
+                tracing::warn!(error = %e, "failed to publish initial NIP-43 membership list on startup");
+            } else {
+                tracing::info!("NIP-43 membership list published on startup");
+            }
+        });
+    }
 
     // Wire the action sink — must happen after AppState (which creates
     // sub_registry, conn_manager) and before the cron loop starts.

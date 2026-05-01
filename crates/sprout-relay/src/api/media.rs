@@ -86,6 +86,11 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         sprout_auth::require_scope(&scopes, Scope::FilesWrite)
             .map_err(|_| MediaError::InsufficientScope)?;
 
+        // 5. Relay membership gate (NIP-43).
+        crate::api::relay_members::enforce_relay_membership(state, &auth_event.pubkey.serialize())
+            .await
+            .map_err(|_| MediaError::RelayMembershipRequired)?;
+
         Ok(AuthenticatedUpload { auth_event, scopes })
     }
 }

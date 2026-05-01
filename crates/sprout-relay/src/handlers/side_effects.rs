@@ -9,7 +9,7 @@ use uuid::Uuid;
 use sprout_core::kind::{
     event_kind_u32, KIND_GIT_REPO_ANNOUNCEMENT, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
-    KIND_NIP29_GROUP_METADATA, KIND_REACTION,
+    KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -1639,4 +1639,119 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
     );
 
     Ok(())
+}
+
+// ── NIP-43 relay-level membership announcement events ────────────────────────
+
+/// Publish a kind:13534 relay membership list event (NIP-43).
+///
+/// Queries all current relay members and emits a relay-signed, NIP-70-protected
+/// addressable event listing every member pubkey. Replaces any previous list.
+pub async fn publish_nip43_membership_list(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let members = state.db.list_relay_members().await?;
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags: Vec<Tag> = Vec::with_capacity(members.len() + 1);
+
+    // NIP-70 protected-event marker — prevents re-broadcasting by third parties.
+    tags.push(Tag::parse(&["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
+
+    for member in &members {
+        tags.push(
+            Tag::parse(&["member", &member.pubkey])
+                .map_err(|e| anyhow::anyhow!("failed to build member tag: {e}"))?,
+        );
+    }
+
+    let event = EventBuilder::new(Kind::Custom(KIND_NIP43_MEMBERSHIP_LIST as u16), "", tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:13534: {e}"))?;
+
+    // NOTE: kind 13534 is technically a regular event (not in the NIP-16 replaceable
+    // range), but we intentionally use replace_addressable_event to get replacement
+    // semantics — only the latest membership snapshot matters. This function keys on
+    // (kind, pubkey, channel_id) and atomically replaces older events, which is exactly
+    // what Pyramid (the reference NIP-43 implementation) does with store.ReplaceEvent().
+    let (stored, was_inserted) = state.db.replace_addressable_event(&event, None).await?;
+    if was_inserted {
+        dispatch_persistent_event(
+            state,
+            &stored,
+            KIND_NIP43_MEMBERSHIP_LIST,
+            &relay_pubkey_hex,
+        )
+        .await;
+    }
+
+    info!(
+        member_count = members.len(),
+        "NIP-43 membership list published"
+    );
+    Ok(())
+}
+
+/// Shared helper: publish a NIP-43 membership delta event (kind 8000 or 8001).
+///
+/// Signs a relay event with `["-"]` (NIP-70) + `["p", target]` tags, stores it
+/// globally, and fans out to matching subscribers.
+async fn publish_nip43_delta(
+    state: &Arc<AppState>,
+    kind: u16,
+    target_pubkey_hex: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let tags = vec![
+        Tag::parse(&["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
+        Tag::parse(&["p", target_pubkey_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+    ];
+
+    let event = EventBuilder::new(Kind::Custom(kind), "", tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
+
+    let (stored, was_inserted) = state.db.insert_event(&event, None).await?;
+    if !was_inserted {
+        return Ok(());
+    }
+
+    let matches = state.sub_registry.fan_out(&stored);
+    if !matches.is_empty() {
+        let event_json = match serde_json::to_string(&stored.event) {
+            Ok(json) => json,
+            Err(e) => {
+                warn!("failed to serialize kind:{kind} for fan-out: {e}");
+                return Ok(());
+            }
+        };
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            state.conn_manager.send_to(*target_conn_id, msg);
+        }
+    }
+
+    info!(
+        target = %target_pubkey_hex,
+        relay = %relay_pubkey_hex,
+        "NIP-43 {label} event published"
+    );
+    Ok(())
+}
+
+/// Publish a kind:8000 relay member-added announcement event (NIP-43).
+pub async fn publish_nip43_member_added(
+    state: &Arc<AppState>,
+    target_pubkey_hex: &str,
+) -> anyhow::Result<()> {
+    publish_nip43_delta(state, 8000, target_pubkey_hex, "member-added").await
+}
+
+/// Publish a kind:8001 relay member-removed announcement event (NIP-43).
+pub async fn publish_nip43_member_removed(
+    state: &Arc<AppState>,
+    target_pubkey_hex: &str,
+) -> anyhow::Result<()> {
+    publish_nip43_delta(state, 8001, target_pubkey_hex, "member-removed").await
 }

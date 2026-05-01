@@ -7,7 +7,7 @@ use crate::connection::MAX_FRAME_BYTES;
 /// NIPs supported by this relay, advertised in the NIP-11 document.
 /// Kept as a module-level constant so tests can verify it without constructing
 /// a full `Config` (which reads env vars and races with config.rs tests).
-pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 38, 42, 50];
+pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 38, 42, 43, 50];
 
 /// Relay information document served at `GET /` with `Accept: application/nostr+json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +28,9 @@ pub struct RelayInfo {
     pub version: String,
     /// Protocol and resource limits advertised to clients.
     pub limitation: Option<RelayLimitation>,
+    /// Relay's own signing pubkey (NIP-11 `self` field, NIP-43).
+    #[serde(rename = "self", skip_serializing_if = "Option::is_none")]
+    pub relay_self: Option<String>,
 }
 
 /// Protocol and resource limits advertised in the NIP-11 document.
@@ -55,7 +58,10 @@ pub struct RelayLimitation {
 
 impl RelayInfo {
     /// Builds a `RelayInfo` document from the relay's runtime config.
-    pub fn from_config(config: &crate::config::Config) -> Self {
+    ///
+    /// `relay_pubkey` is the relay's own signing pubkey (hex), advertised as the
+    /// NIP-11 `self` field for NIP-43 membership verification.
+    pub fn from_config(config: &crate::config::Config, relay_pubkey: Option<&str>) -> Self {
         Self {
             name: "Sprout Relay".to_string(),
             description: "Sprout — private team communication relay".to_string(),
@@ -75,6 +81,7 @@ impl RelayInfo {
                 payment_required: false,
                 restricted_writes: true,
             }),
+            relay_self: relay_pubkey.map(|s| s.to_string()),
         }
     }
 }
@@ -83,7 +90,17 @@ impl RelayInfo {
 pub async fn relay_info_handler(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
 ) -> axum::response::Json<RelayInfo> {
-    axum::response::Json(RelayInfo::from_config(&state.config))
+    // Only advertise the NIP-11 `self` field when a stable relay key is configured.
+    // Ephemeral (auto-generated) keys change on restart, making signed events unverifiable.
+    let relay_pubkey = if state.config.relay_private_key.is_some() {
+        Some(state.relay_keypair.public_key().to_hex())
+    } else {
+        None
+    };
+    axum::response::Json(RelayInfo::from_config(
+        &state.config,
+        relay_pubkey.as_deref(),
+    ))
 }
 
 #[cfg(test)]
