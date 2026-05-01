@@ -104,37 +104,32 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
             .map(|pq| pq.as_str())
             .unwrap_or(parts.uri.path());
 
-        // Service-bound URL verification.
+        // Repo-root URL verification.
         //
         // The credential helper signs a NIP-98 token with:
-        //   u = <repo-root>?service=git-upload-pack   (for clone/fetch)
-        //   u = <repo-root>?service=git-receive-pack  (for push)
+        //   u = <repo-root>   (e.g., http://host/git/{owner}/{repo})
         //
-        // All requests in a git session (info/refs GET + pack POST) share the same
-        // service scope. We extract the service from the current request and build
-        // the canonical URL that the token should have been signed against.
+        // Git's credential protocol does NOT pass query strings to helpers, so
+        // service-scoping (`?service=...`) cannot be implemented at the NIP-98
+        // level without protocol changes. The token is repo-scoped, not service-scoped.
         //
-        // This prevents a clone token from authenticating push endpoints and vice versa.
-        let (repo_path, service) = if let Some((prefix, query)) =
+        // Security is still provided by:
+        // - ±60s timestamp window (limits replay)
+        // - HTTPS in production (prevents token theft)
+        // - Pre-receive hook for push authorization (role + protection rules)
+        // - Endpoint routing (clone/push are different HTTP paths)
+        let repo_path = if let Some((prefix, _query)) =
             path_and_query.split_once("/info/refs")
         {
-            // GET /info/refs?service=git-upload-pack or git-receive-pack
-            let svc = match query {
-                "?service=git-upload-pack" => "git-upload-pack",
-                "?service=git-receive-pack" => "git-receive-pack",
-                _ => {
-                    return Err((StatusCode::BAD_REQUEST, "invalid git service").into_response());
-                }
-            };
-            (prefix, svc)
+            prefix
         } else if let Some(prefix) = path_and_query.strip_suffix("/git-upload-pack") {
-            (prefix, "git-upload-pack")
+            prefix
         } else if let Some(prefix) = path_and_query.strip_suffix("/git-receive-pack") {
-            (prefix, "git-receive-pack")
+            prefix
         } else {
             return Err((StatusCode::BAD_REQUEST, "unrecognized git endpoint").into_response());
         };
-        let expected_url = format!("{base_url}{repo_path}?service={service}");
+        let expected_url = format!("{base_url}{repo_path}");
 
         // Skip HTTP method check for git routes.
         //
