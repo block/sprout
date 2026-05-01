@@ -29,25 +29,28 @@ function ParticipantAvatar({
 }
 
 export function MessageThreadSummaryRow({
+  alignWithText = true,
   depth = 0,
   message,
   onOpenThread,
   summary,
 }: {
+  alignWithText?: boolean;
   depth?: number;
   message: TimelineMessage;
   onOpenThread: (message: TimelineMessage) => void;
   summary: TimelineThreadSummary;
 }) {
   const visibleDepth = Math.min(Math.max(depth, 0), 6);
-  const marginLeftPx = visibleDepth * 28;
+  const messageTextOffsetPx = 60;
+  const marginLeftPx = visibleDepth * 28 + messageTextOffsetPx;
   const depthGuideOffsets = Array.from(
     { length: visibleDepth },
     (_, index) => 14 + index * 28,
   );
 
   return (
-    <div className="relative">
+    <div className="relative pb-2">
       {depthGuideOffsets.length > 0 ? (
         <div
           aria-hidden
@@ -68,14 +71,14 @@ export function MessageThreadSummaryRow({
       ) : null}
 
       <button
-        className="flex w-fit max-w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full border border-border/60 bg-background px-2 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground"
         data-thread-head-id={message.id}
         data-testid="message-thread-summary"
         onClick={() => onOpenThread(message)}
-        style={{ marginLeft: `${marginLeftPx}px` }}
+        style={alignWithText ? { marginLeft: `${marginLeftPx}px` } : undefined}
         type="button"
       >
-        <div className="flex shrink-0 items-center">
+        <span className="flex shrink-0 items-center">
           {summary.participants.map((participant, index) => (
             <ParticipantAvatar
               index={index}
@@ -83,15 +86,10 @@ export function MessageThreadSummaryRow({
               participant={participant}
             />
           ))}
-        </div>
-        <div className="min-w-0">
-          <div className="font-medium">
-            <span>
-              {summary.replyCount}{" "}
-              {summary.replyCount === 1 ? "reply" : "replies"}
-            </span>
-          </div>
-        </div>
+        </span>
+        <span>
+          {summary.replyCount} {summary.replyCount === 1 ? "reply" : "replies"}
+        </span>
       </button>
     </div>
   );

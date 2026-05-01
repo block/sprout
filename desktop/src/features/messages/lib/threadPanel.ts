@@ -1,4 +1,5 @@
 import type { TimelineMessage } from "@/features/messages/types";
+import { KIND_STREAM_MESSAGE_DIFF } from "../../../shared/constants/kinds.ts";
 
 type ThreadPanelData = {
   threadHead: TimelineMessage | null;
@@ -36,6 +37,10 @@ function isBroadcastReply(message: TimelineMessage): boolean {
     message.tags?.some((tag) => tag[0] === "broadcast" && tag[1] === "1") ??
     false
   );
+}
+
+function isCountableThreadReply(message: TimelineMessage): boolean {
+  return message.kind !== KIND_STREAM_MESSAGE_DIFF;
 }
 
 function normalizeHeadMessage(message: TimelineMessage): TimelineMessage {
@@ -97,6 +102,10 @@ function buildDescendantStatsByMessageId(
 
   for (let index = orderedMessages.length - 1; index >= 0; index -= 1) {
     const message = orderedMessages[index].message;
+    if (!isCountableThreadReply(message)) {
+      continue;
+    }
+
     const participantKey = message.pubkey ?? message.id;
     const participant: TimelineThreadSummaryParticipant = {
       id: participantKey,

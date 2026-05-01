@@ -4,7 +4,6 @@ import data from "@emoji-mart/data";
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
-import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
@@ -98,7 +97,6 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
 }) {
   const [isReactionPickerOpen, setIsReactionPickerOpen] = React.useState(false);
   const {
-    reactions,
     canToggle: canToggleReactions,
     pending: reactionPending,
     errorMessage: reactionErrorMessage,
@@ -214,15 +212,6 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
           <MessageTimestamp createdAt={message.createdAt} time={message.time} />
         </div>
       </div>
-      <MessageReactions
-        messageId={message.id}
-        reactions={reactions}
-        canToggle={canToggleReactions}
-        pending={reactionPending}
-        onSelect={(emoji) => {
-          void handleReactionSelect(emoji);
-        }}
-      />
       {reactionErrorMessage ? (
         <p className="mt-1.5 text-xs text-destructive">
           {reactionErrorMessage}

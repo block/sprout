@@ -99,6 +99,10 @@ export function BotActivityBar({
     typingAgents.length === 1
       ? typingAgents[0]?.name
       : `${typingAgents[0]?.name ?? "Agent"} +${typingAgents.length - 1}`;
+  const activeAgentCountLabel =
+    typingAgents.length === 1
+      ? "1 active agent"
+      : `${typingAgents.length} active agents`;
   const visibleInlineAgents = typingAgents.slice(0, MAX_INLINE_AGENT_AVATARS);
 
   return (
@@ -153,7 +157,7 @@ export function BotActivityBar({
           sideOffset={8}
         >
           <div className="px-2 py-1 text-xs font-semibold text-muted-foreground">
-            Active agents
+            {activeAgentCountLabel}
           </div>
           {typingAgents.map((agent) => (
             <button

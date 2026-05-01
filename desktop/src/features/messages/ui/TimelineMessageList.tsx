@@ -61,6 +61,11 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     [messages],
   );
 
+  function getTextColumnOffsetPx(depth = 0) {
+    const visibleDepth = Math.min(Math.max(depth, 0), 6);
+    return visibleDepth * 28 + 60;
+  }
+
   for (let i = 0; i < entries.length; i++) {
     const { message, summary } = entries[i];
     const prev = i > 0 ? entries[i - 1]?.message : null;
@@ -119,12 +124,16 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           renderedTrailingContent = true;
           elements.push(
             <div
-              className="flex min-w-0 items-center gap-1.5"
+              className="flex min-w-0 items-start gap-1.5"
               data-testid="message-thread-summary-with-footer"
               key={`thread-summary-with-footer-${message.id}`}
+              style={{
+                marginLeft: `${getTextColumnOffsetPx(message.depth)}px`,
+              }}
             >
               <div className="min-w-0 shrink">
                 <MessageThreadSummaryRow
+                  alignWithText={false}
                   message={message}
                   onOpenThread={onReply}
                   summary={summary}
@@ -143,6 +152,20 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
             />,
           );
         }
+      } else if (trailingContent && i === entries.length - 1) {
+        renderedTrailingContent = true;
+        elements.push(
+          <div
+            className="flex min-w-0 justify-start pb-1"
+            data-testid="message-timeline-footer"
+            key={`message-timeline-footer-${message.id}`}
+            style={{
+              marginLeft: `${getTextColumnOffsetPx(message.depth)}px`,
+            }}
+          >
+            {trailingContent}
+          </div>,
+        );
       }
     }
   }

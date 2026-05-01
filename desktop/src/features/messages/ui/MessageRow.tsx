@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
-import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
@@ -223,15 +222,6 @@ export const MessageRow = React.memo(
     const messageBodyNode = (
       <>
         {renderBody()}
-        <MessageReactions
-          messageId={message.id}
-          reactions={reactions}
-          canToggle={canToggleReactions}
-          pending={reactionPending}
-          onSelect={(emoji) => {
-            void handleReactionSelect(emoji);
-          }}
-        />
         {reactionErrorMessage ? (
           <p className="mt-1.5 text-xs text-destructive">
             {reactionErrorMessage}
