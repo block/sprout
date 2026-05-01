@@ -506,8 +506,25 @@ async fn handle_agent_observer_event(
         }
     }
 
+    // Freshness check: reject observer frames with stale/future timestamps
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).unsigned_abs() > 300 {
+        conn.send(RelayMessage::ok(
+            event_id_hex,
+            false,
+            "invalid: observer frame timestamp outside ±5 minute freshness window",
+        ));
+        return;
+    }
+
     let route = match agent_observer_route(&event) {
-        Ok(route) => route,
+        Ok(Some(route)) => route,
+        Ok(None) => {
+            // Unknown frame value — silently drop, no error to publisher.
+            conn.send(RelayMessage::ok(event_id_hex, true, ""));
+            return;
+        }
         Err(message) => {
             reject("invalid");
             conn.send(RelayMessage::ok(event_id_hex, false, &message));
@@ -517,25 +534,62 @@ async fn handle_agent_observer_event(
 
     let agent_bytes = route.agent.serialize().to_vec();
     let owner_bytes = route.owner.serialize().to_vec();
-    match state.db.is_agent_owner(&agent_bytes, &owner_bytes).await {
-        Ok(true) => {}
-        Ok(false) => {
-            reject("auth");
-            conn.send(RelayMessage::ok(
-                event_id_hex,
-                false,
-                "restricted: observer frame is not authorized for this agent owner",
-            ));
-            return;
+    let cache_key = (agent_bytes.clone(), owner_bytes.clone());
+    let is_owner = match state.observer_owner_cache.get(&cache_key) {
+        Some(cached) => cached,
+        None => {
+            let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
+            match result {
+                Ok(v) => {
+                    state.observer_owner_cache.insert(cache_key, v);
+                    v
+                }
+                Err(e) => {
+                    warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
+                    conn.send(RelayMessage::ok(
+                        event_id_hex,
+                        false,
+                        "error: internal server error",
+                    ));
+                    return;
+                }
+            }
         }
-        Err(e) => {
-            warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
-            conn.send(RelayMessage::ok(
-                event_id_hex,
-                false,
-                "error: internal server error",
-            ));
-            return;
+    };
+    if !is_owner {
+        reject("auth");
+        conn.send(RelayMessage::ok(
+            event_id_hex,
+            false,
+            "restricted: observer frame is not authorized for this agent owner",
+        ));
+        return;
+    }
+
+    // Rate limit telemetry frames only (100/sec per agent).
+    // Control frames (owner → agent) bypass the limiter — they are rare and must not
+    // be starved by bursty telemetry from the agent.
+    if matches!(route.direction, AgentObserverDirection::Telemetry) {
+        let agent_key: [u8; 32] = agent_bytes.as_slice().try_into().unwrap_or([0u8; 32]);
+        let now = std::time::Instant::now();
+        let mut entry = state
+            .observer_rate_limiter
+            .entry(agent_key)
+            .or_insert((0, now));
+        let (count, window_start) = entry.value_mut();
+        if now.duration_since(*window_start).as_secs() >= 1 {
+            *count = 1;
+            *window_start = now;
+        } else {
+            *count += 1;
+            if *count > 100 {
+                conn.send(RelayMessage::ok(
+                    event_id_hex,
+                    false,
+                    "rate-limited: observer frame rate exceeded (100/sec per agent)",
+                ));
+                return;
+            }
         }
     }
 
@@ -588,7 +642,7 @@ async fn handle_agent_observer_event(
     conn.send(RelayMessage::ok(event_id_hex, true, ""));
 }
 
-fn agent_observer_route(event: &Event) -> Result<AgentObserverRoute, String> {
+fn agent_observer_route(event: &Event) -> Result<Option<AgentObserverRoute>, String> {
     if !content_looks_like_nip44(&event.content) {
         return Err("invalid: observer content must be NIP-44 encrypted".into());
     }
@@ -617,16 +671,15 @@ fn agent_observer_route(event: &Event) -> Result<AgentObserverRoute, String> {
     };
 
     if frame != expected_frame {
-        return Err(format!(
-            "invalid: observer {direction:?} frame must use frame={expected_frame}"
-        ));
+        // Unknown frame value — silently drop without notifying the publisher.
+        return Ok(None);
     }
 
-    Ok(AgentObserverRoute {
+    Ok(Some(AgentObserverRoute {
         agent,
         owner,
         direction,
-    })
+    }))
 }
 
 fn parse_single_pubkey_tag(event: &Event, tag_name: &str) -> Result<PublicKey, String> {
@@ -715,7 +768,9 @@ mod tests {
         .sign_with_keys(&agent)
         .expect("sign event");
 
-        let route = super::agent_observer_route(&event).expect("observer route");
+        let route = super::agent_observer_route(&event)
+            .expect("observer route")
+            .expect("route should be Some");
         assert_eq!(route.agent, agent.public_key());
         assert_eq!(route.owner, owner.public_key());
         assert_eq!(route.direction, super::AgentObserverDirection::Telemetry);
@@ -743,7 +798,9 @@ mod tests {
         .sign_with_keys(&owner)
         .expect("sign event");
 
-        let route = super::agent_observer_route(&event).expect("observer route");
+        let route = super::agent_observer_route(&event)
+            .expect("observer route")
+            .expect("route should be Some");
         assert_eq!(route.agent, agent.public_key());
         assert_eq!(route.owner, owner.public_key());
         assert_eq!(route.direction, super::AgentObserverDirection::Control);

@@ -321,48 +321,48 @@ fn spawn_relay_observer_publisher(
         }
 
         let mut rx = observer.subscribe();
+        let mut flush_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    for event in coalescer.ingest(event) {
-                        publish_relay_observer_event(
-                            &publisher,
-                            &keys,
-                            &agent_pubkey_hex,
-                            &owner_pubkey_hex,
-                            &owner_pubkey,
-                            event,
-                        )
-                        .await;
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            for event in coalescer.ingest(event) {
+                                publish_relay_observer_event(
+                                    &publisher, &keys, &agent_pubkey_hex,
+                                    &owner_pubkey_hex, &owner_pubkey, event,
+                                ).await;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                            for event in coalescer.flush() {
+                                publish_relay_observer_event(
+                                    &publisher, &keys, &agent_pubkey_hex,
+                                    &owner_pubkey_hex, &owner_pubkey, event,
+                                ).await;
+                            }
+                            tracing::warn!(dropped = count, "relay observer publisher lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            for event in coalescer.flush() {
+                                publish_relay_observer_event(
+                                    &publisher, &keys, &agent_pubkey_hex,
+                                    &owner_pubkey_hex, &owner_pubkey, event,
+                                ).await;
+                            }
+                            break;
+                        }
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                _ = flush_interval.tick() => {
+                    // Periodic flush ensures live streaming even during continuous chunk delivery.
                     for event in coalescer.flush() {
                         publish_relay_observer_event(
-                            &publisher,
-                            &keys,
-                            &agent_pubkey_hex,
-                            &owner_pubkey_hex,
-                            &owner_pubkey,
-                            event,
-                        )
-                        .await;
+                            &publisher, &keys, &agent_pubkey_hex,
+                            &owner_pubkey_hex, &owner_pubkey, event,
+                        ).await;
                     }
-                    tracing::warn!(dropped = count, "relay observer publisher lagged");
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    for event in coalescer.flush() {
-                        publish_relay_observer_event(
-                            &publisher,
-                            &keys,
-                            &agent_pubkey_hex,
-                            &owner_pubkey_hex,
-                            &owner_pubkey,
-                            event,
-                        )
-                        .await;
-                    }
-                    break;
                 }
             }
         }
@@ -390,6 +390,10 @@ struct ObserverChunkKey {
     agent_index: Option<usize>,
 }
 
+/// Flush coalesced chunks before they exceed the NIP-44 plaintext limit (65,535 bytes).
+/// Leave headroom for the JSON envelope wrapping the text.
+const OBSERVER_CHUNK_MAX_TEXT_BYTES: usize = 60_000;
+
 impl ObserverChunkCoalescer {
     fn ingest(&mut self, event: observer::ObserverEvent) -> Vec<observer::ObserverEvent> {
         let Some((key, text)) = observer_chunk_key_and_text(&event) else {
@@ -399,6 +403,13 @@ impl ObserverChunkCoalescer {
         };
 
         if let Some(pending) = self.pending.iter_mut().find(|pending| pending.key == key) {
+            // Flush before appending if this would exceed the plaintext size limit.
+            if pending.text.len() + text.len() >= OBSERVER_CHUNK_MAX_TEXT_BYTES {
+                let events = self.flush();
+                // Start a new pending entry with the current chunk.
+                self.pending.push(PendingObserverChunk { key, event, text });
+                return events;
+            }
             pending.text.push_str(&text);
             pending.event.seq = event.seq;
             pending.event.timestamp = event.timestamp;
@@ -504,12 +515,44 @@ async fn publish_relay_observer_event(
     }
 }
 
+/// Maximum age (seconds) for an observer control frame to be considered fresh.
+const OBSERVER_CONTROL_FRESHNESS_SECS: i64 = 300;
+
 fn handle_relay_observer_control_event(
     keys: &nostr::Keys,
     event: nostr::Event,
     pool: &mut AgentPool,
     observer: Option<&observer::ObserverHandle>,
+    owner_pubkey_hex: &str,
 ) {
+    // Defense-in-depth: verify signature even though the relay already checked.
+    if let Err(e) = sprout_core::verify_event(&event) {
+        tracing::warn!(error = %e, "observer control frame failed signature verification");
+        return;
+    }
+
+    // Defense-in-depth: verify the sender is the resolved owner.
+    if event.pubkey.to_hex() != owner_pubkey_hex {
+        tracing::warn!(
+            sender = %event.pubkey,
+            expected = %owner_pubkey_hex,
+            "observer control frame from non-owner — dropping"
+        );
+        return;
+    }
+
+    // Freshness: reject stale/replayed frames outside ±5 minute window.
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).unsigned_abs() > OBSERVER_CONTROL_FRESHNESS_SECS as u64 {
+        tracing::warn!(
+            event_ts,
+            now,
+            "observer control frame outside freshness window — dropping"
+        );
+        return;
+    }
+
     let payload = match decrypt_observer_payload::<serde_json::Value>(keys, &event) {
         Ok(payload) => payload,
         Err(error) => {
@@ -1321,7 +1364,11 @@ async fn tokio_main() -> Result<()> {
                     let _ = result_rx;
                     match control_event {
                         Some(event) => {
-                            handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref());
+                            if let Some(ref owner_hex) = owner_cache.pubkey {
+                                handle_relay_observer_control_event(&config.keys, event, &mut pool, observer.as_ref(), owner_hex);
+                            } else {
+                                tracing::warn!("observer control frame received but no owner resolved — dropping");
+                            }
                         }
                         None => {
                             relay_observer_control_rx = None;

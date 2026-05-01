@@ -66,6 +66,9 @@ CREATE TABLE channel_members (
     PRIMARY KEY (channel_id, pubkey)
 );
 
+CREATE INDEX idx_channel_members_pubkey ON channel_members (pubkey)
+    WHERE removed_at IS NULL;
+
 -- ── Users ─────────────────────────────────────────────────────────────────────
 
 CREATE TABLE users (

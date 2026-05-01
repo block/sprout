@@ -94,6 +94,15 @@ pub fn decrypt_observer_event(
     let keys = CompatKeys::parse(&nsec).map_err(|error| format!("parse nsec: {error}"))?;
     let event =
         CompatEvent::from_json(event_json).map_err(|error| format!("invalid event: {error}"))?;
+
+    // Defense-in-depth: verify event ID and signature before decrypting.
+    if !event.verify_id() {
+        return Err("observer event has invalid ID".into());
+    }
+    if !event.verify_signature() {
+        return Err("observer event has invalid signature".into());
+    }
+
     sprout_core::observer::decrypt_observer_payload(&keys, &event)
         .map_err(|error| format!("decrypt observer event failed: {error}"))
 }

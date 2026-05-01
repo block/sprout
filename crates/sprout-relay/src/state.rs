@@ -181,6 +181,12 @@ pub struct AppState {
     pub conn_semaphore: Arc<Semaphore>,
     /// Semaphore limiting concurrent message handler tasks.
     pub handler_semaphore: Arc<Semaphore>,
+    /// Semaphore limiting concurrent git subprocess operations.
+    pub git_semaphore: Arc<Semaphore>,
+    /// Per-repo mutex map — prevents concurrent pushes to the same bare repo.
+    /// Key: canonical repo path. Value: mutex guarding exclusive push access.
+    pub git_repo_locks: Arc<DashMap<std::path::PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+
     /// Workflow engine for background processing.
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).
@@ -219,6 +225,16 @@ pub struct AppState {
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
     pub started_at: Instant,
+    /// Per-agent sliding-window rate limiter for observer frames (kind 24200).
+    /// Key: agent pubkey bytes (32). Value: (count, window_start).
+    /// 100 events/sec per agent — prevents relay/DB pressure from bursty telemetry.
+    pub observer_rate_limiter: Arc<DashMap<[u8; 32], (u32, Instant)>>,
+    /// Cache for observer agent-owner authorization (kind 24200).
+    /// Key: (agent_pubkey_bytes, owner_pubkey_bytes). Value: is_owner.
+    /// agent_owner_pubkey is immutable so a long TTL (5 min) is safe.
+    /// Prevents repeated DB lookups from bursty observer traffic.
+    #[allow(clippy::type_complexity)]
+    pub observer_owner_cache: Arc<moka::sync::Cache<(Vec<u8>, Vec<u8>), bool>>,
 }
 
 impl AppState {
@@ -301,6 +317,7 @@ impl AppState {
             tracing::warn!("audit log worker exited (expected on shutdown)");
         });
 
+        let git_max_concurrent_ops = config.git_max_concurrent_ops;
         let state = Self {
             config: Arc::new(config),
             db,
@@ -313,6 +330,8 @@ impl AppState {
             conn_manager: Arc::new(ConnectionManager::new()),
             conn_semaphore: Arc::new(Semaphore::new(max_connections)),
             handler_semaphore: Arc::new(Semaphore::new(max_concurrent_handlers)),
+            git_semaphore: Arc::new(Semaphore::new(git_max_concurrent_ops)),
+            git_repo_locks: Arc::new(DashMap::new()),
             workflow_engine,
             relay_keypair,
             mint_rate_limiter: Arc::new(MintRateLimiter::new()),
@@ -342,6 +361,13 @@ impl AppState {
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
+            observer_rate_limiter: Arc::new(DashMap::new()),
+            observer_owner_cache: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(1_000)
+                    .time_to_live(std::time::Duration::from_secs(300))
+                    .build(),
+            ),
         };
         (
             state,

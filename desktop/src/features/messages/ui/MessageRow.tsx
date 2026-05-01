@@ -1,6 +1,8 @@
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
+import { MessageReactions } from "@/features/messages/ui/MessageReactions";
+import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
@@ -49,10 +51,13 @@ export const MessageRow = React.memo(
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
-    const [reactionErrorMessage, setReactionErrorMessage] = React.useState<
-      string | null
-    >(null);
-    const [reactionPending, setReactionPending] = React.useState(false);
+    const {
+      reactions,
+      canToggle: canToggleReactions,
+      pending: reactionPending,
+      errorMessage: reactionErrorMessage,
+      select: handleReactionSelect,
+    } = useReactionHandler(message, onToggleReaction);
     const mentionNames = React.useMemo(
       () => resolveMentionNames(message.tags, profiles),
       [profiles, message.tags],
@@ -118,45 +123,6 @@ export const MessageRow = React.memo(
           );
       }
     };
-
-    const reactions = [...(message.reactions ?? [])].sort((left, right) => {
-      if (left.count !== right.count) {
-        return right.count - left.count;
-      }
-
-      return left.emoji.localeCompare(right.emoji);
-    });
-    const canToggleReactions = Boolean(onToggleReaction && !message.pending);
-
-    const handleReactionSelect = React.useCallback(
-      async (emoji: string) => {
-        if (!onToggleReaction || reactionPending) {
-          return;
-        }
-
-        const remove = reactions.some(
-          (reaction) =>
-            reaction.emoji === emoji && reaction.reactedByCurrentUser,
-        );
-
-        setReactionErrorMessage(null);
-        setReactionPending(true);
-
-        try {
-          await onToggleReaction(message, emoji, remove);
-        } catch (error) {
-          const nextMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to update the reaction.";
-          setReactionErrorMessage(nextMessage);
-          throw error;
-        } finally {
-          setReactionPending(false);
-        }
-      },
-      [message, onToggleReaction, reactionPending, reactions],
-    );
 
     const isThreadReplyLayout = layoutVariant === "thread-reply";
     const guideBleedPx = isThreadReplyLayout ? 4 : 0;
@@ -257,6 +223,15 @@ export const MessageRow = React.memo(
     const messageBodyNode = (
       <>
         {renderBody()}
+        <MessageReactions
+          messageId={message.id}
+          reactions={reactions}
+          canToggle={canToggleReactions}
+          pending={reactionPending}
+          onSelect={(emoji) => {
+            void handleReactionSelect(emoji);
+          }}
+        />
         {reactionErrorMessage ? (
           <p className="mt-1.5 text-xs text-destructive">
             {reactionErrorMessage}

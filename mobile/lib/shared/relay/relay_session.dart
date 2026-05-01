@@ -73,13 +73,14 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   static const _maxReconnectDelayMs = 30000;
   static const _eventBatchMs = 16;
   static const _reconnectReplaySkewSeconds = 5;
+  static const _maxRecentDeliveryKeys = 5000;
 
   RelaySocket? _socket;
   final Map<String, _HistorySubscription> _historySubscriptions = {};
   final Map<String, _LiveSubscription> _liveSubscriptions = {};
   final Map<String, _PendingEvent> _pendingEvents = {};
   final List<_BufferedEvent> _eventBuffer = [];
-  final Set<String> _recentEventIds = {};
+  final Set<String> _recentDeliveryKeys = {};
   Timer? _reconnectTimer;
   Timer? _flushTimer;
   Timer? _backgroundGraceTimer;
@@ -198,6 +199,12 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   void sendRaw(List<dynamic> payload) {
     _socket?.send(payload);
   }
+
+  @visibleForTesting
+  void debugHandleMessage(List<dynamic> data) => _handleMessage(data);
+
+  @visibleForTesting
+  void debugFlushEventBuffer() => _flushEventBuffer();
 
   /// Force a reconnect (e.g., returning from background).
   Future<void> reconnect() async {
@@ -430,19 +437,22 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _eventBuffer.clear();
 
     for (final buffered in batch) {
-      // Deduplication: skip events we've already seen recently.
-      if (_recentEventIds.contains(buffered.event.id)) continue;
-      _recentEventIds.add(buffered.event.id);
+      final sub = _liveSubscriptions[buffered.subId];
+      if (sub == null) continue;
+
+      // Deduplicate per subscription. The same relay event can legitimately
+      // match multiple live subscriptions, e.g. the channel list unread listener
+      // and the open channel message listener.
+      final deliveryKey = '${buffered.subId}:${buffered.event.id}';
+      if (_recentDeliveryKeys.contains(deliveryKey)) continue;
 
       // Cap the dedup set to prevent unbounded memory growth.
-      if (_recentEventIds.length > 5000) {
-        _recentEventIds.clear();
+      if (_recentDeliveryKeys.length >= _maxRecentDeliveryKeys) {
+        _recentDeliveryKeys.clear();
       }
+      _recentDeliveryKeys.add(deliveryKey);
 
-      final sub = _liveSubscriptions[buffered.subId];
-      if (sub != null) {
-        sub.onEvent(buffered.event);
-      }
+      sub.onEvent(buffered.event);
     }
   }
 
@@ -465,6 +475,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
 
   void _unsubscribe(String subId) {
     _liveSubscriptions.remove(subId);
+    _recentDeliveryKeys.removeWhere((key) => key.startsWith('$subId:'));
     _sendClose(subId);
   }
 
@@ -495,6 +506,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _backgroundGraceTimer?.cancel();
     _cancelAllHistory(null);
     _rejectAllPending(null);
+    _recentDeliveryKeys.clear();
     _socket?.dispose();
     _socket = null;
   }

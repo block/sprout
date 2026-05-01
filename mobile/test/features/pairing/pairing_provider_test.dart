@@ -119,6 +119,24 @@ void main() {
       expect(fakeAuth.lastWorkspace?.pubkey, 'abc123');
     });
 
+    test('reuses provider HTTP client across pairing attempts', () async {
+      var requestCount = 0;
+      final mock = http_testing.MockClient((_) async {
+        requestCount++;
+        return http.Response(jsonEncode({'id': '$requestCount'}), 200);
+      });
+      container = createContainer(mock);
+
+      await container.read(pairingProvider.notifier).pair(_encodePairingCode());
+      expect(container.read(pairingProvider).status, PairingStatus.success);
+
+      container.read(pairingProvider.notifier).reset();
+      await container.read(pairingProvider.notifier).pair(_encodePairingCode());
+
+      expect(container.read(pairingProvider).status, PairingStatus.success);
+      expect(requestCount, 2);
+    });
+
     test('relay 401 sets error state', () async {
       final mock = http_testing.MockClient(
         (_) async => http.Response('{"error": "unauthorized"}', 401),

@@ -26,6 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
+/// Smart HTTP git transport (clone, fetch, push).
+pub mod git;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.

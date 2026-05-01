@@ -50,6 +50,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(RequestBodyLimitLayer::new(media_body_limit))
         .with_state(state.clone());
 
+    // ── Git routes: configurable body limit (default 500 MB) ─────────────────
+    let git_router = api::git::git_router(state.clone());
+
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
         .route("/", get(nip11_or_ws_handler))
@@ -164,6 +167,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     // Metrics → Trace → CORS applied once over the combined router.
     api_router
         .merge(media_router)
+        .merge(git_router)
         .layer(middleware::from_fn(track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.cors_origins))

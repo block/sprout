@@ -86,5 +86,11 @@ class RelayException implements Exception {
   RelayException(this.statusCode, this.body);
 
   @override
-  String toString() => 'RelayException($statusCode)';
+  String toString() {
+    final trimmedBody = body.trim();
+    if (trimmedBody.isEmpty) {
+      return 'RelayException($statusCode)';
+    }
+    return 'RelayException($statusCode): $trimmedBody';
+  }
 }
