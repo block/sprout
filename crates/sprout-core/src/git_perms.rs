@@ -259,6 +259,11 @@ pub struct ProtectionRule {
     /// Whether ref deletion is forbidden.
     pub no_delete: bool,
     /// Whether direct push is denied (must use NIP-34 patch).
+    ///
+    /// NOTE: This blocks ALL ref update kinds (create, FF, NFF, delete) — not just
+    /// fast-forward pushes. If set on a ref pattern, that ref can only be modified
+    /// via the NIP-34 patch workflow. This is intentional: the ref is fully governed
+    /// by the patch review process.
     pub require_patch: bool,
 }
 

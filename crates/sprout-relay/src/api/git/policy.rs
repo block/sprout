@@ -6,10 +6,20 @@
 //! 1. Validates HMAC signature + 30s TTL (fail-closed)
 //! 2. Resolves kind:30617 → protection rules
 //! 3. Resolves pusher's channel role via sprout-channel binding
-//! 4. Calls `sprout_core::git_perms::evaluate_push()`
-//! 5. Returns 200 (allow) or 403 (deny with reasons)
+//! 4. Promotes Bot → Member (bots in a channel push as members)
+//! 5. Calls `sprout_core::git_perms::evaluate_push()`
+//! 6. Returns 200 (allow) or 403 (deny with reasons)
 //!
-//! Security invariants:
+//! # Bot Role Model
+//!
+//! Bots are intentionally added to channels by members/admins. For git push,
+//! they're promoted to Member — protection rules still apply. Bot is a
+//! designation (what it is), not a permission tier (what it can do). The
+//! promotion is scoped to this module; the core `MemberRole::Bot` hierarchy
+//! is unchanged.
+//!
+//! # Security invariants
+//!
 //! - Endpoint binds to 127.0.0.1 only (enforced at router level)
 //! - HMAC binds callback to the specific push operation
 //! - Fail-closed: any error → 403
@@ -104,8 +114,14 @@ impl From<Denial> for DenialResponse {
 
 /// Compute the canonical HMAC payload.
 ///
-/// Format: `repo_id || pusher_pubkey || ref_updates_json || timestamp`
-/// where ref_updates_json is the sorted, deterministic JSON of ref updates.
+/// Format (length-prefixed, `|`-separated, structurally unambiguous):
+/// ```text
+/// len(repo_id):repo_id | repo_owner(64) | pusher(64) | sorted_refs | timestamp
+/// ```
+/// where each ref is: `old_oid(40) + new_oid(40) + len(ref_name):ref_name + is_ancestor("1"/"0")`
+///
+/// Fixed-length fields (OIDs=40, pubkeys=64) need no length prefix.
+/// Variable-length fields (repo_id, ref_name) are length-prefixed to prevent concatenation ambiguity.
 fn compute_hmac(secret: &[u8], req: &HookCallbackRequest) -> Vec<u8> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("HMAC can take key of any size");
 
@@ -531,5 +547,181 @@ mod tests {
         );
         req.signature = sig;
         assert!(verify_hmac(secret, &req));
+    }
+
+    /// Cross-boundary HMAC integration test.
+    ///
+    /// Runs the bash HMAC computation logic (extracted from the pre-receive hook)
+    /// and compares its output against Rust's `generate_hook_hmac`. This is the
+    /// most critical test — it verifies the bash/Rust format agreement that the
+    /// entire security model depends on.
+    #[test]
+    fn bash_hmac_matches_rust_hmac() {
+        let secret = "cross-boundary-test-secret-key-1234";
+        let repo_id = "my-project";
+        let repo_owner = "ab".repeat(32); // 64 hex chars
+        let pusher = "cd".repeat(32); // 64 hex chars
+        let timestamp: u64 = 1700000000;
+
+        // Two refs, intentionally out of sorted order to test sorting.
+        let ref_updates = vec![
+            HookRefUpdate {
+                old_oid: "b".repeat(40),
+                new_oid: "c".repeat(40),
+                ref_name: "refs/heads/main".to_string(),
+                is_ancestor: true,
+            },
+            HookRefUpdate {
+                old_oid: "a".repeat(40),
+                new_oid: "d".repeat(40),
+                ref_name: "refs/heads/feature".to_string(),
+                is_ancestor: false,
+            },
+        ];
+
+        // Compute Rust-side HMAC.
+        let rust_sig = generate_hook_hmac(
+            secret.as_bytes(),
+            repo_id,
+            &repo_owner,
+            &pusher,
+            &ref_updates,
+            timestamp,
+        );
+
+        // Bash script that replicates the hook's HMAC computation.
+        // This is the exact logic from hook.rs PRE_RECEIVE_HOOK, extracted into
+        // a standalone script with hardcoded values.
+        let bash_script = format!(
+            r#"
+export LC_ALL=C
+SPROUT_REPO_ID="{repo_id}"
+SPROUT_REPO_OWNER="{repo_owner}"
+SPROUT_PUSHER_PUBKEY="{pusher}"
+SPROUT_HOOK_SECRET="{secret}"
+TIMESTAMP="{timestamp}"
+
+# Simulate the HMAC_FILE with two refs (unsorted, like the hook writes them)
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+HMAC_FILE="$WORK_DIR/hmac"
+
+# Write refs in the order they'd arrive (main first, feature second)
+echo "refs/heads/main {old1} {new1} 1" >> "$HMAC_FILE"
+echo "refs/heads/feature {old2} {new2} 0" >> "$HMAC_FILE"
+
+# Build HMAC input — exact logic from hook script
+REPO_ID_LEN=${{#SPROUT_REPO_ID}}
+HMAC_INPUT="${{REPO_ID_LEN}}:${{SPROUT_REPO_ID}}|${{SPROUT_REPO_OWNER}}|${{SPROUT_PUSHER_PUBKEY}}|"
+sort "$HMAC_FILE" | while IFS=' ' read -r ref_name old_oid new_oid is_anc; do
+    REF_LEN=${{#ref_name}}
+    printf '%s%s%s:%s%s' "$old_oid" "$new_oid" "$REF_LEN" "$ref_name" "$is_anc"
+done > "$HMAC_FILE.concat"
+HMAC_INPUT="${{HMAC_INPUT}}$(cat "$HMAC_FILE.concat")|${{TIMESTAMP}}"
+
+# Compute HMAC-SHA256
+printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "$SPROUT_HOOK_SECRET" -hex 2>/dev/null | sed 's/.*= //'
+"#,
+            repo_id = repo_id,
+            repo_owner = repo_owner,
+            pusher = pusher,
+            secret = secret,
+            timestamp = timestamp,
+            old1 = "b".repeat(40),
+            new1 = "c".repeat(40),
+            old2 = "a".repeat(40),
+            new2 = "d".repeat(40),
+        );
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&bash_script)
+            .output()
+            .expect("failed to run bash");
+
+        assert!(
+            output.status.success(),
+            "bash script failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let bash_sig = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        assert_eq!(
+            rust_sig, bash_sig,
+            "HMAC mismatch!\n  Rust: {rust_sig}\n  Bash: {bash_sig}\n\
+             The pre-receive hook and policy endpoint disagree on the canonical format."
+        );
+    }
+
+    /// Cross-boundary test with a single ref (simpler case).
+    #[test]
+    fn bash_hmac_single_ref() {
+        let secret = "single-ref-secret";
+        let repo_id = "test-repo";
+        let repo_owner = "a".repeat(64);
+        let pusher = "b".repeat(64);
+        let timestamp: u64 = 1700000001;
+
+        let ref_updates = vec![HookRefUpdate {
+            old_oid: "1".repeat(40),
+            new_oid: "2".repeat(40),
+            ref_name: "refs/heads/main".to_string(),
+            is_ancestor: true,
+        }];
+
+        let rust_sig = generate_hook_hmac(
+            secret.as_bytes(),
+            repo_id,
+            &repo_owner,
+            &pusher,
+            &ref_updates,
+            timestamp,
+        );
+
+        let bash_script = format!(
+            r#"
+export LC_ALL=C
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+HMAC_FILE="$WORK_DIR/hmac"
+echo "refs/heads/main {old} {new} 1" >> "$HMAC_FILE"
+REPO_ID_LEN=${{#{repo_id_len}}}
+HMAC_INPUT="{repo_id_len_val}:{repo_id}|{owner}|{pusher}|"
+sort "$HMAC_FILE" | while IFS=' ' read -r ref_name old_oid new_oid is_anc; do
+    REF_LEN=${{#ref_name}}
+    printf '%s%s%s:%s%s' "$old_oid" "$new_oid" "$REF_LEN" "$ref_name" "$is_anc"
+done > "$HMAC_FILE.concat"
+HMAC_INPUT="${{HMAC_INPUT}}$(cat "$HMAC_FILE.concat")|{timestamp}"
+printf '%s' "$HMAC_INPUT" | openssl dgst -sha256 -hmac "{secret}" -hex 2>/dev/null | sed 's/.*= //'
+"#,
+            old = "1".repeat(40),
+            new = "2".repeat(40),
+            repo_id = repo_id,
+            repo_id_len = format!("SPROUT_REPO_ID=\"{repo_id}\"; echo ${{#SPROUT_REPO_ID}}"),
+            repo_id_len_val = repo_id.len(),
+            owner = repo_owner,
+            pusher = pusher,
+            timestamp = timestamp,
+            secret = secret,
+        );
+
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&bash_script)
+            .output()
+            .expect("failed to run bash");
+
+        assert!(
+            output.status.success(),
+            "bash script failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let bash_sig = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(
+            rust_sig, bash_sig,
+            "Single-ref HMAC mismatch!\n  Rust: {rust_sig}\n  Bash: {bash_sig}"
+        );
     }
 }

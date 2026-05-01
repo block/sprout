@@ -57,7 +57,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 #   REFS_FILE: JSON entries (unsorted, for the request body)
 #   HMAC_FILE: "ref_name old_oid new_oid" lines (for sorting → HMAC input)
 REFS=""
-while read old_oid new_oid ref_name; do
+while read -r old_oid new_oid ref_name; do
     # Ancestry check for FF detection.
     # CRITICAL: GIT_OBJECT_DIRECTORY and GIT_ALTERNATE_OBJECT_DIRECTORIES are
     # inherited from our environment (git sets them for quarantine). Any git

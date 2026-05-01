@@ -11,6 +11,9 @@ pub enum ConfigError {
     /// The `SPROUT_BIND_ADDR` environment variable could not be parsed as a socket address.
     #[error("invalid SPROUT_BIND_ADDR: {0}")]
     InvalidBindAddr(String),
+    /// A configuration value failed validation.
+    #[error("invalid config: {0}")]
+    InvalidValue(String),
 }
 
 /// Relay runtime configuration, loaded from environment variables.
@@ -253,6 +256,17 @@ impl Config {
                 let secret: [u8; 32] = rand::random();
                 hex::encode(secret)
             });
+        // Reject explicitly-configured secrets that are too short.
+        // The auto-generated fallback is always 64 hex chars (32 bytes), so this
+        // only fires when someone sets SPROUT_GIT_HOOK_HMAC_SECRET to a weak value.
+        if std::env::var("SPROUT_GIT_HOOK_HMAC_SECRET").is_ok()
+            && git_hook_hmac_secret.len() < 32
+        {
+            return Err(ConfigError::InvalidValue(
+                "SPROUT_GIT_HOOK_HMAC_SECRET must be at least 32 characters (16 bytes hex)"
+                    .to_string(),
+            ));
+        }
 
         Ok(Self {
             bind_addr,

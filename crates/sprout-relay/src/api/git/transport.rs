@@ -462,6 +462,9 @@ pub async fn receive_pack(
         ("GIT_CONFIG_VALUE_0", hooks_dir),
     ];
 
+    // Snapshot refs before push — used to detect whether anything actually changed.
+    let refs_before = snapshot_refs(&validated.repo_path).await;
+
     let response = run_git_service_with_env(
         &state,
         &params.owner,
@@ -472,15 +475,19 @@ pub async fn receive_pack(
     )
     .await?;
 
-    // Post-push: publish kind:30618 ref state event (fire-and-forget).
-    // NOTE: This fires even on denied pushes (git returns 200 with in-band rejection).
-    // The publish reads current refs from disk — if nothing changed, it publishes
-    // identical state (idempotent). A future optimization could compare before/after.
+    // Post-push: publish kind:30618 ref state only if refs actually changed.
+    // Git smart HTTP returns 200 even on denied pushes (in-band rejection),
+    // so we compare before/after refs to avoid publishing on no-ops.
     let state_clone = state.clone();
     let owner = params.owner.clone();
     let repo = params.repo.clone();
     let pusher = auth.pubkey;
+    let repo_path = validated.repo_path.clone();
     tokio::spawn(async move {
+        let refs_after = snapshot_refs(&repo_path).await;
+        if refs_before == refs_after {
+            return; // Nothing changed — skip publish.
+        }
         if let Err(e) = publish_ref_state(&state_clone, &owner, &repo, &pusher).await {
             warn!(error = %e, owner = %owner, repo = %repo, "failed to publish kind:30618");
         }
@@ -606,6 +613,24 @@ async fn run_git_service_with_env(
 }
 
 // ── Post-Push Event Publishing ───────────────────────────────────────────────
+
+/// Quick snapshot of current refs — used to detect whether a push changed anything.
+///
+/// Returns the raw `git for-each-ref` output as a string. Comparison is by
+/// string equality — cheap and sufficient (same refs + same SHAs = same string).
+/// Returns empty string on error (conservative: will trigger publish on failure).
+async fn snapshot_refs(repo_path: &std::path::Path) -> String {
+    let mut cmd = Command::new("git");
+    cmd.args(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .current_dir(repo_path);
+    harden_git_env(&mut cmd);
+    match cmd.output().await {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => String::new(), // Error → empty → won't match after → publish fires (safe default)
+    }
+}
 
 /// Publish kind:30618 (repo state) after a successful push.
 ///
