@@ -248,7 +248,8 @@ jobs:
           cross build --release --target "$TARGET" \
             -p sprout-relay \
             -p sprout-acp \
-            -p sprout-mcp
+            -p sprout-mcp \
+            -p git-credential-nostr
 
   desktop-build-macos:
     name: Desktop Build (macOS)
@@ -267,6 +268,7 @@ jobs:
           mkdir -p desktop/src-tauri/binaries
           touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
           touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+          touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
       - name: Build Tauri app
         run: cd desktop && pnpm tauri build
         env:

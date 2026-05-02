@@ -41,7 +41,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/sprout-acp", "binaries/sprout-mcp-server"],
+    "externalBin": [
+      "binaries/sprout-acp",
+      "binaries/sprout-mcp-server",
+      "binaries/git-credential-nostr"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
