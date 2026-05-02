@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/utils/string_utils.dart';
+import '../channels/channel_detail_page.dart';
+import '../channels/channel_management_provider.dart';
 import 'presence_cache_provider.dart';
 import 'user_cache_provider.dart';
 import 'user_status_cache_provider.dart';
@@ -80,105 +84,142 @@ class UserProfileSheet extends HookConsumerWidget {
       width: double.infinity,
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          Grid.xs,
+          Grid.sm,
           0,
-          Grid.xs,
+          Grid.sm,
           MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
         ),
         child: SafeArea(
           top: false,
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.6,
+              maxHeight: MediaQuery.sizeOf(context).height * 0.7,
             ),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Avatar
-                  _ProfileAvatar(avatarUrl: avatarUrl, initial: initial),
-                  const SizedBox(height: Grid.twelve),
+                  // Avatar with presence overlay — centered
+                  Center(
+                    child: _ProfileAvatar(
+                      avatarUrl: avatarUrl,
+                      initial: initial,
+                      presenceColor: presenceColor,
+                    ),
+                  ),
+                  const SizedBox(height: Grid.xs),
 
-                  // Display name or truncated pubkey
-                  Text(
-                    displayName ?? shortPubkey(pubkey),
-                    style: context.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+                  // Display name — centered, large
+                  Center(
+                    child: Text(
+                      displayName ?? shortPubkey(pubkey),
+                      style: context.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
 
-                  // NIP-05 handle
+                  // NIP-05 handle — centered, secondary
                   if (nip05 != null && nip05.isNotEmpty) ...[
-                    const SizedBox(height: Grid.quarter),
-                    Text(
-                      nip05,
-                      style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-
-                  // Truncated pubkey (only if display name is shown)
-                  if (displayName != null) ...[
-                    const SizedBox(height: Grid.quarter),
-                    Text(
-                      shortPubkey(pubkey),
-                      style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.onSurfaceVariant.withValues(
-                          alpha: 0.6,
-                        ),
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ],
-
-                  const SizedBox(height: Grid.xxs),
-
-                  // Presence indicator
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: presenceColor,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: Grid.half),
-                      Text(
-                        presenceLabel,
-                        style: context.textTheme.bodySmall?.copyWith(
+                    const SizedBox(height: Grid.half),
+                    Center(
+                      child: Text(
+                        nip05,
+                        style: context.textTheme.bodyMedium?.copyWith(
                           color: context.colors.onSurfaceVariant,
                         ),
                       ),
-                    ],
-                  ),
-
-                  // Custom status
-                  if (userStatus != null && !userStatus.isEmpty) ...[
-                    const SizedBox(height: Grid.half),
-                    Text(
-                      '${userStatus.emoji.isNotEmpty ? '${userStatus.emoji} ' : ''}${userStatus.text}',
-                      style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.onSurfaceVariant,
-                      ),
-                      textAlign: TextAlign.center,
                     ),
                   ],
 
-                  // About / bio
+                  const SizedBox(height: Grid.xs),
+
+                  // Info rows — left-aligned with icons
+                  _InfoRow(
+                    icon: LucideIcons.circle,
+                    iconColor: presenceColor,
+                    iconSize: 10,
+                    text: presenceLabel,
+                  ),
+
+                  if (userStatus != null && !userStatus.isEmpty)
+                    _InfoRow(
+                      icon: LucideIcons.messageCircle,
+                      text:
+                          '${userStatus.emoji.isNotEmpty ? '${userStatus.emoji} ' : ''}${userStatus.text}',
+                    ),
+
+                  _InfoRow(
+                    icon: LucideIcons.key,
+                    text: shortPubkey(pubkey),
+                    textStyle: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                      fontFamily: 'monospace',
+                    ),
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: pubkey));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Public key copied'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+
+                  // About / bio section
                   if (about.isNotEmpty) ...[
+                    const SizedBox(height: Grid.xxs),
+                    Divider(
+                      color: context.colors.outlineVariant.withValues(
+                        alpha: 0.3,
+                      ),
+                    ),
                     const SizedBox(height: Grid.xxs),
                     Text(
                       about,
-                      style: context.textTheme.bodySmall?.copyWith(
+                      style: context.textTheme.bodyMedium?.copyWith(
                         color: context.colors.onSurfaceVariant,
                       ),
-                      textAlign: TextAlign.center,
                     ),
                   ],
+
+                  const SizedBox(height: Grid.xs),
+
+                  // Action button — Message
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        try {
+                          final channel = await ref
+                              .read(channelActionsProvider)
+                              .openDm(pubkeys: [pk]);
+                          if (!context.mounted) return;
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  ChannelDetailPage(channel: channel),
+                            ),
+                          );
+                        } catch (_) {
+                          // Silently fail — user tapped but DM open failed.
+                        }
+                      },
+                      icon: const Icon(LucideIcons.messageSquare, size: 18),
+                      label: const Text('Message'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: Grid.twelve,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(Radii.lg),
+                        ),
+                      ),
+                    ),
+                  ),
 
                   const SizedBox(height: Grid.xxs),
                 ],
@@ -191,11 +232,80 @@ class UserProfileSheet extends HookConsumerWidget {
   }
 }
 
+/// A row displaying an icon + text, used for profile info items.
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color? iconColor;
+  final double iconSize;
+  final TextStyle? textStyle;
+  final VoidCallback? onTap;
+
+  const _InfoRow({
+    required this.icon,
+    required this.text,
+    this.iconColor,
+    this.iconSize = 16,
+    this.textStyle,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final child = Padding(
+      padding: const EdgeInsets.symmetric(vertical: Grid.half + 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            child: Icon(
+              icon,
+              size: iconSize,
+              color: iconColor ?? context.colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Expanded(
+            child: Text(
+              text,
+              style:
+                  textStyle ??
+                  context.textTheme.bodyMedium?.copyWith(
+                    color: context.colors.onSurface,
+                  ),
+            ),
+          ),
+          if (onTap != null)
+            Icon(
+              LucideIcons.copy,
+              size: 14,
+              color: context.colors.onSurfaceVariant,
+            ),
+        ],
+      ),
+    );
+
+    if (onTap != null) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: child,
+      );
+    }
+    return child;
+  }
+}
+
 class _ProfileAvatar extends HookWidget {
   final String? avatarUrl;
   final String initial;
+  final Color presenceColor;
 
-  const _ProfileAvatar({required this.avatarUrl, required this.initial});
+  const _ProfileAvatar({
+    required this.avatarUrl,
+    required this.initial,
+    required this.presenceColor,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -209,20 +319,44 @@ class _ProfileAvatar extends HookWidget {
     final url = avatarUrl;
     final showImage = url != null && !failed.value;
 
-    return CircleAvatar(
-      radius: 48,
-      backgroundColor: context.colors.primaryContainer,
-      backgroundImage: showImage ? NetworkImage(url) : null,
-      onBackgroundImageError: showImage ? (_, _) => failed.value = true : null,
-      child: !showImage
-          ? Text(
-              initial,
-              style: context.textTheme.headlineMedium?.copyWith(
-                color: context.colors.onPrimaryContainer,
-                fontWeight: FontWeight.w600,
+    return SizedBox(
+      width: 120,
+      height: 120,
+      child: Stack(
+        children: [
+          CircleAvatar(
+            radius: 56,
+            backgroundColor: context.colors.primaryContainer,
+            backgroundImage: showImage ? NetworkImage(url) : null,
+            onBackgroundImageError: showImage
+                ? (_, _) => failed.value = true
+                : null,
+            child: !showImage
+                ? Text(
+                    initial,
+                    style: context.textTheme.headlineLarge?.copyWith(
+                      color: context.colors.onPrimaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  )
+                : null,
+          ),
+          // Presence dot overlay
+          Positioned(
+            bottom: 4,
+            right: 4,
+            child: Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                color: presenceColor,
+                shape: BoxShape.circle,
+                border: Border.all(color: context.colors.surface, width: 3),
               ),
-            )
-          : null,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
