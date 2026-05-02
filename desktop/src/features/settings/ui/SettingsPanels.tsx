@@ -6,6 +6,7 @@ import {
   Keyboard,
   KeyRound,
   MonitorCog,
+  Shield,
   Moon,
   Search,
   Smartphone,
@@ -18,6 +19,7 @@ import type {
   DesktopNotificationPermissionState,
   NotificationSettings,
 } from "@/features/notifications/hooks";
+import { RelayMembersCard } from "@/features/relay-members/ui/RelayMembersCard";
 import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
@@ -35,6 +37,7 @@ export type SettingsSection =
   | "appearance"
   | "shortcuts"
   | "tokens"
+  | "relay-members"
   | "mobile"
   | "updates"
   | "doctor";
@@ -85,6 +88,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "tokens",
     label: "Tokens",
     icon: KeyRound,
+  },
+  {
+    value: "relay-members",
+    label: "Members",
+    icon: Shield,
   },
   {
     value: "mobile",
@@ -254,6 +262,8 @@ export function renderSettingsSection(
       return <KeyboardShortcutsCard />;
     case "tokens":
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
+    case "relay-members":
+      return <RelayMembersCard currentPubkey={props.currentPubkey} />;
     case "mobile":
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":

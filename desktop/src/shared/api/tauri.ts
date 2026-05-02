@@ -20,6 +20,8 @@ import type {
   ManagedAgent,
   ManagedAgentBackend,
   RelayAgent,
+  RelayMember,
+  RelayMemberRole,
   PresenceLookup,
   PresenceStatus,
   Profile,
@@ -292,6 +294,17 @@ type RawCommandAvailability = {
 type RawManagedAgentPrereqs = {
   acp: RawCommandAvailability;
   mcp: RawCommandAvailability;
+};
+
+type RawRelayMember = {
+  pubkey: string;
+  role: string;
+  added_by: string | null;
+  created_at: string;
+};
+
+type RawListRelayMembersResponse = {
+  members: RawRelayMember[];
 };
 
 type RawCanvasResponse = {
@@ -922,6 +935,59 @@ export async function revokeAllTokens(): Promise<{ revokedCount: number }> {
     "revoke_all_tokens",
   );
   return { revokedCount: response.revoked_count };
+}
+
+// ── Relay Members ────────────────────────────────────────────────────────────
+
+function fromRawRelayMember(raw: RawRelayMember): RelayMember {
+  return {
+    pubkey: raw.pubkey,
+    role: raw.role as RelayMemberRole,
+    addedBy: raw.added_by,
+    createdAt: raw.created_at,
+  };
+}
+
+export async function listRelayMembers(): Promise<RelayMember[]> {
+  const response =
+    await invokeTauri<RawListRelayMembersResponse>("list_relay_members");
+  return response.members.map(fromRawRelayMember);
+}
+
+export async function getMyRelayMembership(): Promise<RelayMember | null> {
+  try {
+    const raw = await invokeTauri<RawRelayMember>("get_my_relay_membership");
+    return fromRawRelayMember(raw);
+  } catch (error) {
+    // "relay returned 404 Not Found" = not a relay member — return null so
+    // the UI hides the Members tab. Re-throw real errors (network, auth, 500)
+    // so React Query surfaces them.
+    if (
+      error instanceof Error &&
+      error.message.startsWith("relay returned 404")
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function addRelayMember(
+  targetPubkey: string,
+  role: string,
+): Promise<void> {
+  await invokeTauri("add_relay_member", { targetPubkey, role });
+}
+
+export async function removeRelayMember(targetPubkey: string): Promise<void> {
+  await invokeTauri("remove_relay_member", { targetPubkey });
+}
+
+export async function changeRelayMemberRole(
+  targetPubkey: string,
+  newRole: string,
+): Promise<void> {
+  await invokeTauri("change_relay_member_role", { targetPubkey, newRole });
 }
 
 export async function listRelayAgents(): Promise<RelayAgent[]> {
