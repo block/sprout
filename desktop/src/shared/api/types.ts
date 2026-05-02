@@ -237,6 +237,17 @@ export type SearchMessagesResponse = {
   found: number;
 };
 
+// ── Relay Members ────────────────────────────────────────────────────────────
+
+export type RelayMemberRole = "owner" | "admin" | "member";
+
+export type RelayMember = {
+  pubkey: string;
+  role: RelayMemberRole;
+  addedBy: string | null;
+  createdAt: string;
+};
+
 export type TokenScope =
   | "messages:read"
   | "messages:write"
