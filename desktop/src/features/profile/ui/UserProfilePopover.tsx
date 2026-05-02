@@ -132,7 +132,7 @@ export function UserProfilePopover({
         {/* biome-ignore lint/a11y/useSemanticElements: wrapper div for hover/click behavior */}
         <div
           role="button"
-          tabIndex={-1}
+          tabIndex={0}
           onClick={handleTriggerClick}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {

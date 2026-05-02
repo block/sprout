@@ -147,17 +147,26 @@ test("clicking author name opens user profile popover", async ({ page }) => {
   await expect(popover).toContainText("deadbeef");
 });
 
-test("clicking avatar opens user profile popover", async ({ page }) => {
+test("hovering avatar opens popover, clicking opens profile panel", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
-  // Click the avatar button on the first message
   const firstMessage = page.getByTestId("message-row").first();
   const avatarButton = firstMessage.locator("button").first();
-  await avatarButton.click();
 
+  // Hover should open the popover
+  await avatarButton.hover();
   await expect(
     page.locator("[data-radix-popper-content-wrapper]"),
   ).toBeVisible();
+
+  // Click should close the popover and open the profile panel
+  await avatarButton.click();
+  await expect(
+    page.locator("[data-radix-popper-content-wrapper]"),
+  ).not.toBeVisible();
+  await expect(page.getByTestId("user-profile-panel")).toBeVisible();
 });

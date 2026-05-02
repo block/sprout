@@ -402,6 +402,7 @@ export const ChannelPane = React.memo(function ChannelPane({
       ) : profilePanelPubkey ? (
         <UserProfilePanel
           canResetWidth={canResetThreadPanelWidth}
+          currentPubkey={currentPubkey}
           onClose={onCloseProfilePanel}
           onOpenDm={onOpenDm}
           onResetWidth={handleThreadPanelWidthReset}

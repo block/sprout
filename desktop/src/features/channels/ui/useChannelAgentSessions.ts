@@ -12,6 +12,7 @@ type UseChannelAgentSessionsOptions = {
   managedAgents: ManagedAgent[];
   setExpandedThreadReplyIds: (value: Set<string>) => void;
   setOpenThreadHeadId: (value: string | null) => void;
+  setProfilePanelPubkey: (value: string | null) => void;
   setThreadReplyTargetId: (value: string | null) => void;
   setThreadScrollTargetId: (value: string | null) => void;
   targetMessageId: string | null;
@@ -26,6 +27,7 @@ export function useChannelAgentSessions({
   managedAgents,
   setExpandedThreadReplyIds,
   setOpenThreadHeadId,
+  setProfilePanelPubkey,
   setThreadReplyTargetId,
   setThreadScrollTargetId,
   targetMessageId,
@@ -62,11 +64,13 @@ export function useChannelAgentSessions({
       setExpandedThreadReplyIds(new Set());
       setThreadScrollTargetId(null);
       setThreadReplyTargetId(null);
+      setProfilePanelPubkey(null);
       setOpenAgentSessionPubkey(pubkey);
     },
     [
       setExpandedThreadReplyIds,
       setOpenThreadHeadId,
+      setProfilePanelPubkey,
       setThreadReplyTargetId,
       setThreadScrollTargetId,
     ],
@@ -79,9 +83,10 @@ export function useChannelAgentSessions({
   const openThreadAndCloseAgentSession = React.useCallback(
     (message: TimelineMessage) => {
       setOpenAgentSessionPubkey(null);
+      setProfilePanelPubkey(null);
       handleOpenThread(message);
     },
-    [handleOpenThread],
+    [handleOpenThread, setProfilePanelPubkey],
   );
 
   React.useEffect(() => {

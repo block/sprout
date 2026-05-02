@@ -25,6 +25,7 @@ import {
 
 type UserProfilePanelProps = {
   canResetWidth: boolean;
+  currentPubkey?: string;
   onClose: () => void;
   onOpenDm?: (pubkeys: string[]) => void;
   onResetWidth: () => void;
@@ -62,6 +63,7 @@ function truncatePubkey(pubkey: string) {
 
 export function UserProfilePanel({
   canResetWidth,
+  currentPubkey,
   onClose,
   onOpenDm,
   onResetWidth,
@@ -80,14 +82,19 @@ export function UserProfilePanel({
   const { onOpenAgentSession } = useAgentSession();
 
   const profile = profileQuery.data;
-  const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
-  const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
+  const pubkeyLower = pubkey.toLowerCase();
+  const presenceStatus = presenceQuery.data?.[pubkeyLower];
+  const userStatus = userStatusQuery.data?.[pubkeyLower];
 
-  const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
+  const relayAgent = relayAgentsQuery.data?.find(
+    (a) => a.pubkey.toLowerCase() === pubkeyLower,
+  );
   const managedAgent = managedAgentsQuery.data?.find(
-    (a) => a.pubkey === pubkey,
+    (a) => a.pubkey.toLowerCase() === pubkeyLower,
   );
   const isBot = Boolean(relayAgent || managedAgent);
+  const isSelf =
+    currentPubkey !== undefined && pubkeyLower === currentPubkey.toLowerCase();
   const canViewActivity =
     isBot &&
     managedAgent?.backend.type === "local" &&
@@ -242,7 +249,7 @@ export function UserProfilePanel({
 
           {/* Actions */}
           <div className="mt-6 flex flex-col gap-2">
-            {onOpenDm ? (
+            {onOpenDm && !isSelf ? (
               <button
                 className="flex w-full items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-muted/50"
                 data-testid="user-profile-message"

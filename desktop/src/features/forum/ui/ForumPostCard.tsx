@@ -69,14 +69,10 @@ export function ForumPostCard({
     >
       <div className="flex items-center gap-2">
         {/* biome-ignore lint/a11y/noStaticElementInteractions: presentation wrapper stops click propagation to parent card */}
-        <div
-          className="flex items-center gap-2"
-          onClick={(e) => e.stopPropagation()}
-          role="presentation"
-        >
+        <div onClick={(e) => e.stopPropagation()} role="presentation">
           <UserProfilePopover pubkey={post.pubkey}>
             <button
-              className="shrink-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               type="button"
             >
               <UserAvatar
@@ -84,14 +80,9 @@ export function ForumPostCard({
                 displayName={authorLabel}
                 size="sm"
               />
-            </button>
-          </UserProfilePopover>
-          <UserProfilePopover pubkey={post.pubkey}>
-            <button
-              className="truncate text-sm font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              type="button"
-            >
-              {authorLabel}
+              <span className="truncate text-sm font-medium text-foreground hover:underline">
+                {authorLabel}
+              </span>
             </button>
           </UserProfilePopover>
         </div>

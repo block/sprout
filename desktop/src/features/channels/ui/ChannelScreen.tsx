@@ -73,13 +73,9 @@ export function ChannelScreen({
   targetMessageId,
 }: ChannelScreenProps) {
   const { markChannelRead, openChannelManagement } = useAppShell();
-  const {
-    profilePanelPubkey,
-    setProfilePanelPubkey,
-    handleOpenProfilePanel,
-    handleCloseProfilePanel,
-    handleOpenDm,
-  } = useChannelProfilePanel();
+  const [profilePanelPubkey, setProfilePanelPubkey] = React.useState<
+    string | null
+  >(null);
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
     null,
@@ -350,11 +346,22 @@ export function ChannelScreen({
     managedAgents: managedAgentsQuery.data ?? [],
     setExpandedThreadReplyIds,
     setOpenThreadHeadId,
+    setProfilePanelPubkey,
     setThreadReplyTargetId,
     setThreadScrollTargetId,
     targetMessageId,
     timelineMessages,
   });
+
+  const { handleOpenProfilePanel, handleCloseProfilePanel, handleOpenDm } =
+    useChannelProfilePanel({
+      closeAgentSession: handleCloseAgentSession,
+      setExpandedThreadReplyIds,
+      setOpenThreadHeadId,
+      setProfilePanelPubkey,
+      setThreadReplyTargetId,
+      setThreadScrollTargetId,
+    });
 
   const isTimelineLoading =
     activeChannel !== null &&
@@ -371,7 +378,7 @@ export function ChannelScreen({
       setEditTargetId(null);
       setProfilePanelPubkey(null);
     },
-    [handleCloseAgentSession, setProfilePanelPubkey],
+    [handleCloseAgentSession],
   );
   const handleThreadScrollTargetResolved = React.useCallback(() => {
     setThreadScrollTargetId(null);
