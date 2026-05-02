@@ -6,6 +6,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import '../profile/user_status.dart';
+import '../profile/user_status_cache_provider.dart';
 import 'agent_activity/agent_activity_sheet.dart';
 import 'agent_activity/working_bots_provider.dart';
 import 'channel.dart';
@@ -29,6 +31,7 @@ class MembersSheet extends HookConsumerWidget {
     final bots = allMembers.where((member) => member.isBot).toList();
     final userCache = ref.watch(userCacheProvider);
     final typingBotPubkeys = ref.watch(workingBotPubkeysProvider(channel.id));
+    final statusCache = ref.watch(userStatusCacheProvider);
 
     // Determine if the current user can manage members.
     final currentMember = allMembers.cast<ChannelMember?>().firstWhere(
@@ -63,6 +66,14 @@ class MembersSheet extends HookConsumerWidget {
         ref
             .read(userCacheProvider.notifier)
             .preload(allMembers.map((m) => m.pubkey).toList());
+        // Track user statuses for people (not bots).
+        final peoplePubkeys = allMembers
+            .where((m) => !m.isBot)
+            .map((m) => m.pubkey)
+            .toList();
+        if (peoplePubkeys.isNotEmpty) {
+          ref.read(userStatusCacheProvider.notifier).track(peoplePubkeys);
+        }
       }
       return null;
     }, [allMembers.length]);
@@ -108,6 +119,8 @@ class MembersSheet extends HookConsumerWidget {
                                 member.pubkey.toLowerCase() ==
                                 currentPubkey?.toLowerCase(),
                             channelId: channel.id,
+                            userStatus:
+                                statusCache[member.pubkey.toLowerCase()],
                           ),
                       ],
                       if (bots.isNotEmpty) ...[
@@ -202,6 +215,7 @@ class _MemberTile extends ConsumerWidget {
   final bool isWorking;
   final VoidCallback? onActivityTap;
   final VoidCallback? onViewActivity;
+  final UserStatus? userStatus;
 
   const _MemberTile({
     required this.member,
@@ -213,6 +227,7 @@ class _MemberTile extends ConsumerWidget {
     this.isWorking = false,
     this.onActivityTap,
     this.onViewActivity,
+    this.userStatus,
   });
 
   @override
@@ -247,6 +262,15 @@ class _MemberTile extends ConsumerWidget {
                   ),
                 ),
               ],
+            )
+          : userStatus != null && !userStatus!.isEmpty
+          ? Text(
+              '${userStatus!.emoji.isNotEmpty ? '${userStatus!.emoji} ' : ''}${userStatus!.text}',
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             )
           : Text(
               _roleLabel(member.role),

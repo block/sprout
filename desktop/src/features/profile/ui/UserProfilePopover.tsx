@@ -10,6 +10,7 @@ import {
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { useUserStatusQuery } from "@/features/user-status/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
@@ -74,6 +75,7 @@ export function UserProfilePopover({
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
   });
+  const userStatusQuery = useUserStatusQuery(open ? [pubkey] : []);
 
   const { onOpenAgentSession } = useAgentSession();
   const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
@@ -87,6 +89,7 @@ export function UserProfilePopover({
   const profile = profileQuery.data;
   const latestNote = (notesQuery.data?.notes ?? [])[0] ?? null;
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
+  const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
@@ -136,6 +139,18 @@ export function UserProfilePopover({
 
             {presenceStatus ? <PresenceBadge status={presenceStatus} /> : null}
           </div>
+
+          {userStatus ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="user-profile-status"
+            >
+              {userStatus.emoji ? (
+                <span className="mr-1">{userStatus.emoji}</span>
+              ) : null}
+              {userStatus.text}
+            </p>
+          ) : null}
 
           {!notesQuery.isLoading && !notesQuery.isError && latestNote ? (
             <div

@@ -23,6 +23,7 @@ import type {
   ChannelVisibility,
   PresenceStatus,
   Profile,
+  UserStatus,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -105,7 +106,10 @@ type AppSidebarProps = {
   onSelectChannel: (channelId: string) => void;
   onSelectSettings: () => void;
   onSetPresenceStatus?: (status: "online" | "away" | "offline") => void;
+  onSetUserStatus: (text: string, emoji: string) => void;
+  onClearUserStatus: () => void;
   onSwitchWorkspace: (id: string) => void;
+  selfUserStatus?: UserStatus;
   isPresencePending?: boolean;
   isNewDmOpen?: boolean;
   onNewDmOpenChange?: (open: boolean) => void;
@@ -255,7 +259,10 @@ export function AppSidebar({
   onSelectChannel,
   onSelectSettings,
   onSetPresenceStatus,
+  onSetUserStatus,
+  onClearUserStatus,
   onSwitchWorkspace,
+  selfUserStatus,
   isPresencePending,
   isNewDmOpen: isNewDmOpenProp,
   onNewDmOpenChange,
@@ -526,7 +533,11 @@ export function AppSidebar({
               avatarUrl={profile?.avatarUrl ?? null}
               currentStatus={selfPresenceStatus}
               isStatusPending={isPresencePending}
+              userStatusText={selfUserStatus?.text}
+              userStatusEmoji={selfUserStatus?.emoji}
               onSetStatus={onSetPresenceStatus ?? (() => {})}
+              onSetUserStatus={onSetUserStatus}
+              onClearUserStatus={onClearUserStatus}
               onOpenSettings={onSelectSettings}
             >
               <SidebarMenuButton
