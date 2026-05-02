@@ -92,19 +92,13 @@ class MembersSheet extends HookConsumerWidget {
           children: [
             Text('Members', style: context.textTheme.titleMedium),
             const SizedBox(height: Grid.xxs),
-            Text(
-              'People in ${channel.displayLabel(currentPubkey: currentPubkey)}.',
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-            ),
             if (!channel.isDm) ...[const Divider(height: 1)],
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 400),
               child: membersAsync.when(
                 data: (_) => ListView(
                   shrinkWrap: true,
-                  padding: EdgeInsets.zero,
+                  padding: const EdgeInsets.only(top: Grid.xxs),
                   children: [
                     if (people.isNotEmpty) ...[
                       _SectionLabel(label: 'People — ${people.length}'),
