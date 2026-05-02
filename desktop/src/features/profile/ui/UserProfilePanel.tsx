@@ -161,12 +161,12 @@ export function UserProfilePanel({
             {profile?.avatarUrl ? (
               <img
                 alt={displayName}
-                className="h-20 w-20 rounded-2xl object-cover shadow-sm"
+                className="h-28 w-28 rounded-2xl object-cover shadow-sm"
                 referrerPolicy="no-referrer"
                 src={rewriteRelayUrl(profile.avatarUrl)}
               />
             ) : (
-              <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-secondary text-xl font-semibold text-secondary-foreground shadow-sm">
+              <div className="flex h-28 w-28 items-center justify-center rounded-2xl bg-secondary text-3xl font-semibold text-secondary-foreground shadow-sm">
                 {displayName.slice(0, 2).toUpperCase()}
               </div>
             )}
@@ -250,15 +250,15 @@ export function UserProfilePanel({
           {/* Actions */}
           <div className="mt-6 flex flex-col gap-2">
             {onOpenDm && !isSelf ? (
-              <button
-                className="flex w-full items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-muted/50"
+              <Button
+                className="w-full"
                 data-testid="user-profile-message"
                 onClick={handleMessage}
                 type="button"
               >
-                <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                <MessageSquare className="h-4 w-4" />
                 Message
-              </button>
+              </Button>
             ) : null}
             {canViewActivity ? (
               <button
