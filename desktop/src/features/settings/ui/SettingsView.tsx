@@ -102,6 +102,12 @@ export function SettingsView({
   }, []);
 
   React.useEffect(() => {
+    if (!visibleSections.some((entry) => entry.value === section)) {
+      onSectionChange("profile");
+    }
+  }, [onSectionChange, section, visibleSections]);
+
+  React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();

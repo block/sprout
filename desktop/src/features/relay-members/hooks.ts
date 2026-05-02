@@ -7,13 +7,14 @@ import {
   listRelayMembers,
   removeRelayMember,
 } from "@/shared/api/tauri";
-import type { RelayMember } from "@/shared/api/types";
+import type { RelayMember, RelayMemberRole } from "@/shared/api/types";
 
 export const relayMembersQueryKey = ["relayMembers"] as const;
 export const myRelayMembershipQueryKey = ["myRelayMembership"] as const;
 
-export function useRelayMembersQuery() {
+export function useRelayMembersQuery(enabled = true) {
   return useQuery({
+    enabled,
     queryKey: relayMembersQueryKey,
     queryFn: listRelayMembers,
     staleTime: 30_000,
@@ -32,8 +33,13 @@ export function useAddRelayMemberMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ pubkey, role }: { pubkey: string; role: string }) =>
-      addRelayMember(pubkey, role),
+    mutationFn: ({
+      pubkey,
+      role,
+    }: {
+      pubkey: string;
+      role: Exclude<RelayMemberRole, "owner">;
+    }) => addRelayMember(pubkey, role),
     onMutate: async ({ pubkey, role }) => {
       await queryClient.cancelQueries({ queryKey: relayMembersQueryKey });
       const previous =
@@ -43,7 +49,7 @@ export function useAddRelayMemberMutation() {
         ...(old ?? []),
         {
           pubkey,
-          role: role as RelayMember["role"],
+          role,
           addedBy: null,
           createdAt: new Date().toISOString(),
         },
@@ -57,7 +63,10 @@ export function useAddRelayMemberMutation() {
       }
     },
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: relayMembersQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: relayMembersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: myRelayMembershipQueryKey }),
+      ]);
     },
   });
 }
@@ -84,7 +93,10 @@ export function useRemoveRelayMemberMutation() {
       }
     },
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: relayMembersQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: relayMembersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: myRelayMembershipQueryKey }),
+      ]);
     },
   });
 }
@@ -93,9 +105,14 @@ export function useChangeRelayMemberRoleMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ pubkey, newRole }: { pubkey: string; newRole: string }) =>
-      changeRelayMemberRole(pubkey, newRole),
-    onMutate: async ({ pubkey, newRole }) => {
+    mutationFn: ({
+      pubkey,
+      role,
+    }: {
+      pubkey: string;
+      role: Exclude<RelayMemberRole, "owner">;
+    }) => changeRelayMemberRole(pubkey, role),
+    onMutate: async ({ pubkey, role }) => {
       await queryClient.cancelQueries({ queryKey: relayMembersQueryKey });
       const previous =
         queryClient.getQueryData<RelayMember[]>(relayMembersQueryKey);
@@ -103,7 +120,7 @@ export function useChangeRelayMemberRoleMutation() {
       queryClient.setQueryData<RelayMember[]>(relayMembersQueryKey, (old) =>
         old?.map((m) =>
           m.pubkey.toLowerCase() === pubkey.toLowerCase()
-            ? { ...m, role: newRole as RelayMember["role"] }
+            ? { ...m, role }
             : m,
         ),
       );
@@ -116,7 +133,10 @@ export function useChangeRelayMemberRoleMutation() {
       }
     },
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: relayMembersQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: relayMembersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: myRelayMembershipQueryKey }),
+      ]);
     },
   });
 }
