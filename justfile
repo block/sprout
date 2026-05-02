@@ -91,7 +91,7 @@ _ensure-sidecar-stubs:
     set -euo pipefail
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
     mkdir -p desktop/src-tauri/binaries
-    for bin in sprout-acp sprout-mcp-server; do
+    for bin in sprout-acp sprout-mcp-server git-credential-nostr; do
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 
@@ -107,6 +107,7 @@ desktop-release-build target="aarch64-apple-darwin":
     mkdir -p desktop/src-tauri/binaries
     touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+    touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     cd {{desktop_dir}} && pnpm install && pnpm tauri build --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
