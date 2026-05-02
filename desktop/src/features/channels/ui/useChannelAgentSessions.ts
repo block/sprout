@@ -143,6 +143,7 @@ export function useChannelAgentSessions({
     }
 
     setOpenAgentSessionPubkey(null);
+    setProfilePanelPubkey(null);
     setOpenThreadHeadId(threadHeadId);
     setThreadReplyTargetId(threadHeadId);
     setThreadScrollTargetId(targetMessageId);
@@ -153,6 +154,7 @@ export function useChannelAgentSessions({
     activeChannelId,
     setExpandedThreadReplyIds,
     setOpenThreadHeadId,
+    setProfilePanelPubkey,
     setThreadReplyTargetId,
     setThreadScrollTargetId,
     targetMessageId,

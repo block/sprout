@@ -116,11 +116,17 @@ export function UserProfilePopover({
     clearHoverTimer();
   }, [clearHoverTimer]);
 
-  const handleTriggerClick = React.useCallback(() => {
-    clearHoverTimer();
-    setOpen(false);
-    openProfilePanel?.(pubkey);
-  }, [clearHoverTimer, openProfilePanel, pubkey]);
+  const handleTriggerClick = React.useCallback(
+    (event: React.MouseEvent) => {
+      clearHoverTimer();
+      if (openProfilePanel) {
+        event.preventDefault();
+        setOpen(false);
+        openProfilePanel(pubkey);
+      }
+    },
+    [clearHoverTimer, openProfilePanel, pubkey],
+  );
 
   React.useEffect(() => {
     return () => clearHoverTimer();
@@ -135,9 +141,11 @@ export function UserProfilePopover({
           tabIndex={0}
           onClick={handleTriggerClick}
           onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
+            if ((e.key === "Enter" || e.key === " ") && openProfilePanel) {
               e.preventDefault();
-              handleTriggerClick();
+              clearHoverTimer();
+              setOpen(false);
+              openProfilePanel(pubkey);
             }
           }}
           onMouseEnter={handleTriggerMouseEnter}
