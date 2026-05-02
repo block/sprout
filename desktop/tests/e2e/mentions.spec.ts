@@ -127,7 +127,7 @@ test("mention text is highlighted in sent messages", async ({ page }) => {
   await expect(mentionSpan).toBeVisible();
 });
 
-test("clicking author name opens user profile popover", async ({ page }) => {
+test("clicking author name opens user profile panel", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
@@ -139,12 +139,10 @@ test("clicking author name opens user profile popover", async ({ page }) => {
   });
   await authorButton.click();
 
-  const popover = page.locator("[data-radix-popper-content-wrapper]");
-  await expect(popover).toBeVisible();
-  await expect(popover).toContainText("deadbeef");
-  // Notes section removed — user status replaces it.
-  // Verify the popover is still functional (pubkey visible confirms data loaded).
-  await expect(popover).toContainText("deadbeef");
+  // Click now opens the full profile panel instead of the popover
+  const panel = page.getByTestId("user-profile-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("deadbeef");
 });
 
 test("hovering avatar opens popover, clicking opens profile panel", async ({
