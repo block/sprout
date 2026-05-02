@@ -46,7 +46,9 @@ import type {
 import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
+import { ProfilePanelProvider } from "@/shared/context/ProfilePanelContext";
 import { useChannelAgentSessions } from "./useChannelAgentSessions";
+import { useChannelProfilePanel } from "./useChannelProfilePanel";
 type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
@@ -71,6 +73,13 @@ export function ChannelScreen({
   targetMessageId,
 }: ChannelScreenProps) {
   const { markChannelRead, openChannelManagement } = useAppShell();
+  const {
+    profilePanelPubkey,
+    setProfilePanelPubkey,
+    handleOpenProfilePanel,
+    handleCloseProfilePanel,
+    handleOpenDm,
+  } = useChannelProfilePanel();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
     null,
@@ -360,8 +369,9 @@ export function ChannelScreen({
       setThreadReplyTargetId(null);
       handleCloseAgentSession();
       setEditTargetId(null);
+      setProfilePanelPubkey(null);
     },
-    [handleCloseAgentSession],
+    [handleCloseAgentSession, setProfilePanelPubkey],
   );
   const handleThreadScrollTargetResolved = React.useCallback(() => {
     setThreadScrollTargetId(null);
@@ -402,98 +412,105 @@ export function ChannelScreen({
 
   return (
     <AgentSessionProvider onOpenAgentSession={handleOpenAgentSession}>
-      <ChannelScreenHeader
-        activeChannel={activeChannel}
-        activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}
-        activeChannelTitle={activeChannelTitle}
-        activeDmPresenceStatus={activeDmPresenceStatus}
-        currentPubkey={currentPubkey}
-        isJoining={joinChannelMutation.isPending}
-        onJoinChannel={joinChannelMutation.mutateAsync}
-        onManageChannel={openChannelManagement}
-        onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
-      />
+      <ProfilePanelProvider onOpenProfilePanel={handleOpenProfilePanel}>
+        <ChannelScreenHeader
+          activeChannel={activeChannel}
+          activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}
+          activeChannelTitle={activeChannelTitle}
+          activeDmPresenceStatus={activeDmPresenceStatus}
+          currentPubkey={currentPubkey}
+          isJoining={joinChannelMutation.isPending}
+          onJoinChannel={joinChannelMutation.mutateAsync}
+          onManageChannel={openChannelManagement}
+          onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
+        />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {activeChannel ? (
-          activeChannel.channelType === "forum" ? (
-            <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
-              <ForumView
-                channel={activeChannel}
-                currentPubkey={currentPubkey}
-                onClosePost={onCloseForumPost}
-                onSelectPost={onSelectForumPost}
-                selectedPostId={selectedForumPostId}
-                targetReplyId={targetForumReplyId}
-              />
-            </React.Suspense>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {activeChannel ? (
+            activeChannel.channelType === "forum" ? (
+              <React.Suspense fallback={<ViewLoadingFallback kind="forum" />}>
+                <ForumView
+                  channel={activeChannel}
+                  currentPubkey={currentPubkey}
+                  onClosePost={onCloseForumPost}
+                  onSelectPost={onSelectForumPost}
+                  selectedPostId={selectedForumPostId}
+                  targetReplyId={targetForumReplyId}
+                />
+              </React.Suspense>
+            ) : (
+              <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
+                <ChannelPane
+                  activeChannel={activeChannel}
+                  agentSessionAgents={channelAgentSessionAgents}
+                  botTypingPubkeys={botTypingPubkeys}
+                  channelFind={channelFind}
+                  currentPubkey={currentPubkey}
+                  fetchOlder={fetchOlder}
+                  hasOlderMessages={hasOlderMessages}
+                  isFetchingOlder={isFetchingOlder}
+                  editTarget={
+                    editTargetMessage
+                      ? {
+                          author: editTargetMessage.author,
+                          body: editTargetMessage.body,
+                          id: editTargetMessage.id,
+                        }
+                      : null
+                  }
+                  isSending={sendMessageMutation.isPending}
+                  isTimelineLoading={isTimelineLoading}
+                  messages={timelineMessages}
+                  onCancelEdit={handleCancelEdit}
+                  onCancelThreadReply={handleCancelThreadReply}
+                  onCloseAgentSession={handleCloseAgentSession}
+                  onCloseThread={handleCloseThread}
+                  onDelete={handleDelete}
+                  onEdit={handleEdit}
+                  onEditSave={handleEditSave}
+                  onExpandThreadReplies={handleExpandThreadReplies}
+                  onOpenAgentSession={handleOpenAgentSession}
+                  onOpenDm={handleOpenDm}
+                  onCloseProfilePanel={handleCloseProfilePanel}
+                  onOpenThread={handleOpenThreadAndCloseAgentSession}
+                  onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
+                  onSendMessage={handleSendMessage}
+                  onSendThreadReply={handleSendThreadReply}
+                  onThreadScrollTargetResolved={
+                    handleThreadScrollTargetResolved
+                  }
+                  onToggleReaction={effectiveToggleReaction}
+                  openAgentSessionPubkey={openAgentSessionPubkey}
+                  openThreadHeadId={openThreadHeadId}
+                  profilePanelPubkey={profilePanelPubkey}
+                  personaLookup={personaLookup}
+                  profiles={messageProfiles}
+                  targetMessageId={targetMessageId}
+                  threadHeadMessage={openThreadHeadMessage}
+                  threadMessages={threadMessages}
+                  threadTypingPubkeys={threadTypingPubkeys}
+                  threadReplyTargetId={threadReplyTargetId}
+                  threadReplyTargetMessage={threadReplyTargetMessage}
+                  threadScrollTargetId={threadScrollTargetId}
+                  isJoining={joinChannelMutation.isPending}
+                  onJoinChannel={joinChannelMutation.mutateAsync}
+                  typingPubkeys={humanTypingPubkeys}
+                />
+              </React.Suspense>
+            )
           ) : (
-            <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
-              <ChannelPane
-                activeChannel={activeChannel}
-                agentSessionAgents={channelAgentSessionAgents}
-                botTypingPubkeys={botTypingPubkeys}
-                channelFind={channelFind}
-                currentPubkey={currentPubkey}
-                fetchOlder={fetchOlder}
-                hasOlderMessages={hasOlderMessages}
-                isFetchingOlder={isFetchingOlder}
-                editTarget={
-                  editTargetMessage
-                    ? {
-                        author: editTargetMessage.author,
-                        body: editTargetMessage.body,
-                        id: editTargetMessage.id,
-                      }
-                    : null
-                }
-                isSending={sendMessageMutation.isPending}
-                isTimelineLoading={isTimelineLoading}
-                messages={timelineMessages}
-                onCancelEdit={handleCancelEdit}
-                onCancelThreadReply={handleCancelThreadReply}
-                onCloseAgentSession={handleCloseAgentSession}
-                onCloseThread={handleCloseThread}
-                onDelete={handleDelete}
-                onEdit={handleEdit}
-                onEditSave={handleEditSave}
-                onExpandThreadReplies={handleExpandThreadReplies}
-                onOpenAgentSession={handleOpenAgentSession}
-                onOpenThread={handleOpenThreadAndCloseAgentSession}
-                onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
-                onSendMessage={handleSendMessage}
-                onSendThreadReply={handleSendThreadReply}
-                onThreadScrollTargetResolved={handleThreadScrollTargetResolved}
-                onToggleReaction={effectiveToggleReaction}
-                openAgentSessionPubkey={openAgentSessionPubkey}
-                openThreadHeadId={openThreadHeadId}
-                personaLookup={personaLookup}
-                profiles={messageProfiles}
-                targetMessageId={targetMessageId}
-                threadHeadMessage={openThreadHeadMessage}
-                threadMessages={threadMessages}
-                threadTypingPubkeys={threadTypingPubkeys}
-                threadReplyTargetId={threadReplyTargetId}
-                threadReplyTargetMessage={threadReplyTargetMessage}
-                threadScrollTargetId={threadScrollTargetId}
-                isJoining={joinChannelMutation.isPending}
-                onJoinChannel={joinChannelMutation.mutateAsync}
-                typingPubkeys={humanTypingPubkeys}
-              />
-            </React.Suspense>
-          )
-        ) : (
-          <ChannelScreenEmptyState />
-        )}
-      </div>
+            <ChannelScreenEmptyState />
+          )}
+        </div>
 
-      <MembersSidebar
-        channel={activeChannel}
-        currentPubkey={currentPubkey}
-        open={isMembersSidebarOpen}
-        onOpenChange={setIsMembersSidebarOpen}
-        onViewActivity={handleOpenAgentSession}
-      />
+        <MembersSidebar
+          channel={activeChannel}
+          currentPubkey={currentPubkey}
+          open={isMembersSidebarOpen}
+          onOpenChange={setIsMembersSidebarOpen}
+          onViewActivity={handleOpenAgentSession}
+        />
+      </ProfilePanelProvider>
     </AgentSessionProvider>
   );
 }
