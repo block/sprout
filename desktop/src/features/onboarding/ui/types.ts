@@ -6,7 +6,7 @@ import type {
 } from "@/features/notifications/hooks";
 import type { AcpProvider, Profile } from "@/shared/api/types";
 
-export type OnboardingPage = "profile" | "setup";
+export type OnboardingPage = "profile" | "setup" | "membership-denied";
 
 export type OnboardingActions = {
   complete: () => void;
@@ -51,6 +51,9 @@ export type ProfileStepAvatarState = {
 
 export type ProfileStepState = {
   avatar: ProfileStepAvatarState;
+  /** Bech32-encoded current pubkey (npub1…), shown so the user can confirm
+   *  which identity they're saving the profile for. */
+  currentNpub: string | null;
   isSaving: boolean;
   name: ProfileStepNameState;
   saveRecovery: ProfileStepSaveRecovery;
@@ -59,6 +62,7 @@ export type ProfileStepState = {
 export type ProfileStepActions = {
   advanceWithoutSaving: () => void;
   clearAvatarDraft: () => void;
+  importIdentity: (nsec: string) => Promise<void>;
   openAvatarPicker: () => void;
   skipForNow: () => void;
   submit: () => void;

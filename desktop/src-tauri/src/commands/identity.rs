@@ -1,4 +1,5 @@
-use nostr::{nips::nip44, EventBuilder, JsonUtil, Kind, Tag, Timestamp, ToBech32};
+use nostr::{nips::nip44, EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp, ToBech32};
+use tauri::Manager;
 use nostr_compat::{
     Event as CompatEvent, JsonUtil as CompatJsonUtil, Keys as CompatKeys,
     PublicKey as CompatPublicKey,
@@ -144,6 +145,56 @@ pub fn get_nsec(state: State<'_, AppState>) -> Result<String, String> {
     keys.secret_key()
         .to_bech32()
         .map_err(|error| format!("encode nsec: {error}"))
+}
+
+#[tauri::command]
+pub fn import_identity(
+    nsec: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<IdentityInfo, String> {
+    let trimmed = nsec.trim();
+    let keys = Keys::parse(trimmed).map_err(|e| format!("Invalid private key: {e}"))?;
+
+    // Persist to identity.key
+    let data_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app data dir: {e}"))?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| format!("create app data dir: {e}"))?;
+    let key_path = data_dir.join("identity.key");
+    crate::app_state::save_key_file(&key_path, &keys)?;
+
+    // Update in-memory keys
+    let pubkey = keys.public_key();
+    *state.keys.lock().map_err(|e| e.to_string())? = keys;
+
+    // Clear any session token: it was minted for the previous pubkey and
+    // would be invalid (or worse, identify us as the previous pubkey) for
+    // any subsequent relay requests.
+    if let Ok(mut token) = state.session_token.lock() {
+        *token = None;
+    }
+
+    let pubkey_hex = pubkey.to_hex();
+    let bech32 = pubkey
+        .to_bech32()
+        .map_err(|error| format!("bech32 encode failed: {error}"))?;
+    let display_name = if bech32.len() > 16 {
+        format!("{}…{}", &bech32[..10], &bech32[bech32.len() - 4..])
+    } else {
+        bech32
+    };
+
+    eprintln!(
+        "sprout-desktop: imported identity pubkey {}",
+        pubkey_hex
+    );
+
+    Ok(IdentityInfo {
+        pubkey: pubkey_hex,
+        display_name,
+    })
 }
 
 #[tauri::command]

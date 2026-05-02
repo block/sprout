@@ -13,7 +13,25 @@ export function loadWorkspaces(): Workspace[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return parsed as Workspace[];
+    // Migration: older builds stored the user's `nsec` in localStorage and
+    // re-applied it to the backend on every reload, which silently overwrote
+    // any `import_identity` result with the original generated key. The
+    // on-disk `identity.key` file is the only source of truth now. Strip
+    // any lingering `nsec` from existing entries on read and persist the
+    // cleaned list back so it cannot leak into future sessions.
+    let didStrip = false;
+    const cleaned = (parsed as Array<Record<string, unknown>>).map((entry) => {
+      if (entry && typeof entry === "object" && "nsec" in entry) {
+        const { nsec: _nsec, ...rest } = entry;
+        didStrip = true;
+        return rest;
+      }
+      return entry;
+    }) as Workspace[];
+    if (didStrip) {
+      localStorage.setItem(WORKSPACES_KEY, JSON.stringify(cleaned));
+    }
+    return cleaned;
   } catch {
     return [];
   }

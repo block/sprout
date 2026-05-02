@@ -196,7 +196,7 @@ fn load_key_file(path: &std::path::Path) -> Result<Keys, String> {
 /// On Unix, the file is created with mode 0600 (owner read/write only).
 /// On Windows, default ACLs apply — the app data directory is already
 /// per-user, so the key is not world-readable in practice.
-fn save_key_file(path: &std::path::Path, keys: &Keys) -> Result<(), String> {
+pub(crate) fn save_key_file(path: &std::path::Path, keys: &Keys) -> Result<(), String> {
     use atomic_write_file::AtomicWriteFile;
 
     let nsec = keys
