@@ -87,16 +87,13 @@ class UserProfileSheet extends HookConsumerWidget {
           Grid.sm,
           0,
           Grid.sm,
-          MediaQuery.viewInsetsOf(context).bottom,
+          MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
         ),
         child: ConstrainedBox(
           constraints: BoxConstraints(
             maxHeight: MediaQuery.sizeOf(context).height * 0.7,
           ),
           child: SingleChildScrollView(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.viewPaddingOf(context).bottom + Grid.xs,
-            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,

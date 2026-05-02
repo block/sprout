@@ -98,9 +98,7 @@ class _SetStatusSheet extends HookConsumerWidget {
         Grid.xs,
         0,
         Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom +
-            MediaQuery.viewPaddingOf(context).bottom +
-            Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

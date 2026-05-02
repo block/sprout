@@ -186,9 +186,7 @@ void _showEditSheet({
         Grid.xs,
         0,
         Grid.xs,
-        MediaQuery.viewInsetsOf(sheetContext).bottom +
-            MediaQuery.viewPaddingOf(sheetContext).bottom +
-            Grid.xs,
+        MediaQuery.viewInsetsOf(sheetContext).bottom + Grid.xs,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
