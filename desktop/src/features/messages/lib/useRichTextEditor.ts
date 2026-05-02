@@ -183,7 +183,11 @@ export function useRichTextEditor({
         Placeholder.configure({
           placeholder: () => placeholderRef.current ?? "Write a message…",
         }),
-        Link.configure({
+        Link.extend({
+          inclusive() {
+            return false;
+          },
+        }).configure({
           openOnClick: false,
           autolink: true,
           linkOnPaste: true,
