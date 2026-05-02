@@ -98,7 +98,7 @@ class MembersSheet extends HookConsumerWidget {
                 color: context.colors.onSurfaceVariant,
               ),
             ),
-            if (!channel.isDm) ...[const Divider(height: Grid.xs)],
+            if (!channel.isDm) ...[const Divider(height: 1)],
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 400),
               child: membersAsync.when(
