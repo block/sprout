@@ -87,168 +87,162 @@ class UserProfileSheet extends HookConsumerWidget {
           Grid.sm,
           0,
           Grid.sm,
-          MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+          MediaQuery.viewInsetsOf(context).bottom +
+              MediaQuery.viewPaddingOf(context).bottom +
+              Grid.xs,
         ),
-        child: SafeArea(
-          top: false,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.7,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Avatar — near full-width
-                  _ProfileAvatar(avatarUrl: avatarUrl, initial: initial),
-                  const SizedBox(height: Grid.xs),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Avatar — near full-width
+                _ProfileAvatar(avatarUrl: avatarUrl, initial: initial),
+                const SizedBox(height: Grid.xs),
 
-                  // Display name — centered, large
+                // Display name — centered, large
+                Center(
+                  child: Text(
+                    displayName ?? shortPubkey(pubkey),
+                    style: context.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+
+                // NIP-05 handle — centered, secondary
+                if (nip05 != null && nip05.isNotEmpty) ...[
+                  const SizedBox(height: Grid.half),
                   Center(
                     child: Text(
-                      displayName ?? shortPubkey(pubkey),
-                      style: context.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-
-                  // NIP-05 handle — centered, secondary
-                  if (nip05 != null && nip05.isNotEmpty) ...[
-                    const SizedBox(height: Grid.half),
-                    Center(
-                      child: Text(
-                        nip05,
-                        style: context.textTheme.bodyMedium?.copyWith(
-                          color: context.colors.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-
-                  const SizedBox(height: Grid.xs),
-
-                  // Presence row — filled dot, not an outline icon
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: Grid.half + 2,
-                    ),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 24,
-                          child: Center(
-                            child: Container(
-                              width: 10,
-                              height: 10,
-                              decoration: BoxDecoration(
-                                color: presenceColor,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: Grid.xxs),
-                        Text(
-                          presenceLabel,
-                          style: context.textTheme.bodyMedium?.copyWith(
-                            color: context.colors.onSurface,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  if (userStatus != null && !userStatus.isEmpty)
-                    _InfoRow(
-                      icon: LucideIcons.messageCircle,
-                      text:
-                          '${userStatus.emoji.isNotEmpty ? '${userStatus.emoji} ' : ''}${userStatus.text}',
-                    ),
-
-                  _InfoRow(
-                    icon: LucideIcons.key,
-                    text: shortPubkey(pubkey),
-                    textStyle: context.textTheme.bodySmall?.copyWith(
-                      color: context.colors.onSurfaceVariant,
-                      fontFamily: 'monospace',
-                    ),
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: pubkey));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Public key copied'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                  ),
-
-                  // About / bio section
-                  if (about.isNotEmpty) ...[
-                    const SizedBox(height: Grid.xxs),
-                    Divider(
-                      color: context.colors.outlineVariant.withValues(
-                        alpha: 0.3,
-                      ),
-                    ),
-                    const SizedBox(height: Grid.xxs),
-                    Text(
-                      'About',
-                      style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: Grid.half),
-                    Text(
-                      about,
+                      nip05,
                       style: context.textTheme.bodyMedium?.copyWith(
                         color: context.colors.onSurfaceVariant,
                       ),
                     ),
-                  ],
+                  ),
+                ],
 
-                  const SizedBox(height: Grid.xs),
+                const SizedBox(height: Grid.xs),
 
-                  // Action button — Message
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () async {
-                        Navigator.of(context).pop();
-                        try {
-                          final channel = await ref
-                              .read(channelActionsProvider)
-                              .openDm(pubkeys: [pk]);
-                          if (!context.mounted) return;
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  ChannelDetailPage(channel: channel),
+                // Presence row — filled dot, not an outline icon
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: Grid.half + 2),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 24,
+                        child: Center(
+                          child: Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: presenceColor,
+                              shape: BoxShape.circle,
                             ),
-                          );
-                        } catch (_) {
-                          // Silently fail — user tapped but DM open failed.
-                        }
-                      },
-                      icon: const Icon(LucideIcons.messageSquare, size: 18),
-                      label: const Text('Message'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: Grid.twelve,
+                          ),
                         ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(Radii.lg),
+                      ),
+                      const SizedBox(width: Grid.xxs),
+                      Text(
+                        presenceLabel,
+                        style: context.textTheme.bodyMedium?.copyWith(
+                          color: context.colors.onSurface,
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                if (userStatus != null && !userStatus.isEmpty)
+                  _InfoRow(
+                    icon: LucideIcons.messageCircle,
+                    text:
+                        '${userStatus.emoji.isNotEmpty ? '${userStatus.emoji} ' : ''}${userStatus.text}',
+                  ),
+
+                _InfoRow(
+                  icon: LucideIcons.key,
+                  text: shortPubkey(pubkey),
+                  textStyle: context.textTheme.bodySmall?.copyWith(
+                    color: context.colors.onSurfaceVariant,
+                    fontFamily: 'monospace',
+                  ),
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: pubkey));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Public key copied'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+
+                // About / bio section
+                if (about.isNotEmpty) ...[
+                  const SizedBox(height: Grid.xxs),
+                  Divider(
+                    color: context.colors.outlineVariant.withValues(alpha: 0.3),
+                  ),
+                  const SizedBox(height: Grid.xxs),
+                  Text(
+                    'About',
+                    style: context.textTheme.labelSmall?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: Grid.half),
+                  Text(
+                    about,
+                    style: context.textTheme.bodyMedium?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: Grid.xs),
+
+                // Action button — Message
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      try {
+                        final channel = await ref
+                            .read(channelActionsProvider)
+                            .openDm(pubkeys: [pk]);
+                        if (!context.mounted) return;
+                        await Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ChannelDetailPage(channel: channel),
+                          ),
+                        );
+                      } catch (_) {
+                        // Silently fail — user tapped but DM open failed.
+                      }
+                    },
+                    icon: const Icon(LucideIcons.messageSquare, size: 18),
+                    label: const Text('Message'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: Grid.twelve,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(Radii.lg),
                       ),
                     ),
                   ),
+                ),
 
-                  const SizedBox(height: Grid.xxs),
-                ],
-              ),
+                const SizedBox(height: Grid.xxs),
+              ],
             ),
           ),
         ),
