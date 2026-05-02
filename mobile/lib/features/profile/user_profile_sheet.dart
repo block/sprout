@@ -94,6 +94,7 @@ class UserProfileSheet extends HookConsumerWidget {
             maxHeight: MediaQuery.sizeOf(context).height * 0.7,
           ),
           child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: Grid.xs),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,

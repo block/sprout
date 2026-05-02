@@ -98,12 +98,13 @@ class MembersSheet extends HookConsumerWidget {
                 color: context.colors.onSurfaceVariant,
               ),
             ),
-            if (!channel.isDm) ...[const Divider(height: Grid.sm)],
+            if (!channel.isDm) ...[const Divider(height: Grid.xs)],
             ConstrainedBox(
               constraints: const BoxConstraints(maxHeight: 400),
               child: membersAsync.when(
                 data: (_) => ListView(
                   shrinkWrap: true,
+                  padding: EdgeInsets.zero,
                   children: [
                     if (people.isNotEmpty) ...[
                       _SectionLabel(label: 'People — ${people.length}'),
