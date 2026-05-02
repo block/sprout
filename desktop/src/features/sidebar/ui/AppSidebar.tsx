@@ -576,6 +576,14 @@ export function AppSidebar({
                     >
                       {resolvedDisplayName}
                     </p>
+                    {selfUserStatus?.text || selfUserStatus?.emoji ? (
+                      <p className="truncate text-xs text-sidebar-foreground/50">
+                        {selfUserStatus.emoji ? (
+                          <span className="mr-1">{selfUserStatus.emoji}</span>
+                        ) : null}
+                        {selfUserStatus.text}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </SidebarMenuButton>

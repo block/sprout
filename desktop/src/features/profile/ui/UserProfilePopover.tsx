@@ -1,10 +1,7 @@
 import * as React from "react";
 import { Activity } from "lucide-react";
 
-import {
-  useUserNotesQuery,
-  useUserProfileQuery,
-} from "@/features/profile/hooks";
+import { useUserProfileQuery } from "@/features/profile/hooks";
 import {
   useRelayAgentsQuery,
   useManagedAgentsQuery,
@@ -12,7 +9,6 @@ import {
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { useUserStatusQuery } from "@/features/user-status/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
-import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
 
@@ -63,9 +59,6 @@ export function UserProfilePopover({
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
-  const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
-    limit: 1,
-  });
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: open && role === "bot",
   });
@@ -87,7 +80,6 @@ export function UserProfilePopover({
     managedAgent?.backend.type === "local" &&
     Boolean(onOpenAgentSession);
   const profile = profileQuery.data;
-  const latestNote = (notesQuery.data?.notes ?? [])[0] ?? null;
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
   const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
 
@@ -152,20 +144,6 @@ export function UserProfilePopover({
             </p>
           ) : null}
 
-          {!notesQuery.isLoading && !notesQuery.isError && latestNote ? (
-            <div
-              className="rounded-lg bg-muted/30 px-3 py-2"
-              data-testid="user-profile-latest-note"
-            >
-              <p className="line-clamp-2 text-xs text-foreground">
-                {latestNote.content}
-              </p>
-              <p className="mt-1 text-[10px] text-muted-foreground/70">
-                {formatRelativeTime(latestNote.createdAt)}
-              </p>
-            </div>
-          ) : null}
-
           {role === "bot" && (managedAgent || relayAgent) ? (
             <div className="flex flex-wrap gap-1.5">
               {managedAgent?.agentCommand ? (
@@ -201,12 +179,6 @@ export function UserProfilePopover({
               <Activity className="h-3.5 w-3.5 text-muted-foreground" />
               View activity log
             </button>
-          ) : null}
-
-          {notesQuery.isError ? (
-            <p className="text-xs text-muted-foreground">
-              Recent notes are unavailable right now.
-            </p>
           ) : null}
         </div>
       </PopoverContent>

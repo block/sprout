@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { getUserNotes } from "@/shared/api/social";
 import {
   getProfile,
   searchUsers,
@@ -12,7 +11,6 @@ import {
 import type {
   Profile,
   UpdateProfileInput,
-  UserNotesResponse,
   UserSearchResult,
   UsersBatchResponse,
 } from "@/shared/api/types";
@@ -73,25 +71,6 @@ export function useUsersBatchQuery(
   }, [query.data, queryClient]);
 
   return query;
-}
-
-export function useUserNotesQuery(
-  pubkey?: string,
-  options?: {
-    enabled?: boolean;
-    limit?: number;
-  },
-) {
-  const resolvedPubkey = typeof pubkey === "string" ? pubkey : "";
-  const enabled = (options?.enabled ?? true) && resolvedPubkey.length > 0;
-
-  return useQuery<UserNotesResponse>({
-    enabled,
-    queryKey: ["user-notes", resolvedPubkey.toLowerCase(), options?.limit ?? 3],
-    queryFn: () => getUserNotes(resolvedPubkey, { limit: options?.limit ?? 3 }),
-    staleTime: 60_000,
-    gcTime: 5 * 60 * 1_000,
-  });
 }
 
 export function useUserSearchQuery(
