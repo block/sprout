@@ -98,125 +98,122 @@ class _SetStatusSheet extends HookConsumerWidget {
         Grid.xs,
         0,
         Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom,
       ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Set a status', style: context.textTheme.titleMedium),
-            const SizedBox(height: Grid.half),
-            Text(
-              'Let others know what you\u2019re up to.',
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Set a status', style: context.textTheme.titleMedium),
+          const SizedBox(height: Grid.half),
+          Text(
+            'Let others know what you\u2019re up to.',
+            style: context.textTheme.bodySmall?.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: Grid.twelve),
+
+          // Text input with emoji preview
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(color: context.colors.outlineVariant),
+                  borderRadius: BorderRadius.circular(Radii.md),
+                ),
+                child: Text(
+                  emoji.value.isNotEmpty ? emoji.value : '\u{1F4AC}',
+                  style: const TextStyle(fontSize: 18),
+                ),
               ),
-            ),
-            const SizedBox(height: Grid.twelve),
-
-            // Text input with emoji preview
-            Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: context.colors.outlineVariant),
-                    borderRadius: BorderRadius.circular(Radii.md),
-                  ),
-                  child: Text(
-                    emoji.value.isNotEmpty ? emoji.value : '\u{1F4AC}',
-                    style: const TextStyle(fontSize: 18),
-                  ),
-                ),
-                const SizedBox(width: Grid.xxs),
-                Expanded(
-                  child: TextField(
-                    controller: textController,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      hintText: 'What\u2019s your status?',
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: Grid.twelve,
-                        vertical: Grid.xxs,
-                      ),
+              const SizedBox(width: Grid.xxs),
+              Expanded(
+                child: TextField(
+                  controller: textController,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'What\u2019s your status?',
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: Grid.twelve,
+                      vertical: Grid.xxs,
                     ),
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) {
-                      if (hasContent) handleSave();
-                    },
                   ),
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) {
+                    if (hasContent) handleSave();
+                  },
                 ),
-              ],
-            ),
-            const SizedBox(height: Grid.twelve),
+              ),
+            ],
+          ),
+          const SizedBox(height: Grid.twelve),
 
-            // Emoji grid
-            Wrap(
-              spacing: Grid.half,
-              runSpacing: Grid.half,
-              children: [
-                for (final option in _emojiOptions)
-                  _EmojiButton(
-                    emoji: option.emoji,
-                    label: option.label,
-                    selected: emoji.value == option.emoji,
-                    onTap: () {
-                      emoji.value = emoji.value == option.emoji
-                          ? ''
-                          : option.emoji;
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: Grid.twelve),
+          // Emoji grid
+          Wrap(
+            spacing: Grid.half,
+            runSpacing: Grid.half,
+            children: [
+              for (final option in _emojiOptions)
+                _EmojiButton(
+                  emoji: option.emoji,
+                  label: option.label,
+                  selected: emoji.value == option.emoji,
+                  onTap: () {
+                    emoji.value = emoji.value == option.emoji
+                        ? ''
+                        : option.emoji;
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: Grid.twelve),
 
-            // Presets
-            Wrap(
-              spacing: Grid.half,
-              runSpacing: Grid.half,
-              children: [
-                for (final preset in _presets)
-                  ActionChip(
-                    label: Text('${preset.emoji} ${preset.text}'),
-                    labelStyle: context.textTheme.labelSmall,
-                    onPressed: () {
-                      textController.text = preset.text;
-                      emoji.value = preset.emoji;
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: Grid.xs),
+          // Presets
+          Wrap(
+            spacing: Grid.half,
+            runSpacing: Grid.half,
+            children: [
+              for (final preset in _presets)
+                ActionChip(
+                  label: Text('${preset.emoji} ${preset.text}'),
+                  labelStyle: context.textTheme.labelSmall,
+                  onPressed: () {
+                    textController.text = preset.text;
+                    emoji.value = preset.emoji;
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: Grid.xs),
 
-            // Action buttons
-            Row(
-              children: [
-                if (hasExistingStatus)
-                  TextButton(
-                    onPressed: isSaving.value ? null : handleClear,
-                    child: const Text('Clear status'),
-                  ),
-                const Spacer(),
+          // Action buttons
+          Row(
+            children: [
+              if (hasExistingStatus)
                 TextButton(
-                  onPressed: isSaving.value
-                      ? null
-                      : () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
+                  onPressed: isSaving.value ? null : handleClear,
+                  child: const Text('Clear status'),
                 ),
-                const SizedBox(width: Grid.xxs),
-                FilledButton(
-                  onPressed: hasContent && !isSaving.value ? handleSave : null,
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
+              const Spacer(),
+              TextButton(
+                onPressed: isSaving.value
+                    ? null
+                    : () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: Grid.xxs),
+              FilledButton(
+                onPressed: hasContent && !isSaving.value ? handleSave : null,
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

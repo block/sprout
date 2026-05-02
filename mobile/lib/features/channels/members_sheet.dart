@@ -83,94 +83,84 @@ class MembersSheet extends HookConsumerWidget {
         Grid.xs,
         0,
         Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom,
       ),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Members', style: context.textTheme.titleMedium),
-              const SizedBox(height: Grid.xxs),
-              Text(
-                'People in ${channel.displayLabel(currentPubkey: currentPubkey)}.',
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.onSurfaceVariant,
-                ),
-              ),
-              if (!channel.isDm) ...[const Divider(height: Grid.sm)],
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 400),
-                child: membersAsync.when(
-                  data: (_) => ListView(
-                    shrinkWrap: true,
-                    children: [
-                      if (people.isNotEmpty) ...[
-                        _SectionLabel(label: 'People — ${people.length}'),
-                        for (final member in people)
-                          _MemberTile(
-                            member: member,
-                            currentPubkey: currentPubkey,
-                            profile: userCache[member.pubkey.toLowerCase()],
-                            canManage: canManage,
-                            isSelf:
-                                member.pubkey.toLowerCase() ==
-                                currentPubkey?.toLowerCase(),
-                            channelId: channel.id,
-                            userStatus:
-                                statusCache[member.pubkey.toLowerCase()],
-                          ),
-                      ],
-                      if (bots.isNotEmpty) ...[
-                        const SizedBox(height: Grid.xxs),
-                        _SectionLabel(label: 'Bots — ${bots.length}'),
-                        for (final bot in bots)
-                          _MemberTile(
-                            member: bot,
-                            currentPubkey: currentPubkey,
-                            profile: userCache[bot.pubkey.toLowerCase()],
-                            canManage: canManage,
-                            isSelf: false,
-                            channelId: channel.id,
-                            isWorking: typingBotPubkeys.contains(
-                              bot.pubkey.toLowerCase(),
-                            ),
-                            onViewActivity: () => openActivity(bot),
-                            onActivityTap:
-                                typingBotPubkeys.contains(
-                                  bot.pubkey.toLowerCase(),
-                                )
-                                ? () => openActivity(bot)
-                                : null,
-                          ),
-                      ],
-                      if (people.isEmpty && bots.isEmpty)
-                        Center(
-                          child: Text(
-                            'No members found.',
-                            style: context.textTheme.bodySmall?.copyWith(
-                              color: context.colors.onSurfaceVariant,
-                            ),
-                          ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Members', style: context.textTheme.titleMedium),
+            const SizedBox(height: Grid.xxs),
+            if (!channel.isDm) ...[const Divider(height: 1)],
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 400),
+              child: membersAsync.when(
+                data: (_) => ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.only(top: Grid.xxs),
+                  children: [
+                    if (people.isNotEmpty) ...[
+                      _SectionLabel(label: 'People — ${people.length}'),
+                      for (final member in people)
+                        _MemberTile(
+                          member: member,
+                          currentPubkey: currentPubkey,
+                          profile: userCache[member.pubkey.toLowerCase()],
+                          canManage: canManage,
+                          isSelf:
+                              member.pubkey.toLowerCase() ==
+                              currentPubkey?.toLowerCase(),
+                          channelId: channel.id,
+                          userStatus: statusCache[member.pubkey.toLowerCase()],
                         ),
                     ],
-                  ),
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, _) => Center(
-                    child: Text(
-                      error.toString(),
-                      style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.error,
+                    if (bots.isNotEmpty) ...[
+                      const SizedBox(height: Grid.xxs),
+                      _SectionLabel(label: 'Bots — ${bots.length}'),
+                      for (final bot in bots)
+                        _MemberTile(
+                          member: bot,
+                          currentPubkey: currentPubkey,
+                          profile: userCache[bot.pubkey.toLowerCase()],
+                          canManage: canManage,
+                          isSelf: false,
+                          channelId: channel.id,
+                          isWorking: typingBotPubkeys.contains(
+                            bot.pubkey.toLowerCase(),
+                          ),
+                          onViewActivity: () => openActivity(bot),
+                          onActivityTap:
+                              typingBotPubkeys.contains(
+                                bot.pubkey.toLowerCase(),
+                              )
+                              ? () => openActivity(bot)
+                              : null,
+                        ),
+                    ],
+                    if (people.isEmpty && bots.isEmpty)
+                      Center(
+                        child: Text(
+                          'No members found.',
+                          style: context.textTheme.bodySmall?.copyWith(
+                            color: context.colors.onSurfaceVariant,
+                          ),
+                        ),
                       ),
+                  ],
+                ),
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, _) => Center(
+                  child: Text(
+                    error.toString(),
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.error,
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

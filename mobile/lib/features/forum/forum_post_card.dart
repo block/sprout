@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/theme/theme.dart';
 import '../channels/message_content.dart';
 import '../profile/user_cache_provider.dart';
+import '../profile/user_profile_sheet.dart';
 import '../profile/user_profile.dart';
 import 'forum_models.dart';
 
@@ -63,15 +64,23 @@ class ForumPostCard extends ConsumerWidget {
             // Author row
             Row(
               children: [
-                _PostAvatar(profile: profile, pubkey: post.pubkey),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => showUserProfileSheet(context, post.pubkey),
+                  child: _PostAvatar(profile: profile, pubkey: post.pubkey),
+                ),
                 const SizedBox(width: Grid.xxs),
                 Expanded(
-                  child: Text(
-                    displayName,
-                    style: context.textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => showUserProfileSheet(context, post.pubkey),
+                    child: Text(
+                      displayName,
+                      style: context.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 Text(

@@ -12,6 +12,7 @@ import 'channel_typing_provider.dart';
 import 'channels_provider.dart';
 import 'compose_bar.dart';
 import 'date_formatters.dart';
+import '../profile/user_profile_sheet.dart';
 import 'message_actions.dart';
 import 'message_content.dart';
 import 'reaction_row.dart';
@@ -391,7 +392,10 @@ class _ThreadMessage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (showAuthor)
-              _Avatar(profile: profile, pubkey: message.pubkey)
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, message.pubkey),
+                child: _Avatar(profile: profile, pubkey: message.pubkey),
+              )
             else
               const SizedBox(width: 28),
             const SizedBox(width: Grid.xxs),
@@ -404,11 +408,15 @@ class _ThreadMessage extends ConsumerWidget {
                       padding: const EdgeInsets.only(bottom: Grid.quarter),
                       child: Row(
                         children: [
-                          Text(
-                            displayName,
-                            style: context.textTheme.labelMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: context.colors.onSurface,
+                          GestureDetector(
+                            onTap: () =>
+                                showUserProfileSheet(context, message.pubkey),
+                            child: Text(
+                              displayName,
+                              style: context.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: context.colors.onSurface,
+                              ),
                             ),
                           ),
                           const SizedBox(width: Grid.xxs),

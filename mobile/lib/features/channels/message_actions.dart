@@ -186,51 +186,48 @@ void _showEditSheet({
         Grid.xs,
         0,
         Grid.xs,
-        MediaQuery.viewInsetsOf(sheetContext).bottom + Grid.xs,
+        MediaQuery.viewInsetsOf(sheetContext).bottom,
       ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              autofocus: true,
-              minLines: 1,
-              maxLines: 5,
-              decoration: const InputDecoration(hintText: 'Edit message'),
-            ),
-            const SizedBox(height: Grid.xxs),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(sheetContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: Grid.half),
-                FilledButton(
-                  onPressed: () {
-                    final text = controller.text.trim();
-                    if (text.isEmpty || text == message.content) {
-                      Navigator.of(sheetContext).pop();
-                      return;
-                    }
-                    ref
-                        .read(channelActionsProvider)
-                        .editMessage(
-                          channelId: channelId,
-                          eventId: message.id,
-                          content: text,
-                        );
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: controller,
+            autofocus: true,
+            minLines: 1,
+            maxLines: 5,
+            decoration: const InputDecoration(hintText: 'Edit message'),
+          ),
+          const SizedBox(height: Grid.xxs),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(sheetContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: Grid.half),
+              FilledButton(
+                onPressed: () {
+                  final text = controller.text.trim();
+                  if (text.isEmpty || text == message.content) {
                     Navigator.of(sheetContext).pop();
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        ),
+                    return;
+                  }
+                  ref
+                      .read(channelActionsProvider)
+                      .editMessage(
+                        channelId: channelId,
+                        eventId: message.id,
+                        content: text,
+                      );
+                  Navigator.of(sheetContext).pop();
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ],
       ),
     ),
   );

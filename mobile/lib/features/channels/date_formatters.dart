@@ -1,6 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
+// Re-export shortPubkey so existing callers continue to compile.
+export '../../shared/utils/string_utils.dart' show shortPubkey;
+
 final _fullDateFormat = DateFormat('EEEE, MMMM d, y');
 
 /// Returns "Today", "Yesterday", or a full date like "Monday, March 31, 2026".
@@ -75,10 +78,4 @@ String formatMessageTime(int unixSeconds) {
     return '${dt.month}/${dt.day} $hh:$mm';
   }
   return '$hh:$mm';
-}
-
-/// Truncates a hex pubkey to the first 8 characters with an ellipsis.
-String shortPubkey(String pubkey) {
-  if (pubkey.length > 12) return '${pubkey.substring(0, 8)}\u2026';
-  return pubkey;
 }

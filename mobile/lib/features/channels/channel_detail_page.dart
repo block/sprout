@@ -32,6 +32,7 @@ import 'read_state/read_state_provider.dart';
 import 'read_state/read_state_time.dart';
 import 'reaction_row.dart';
 import 'send_message_provider.dart';
+import '../profile/user_profile_sheet.dart';
 import 'small_avatar.dart';
 import 'thread_detail_page.dart';
 import 'timeline_message.dart';
@@ -833,7 +834,10 @@ class _MessageBubble extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (showAuthor)
-              _UserAvatar(profile: profile, pubkey: message.pubkey)
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, message.pubkey),
+                child: _UserAvatar(profile: profile, pubkey: message.pubkey),
+              )
             else
               const SizedBox(width: 28),
             const SizedBox(width: Grid.xxs),
@@ -846,11 +850,15 @@ class _MessageBubble extends ConsumerWidget {
                       padding: const EdgeInsets.only(bottom: Grid.quarter),
                       child: Row(
                         children: [
-                          Text(
-                            displayName,
-                            style: context.textTheme.labelMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: context.colors.onSurface,
+                          GestureDetector(
+                            onTap: () =>
+                                showUserProfileSheet(context, message.pubkey),
+                            child: Text(
+                              displayName,
+                              style: context.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: context.colors.onSurface,
+                              ),
                             ),
                           ),
                           const SizedBox(width: Grid.xxs),
