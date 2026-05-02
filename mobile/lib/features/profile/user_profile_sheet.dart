@@ -87,7 +87,7 @@ class UserProfileSheet extends HookConsumerWidget {
           Grid.sm,
           0,
           Grid.sm,
-          MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+          MediaQuery.viewInsetsOf(context).bottom,
         ),
         child: ConstrainedBox(
           constraints: BoxConstraints(
