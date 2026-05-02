@@ -5,6 +5,7 @@ import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
+import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { BotActivityBar } from "@/features/channels/ui/BotActivityBar";
@@ -70,6 +71,7 @@ type ChannelPaneProps = {
   onCancelEdit?: () => void;
   onCancelThreadReply: () => void;
   onCloseAgentSession: () => void;
+  onCloseProfilePanel: () => void;
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -77,6 +79,7 @@ type ChannelPaneProps = {
   onExpandThreadReplies: (message: TimelineMessage) => void;
   onJoinChannel?: () => Promise<void>;
   onOpenAgentSession: (pubkey: string) => void;
+  onOpenDm?: (pubkeys: string[]) => void;
   onOpenThread: (message: TimelineMessage) => void;
   onSelectThreadReplyTarget: (message: TimelineMessage) => void;
   onSendMessage: (
@@ -101,6 +104,7 @@ type ChannelPaneProps = {
   profiles?: UserProfileLookup;
   openThreadHeadId: string | null;
   openAgentSessionPubkey: string | null;
+  profilePanelPubkey?: string | null;
   threadHeadMessage: TimelineMessage | null;
   threadMessages: MainTimelineEntry[];
   threadTypingPubkeys: string[];
@@ -128,6 +132,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onCancelEdit,
   onCancelThreadReply,
   onCloseAgentSession,
+  onCloseProfilePanel,
   onCloseThread,
   onDelete,
   onEdit,
@@ -135,6 +140,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onExpandThreadReplies,
   onJoinChannel,
   onOpenAgentSession,
+  onOpenDm,
   onOpenThread,
   onSelectThreadReplyTarget,
   onSendMessage,
@@ -146,6 +152,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   profiles,
   openThreadHeadId,
   openAgentSessionPubkey,
+  profilePanelPubkey,
   targetMessageId,
   threadHeadMessage,
   threadMessages,
@@ -390,6 +397,17 @@ export const ChannelPane = React.memo(function ChannelPane({
           onClose={onCloseAgentSession}
           onResetWidth={handleThreadPanelWidthReset}
           onResizeStart={handleThreadPanelResizeStart}
+          widthPx={threadPanelWidthPx}
+        />
+      ) : profilePanelPubkey ? (
+        <UserProfilePanel
+          canResetWidth={canResetThreadPanelWidth}
+          currentPubkey={currentPubkey}
+          onClose={onCloseProfilePanel}
+          onOpenDm={onOpenDm}
+          onResetWidth={handleThreadPanelWidthReset}
+          onResizeStart={handleThreadPanelResizeStart}
+          pubkey={profilePanelPubkey}
           widthPx={threadPanelWidthPx}
         />
       ) : null}

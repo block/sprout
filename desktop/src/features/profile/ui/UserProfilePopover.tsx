@@ -11,6 +11,7 @@ import { useUserStatusQuery } from "@/features/user-status/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
+import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
@@ -23,6 +24,9 @@ type UserProfilePopoverProps = {
   /** Value used to generate the BotIdenticon glyph (typically the author name). */
   botIdenticonValue?: string;
 };
+
+const HOVER_OPEN_DELAY_MS = 300;
+const HOVER_CLOSE_DELAY_MS = 200;
 
 const RUNTIME_LABELS: Record<string, string> = {
   goose: "Goose",
@@ -58,6 +62,9 @@ export function UserProfilePopover({
   botIdenticonValue,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
+  const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: open && role === "bot",
@@ -71,6 +78,7 @@ export function UserProfilePopover({
   const userStatusQuery = useUserStatusQuery(open ? [pubkey] : []);
 
   const { onOpenAgentSession } = useAgentSession();
+  const { openProfilePanel } = useProfilePanel();
   const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
   const managedAgent = managedAgentsQuery.data?.find(
     (a) => a.pubkey === pubkey,
@@ -83,10 +91,78 @@ export function UserProfilePopover({
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
   const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
 
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const handleTriggerMouseEnter = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, HOVER_OPEN_DELAY_MS);
+  }, [clearHoverTimer]);
+
+  const handleMouseLeave = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, HOVER_CLOSE_DELAY_MS);
+  }, [clearHoverTimer]);
+
+  const handleContentMouseEnter = React.useCallback(() => {
+    clearHoverTimer();
+  }, [clearHoverTimer]);
+
+  const handleTriggerClick = React.useCallback(
+    (event: React.MouseEvent) => {
+      clearHoverTimer();
+      if (openProfilePanel) {
+        event.preventDefault();
+        setOpen(false);
+        openProfilePanel(pubkey);
+      }
+    },
+    [clearHoverTimer, openProfilePanel, pubkey],
+  );
+
+  React.useEffect(() => {
+    return () => clearHoverTimer();
+  }, [clearHoverTimer]);
+
   return (
     <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-80" side="top" sideOffset={8}>
+      <PopoverTrigger asChild>
+        {/* biome-ignore lint/a11y/useSemanticElements: wrapper div for hover/click behavior */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={handleTriggerClick}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && openProfilePanel) {
+              e.preventDefault();
+              clearHoverTimer();
+              setOpen(false);
+              openProfilePanel(pubkey);
+            }
+          }}
+          onMouseEnter={handleTriggerMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          className="inline-flex"
+        >
+          {children}
+        </div>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-80"
+        onMouseEnter={handleContentMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        side="top"
+        sideOffset={8}
+      >
         <div className="flex flex-col gap-3">
           <div className="flex items-start gap-3">
             {profile?.avatarUrl ? (
