@@ -42,6 +42,7 @@ export function AddMemberDialog({
   const isValidPubkey = PUBKEY_REGEX.test(normalizedPubkey);
   const isAlreadyMember =
     isValidPubkey &&
+    !addMutation.isPending &&
     (membersQuery.data ?? []).some(
       (m) => m.pubkey.toLowerCase() === normalizedPubkey,
     );
