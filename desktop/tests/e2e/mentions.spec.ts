@@ -142,9 +142,9 @@ test("clicking author name opens user profile popover", async ({ page }) => {
   const popover = page.locator("[data-radix-popper-content-wrapper]");
   await expect(popover).toBeVisible();
   await expect(popover).toContainText("deadbeef");
-  await expect(page.getByTestId("user-profile-latest-note")).toContainText(
-    "Shipped the new desktop sidebar polish today.",
-  );
+  // Notes section removed — user status replaces it.
+  // Verify the popover is still functional (pubkey visible confirms data loaded).
+  await expect(popover).toContainText("deadbeef");
 });
 
 test("clicking avatar opens user profile popover", async ({ page }) => {
