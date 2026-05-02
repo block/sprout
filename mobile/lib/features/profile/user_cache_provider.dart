@@ -70,6 +70,7 @@ class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
           pubkey: entry.key.toLowerCase(),
           displayName: data['display_name'] as String?,
           avatarUrl: data['avatar_url'] as String?,
+          nip05Handle: data['nip05_handle'] as String?,
         );
       }
 

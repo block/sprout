@@ -13,6 +13,7 @@ import '../channels/compose_bar.dart';
 import '../channels/message_content.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import '../profile/user_profile_sheet.dart';
 import 'forum_models.dart';
 import 'forum_provider.dart';
 
@@ -322,16 +323,26 @@ class _OriginalPost extends ConsumerWidget {
         children: [
           Row(
             children: [
-              _Avatar(profile: profile, pubkey: post.pubkey, radius: 16),
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, post.pubkey),
+                child: _Avatar(
+                  profile: profile,
+                  pubkey: post.pubkey,
+                  radius: 16,
+                ),
+              ),
               const SizedBox(width: Grid.xxs),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      displayName,
-                      style: context.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    GestureDetector(
+                      onTap: () => showUserProfileSheet(context, post.pubkey),
+                      child: Text(
+                        displayName,
+                        style: context.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                     Text(
@@ -391,15 +402,25 @@ class _ReplyRow extends ConsumerWidget {
         children: [
           Row(
             children: [
-              _Avatar(profile: profile, pubkey: reply.pubkey, radius: 12),
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, reply.pubkey),
+                child: _Avatar(
+                  profile: profile,
+                  pubkey: reply.pubkey,
+                  radius: 12,
+                ),
+              ),
               const SizedBox(width: Grid.xxs),
               Expanded(
                 child: Row(
                   children: [
-                    Text(
-                      displayName,
-                      style: context.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    GestureDetector(
+                      onTap: () => showUserProfileSheet(context, reply.pubkey),
+                      child: Text(
+                        displayName,
+                        style: context.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                     const SizedBox(width: Grid.xxs),
