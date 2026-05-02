@@ -100,14 +100,8 @@ class UserProfileSheet extends HookConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Avatar with presence overlay — centered
-                  Center(
-                    child: _ProfileAvatar(
-                      avatarUrl: avatarUrl,
-                      initial: initial,
-                      presenceColor: presenceColor,
-                    ),
-                  ),
+                  // Avatar — near full-width
+                  _ProfileAvatar(avatarUrl: avatarUrl, initial: initial),
                   const SizedBox(height: Grid.xs),
 
                   // Display name — centered, large
@@ -135,12 +129,35 @@ class UserProfileSheet extends HookConsumerWidget {
 
                   const SizedBox(height: Grid.xs),
 
-                  // Info rows — left-aligned with icons
-                  _InfoRow(
-                    icon: LucideIcons.circle,
-                    iconColor: presenceColor,
-                    iconSize: 10,
-                    text: presenceLabel,
+                  // Presence row — filled dot, not an outline icon
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: Grid.half + 2,
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 24,
+                          child: Center(
+                            child: Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: presenceColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: Grid.xxs),
+                        Text(
+                          presenceLabel,
+                          style: context.textTheme.bodyMedium?.copyWith(
+                            color: context.colors.onSurface,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
 
                   if (userStatus != null && !userStatus.isEmpty)
@@ -177,6 +194,14 @@ class UserProfileSheet extends HookConsumerWidget {
                       ),
                     ),
                     const SizedBox(height: Grid.xxs),
+                    Text(
+                      'About',
+                      style: context.textTheme.labelSmall?.copyWith(
+                        color: context.colors.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: Grid.half),
                     Text(
                       about,
                       style: context.textTheme.bodyMedium?.copyWith(
@@ -236,16 +261,12 @@ class UserProfileSheet extends HookConsumerWidget {
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String text;
-  final Color? iconColor;
-  final double iconSize;
   final TextStyle? textStyle;
   final VoidCallback? onTap;
 
   const _InfoRow({
     required this.icon,
     required this.text,
-    this.iconColor,
-    this.iconSize = 16,
     this.textStyle,
     this.onTap,
   });
@@ -258,11 +279,7 @@ class _InfoRow extends StatelessWidget {
         children: [
           SizedBox(
             width: 24,
-            child: Icon(
-              icon,
-              size: iconSize,
-              color: iconColor ?? context.colors.onSurfaceVariant,
-            ),
+            child: Icon(icon, size: 16, color: context.colors.onSurfaceVariant),
           ),
           const SizedBox(width: Grid.xxs),
           Expanded(
@@ -299,13 +316,8 @@ class _InfoRow extends StatelessWidget {
 class _ProfileAvatar extends HookWidget {
   final String? avatarUrl;
   final String initial;
-  final Color presenceColor;
 
-  const _ProfileAvatar({
-    required this.avatarUrl,
-    required this.initial,
-    required this.presenceColor,
-  });
+  const _ProfileAvatar({required this.avatarUrl, required this.initial});
 
   @override
   Widget build(BuildContext context) {
@@ -319,43 +331,41 @@ class _ProfileAvatar extends HookWidget {
     final url = avatarUrl;
     final showImage = url != null && !failed.value;
 
-    return SizedBox(
-      width: 120,
-      height: 120,
-      child: Stack(
-        children: [
-          CircleAvatar(
-            radius: 56,
-            backgroundColor: context.colors.primaryContainer,
-            backgroundImage: showImage ? NetworkImage(url) : null,
-            onBackgroundImageError: showImage
-                ? (_, _) => failed.value = true
-                : null,
-            child: !showImage
-                ? Text(
-                    initial,
-                    style: context.textTheme.headlineLarge?.copyWith(
-                      color: context.colors.onPrimaryContainer,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  )
-                : null,
-          ),
-          // Presence dot overlay
-          Positioned(
-            bottom: 4,
-            right: 4,
-            child: Container(
-              width: 18,
-              height: 18,
-              decoration: BoxDecoration(
-                color: presenceColor,
-                shape: BoxShape.circle,
-                border: Border.all(color: context.colors.surface, width: 3),
-              ),
-            ),
-          ),
-        ],
+    return AspectRatio(
+      aspectRatio: 1,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: showImage
+            ? Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) {
+                  failed.value = true;
+                  return _AvatarFallback(initial: initial);
+                },
+              )
+            : _AvatarFallback(initial: initial),
+      ),
+    );
+  }
+}
+
+class _AvatarFallback extends StatelessWidget {
+  final String initial;
+
+  const _AvatarFallback({required this.initial});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: context.colors.primaryContainer,
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: context.textTheme.displayLarge?.copyWith(
+          color: context.colors.onPrimaryContainer,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
