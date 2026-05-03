@@ -570,38 +570,95 @@ pub fn spawn_agent_child(
 
     command.env("SPROUT_ACP_RELAY_OBSERVER", "true");
 
-    // ── Git credential helper for Sprout relay ──────────────────────────
+    // ── Git credential helper + NIP-GS commit signing for Sprout relay ─
     //
     // Agents need to clone/push repos hosted on the Sprout relay's git
     // server, which authenticates via NIP-98. The `git-credential-nostr`
     // binary signs auth events using the agent's nostr key.
     //
-    // We configure git via GIT_CONFIG_COUNT env vars (ephemeral, no
-    // filesystem writes) scoped to the relay's git URL so we don't
-    // interfere with other remotes (e.g. GitHub).
+    // `git-sign-nostr` provides NIP-GS commit/tag signing so that every
+    // commit the agent makes is verifiably tied to its nostr identity.
+    //
+    // Both are configured via GIT_CONFIG_COUNT env vars (ephemeral, no
+    // filesystem writes). The credential helper is scoped to the relay's
+    // git URL so we don't interfere with other remotes (e.g. GitHub).
+    // Signing config is global within the agent's git environment.
     //
     // NOSTR_PRIVATE_KEY mirrors SPROUT_PRIVATE_KEY — keep in sync.
-    if let Some(cred_helper) = resolve_command("git-credential-nostr", Some(app)) {
-        let relay_http_url = crate::relay::relay_http_base_url(&record.relay_url);
+    let cred_helper = resolve_command("git-credential-nostr", Some(app));
+    let sign_program = resolve_command("git-sign-nostr", Some(app));
 
-        command.env("NOSTR_PRIVATE_KEY", &record.private_key_nsec);
-        command.env("GIT_TERMINAL_PROMPT", "0");
-        command.env("GIT_CONFIG_COUNT", "2");
-        command.env(
-            "GIT_CONFIG_KEY_0",
-            format!("credential.{relay_http_url}/git.helper"),
-        );
-        command.env("GIT_CONFIG_VALUE_0", cred_helper.display().to_string());
-        command.env(
-            "GIT_CONFIG_KEY_1",
-            format!("credential.{relay_http_url}/git.useHttpPath"),
-        );
-        command.env("GIT_CONFIG_VALUE_1", "true");
-    } else {
+    if cred_helper.is_none() {
         eprintln!(
             "sprout-desktop: git-credential-nostr not found — agent {} will not have automatic Sprout git auth",
             record.name,
         );
+    }
+    if sign_program.is_none() {
+        eprintln!(
+            "sprout-desktop: git-sign-nostr not found — agent {} will not have NIP-GS commit signing",
+            record.name,
+        );
+    }
+
+    if cred_helper.is_some() || sign_program.is_some() {
+        let relay_http_url = crate::relay::relay_http_base_url(&record.relay_url);
+
+        command.env("NOSTR_PRIVATE_KEY", &record.private_key_nsec);
+        command.env("GIT_TERMINAL_PROMPT", "0");
+
+        match (&cred_helper, &sign_program) {
+            (Some(cred), Some(sign)) => {
+                command.env("GIT_CONFIG_COUNT", "7");
+                command.env(
+                    "GIT_CONFIG_KEY_0",
+                    format!("credential.{relay_http_url}/git.helper"),
+                );
+                command.env("GIT_CONFIG_VALUE_0", cred.display().to_string());
+                command.env(
+                    "GIT_CONFIG_KEY_1",
+                    format!("credential.{relay_http_url}/git.useHttpPath"),
+                );
+                command.env("GIT_CONFIG_VALUE_1", "true");
+                command.env("GIT_CONFIG_KEY_2", "gpg.format");
+                command.env("GIT_CONFIG_VALUE_2", "x509");
+                command.env("GIT_CONFIG_KEY_3", "gpg.x509.program");
+                command.env("GIT_CONFIG_VALUE_3", sign.display().to_string());
+                command.env("GIT_CONFIG_KEY_4", "commit.gpgsign");
+                command.env("GIT_CONFIG_VALUE_4", "true");
+                command.env("GIT_CONFIG_KEY_5", "tag.gpgsign");
+                command.env("GIT_CONFIG_VALUE_5", "true");
+                command.env("GIT_CONFIG_KEY_6", "user.signingkey");
+                command.env("GIT_CONFIG_VALUE_6", &record.pubkey);
+            }
+            (Some(cred), None) => {
+                command.env("GIT_CONFIG_COUNT", "2");
+                command.env(
+                    "GIT_CONFIG_KEY_0",
+                    format!("credential.{relay_http_url}/git.helper"),
+                );
+                command.env("GIT_CONFIG_VALUE_0", cred.display().to_string());
+                command.env(
+                    "GIT_CONFIG_KEY_1",
+                    format!("credential.{relay_http_url}/git.useHttpPath"),
+                );
+                command.env("GIT_CONFIG_VALUE_1", "true");
+            }
+            (None, Some(sign)) => {
+                command.env("GIT_CONFIG_COUNT", "5");
+                command.env("GIT_CONFIG_KEY_0", "gpg.format");
+                command.env("GIT_CONFIG_VALUE_0", "x509");
+                command.env("GIT_CONFIG_KEY_1", "gpg.x509.program");
+                command.env("GIT_CONFIG_VALUE_1", sign.display().to_string());
+                command.env("GIT_CONFIG_KEY_2", "commit.gpgsign");
+                command.env("GIT_CONFIG_VALUE_2", "true");
+                command.env("GIT_CONFIG_KEY_3", "tag.gpgsign");
+                command.env("GIT_CONFIG_VALUE_3", "true");
+                command.env("GIT_CONFIG_KEY_4", "user.signingkey");
+                command.env("GIT_CONFIG_VALUE_4", &record.pubkey);
+            }
+            (None, None) => unreachable!(),
+        }
     }
 
     // Spawn the harness in its own process group so we can kill the entire

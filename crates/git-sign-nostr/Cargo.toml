@@ -1,0 +1,25 @@
+[package]
+name = "git-sign-nostr"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Git signing program using Nostr secp256k1 keys (NIP-GS)"
+
+[[bin]]
+name = "git-sign-nostr"
+path = "src/main.rs"
+
+[dependencies]
+nostr      = { workspace = true }
+serde_json = { workspace = true }
+zeroize    = { workspace = true }
+base64     = "0.22"
+
+# This crate is Unix-only: it uses BorrowedFd/OwnedFd, PermissionsExt,
+# and getuid(2). Non-Unix builds will fail at compile time on those imports,
+# which is the intended behaviour.
+[target.'cfg(not(unix))'.dependencies]
+# Intentionally empty — serves as a compile-time reminder that this crate
+# requires a Unix target. Add a build.rs assertion if cross-compilation
+# to non-Unix is ever attempted.
