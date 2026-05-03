@@ -118,33 +118,26 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     };
 
     // Extract NIP-OA auth tag for NIP-AA before the event is consumed.
-    // NIP-AA requires exactly one auth tag — zero means not a NIP-AA attempt,
-    // multiple means malformed — reject with an explicit error.
-    let auth_tags: Vec<_> = auth_msg
-        .event
-        .tags
-        .iter()
-        .filter(|t| {
-            let s = t.as_slice();
-            !s.is_empty() && s[0] == "auth"
-        })
-        .collect();
-    if auth_tags.len() > 1 {
-        warn!(channel_id = %channel_id, "audio: multiple auth tags in NIP-42 event");
-        let _ = ws_send
-            .send(WsMessage::Text(
-                serde_json::json!({"type": "error", "message": "invalid: multiple auth tags"})
-                    .to_string()
-                    .into(),
-            ))
-            .await;
-        return;
-    }
-    let auth_tag_json = if auth_tags.len() == 1 {
-        serde_json::to_string(&auth_tags[0].as_slice()).ok()
-    } else {
-        None // Zero auth tags — not a NIP-AA attempt
-    };
+    // Delegates to the canonical extract_single_auth_tag from nip_aa.rs:
+    //   Ok(None)     → zero auth tags — not a NIP-AA attempt
+    //   Ok(Some(t))  → exactly one auth tag — serialize to JSON for later use
+    //   Err(reason)  → multiple auth tags — malformed, reject immediately
+    let auth_tag_json =
+        match crate::handlers::nip_aa::extract_single_auth_tag(auth_msg.event.tags.as_slice()) {
+            Ok(None) => None,
+            Ok(Some(tag)) => serde_json::to_string(&tag.as_slice()).ok(),
+            Err(reason) => {
+                warn!(channel_id = %channel_id, "audio: multiple auth tags in NIP-42 event");
+                let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type": "error", "message": reason})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                return;
+            }
+        };
     let event_created_at = Some(auth_msg.event.created_at.as_u64());
 
     // Extract auth_token tag before the event is consumed — API tokens and
@@ -214,11 +207,22 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         let candidate_pubkey = auth_msg.event.pubkey;
         let candidate_pubkey_hex = candidate_pubkey.to_hex();
         let is_direct_member = if state.config.require_relay_membership {
-            state
-                .db
-                .is_relay_member(&candidate_pubkey_hex)
-                .await
-                .unwrap_or(false)
+            // Fail closed on DB errors — a DB failure must not silently grant
+            // access. The main WS auth handler (auth.rs) uses the same pattern.
+            match state.db.is_relay_member(&candidate_pubkey_hex).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(channel_id = %channel_id, "audio: DB error checking relay membership: {e}");
+                    let _ = ws_send
+                        .send(WsMessage::Text(
+                            serde_json::json!({"type":"error","message":"auth failed"})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await;
+                    return;
+                }
+            }
         } else {
             true // membership not required — treat as member
         };

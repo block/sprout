@@ -362,10 +362,14 @@ async fn handle_text_message(
             // NIP-AA spec: an unparseable AUTH frame MUST close the WebSocket.
             // Two cases:
             //   1. Valid JSON array whose first element is "AUTH" but payload is
-            //      invalid (e.g. bad event fields) — caught by the Ok branch.
+            //      invalid (e.g. bad event fields) — serde parses the envelope
+            //      successfully, so we can inspect the first element directly.
             //   2. Truly broken JSON (e.g. `["AUTH", {broken`) — serde fails
-            //      entirely, so we fall back to a cheap heuristic: the frame
-            //      starts with '[' and contains "AUTH" in the first 20 chars.
+            //      entirely. We fall back to scanning the raw text for the
+            //      literal token `"AUTH"` (quotes included). Any well-formed
+            //      Nostr AUTH frame must contain that exact quoted string, and
+            //      no other Nostr message type uses the verb AUTH, so a false
+            //      positive here is essentially impossible in practice.
             let is_auth_frame = match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(val) => {
                     val.as_array()
@@ -374,10 +378,10 @@ async fn handle_text_message(
                         == Some("AUTH")
                 }
                 Err(_) => {
-                    // JSON parse failed — check if it looks like an AUTH attempt.
-                    let trimmed = text.trim_start();
-                    trimmed.starts_with('[')
-                        && trimmed.get(..20).map_or(false, |s| s.contains("AUTH"))
+                    // JSON parse failed — presence of `"AUTH"` (with quotes) in
+                    // the raw frame is a reliable signal that this was an AUTH
+                    // attempt, regardless of where in the frame it appears.
+                    text.contains(r#""AUTH""#)
                 }
             };
             if is_auth_frame {

@@ -21,7 +21,7 @@ pub struct NipAaResult {
 /// - Returns `Ok(Some(&tag))` for exactly one match.
 ///
 /// Extracted as a pure function so it can be unit-tested without `AppState`.
-fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag>, String> {
+pub fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag>, String> {
     let auth_tags: Vec<&nostr::Tag> = tags
         .iter()
         .filter(|t| {
