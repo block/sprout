@@ -25,7 +25,7 @@
 //! - **Freshness** — `created_at` must be within ±120 s of relay wall-clock.
 //! - **Deduplication** — duplicate event IDs are rejected within a relay session.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,9 +74,15 @@ const SUB_ID_MAX: usize = 64;
 /// Hard session cap: at most this many accepted EVENTs per connection.
 const MAX_EVENTS_PER_CONN: u32 = 6;
 
+/// Per-#p delivery budget: enough for one full pairing from each direction.
+const MAX_DELIVERED_PER_P: u32 = 12;
+
 /// Dedup set is cleared when it reaches this size (connections are 120 s max,
 /// so accumulation is naturally bounded, but we cap defensively).
 const DEDUP_CAP: usize = 1024;
+
+/// Delivered map is cleared when it reaches this size.
+const DELIVERED_MAP_CAP: usize = 4096;
 
 /// Freshness window in seconds (±).
 const FRESHNESS_SECS: i64 = 120;
@@ -102,6 +108,8 @@ pub struct Relay {
     next_conn_id: AtomicU64,
     /// Global dedup set — cleared at DEDUP_CAP.
     seen_ids: Mutex<HashSet<[u8; 32]>>,
+    /// Per-#p delivery counter — cleared at DELIVERED_MAP_CAP.
+    delivered: Mutex<HashMap<[u8; 32], u32>>,
 }
 
 impl Default for Relay {
@@ -117,6 +125,7 @@ impl Relay {
             conn_count: AtomicU32::new(0),
             next_conn_id: AtomicU64::new(0),
             seen_ids: Mutex::new(HashSet::new()),
+            delivered: Mutex::new(HashMap::new()),
         }
     }
 
@@ -135,30 +144,54 @@ impl Relay {
         false
     }
 
-    /// Count live subscribers for `p_value`.
-    fn subscriber_count(&self, p_value: &[u8; 32]) -> usize {
-        self.subs
-            .lock()
-            .iter()
-            .filter(|s| &s.p_value == p_value)
-            .count()
-    }
-
-    /// Fan-out: send event to the single subscriber whose `p_value` matches.
-    /// Caller must have already verified exactly one subscriber exists.
-    fn fanout(&self, p_value: &[u8; 32], event: &Value) {
+    /// Atomically check for exactly one subscriber and deliver.
+    /// Returns `Ok(true)` if delivered, `Ok(false)` if `try_send` failed,
+    /// `Err(reason)` if wrong subscriber count or budget exceeded.
+    fn deliver_single(&self, p_value: &[u8; 32], event: &Value) -> Result<bool, &'static str> {
+        // Acquire subs lock once for the entire operation.
         let subs = self.subs.lock();
-        for sub in subs.iter() {
-            if &sub.p_value == p_value {
-                let msg = Value::Array(vec![
-                    Value::String("EVENT".into()),
-                    Value::String(sub.sub_id.clone()),
-                    event.clone(),
-                ]);
-                if let Ok(s) = serde_json::to_string(&msg) {
-                    let _ = sub.writer_tx.try_send(OutMsg::Text(s));
-                }
+
+        let matching: Vec<&Sub> = subs.iter().filter(|s| &s.p_value == p_value).collect();
+
+        match matching.len() {
+            0 => return Err("no live subscriber"),
+            1 => {} // exactly one — proceed
+            _ => return Err("ambiguous recipient"),
+        }
+
+        let sub = matching[0];
+
+        // Check per-#p delivery budget.
+        {
+            let delivered = self.delivered.lock();
+            let count = delivered.get(p_value).copied().unwrap_or(0);
+            if count >= MAX_DELIVERED_PER_P {
+                return Err("recipient session budget exhausted");
             }
+        }
+
+        // Build the EVENT message.
+        let msg = Value::Array(vec![
+            Value::String("EVENT".into()),
+            Value::String(sub.sub_id.clone()),
+            event.clone(),
+        ]);
+        let text = match serde_json::to_string(&msg) {
+            Ok(s) => s,
+            Err(_) => return Ok(false),
+        };
+
+        // Attempt delivery.
+        if sub.writer_tx.try_send(OutMsg::Text(text)).is_ok() {
+            // Increment counter after successful delivery.
+            let mut delivered = self.delivered.lock();
+            if delivered.len() >= DELIVERED_MAP_CAP {
+                delivered.clear();
+            }
+            *delivered.entry(*p_value).or_insert(0) += 1;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -751,7 +784,13 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                         }
                         match validate_event(&arr[1]) {
                             Ok((event_id, id_bytes, p_value)) => {
-                                // Tightening #7: deduplication.
+                                // Tightening #8: Schnorr signature verification BEFORE dedup.
+                                if let Err(reason) = verify_event_sig(&arr[1]) {
+                                    let _ = tx
+                                        .try_send(OutMsg::Text(make_ok(&event_id, false, reason)));
+                                    continue;
+                                }
+                                // Tightening #7: deduplication AFTER sig check.
                                 if relay.check_and_record_id(&id_bytes) {
                                     let _ = tx.try_send(OutMsg::Text(make_ok(
                                         &event_id,
@@ -760,32 +799,23 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                     )));
                                     continue;
                                 }
-                                // Tightening #8: Schnorr signature verification.
-                                if let Err(reason) = verify_event_sig(&arr[1]) {
-                                    let _ = tx
-                                        .try_send(OutMsg::Text(make_ok(&event_id, false, reason)));
-                                    continue;
-                                }
-                                // Tightening #2: require exactly one live subscriber.
-                                match relay.subscriber_count(&p_value) {
-                                    0 => {
-                                        let _ = tx.try_send(OutMsg::Text(make_ok(
-                                            &event_id,
-                                            false,
-                                            "no live subscriber",
-                                        )));
-                                    }
-                                    1 => {
-                                        relay.fanout(&p_value, &arr[1]);
+                                // Tightening #2: atomically check subscriber and deliver.
+                                match relay.deliver_single(&p_value, &arr[1]) {
+                                    Ok(true) => {
                                         events_accepted += 1;
                                         let _ =
                                             tx.try_send(OutMsg::Text(make_ok(&event_id, true, "")));
                                     }
-                                    _ => {
+                                    Ok(false) => {
                                         let _ = tx.try_send(OutMsg::Text(make_ok(
                                             &event_id,
                                             false,
-                                            "ambiguous recipient",
+                                            "delivery failed",
+                                        )));
+                                    }
+                                    Err(reason) => {
+                                        let _ = tx.try_send(OutMsg::Text(make_ok(
+                                            &event_id, false, reason,
                                         )));
                                     }
                                 }
