@@ -98,10 +98,13 @@ jobs:
         run: |
           bash desktop/scripts/generate-oss-latest-json.sh \
             "$VERSION" \
-            "${{ steps.artifacts.outputs.sig }}" \
-            "https://github.com/block/sprout/releases/download/sprout-desktop-latest/${{ steps.artifacts.outputs.archive_name }}" \
+            "$SIG_PATH" \
+            "https://github.com/block/sprout/releases/download/sprout-desktop-latest/$ARCHIVE_NAME" \
             > latest.json
           cat latest.json
+        env:
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
+          ARCHIVE_NAME: ${{ steps.artifacts.outputs.archive_name }}
 
       - name: Create versioned GitHub release
         run: |
@@ -110,9 +113,10 @@ jobs:
             --target "$RELEASE_SHA" \
             --title "Sprout Desktop v${VERSION}" \
             --notes "Sprout Desktop v${VERSION}" \
-            "${{ steps.artifacts.outputs.dmg }}"
+            "$DMG_PATH"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
 
       - name: Update rolling release for auto-updater
         run: |
@@ -123,8 +127,10 @@ jobs:
             2>/dev/null || true
           gh release upload sprout-desktop-latest \
             latest.json \
-            "${{ steps.artifacts.outputs.archive }}" \
-            "${{ steps.artifacts.outputs.sig }}" \
+            "$ARCHIVE_PATH" \
+            "$SIG_PATH" \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_PATH: ${{ steps.artifacts.outputs.archive }}
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
