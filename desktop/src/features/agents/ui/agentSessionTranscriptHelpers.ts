@@ -4,7 +4,7 @@ import {
   isGenericToolTitle,
   normalizeToolName,
 } from "./agentSessionToolCatalog";
-import { asRecord, asString, shorten, titleCase } from "./agentSessionUtils";
+import { asRecord, asString, titleCase } from "./agentSessionUtils";
 
 export function extractPromptText(payload: Record<string, unknown>): string {
   const params = asRecord(payload.params);
@@ -194,18 +194,14 @@ export function describeTurnStarted(payload: unknown): string {
       )
     : [];
   return ids.length > 0
-    ? `Triggered by ${ids.map(shorten).join(", ")}.`
-    : "Heartbeat or internal turn.";
+    ? `Triggered by ${ids.length === 1 ? "1 event" : `${ids.length} events`}.`
+    : "";
 }
 
 export function describeSessionResolved(payload: unknown): string {
   const record = asRecord(payload);
-  const sessionId = asString(record.sessionId);
   const isNewSession = record.isNewSession === true;
-  if (!sessionId) {
-    return "Using existing ACP session.";
-  }
-  return `${isNewSession ? "Created" : "Using"} session ${shorten(sessionId)}.`;
+  return isNewSession ? "New session created." : "";
 }
 
 export function describeRawEvent(event: ObserverEvent): string {

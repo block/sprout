@@ -147,6 +147,12 @@ export function buildTranscript(events: ObserverEvent[]): TranscriptItem[] {
       existing.args = Object.keys(args).length > 0 ? args : existing.args;
       if (result) existing.result = result;
       existing.isError = isError || existing.isError;
+      if (
+        (status === "completed" || status === "failed") &&
+        existing.completedAt == null
+      ) {
+        existing.completedAt = timestamp;
+      }
       return;
     }
     sealOpenMessages();
@@ -161,6 +167,8 @@ export function buildTranscript(events: ObserverEvent[]): TranscriptItem[] {
       result,
       isError,
       timestamp,
+      startedAt: timestamp,
+      completedAt: null,
     };
     items.push(item);
     itemsById.set(id, item);
