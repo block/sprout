@@ -360,17 +360,26 @@ async fn handle_text_message(
         Ok(m) => m,
         Err(e) => {
             // NIP-AA spec: an unparseable AUTH frame MUST close the WebSocket.
-            // Parse as JSON and check if the first element is "AUTH" — this
-            // correctly handles all whitespace variants (e.g. `[  "AUTH", ...]`)
-            // that a naive string-prefix check would miss.
-            let is_auth_frame = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .as_ref()
-                .and_then(|v| v.as_array())
-                .and_then(|a| a.first())
-                .and_then(|v| v.as_str())
-                .map(|s| s == "AUTH")
-                .unwrap_or(false);
+            // Two cases:
+            //   1. Valid JSON array whose first element is "AUTH" but payload is
+            //      invalid (e.g. bad event fields) — caught by the Ok branch.
+            //   2. Truly broken JSON (e.g. `["AUTH", {broken`) — serde fails
+            //      entirely, so we fall back to a cheap heuristic: the frame
+            //      starts with '[' and contains "AUTH" in the first 20 chars.
+            let is_auth_frame = match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(val) => {
+                    val.as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        == Some("AUTH")
+                }
+                Err(_) => {
+                    // JSON parse failed — check if it looks like an AUTH attempt.
+                    let trimmed = text.trim_start();
+                    trimmed.starts_with('[')
+                        && trimmed.get(..20).map_or(false, |s| s.contains("AUTH"))
+                }
+            };
             if is_auth_frame {
                 warn!(conn_id = %conn.conn_id, error = %e, "malformed AUTH frame — closing connection");
                 let _ = conn.ctrl_tx.try_send(WsMessage::Close(Some(CloseFrame {

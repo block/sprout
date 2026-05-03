@@ -490,6 +490,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 state
                     .conn_manager
                     .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
+                state
+                    .conn_manager
+                    .set_owner_pubkey(conn_id, owner_pubkey.serialize().to_vec());
                 conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 return;
             }

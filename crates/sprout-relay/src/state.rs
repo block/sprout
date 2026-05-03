@@ -37,6 +37,10 @@ struct ConnEntry {
     backpressure_count: Arc<AtomicU8>,
     subscriptions: ConnectionSubscriptions,
     authenticated_pubkey: Arc<std::sync::RwLock<Option<Vec<u8>>>>,
+    /// Set when a NIP-AA virtual member authenticates. Enables owner-scoped
+    /// enumeration (find all agents authorized by a given owner) and
+    /// termination (disconnect all agents when owner is removed).
+    owner_pubkey: Arc<std::sync::RwLock<Option<Vec<u8>>>>,
 }
 
 /// Tracks active WebSocket connections and provides message routing by connection ID.
@@ -70,6 +74,7 @@ impl ConnectionManager {
                 backpressure_count,
                 subscriptions,
                 authenticated_pubkey: Arc::new(std::sync::RwLock::new(None)),
+                owner_pubkey: Arc::new(std::sync::RwLock::new(None)),
             },
         );
     }
@@ -101,6 +106,38 @@ impl ConnectionManager {
                         value
                             .as_ref()
                             .map(|stored| stored.as_slice() == pubkey_bytes)
+                    })
+                    .unwrap_or(false);
+                matches.then_some(*entry.key())
+            })
+            .collect()
+    }
+
+    /// Record the owner pubkey for a NIP-AA virtual member connection.
+    ///
+    /// Enables owner-scoped enumeration (`connection_ids_for_owner`) and
+    /// bulk termination when an owner is removed from the relay.
+    pub fn set_owner_pubkey(&self, conn_id: Uuid, owner_bytes: Vec<u8>) {
+        if let Some(entry) = self.connections.get(&conn_id) {
+            if let Ok(mut slot) = entry.owner_pubkey.write() {
+                *slot = Some(owner_bytes);
+            }
+        }
+    }
+
+    /// Return all live connection IDs whose NIP-AA owner matches `owner_bytes`.
+    pub fn connection_ids_for_owner(&self, owner_bytes: &[u8]) -> Vec<Uuid> {
+        self.connections
+            .iter()
+            .filter_map(|entry| {
+                let matches = entry
+                    .owner_pubkey
+                    .read()
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .as_ref()
+                            .map(|stored| stored.as_slice() == owner_bytes)
                     })
                     .unwrap_or(false);
                 matches.then_some(*entry.key())

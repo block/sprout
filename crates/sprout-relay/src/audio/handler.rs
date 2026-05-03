@@ -168,7 +168,13 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     // Track whether this pubkey was granted access via NIP-AA virtual membership.
     // Virtual members already passed the relay membership check inside verify_nip_aa
     // (Step 5), so the direct-only membership gate below must be skipped for them.
-    let (pubkey, is_nip_aa_virtual) = if audio_auth_token.is_none() && auth_tag_json.is_some() {
+    // owner_pubkey is Some only for NIP-AA virtual members; retained for the
+    // duration of the audio session for audit and future owner-scoped tracking.
+    let (pubkey, is_nip_aa_virtual, owner_pubkey): (
+        nostr::PublicKey,
+        bool,
+        Option<nostr::PublicKey>,
+    ) = if audio_auth_token.is_none() && auth_tag_json.is_some() {
         let event_for_verify = auth_msg.event.clone();
         let challenge_owned = challenge.clone();
         let relay_owned = relay_url.clone();
@@ -239,7 +245,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 }
             };
             // Direct member — not a NIP-AA virtual member.
-            (auth_ctx.pubkey, false)
+            (auth_ctx.pubkey, false, None)
         } else {
             // Not a direct member — attempt NIP-AA (Steps 3-5).
             let event_tags_slice: Vec<nostr::Tag> = auth_msg.event.tags.clone().to_vec();
@@ -257,19 +263,17 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                     // verify_nip_aa already confirmed the owner is an active relay member
                     // (Step 5), so the direct membership gate below must be skipped.
                     //
-                    // NIP-AA requires retaining owner_pubkey for owner-scoped session
-                    // enumeration, termination, and quota aggregation. The audio handler
-                    // does not maintain a persistent AuthContext, so we log the owner
-                    // association for audit purposes. Full owner-scoped session tracking
-                    // requires wiring audio sessions into the connection manager.
+                    // owner_pubkey is retained for the audio session lifetime for audit
+                    // and future owner-scoped enumeration/termination/quota aggregation.
                     // TODO(NIP-AA): Wire audio sessions into ConnectionManager for owner-scoped tracking.
+                    let nip_aa_owner = result.owner_pubkey;
                     tracing::info!(
                         channel_id = %channel_id,
                         agent = %candidate_pubkey.to_hex(),
-                        owner = %result.owner_pubkey.to_hex(),
+                        owner = %nip_aa_owner.to_hex(),
                         "NIP-AA: audio virtual membership granted"
                     );
-                    (candidate_pubkey, true)
+                    (candidate_pubkey, true, Some(nip_aa_owner))
                 }
                 Ok(None) => {
                     // No auth tag (or direct member) — must go through verify_auth_event
@@ -292,7 +296,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                             return;
                         }
                     };
-                    (auth_ctx.pubkey, false)
+                    (auth_ctx.pubkey, false, None)
                 }
                 Err(reason) => {
                     // Auth tag present but invalid, or owner not a member — deny.
@@ -328,11 +332,23 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 return;
             }
         };
-        (auth_ctx.pubkey, false)
+        (auth_ctx.pubkey, false, None)
     };
     let pubkey_hex = pubkey.to_hex();
     let pubkey_bytes = pubkey.serialize().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;
+
+    // owner_pubkey is Some for NIP-AA virtual members; available for the full
+    // session lifetime for audit, quota aggregation, and future owner-scoped
+    // ConnectionManager wiring (see TODO above).
+    if let Some(ref owner) = owner_pubkey {
+        debug!(
+            channel_id = %channel_id,
+            agent = %pubkey_hex,
+            owner = %owner.to_hex(),
+            "audio session: NIP-AA owner retained for session"
+        );
+    }
 
     // ── Relay membership gate (NIP-43) ────────────────────────────────────────
     // NIP-AA virtual members already passed the relay membership check inside
