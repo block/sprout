@@ -3,6 +3,24 @@
 //! Accepts WebSocket connections, matches incoming kind:24134 events against
 //! live `#p`-filtered subscriptions, and forwards matches to the subscriber.
 //! No persistence. No auth. No history.
+//!
+//! # Deployment
+//!
+//! This binary binds **loopback only** and MUST run behind a reverse proxy
+//! (nginx, caddy, etc.) that:
+//! - Routes only `/pair` to this sidecar
+//! - Enforces HTTP read timeouts (mitigates slowloris at the TCP layer)
+//! - Terminates TLS
+//!
+//! The relay does not enforce path restrictions or pre-upgrade connection
+//! limits — those are the reverse proxy's responsibility.
+//!
+//! # Security Model
+//!
+//! - **No signature verification** — this is an intentionally untrusted pipe.
+//!   NIP-AB pairing security derives from the encrypted session, not relay trust.
+//! - **No persistence** — events exist only in-flight between matched pub/sub.
+//! - **Bounded resources** — 128 max WS connections, 4 KiB max frame, 120s TTL.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
