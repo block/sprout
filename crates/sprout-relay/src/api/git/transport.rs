@@ -172,7 +172,14 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
 
         // Relay membership gate (NIP-43).
         // Extract NIP-OA auth tag for NIP-AA if present.
-        let auth_tag_json = extract_auth_tag_from_event_json(&event_json);
+        // Multiple auth tags are malformed — reject with 403.
+        let auth_tag_json = match extract_auth_tag_from_event_json(&event_json) {
+            Ok(tag) => tag,
+            Err(_) => {
+                warn!(pubkey = %pubkey.to_hex(), "git: multiple auth tags in NIP-98 event");
+                return Err((StatusCode::FORBIDDEN, "invalid: multiple auth tags").into_response());
+            }
+        };
         let nip98_created_at = extract_created_at_from_event_json(&event_json);
         if crate::api::relay_members::enforce_relay_membership(
             state,
@@ -755,11 +762,18 @@ async fn publish_ref_state(
 
 /// Extract the NIP-OA auth tag JSON from a raw event JSON string.
 ///
-/// Returns `Some(tag_json)` only when exactly one `auth` tag is present.
-/// Zero or multiple auth tags return `None` (ambiguous or absent).
-fn extract_auth_tag_from_event_json(event_json: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(event_json).ok()?;
-    let tags = v.get("tags")?.as_array()?;
+/// Returns:
+/// - `Ok(Some(tag_json))` — exactly one `auth` tag present
+/// - `Ok(None)`           — zero `auth` tags (not a NIP-AA attempt)
+/// - `Err(reason)`        — multiple `auth` tags (malformed; caller must reject)
+fn extract_auth_tag_from_event_json(event_json: &str) -> Result<Option<String>, String> {
+    let v: serde_json::Value = match serde_json::from_str(event_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some(tags) = v.get("tags").and_then(|t| t.as_array()) else {
+        return Ok(None);
+    };
     let auth_tags: Vec<&serde_json::Value> = tags
         .iter()
         .filter(|t| {
@@ -769,10 +783,10 @@ fn extract_auth_tag_from_event_json(event_json: &str) -> Option<String> {
                 == Some("auth")
         })
         .collect();
-    if auth_tags.len() == 1 {
-        Some(auth_tags[0].to_string())
-    } else {
-        None // Zero or multiple auth tags — ambiguous
+    match auth_tags.len() {
+        0 => Ok(None),
+        1 => Ok(Some(auth_tags[0].to_string())),
+        _ => Err("multiple auth tags".to_string()),
     }
 }
 

@@ -86,6 +86,15 @@ impl Scope {
         ]
     }
 
+    /// Return the scopes granted to NIP-AA virtual members.
+    ///
+    /// NIP-AA spec: virtual members MUST NOT gain admin privileges. This returns all
+    /// known scopes except `AdminChannels` and `AdminUsers`, which require a real
+    /// operator-minted token even when relay membership is delegated via NIP-AA.
+    pub fn nip_aa_virtual_member() -> Vec<Scope> {
+        Self::all_non_admin()
+    }
+
     /// Return a `Vec` containing every known scope variant except admin scopes.
     ///
     /// Used in dev mode (`require_auth_token=false`) where `X-Pubkey` header auth grants

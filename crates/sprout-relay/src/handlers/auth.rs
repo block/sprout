@@ -369,9 +369,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         {
             Some(Some(owner_pubkey)) => {
                 // NIP-AA virtual member — grant access with agent auth method.
+                // NIP-AA spec: virtual members MUST NOT gain admin privileges.
                 let auth_ctx = sprout_auth::AuthContext {
                     pubkey,
-                    scopes: sprout_auth::Scope::all_known(),
+                    scopes: sprout_auth::Scope::nip_aa_virtual_member(),
                     channel_ids: None,
                     auth_method: sprout_auth::AuthMethod::Nip42AgentAuth,
                     owner_pubkey: Some(owner_pubkey),

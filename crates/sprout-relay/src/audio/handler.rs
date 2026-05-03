@@ -119,8 +119,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
 
     // Extract NIP-OA auth tag for NIP-AA before the event is consumed.
     // NIP-AA requires exactly one auth tag — zero means not a NIP-AA attempt,
-    // multiple means malformed (treat as absent so membership check falls through
-    // to the standard path rather than silently picking an arbitrary tag).
+    // multiple means malformed — reject with an explicit error.
     let auth_tags: Vec<_> = auth_msg
         .event
         .tags
@@ -130,10 +129,21 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
             !s.is_empty() && s[0] == "auth"
         })
         .collect();
+    if auth_tags.len() > 1 {
+        warn!(channel_id = %channel_id, "audio: multiple auth tags in NIP-42 event");
+        let _ = ws_send
+            .send(WsMessage::Text(
+                serde_json::json!({"type": "error", "message": "invalid: multiple auth tags"})
+                    .to_string()
+                    .into(),
+            ))
+            .await;
+        return;
+    }
     let auth_tag_json = if auth_tags.len() == 1 {
         serde_json::to_string(&auth_tags[0].as_slice()).ok()
     } else {
-        None // Zero or multiple auth tags — NIP-AA requires exactly one
+        None // Zero auth tags — not a NIP-AA attempt
     };
     let event_created_at = Some(auth_msg.event.created_at.as_u64());
 
