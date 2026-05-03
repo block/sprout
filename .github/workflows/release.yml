@@ -38,12 +38,6 @@ jobs:
       - name: Install desktop dependencies
         run: just desktop-install-ci
 
-      - name: Detect target
-        id: detect-target
-        run: |
-          TARGET=$(rustc -vV | sed -n 's|host: ||p')
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-
       - name: Patch version
         run: |
           cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
@@ -72,7 +66,6 @@ jobs:
       - name: Locate build artifacts
         id: artifacts
         run: |
-          TARGET="${{ steps.detect-target.outputs.target }}"
           BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
 
           # Find the DMG (Tauri names it Sprout_<version>_<arch>.dmg)
