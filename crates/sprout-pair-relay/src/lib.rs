@@ -756,10 +756,11 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                 continue;
                             }
                         };
-                        // Reject if this #p already has a live subscriber
-                        // (prevents late-joiner poisoning of active sessions).
+                        // Atomically check #p uniqueness + register under one lock.
+                        // EOSE try_send happens inside the lock to prevent a
+                        // concurrent REQ from racing between check and push.
                         {
-                            let subs = relay.subs.lock();
+                            let mut subs = relay.subs.lock();
                             if subs.iter().any(|s| s.p_value == p_value) {
                                 let _ = tx.try_send(OutMsg::Text(make_closed(
                                     &client_sub_id,
@@ -767,20 +768,20 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                 )));
                                 continue;
                             }
+                            // Send EOSE before registering (still under lock).
+                            if tx
+                                .try_send(OutMsg::Text(make_eose(&client_sub_id)))
+                                .is_err()
+                            {
+                                break 'conn;
+                            }
+                            subs.push(Sub {
+                                conn_id,
+                                sub_id: client_sub_id.clone(),
+                                p_value,
+                                writer_tx: tx.clone(),
+                            });
                         }
-                        // Send EOSE before registering.
-                        if tx
-                            .try_send(OutMsg::Text(make_eose(&client_sub_id)))
-                            .is_err()
-                        {
-                            break 'conn;
-                        }
-                        relay.subs.lock().push(Sub {
-                            conn_id,
-                            sub_id: client_sub_id.clone(),
-                            p_value,
-                            writer_tx: tx.clone(),
-                        });
                         sub_id = Some(client_sub_id);
                     }
 
