@@ -34,13 +34,23 @@ async fn enforce_ws_relay_membership(
     let is_member = match state.db.is_relay_member(&pubkey_hex).await {
         Ok(v) => v,
         Err(e) => {
+            // DB error: fail closed immediately. Do NOT fall through to NIP-AA —
+            // we cannot authoritatively determine membership, so we must deny.
             warn!(
                 conn_id = %conn_id,
                 pubkey = %pubkey_hex,
                 error = %e,
                 "relay membership check failed, denying (fail-closed)"
             );
-            false
+            metrics::counter!("sprout_auth_failures_total", "reason" => "membership_db_error")
+                .increment(1);
+            *conn.auth_state.write().await = AuthState::Failed;
+            conn.send(RelayMessage::ok(
+                event_id_hex,
+                false,
+                "restricted: membership check failed",
+            ));
+            return None;
         }
     };
 
@@ -299,11 +309,28 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     // do NOT replace them. Replacing could widen a read-only token to
                     // full write access. Intersection preserves the token's restrictions
                     // while stripping any admin scopes.
+                    //
+                    // Empty intersection: if the token carries ONLY admin scopes (e.g. a
+                    // sprout_admin token), the intersection is empty. Empty scopes are
+                    // treated as "unrestricted" by some handlers (NIP-98 / dev-mode paths),
+                    // which would widen access. Deny rather than grant with empty scopes.
                     let (auth_method, final_owner_pubkey, final_scopes) = match nip_aa_owner {
                         Some(owner) => {
                             let allowed = sprout_auth::Scope::nip_aa_virtual_member();
                             let intersected: Vec<sprout_auth::Scope> =
                                 scopes.into_iter().filter(|s| allowed.contains(s)).collect();
+                            if intersected.is_empty() {
+                                warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
+                                      "NIP-AA: scope intersection is empty — denying (would widen access)");
+                                metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_empty_scope").increment(1);
+                                *conn.auth_state.write().await = AuthState::Failed;
+                                conn.send(RelayMessage::ok(
+                                    &event_id_hex,
+                                    false,
+                                    "restricted: token scopes incompatible with NIP-AA virtual membership",
+                                ));
+                                return;
+                            }
                             (
                                 sprout_auth::AuthMethod::Nip42AgentAuth,
                                 Some(owner),
@@ -507,6 +534,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             // them. Replacing could widen a read-only JWT/pubkey-only session to full
             // write access. Intersection preserves the original restrictions while
             // stripping any admin scopes.
+            //
+            // Empty intersection: pubkey-only auth has empty scopes (treated as
+            // unrestricted in dev/NIP-98 paths). For NIP-AA virtual members, we
+            // use the full virtual-member scope set instead of the empty intersection
+            // to avoid the empty-means-unrestricted footgun. This is safe: the
+            // virtual-member set already excludes admin scopes by design.
             let final_ctx = match nip_aa_owner {
                 Some(owner_pubkey) => {
                     info!(
@@ -516,16 +549,35 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         "NIP-42 auth successful via NIP-AA"
                     );
                     let allowed = sprout_auth::Scope::nip_aa_virtual_member();
-                    let intersected: Vec<sprout_auth::Scope> = auth_ctx
-                        .scopes
-                        .iter()
-                        .filter(|s| allowed.contains(s))
-                        .cloned()
-                        .collect();
+                    let final_scopes = if auth_ctx.scopes.is_empty() {
+                        // Pubkey-only / NIP-98 path: no token scopes to intersect.
+                        // Use the full virtual-member set (already excludes admin).
+                        allowed
+                    } else {
+                        let intersected: Vec<sprout_auth::Scope> = auth_ctx
+                            .scopes
+                            .iter()
+                            .filter(|s| allowed.contains(s))
+                            .cloned()
+                            .collect();
+                        if intersected.is_empty() {
+                            warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
+                                  "NIP-AA: scope intersection is empty — denying (would widen access)");
+                            metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_empty_scope").increment(1);
+                            *conn.auth_state.write().await = AuthState::Failed;
+                            conn.send(RelayMessage::ok(
+                                &event_id_hex,
+                                false,
+                                "restricted: token scopes incompatible with NIP-AA virtual membership",
+                            ));
+                            return;
+                        }
+                        intersected
+                    };
                     sprout_auth::AuthContext {
                         owner_pubkey: Some(owner_pubkey),
                         auth_method: sprout_auth::AuthMethod::Nip42AgentAuth,
-                        scopes: intersected,
+                        scopes: final_scopes,
                         ..auth_ctx
                     }
                 }
