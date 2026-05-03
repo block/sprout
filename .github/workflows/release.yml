@@ -55,7 +55,7 @@ jobs:
           ./scripts/bundle-sidecars.sh
 
       - name: Build Tauri app
-        run: cd desktop && pnpm tauri build --config src-tauri/tauri.release.conf.json
+        run: cd desktop && pnpm tauri build --verbose --config src-tauri/tauri.release.conf.json
         env:
           SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
