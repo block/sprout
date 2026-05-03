@@ -69,6 +69,17 @@ The release workflow currently builds for **macOS ARM64 only**
 (`darwin-aarch64`). Intel Mac (`darwin-x86_64`) support would require
 adding a matrix build to the workflow.
 
+## Code Signing (macOS)
+
+OSS release builds use **ad-hoc code signing** (`signingIdentity: "-"`)
+rather than a Developer ID certificate. This means the app is not
+notarized by Apple.
+
+On first launch, macOS Gatekeeper will block the app with a "damaged" or
+"unidentified developer" message. Users can bypass this by
+**right-clicking the app > Open** (or via System Settings > Privacy &
+Security). After the first launch the app will open normally.
+
 ---
 
 ## Auto-Updater
