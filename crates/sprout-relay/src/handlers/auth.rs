@@ -100,6 +100,14 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         match &*auth {
             AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id),
             AuthState::Authenticated(_) => {
+                // NIP-AA §6: If the same pubkey re-authenticates with a different credential,
+                // the new credential replaces the old one. This is handled naturally — a
+                // successful AUTH always overwrites the previous AuthState::Authenticated.
+                // AuthState::Failed is terminal per NIP-42 (the connection cannot re-auth).
+                //
+                // We reject here rather than allowing re-auth because the connection has
+                // already been granted access; re-auth on an authenticated connection is
+                // not a defined NIP-42 flow and could mask credential-swap attacks.
                 debug!(conn_id = %conn.conn_id, "AUTH received but already authenticated");
                 conn.send(RelayMessage::ok(
                     &event_id_hex_early,

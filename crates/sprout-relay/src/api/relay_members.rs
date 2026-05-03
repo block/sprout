@@ -104,7 +104,7 @@ pub async fn enforce_relay_membership(
             .map_err(|e| internal_error(&format!("owner membership check failed: {e}")))?;
 
         if owner_is_member {
-            tracing::debug!(
+            tracing::info!(
                 agent = %pubkey_hex,
                 owner = %owner_hex,
                 "NIP-AA: virtual membership granted (REST)"

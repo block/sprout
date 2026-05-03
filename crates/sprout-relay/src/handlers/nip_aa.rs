@@ -14,6 +14,29 @@ pub struct NipAaResult {
     pub owner_pubkey: PublicKey,
 }
 
+/// Extract exactly one `auth` tag from a slice of event tags.
+///
+/// - Returns `Ok(None)` if no `auth` tag is present (not a NIP-AA attempt).
+/// - Returns `Err` if more than one `auth` tag is present (ambiguous credential).
+/// - Returns `Ok(Some(&tag))` for exactly one match.
+///
+/// Extracted as a pure function so it can be unit-tested without `AppState`.
+fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag>, String> {
+    let auth_tags: Vec<&nostr::Tag> = tags
+        .iter()
+        .filter(|t| {
+            let s = t.as_slice();
+            !s.is_empty() && s[0] == "auth"
+        })
+        .collect();
+
+    match auth_tags.len() {
+        0 => Ok(None),
+        1 => Ok(Some(auth_tags[0])),
+        _ => Err("restricted: multiple auth tags present".to_string()),
+    }
+}
+
 /// Extract and verify a NIP-OA auth tag from event tags for NIP-AA authentication.
 ///
 /// Implements NIP-AA Steps 3-5:
@@ -32,23 +55,10 @@ pub async fn verify_nip_aa(
     event_created_at: u64,
 ) -> Result<Option<NipAaResult>, String> {
     // Step 3: Extract exactly one auth tag
-    let auth_tags: Vec<&nostr::Tag> = tags
-        .iter()
-        .filter(|t| {
-            let s = t.as_slice();
-            !s.is_empty() && s[0] == "auth"
-        })
-        .collect();
-
-    if auth_tags.is_empty() {
-        return Ok(None); // No auth tag — not an agent, not a NIP-AA attempt
-    }
-
-    if auth_tags.len() > 1 {
-        return Err("restricted: multiple auth tags present".to_string());
-    }
-
-    let auth_tag = auth_tags[0];
+    let auth_tag = match extract_single_auth_tag(tags)? {
+        None => return Ok(None), // No auth tag — not an agent, not a NIP-AA attempt
+        Some(tag) => tag,
+    };
     let tag_json = serde_json::to_string(&auth_tag.as_slice())
         .map_err(|e| format!("restricted: failed to serialize auth tag: {e}"))?;
 
@@ -183,5 +193,52 @@ mod tests {
     #[test]
     fn malformed_threshold_returns_err() {
         assert!(evaluate_created_at_conditions("created_at<notanumber", 1000).is_err());
+    }
+
+    // ── extract_single_auth_tag ───────────────────────────────────────────────
+    // These tests cover the NIP-AA §Step 3 logic (no auth tags → Ok(None),
+    // multiple auth tags → Err) without requiring AppState or async runtime.
+
+    #[test]
+    fn no_auth_tags_returns_ok_none() {
+        // verify_nip_aa returns Ok(None) when no auth tag is present — the
+        // caller treats this as "not an agent" and falls through to a plain
+        // membership failure.
+        let tags: Vec<nostr::Tag> = vec![];
+        assert!(matches!(extract_single_auth_tag(&tags), Ok(None)));
+    }
+
+    #[test]
+    fn non_auth_tags_ignored_returns_ok_none() {
+        // Unrelated tags (e.g. "p", "e") must not be mistaken for auth tags.
+        let tags = vec![
+            nostr::Tag::parse(&["p", "deadbeef"]).expect("valid tag"),
+            nostr::Tag::parse(&["e", "cafebabe"]).expect("valid tag"),
+        ];
+        assert!(matches!(extract_single_auth_tag(&tags), Ok(None)));
+    }
+
+    #[test]
+    fn multiple_auth_tags_returns_err() {
+        // NIP-AA §Step 3: more than one auth tag is ambiguous and must be
+        // rejected. verify_nip_aa propagates this as Err.
+        let tags = vec![
+            nostr::Tag::parse(&["auth", "owner1hex", "", "sig1"]).expect("valid tag"),
+            nostr::Tag::parse(&["auth", "owner2hex", "", "sig2"]).expect("valid tag"),
+        ];
+        let result = extract_single_auth_tag(&tags);
+        assert!(
+            result.is_err(),
+            "expected Err for multiple auth tags, got {result:?}"
+        );
+        assert!(result.unwrap_err().contains("multiple auth tags"));
+    }
+
+    #[test]
+    fn single_auth_tag_returns_ok_some() {
+        let tags = vec![
+            nostr::Tag::parse(&["auth", "ownerhex", "created_at>0", "sig"]).expect("valid tag"),
+        ];
+        assert!(matches!(extract_single_auth_tag(&tags), Ok(Some(_))));
     }
 }
