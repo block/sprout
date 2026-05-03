@@ -77,8 +77,8 @@ const MAX_EVENTS_PER_CONN: u32 = 6;
 /// Per-#p delivery budget: enough for one full pairing from each direction.
 const MAX_DELIVERED_PER_P: u32 = 12;
 
-/// Dedup set is cleared when it reaches this size (connections are 120 s max,
-/// so accumulation is naturally bounded, but we cap defensively).
+/// Dedup set rejects new events when full (fail closed). Connections are 120 s
+/// max so accumulation is naturally bounded, but we cap defensively.
 const DEDUP_CAP: usize = 1024;
 
 /// Delivered map is cleared when it reaches this size.
@@ -108,7 +108,7 @@ pub struct Relay {
     next_conn_id: AtomicU64,
     /// Global dedup set — cleared at DEDUP_CAP.
     seen_ids: Mutex<HashSet<[u8; 32]>>,
-    /// Per-#p delivery counter — cleared at DELIVERED_MAP_CAP.
+    /// Per-#p delivery counter — rejects new #p values at DELIVERED_MAP_CAP (fail closed).
     delivered: Mutex<HashMap<[u8; 32], u32>>,
 }
 
@@ -132,16 +132,19 @@ impl Relay {
     /// Check whether `id` has been seen before.
     /// If not, record it and return `false` (not a duplicate).
     /// If yes, return `true` (duplicate — reject).
-    fn check_and_record_id(&self, id: &[u8; 32]) -> bool {
+    /// Check whether `id` has been seen before.
+    /// Returns `Ok(false)` if new (recorded), `Ok(true)` if duplicate,
+    /// `Err(())` if the dedup set is at capacity (fail closed).
+    fn check_and_record_id(&self, id: &[u8; 32]) -> Result<bool, ()> {
         let mut set = self.seen_ids.lock();
         if set.contains(id) {
-            return true; // duplicate
+            return Ok(true); // duplicate
         }
         if set.len() >= DEDUP_CAP {
-            set.clear();
+            return Err(()); // at capacity — fail closed
         }
         set.insert(*id);
-        false
+        Ok(false)
     }
 
     /// Atomically check for exactly one subscriber and deliver.
@@ -161,13 +164,16 @@ impl Relay {
 
         let sub = matching[0];
 
-        // Check per-#p delivery budget.
-        {
-            let delivered = self.delivered.lock();
-            let count = delivered.get(p_value).copied().unwrap_or(0);
-            if count >= MAX_DELIVERED_PER_P {
-                return Err("recipient session budget exhausted");
-            }
+        // Hold delivered lock for the entire check+increment (atomic budget).
+        let mut delivered = self.delivered.lock();
+
+        // Fail closed if the map is at capacity.
+        let count = delivered.get(p_value).copied().unwrap_or(0);
+        if count >= MAX_DELIVERED_PER_P {
+            return Err("recipient session budget exhausted");
+        }
+        if delivered.len() >= DELIVERED_MAP_CAP && !delivered.contains_key(p_value) {
+            return Err("relay at capacity");
         }
 
         // Build the EVENT message.
@@ -183,11 +189,7 @@ impl Relay {
 
         // Attempt delivery.
         if sub.writer_tx.try_send(OutMsg::Text(text)).is_ok() {
-            // Increment counter after successful delivery.
-            let mut delivered = self.delivered.lock();
-            if delivered.len() >= DELIVERED_MAP_CAP {
-                delivered.clear();
-            }
+            // Increment counter atomically (lock already held).
             *delivered.entry(*p_value).or_insert(0) += 1;
             Ok(true)
         } else {
@@ -452,7 +454,7 @@ fn validate_event(ev: &Value) -> Result<(String, [u8; 32], [u8; 32]), &'static s
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    if (created_at - now).abs() > FRESHNESS_SECS {
+    if (created_at as i128 - now as i128).unsigned_abs() > FRESHNESS_SECS as u128 {
         return Err("created_at outside freshness window");
     }
 
@@ -791,13 +793,24 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                     continue;
                                 }
                                 // Tightening #7: deduplication AFTER sig check.
-                                if relay.check_and_record_id(&id_bytes) {
-                                    let _ = tx.try_send(OutMsg::Text(make_ok(
-                                        &event_id,
-                                        false,
-                                        "duplicate: already seen",
-                                    )));
-                                    continue;
+                                match relay.check_and_record_id(&id_bytes) {
+                                    Ok(true) => {
+                                        let _ = tx.try_send(OutMsg::Text(make_ok(
+                                            &event_id,
+                                            false,
+                                            "duplicate: already seen",
+                                        )));
+                                        continue;
+                                    }
+                                    Err(()) => {
+                                        let _ = tx.try_send(OutMsg::Text(make_ok(
+                                            &event_id,
+                                            false,
+                                            "relay at capacity",
+                                        )));
+                                        continue;
+                                    }
+                                    Ok(false) => {} // new event, proceed
                                 }
                                 // Tightening #2: atomically check subscriber and deliver.
                                 match relay.deliver_single(&p_value, &arr[1]) {
