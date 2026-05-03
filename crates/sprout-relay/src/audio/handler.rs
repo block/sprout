@@ -212,10 +212,22 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         .await;
 
         match membership {
-            Ok(Some(_owner_pubkey)) => {
+            Ok(Some(owner_pubkey)) => {
                 // NIP-AA virtual member — NIP-42 binding already verified above.
                 // The relay membership gate below will re-confirm and is a no-op
                 // (membership already proven), but we skip verify_auth_event.
+                //
+                // NIP-AA requires retaining owner_pubkey for owner-scoped session
+                // enumeration, termination, and quota aggregation. The audio handler
+                // does not maintain a persistent AuthContext, so we log the owner
+                // association for audit purposes. Full owner-scoped session tracking
+                // requires wiring audio sessions into the connection manager.
+                tracing::info!(
+                    channel_id = %channel_id,
+                    agent = %candidate_pubkey.to_hex(),
+                    owner = %owner_pubkey.to_hex(),
+                    "NIP-AA: audio virtual membership granted"
+                );
                 candidate_pubkey
             }
             Ok(None) => {

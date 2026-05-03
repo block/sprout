@@ -77,9 +77,6 @@ pub enum MediaError {
     /// I/O error during streaming upload.
     #[error("io error: {0}")]
     Io(String),
-    /// Event contains more than one `auth` tag — NIP-AA requires exactly one.
-    #[error("multiple auth tags: NIP-AA requires exactly one auth tag")]
-    MultipleAuthTags,
 }
 
 impl From<image::ImageError> for MediaError {
@@ -136,7 +133,6 @@ impl IntoResponse for MediaError {
             }
             Self::InsufficientScope => (StatusCode::FORBIDDEN, self.to_string()),
             Self::RelayMembershipRequired => (StatusCode::FORBIDDEN, self.to_string()),
-            Self::MultipleAuthTags => (StatusCode::FORBIDDEN, self.to_string()),
             Self::UnsupportedContainer => (StatusCode::UNSUPPORTED_MEDIA_TYPE, self.to_string()),
             Self::WrongCodec
             | Self::DurationTooLong

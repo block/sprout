@@ -39,6 +39,17 @@ use crate::state::AppState;
 ///
 /// `auth_tag_json` is the JSON-serialised NIP-OA `auth` tag array (e.g.
 /// `["auth","<owner_hex>","<conditions>","<sig>"]`). Pass `None` to skip NIP-AA.
+///
+/// # NIP-AA callers MUST pre-verify the NIP-42 AUTH event
+///
+/// This function only performs NIP-OA credential verification (Steps 3–5 of
+/// NIP-AA). It does NOT verify the NIP-42 `kind:22242` event signature,
+/// challenge binding, relay URL, or freshness window (Step 1). Callers that
+/// pass `auth_tag_json` MUST have already verified the enclosing NIP-42 AUTH
+/// event before calling this function, or they bypass NIP-AA Step 1 entirely.
+///
+/// REST paths (NIP-98, Blossom, git HTTP) MUST pass `None` — NIP-AA is
+/// defined only for NIP-42 WebSocket AUTH flows.
 pub async fn enforce_relay_membership(
     state: &AppState,
     pubkey_bytes: &[u8],

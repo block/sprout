@@ -113,13 +113,22 @@ pub async fn verify_nip_aa(
         }
     }
 
-    // Step 5: Check owner is an active relay member
+    // Step 5: Check owner is an active relay member.
+    // Log DB errors server-side; send a sanitized fail-closed message to the client
+    // to avoid leaking internal error details.
     let owner_hex = owner_pubkey.to_hex();
-    let is_member = state
-        .db
-        .is_relay_member(&owner_hex)
-        .await
-        .map_err(|e| format!("restricted: owner membership check failed: {e}"))?;
+    let is_member = match state.db.is_relay_member(&owner_hex).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                agent = %agent_pubkey.to_hex(),
+                owner = %owner_hex,
+                error = %e,
+                "NIP-AA: owner membership DB check failed"
+            );
+            return Err("restricted: membership check failed".to_string());
+        }
+    };
 
     if !is_member {
         return Err("restricted: owner is not a relay member".to_string());
