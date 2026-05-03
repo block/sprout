@@ -723,4 +723,68 @@ mod tests {
             Err(AuthError::ChallengeMismatch)
         ));
     }
+
+    /// Verify that intersecting admin-only scopes with the NIP-AA virtual
+    /// member set produces an empty result — admin privileges must never be
+    /// granted through the NIP-AA path.
+    #[test]
+    fn nip_aa_scope_intersection_strips_admin() {
+        let admin_only = vec![
+            sprout_auth::Scope::AdminChannels,
+            sprout_auth::Scope::AdminUsers,
+        ];
+        let allowed = sprout_auth::Scope::nip_aa_virtual_member();
+        let intersected: Vec<_> = admin_only
+            .iter()
+            .filter(|s| allowed.contains(s))
+            .cloned()
+            .collect();
+        assert!(
+            intersected.is_empty(),
+            "admin scopes must not survive NIP-AA intersection"
+        );
+    }
+
+    /// Verify that normal read/write scopes survive intersection with the
+    /// virtual member set — NIP-AA agents must retain messaging access.
+    #[test]
+    fn nip_aa_scope_intersection_preserves_read_write() {
+        let token_scopes = vec![
+            sprout_auth::Scope::MessagesRead,
+            sprout_auth::Scope::MessagesWrite,
+        ];
+        let allowed = sprout_auth::Scope::nip_aa_virtual_member();
+        let intersected: Vec<_> = token_scopes
+            .iter()
+            .filter(|s| allowed.contains(s))
+            .cloned()
+            .collect();
+        assert_eq!(
+            intersected, token_scopes,
+            "read/write scopes must survive NIP-AA intersection"
+        );
+    }
+
+    /// Verify the virtual member scope set itself: admin scopes absent,
+    /// core messaging scopes present.
+    #[test]
+    fn nip_aa_virtual_member_excludes_admin_scopes() {
+        let vm = sprout_auth::Scope::nip_aa_virtual_member();
+        assert!(
+            !vm.contains(&sprout_auth::Scope::AdminChannels),
+            "virtual member must not include AdminChannels"
+        );
+        assert!(
+            !vm.contains(&sprout_auth::Scope::AdminUsers),
+            "virtual member must not include AdminUsers"
+        );
+        assert!(
+            vm.contains(&sprout_auth::Scope::MessagesRead),
+            "virtual member must include MessagesRead"
+        );
+        assert!(
+            vm.contains(&sprout_auth::Scope::MessagesWrite),
+            "virtual member must include MessagesWrite"
+        );
+    }
 }

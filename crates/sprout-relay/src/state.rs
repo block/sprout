@@ -677,4 +677,102 @@ mod tests {
         assert_eq!(mgr.connection_ids_for_pubkey(&pubkey), vec![conn_id]);
         assert!(mgr.subscriptions_for(conn_id).is_some());
     }
+
+    /// Verify that `set_owner_pubkey` makes the connection discoverable via
+    /// `connection_ids_for_owner` — the primary lookup used when an owner is
+    /// removed from the relay and their NIP-AA sessions must be terminated.
+    #[tokio::test]
+    async fn tracks_connections_by_owner_pubkey() {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        mgr.register(conn_id, tx, cancel, bp, subscriptions);
+
+        let owner = vec![0xAAu8; 32];
+        mgr.set_owner_pubkey(conn_id, owner.clone());
+
+        assert_eq!(mgr.connection_ids_for_owner(&owner), vec![conn_id]);
+    }
+
+    /// Verify that deregistering a connection removes it from the owner-pubkey
+    /// index so stale lookups never return dead connection IDs.
+    #[tokio::test]
+    async fn owner_pubkey_cleared_on_deregister() {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        mgr.register(conn_id, tx, cancel, bp, subscriptions);
+
+        let owner = vec![0xBBu8; 32];
+        mgr.set_owner_pubkey(conn_id, owner.clone());
+        assert_eq!(mgr.connection_ids_for_owner(&owner), vec![conn_id]);
+
+        mgr.deregister(conn_id);
+        assert!(
+            mgr.connection_ids_for_owner(&owner).is_empty(),
+            "deregistered connection must not appear in owner index"
+        );
+    }
+
+    /// Verify that two distinct connections sharing the same NIP-AA owner are
+    /// both returned by `connection_ids_for_owner` — needed for bulk teardown.
+    #[tokio::test]
+    async fn multiple_connections_same_owner() {
+        let mgr = ConnectionManager::new();
+        let owner = vec![0xCCu8; 32];
+
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let conn_id = Uuid::new_v4();
+            let (tx, _rx) = mpsc::channel(1);
+            let cancel = CancellationToken::new();
+            let bp = Arc::new(AtomicU8::new(0));
+            let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+            mgr.register(conn_id, tx, cancel, bp, subscriptions);
+            mgr.set_owner_pubkey(conn_id, owner.clone());
+            ids.push(conn_id);
+        }
+
+        let mut found = mgr.connection_ids_for_owner(&owner);
+        found.sort();
+        ids.sort();
+        assert_eq!(found, ids, "both connections must appear in owner index");
+    }
+
+    /// Verify that calling `set_authenticated_pubkey` a second time with a
+    /// different pubkey removes the connection from the old pubkey's index and
+    /// adds it to the new one — prevents stale fanout after re-auth.
+    #[tokio::test]
+    async fn set_authenticated_pubkey_replaces_previous() {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        mgr.register(conn_id, tx, cancel, bp, subscriptions);
+
+        let pubkey_a = vec![0x01u8; 32];
+        let pubkey_b = vec![0x02u8; 32];
+
+        mgr.set_authenticated_pubkey(conn_id, pubkey_a.clone());
+        assert_eq!(mgr.connection_ids_for_pubkey(&pubkey_a), vec![conn_id]);
+
+        mgr.set_authenticated_pubkey(conn_id, pubkey_b.clone());
+        assert!(
+            mgr.connection_ids_for_pubkey(&pubkey_a).is_empty(),
+            "old pubkey index must be empty after re-auth"
+        );
+        assert_eq!(
+            mgr.connection_ids_for_pubkey(&pubkey_b),
+            vec![conn_id],
+            "new pubkey index must contain the connection"
+        );
+    }
 }

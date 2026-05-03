@@ -205,16 +205,22 @@ fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Re
 
 #[cfg(test)]
 mod tests {
-    // E2E tests needed (requires running relay — implement in sprout-test-client):
+    // E2E tests needed (requires running relay + test client with NIP-42 AUTH):
     // - Valid NIP-AA login → virtual membership granted
     // - Invalid NIP-OA signature → rejected
     // - Self-attestation → rejected
     // - Owner not a relay member → rejected
     // - Stale AUTH event → rejected
-    // - Re-auth replaces credential
+    // - Re-auth replaces credential (same pubkey)
+    // - Re-auth identity switch (different pubkey) — new: single-pubkey-at-a-time
     // - Failed re-auth preserves existing session
     // - Virtual member denied admin commands
     // - Malformed AUTH closes connection
+    //
+    // Unit-tested elsewhere:
+    // - Scope intersection (admin stripped, read/write preserved) — auth.rs tests
+    // - Owner-pubkey tracking in ConnectionManager — state.rs tests
+    // - NIP-OA crypto, tag extraction, conditions — below
 
     use super::*;
 
