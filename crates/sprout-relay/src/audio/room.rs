@@ -18,6 +18,10 @@ use uuid::Uuid;
 pub struct AudioPeer {
     /// Nostr pubkey hex.
     pub pubkey: String,
+    /// Owner pubkey hex for NIP-AA virtual members. `None` for direct members.
+    /// Retained for the audio session lifetime per NIP-AA §6 for owner-scoped
+    /// enumeration, termination, and quota aggregation.
+    pub owner_pubkey: Option<String>,
     /// Audio frames (binary Opus with peer_index prefix). Drops on full — real-time.
     pub audio_tx: mpsc::Sender<Bytes>,
     /// Control messages (joined/left/close JSON). Separate queue so control
@@ -134,6 +138,7 @@ impl Room {
     pub fn add_peer(
         &self,
         pubkey: String,
+        owner_pubkey: Option<String>,
     ) -> Option<(Uuid, u8, mpsc::Receiver<Bytes>, mpsc::Receiver<PeerCtrl>)> {
         if self.peers.len() >= MAX_PEERS_PER_ROOM {
             return None;
@@ -153,6 +158,7 @@ impl Room {
             peer_id,
             AudioPeer {
                 pubkey,
+                owner_pubkey,
                 audio_tx,
                 ctrl_tx,
                 peer_index,

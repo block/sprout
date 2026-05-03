@@ -138,7 +138,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 return;
             }
         };
-    let event_created_at = Some(auth_msg.event.created_at.as_u64());
+    let event_created_at = auth_msg.event.created_at.as_u64();
 
     // Extract auth_token tag before the event is consumed — API tokens and
     // Okta JWTs carry an `auth_token` tag; NIP-AA agents do not.
@@ -257,7 +257,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 &state,
                 &candidate_pubkey,
                 &event_tags_slice,
-                event_created_at.unwrap_or(0),
+                event_created_at,
             )
             .await;
 
@@ -267,9 +267,9 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                     // verify_nip_aa already confirmed the owner is an active relay member
                     // (Step 5), so the direct membership gate below must be skipped.
                     //
-                    // owner_pubkey is retained for the audio session lifetime for audit
-                    // and future owner-scoped enumeration/termination/quota aggregation.
-                    // TODO(NIP-AA): Wire audio sessions into ConnectionManager for owner-scoped tracking.
+                    // owner_pubkey is persisted in AudioPeer for the full session lifetime
+                    // for audit, quota aggregation, and future owner-scoped
+                    // enumeration/termination (NIP-AA §6).
                     let nip_aa_owner = result.owner_pubkey;
                     tracing::info!(
                         channel_id = %channel_id,
@@ -342,9 +342,9 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let pubkey_bytes = pubkey.serialize().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;
 
-    // owner_pubkey is Some for NIP-AA virtual members; available for the full
-    // session lifetime for audit, quota aggregation, and future owner-scoped
-    // ConnectionManager wiring (see TODO above).
+    // owner_pubkey is Some for NIP-AA virtual members; persisted in AudioPeer
+    // for the full session lifetime for audit, quota aggregation, and future
+    // owner-scoped enumeration/termination.
     if let Some(ref owner) = owner_pubkey {
         debug!(
             channel_id = %channel_id,
@@ -417,7 +417,10 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         Ok(_) => {} // Channel exists and is not archived — proceed.
     }
 
-    let (peer_id, peer_index, audio_rx, peer_ctrl_rx) = match room.add_peer(pubkey_hex.clone()) {
+    let (peer_id, peer_index, audio_rx, peer_ctrl_rx) = match room.add_peer(
+        pubkey_hex.clone(),
+        owner_pubkey.as_ref().map(|pk| pk.to_hex()),
+    ) {
         Some(v) => v,
         None => {
             warn!(channel_id = %channel_id, "audio room full (255 peers exhausted)");

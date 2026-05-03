@@ -46,6 +46,10 @@ pub fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag
 /// Only runs when the tag has ≥ 4 elements (the minimum for a well-formed auth
 /// tag). Tags with fewer elements are passed through and will fail the
 /// `verify_auth_tag` element-count check instead.
+///
+/// This is a defense-in-depth check: the SDK's `verify_auth_tag` also validates
+/// these fields, but `secp256k1::from_hex` silently accepts uppercase hex. This
+/// pre-check enforces the NIP-OA lowercase-only constraint before the crypto call.
 fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
     let tag_slice = auth_tag.as_slice();
     if tag_slice.len() >= 4 {
@@ -174,6 +178,11 @@ pub async fn verify_nip_aa(
 /// Evaluate `created_at<t` and `created_at>t` conditions against an event's created_at.
 /// Returns Ok(()) if all conditions pass, Err(reason) if any fail.
 /// `kind=` conditions are intentionally skipped per NIP-AA spec.
+///
+/// **Precondition**: This function is only called after `verify_auth_tag` has validated
+/// the conditions string. Empty clauses and unknown clause types are unreachable in
+/// production — they are handled defensively (skipped) rather than rejected, because
+/// the upstream SDK validation is the authoritative guard.
 fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Result<(), String> {
     for clause in conditions.split('&') {
         if clause.is_empty() {
