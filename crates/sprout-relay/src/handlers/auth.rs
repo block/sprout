@@ -106,17 +106,22 @@ fn verify_api_token_nip42_binding(
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex_early = event.id.to_hex();
 
-    // Extract the challenge and conn_id from the current auth state.
+    // Extract the challenge, conn_id, and (for re-auth) the previous AuthContext.
     //
     // AuthState::Authenticated: NIP-AA §6 allows the same pubkey to re-auth on an
     // already-authenticated connection to replace the stored credential. We retain
     // the challenge in AuthState::Authenticated for exactly this purpose. Only the
     // same pubkey may re-auth — a different pubkey is rejected to prevent session
     // hijacking via credential replacement.
-    let (challenge, conn_id) = {
+    //
+    // NIP-AA §6 also says: "A failed NIP-AA AUTH attempt does not necessarily
+    // invalidate other authenticated pubkeys on the same WebSocket connection."
+    // We preserve this by saving the previous AuthContext and restoring it if
+    // re-auth fails, rather than transitioning to AuthState::Failed.
+    let (challenge, conn_id, prev_auth_ctx) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id),
+            AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id, None),
             AuthState::Authenticated { challenge, ctx } => {
                 // NIP-AA §6: same-pubkey re-auth MUST replace the stored credential.
                 if event.pubkey != ctx.pubkey {
@@ -138,7 +143,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     pubkey = %ctx.pubkey.to_hex(),
                     "NIP-AA §6: re-auth credential replacement"
                 );
-                (challenge.clone(), conn.conn_id)
+                (challenge.clone(), conn.conn_id, Some(ctx.clone()))
             }
             AuthState::Failed => {
                 debug!(conn_id = %conn.conn_id, "AUTH received after failed auth");
@@ -151,6 +156,22 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             }
         }
     };
+
+    // Helper: on re-auth failure, restore the previous AuthContext rather than
+    // transitioning to Failed (per NIP-AA §6 — failed re-auth must not invalidate
+    // the existing authenticated identity).
+    macro_rules! reauth_fail {
+        ($state:expr) => {
+            if let Some(ref prev) = prev_auth_ctx {
+                *conn.auth_state.write().await = AuthState::Authenticated {
+                    ctx: prev.clone(),
+                    challenge: challenge.clone(),
+                };
+            } else {
+                *conn.auth_state.write().await = $state;
+            }
+        };
+    }
 
     let relay_url = state.config.relay_url.clone();
     let auth_svc = Arc::clone(&state.auth);
@@ -200,7 +221,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     warn!(conn_id = %conn_id, error = %e, "API token auth failed NIP-42 verification");
                     metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
                         .increment(1);
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -212,7 +233,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     warn!(conn_id = %conn_id, error = %e, "API token NIP-42 verification task failed");
                     metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_internal")
                         .increment(1);
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -230,7 +251,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 Ok(Some(r)) => r,
                 Ok(None) => {
                     warn!(conn_id = %conn_id, "API token not found");
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -240,7 +261,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
                 Err(e) => {
                     warn!(conn_id = %conn_id, error = %e, "API token lookup failed");
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -255,7 +276,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 Ok(pk) => pk,
                 Err(e) => {
                     warn!(conn_id = %conn_id, error = %e, "API token owner pubkey invalid");
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -323,7 +344,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                                 warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
                                       "NIP-AA: scope intersection is empty — denying (would widen access)");
                                 metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_empty_scope").increment(1);
-                                *conn.auth_state.write().await = AuthState::Failed;
+                                reauth_fail!(AuthState::Failed);
                                 conn.send(RelayMessage::ok(
                                     &event_id_hex,
                                     false,
@@ -360,7 +381,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 Err(e) => {
                     warn!(conn_id = %conn_id, error = %e, "API token verification failed");
                     metrics::counter!("sprout_auth_failures_total", "reason" => "api_token_invalid").increment(1);
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -403,7 +424,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 warn!(conn_id = %conn_id, error = %e, "NIP-AA: NIP-42 binding verification failed");
                 metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_nip42_invalid")
                     .increment(1);
-                *conn.auth_state.write().await = AuthState::Failed;
+                reauth_fail!(AuthState::Failed);
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
@@ -415,7 +436,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 warn!(conn_id = %conn_id, error = %e, "NIP-AA: NIP-42 verification task panicked");
                 metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_nip42_internal")
                     .increment(1);
-                *conn.auth_state.write().await = AuthState::Failed;
+                reauth_fail!(AuthState::Failed);
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
@@ -503,7 +524,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "pubkey not in allowlist");
                     metrics::counter!("sprout_auth_failures_total", "reason" => "allowlist_denied")
                         .increment(1);
-                    *conn.auth_state.write().await = AuthState::Failed;
+                    reauth_fail!(AuthState::Failed);
                     conn.send(RelayMessage::ok(
                         &event_id_hex,
                         false,
@@ -564,7 +585,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                             warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(),
                                   "NIP-AA: scope intersection is empty — denying (would widen access)");
                             metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_empty_scope").increment(1);
-                            *conn.auth_state.write().await = AuthState::Failed;
+                            reauth_fail!(AuthState::Failed);
                             conn.send(RelayMessage::ok(
                                 &event_id_hex,
                                 false,
@@ -611,7 +632,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             warn!(conn_id = %conn_id, error = %e, "NIP-42 auth failed");
             metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
                 .increment(1);
-            *conn.auth_state.write().await = AuthState::Failed;
+            reauth_fail!(AuthState::Failed);
             conn.send(RelayMessage::ok(
                 &event_id_hex,
                 false,
