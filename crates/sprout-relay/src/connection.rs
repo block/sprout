@@ -360,10 +360,17 @@ async fn handle_text_message(
         Ok(m) => m,
         Err(e) => {
             // NIP-AA spec: an unparseable AUTH frame MUST close the WebSocket.
-            // Detect by checking if the raw frame looks like an AUTH array.
-            let trimmed = text.trim_start();
-            let is_auth_frame =
-                trimmed.starts_with("[\"AUTH\"") || trimmed.starts_with("[ \"AUTH\"");
+            // Parse as JSON and check if the first element is "AUTH" — this
+            // correctly handles all whitespace variants (e.g. `[  "AUTH", ...]`)
+            // that a naive string-prefix check would miss.
+            let is_auth_frame = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                .map(|s| s == "AUTH")
+                .unwrap_or(false);
             if is_auth_frame {
                 warn!(conn_id = %conn.conn_id, error = %e, "malformed AUTH frame — closing connection");
                 let _ = conn.ctrl_tx.try_send(WsMessage::Close(Some(CloseFrame {

@@ -262,6 +262,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                     // does not maintain a persistent AuthContext, so we log the owner
                     // association for audit purposes. Full owner-scoped session tracking
                     // requires wiring audio sessions into the connection manager.
+                    // TODO(NIP-AA): Wire audio sessions into ConnectionManager for owner-scoped tracking.
                     tracing::info!(
                         channel_id = %channel_id,
                         agent = %candidate_pubkey.to_hex(),

@@ -105,6 +105,12 @@ fn verify_api_token_nip42_binding(
     sprout_auth::verify_nip42_event(event, challenge, relay_url)
 }
 
+// NOTE: NIP-42 technically allows multiple authenticated pubkeys per connection.
+// Sprout currently supports only one authenticated identity per WebSocket connection.
+// This is a known limitation documented in NIP-AA §6. A re-auth with a DIFFERENT
+// pubkey is rejected; re-auth with the SAME pubkey replaces the credential.
+// Future work: per-pubkey auth state map for multi-identity connections.
+
 /// Handle a NIP-42 AUTH message: verify the challenge response and transition the connection to authenticated state.
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex_early = event.id.to_hex();

@@ -86,6 +86,22 @@ fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
 /// Returns `Ok(Some(NipAaResult))` if NIP-AA grants access.
 /// Returns `Ok(None)` if no auth tag is present (not an agent).
 /// Returns `Err(reason)` if auth tag is present but invalid.
+///
+/// ## Rejection matrix
+///
+/// | Condition | Return value | Reason prefix |
+/// |-----------|-------------|---------------|
+/// | No `auth` tag | `Ok(None)` | — (not an agent) |
+/// | Multiple `auth` tags | `Err` | `"restricted: multiple auth tags present"` |
+/// | Owner pubkey not 64-char lowercase hex | `Err` | `"restricted: owner pubkey must be 64 lowercase hex chars"` |
+/// | Signature not 128-char lowercase hex | `Err` | `"restricted: signature must be 128 lowercase hex chars"` |
+/// | NIP-OA signature verification fails | `Err` | `"restricted: invalid auth tag: …"` |
+/// | Self-attestation (agent == owner) | `Err` | `"restricted: invalid auth tag: …"` (from sprout-sdk) |
+/// | `created_at<T` condition not satisfied | `Err` | `"restricted: created_at condition not satisfied: …"` |
+/// | `created_at>T` condition not satisfied | `Err` | `"restricted: created_at condition not satisfied: …"` |
+/// | Malformed `created_at` threshold | `Err` | `"restricted: malformed created_at< condition: …"` |
+/// | Owner not an active relay member | `Err` | `"restricted: owner is not a relay member"` |
+/// | DB membership check fails | `Err` | `"restricted: membership check failed"` |
 pub async fn verify_nip_aa(
     state: &AppState,
     agent_pubkey: &PublicKey,
@@ -189,6 +205,17 @@ fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Re
 
 #[cfg(test)]
 mod tests {
+    // E2E tests needed (requires running relay — implement in sprout-test-client):
+    // - Valid NIP-AA login → virtual membership granted
+    // - Invalid NIP-OA signature → rejected
+    // - Self-attestation → rejected
+    // - Owner not a relay member → rejected
+    // - Stale AUTH event → rejected
+    // - Re-auth replaces credential
+    // - Failed re-auth preserves existing session
+    // - Virtual member denied admin commands
+    // - Malformed AUTH closes connection
+
     use super::*;
 
     #[test]
