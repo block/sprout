@@ -162,6 +162,32 @@ impl std::fmt::Display for Error {
     }
 }
 
+// ── OA Verification Result ───────────────────────────────────────────────────
+
+/// Result of NIP-OA verification during signature verification.
+enum OaVerifyResult {
+    /// No OA present in the signature (optional field).
+    Absent,
+    /// OA present, signature valid, conditions satisfied.
+    Valid,
+    /// OA present but cryptographic verification failed.
+    InvalidSignature,
+    /// OA present, signature valid, but temporal conditions violated.
+    ConditionsViolated,
+}
+
+impl OaVerifyResult {
+    /// Return the machine-readable status string for NOTATION_DATA output.
+    fn as_status_str(&self) -> &'static str {
+        match self {
+            OaVerifyResult::Absent => "none",
+            OaVerifyResult::Valid => "valid",
+            OaVerifyResult::InvalidSignature => "invalid_signature",
+            OaVerifyResult::ConditionsViolated => "expired",
+        }
+    }
+}
+
 // ── CLI Parsing ──────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -181,6 +207,7 @@ fn parse_args() -> Result<Args, Error> {
     let mut status_fd: Option<i32> = None;
     let mut verify_file: Option<String> = None;
     let mut sign_key: Option<String> = None;
+    let mut saw_stdin_dash = false;
     let mut i = 0;
 
     while i < args.len() {
@@ -196,6 +223,18 @@ fn parse_args() -> Result<Args, Error> {
                 return Err(Error::Fatal("--status-fd requires a value".to_string()));
             }
         } else if arg == "--verify" {
+            // Reject duplicate --verify
+            if verify_file.is_some() {
+                return Err(Error::Fatal(
+                    "--verify specified more than once".to_string(),
+                ));
+            }
+            // Reject if -bsau was already seen (conflicting modes)
+            if sign_key.is_some() {
+                return Err(Error::Fatal(
+                    "cannot specify both -bsau and --verify".to_string(),
+                ));
+            }
             i += 1;
             if i < args.len() {
                 verify_file = Some(args[i].clone());
@@ -205,6 +244,16 @@ fn parse_args() -> Result<Args, Error> {
                 ));
             }
         } else if arg == "-bsau" {
+            // Reject duplicate -bsau
+            if sign_key.is_some() {
+                return Err(Error::Fatal("-bsau specified more than once".to_string()));
+            }
+            // Reject if --verify was already seen (conflicting modes)
+            if verify_file.is_some() {
+                return Err(Error::Fatal(
+                    "cannot specify both -bsau and --verify".to_string(),
+                ));
+            }
             i += 1;
             if i < args.len() {
                 sign_key = Some(args[i].clone());
@@ -212,7 +261,8 @@ fn parse_args() -> Result<Args, Error> {
                 return Err(Error::Fatal("-bsau requires a key argument".to_string()));
             }
         } else if arg == "-" {
-            // stdin marker for verify mode — expected by git
+            // stdin marker for verify mode — required by git after the sig file
+            saw_stdin_dash = true;
         }
         // Silently ignore unrecognized args for forward compatibility
         // (NIP-GS spec: implementations SHOULD ignore unknown arguments)
@@ -221,6 +271,13 @@ fn parse_args() -> Result<Args, Error> {
     }
 
     let mode = if let Some(sig_file) = verify_file {
+        // git always passes trailing `-` in verify mode; reject if absent
+        // so we fail fast rather than hanging on stdin with no payload.
+        if !saw_stdin_dash {
+            return Err(Error::Fatal(
+                "--verify requires a trailing `-` argument (stdin marker)".to_string(),
+            ));
+        }
         Mode::Verify { sig_file }
     } else if let Some(key_id) = sign_key {
         Mode::Sign { key_id }
@@ -299,6 +356,35 @@ impl StatusWriter {
             eprintln!("warning: failed to write status line: {e}");
         }
     }
+
+    /// Write a GnuPG-format status line, returning an error if the write fails.
+    ///
+    /// Use this in `cmd_verify` where status output is critical — git reads
+    /// these lines to determine signature validity. A broken status-fd means
+    /// git cannot receive the result, so we must fail rather than silently
+    /// continue.
+    fn write_line_critical(&mut self, line: &str) -> Result<(), Error> {
+        let result = if let Some(ref mut f) = self.file {
+            writeln!(&mut **f, "{GNUPG_PREFIX}{line}")
+        } else {
+            writeln!(io::stderr(), "{GNUPG_PREFIX}{line}")
+        };
+        result.map_err(|e| Error::Fatal(format!("failed to write status line: {e}")))
+    }
+}
+
+/// Write a critical status line; exit with error if the write fails.
+///
+/// Used in `cmd_verify` where status output is required for git to parse the
+/// result. Unlike `status!` (which ignores errors), this macro propagates
+/// write failures as `Error::Fatal`.
+macro_rules! status_or_fail {
+    ($writer:expr, $line:expr) => {
+        $writer.write_line_critical($line)?
+    };
+    ($writer:expr, $fmt:literal, $($arg:tt)*) => {
+        $writer.write_line_critical(&format!($fmt, $($arg)*))?
+    };
 }
 
 // ── Key Loading ──────────────────────────────────────────────────────────────
@@ -311,13 +397,13 @@ impl StatusWriter {
 fn load_key() -> Result<zeroize::Zeroizing<String>, Error> {
     // 1. NOSTR_PRIVATE_KEY
     if let Ok(mut val) = std::env::var("NOSTR_PRIVATE_KEY") {
-        // Bound env var size to match keyfile limit (1KB). Legitimate keys
-        // are < 100 bytes; this prevents memory waste from malformed values.
-        if val.len() > 1024 {
+        // Cap at 128 bytes: nsec1 bech32 is ~63 chars, hex is 64 chars.
+        // 128 bytes is generous headroom; anything larger is malformed input.
+        if val.len() > 128 {
             val.zeroize();
             std::env::remove_var("NOSTR_PRIVATE_KEY");
             return Err(Error::Fatal(
-                "NOSTR_PRIVATE_KEY exceeds 1KB size limit".to_string(),
+                "NOSTR_PRIVATE_KEY exceeds 128-byte size limit".to_string(),
             ));
         }
         let trimmed = val.trim().to_string();
@@ -331,13 +417,13 @@ fn load_key() -> Result<zeroize::Zeroizing<String>, Error> {
 
     // 2. SPROUT_PRIVATE_KEY
     if let Ok(mut val) = std::env::var("SPROUT_PRIVATE_KEY") {
-        // Bound env var size to match keyfile limit (1KB). Legitimate keys
-        // are < 100 bytes; this prevents memory waste from malformed values.
-        if val.len() > 1024 {
+        // Cap at 128 bytes: nsec1 bech32 is ~63 chars, hex is 64 chars.
+        // 128 bytes is generous headroom; anything larger is malformed input.
+        if val.len() > 128 {
             val.zeroize();
             std::env::remove_var("SPROUT_PRIVATE_KEY");
             return Err(Error::Fatal(
-                "SPROUT_PRIVATE_KEY exceeds 1KB size limit".to_string(),
+                "SPROUT_PRIVATE_KEY exceeds 128-byte size limit".to_string(),
             ));
         }
         let trimmed = val.trim().to_string();
@@ -358,45 +444,9 @@ fn load_key() -> Result<zeroize::Zeroizing<String>, Error> {
         )
     })?;
 
-    // Max keyfile size: nsec1 bech32 is ~63 chars, hex is 64 chars.
-    // Allow generous headroom for whitespace/newlines but cap at 1KB.
-    const MAX_KEYFILE: u64 = 1024;
-
-    // Open keyfile with permission/symlink checks (atomic on unix via O_NOFOLLOW)
-    #[cfg(unix)]
-    let mut raw = {
-        let file = open_keyfile(&path)?;
-        let mut buf = String::new();
-        file.take(MAX_KEYFILE + 1)
-            .read_to_string(&mut buf)
-            .map_err(|e| Error::Fatal(format!("cannot read keyfile {path}: {e}")))?;
-        if buf.len() as u64 > MAX_KEYFILE {
-            return Err(Error::Fatal(format!(
-                "keyfile {path} exceeds {MAX_KEYFILE} byte limit"
-            )));
-        }
-        buf
-    };
-    #[cfg(not(unix))]
-    let mut raw = {
-        check_keyfile_permissions(&path)?;
-        let mut file = fs::File::open(&path)
-            .map_err(|e| Error::Fatal(format!("cannot read keyfile {path}: {e}")))?;
-        let mut buf = String::new();
-        file.take(MAX_KEYFILE + 1)
-            .read_to_string(&mut buf)
-            .map_err(|e| Error::Fatal(format!("cannot read keyfile {path}: {e}")))?;
-        if buf.len() as u64 > MAX_KEYFILE {
-            return Err(Error::Fatal(format!(
-                "keyfile {path} exceeds {MAX_KEYFILE} byte limit"
-            )));
-        }
-        buf
-    };
-
-    let trimmed = raw.trim().to_string();
-    raw.zeroize();
-    Ok(zeroize::Zeroizing::new(trimmed))
+    // Delegate to read_keyfile_secure which handles permission checks,
+    // size limits, and Zeroizing wrapping in one place.
+    read_keyfile_secure(&path)
 }
 
 /// Load the NIP-OA auth tag from env or git config.
@@ -428,10 +478,12 @@ fn load_auth_tag() -> Result<Option<(String, String, String)>, Error> {
         None => return Ok(None),
     };
 
-    // Bound input size before parsing
-    if json_str.len() > MAX_JSON_DECODED {
+    // Cap auth tag at 1024 bytes. A valid NIP-OA tag is ~300 bytes; 1024
+    // allows generous headroom while bounding memory use from malformed input.
+    const MAX_AUTH_TAG: usize = 1024;
+    if json_str.len() > MAX_AUTH_TAG {
         return Err(Error::Fatal(format!(
-            "SPROUT_AUTH_TAG exceeds {MAX_JSON_DECODED} bytes"
+            "auth tag exceeds {MAX_AUTH_TAG}-byte size limit"
         )));
     }
 
@@ -574,8 +626,16 @@ fn has_kind_clause(conditions: &str) -> bool {
 
 /// Parse a decimal string into u32, rejecting leading zeros and non-decimal chars.
 /// Valid range: 0..=4294967295.
+///
+/// NIP-OA requires bare decimal digits only — leading `+` or `-` signs are
+/// rejected even though Rust's `str::parse` would accept them.
 fn parse_decimal_u32(s: &str) -> Option<u32> {
     if s.is_empty() {
+        return None;
+    }
+    // Reject leading sign characters: NIP-OA only allows bare decimal digits.
+    // Rust's `parse::<u32>()` accepts '+' prefix; we must reject it explicitly.
+    if s.starts_with('+') || s.starts_with('-') {
         return None;
     }
     // Reject leading zeros (except the single digit "0")
@@ -772,6 +832,45 @@ fn check_keyfile_permissions(_path: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Read a keyfile securely, returning its trimmed contents as a `Zeroizing<String>`.
+///
+/// Performs platform-appropriate permission/symlink checks, enforces the 1 KB
+/// size limit, and wraps the buffer in `Zeroizing` from the moment it is
+/// allocated so the secret material is erased on drop regardless of the return
+/// path.
+fn read_keyfile_secure(path: &str) -> Result<zeroize::Zeroizing<String>, Error> {
+    // Max keyfile size: nsec1 bech32 is ~63 chars, hex is 64 chars.
+    // 1 KB allows generous headroom for whitespace/newlines.
+    const MAX_KEYFILE: u64 = 1024;
+
+    #[cfg(unix)]
+    let file = open_keyfile(path)?;
+
+    #[cfg(not(unix))]
+    let file = {
+        check_keyfile_permissions(path)?;
+        fs::File::open(path)
+            .map_err(|e| Error::Fatal(format!("cannot open keyfile {path}: {e}")))?
+    };
+
+    // Allocate inside Zeroizing immediately so the buffer is erased on any
+    // early-return error path, not just on the success path.
+    let mut buf = zeroize::Zeroizing::new(String::new());
+    file.take(MAX_KEYFILE + 1)
+        .read_to_string(&mut buf)
+        .map_err(|e| Error::Fatal(format!("cannot read keyfile {path}: {e}")))?;
+    if buf.len() as u64 > MAX_KEYFILE {
+        return Err(Error::Fatal(format!(
+            "keyfile {path} exceeds {MAX_KEYFILE} byte limit"
+        )));
+    }
+
+    // Trim in-place: build a new Zeroizing<String> from the trimmed slice,
+    // then let the original (with leading/trailing whitespace) be zeroized.
+    let trimmed = zeroize::Zeroizing::new(buf.trim().to_string());
+    Ok(trimmed)
+}
+
 // ── Signing Hash ─────────────────────────────────────────────────────────────
 
 /// Compute the NIP-GS signing hash.
@@ -892,7 +991,7 @@ fn do_sign(key_id: &str, status: &mut StatusWriter) -> Result<(), Error> {
     }
 
     // Read payload from stdin (bounded)
-    let payload = read_payload()?;
+    let payload = read_payload_stdin()?;
 
     // Get timestamp — capped at u32::MAX per NIP-GS spec range [0, 4294967295]
     let t = SystemTime::now()
@@ -1095,7 +1194,7 @@ fn do_verify(sig_file: &str, status: &mut StatusWriter) -> Result<(), Error> {
 
     // Read payload from stdin (bounded). Emit ERRSIG on failure since we
     // already have the pk from the envelope.
-    let payload = read_payload().inspect_err(|_e| {
+    let payload = read_payload_stdin().inspect_err(|_e| {
         write_errsig(status, Some(&envelope.pk));
     })?;
 
@@ -1130,11 +1229,8 @@ fn do_verify(sig_file: &str, status: &mut StatusWriter) -> Result<(), Error> {
         });
     }
 
-    // Signature is valid — check NIP-OA if present and track result
-    let mut oa_status = "none"; // no OA tag present
-    if let Some(ref oa) = envelope.oa {
-        oa_status = "valid"; // assume valid, downgrade on failure
-
+    // Signature is valid — check NIP-OA if present and track result.
+    let oa_result = if let Some(ref oa) = envelope.oa {
         // Validate oa[0] is a valid BIP-340 public key. Per NIP-GS spec,
         // an invalid owner pubkey is a structural error → ERRSIG.
         if PublicKey::from_hex(&oa.0).is_err() {
@@ -1149,31 +1245,37 @@ fn do_verify(sig_file: &str, status: &mut StatusWriter) -> Result<(), Error> {
             eprintln!(
                 "warning: NIP-OA owner attestation verification failed (signature still valid)"
             );
-            oa_status = "invalid_signature";
-        }
-
-        // Enforce time constraints from auth tag conditions.
-        if oa_status == "valid" {
-            if let Err(msg) = enforce_conditions(&oa.1, envelope.t) {
-                eprintln!("warning: NIP-OA conditions not satisfied: {msg}");
-                oa_status = "expired";
+            OaVerifyResult::InvalidSignature
+        } else if let Err(msg) = enforce_conditions(&oa.1, envelope.t) {
+            eprintln!("warning: NIP-OA conditions not satisfied: {msg}");
+            OaVerifyResult::ConditionsViolated
+        } else {
+            // kind= clauses are valid NIP-OA but not enforceable in NIP-GS.
+            // We still report Valid here — callers check nostr-oa-status for
+            // the full picture. The kind_not_applicable status is preserved
+            // via the NOTATION_DATA line below.
+            if has_kind_clause(&oa.1) {
+                eprintln!(
+                    "warning: auth tag contains kind= constraints which are not enforced in git signing context"
+                );
             }
+            OaVerifyResult::Valid
         }
-
-        // kind= clauses are valid NIP-OA but not enforceable in NIP-GS.
-        // Downgrade status so callers know the OA scope wasn't fully verified.
-        if oa_status == "valid" && has_kind_clause(&oa.1) {
-            oa_status = "kind_not_applicable";
-        }
-    }
+    } else {
+        OaVerifyResult::Absent
+    };
 
     // Determine trust level.
     //
-    // NOTE: Trust is based on whether the verified key matches `user.signingkey`
-    // in git config. This is NOT a PKI trust root — it simply tells git "this
-    // is the key I expect for this repo." A proper trust model would use a
-    // keyring or web-of-trust, but git's signing interface only supports
-    // TRUST_FULLY / TRUST_UNDEFINED.
+    // Direct key match takes priority: if the verified key matches
+    // `user.signingkey` in git config, that is TRUST_FULLY regardless of OA
+    // status. OA delegation is only a secondary attestation path — it does not
+    // affect the primary trust determination.
+    //
+    // NOTE: This is NOT a PKI trust root — it simply tells git "this is the
+    // key I expect for this repo." A proper trust model would use a keyring or
+    // web-of-trust, but git's signing interface only supports TRUST_FULLY /
+    // TRUST_UNDEFINED.
     let trust = determine_trust(&envelope.pk);
 
     // Format date from timestamp (for VALIDSIG status line)
@@ -1184,32 +1286,39 @@ fn do_verify(sig_file: &str, status: &mut StatusWriter) -> Result<(), Error> {
     // - GOODSIG <keyid> <uid>: signature is cryptographically valid
     // - VALIDSIG <fpr> <date> <timestamp> ... <primary-fpr>: full details
     // - TRUST_*: trust level of the signing key
-    status.write_line("NEWSIG");
-    status.write_line(&format!("GOODSIG {} {}", envelope.pk, envelope.pk));
-    status.write_line(&format!(
+    //
+    // These are critical — git reads them to determine signature validity.
+    // Use status_or_fail! so a broken status-fd is surfaced as an error.
+    status_or_fail!(status, "NEWSIG");
+    status_or_fail!(status, "GOODSIG {} {}", envelope.pk, envelope.pk);
+    status_or_fail!(
+        status,
         "VALIDSIG {} {} {} 0 - - - - - {}",
-        envelope.pk, date_str, envelope.t, envelope.pk
-    ));
-    status.write_line(&format!("{trust} 0 shell"));
+        envelope.pk,
+        date_str,
+        envelope.t,
+        envelope.pk
+    );
+    status_or_fail!(status, "{} 0 shell", trust);
     // Clarify that TRUST_FULLY is advisory — it only means the verified key
     // matches user.signingkey in git config, not that the signer is trusted
     // by any external authority. Callers MUST NOT rely on this for security
     // decisions without an external allowlist or owner policy.
-    status.write_line("NOTATION_NAME nostr-trust-model");
-    status.write_line("NOTATION_DATA advisory-config-match-only");
+    status_or_fail!(status, "NOTATION_NAME nostr-trust-model");
+    status_or_fail!(status, "NOTATION_DATA advisory-config-match-only");
 
     // Emit machine-readable OA status via NOTATION lines.
     // This allows callers to distinguish "valid sig + valid OA" from
     // "valid sig + invalid/missing OA" without parsing stderr warnings.
     // NOTATION_NAME/NOTATION_DATA pairs are part of the GnuPG status protocol.
     if let Some(ref oa) = envelope.oa {
-        status.write_line("NOTATION_NAME nostr-oa-status");
-        status.write_line(&format!("NOTATION_DATA {oa_status}"));
-        status.write_line("NOTATION_NAME nostr-oa-owner");
-        status.write_line(&format!("NOTATION_DATA {}", oa.0));
+        status_or_fail!(status, "NOTATION_NAME nostr-oa-status");
+        status_or_fail!(status, "NOTATION_DATA {}", oa_result.as_status_str());
+        status_or_fail!(status, "NOTATION_NAME nostr-oa-owner");
+        status_or_fail!(status, "NOTATION_DATA {}", oa.0);
     } else {
-        status.write_line("NOTATION_NAME nostr-oa-status");
-        status.write_line("NOTATION_DATA none");
+        status_or_fail!(status, "NOTATION_NAME nostr-oa-status");
+        status_or_fail!(status, "NOTATION_DATA none");
     }
 
     Ok(())
@@ -1429,7 +1538,10 @@ fn verify_oa(agent_pk_hex: &str, oa: &(String, String, String)) -> bool {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Read payload from stdin with a bounded allocation.
-fn read_payload() -> Result<Vec<u8>, Error> {
+///
+/// Single entry point for all stdin reads — both sign and verify paths use
+/// this function so the size limit and error handling are consistent.
+fn read_payload_stdin() -> Result<Vec<u8>, Error> {
     let limit = (MAX_PAYLOAD as u64) + 1;
     let mut payload = Vec::new();
     io::stdin()
