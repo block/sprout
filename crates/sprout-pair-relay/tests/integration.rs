@@ -1216,39 +1216,23 @@ async fn test_graceful_close() {
 #[tokio::test]
 async fn test_multiple_subscribers_same_p() {
     let url = start_relay().await;
-    let (sk, pk) = gen_keypair();
 
-    // Two subscribers on the same #p.
+    // First subscriber on #p succeeds.
     let mut sub1 = connect(&url).await;
     subscribe(&mut sub1, "s1", P_A).await;
 
+    // Second subscriber on the SAME #p is rejected at REQ time.
     let mut sub2 = connect(&url).await;
-    subscribe(&mut sub2, "s2", P_A).await;
-
-    // Publisher sends one event — relay rejects it (ambiguous recipient).
-    let mut pub_ws = connect(&url).await;
-    send(
-        &mut pub_ws,
-        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
-    )
-    .await;
-    let ok = recv(&mut pub_ws).await;
-    assert_eq!(ok[0], "OK");
-    assert_eq!(ok[2], false, "expected rejection with ambiguous recipient");
+    send(&mut sub2, &json!(["REQ", "s2", {"#p": [P_A]}])).await;
+    let resp = recv(&mut sub2).await;
+    assert_eq!(resp[0], "CLOSED");
     assert!(
-        ok[3].as_str().unwrap_or("").contains("ambiguous recipient"),
+        resp[2]
+            .as_str()
+            .unwrap_or("")
+            .contains("already has a live subscriber"),
         "unexpected message: {}",
-        ok[3]
-    );
-
-    // Neither subscriber receives anything.
-    assert!(
-        try_recv(&mut sub1).await.is_none(),
-        "sub1 received event despite ambiguous recipient"
-    );
-    assert!(
-        try_recv(&mut sub2).await.is_none(),
-        "sub2 received event despite ambiguous recipient"
+        resp[2]
     );
 }
 

@@ -23,7 +23,7 @@
 //! - **Bounded resources** — 128 max WS connections, 4 KiB max frame, 120s TTL.
 //! - **Session cap** — at most 6 accepted EVENTs per connection.
 //! - **Freshness** — `created_at` must be within ±120 s of relay wall-clock.
-//! - **Deduplication** — duplicate event IDs are rejected within a relay session.
+//! - **Deduplication** — duplicate event IDs are rejected; dedup entries expire after 300 s.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -71,18 +71,21 @@ const RATE_MSG_MAX: u32 = 20;
 const RATE_EVENT_MAX: u32 = 10;
 const SUB_ID_MAX: usize = 64;
 
-/// Hard session cap: at most this many accepted EVENTs per connection.
+/// Hard session cap: at most this many attempted EVENTs (post-sig-check) per connection.
 const MAX_EVENTS_PER_CONN: u32 = 6;
 
 /// Per-#p delivery budget: enough for one full pairing from each direction.
 const MAX_DELIVERED_PER_P: u32 = 12;
 
-/// Dedup set rejects new events when full (fail closed). Connections are 120 s
-/// max so accumulation is naturally bounded, but we cap defensively.
+/// Dedup vec rejects new events when still at capacity after TTL eviction (fail closed).
 const DEDUP_CAP: usize = 1024;
 
-/// Delivered map is cleared when it reaches this size.
+/// Delivered map rejects new #p keys when still at capacity after TTL eviction (fail closed).
 const DELIVERED_MAP_CAP: usize = 4096;
+
+/// TTL for entries in `seen_ids` and `delivered`. Entries older than this are
+/// evicted on the next access, keeping both structures bounded over time.
+const ENTRY_TTL: Duration = Duration::from_secs(300);
 
 /// Freshness window in seconds (±).
 const FRESHNESS_SECS: i64 = 120;
@@ -106,10 +109,10 @@ pub struct Relay {
     subs: Mutex<Vec<Sub>>,
     conn_count: AtomicU32,
     next_conn_id: AtomicU64,
-    /// Global dedup set — cleared at DEDUP_CAP.
-    seen_ids: Mutex<HashSet<[u8; 32]>>,
-    /// Per-#p delivery counter — rejects new #p values at DELIVERED_MAP_CAP (fail closed).
-    delivered: Mutex<HashMap<[u8; 32], u32>>,
+    /// Global dedup vec — entries expire after ENTRY_TTL; rejects at DEDUP_CAP after eviction.
+    seen_ids: Mutex<Vec<([u8; 32], tokio::time::Instant)>>,
+    /// Per-#p delivery counter — entries expire after ENTRY_TTL; rejects at DELIVERED_MAP_CAP after eviction.
+    delivered: Mutex<HashMap<[u8; 32], (u32, tokio::time::Instant)>>,
 }
 
 impl Default for Relay {
@@ -124,27 +127,35 @@ impl Relay {
             subs: Mutex::new(Vec::new()),
             conn_count: AtomicU32::new(0),
             next_conn_id: AtomicU64::new(0),
-            seen_ids: Mutex::new(HashSet::new()),
+            seen_ids: Mutex::new(Vec::new()),
             delivered: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Check whether `id` has been seen before.
-    /// If not, record it and return `false` (not a duplicate).
-    /// If yes, return `true` (duplicate — reject).
-    /// Check whether `id` has been seen before.
-    /// Returns `Ok(false)` if new (recorded), `Ok(true)` if duplicate,
-    /// `Err(())` if the dedup set is at capacity (fail closed).
-    fn check_and_record_id(&self, id: &[u8; 32]) -> Result<bool, ()> {
-        let mut set = self.seen_ids.lock();
-        if set.contains(id) {
+    /// Atomically check-and-reserve an event ID. Evicts expired entries first.
+    /// Returns `Ok(true)` if duplicate (already seen), `Ok(false)` if new
+    /// (reserved — caller MUST call `unreserve_id` if delivery fails),
+    /// `Err(())` if at capacity after eviction (fail closed).
+    fn reserve_id(&self, id: &[u8; 32]) -> Result<bool, ()> {
+        let mut vec = self.seen_ids.lock();
+        vec.retain(|(_, ts)| ts.elapsed() < ENTRY_TTL);
+        if vec.iter().any(|(eid, _)| eid == id) {
             return Ok(true); // duplicate
         }
-        if set.len() >= DEDUP_CAP {
-            return Err(()); // at capacity — fail closed
+        if vec.len() >= DEDUP_CAP {
+            return Err(()); // at capacity after eviction — fail closed
         }
-        set.insert(*id);
+        // Optimistically reserve the slot.
+        vec.push((*id, tokio::time::Instant::now()));
         Ok(false)
+    }
+
+    /// Remove a previously reserved ID (called when delivery fails).
+    fn unreserve_id(&self, id: &[u8; 32]) {
+        let mut vec = self.seen_ids.lock();
+        if let Some(pos) = vec.iter().position(|(eid, _)| eid == id) {
+            vec.swap_remove(pos);
+        }
     }
 
     /// Atomically check for exactly one subscriber and deliver.
@@ -167,11 +178,14 @@ impl Relay {
         // Hold delivered lock for the entire check+increment (atomic budget).
         let mut delivered = self.delivered.lock();
 
-        // Fail closed if the map is at capacity.
-        let count = delivered.get(p_value).copied().unwrap_or(0);
+        // Evict entries older than ENTRY_TTL before checking capacity.
+        delivered.retain(|_, (_, ts)| ts.elapsed() < ENTRY_TTL);
+
+        let count = delivered.get(p_value).map(|(c, _)| *c).unwrap_or(0);
         if count >= MAX_DELIVERED_PER_P {
             return Err("recipient session budget exhausted");
         }
+        // Fail closed if still at capacity after eviction and key is new.
         if delivered.len() >= DELIVERED_MAP_CAP && !delivered.contains_key(p_value) {
             return Err("relay at capacity");
         }
@@ -189,8 +203,12 @@ impl Relay {
 
         // Attempt delivery.
         if sub.writer_tx.try_send(OutMsg::Text(text)).is_ok() {
-            // Increment counter atomically (lock already held).
-            *delivered.entry(*p_value).or_insert(0) += 1;
+            // Increment counter atomically (lock already held), refreshing the timestamp.
+            let entry = delivered
+                .entry(*p_value)
+                .or_insert((0, tokio::time::Instant::now()));
+            entry.0 += 1;
+            entry.1 = tokio::time::Instant::now();
             Ok(true)
         } else {
             Ok(false)
@@ -630,8 +648,8 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
     let mut msg_rate = RateWindow::new();
     let mut event_rate = RateWindow::new();
     let mut sub_id: Option<String> = None;
-    // Tightening #1: hard session cap.
-    let mut events_accepted: u32 = 0;
+    // Tightening #1: hard session cap — counts all valid+sig-verified EVENT attempts.
+    let mut events_attempted: u32 = 0;
     let deadline = tokio::time::sleep(CONN_TIMEOUT);
     tokio::pin!(deadline);
 
@@ -738,6 +756,18 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                 continue;
                             }
                         };
+                        // Reject if this #p already has a live subscriber
+                        // (prevents late-joiner poisoning of active sessions).
+                        {
+                            let subs = relay.subs.lock();
+                            if subs.iter().any(|s| s.p_value == p_value) {
+                                let _ = tx.try_send(OutMsg::Text(make_closed(
+                                    &client_sub_id,
+                                    "error: #p already has a live subscriber",
+                                )));
+                                continue;
+                            }
+                        }
                         // Send EOSE before registering.
                         if tx
                             .try_send(OutMsg::Text(make_eose(&client_sub_id)))
@@ -767,7 +797,7 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                             continue;
                         }
                         // Tightening #1: hard session cap check.
-                        if events_accepted >= MAX_EVENTS_PER_CONN {
+                        if events_attempted >= MAX_EVENTS_PER_CONN {
                             let safe_id = safe_event_id(&arr[1]);
                             let _ = tx.try_send(OutMsg::Text(make_ok(
                                 &safe_id,
@@ -792,8 +822,10 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                         .try_send(OutMsg::Text(make_ok(&event_id, false, reason)));
                                     continue;
                                 }
-                                // Tightening #7: deduplication AFTER sig check.
-                                match relay.check_and_record_id(&id_bytes) {
+                                // Count all valid+sig-verified attempts toward the session cap.
+                                events_attempted += 1;
+                                // Tightening #7: atomic dedup reservation AFTER sig check.
+                                match relay.reserve_id(&id_bytes) {
                                     Ok(true) => {
                                         let _ = tx.try_send(OutMsg::Text(make_ok(
                                             &event_id,
@@ -810,16 +842,18 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                         )));
                                         continue;
                                     }
-                                    Ok(false) => {} // new event, proceed
+                                    Ok(false) => {} // reserved — proceed to delivery
                                 }
                                 // Tightening #2: atomically check subscriber and deliver.
                                 match relay.deliver_single(&p_value, &arr[1]) {
                                     Ok(true) => {
-                                        events_accepted += 1;
+                                        // ID stays reserved (already in dedup vec).
                                         let _ =
                                             tx.try_send(OutMsg::Text(make_ok(&event_id, true, "")));
                                     }
                                     Ok(false) => {
+                                        // Delivery failed — unreserve so ID can be retried.
+                                        relay.unreserve_id(&id_bytes);
                                         let _ = tx.try_send(OutMsg::Text(make_ok(
                                             &event_id,
                                             false,
@@ -827,6 +861,8 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                         )));
                                     }
                                     Err(reason) => {
+                                        // Delivery rejected — unreserve so ID can be retried.
+                                        relay.unreserve_id(&id_bytes);
                                         let _ = tx.try_send(OutMsg::Text(make_ok(
                                             &event_id, false, reason,
                                         )));
