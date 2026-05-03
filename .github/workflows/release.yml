@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver version (e.g. 0.4.0)"
+        required: true
+      ref:
+        description: "Branch, tag, or SHA to build"
+        default: main
+        required: true
+
+jobs:
+  release:
+    name: Release
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Validate version
+        run: |
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version '$VERSION'. Expected semver (e.g. 0.4.0 or 1.0.0-beta.1)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Patch version
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo generate-lockfile
+
+      - name: Generate release config
+        run: cd desktop && node scripts/build-release-config.mjs
+        env:
+          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
+
+      - name: Build sidecars
+        run: |
+          cargo build --release -p sprout-acp -p sprout-mcp -p git-credential-nostr
+          ./scripts/bundle-sidecars.sh
+
+      - name: Build Tauri app
+        run: cd desktop && pnpm tauri build --config src-tauri/tauri.release.conf.json
+        env:
+          SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
+          SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Locate build artifacts
+        id: artifacts
+        run: |
+          BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
+
+          # Find the DMG (Tauri names it Sprout_<version>_<arch>.dmg)
+          DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
+          if [[ -z "$DMG" ]]; then
+            echo "::error::No DMG found in $BUNDLE_DIR/dmg"
+            exit 1
+          fi
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+          # Find the updater .tar.gz and .sig
+          ARCHIVE=$(find "$BUNDLE_DIR/macos" -name '*.tar.gz' ! -name '*.sig' -type f | head -1)
+          SIG="${ARCHIVE}.sig"
+          if [[ -z "$ARCHIVE" || ! -f "$SIG" ]]; then
+            echo "::error::Updater archive or signature not found in $BUNDLE_DIR/macos"
+            exit 1
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
+          echo "sig=$SIG" >> "$GITHUB_OUTPUT"
+
+      - name: Generate latest.json
+        run: |
+          bash desktop/scripts/generate-oss-latest-json.sh \
+            "$VERSION" \
+            "$SIG_PATH" \
+            "https://github.com/block/sprout/releases/download/sprout-desktop-latest/$ARCHIVE_NAME" \
+            > latest.json
+          cat latest.json
+        env:
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
+          ARCHIVE_NAME: ${{ steps.artifacts.outputs.archive_name }}
+
+      - name: Create versioned GitHub release
+        run: |
+          RELEASE_SHA=$(git rev-parse HEAD)
+          gh release create "v${VERSION}" \
+            --target "$RELEASE_SHA" \
+            --title "Sprout Desktop v${VERSION}" \
+            --notes "Sprout Desktop v${VERSION}" \
+            "$DMG_PATH"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
+
+      - name: Update rolling release for auto-updater
+        run: |
+          gh release create sprout-desktop-latest \
+            --prerelease \
+            --title "Sprout Desktop Auto-Update" \
+            --notes "Rolling release for the Tauri auto-updater. Do not download manually — use the versioned release instead." \
+            2>/dev/null || true
+          gh release upload sprout-desktop-latest \
+            latest.json \
+            "$ARCHIVE_PATH" \
+            "$SIG_PATH" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_PATH: ${{ steps.artifacts.outputs.archive }}
+          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
