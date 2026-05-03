@@ -105,11 +105,16 @@ fn verify_api_token_nip42_binding(
     sprout_auth::verify_nip42_event(event, challenge, relay_url)
 }
 
-// NOTE: NIP-42 technically allows multiple authenticated pubkeys per connection.
-// Sprout currently supports only one authenticated identity per WebSocket connection.
-// This is a known limitation documented in NIP-AA §6. A re-auth with a DIFFERENT
-// pubkey is rejected; re-auth with the SAME pubkey replaces the credential.
-// Future work: per-pubkey auth state map for multi-identity connections.
+// NOTE: NIP-42 allows multiple authenticated pubkeys per connection. Sprout uses a
+// single-pubkey-at-a-time model: re-auth with any pubkey (same or different) replaces
+// the current credential. The previous identity is discarded. This is a valid subset
+// of the spec — the NIP-AA multi-pubkey language describes behavior IF multiple
+// pubkeys are supported, not a mandate to support them.
+//
+// A failed re-auth attempt preserves the existing identity per NIP-AA §6.
+//
+// Future work: per-pubkey auth state map (HashMap<PublicKey, AuthContext>) for
+// simultaneous multi-identity connections.
 
 /// Handle a NIP-42 AUTH message: verify the challenge response and transition the connection to authenticated state.
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
@@ -117,14 +122,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
 
     // Extract the challenge, conn_id, and (for re-auth) the previous AuthContext.
     //
-    // AuthState::Authenticated: NIP-AA §6 allows the same pubkey to re-auth on an
-    // already-authenticated connection to replace the stored credential. We retain
-    // the challenge in AuthState::Authenticated for exactly this purpose. Only the
-    // same pubkey may re-auth — a different pubkey is rejected to prevent session
-    // hijacking via credential replacement.
+    // AuthState::Authenticated: re-auth replaces the stored credential. Both same-pubkey
+    // credential refresh and different-pubkey identity switch are allowed. We retain
+    // the challenge in AuthState::Authenticated for exactly this purpose.
     //
-    // NIP-AA §6 also says: "A failed NIP-AA AUTH attempt does not necessarily
-    // invalidate other authenticated pubkeys on the same WebSocket connection."
+    // NIP-AA §6: "A failed NIP-AA AUTH attempt does not necessarily invalidate other
+    // authenticated pubkeys on the same WebSocket connection."
     // We preserve this by saving the previous AuthContext and restoring it if
     // re-auth fails, rather than transitioning to AuthState::Failed.
     let (challenge, conn_id, prev_auth_ctx) = {
@@ -132,26 +135,20 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         match &*auth {
             AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id, None),
             AuthState::Authenticated { challenge, ctx } => {
-                // NIP-AA §6: same-pubkey re-auth MUST replace the stored credential.
                 if event.pubkey != ctx.pubkey {
-                    warn!(
+                    info!(
                         conn_id = %conn.conn_id,
                         existing = %ctx.pubkey.to_hex(),
                         incoming = %event.pubkey.to_hex(),
-                        "NIP-AA §6: re-auth pubkey mismatch — rejecting"
+                        "re-auth: identity switch (single-pubkey-at-a-time model)"
                     );
-                    conn.send(RelayMessage::ok(
-                        &event_id_hex_early,
-                        false,
-                        "auth-required: pubkey mismatch on re-auth",
-                    ));
-                    return;
+                } else {
+                    debug!(
+                        conn_id = %conn.conn_id,
+                        pubkey = %ctx.pubkey.to_hex(),
+                        "NIP-AA §6: re-auth credential replacement"
+                    );
                 }
-                debug!(
-                    conn_id = %conn.conn_id,
-                    pubkey = %ctx.pubkey.to_hex(),
-                    "NIP-AA §6: re-auth credential replacement"
-                );
                 (challenge.clone(), conn.conn_id, Some(ctx.clone()))
             }
             AuthState::Failed => {

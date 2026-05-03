@@ -37,9 +37,10 @@ pub enum AuthState {
     },
     /// Client has successfully authenticated.
     ///
-    /// The challenge is retained so that NIP-AA §6 credential replacement can
-    /// re-verify a new AUTH event on the same connection without requiring a
-    /// new challenge round-trip.
+    /// The challenge is retained so that re-auth (same-pubkey credential refresh
+    /// or different-pubkey identity switch) can re-verify a new AUTH event on the
+    /// same connection without requiring a new challenge round-trip. The previous
+    /// identity is replaced on success, or preserved on failure (NIP-AA §6).
     Authenticated {
         /// The auth context established during the initial AUTH handshake.
         ctx: AuthContext,
