@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::ws::{Message as WsMessage, WebSocket};
+use axum::extract::ws::{CloseFrame, Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -304,7 +304,9 @@ async fn recv_loop(
                             break;
                         }
                         trace!(len = text.len(), "frame received");
-                        handle_text_message(text.to_string(), Arc::clone(&conn), Arc::clone(&state)).await;
+                        if !handle_text_message(text.to_string(), Arc::clone(&conn), Arc::clone(&state)).await {
+                            break;
+                        }
                     }
                     Some(Ok(WsMessage::Binary(bytes))) => {
                         if bytes.len() > MAX_FRAME_BYTES {
@@ -315,7 +317,9 @@ async fn recv_loop(
                         // (notably certain Nostr libraries) send text payloads in binary frames.
                         // NIP-01 is text-only, but accepting binary is a common relay extension.
                         if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                            handle_text_message(text, Arc::clone(&conn), Arc::clone(&state)).await;
+                            if !handle_text_message(text, Arc::clone(&conn), Arc::clone(&state)).await {
+                                break;
+                            }
                         }
                     }
                     Some(Ok(WsMessage::Pong(_))) => {
@@ -346,12 +350,31 @@ async fn recv_loop(
     }
 }
 
-async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Arc<AppState>) {
+/// Returns `false` if the connection should be closed (malformed AUTH frame).
+async fn handle_text_message(
+    text: String,
+    conn: Arc<ConnectionState>,
+    state: Arc<AppState>,
+) -> bool {
     let msg = match ClientMessage::parse(&text) {
         Ok(m) => m,
         Err(e) => {
+            // NIP-AA spec: an unparseable AUTH frame MUST close the WebSocket.
+            // Detect by checking if the raw frame looks like an AUTH array.
+            let trimmed = text.trim_start();
+            let is_auth_frame =
+                trimmed.starts_with("[\"AUTH\"") || trimmed.starts_with("[ \"AUTH\"");
+            if is_auth_frame {
+                warn!(conn_id = %conn.conn_id, error = %e, "malformed AUTH frame — closing connection");
+                let _ = conn.ctrl_tx.try_send(WsMessage::Close(Some(CloseFrame {
+                    code: 4000,
+                    reason: "malformed AUTH".into(),
+                })));
+                conn.cancel.cancel();
+                return false;
+            }
             conn.send(RelayMessage::notice(&format!("invalid message: {e}")));
-            return;
+            return true;
         }
     };
 
@@ -368,7 +391,7 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
                     conn.send(RelayMessage::notice(
                         "rate-limited: too many concurrent requests",
                     ));
-                    return;
+                    return true;
                 }
             };
             tokio::spawn(async move {
@@ -385,7 +408,7 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
                     conn.send(RelayMessage::notice(
                         "rate-limited: too many concurrent requests",
                     ));
-                    return;
+                    return true;
                 }
             };
             tokio::spawn(async move {
@@ -397,4 +420,5 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
             handlers::close::handle_close(sub_id, Arc::clone(&conn), Arc::clone(&state)).await;
         }
     }
+    true
 }

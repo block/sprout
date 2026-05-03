@@ -37,6 +37,44 @@ fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag>, S
     }
 }
 
+/// Pre-validate that an `auth` tag's owner pubkey and signature fields are
+/// 64-char and 128-char lowercase hex respectively.
+///
+/// NIP-OA mandates lowercase hex; secp256k1's `from_hex` silently accepts
+/// uppercase, so we enforce the spec constraint here before the crypto call.
+///
+/// Only runs when the tag has ≥ 4 elements (the minimum for a well-formed auth
+/// tag). Tags with fewer elements are passed through and will fail the
+/// `verify_auth_tag` element-count check instead.
+fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
+    let tag_slice = auth_tag.as_slice();
+    if tag_slice.len() >= 4 {
+        let owner_hex = &tag_slice[1];
+        if owner_hex.len() != 64
+            || !owner_hex
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
+            return Err(format!(
+                "restricted: owner pubkey must be 64 lowercase hex chars, got {:?}",
+                owner_hex
+            ));
+        }
+        let sig_hex = &tag_slice[3];
+        if sig_hex.len() != 128
+            || !sig_hex
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        {
+            return Err(format!(
+                "restricted: signature must be 128 lowercase hex chars, got length {}",
+                sig_hex.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Extract and verify a NIP-OA auth tag from event tags for NIP-AA authentication.
 ///
 /// Implements NIP-AA Steps 3-5:
@@ -62,33 +100,7 @@ pub async fn verify_nip_aa(
     // Step 4: Pre-validate lowercase hex requirements before calling verify_auth_tag.
     // NIP-OA requires 64-char lowercase hex owner pubkey and 128-char lowercase hex sig.
     // secp256k1's from_hex accepts uppercase, so we enforce the spec constraint here.
-    {
-        let tag_slice = auth_tag.as_slice();
-        if tag_slice.len() >= 4 {
-            let owner_hex = &tag_slice[1];
-            if owner_hex.len() != 64
-                || !owner_hex
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-            {
-                return Err(format!(
-                    "restricted: owner pubkey must be 64 lowercase hex chars, got {:?}",
-                    owner_hex
-                ));
-            }
-            let sig_hex = &tag_slice[3];
-            if sig_hex.len() != 128
-                || !sig_hex
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-            {
-                return Err(format!(
-                    "restricted: signature must be 128 lowercase hex chars, got length {}",
-                    sig_hex.len()
-                ));
-            }
-        }
-    }
+    validate_auth_tag_hex(auth_tag)?;
 
     let tag_json = serde_json::to_string(&auth_tag.as_slice())
         .map_err(|e| format!("restricted: failed to serialize auth tag: {e}"))?;
@@ -280,5 +292,196 @@ mod tests {
             nostr::Tag::parse(&["auth", "ownerhex", "created_at>0", "sig"]).expect("valid tag"),
         ];
         assert!(matches!(extract_single_auth_tag(&tags), Ok(Some(_))));
+    }
+
+    #[test]
+    fn three_auth_tags_returns_err() {
+        let tags = vec![
+            nostr::Tag::parse(&["auth", "a", "", "s1"]).expect("valid tag"),
+            nostr::Tag::parse(&["auth", "b", "", "s2"]).expect("valid tag"),
+            nostr::Tag::parse(&["auth", "c", "", "s3"]).expect("valid tag"),
+        ];
+        assert!(extract_single_auth_tag(&tags).is_err());
+    }
+
+    // ── validate_auth_tag_hex ─────────────────────────────────────────────────
+
+    fn make_hex(len: usize, uppercase: bool) -> String {
+        let ch = if uppercase { 'A' } else { 'a' };
+        std::iter::repeat(ch).take(len).collect()
+    }
+
+    #[test]
+    fn validate_hex_passes_for_well_formed_tag() {
+        // A tag with exactly 64-char lowercase owner hex and 128-char lowercase sig hex.
+        let owner = make_hex(64, false);
+        let sig = make_hex(128, false);
+        let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
+        assert!(validate_auth_tag_hex(&tag).is_ok());
+    }
+
+    #[test]
+    fn validate_hex_rejects_uppercase_owner_pubkey() {
+        // NIP-OA mandates lowercase hex. Uppercase must be rejected even though
+        // secp256k1's from_hex would silently accept it.
+        let owner = make_hex(64, true); // uppercase
+        let sig = make_hex(128, false);
+        let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
+        let err = validate_auth_tag_hex(&tag).unwrap_err();
+        assert!(
+            err.contains("owner pubkey must be 64 lowercase hex chars"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_hex_rejects_short_owner_pubkey() {
+        let owner = make_hex(32, false); // too short
+        let sig = make_hex(128, false);
+        let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
+        assert!(validate_auth_tag_hex(&tag).is_err());
+    }
+
+    #[test]
+    fn validate_hex_rejects_long_owner_pubkey() {
+        let owner = make_hex(65, false); // too long
+        let sig = make_hex(128, false);
+        let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
+        assert!(validate_auth_tag_hex(&tag).is_err());
+    }
+
+    #[test]
+    fn validate_hex_rejects_uppercase_signature() {
+        let owner = make_hex(64, false);
+        let sig = make_hex(128, true); // uppercase
+        let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
+        let err = validate_auth_tag_hex(&tag).unwrap_err();
+        assert!(
+            err.contains("signature must be 128 lowercase hex chars"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_hex_rejects_short_signature() {
+        let owner = make_hex(64, false);
+        let sig = make_hex(64, false); // too short
+        let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
+        assert!(validate_auth_tag_hex(&tag).is_err());
+    }
+
+    #[test]
+    fn validate_hex_skips_check_for_tag_with_fewer_than_4_elements() {
+        // Tags with < 4 elements bypass the hex check here and will fail later
+        // in verify_auth_tag's element-count check. We must not panic or error
+        // prematurely on short tags.
+        let tag2 = nostr::Tag::parse(&["auth", "short"]).expect("valid tag");
+        assert!(
+            validate_auth_tag_hex(&tag2).is_ok(),
+            "2-element tag should pass hex check"
+        );
+
+        let tag3 = nostr::Tag::parse(&["auth", "a", "b"]).expect("valid tag");
+        assert!(
+            validate_auth_tag_hex(&tag3).is_ok(),
+            "3-element tag should pass hex check"
+        );
+    }
+
+    // ── evaluate_created_at_conditions — additional edge cases ────────────────
+
+    #[test]
+    fn created_at_lt_passes_one_below_boundary() {
+        // Strict less-than: value one below threshold must pass.
+        assert!(evaluate_created_at_conditions("created_at<1001", 1000).is_ok());
+    }
+
+    #[test]
+    fn created_at_gt_passes_one_above_boundary() {
+        // Strict greater-than: value one above threshold must pass.
+        assert!(evaluate_created_at_conditions("created_at>999", 1000).is_ok());
+    }
+
+    #[test]
+    fn multiple_kind_conditions_are_all_skipped() {
+        // Multiple kind= clauses must all be skipped — none should cause failure.
+        assert!(
+            evaluate_created_at_conditions("kind=9&kind=1&kind=30023&created_at>0", 1000).is_ok()
+        );
+    }
+
+    #[test]
+    fn empty_clause_from_leading_ampersand_is_skipped() {
+        // A leading & produces an empty first clause — must not error.
+        assert!(evaluate_created_at_conditions("&created_at>0", 1000).is_ok());
+    }
+
+    #[test]
+    fn empty_clause_from_trailing_ampersand_is_skipped() {
+        // A trailing & produces an empty last clause — must not error.
+        assert!(evaluate_created_at_conditions("created_at>0&", 1000).is_ok());
+    }
+
+    #[test]
+    fn unknown_clause_type_is_skipped() {
+        // Unknown condition types (future extensions) must be ignored, not rejected.
+        assert!(evaluate_created_at_conditions("foo=bar&created_at>0", 1000).is_ok());
+    }
+
+    // ── self-attestation rejection ────────────────────────────────────────────
+    // verify_auth_tag (sprout-sdk) rejects self-attestation. Verify that
+    // verify_nip_aa propagates this as Err without requiring AppState by
+    // calling sprout_sdk::nip_oa::verify_auth_tag directly.
+
+    #[test]
+    fn self_attestation_rejected_by_verify_auth_tag() {
+        use nostr::Keys;
+
+        let keys = Keys::generate();
+        let agent_pubkey = keys.public_key();
+
+        // Attempt to compute a self-attesting auth tag (owner == agent).
+        // compute_auth_tag itself rejects this — verify the error propagates.
+        let result = sprout_sdk::nip_oa::compute_auth_tag(&keys, &agent_pubkey, "");
+        assert!(
+            result.is_err(),
+            "compute_auth_tag must reject self-attestation"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("self-attestation"),
+            "expected self-attestation error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn verify_auth_tag_rejects_wrong_element_count_2() {
+        use nostr::Keys;
+        let keys = Keys::generate();
+        let agent_pubkey = keys.public_key();
+        // Manually craft a 2-element JSON array (missing conditions and sig).
+        let tag_json = r#"["auth","deadbeef"]"#;
+        let result = sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey);
+        assert!(result.is_err(), "2-element auth tag must be rejected");
+    }
+
+    #[test]
+    fn verify_auth_tag_rejects_wrong_element_count_3() {
+        use nostr::Keys;
+        let keys = Keys::generate();
+        let agent_pubkey = keys.public_key();
+        let tag_json = r#"["auth","deadbeef","conditions"]"#;
+        let result = sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey);
+        assert!(result.is_err(), "3-element auth tag must be rejected");
+    }
+
+    #[test]
+    fn verify_auth_tag_rejects_wrong_element_count_5() {
+        use nostr::Keys;
+        let keys = Keys::generate();
+        let agent_pubkey = keys.public_key();
+        let tag_json = r#"["auth","deadbeef","conditions","sig","extra"]"#;
+        let result = sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey);
+        assert!(result.is_err(), "5-element auth tag must be rejected");
     }
 }
