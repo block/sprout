@@ -4,13 +4,13 @@ NIP-AA
 Agent Authentication
 --------------------
 
-`draft` `optional`
+`draft` `optional` `relay`
 
 **Depends on**: NIP-OA (Owner Attestation), NIP-43 (Relay Access Metadata and Requests), NIP-42 (Authentication of Clients to Relays)
 
 ## Abstract
 
-This NIP defines how a relay that implements NIP-43 relay membership SHOULD handle connection requests from agent keys that carry valid NIP-OA credentials. An agent whose owner is a relay member MAY gain implicit relay access — without being explicitly enrolled in the member list — by presenting a valid NIP-OA `auth` tag during NIP-42 authentication.
+This NIP defines how a relay that implements NIP-43 relay membership SHOULD handle connection requests from agent keys that carry NIP-OA credentials. An agent whose owner is a relay member MAY gain implicit relay access — without being explicitly enrolled in the member list — by presenting a NIP-OA `auth` tag during NIP-42 authentication.
 
 ## Motivation
 
@@ -22,7 +22,7 @@ NIP-AA closes this gap. An agent presents its NIP-OA credential during NIP-42 au
 
 ## Terminology
 
-This document uses MUST, SHOULD, MAY, MUST NOT, and SHOULD NOT as defined in RFC 2119.
+This document uses MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, and RECOMMENDED as defined in RFC 2119.
 
 - **owner key**: The Nostr keypair that issued the NIP-OA authorization. The owner is a relay member per NIP-43.
 - **agent key**: An AI agent, bot, or automation process with its own Nostr keypair. The agent need not be a relay member.
@@ -66,7 +66,7 @@ Agent                                  Relay
   |  required for relay access.         |
 ```
 
-On failure the relay MUST respond per the error prefix rules in the verification algorithm below. If the AUTH payload is too malformed to yield a parseable event id, the relay MUST close the WebSocket connection (optionally preceded by a `NOTICE` message). The relay MAY close the WebSocket on any AUTH failure but is not required to; an independently failed AUTH attempt does not implicitly invalidate prior authenticated identities on the connection. This rule does not prevent a relay from deliberately revalidating or terminating sessions for other reasons (e.g., owner membership revocation).
+On failure the relay MUST respond per the error prefix rules in the verification algorithm below. If the AUTH payload is too malformed to yield a parseable event id, the relay MUST close the WebSocket connection (optionally preceded by a `NOTICE` message). This is an explicit exception to NIP-42's requirement that AUTH messages be answered with `OK` — that requirement is impossible to satisfy without a parseable event id to reference. The relay MAY close the WebSocket on any AUTH failure but is not required to; an independently failed AUTH attempt does not implicitly invalidate prior authenticated identities on the connection. This rule does not prevent a relay from deliberately revalidating or terminating sessions for other reasons (e.g., owner membership revocation).
 
 ## Relay Verification Algorithm
 
@@ -97,7 +97,7 @@ Verify the `auth` tag using the following NIP-AA-specific procedure. This proced
 3. `<sig-hex>` MUST be a valid 128-character lowercase hex string.
 4. `<owner-pubkey-hex>` MUST NOT equal `event.pubkey` (no self-attestation).
 5. `<conditions>` MUST be a syntactically valid NIP-OA conditions string (see NIP-OA §The Tag).
-6. Reconstruct the preimage: `nostr:agent-auth:` || `event.pubkey` || `:` || `<conditions>`.
+6. Reconstruct the preimage: `nostr:agent-auth:` || `event.pubkey` || `:` || `<conditions>`. The `<conditions>` string MUST be used verbatim from the `auth` tag — implementations MUST NOT reorder, deduplicate, normalize, or canonicalize the conditions before computing the preimage.
 7. Compute `SHA256(preimage)`.
 8. Verify `<sig-hex>` as a BIP-340 Schnorr signature over the SHA256 hash using `<owner-pubkey-hex>`.
 9. Evaluate any `created_at<t` and `created_at>t` clauses against the AUTH event's `created_at` field. If the AUTH event does not satisfy a timestamp clause, reject.
