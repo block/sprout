@@ -4,22 +4,38 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Git signing program using Nostr secp256k1 keys (NIP-GS)"
+repository.workspace = true
+description = "NIP-GS git commit/tag signing program using Nostr secp256k1 keys"
+readme = "README.md"
+publish = false  # internal workspace tool, not published to crates.io
 
 [[bin]]
 name = "git-sign-nostr"
 path = "src/main.rs"
 
 [dependencies]
-nostr      = { workspace = true }
-serde_json = { workspace = true }
-zeroize    = { workspace = true }
-base64     = "0.22"
+# Base64 armor encoding/decoding for NIP-GS signature envelopes.
+# Not in workspace deps — each crate pins independently (same pattern as
+# sprout-relay, sprout-mcp, sprout-cli, git-credential-nostr).
+base64 = "0.22"
 
-# This crate is Unix-only: it uses BorrowedFd/OwnedFd, PermissionsExt,
-# and getuid(2). Non-Unix builds will fail at compile time on those imports,
-# which is the intended behaviour.
-[target.'cfg(not(unix))'.dependencies]
-# Intentionally empty — serves as a compile-time reminder that this crate
-# requires a Unix target. Add a build.rs assertion if cross-compilation
-# to non-Unix is ever attempted.
+# Hex encoding for BIP-340 signatures and public keys.
+hex = { workspace = true }
+
+# Secret key zeroization on drop.
+zeroize = { workspace = true, features = ["derive"] }
+
+# Nostr key parsing (nsec/npub bech32), secp256k1 Schnorr signing, SHA-256.
+# Uses the full default feature set because we need: Keys, PublicKey,
+# FromBech32, and the re-exported bitcoin::secp256k1 + bitcoin::hashes.
+nostr = { workspace = true }
+
+# JSON parsing for NIP-OA auth tag and envelope verification.
+serde_json = { workspace = true }
+
+# Timestamp formatting for GnuPG VALIDSIG status lines.
+chrono = { workspace = true }
+
+# Unix-specific: O_NOFOLLOW for keyfile open, fcntl for fd validation.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
