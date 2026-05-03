@@ -100,22 +100,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         match &*auth {
             AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id),
             AuthState::Authenticated(_) => {
-                // NIP-AA §6 says: "If the same agent pubkey completes NIP-AA authentication
-                // again on the same connection, the relay MUST replace the previously stored
-                // credential with the new one."
-                //
-                // We intentionally do NOT implement credential replacement here. Reasons:
-                // 1. The NIP-42 challenge is only stored in AuthState::Pending; once
-                //    authenticated, the challenge is gone and cannot be used to verify a
-                //    new AUTH event. Supporting re-auth would require restructuring AuthState
-                //    to retain the challenge across the Authenticated transition.
-                // 2. Credential-swap on an already-authenticated connection is a potential
-                //    attack vector (privilege escalation via credential replacement).
-                // 3. NIP-42 itself does not define re-authentication semantics.
-                //
-                // TODO: To fully comply with NIP-AA §6, AuthState::Authenticated should
-                // retain the challenge string and this branch should re-verify + replace
-                // the stored AuthContext when the same pubkey re-auths.
+                // NIP-AA §6 says same-pubkey re-auth MUST replace the stored credential.
+                // We intentionally do not implement this: the challenge is not retained
+                // after authentication, so there is no way to verify a new AUTH event
+                // without a new challenge round-trip. Supporting re-auth would require
+                // restructuring AuthState to carry the challenge across the Authenticated
+                // transition — deferred as a TODO.
                 debug!(conn_id = %conn.conn_id, "AUTH received but already authenticated");
                 conn.send(RelayMessage::ok(
                     &event_id_hex_early,
@@ -153,6 +143,18 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
 
     metrics::counter!("sprout_auth_attempts_total", "method" => if auth_token.as_ref().is_some_and(|t| t.starts_with("sprout_")) { "api_token" } else { "nip42" }).increment(1);
 
+    // ── auth_token + auth tag interaction ──────────────────────────────────
+    // If an AUTH event carries BOTH an `auth_token` tag AND an `auth` tag (NIP-OA
+    // credential), the token path runs first:
+    //   1. If the token is valid → use it (the `auth` tag is ignored).
+    //   2. If the token is INVALID (wrong hash, expired, etc.) → reject immediately.
+    //      We do NOT fall through to NIP-AA in this case. A client that supplies a
+    //      token has declared its intent; a bad token is a hard failure, not a cue
+    //      to try a different auth method. This prevents a confused-deputy attack
+    //      where an attacker appends a valid NIP-OA credential to a stolen-but-expired
+    //      token event hoping the relay will accept it via NIP-AA.
+    //
+    // The NIP-AA path (below) only runs when `auth_token` is absent entirely.
     if let Some(ref token) = auth_token {
         if token.starts_with("sprout_") {
             // ── API token path ──────────────────────────────────────────────
@@ -518,14 +520,17 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
         Err(e) => {
-            // NIP-42 verification failure — use "auth-required:" prefix per NIP-42 spec.
-            //
-            // NIP-AA spec §Step 1 says to use "invalid:" for Step 1 failures, but that
-            // language applies to the relay's response *after* it has determined this is
-            // a NIP-AA attempt (i.e., after Step 2 fails and Step 3 finds an auth tag).
-            // Standard NIP-42 verification happens *before* NIP-AA is even considered, so
-            // "auth-required:" is the correct prefix here. Changing it would break
-            // standard NIP-42 clients that expect "auth-required:" on verification failure.
+            // NIP-AA spec §Step 1: when the AUTH event contains an `auth` tag (NIP-AA
+            // attempt), Step 1 failures MUST use the "invalid:" prefix. For standard
+            // NIP-42 events without an auth tag, "auth-required:" is the correct prefix.
+            let has_auth_tag_in_event = event_tags
+                .iter()
+                .any(|t| !t.as_slice().is_empty() && t.as_slice()[0] == "auth");
+            let prefix = if has_auth_tag_in_event {
+                "invalid"
+            } else {
+                "auth-required"
+            };
             warn!(conn_id = %conn_id, error = %e, "NIP-42 auth failed");
             metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
                 .increment(1);
@@ -533,7 +538,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             conn.send(RelayMessage::ok(
                 &event_id_hex,
                 false,
-                "auth-required: verification failed",
+                &format!("{prefix}: verification failed"),
             ));
         }
     }

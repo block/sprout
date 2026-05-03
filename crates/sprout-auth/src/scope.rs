@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn all_known_returns_all_14_variants() {
+    fn all_known_returns_all_16_variants() {
         let all = Scope::all_known();
         assert_eq!(all.len(), 16, "expected 16 known scope variants");
         // Verify no duplicates

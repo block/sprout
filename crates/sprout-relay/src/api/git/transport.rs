@@ -173,14 +173,9 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // Relay membership gate (NIP-43).
         // NIP-AA is a WebSocket-only (NIP-42) mechanism; git HTTP paths use
         // direct membership only.
-        if crate::api::relay_members::enforce_relay_membership(
-            state,
-            &pubkey.serialize(),
-            None,
-            None,
-        )
-        .await
-        .is_err()
+        if crate::api::relay_members::enforce_relay_membership(state, &pubkey.serialize())
+            .await
+            .is_err()
         {
             warn!(pubkey = %pubkey.to_hex(), "git: relay membership denied");
             return Err((StatusCode::FORBIDDEN, "restricted: not a relay member").into_response());

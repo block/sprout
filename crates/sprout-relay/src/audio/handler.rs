@@ -199,23 +199,22 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
             }
         }
 
-        // Check relay membership to distinguish NIP-AA virtual members from
-        // direct members. Direct members must not bypass verify_auth_event.
+        // Use nip_aa::verify_nip_aa directly — NIP-42 binding already verified above.
+        // This distinguishes NIP-AA virtual members from direct members without
+        // routing through the generic REST membership helper (which is direct-only).
         let candidate_pubkey = auth_msg.event.pubkey;
-        let candidate_pubkey_bytes = candidate_pubkey.serialize().to_vec();
-        let membership = crate::api::relay_members::enforce_relay_membership(
+        let event_tags_slice: Vec<nostr::Tag> = auth_msg.event.tags.clone().to_vec();
+        let nip_aa_result = crate::handlers::nip_aa::verify_nip_aa(
             &state,
-            &candidate_pubkey_bytes,
-            auth_tag_json.as_deref(),
-            event_created_at,
+            &candidate_pubkey,
+            &event_tags_slice,
+            event_created_at.unwrap_or(0),
         )
         .await;
 
-        match membership {
-            Ok(Some(owner_pubkey)) => {
+        match nip_aa_result {
+            Ok(Some(result)) => {
                 // NIP-AA virtual member — NIP-42 binding already verified above.
-                // The relay membership gate below will re-confirm and is a no-op
-                // (membership already proven), but we skip verify_auth_event.
                 //
                 // NIP-AA requires retaining owner_pubkey for owner-scoped session
                 // enumeration, termination, and quota aggregation. The audio handler
@@ -225,14 +224,14 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 tracing::info!(
                     channel_id = %channel_id,
                     agent = %candidate_pubkey.to_hex(),
-                    owner = %owner_pubkey.to_hex(),
+                    owner = %result.owner_pubkey.to_hex(),
                     "NIP-AA: audio virtual membership granted"
                 );
                 candidate_pubkey
             }
             Ok(None) => {
-                // Direct member with a dummy auth tag — must go through
-                // verify_auth_event to enforce token requirements.
+                // No auth tag (or direct member) — must go through verify_auth_event
+                // to enforce token requirements.
                 let auth_ctx = match state
                     .auth
                     .verify_auth_event(auth_msg.event, &challenge, &relay_url)
@@ -253,12 +252,12 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 };
                 auth_ctx.pubkey
             }
-            Err(_) => {
-                // Not a relay member at all — deny.
-                warn!(channel_id = %channel_id, pubkey = %candidate_pubkey.to_hex(), "audio NIP-AA: relay membership denied");
+            Err(reason) => {
+                // Auth tag present but invalid, or owner not a member — deny.
+                warn!(channel_id = %channel_id, pubkey = %candidate_pubkey.to_hex(), reason = %reason, "audio NIP-AA: denied");
                 let _ = ws_send
                     .send(WsMessage::Text(
-                        serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                        serde_json::json!({"type": "error", "message": reason})
                             .to_string()
                             .into(),
                     ))
@@ -293,14 +292,11 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let parent_channel_id = auth_msg.parent_channel_id;
 
     // ── Relay membership gate (NIP-43) ────────────────────────────────────────
-    if crate::api::relay_members::enforce_relay_membership(
-        &state,
-        &pubkey.serialize(),
-        auth_tag_json.as_deref(),
-        event_created_at,
-    )
-    .await
-    .is_err()
+    // NIP-AA virtual members already passed membership via nip_aa::verify_nip_aa above.
+    // This gate is a direct-membership-only check (no NIP-AA fallback needed here).
+    if crate::api::relay_members::enforce_relay_membership(&state, &pubkey.serialize())
+        .await
+        .is_err()
     {
         warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
         let _ = ws_send

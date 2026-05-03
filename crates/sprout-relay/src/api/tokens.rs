@@ -294,13 +294,7 @@ pub async fn post_tokens(
                     // Bearer/JWT paths go through extract_auth_context which already checks.
                     // NIP-AA is a WebSocket-only (NIP-42) mechanism; REST paths use direct
                     // membership only.
-                    super::relay_members::enforce_relay_membership(
-                        &state,
-                        &pubkey_bytes,
-                        None,
-                        None,
-                    )
-                    .await?;
+                    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes).await?;
                     super::RestAuthContext {
                         pubkey,
                         pubkey_bytes,

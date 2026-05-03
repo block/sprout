@@ -157,7 +157,7 @@ pub(crate) async fn extract_auth_context(
     state: &AppState,
 ) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
     let ctx = extract_auth_context_inner(headers, state).await?;
-    relay_members::enforce_relay_membership(state, &ctx.pubkey_bytes, None, None).await?;
+    relay_members::enforce_relay_membership(state, &ctx.pubkey_bytes).await?;
     Ok(ctx)
 }
 

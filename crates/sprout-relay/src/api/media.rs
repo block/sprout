@@ -89,14 +89,9 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         // 5. Relay membership gate (NIP-43).
         // NIP-AA is a WebSocket-only (NIP-42) mechanism; Blossom/REST paths use
         // direct membership only.
-        crate::api::relay_members::enforce_relay_membership(
-            state,
-            &auth_event.pubkey.serialize(),
-            None,
-            None,
-        )
-        .await
-        .map_err(|_| MediaError::RelayMembershipRequired)?;
+        crate::api::relay_members::enforce_relay_membership(state, &auth_event.pubkey.serialize())
+            .await
+            .map_err(|_| MediaError::RelayMembershipRequired)?;
 
         Ok(AuthenticatedUpload { auth_event, scopes })
     }
