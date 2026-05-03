@@ -137,27 +137,79 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     };
     let event_created_at = Some(auth_msg.event.created_at.as_u64());
 
-    let relay_url = state.config.relay_url.clone();
-    let auth_ctx = match state
-        .auth
-        .verify_auth_event(auth_msg.event, &challenge, &relay_url)
-        .await
-    {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            warn!(channel_id = %channel_id, "audio auth failed: {e}");
-            let _ = ws_send
-                .send(WsMessage::Text(
-                    serde_json::json!({"type":"error","message":"auth failed"})
-                        .to_string()
-                        .into(),
-                ))
-                .await;
-            return;
+    // Extract auth_token tag before the event is consumed — API tokens and
+    // Okta JWTs carry an `auth_token` tag; NIP-AA agents do not.
+    let audio_auth_token = auth_msg.event.tags.iter().find_map(|tag| {
+        let v = tag.as_slice();
+        if v.len() >= 2 && v[0] == "auth_token" {
+            Some(v[1].to_string())
+        } else {
+            None
         }
-    };
+    });
 
-    let pubkey = auth_ctx.pubkey;
+    let relay_url = state.config.relay_url.clone();
+
+    // ── NIP-AA agent auth path ───────────────────────────────────────────────
+    // If there is no auth_token but there IS a NIP-OA auth tag, this is an
+    // agent using NIP-AA. Bypass verify_auth_event (which requires a token in
+    // production mode) and do NIP-42 binding verification directly.
+    let pubkey = if audio_auth_token.is_none() && auth_tag_json.is_some() {
+        let event_for_verify = auth_msg.event.clone();
+        let challenge_owned = challenge.clone();
+        let relay_owned = relay_url.clone();
+        match tokio::task::spawn_blocking(move || {
+            sprout_auth::verify_nip42_event(&event_for_verify, &challenge_owned, &relay_owned)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!(channel_id = %channel_id, "audio NIP-AA: NIP-42 binding failed: {e}");
+                let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type":"error","message":"auth failed"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                return;
+            }
+            Err(e) => {
+                warn!(channel_id = %channel_id, "audio NIP-AA: NIP-42 verify task panicked: {e}");
+                let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type":"error","message":"auth failed"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                return;
+            }
+        }
+        auth_msg.event.pubkey
+    } else {
+        // ── Standard auth path (Okta JWT / API token / pubkey-only) ─────────
+        let auth_ctx = match state
+            .auth
+            .verify_auth_event(auth_msg.event, &challenge, &relay_url)
+            .await
+        {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                warn!(channel_id = %channel_id, "audio auth failed: {e}");
+                let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type":"error","message":"auth failed"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                return;
+            }
+        };
+        auth_ctx.pubkey
+    };
     let pubkey_hex = pubkey.to_hex();
     let pubkey_bytes = pubkey.serialize().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;

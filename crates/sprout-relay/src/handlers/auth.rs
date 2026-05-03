@@ -294,6 +294,103 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         }
     }
 
+    // ── NIP-AA agent auth path ──────────────────────────────────────────────
+    // If the event carries a NIP-OA `auth` tag but no `auth_token`, this is an
+    // agent attempting NIP-AA authentication. Handle it directly rather than
+    // going through `verify_auth_event`, which requires a token in production
+    // mode and would reject the event before NIP-AA membership is checked.
+    let has_auth_tag = event.tags.iter().any(|t| {
+        let s = t.as_slice();
+        !s.is_empty() && s[0] == "auth"
+    });
+
+    if auth_token.is_none() && has_auth_tag {
+        // Extract tags and created_at before event is moved into spawn_blocking.
+        let event_tags = event.tags.clone().to_vec();
+        let event_created_at_ts = event.created_at.as_u64();
+        let pubkey = event.pubkey;
+
+        // NIP-42 binding verification (challenge, relay URL, sig, freshness).
+        // CPU-intensive crypto — run on the blocking thread pool.
+        let event_for_verify = event.clone();
+        let challenge_owned = challenge.clone();
+        let relay_owned = relay_url.clone();
+        match tokio::task::spawn_blocking(move || {
+            verify_api_token_nip42_binding(&event_for_verify, &challenge_owned, &relay_owned)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!(conn_id = %conn_id, error = %e, "NIP-AA: NIP-42 binding verification failed");
+                metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_nip42_invalid")
+                    .increment(1);
+                *conn.auth_state.write().await = AuthState::Failed;
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    &format!("invalid: {e}"),
+                ));
+                return;
+            }
+            Err(e) => {
+                warn!(conn_id = %conn_id, error = %e, "NIP-AA: NIP-42 verification task panicked");
+                metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_nip42_internal")
+                    .increment(1);
+                *conn.auth_state.write().await = AuthState::Failed;
+                conn.send(RelayMessage::ok(
+                    &event_id_hex,
+                    false,
+                    "auth-required: verification failed",
+                ));
+                return;
+            }
+        }
+
+        // Relay membership + NIP-AA fallback.
+        match enforce_ws_relay_membership(
+            &state,
+            &conn,
+            conn_id,
+            &pubkey,
+            &event_id_hex,
+            &event_tags,
+            event_created_at_ts,
+        )
+        .await
+        {
+            Some(nip_aa_owner) => {
+                let auth_method = if nip_aa_owner.is_some() {
+                    sprout_auth::AuthMethod::Nip42AgentAuth
+                } else {
+                    sprout_auth::AuthMethod::Nip42PubkeyOnly
+                };
+                let auth_ctx = sprout_auth::AuthContext {
+                    pubkey,
+                    scopes: sprout_auth::Scope::all_known(),
+                    channel_ids: None,
+                    auth_method,
+                    owner_pubkey: nip_aa_owner,
+                };
+                info!(
+                    conn_id = %conn_id,
+                    pubkey = %pubkey.to_hex(),
+                    owner = ?nip_aa_owner.map(|p| p.to_hex()),
+                    "NIP-AA agent auth successful"
+                );
+                *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+                state
+                    .conn_manager
+                    .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
+                conn.send(RelayMessage::ok(&event_id_hex, true, ""));
+            }
+            None => {
+                // enforce_ws_relay_membership already sent the rejection message.
+            }
+        }
+        return;
+    }
+
     // ── Okta JWT / pubkey-only path ─────────────────────────────────────────
     // Non-sprout_ tokens (eyJ* JWTs) and no-token (open-relay) fall through here.
     // Extract tags and created_at before event is consumed by verify_auth_event.
