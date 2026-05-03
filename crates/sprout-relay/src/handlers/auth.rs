@@ -100,14 +100,22 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         match &*auth {
             AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id),
             AuthState::Authenticated(_) => {
-                // NIP-AA §6: If the same pubkey re-authenticates with a different credential,
-                // the new credential replaces the old one. This is handled naturally — a
-                // successful AUTH always overwrites the previous AuthState::Authenticated.
-                // AuthState::Failed is terminal per NIP-42 (the connection cannot re-auth).
+                // NIP-AA §6 says: "If the same agent pubkey completes NIP-AA authentication
+                // again on the same connection, the relay MUST replace the previously stored
+                // credential with the new one."
                 //
-                // We reject here rather than allowing re-auth because the connection has
-                // already been granted access; re-auth on an authenticated connection is
-                // not a defined NIP-42 flow and could mask credential-swap attacks.
+                // We intentionally do NOT implement credential replacement here. Reasons:
+                // 1. The NIP-42 challenge is only stored in AuthState::Pending; once
+                //    authenticated, the challenge is gone and cannot be used to verify a
+                //    new AUTH event. Supporting re-auth would require restructuring AuthState
+                //    to retain the challenge across the Authenticated transition.
+                // 2. Credential-swap on an already-authenticated connection is a potential
+                //    attack vector (privilege escalation via credential replacement).
+                // 3. NIP-42 itself does not define re-authentication semantics.
+                //
+                // TODO: To fully comply with NIP-AA §6, AuthState::Authenticated should
+                // retain the challenge string and this branch should re-verify + replace
+                // the stored AuthContext when the same pubkey re-auths.
                 debug!(conn_id = %conn.conn_id, "AUTH received but already authenticated");
                 conn.send(RelayMessage::ok(
                     &event_id_hex_early,
@@ -268,14 +276,21 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         None => return,
                     };
 
-                    let (auth_method, owner_pubkey) = match nip_aa_owner {
-                        Some(owner) => (sprout_auth::AuthMethod::Nip42AgentAuth, Some(owner)),
-                        None => (sprout_auth::AuthMethod::Nip42ApiToken, None),
+                    // NIP-AA spec: virtual members MUST NOT be granted admin privileges.
+                    // Intersect token scopes with the NIP-AA virtual member scope set to
+                    // strip any admin scopes the token may have carried.
+                    let (auth_method, owner_pubkey, final_scopes) = match nip_aa_owner {
+                        Some(owner) => (
+                            sprout_auth::AuthMethod::Nip42AgentAuth,
+                            Some(owner),
+                            sprout_auth::Scope::nip_aa_virtual_member(),
+                        ),
+                        None => (sprout_auth::AuthMethod::Nip42ApiToken, None, scopes),
                     };
 
                     let auth_ctx = sprout_auth::AuthContext {
                         pubkey,
-                        scopes,
+                        scopes: final_scopes,
                         channel_ids: record.channel_ids,
                         auth_method,
                         owner_pubkey,
@@ -456,6 +471,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             };
 
             // If NIP-AA granted access, upgrade the auth context.
+            // NIP-AA spec: virtual members MUST NOT be granted admin privileges.
+            // Override scopes with the restricted virtual-member set regardless of
+            // what the underlying auth method (Okta JWT / pubkey-only) would have granted.
             let final_ctx = match nip_aa_owner {
                 Some(owner_pubkey) => {
                     info!(
@@ -467,6 +485,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     sprout_auth::AuthContext {
                         owner_pubkey: Some(owner_pubkey),
                         auth_method: sprout_auth::AuthMethod::Nip42AgentAuth,
+                        scopes: sprout_auth::Scope::nip_aa_virtual_member(),
                         ..auth_ctx
                     }
                 }

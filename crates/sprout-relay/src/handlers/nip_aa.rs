@@ -59,6 +59,37 @@ pub async fn verify_nip_aa(
         None => return Ok(None), // No auth tag — not an agent, not a NIP-AA attempt
         Some(tag) => tag,
     };
+    // Step 4: Pre-validate lowercase hex requirements before calling verify_auth_tag.
+    // NIP-OA requires 64-char lowercase hex owner pubkey and 128-char lowercase hex sig.
+    // secp256k1's from_hex accepts uppercase, so we enforce the spec constraint here.
+    {
+        let tag_slice = auth_tag.as_slice();
+        if tag_slice.len() >= 4 {
+            let owner_hex = &tag_slice[1];
+            if owner_hex.len() != 64
+                || !owner_hex
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            {
+                return Err(format!(
+                    "restricted: owner pubkey must be 64 lowercase hex chars, got {:?}",
+                    owner_hex
+                ));
+            }
+            let sig_hex = &tag_slice[3];
+            if sig_hex.len() != 128
+                || !sig_hex
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            {
+                return Err(format!(
+                    "restricted: signature must be 128 lowercase hex chars, got length {}",
+                    sig_hex.len()
+                ));
+            }
+        }
+    }
+
     let tag_json = serde_json::to_string(&auth_tag.as_slice())
         .map_err(|e| format!("restricted: failed to serialize auth tag: {e}"))?;
 

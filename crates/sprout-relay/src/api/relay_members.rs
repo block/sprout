@@ -65,6 +65,41 @@ pub async fn enforce_relay_membership(
         let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes)
             .map_err(|e| internal_error(&format!("invalid agent pubkey bytes: {e}")))?;
 
+        // Step 4: Pre-validate lowercase hex requirements before calling verify_auth_tag.
+        // NIP-OA requires 64-char lowercase hex owner pubkey and 128-char lowercase hex sig.
+        // secp256k1's from_hex accepts uppercase, so we enforce the spec constraint here.
+        {
+            let tag_arr: serde_json::Value = serde_json::from_str(tag_json)
+                .map_err(|e| internal_error(&format!("failed to parse auth tag JSON: {e}")))?;
+            if let (Some(owner_hex), Some(sig_hex)) = (
+                tag_arr.get(1).and_then(|v| v.as_str()),
+                tag_arr.get(3).and_then(|v| v.as_str()),
+            ) {
+                let is_lowercase_hex = |s: &str| {
+                    s.chars()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+                };
+                if owner_hex.len() != 64 || !is_lowercase_hex(owner_hex) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({
+                            "error": "nip_aa_invalid",
+                            "message": "restricted: owner pubkey must be 64 lowercase hex chars"
+                        })),
+                    ));
+                }
+                if sig_hex.len() != 128 || !is_lowercase_hex(sig_hex) {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({
+                            "error": "nip_aa_invalid",
+                            "message": "restricted: signature must be 128 lowercase hex chars"
+                        })),
+                    ));
+                }
+            }
+        }
+
         // Step 4: Verify the auth tag cryptographically.
         let owner_pubkey =
             sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey).map_err(|e| {
