@@ -164,7 +164,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     // ── Extract auth from WS connection state ────────────────────────────
-    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids) = {
+    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids, is_nip_aa_virtual) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => (
@@ -173,6 +173,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 ctx.pubkey,
                 ctx.scopes.clone(),
                 ctx.channel_ids.clone(),
+                ctx.auth_method == sprout_auth::AuthMethod::Nip42AgentAuth,
             ),
             _ => {
                 reject("auth");
@@ -191,7 +192,10 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     // events get a second check inside ingest_event() (step 3), but
     // ephemeral events bypass the pipeline entirely.
     let has_proxy_scope = scopes.contains(&sprout_auth::Scope::ProxySubmit);
-    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
+    // Gift-wrap exception: allows submitting kind:1059 events with an ephemeral
+    // outer pubkey for privacy. NIP-AA virtual members are excluded — they must
+    // only submit events signed by their own authenticated pubkey.
+    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP && !is_nip_aa_virtual;
     if event.pubkey != auth_pubkey && !has_proxy_scope && !is_gift_wrap {
         reject("invalid");
         conn.send(RelayMessage::ok(
