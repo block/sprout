@@ -167,7 +167,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids, is_nip_aa_virtual) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Authenticated(ctx) => (
+            AuthState::Authenticated { ctx, .. } => (
                 conn.conn_id,
                 ctx.pubkey.serialize().to_vec(),
                 ctx.pubkey,

@@ -40,7 +40,7 @@ fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag>, S
 /// Extract and verify a NIP-OA auth tag from event tags for NIP-AA authentication.
 ///
 /// Implements NIP-AA Steps 3-5:
-/// - Step 3: Extract exactly one `auth` tag (zero or >1 → None)
+/// - Step 3: Extract exactly one `auth` tag (zero → Ok(None); >1 → Err)
 /// - Step 4: Verify the auth tag cryptographically (reuses sprout-sdk nip_oa)
 /// - Step 4b: Evaluate created_at conditions against the event's created_at
 /// - Step 5: Check that the owner is an active relay member

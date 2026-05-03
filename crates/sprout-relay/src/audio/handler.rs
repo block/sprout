@@ -165,7 +165,10 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     // be a NIP-AA agent. Verify NIP-42 binding first, then check relay
     // membership to confirm it is a virtual member — not just a direct member
     // with a dummy auth tag trying to bypass verify_auth_event.
-    let pubkey = if audio_auth_token.is_none() && auth_tag_json.is_some() {
+    // Track whether this pubkey was granted access via NIP-AA virtual membership.
+    // Virtual members already passed the relay membership check inside verify_nip_aa
+    // (Step 5), so the direct-only membership gate below must be skipped for them.
+    let (pubkey, is_nip_aa_virtual) = if audio_auth_token.is_none() && auth_tag_json.is_some() {
         let event_for_verify = auth_msg.event.clone();
         let challenge_owned = challenge.clone();
         let relay_owned = relay_url.clone();
@@ -215,6 +218,8 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         match nip_aa_result {
             Ok(Some(result)) => {
                 // NIP-AA virtual member — NIP-42 binding already verified above.
+                // verify_nip_aa already confirmed the owner is an active relay member
+                // (Step 5), so the direct membership gate below must be skipped.
                 //
                 // NIP-AA requires retaining owner_pubkey for owner-scoped session
                 // enumeration, termination, and quota aggregation. The audio handler
@@ -227,7 +232,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                     owner = %result.owner_pubkey.to_hex(),
                     "NIP-AA: audio virtual membership granted"
                 );
-                candidate_pubkey
+                (candidate_pubkey, true)
             }
             Ok(None) => {
                 // No auth tag (or direct member) — must go through verify_auth_event
@@ -250,7 +255,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                         return;
                     }
                 };
-                auth_ctx.pubkey
+                (auth_ctx.pubkey, false)
             }
             Err(reason) => {
                 // Auth tag present but invalid, or owner not a member — deny.
@@ -285,18 +290,20 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 return;
             }
         };
-        auth_ctx.pubkey
+        (auth_ctx.pubkey, false)
     };
     let pubkey_hex = pubkey.to_hex();
     let pubkey_bytes = pubkey.serialize().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;
 
     // ── Relay membership gate (NIP-43) ────────────────────────────────────────
-    // NIP-AA virtual members already passed membership via nip_aa::verify_nip_aa above.
-    // This gate is a direct-membership-only check (no NIP-AA fallback needed here).
-    if crate::api::relay_members::enforce_relay_membership(&state, &pubkey.serialize())
-        .await
-        .is_err()
+    // NIP-AA virtual members already passed the relay membership check inside
+    // verify_nip_aa (Step 5 — owner is an active member). Skip the direct gate
+    // for them; only check direct membership for non-virtual-member connections.
+    if !is_nip_aa_virtual
+        && crate::api::relay_members::enforce_relay_membership(&state, &pubkey.serialize())
+            .await
+            .is_err()
     {
         warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
         let _ = ws_send

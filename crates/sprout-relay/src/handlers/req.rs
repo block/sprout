@@ -39,7 +39,7 @@ pub async fn handle_req(
     let (conn_id, pubkey_bytes, token_channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Authenticated(ctx) => {
+            AuthState::Authenticated { ctx, .. } => {
                 if !ctx.scopes.is_empty() && !ctx.scopes.contains(&Scope::MessagesRead) {
                     conn.send(RelayMessage::notice("restricted: insufficient scope"));
                     conn.send(RelayMessage::closed(

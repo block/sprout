@@ -36,7 +36,16 @@ pub enum AuthState {
         challenge: String,
     },
     /// Client has successfully authenticated.
-    Authenticated(AuthContext),
+    ///
+    /// The challenge is retained so that NIP-AA §6 credential replacement can
+    /// re-verify a new AUTH event on the same connection without requiring a
+    /// new challenge round-trip.
+    Authenticated {
+        /// The auth context established during the initial AUTH handshake.
+        ctx: AuthContext,
+        /// The original challenge string, retained for re-auth verification.
+        challenge: String,
+    },
     /// Authentication attempt was rejected.
     Failed,
 }

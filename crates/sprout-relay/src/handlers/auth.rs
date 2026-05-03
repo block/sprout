@@ -95,24 +95,40 @@ fn verify_api_token_nip42_binding(
 /// Handle a NIP-42 AUTH message: verify the challenge response and transition the connection to authenticated state.
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex_early = event.id.to_hex();
+
+    // Extract the challenge and conn_id from the current auth state.
+    //
+    // AuthState::Authenticated: NIP-AA §6 allows the same pubkey to re-auth on an
+    // already-authenticated connection to replace the stored credential. We retain
+    // the challenge in AuthState::Authenticated for exactly this purpose. Only the
+    // same pubkey may re-auth — a different pubkey is rejected to prevent session
+    // hijacking via credential replacement.
     let (challenge, conn_id) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Pending { challenge } => (challenge.clone(), conn.conn_id),
-            AuthState::Authenticated(_) => {
-                // NIP-AA §6 says same-pubkey re-auth MUST replace the stored credential.
-                // We intentionally do not implement this: the challenge is not retained
-                // after authentication, so there is no way to verify a new AUTH event
-                // without a new challenge round-trip. Supporting re-auth would require
-                // restructuring AuthState to carry the challenge across the Authenticated
-                // transition — deferred as a TODO.
-                debug!(conn_id = %conn.conn_id, "AUTH received but already authenticated");
-                conn.send(RelayMessage::ok(
-                    &event_id_hex_early,
-                    false,
-                    "auth-required: already authenticated",
-                ));
-                return;
+            AuthState::Authenticated { challenge, ctx } => {
+                // NIP-AA §6: same-pubkey re-auth MUST replace the stored credential.
+                if event.pubkey != ctx.pubkey {
+                    warn!(
+                        conn_id = %conn.conn_id,
+                        existing = %ctx.pubkey.to_hex(),
+                        incoming = %event.pubkey.to_hex(),
+                        "NIP-AA §6: re-auth pubkey mismatch — rejecting"
+                    );
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex_early,
+                        false,
+                        "auth-required: pubkey mismatch on re-auth",
+                    ));
+                    return;
+                }
+                debug!(
+                    conn_id = %conn.conn_id,
+                    pubkey = %ctx.pubkey.to_hex(),
+                    "NIP-AA §6: re-auth credential replacement"
+                );
+                (challenge.clone(), conn.conn_id)
             }
             AuthState::Failed => {
                 debug!(conn_id = %conn.conn_id, "AUTH received after failed auth");
@@ -283,7 +299,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     // do NOT replace them. Replacing could widen a read-only token to
                     // full write access. Intersection preserves the token's restrictions
                     // while stripping any admin scopes.
-                    let (auth_method, owner_pubkey, final_scopes) = match nip_aa_owner {
+                    let (auth_method, final_owner_pubkey, final_scopes) = match nip_aa_owner {
                         Some(owner) => {
                             let allowed = sprout_auth::Scope::nip_aa_virtual_member();
                             let intersected: Vec<sprout_auth::Scope> =
@@ -302,10 +318,13 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         scopes: final_scopes,
                         channel_ids: record.channel_ids,
                         auth_method,
-                        owner_pubkey,
+                        owner_pubkey: final_owner_pubkey,
                     };
 
-                    *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+                    *conn.auth_state.write().await = AuthState::Authenticated {
+                        ctx: auth_ctx,
+                        challenge: challenge.clone(),
+                    };
                     state
                         .conn_manager
                         .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
@@ -407,7 +426,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     owner = %owner_pubkey.to_hex(),
                     "NIP-AA agent auth successful"
                 );
-                *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+                *conn.auth_state.write().await = AuthState::Authenticated {
+                    ctx: auth_ctx,
+                    challenge: challenge.clone(),
+                };
                 state
                     .conn_manager
                     .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
@@ -513,7 +535,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
             };
 
-            *conn.auth_state.write().await = AuthState::Authenticated(final_ctx);
+            *conn.auth_state.write().await = AuthState::Authenticated {
+                ctx: final_ctx,
+                challenge: challenge.clone(),
+            };
             state
                 .conn_manager
                 .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
@@ -588,5 +613,32 @@ mod tests {
             make_api_token_auth_event(&keys, &challenge, TEST_RELAY, "sprout_test_api_token");
 
         assert!(verify_api_token_nip42_binding(&event, &challenge, TEST_RELAY).is_ok());
+    }
+
+    /// When an AUTH event has BOTH an `auth_token` AND an `auth` (NIP-OA) tag,
+    /// the token path runs first. A bad token must be rejected immediately —
+    /// we must NOT fall through to NIP-AA. This test verifies the NIP-42
+    /// binding check (which runs before the DB lookup) still rejects on a
+    /// wrong challenge even when an `auth` tag is present.
+    #[test]
+    fn token_path_runs_first_when_both_auth_token_and_auth_tag_present() {
+        let keys = Keys::generate();
+        let challenge = sprout_auth::generate_challenge();
+        let url: Url = TEST_RELAY.parse().expect("valid relay url");
+        let auth_token_tag =
+            Tag::parse(&["auth_token", "sprout_test"]).expect("valid auth_token tag");
+        // Craft a dummy NIP-OA auth tag (content doesn't matter for this test).
+        let auth_tag = Tag::parse(&["auth", "owner_hex", "", "sig_hex"]).expect("valid auth tag");
+        let event = EventBuilder::auth(&challenge, url)
+            .add_tags(vec![auth_token_tag, auth_tag])
+            .sign_with_keys(&keys)
+            .expect("signing failed");
+
+        // The token path runs first — wrong challenge must be rejected even
+        // though a (dummy) NIP-OA auth tag is present.
+        assert!(matches!(
+            verify_api_token_nip42_binding(&event, "wrong-challenge", TEST_RELAY),
+            Err(AuthError::ChallengeMismatch)
+        ));
     }
 }
