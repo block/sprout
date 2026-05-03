@@ -41,7 +41,7 @@ jobs:
       - name: Patch version
         run: |
           cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
-          cd src-tauri && cargo generate-lockfile
+          cd src-tauri && cargo update --workspace
 
       - name: Generate release config
         run: cd desktop && node scripts/build-release-config.mjs
