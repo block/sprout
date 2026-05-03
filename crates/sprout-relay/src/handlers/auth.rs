@@ -367,23 +367,19 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         )
         .await
         {
-            Some(nip_aa_owner) => {
-                let auth_method = if nip_aa_owner.is_some() {
-                    sprout_auth::AuthMethod::Nip42AgentAuth
-                } else {
-                    sprout_auth::AuthMethod::Nip42PubkeyOnly
-                };
+            Some(Some(owner_pubkey)) => {
+                // NIP-AA virtual member — grant access with agent auth method.
                 let auth_ctx = sprout_auth::AuthContext {
                     pubkey,
                     scopes: sprout_auth::Scope::all_known(),
                     channel_ids: None,
-                    auth_method,
-                    owner_pubkey: nip_aa_owner,
+                    auth_method: sprout_auth::AuthMethod::Nip42AgentAuth,
+                    owner_pubkey: Some(owner_pubkey),
                 };
                 info!(
                     conn_id = %conn_id,
                     pubkey = %pubkey.to_hex(),
-                    owner = ?nip_aa_owner.map(|p| p.to_hex()),
+                    owner = %owner_pubkey.to_hex(),
                     "NIP-AA agent auth successful"
                 );
                 *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
@@ -391,12 +387,18 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     .conn_manager
                     .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
                 conn.send(RelayMessage::ok(&event_id_hex, true, ""));
+                return;
+            }
+            Some(None) => {
+                // Direct member with a dummy auth tag — do NOT grant access here.
+                // Fall through to verify_auth_event which enforces token requirements.
             }
             None => {
                 // enforce_ws_relay_membership already sent the rejection message.
+                return;
             }
         }
-        return;
+        // Direct member fell through — continue to verify_auth_event below.
     }
 
     // ── Okta JWT / pubkey-only path ─────────────────────────────────────────

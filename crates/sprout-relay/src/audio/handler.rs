@@ -151,9 +151,10 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let relay_url = state.config.relay_url.clone();
 
     // ── NIP-AA agent auth path ───────────────────────────────────────────────
-    // If there is no auth_token but there IS a NIP-OA auth tag, this is an
-    // agent using NIP-AA. Bypass verify_auth_event (which requires a token in
-    // production mode) and do NIP-42 binding verification directly.
+    // If there is no auth_token but there IS a NIP-OA auth tag, this *might*
+    // be a NIP-AA agent. Verify NIP-42 binding first, then check relay
+    // membership to confirm it is a virtual member — not just a direct member
+    // with a dummy auth tag trying to bypass verify_auth_event.
     let pubkey = if audio_auth_token.is_none() && auth_tag_json.is_some() {
         let event_for_verify = auth_msg.event.clone();
         let challenge_owned = challenge.clone();
@@ -187,7 +188,62 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                 return;
             }
         }
-        auth_msg.event.pubkey
+
+        // Check relay membership to distinguish NIP-AA virtual members from
+        // direct members. Direct members must not bypass verify_auth_event.
+        let candidate_pubkey = auth_msg.event.pubkey;
+        let candidate_pubkey_bytes = candidate_pubkey.serialize().to_vec();
+        let membership = crate::api::relay_members::enforce_relay_membership(
+            &state,
+            &candidate_pubkey_bytes,
+            auth_tag_json.as_deref(),
+            event_created_at,
+        )
+        .await;
+
+        match membership {
+            Ok(Some(_owner_pubkey)) => {
+                // NIP-AA virtual member — NIP-42 binding already verified above.
+                // The relay membership gate below will re-confirm and is a no-op
+                // (membership already proven), but we skip verify_auth_event.
+                candidate_pubkey
+            }
+            Ok(None) => {
+                // Direct member with a dummy auth tag — must go through
+                // verify_auth_event to enforce token requirements.
+                let auth_ctx = match state
+                    .auth
+                    .verify_auth_event(auth_msg.event, &challenge, &relay_url)
+                    .await
+                {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        warn!(channel_id = %channel_id, "audio auth failed for direct member: {e}");
+                        let _ = ws_send
+                            .send(WsMessage::Text(
+                                serde_json::json!({"type":"error","message":"auth failed"})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        return;
+                    }
+                };
+                auth_ctx.pubkey
+            }
+            Err(_) => {
+                // Not a relay member at all — deny.
+                warn!(channel_id = %channel_id, pubkey = %candidate_pubkey.to_hex(), "audio NIP-AA: relay membership denied");
+                let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                return;
+            }
+        }
     } else {
         // ── Standard auth path (Okta JWT / API token / pubkey-only) ─────────
         let auth_ctx = match state
