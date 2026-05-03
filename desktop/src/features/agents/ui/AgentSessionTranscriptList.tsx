@@ -4,6 +4,8 @@ import { cn } from "@/shared/lib/cn";
 import { Markdown } from "@/shared/ui/markdown";
 import type { TranscriptItem } from "./agentSessionTypes";
 import { ToolItem } from "./AgentSessionToolItem";
+import { formatTranscriptTime } from "./agentSessionUtils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 export function AgentSessionTranscriptList({
   agentName,
@@ -91,6 +93,7 @@ function MessageItem({
               <Bot className="h-3.5 w-3.5 text-muted-foreground" />
             </span>
             <span className="font-normal text-foreground">{agentName}</span>
+            <TranscriptTimestamp timestamp={item.timestamp} />
           </div>
         ) : null}
         <div
@@ -102,7 +105,10 @@ function MessageItem({
           {isAssistant ? (
             <Markdown compact content={text || " "} />
           ) : (
-            <p className="whitespace-pre-wrap break-words">{text}</p>
+            <>
+              <p className="whitespace-pre-wrap break-words">{text}</p>
+              <TranscriptTimestamp timestamp={item.timestamp} />
+            </>
           )}
         </div>
       </div>
@@ -120,6 +126,7 @@ function ThoughtItem({
       <summary className="inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-px text-muted-foreground">
         <Brain className="h-4 w-4" />
         <span className="truncate text-sm font-medium">{item.title}</span>
+        <TranscriptTimestamp timestamp={item.timestamp} />
         <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
       </summary>
       <div className="py-2 pl-5 text-sm leading-6 text-muted-foreground">
@@ -142,6 +149,7 @@ function MetadataItem({
         <span className="shrink-0 text-xs">
           {item.sections.length} section{item.sections.length === 1 ? "" : "s"}
         </span>
+        <TranscriptTimestamp timestamp={item.timestamp} />
         <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
       </summary>
       <div className="space-y-3 py-2 pl-5">
@@ -173,12 +181,42 @@ function LifecycleItem({
   return (
     <div
       className={cn(
-        "px-4 py-2 text-center text-xs",
+        "flex items-center justify-center gap-1.5 px-4 py-2 text-center text-xs",
         isError ? "text-destructive" : "text-muted-foreground",
       )}
     >
       <span className="font-medium">{item.title}</span>
       {item.text ? <span> - {item.text}</span> : null}
+      <TranscriptTimestamp timestamp={item.timestamp} />
     </div>
+  );
+}
+
+const fullDateTimeFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "long",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+function TranscriptTimestamp({ timestamp }: { timestamp: string }) {
+  const formatted = formatTranscriptTime(timestamp);
+  if (!formatted) return null;
+  const date = new Date(timestamp);
+  const fullDateTime = Number.isNaN(date.getTime())
+    ? timestamp
+    : fullDateTimeFormat.format(date);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="shrink-0 cursor-default text-[11px] text-muted-foreground/60">
+          {formatted}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{fullDateTime}</TooltipContent>
+    </Tooltip>
   );
 }

@@ -61,6 +61,8 @@ export type TranscriptItem =
       result: string;
       isError: boolean;
       timestamp: string;
+      startedAt: string;
+      completedAt: string | null;
     };
 
 export type PromptSection = {
