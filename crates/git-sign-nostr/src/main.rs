@@ -313,35 +313,40 @@ struct StatusWriter {
 impl StatusWriter {
     /// Create a status writer for the given file descriptor.
     ///
-    /// On unix, validates the fd is actually open using `fcntl(F_GETFD)` before
-    /// wrapping it. Returns `None` file (falls back to stderr) if the fd is
-    /// invalid. Uses `ManuallyDrop` to avoid closing the fd on drop — git owns
-    /// the fd lifetime.
-    fn new(fd: Option<i32>) -> Self {
-        let file = fd.and_then(|fd| {
-            // Validate the fd is open before wrapping. Git should always pass
-            // a valid fd, but defense-in-depth: if it's closed/invalid, fall
-            // back to stderr rather than triggering UB.
-            #[cfg(unix)]
-            {
-                // SAFETY EXCEPTION: Required for Unix fd operations; no safe Rust API
-                // exists for fcntl. The fd value is >= 1 (validated by
-                // parse_status_fd). F_GETFD is read-only and cannot cause memory
-                // unsafety — the only risk is EBADF, which we handle by checking
-                // the return value.
-                let ret = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-                if ret == -1 {
-                    eprintln!("warning: --status-fd={fd} is not a valid open fd, using stderr");
-                    return None;
+    /// If `strict` is true (verify mode), returns an error when the fd is
+    /// explicitly provided but invalid — git depends on status output to
+    /// determine verification results. If `strict` is false (sign mode),
+    /// falls back to stderr on invalid fd.
+    fn new(fd: Option<i32>, strict: bool) -> Result<Self, Error> {
+        let file = match fd {
+            None => None,
+            Some(fd) => {
+                #[cfg(unix)]
+                {
+                    // SAFETY EXCEPTION: Required for Unix fd operations; no safe Rust API
+                    // exists for fcntl. The fd value is >= 1 (validated by
+                    // parse_status_fd). F_GETFD is read-only and cannot cause memory
+                    // unsafety — the only risk is EBADF, which we handle by checking
+                    // the return value.
+                    let ret = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+                    if ret == -1 {
+                        if strict {
+                            return Err(Error::Fatal(format!(
+                                "--status-fd={fd} is not a valid open fd (required for verify)"
+                            )));
+                        }
+                        eprintln!("warning: --status-fd={fd} is not a valid open fd, using stderr");
+                        return Ok(Self { file: None });
+                    }
                 }
+                // SAFETY EXCEPTION: Required for Unix fd operations; no safe Rust API
+                // exists for from_raw_fd. The fd is >= 1 (validated by parse_status_fd),
+                // confirmed open by fcntl above, and git owns its lifetime. We use
+                // ManuallyDrop to prevent Rust from closing the inherited fd on drop.
+                Some(ManuallyDrop::new(unsafe { fs::File::from_raw_fd(fd) }))
             }
-            // SAFETY EXCEPTION: Required for Unix fd operations; no safe Rust API
-            // exists for from_raw_fd. The fd is >= 1 (validated by parse_status_fd),
-            // confirmed open by fcntl above, and git owns its lifetime. We use
-            // ManuallyDrop to prevent Rust from closing the inherited fd on drop.
-            Some(ManuallyDrop::new(unsafe { fs::File::from_raw_fd(fd) }))
-        });
-        Self { file }
+        };
+        Ok(Self { file })
     }
 
     /// Write a GnuPG-format status line. Errors are logged to stderr but do
@@ -774,7 +779,7 @@ fn git_config_strict(key: &str) -> Result<Option<String>, String> {
 /// the opened handle to verify permissions. Returns the opened file handle.
 #[cfg(unix)]
 fn open_keyfile(path: &str) -> Result<fs::File, Error> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::os::unix::io::AsRawFd;
 
     // O_NOFOLLOW: fail with ELOOP if path is a symlink.
@@ -823,6 +828,18 @@ fn open_keyfile(path: &str) -> Result<fs::File, Error> {
             "keyfile {path} has insecure permissions {mode:04o} (expected 0600 or 0400)"
         )));
     }
+
+    // Verify the keyfile is owned by the current user. A 0600 file owned by
+    // another UID could still be readable via ACLs or privileged execution.
+    // SAFETY EXCEPTION: getuid(2) has no preconditions and no side effects.
+    let current_uid = unsafe { libc::getuid() };
+    if meta.uid() != current_uid {
+        return Err(Error::Fatal(format!(
+            "keyfile {path} is owned by uid {} but current uid is {current_uid}",
+            meta.uid()
+        )));
+    }
+
     Ok(file)
 }
 
@@ -1744,7 +1761,30 @@ fn run() -> i32 {
         }
         _ => args.status_fd,
     };
-    let mut status = StatusWriter::new(effective_fd);
+    let mut status = match args.mode {
+        Mode::Sign { .. } => match StatusWriter::new(effective_fd, false) {
+            Ok(s) => s,
+            Err(Error::Fatal(msg)) => {
+                eprintln!("error: {msg}");
+                return 1;
+            }
+            Err(Error::VerifyFailed { msg, .. }) => {
+                eprintln!("error: {msg}");
+                return 1;
+            }
+        },
+        Mode::Verify { .. } => match StatusWriter::new(effective_fd, true) {
+            Ok(s) => s,
+            Err(Error::Fatal(msg)) => {
+                eprintln!("error: {msg}");
+                return 1;
+            }
+            Err(Error::VerifyFailed { msg, .. }) => {
+                eprintln!("error: {msg}");
+                return 1;
+            }
+        },
+    };
 
     let result = match args.mode {
         Mode::Sign { ref key_id } => do_sign(key_id, &mut status),
