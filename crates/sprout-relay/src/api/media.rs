@@ -87,15 +87,21 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
             .map_err(|_| MediaError::InsufficientScope)?;
 
         // 5. Relay membership gate (NIP-43).
-        // Extract NIP-OA auth tag for NIP-AA if present.
-        let auth_tag_json = auth_event
+        // Extract NIP-OA auth tag for NIP-AA — NIP-AA requires exactly one auth tag.
+        // Zero tags → not a NIP-AA attempt. Multiple tags → malformed, treat as absent.
+        let auth_tags: Vec<_> = auth_event
             .tags
             .iter()
-            .find(|t| {
+            .filter(|t| {
                 let s = t.as_slice();
                 !s.is_empty() && s[0] == "auth"
             })
-            .map(|t| serde_json::to_string(&t.as_slice()).unwrap_or_default());
+            .collect();
+        let auth_tag_json = if auth_tags.len() == 1 {
+            serde_json::to_string(&auth_tags[0].as_slice()).ok()
+        } else {
+            None // Zero or multiple auth tags — NIP-AA requires exactly one
+        };
         let event_created_at = Some(auth_event.created_at.as_u64());
         crate::api::relay_members::enforce_relay_membership(
             state,

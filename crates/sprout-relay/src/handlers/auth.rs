@@ -375,6 +375,14 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
         Err(e) => {
+            // NIP-42 verification failure — use "auth-required:" prefix per NIP-42 spec.
+            //
+            // NIP-AA spec §Step 1 says to use "invalid:" for Step 1 failures, but that
+            // language applies to the relay's response *after* it has determined this is
+            // a NIP-AA attempt (i.e., after Step 2 fails and Step 3 finds an auth tag).
+            // Standard NIP-42 verification happens *before* NIP-AA is even considered, so
+            // "auth-required:" is the correct prefix here. Changing it would break
+            // standard NIP-42 clients that expect "auth-required:" on verification failure.
             warn!(conn_id = %conn_id, error = %e, "NIP-42 auth failed");
             metrics::counter!("sprout_auth_failures_total", "reason" => "nip42_invalid")
                 .increment(1);

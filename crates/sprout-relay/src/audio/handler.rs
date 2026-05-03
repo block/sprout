@@ -118,15 +118,23 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     };
 
     // Extract NIP-OA auth tag for NIP-AA before the event is consumed.
-    let auth_tag_json = auth_msg
+    // NIP-AA requires exactly one auth tag — zero means not a NIP-AA attempt,
+    // multiple means malformed (treat as absent so membership check falls through
+    // to the standard path rather than silently picking an arbitrary tag).
+    let auth_tags: Vec<_> = auth_msg
         .event
         .tags
         .iter()
-        .find(|t| {
+        .filter(|t| {
             let s = t.as_slice();
             !s.is_empty() && s[0] == "auth"
         })
-        .map(|t| serde_json::to_string(&t.as_slice()).unwrap_or_default());
+        .collect();
+    let auth_tag_json = if auth_tags.len() == 1 {
+        serde_json::to_string(&auth_tags[0].as_slice()).ok()
+    } else {
+        None // Zero or multiple auth tags — NIP-AA requires exactly one
+    };
     let event_created_at = Some(auth_msg.event.created_at.as_u64());
 
     let relay_url = state.config.relay_url.clone();
