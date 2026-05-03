@@ -19,6 +19,7 @@ members = [
     "crates/sprout-sdk",
     "crates/sprout-persona",
     "crates/git-credential-nostr",
+    "crates/git-sign-nostr",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
