@@ -13,17 +13,23 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 
 use sprout_pair_relay::{run_server, Relay};
 
+// ── Crypto imports (for real event signing) ───────────────────────────────────
+
+use secp256k1::{Keypair, Secp256k1, SecretKey};
+use sha2::{Digest, Sha256};
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /// A valid 64-char lowercase hex string (all 'a's).
 const P_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 /// A different valid 64-char lowercase hex string (all 'b's).
 const P_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-/// A valid event id (all 'c's).
+/// A valid event id (all 'c's) — used only in tests that are rejected before
+/// ID/sig verification (kind check, shape check, etc.).
 const EV_ID: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
-/// A valid pubkey (all 'd's).
+/// A valid pubkey (all 'd's) — used only in pre-sig-check rejection tests.
 const PUBKEY: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-/// A valid sig (128 'e's).
+/// A valid sig (128 'e's) — used only in pre-sig-check rejection tests.
 const SIG: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
 // ── Test infrastructure ───────────────────────────────────────────────────────
@@ -86,30 +92,107 @@ async fn assert_closed(ws: &mut WS) {
     }
 }
 
-/// Build a valid kind:24134 event targeting `p_hex`.
-fn make_event(p_hex: &str) -> Value {
+// ── Crypto helpers ────────────────────────────────────────────────────────────
+
+/// Generate a random keypair; returns `(SecretKey, pubkey_hex)`.
+fn gen_keypair() -> (SecretKey, String) {
+    let secp = Secp256k1::new();
+    let (sk, pk) = secp.generate_keypair(&mut secp256k1::rand::rngs::OsRng);
+    let xonly = pk.x_only_public_key().0;
+    let pubkey_hex = xonly
+        .serialize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    (sk, pubkey_hex)
+}
+
+/// Standard base64 encoder (no external dep).
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHA[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHA[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHA[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHA[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+/// Build a minimal valid NIP-44 v2 fake ciphertext and base64-encode it.
+/// Layout: 0x02 (version) | 32-byte nonce | 48-byte ciphertext | 32-byte MAC = 113 bytes.
+/// 113 bytes ≥ 99 minimum; first decoded byte is 0x02.
+fn make_nip44_content() -> String {
+    let mut blob = vec![0x02u8]; // version
+    blob.extend_from_slice(&[0xAA; 32]); // nonce
+    blob.extend_from_slice(&[0xBB; 48]); // ciphertext
+    blob.extend_from_slice(&[0xCC; 32]); // MAC
+                                         // 113 bytes total
+    base64_encode(&blob)
+}
+
+/// Build a properly signed kind:24134 event targeting `p_hex`.
+/// `nonce` is mixed into the content so callers can produce unique IDs from
+/// the same keypair without sleeping.
+fn make_signed_event(sk: &SecretKey, pubkey_hex: &str, p_hex: &str, nonce: u64) -> Value {
+    let secp = Secp256k1::new();
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    // Vary content per nonce so each call produces a unique event ID.
+    let mut blob = vec![0x02u8];
+    blob.extend_from_slice(&nonce.to_le_bytes()); // 8 bytes of nonce
+    blob.extend_from_slice(&[0xAA; 24]); // pad to 32-byte "nonce" field
+    blob.extend_from_slice(&[0xBB; 48]);
+    blob.extend_from_slice(&[0xCC; 32]);
+    let content = base64_encode(&blob);
+
+    let tags = json!([["p", p_hex]]);
+    let kind = 24134u64;
+
+    // NIP-01 commitment: [0, pubkey, created_at, kind, tags, content]
+    let commitment = json!([0, pubkey_hex, created_at, kind, tags, content]);
+    let commitment_str = serde_json::to_string(&commitment).unwrap();
+    let hash: [u8; 32] = Sha256::digest(commitment_str.as_bytes()).into();
+    let id_hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+
+    let msg = secp256k1::Message::from_digest(hash);
+    let keypair = Keypair::from_secret_key(&secp, sk);
+    let sig = secp.sign_schnorr_no_aux_rand(&msg, &keypair);
+    let sig_hex: String = sig.serialize().iter().map(|b| format!("{b:02x}")).collect();
+
     json!({
-        "id":         EV_ID,
-        "pubkey":     PUBKEY,
+        "id":         id_hex,
+        "pubkey":     pubkey_hex,
         "kind":       24134,
-        "created_at": 1_700_000_000i64,
-        "content":    "encrypted",
-        "sig":        SIG,
+        "created_at": created_at,
+        "content":    content,
+        "sig":        sig_hex,
         "tags":       [["p", p_hex]]
     })
 }
 
-/// Build a valid kind:24134 event with a custom id.
-fn make_event_with_id(id: &str, p_hex: &str) -> Value {
-    json!({
-        "id":         id,
-        "pubkey":     PUBKEY,
-        "kind":       24134,
-        "created_at": 1_700_000_000i64,
-        "content":    "encrypted",
-        "sig":        SIG,
-        "tags":       [["p", p_hex]]
-    })
+/// Return the current Unix timestamp as i64.
+fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
 }
 
 /// Send a REQ for the given sub_id and p_hex, then consume the EOSE.
@@ -123,16 +206,28 @@ async fn subscribe(ws: &mut WS, sub_id: &str, p_hex: &str) {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 /// 1. No replay: events published before a subscription are not delivered.
+///    With tightening #2, publishing with no live subscriber is rejected
+///    ("no live subscriber"), so the publisher gets OK false.
 #[tokio::test]
 async fn test_no_replay() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
-    // Publish first, then subscribe.
+    // Publish first — no subscriber yet, so relay rejects with "no live subscriber".
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ok = recv(&mut pub_ws).await;
     assert_eq!(ok[0], "OK");
-    assert!(ok[2].as_bool().unwrap());
+    assert_eq!(ok[2], false, "expected rejection with no live subscriber");
+    assert!(
+        ok[3].as_str().unwrap_or("").contains("no live subscriber"),
+        "unexpected message: {}",
+        ok[3]
+    );
 
     // Subscribe — should only get EOSE, no EVENT.
     let mut sub_ws = connect(&url).await;
@@ -150,27 +245,36 @@ async fn test_no_replay() {
 #[tokio::test]
 async fn test_live_delivery() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
     let mut sub_ws = connect(&url).await;
     subscribe(&mut sub_ws, "s1", P_A).await;
 
     // Publish matching event from a second connection.
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ok = recv(&mut pub_ws).await;
     assert_eq!(ok[0], "OK");
-    assert!(ok[2].as_bool().unwrap());
+    assert!(ok[2].as_bool().unwrap(), "event rejected: {}", ok[3]);
 
     // Subscriber should receive the event.
     let ev_msg = recv(&mut sub_ws).await;
     assert_eq!(ev_msg[0], "EVENT");
     assert_eq!(ev_msg[1], "s1");
 
-    // Publish to a different p-tag — subscriber should NOT receive it.
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_B)])).await;
+    // Publish to a different p-tag — no subscriber for P_B, so OK false.
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_B, 1)]),
+    )
+    .await;
     let ok2 = recv(&mut pub_ws).await;
     assert_eq!(ok2[0], "OK");
-    assert!(ok2[2].as_bool().unwrap());
+    assert_eq!(ok2[2], false, "expected rejection for unsubscribed p-tag");
 
     assert!(
         try_recv(&mut sub_ws).await.is_none(),
@@ -275,6 +379,7 @@ async fn test_unsupported_filter_field() {
 #[tokio::test]
 async fn test_second_sub_different_id() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
     let mut ws = connect(&url).await;
 
     subscribe(&mut ws, "s1", P_A).await;
@@ -295,7 +400,11 @@ async fn test_second_sub_different_id() {
 
     // First subscription still works.
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ev_msg = recv(&mut ws).await;
     assert_eq!(ev_msg[0], "EVENT");
     assert_eq!(ev_msg[1], "s1");
@@ -305,6 +414,7 @@ async fn test_second_sub_different_id() {
 #[tokio::test]
 async fn test_second_sub_same_id() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
     let mut ws = connect(&url).await;
 
     subscribe(&mut ws, "s1", P_A).await;
@@ -325,7 +435,11 @@ async fn test_second_sub_same_id() {
 
     // First subscription still works.
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ev_msg = recv(&mut ws).await;
     assert_eq!(ev_msg[0], "EVENT");
     assert_eq!(ev_msg[1], "s1");
@@ -424,8 +538,8 @@ async fn test_multiple_p_tags() {
         "id":         EV_ID,
         "pubkey":     PUBKEY,
         "kind":       24134,
-        "created_at": 1_700_000_000i64,
-        "content":    "x",
+        "created_at": now_ts(),
+        "content":    make_nip44_content(),
         "sig":        SIG,
         "tags":       [["p", P_A], ["p", P_B]]
     });
@@ -498,36 +612,52 @@ async fn test_global_conn_cap() {
     let _new = connect(&url).await;
 }
 
-/// 18. Event rate limit: 10 EVENTs succeed; 11th is rate-limited.
+/// 18. Session event cap: 6 EVENTs are accepted; 7th is rejected with
+///     "session event limit reached".  (The relay's hard cap is 6 per
+///     connection, which is tighter than the per-window rate limit of 10.)
 #[tokio::test]
 async fn test_event_rate_limit() {
     let url = start_relay().await;
-    let mut ws = connect(&url).await;
+    let (sk, pk) = gen_keypair();
 
-    // Use a unique p-tag per test to avoid cross-test fan-out.
-    const P: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    // Subscribe so the relay has exactly one live recipient for P_A.
+    let mut sub_ws = connect(&url).await;
+    subscribe(&mut sub_ws, "s1", P_A).await;
 
-    // First 10 events must be accepted.
-    for i in 0..10u8 {
-        let id = format!("{:0>64}", i);
-        send(&mut ws, &json!(["EVENT", make_event_with_id(&id, P)])).await;
-        let resp = recv(&mut ws).await;
+    let mut pub_ws = connect(&url).await;
+
+    // First 6 events must be accepted (session cap = 6).
+    for i in 0..6u64 {
+        send(
+            &mut pub_ws,
+            &json!(["EVENT", make_signed_event(&sk, &pk, P_A, i)]),
+        )
+        .await;
+        let resp = recv(&mut pub_ws).await;
         assert_eq!(resp[0], "OK", "event {i}: {resp}");
         assert!(
             resp[2].as_bool().unwrap(),
             "event {i} rejected: {}",
             resp[3]
         );
+        // Drain the forwarded event from the subscriber so the channel stays open.
+        let _ = recv(&mut sub_ws).await;
     }
 
-    // 11th must be rate-limited.
-    let id = format!("{:0>64}", 10u8);
-    send(&mut ws, &json!(["EVENT", make_event_with_id(&id, P)])).await;
-    let resp = recv(&mut ws).await;
+    // 7th must be rejected by the session cap.
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 6)]),
+    )
+    .await;
+    let resp = recv(&mut pub_ws).await;
     assert_eq!(resp[0], "OK");
     assert_eq!(resp[2], false);
     assert!(
-        resp[3].as_str().unwrap_or("").contains("rate-limited"),
+        resp[3]
+            .as_str()
+            .unwrap_or("")
+            .contains("session event limit reached"),
         "unexpected message: {}",
         resp[3]
     );
@@ -610,6 +740,7 @@ async fn test_json_injection_sub_id() {
 #[tokio::test]
 async fn test_close_removes_sub() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
     let mut ws = connect(&url).await;
 
     subscribe(&mut ws, "s1", P_A).await;
@@ -618,11 +749,17 @@ async fn test_close_removes_sub() {
     // Give the relay a moment to process the CLOSE.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Publish a matching event.
+    // Publish a matching event — no subscriber, so OK false.
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ok = recv(&mut pub_ws).await;
     assert_eq!(ok[0], "OK");
+    // No subscriber after CLOSE, so event is rejected.
+    assert_eq!(ok[2], false);
 
     // Original subscriber must not receive anything.
     assert!(
@@ -651,6 +788,7 @@ async fn test_close_keeps_connection() {
 #[tokio::test]
 async fn test_req_after_close() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
     let mut ws = connect(&url).await;
 
     subscribe(&mut ws, "s1", P_A).await;
@@ -661,10 +799,14 @@ async fn test_req_after_close() {
 
     // Publish a matching event.
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ok = recv(&mut pub_ws).await;
     assert_eq!(ok[0], "OK");
-    assert!(ok[2].as_bool().unwrap());
+    assert!(ok[2].as_bool().unwrap(), "event rejected: {}", ok[3]);
 
     // New subscription must receive the event.
     let ev_msg = recv(&mut ws).await;
@@ -696,6 +838,7 @@ async fn test_close_unknown_sub_id() {
 #[tokio::test]
 async fn test_no_events_after_close() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
     let mut ws = connect(&url).await;
 
     subscribe(&mut ws, "sub", P_A).await;
@@ -703,8 +846,12 @@ async fn test_no_events_after_close() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
-    recv(&mut pub_ws).await; // consume OK
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
+    recv(&mut pub_ws).await; // consume OK (will be false — no subscriber)
 
     assert!(
         try_recv(&mut ws).await.is_none(),
@@ -780,22 +927,25 @@ async fn test_malformed_req_non_object_filter() {
 ///     and subsequent fan-out drops are silent.  The subscriber connection
 ///     itself stays open (fan-out drops don't close).  This test verifies the
 ///     observable behavior: the publisher keeps getting OK responses and the
-///     subscriber connection is still alive after the flood (see test 40 for
-///     the complementary assertion).
+///     subscriber connection is still alive after the flood.
 #[tokio::test]
 async fn test_write_timeout() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
     // Subscribe but never read.
     let mut sub_ws = connect(&url).await;
     send(&mut sub_ws, &json!(["REQ", "s1", {"#p": [P_A]}])).await;
     // Don't call recv — leave the EOSE unread.
 
-    // Flood from a publisher (stay under 20 msg rate limit).
+    // Flood from a publisher — stay within the 6-event session cap.
     let mut pub_ws = connect(&url).await;
-    for i in 0..10u8 {
-        let id = format!("{:0>64}", i);
-        send(&mut pub_ws, &json!(["EVENT", make_event_with_id(&id, P_A)])).await;
+    for i in 0..6u64 {
+        send(
+            &mut pub_ws,
+            &json!(["EVENT", make_signed_event(&sk, &pk, P_A, i)]),
+        )
+        .await;
         let ok = recv(&mut pub_ws).await;
         assert_eq!(ok[0], "OK");
     }
@@ -864,26 +1014,27 @@ async fn test_conn_counter_no_leak() {
 }
 
 /// 36. Fan-out drops do not close the subscriber connection.
-///     (Merged with test 40 — see that test for the authoritative assertion.)
 #[tokio::test]
 async fn test_control_msg_backpressure() {
-    // Verify that flooding events to a slow subscriber does not close the
-    // subscriber's connection — the relay silently drops overflowing messages.
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
     let mut sub_ws = connect(&url).await;
     send(&mut sub_ws, &json!(["REQ", "s1", {"#p": [P_A]}])).await;
     // Leave EOSE unread to fill the channel quickly.
 
+    // Flood within the 6-event session cap.
     let mut pub_ws = connect(&url).await;
-    for i in 0..16u8 {
-        let id = format!("{:0>64}", i);
-        send(&mut pub_ws, &json!(["EVENT", make_event_with_id(&id, P_A)])).await;
+    for i in 0..6u64 {
+        send(
+            &mut pub_ws,
+            &json!(["EVENT", make_signed_event(&sk, &pk, P_A, i)]),
+        )
+        .await;
         let _ = recv(&mut pub_ws).await;
     }
 
     // Subscriber connection must still be alive — verify by closing it cleanly.
-    // If the connection were dead, close() would fail or timeout.
     let close_result = tokio::time::timeout(Duration::from_secs(2), sub_ws.close(None)).await;
     assert!(
         close_result.is_ok(),
@@ -924,15 +1075,22 @@ async fn test_no_client_data_in_logs() {
 }
 
 /// 38. EOSE arrives before any EVENT in normal flow.
+///     Publishing with no live subscriber is rejected (tightening #2).
 #[tokio::test]
 async fn test_eose_try_send_failure() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
-    // Publisher sends an event before the subscriber connects.
+    // Publisher sends an event before the subscriber connects — rejected.
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ok = recv(&mut pub_ws).await;
     assert_eq!(ok[0], "OK");
+    assert_eq!(ok[2], false, "expected rejection with no live subscriber");
 
     // Subscriber connects after the event — should see EOSE first (no EVENT,
     // since there is no persistence).
@@ -975,16 +1133,20 @@ async fn test_ping_counts_toward_rate_limit() {
 #[tokio::test]
 async fn test_fan_out_drop_doesnt_close() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
     // Subscribe but don't read (leave EOSE buffered).
     let mut sub_ws = connect(&url).await;
     send(&mut sub_ws, &json!(["REQ", "s1", {"#p": [P_A]}])).await;
 
-    // Flood from a publisher — channel fills, extras are dropped silently.
+    // Flood from a publisher — stay within the 6-event session cap.
     let mut pub_ws = connect(&url).await;
-    for i in 0..16u8 {
-        let id = format!("{:0>64}", i);
-        send(&mut pub_ws, &json!(["EVENT", make_event_with_id(&id, P_A)])).await;
+    for i in 0..6u64 {
+        send(
+            &mut pub_ws,
+            &json!(["EVENT", make_signed_event(&sk, &pk, P_A, i)]),
+        )
+        .await;
         let _ = recv(&mut pub_ws).await;
     }
 
@@ -996,22 +1158,25 @@ async fn test_fan_out_drop_doesnt_close() {
     );
 }
 
-/// 41. Reader backpressure: simplified version verifying that a subscriber
-///     that never reads eventually allows the publisher to keep running.
-///     (Merged with test 32 for observable behavior.)
+/// 41. Reader backpressure: publisher can keep running even when the subscriber
+///     never reads.
 #[tokio::test]
 async fn test_reader_backpressure_closes() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
     // Slow subscriber — never reads.
     let mut sub_ws = connect(&url).await;
     send(&mut sub_ws, &json!(["REQ", "s1", {"#p": [P_A]}])).await;
 
-    // Publisher floods events.
+    // Publisher floods events up to the session cap.
     let mut pub_ws = connect(&url).await;
-    for i in 0..20u8 {
-        let id = format!("{:0>64}", i);
-        send(&mut pub_ws, &json!(["EVENT", make_event_with_id(&id, P_A)])).await;
+    for i in 0..6u64 {
+        send(
+            &mut pub_ws,
+            &json!(["EVENT", make_signed_event(&sk, &pk, P_A, i)]),
+        )
+        .await;
         let ok = recv(&mut pub_ws).await;
         // Publisher must always get OK (fan-out drops are silent to publisher).
         assert_eq!(ok[0], "OK");
@@ -1046,10 +1211,12 @@ async fn test_graceful_close() {
     assert_closed(&mut ws).await;
 }
 
-/// 44. Multiple subscribers on the same #p value both receive the event.
+/// 44. Multiple subscribers on the same #p value: event is rejected with
+///     "ambiguous recipient" (tightening #2 — exactly one subscriber required).
 #[tokio::test]
 async fn test_multiple_subscribers_same_p() {
     let url = start_relay().await;
+    let (sk, pk) = gen_keypair();
 
     // Two subscribers on the same #p.
     let mut sub1 = connect(&url).await;
@@ -1058,21 +1225,31 @@ async fn test_multiple_subscribers_same_p() {
     let mut sub2 = connect(&url).await;
     subscribe(&mut sub2, "s2", P_A).await;
 
-    // Publisher sends one event.
+    // Publisher sends one event — relay rejects it (ambiguous recipient).
     let mut pub_ws = connect(&url).await;
-    send(&mut pub_ws, &json!(["EVENT", make_event(P_A)])).await;
+    send(
+        &mut pub_ws,
+        &json!(["EVENT", make_signed_event(&sk, &pk, P_A, 0)]),
+    )
+    .await;
     let ok = recv(&mut pub_ws).await;
     assert_eq!(ok[0], "OK");
-    assert!(ok[2].as_bool().unwrap());
+    assert_eq!(ok[2], false, "expected rejection with ambiguous recipient");
+    assert!(
+        ok[3].as_str().unwrap_or("").contains("ambiguous recipient"),
+        "unexpected message: {}",
+        ok[3]
+    );
 
-    // Both subscribers receive it.
-    let ev1 = recv(&mut sub1).await;
-    assert_eq!(ev1[0], "EVENT");
-    assert_eq!(ev1[1], "s1");
-
-    let ev2 = recv(&mut sub2).await;
-    assert_eq!(ev2[0], "EVENT");
-    assert_eq!(ev2[1], "s2");
+    // Neither subscriber receives anything.
+    assert!(
+        try_recv(&mut sub1).await.is_none(),
+        "sub1 received event despite ambiguous recipient"
+    );
+    assert!(
+        try_recv(&mut sub2).await.is_none(),
+        "sub2 received event despite ambiguous recipient"
+    );
 }
 
 /// 45. Uppercase hex in #p filter value is rejected.
@@ -1099,9 +1276,16 @@ async fn test_uppercase_hex_in_event_fields() {
     let url = start_relay().await;
     let mut ws = connect(&url).await;
 
-    // Event with uppercase id.
-    let mut ev = make_event(P_A);
-    ev["id"] = json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    // Build an event with a valid shape but uppercase id — rejected at hex check.
+    let ev = json!({
+        "id":         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "pubkey":     PUBKEY,
+        "kind":       24134,
+        "created_at": 1_700_000_000i64,
+        "content":    make_nip44_content(),
+        "sig":        SIG,
+        "tags":       [["p", P_A]]
+    });
     send(&mut ws, &json!(["EVENT", ev])).await;
     let resp = recv(&mut ws).await;
     assert_eq!(resp[0], "OK");
@@ -1123,21 +1307,30 @@ async fn test_overlong_sub_id() {
     assert!(resp[2].as_str().unwrap_or("").contains("sub_id too long"));
 }
 
-/// 48. Negative created_at is accepted (relay doesn't validate timestamps).
+/// 48. Negative created_at is rejected by the freshness window check.
+///     (Tightening #6: created_at must be within ±120 s of relay wall-clock.)
 #[tokio::test]
 async fn test_negative_created_at() {
     let url = start_relay().await;
     let mut ws = connect(&url).await;
 
-    let mut ev = make_event(P_A);
-    ev["created_at"] = json!(-1);
+    // A stale event with created_at = -1 is far outside the ±120 s window.
+    let ev = json!({
+        "id":         EV_ID,
+        "pubkey":     PUBKEY,
+        "kind":       24134,
+        "created_at": -1i64,
+        "content":    make_nip44_content(),
+        "sig":        SIG,
+        "tags":       [["p", P_A]]
+    });
     send(&mut ws, &json!(["EVENT", ev])).await;
     let resp = recv(&mut ws).await;
     assert_eq!(resp[0], "OK");
-    // Should still be accepted — relay doesn't validate timestamps.
+    assert_eq!(resp[2], false, "expected rejection for stale created_at");
     assert!(
-        resp[2].as_bool().unwrap(),
-        "negative created_at rejected: {}",
+        resp[3].as_str().unwrap_or("").contains("freshness window"),
+        "unexpected message: {}",
         resp[3]
     );
 }
@@ -1149,12 +1342,12 @@ async fn test_event_missing_sig() {
     let mut ws = connect(&url).await;
 
     let ev = json!({
-        "id": EV_ID,
-        "pubkey": PUBKEY,
-        "kind": 24134,
-        "created_at": 1_700_000_000i64,
-        "content": "encrypted",
-        "tags": [["p", P_A]]
+        "id":         EV_ID,
+        "pubkey":     PUBKEY,
+        "kind":       24134,
+        "created_at": now_ts(),
+        "content":    make_nip44_content(),
+        "tags":       [["p", P_A]]
     });
     send(&mut ws, &json!(["EVENT", ev])).await;
     let resp = recv(&mut ws).await;
@@ -1163,52 +1356,61 @@ async fn test_event_missing_sig() {
     assert!(resp[3].as_str().unwrap_or("").contains("missing sig"));
 }
 
-/// 50. Event with too many tags (> 16) is rejected.
+/// 50. EVENT with extra tags (not exactly one `["p", ...]`) is rejected.
+///     (Tightening #3: tags must be exactly `[["p", "<64-hex>"]]`.)
 #[tokio::test]
 async fn test_event_too_many_tags() {
     let url = start_relay().await;
     let mut ws = connect(&url).await;
 
-    let mut tags: Vec<Value> = (0..17).map(|i| json!(["x", format!("{i}")])).collect();
-    tags.push(json!(["p", P_A])); // 18 tags total, > 16 limit
+    // Two tags — violates the "exactly one p tag" rule.
     let ev = json!({
-        "id": EV_ID,
-        "pubkey": PUBKEY,
-        "kind": 24134,
-        "created_at": 1_700_000_000i64,
-        "content": "encrypted",
-        "sig": SIG,
-        "tags": tags
+        "id":         EV_ID,
+        "pubkey":     PUBKEY,
+        "kind":       24134,
+        "created_at": now_ts(),
+        "content":    make_nip44_content(),
+        "sig":        SIG,
+        "tags":       [["p", P_A], ["x", "extra"]]
     });
     send(&mut ws, &json!(["EVENT", ev])).await;
     let resp = recv(&mut ws).await;
     assert_eq!(resp[0], "OK");
     assert_eq!(resp[2], false);
-    assert!(resp[3].as_str().unwrap_or("").contains("too many tags"));
+    assert!(
+        resp[3].as_str().unwrap_or("").contains("exactly one p tag"),
+        "unexpected message: {}",
+        resp[3]
+    );
 }
 
-/// 51. Event with tag string exceeding 128 bytes is rejected.
+/// 51. EVENT with extra tags (not exactly one `["p", ...]`) is rejected.
+///     (Tightening #3: tags must be exactly `[["p", "<64-hex>"]]`.)
+///     Variant: two tags where one has a long string value.
 #[tokio::test]
 async fn test_event_tag_string_too_long() {
     let url = start_relay().await;
     let mut ws = connect(&url).await;
 
+    // Two tags — violates the "exactly one p tag" rule before any length check.
     let long_val = "x".repeat(129);
     let ev = json!({
-        "id": EV_ID,
-        "pubkey": PUBKEY,
-        "kind": 24134,
-        "created_at": 1_700_000_000i64,
-        "content": "encrypted",
-        "sig": SIG,
-        "tags": [["p", P_A], ["x", long_val]]
+        "id":         EV_ID,
+        "pubkey":     PUBKEY,
+        "kind":       24134,
+        "created_at": now_ts(),
+        "content":    make_nip44_content(),
+        "sig":        SIG,
+        "tags":       [["p", P_A], ["x", long_val]]
     });
     send(&mut ws, &json!(["EVENT", ev])).await;
     let resp = recv(&mut ws).await;
     assert_eq!(resp[0], "OK");
     assert_eq!(resp[2], false);
-    assert!(resp[3]
-        .as_str()
-        .unwrap_or("")
-        .contains("tag string too long"));
+    // Strict tag check fires first: exactly one tag required.
+    assert!(
+        resp[3].as_str().unwrap_or("").contains("exactly one p tag"),
+        "unexpected message: {}",
+        resp[3]
+    );
 }

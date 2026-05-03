@@ -17,11 +17,15 @@
 //!
 //! # Security Model
 //!
-//! - **No signature verification** — this is an intentionally untrusted pipe.
-//!   NIP-AB pairing security derives from the encrypted session, not relay trust.
+//! - **Signature verification** — Schnorr signatures are verified against the
+//!   NIP-01 event ID hash. Events with invalid signatures are rejected.
 //! - **No persistence** — events exist only in-flight between matched pub/sub.
 //! - **Bounded resources** — 128 max WS connections, 4 KiB max frame, 120s TTL.
+//! - **Session cap** — at most 6 accepted EVENTs per connection.
+//! - **Freshness** — `created_at` must be within ±120 s of relay wall-clock.
+//! - **Deduplication** — duplicate event IDs are rejected within a relay session.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +43,10 @@ use hyper::upgrade::Upgraded;
 use hyper::{Method, Request, Response, StatusCode, Version};
 use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
+use secp256k1::schnorr::Signature as SchnorrSig;
+use secp256k1::{Message as SecpMsg, XOnlyPublicKey};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -62,9 +69,17 @@ const MAX_FRAME: usize = 4096;
 const RATE_WINDOW: Duration = Duration::from_secs(10);
 const RATE_MSG_MAX: u32 = 20;
 const RATE_EVENT_MAX: u32 = 10;
-const MAX_TAGS: usize = 16;
-const MAX_TAG_STR: usize = 128;
 const SUB_ID_MAX: usize = 64;
+
+/// Hard session cap: at most this many accepted EVENTs per connection.
+const MAX_EVENTS_PER_CONN: u32 = 6;
+
+/// Dedup set is cleared when it reaches this size (connections are 120 s max,
+/// so accumulation is naturally bounded, but we cap defensively).
+const DEDUP_CAP: usize = 1024;
+
+/// Freshness window in seconds (±).
+const FRESHNESS_SECS: i64 = 120;
 
 // ── Core types ────────────────────────────────────────────────────────────────
 
@@ -85,6 +100,8 @@ pub struct Relay {
     subs: Mutex<Vec<Sub>>,
     conn_count: AtomicU32,
     next_conn_id: AtomicU64,
+    /// Global dedup set — cleared at DEDUP_CAP.
+    seen_ids: Mutex<HashSet<[u8; 32]>>,
 }
 
 impl Default for Relay {
@@ -99,10 +116,36 @@ impl Relay {
             subs: Mutex::new(Vec::new()),
             conn_count: AtomicU32::new(0),
             next_conn_id: AtomicU64::new(0),
+            seen_ids: Mutex::new(HashSet::new()),
         }
     }
 
-    /// Fan-out: send event to all subscribers whose `p_value` matches.
+    /// Check whether `id` has been seen before.
+    /// If not, record it and return `false` (not a duplicate).
+    /// If yes, return `true` (duplicate — reject).
+    fn check_and_record_id(&self, id: &[u8; 32]) -> bool {
+        let mut set = self.seen_ids.lock();
+        if set.contains(id) {
+            return true; // duplicate
+        }
+        if set.len() >= DEDUP_CAP {
+            set.clear();
+        }
+        set.insert(*id);
+        false
+    }
+
+    /// Count live subscribers for `p_value`.
+    fn subscriber_count(&self, p_value: &[u8; 32]) -> usize {
+        self.subs
+            .lock()
+            .iter()
+            .filter(|s| &s.p_value == p_value)
+            .count()
+    }
+
+    /// Fan-out: send event to the single subscriber whose `p_value` matches.
+    /// Caller must have already verified exactly one subscriber exists.
     fn fanout(&self, p_value: &[u8; 32], event: &Value) {
         let subs = self.subs.lock();
         for sub in subs.iter() {
@@ -250,13 +293,112 @@ fn validate_filter(filter: &Value) -> Result<[u8; 32], &'static str> {
     decode_hex32(p_str).ok_or("#p value must be 64 lowercase hex chars")
 }
 
-/// Validate an EVENT object. Returns `Ok((event_id, p_value))` or `Err(reason)`.
-fn validate_event(ev: &Value) -> Result<(String, [u8; 32]), &'static str> {
+/// Validate NIP-44 content structure (no external crate — manual base64 check).
+///
+/// Checks:
+/// - Standard base64 alphabet only (A-Z, a-z, 0-9, +, /, =)
+/// - Decoded length ≥ 99 bytes (1 version + 32 nonce + 32 min ciphertext + 32 MAC + 2 padding)
+/// - First decoded byte is 0x02 (NIP-44 version 2)
+fn validate_nip44_content(content: &str) -> Result<(), &'static str> {
+    if content.is_empty() {
+        return Err("content must not be empty");
+    }
+
+    // Validate base64 alphabet and compute decoded length.
+    let bytes = content.as_bytes();
+    let len = bytes.len();
+
+    // base64 strings must have length that is a multiple of 4 (with padding).
+    if !len.is_multiple_of(4) {
+        return Err("content is not valid base64");
+    }
+
+    // Check alphabet and count padding.
+    let mut pad_count = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' => {
+                if pad_count > 0 {
+                    // Non-pad after pad is invalid.
+                    return Err("content is not valid base64");
+                }
+            }
+            b'=' => {
+                // Padding only allowed in last two positions.
+                if i < len - 2 {
+                    return Err("content is not valid base64");
+                }
+                pad_count += 1;
+                if pad_count > 2 {
+                    return Err("content is not valid base64");
+                }
+            }
+            _ => return Err("content is not valid base64"),
+        }
+    }
+
+    // Decoded byte length = (len / 4) * 3 - pad_count.
+    let decoded_len = (len / 4) * 3 - pad_count;
+    if decoded_len < 99 {
+        return Err("content too short for NIP-44 v2");
+    }
+
+    // Decode only the first byte to check the version prefix.
+    // First base64 char encodes bits 7-2 of byte 0; second encodes bits 1-0 of
+    // byte 0 (high) and bits 5-2 of byte 1 (low). We only need byte 0.
+    let b64_val = |c: u8| -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let v0 = b64_val(bytes[0]).ok_or("content is not valid base64")?;
+    let v1 = b64_val(bytes[1]).ok_or("content is not valid base64")?;
+    let first_byte = (v0 << 2) | (v1 >> 4);
+
+    if first_byte != 0x02 {
+        return Err("content is not NIP-44 v2 (expected 0x02 prefix)");
+    }
+
+    Ok(())
+}
+
+/// Validate an EVENT object. Returns `Ok((event_id_str, event_id_bytes, p_value))` or `Err(reason)`.
+///
+/// Tightenings applied here:
+/// - Exactly 7 top-level keys (tightening #4)
+/// - Strict tag shape: exactly `[["p", "<64-hex>"]]` (tightening #3)
+/// - NIP-44 content validation (tightening #5)
+/// - Freshness window on `created_at` (tightening #6)
+fn validate_event(ev: &Value) -> Result<(String, [u8; 32], [u8; 32]), &'static str> {
     let obj = ev.as_object().ok_or("event must be an object")?;
+
+    // Tightening #4: reject extra top-level fields.
+    const ALLOWED_KEYS: &[&str] = &[
+        "id",
+        "pubkey",
+        "created_at",
+        "kind",
+        "tags",
+        "content",
+        "sig",
+    ];
+    for key in obj.keys() {
+        if !ALLOWED_KEYS.contains(&key.as_str()) {
+            return Err("unknown top-level field");
+        }
+    }
+
     let id = obj.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
     if !is_lower_hex(id, 64) {
         return Err("id must be 64 lowercase hex chars");
     }
+    let id_bytes = decode_hex32(id).ok_or("id must be 64 lowercase hex chars")?;
+
     let pubkey = obj
         .get("pubkey")
         .and_then(|v| v.as_str())
@@ -267,12 +409,28 @@ fn validate_event(ev: &Value) -> Result<(String, [u8; 32]), &'static str> {
     if obj.get("kind").and_then(|v| v.as_u64()) != Some(KIND_PAIR) {
         return Err("kind must be 24134");
     }
-    obj.get("created_at")
+
+    // Tightening #6: freshness window.
+    let created_at = obj
+        .get("created_at")
         .and_then(|v| v.as_i64())
         .ok_or("missing created_at")?;
-    obj.get("content")
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if (created_at - now).abs() > FRESHNESS_SECS {
+        return Err("created_at outside freshness window");
+    }
+
+    let content = obj
+        .get("content")
         .and_then(|v| v.as_str())
         .ok_or("missing content")?;
+
+    // Tightening #5: NIP-44 content validation.
+    validate_nip44_content(content)?;
+
     let sig = obj
         .get("sig")
         .and_then(|v| v.as_str())
@@ -285,41 +443,22 @@ fn validate_event(ev: &Value) -> Result<(String, [u8; 32]), &'static str> {
         .get("tags")
         .and_then(|v| v.as_array())
         .ok_or("missing tags")?;
-    if tags.len() > MAX_TAGS {
-        return Err("too many tags");
-    }
 
-    let mut p_bytes: Option<[u8; 32]> = None;
-    let mut p_count = 0usize;
-    for tag in tags {
-        let arr = tag.as_array().ok_or("tag must be an array")?;
-        if arr.is_empty() {
-            return Err("tag must be non-empty");
-        }
-        for elem in arr {
-            if elem.as_str().ok_or("tag elements must be strings")?.len() > MAX_TAG_STR {
-                return Err("tag string too long");
-            }
-        }
-        if arr[0].as_str() == Some("p") {
-            p_count += 1;
-            if p_count > 1 {
-                return Err("event must have exactly one p tag");
-            }
-            let p_str = arr
-                .get(1)
-                .and_then(|v| v.as_str())
-                .ok_or("p tag missing value")?;
-            p_bytes =
-                Some(decode_hex32(p_str).ok_or("p tag value must be 64 lowercase hex chars")?);
-        }
-    }
-    if p_count != 1 {
+    // Tightening #3: exactly one tag, exactly ["p", "<64-hex>"].
+    if tags.len() != 1 {
         return Err("event must have exactly one p tag");
     }
-    // p_count == 1 guarantees p_bytes is Some; use ok_or for a clean error path.
-    let p_bytes = p_bytes.ok_or("event must have exactly one p tag")?;
-    Ok((id.to_string(), p_bytes))
+    let tag = tags[0].as_array().ok_or("tag must be an array")?;
+    if tag.len() != 2 {
+        return Err("p tag must have exactly 2 elements");
+    }
+    if tag[0].as_str() != Some("p") {
+        return Err("event must have exactly one p tag");
+    }
+    let p_str = tag[1].as_str().ok_or("p tag value must be a string")?;
+    let p_bytes = decode_hex32(p_str).ok_or("p tag value must be 64 lowercase hex chars")?;
+
+    Ok((id.to_string(), id_bytes, p_bytes))
 }
 
 fn safe_event_id(ev: &Value) -> String {
@@ -328,6 +467,89 @@ fn safe_event_id(ev: &Value) -> String {
         .filter(|s| is_lower_hex(s, 64))
         .unwrap_or("")
         .to_string()
+}
+
+/// Verify the Schnorr signature and event ID for a NIP-01 event.
+///
+/// Steps:
+/// 1. Serialize the commitment array `[0, pubkey, created_at, kind, tags, content]`
+///    as compact JSON (no spaces).
+/// 2. SHA-256 hash the serialization.
+/// 3. Verify the hash matches the claimed `id` field.
+/// 4. Verify the Schnorr signature over the hash using the `pubkey` field.
+fn verify_event_sig(ev: &Value) -> Result<(), &'static str> {
+    let obj = ev.as_object().ok_or("event must be an object")?;
+
+    let pubkey_str = obj
+        .get("pubkey")
+        .and_then(|v| v.as_str())
+        .ok_or("missing pubkey")?;
+    let created_at = obj
+        .get("created_at")
+        .and_then(|v| v.as_i64())
+        .ok_or("missing created_at")?;
+    let kind = obj
+        .get("kind")
+        .and_then(|v| v.as_u64())
+        .ok_or("missing kind")?;
+    let tags = obj.get("tags").ok_or("missing tags")?;
+    let content = obj
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or("missing content")?;
+    let id_str = obj.get("id").and_then(|v| v.as_str()).ok_or("missing id")?;
+    let sig_str = obj
+        .get("sig")
+        .and_then(|v| v.as_str())
+        .ok_or("missing sig")?;
+
+    // Step 1: build the NIP-01 commitment and hash it.
+    let commitment = Value::Array(vec![
+        Value::Number(0.into()),
+        Value::String(pubkey_str.to_string()),
+        Value::Number(created_at.into()),
+        Value::Number(kind.into()),
+        tags.clone(),
+        Value::String(content.to_string()),
+    ]);
+    let commitment_json =
+        serde_json::to_string(&commitment).map_err(|_| "failed to serialize commitment")?;
+    let hash: [u8; 32] = Sha256::digest(commitment_json.as_bytes()).into();
+
+    // Step 2: verify hash matches claimed id.
+    let id_bytes = decode_hex32(id_str).ok_or("id must be 64 lowercase hex chars")?;
+    if hash != id_bytes {
+        return Err("invalid: event id mismatch");
+    }
+
+    // Step 3: parse pubkey as x-only.
+    let pubkey_bytes = decode_hex32(pubkey_str).ok_or("pubkey must be 64 lowercase hex chars")?;
+    let xonly_pk = XOnlyPublicKey::from_slice(&pubkey_bytes).map_err(|_| "invalid: bad pubkey")?;
+
+    // Step 4: parse sig.
+    let sig_bytes = decode_hex64(sig_str).ok_or("sig must be 128 lowercase hex chars")?;
+    let schnorr_sig =
+        SchnorrSig::from_slice(&sig_bytes).map_err(|_| "invalid: bad signature encoding")?;
+
+    // Step 5: verify.
+    let secp = secp256k1::Secp256k1::verification_only();
+    let msg = SecpMsg::from_digest(hash);
+    secp.verify_schnorr(&schnorr_sig, &msg, &xonly_pk)
+        .map_err(|_| "invalid: signature verification failed")
+}
+
+/// Decode a 128-char lowercase hex string into 64 bytes.
+fn decode_hex64(s: &str) -> Option<[u8; 64]> {
+    if !is_lower_hex(s, 128) {
+        return None;
+    }
+    let mut out = [0u8; 64];
+    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
+        let hi = (chunk[0] as char).to_digit(16)?;
+        let lo = (chunk[1] as char).to_digit(16)?;
+        out[i] = (hi * 16 + lo) as u8;
+    }
+    Some(out)
 }
 
 // ── Writer task ───────────────────────────────────────────────────────────────
@@ -373,6 +595,8 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
     let mut msg_rate = RateWindow::new();
     let mut event_rate = RateWindow::new();
     let mut sub_id: Option<String> = None;
+    // Tightening #1: hard session cap.
+    let mut events_accepted: u32 = 0;
     let deadline = tokio::time::sleep(CONN_TIMEOUT);
     tokio::pin!(deadline);
 
@@ -507,6 +731,16 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                                 tx.try_send(OutMsg::Text(make_ok(&safe_id, false, "rate-limited")));
                             continue;
                         }
+                        // Tightening #1: hard session cap check.
+                        if events_accepted >= MAX_EVENTS_PER_CONN {
+                            let safe_id = safe_event_id(&arr[1]);
+                            let _ = tx.try_send(OutMsg::Text(make_ok(
+                                &safe_id,
+                                false,
+                                "error: session event limit reached",
+                            )));
+                            continue;
+                        }
                         if !arr[1].is_object() {
                             let _ = tx.try_send(OutMsg::Text(make_ok(
                                 "",
@@ -516,9 +750,45 @@ async fn handle_conn(relay: Arc<Relay>, conn_id: u64, stream: WebSocketStream<To
                             continue;
                         }
                         match validate_event(&arr[1]) {
-                            Ok((event_id, p_value)) => {
-                                relay.fanout(&p_value, &arr[1]);
-                                let _ = tx.try_send(OutMsg::Text(make_ok(&event_id, true, "")));
+                            Ok((event_id, id_bytes, p_value)) => {
+                                // Tightening #7: deduplication.
+                                if relay.check_and_record_id(&id_bytes) {
+                                    let _ = tx.try_send(OutMsg::Text(make_ok(
+                                        &event_id,
+                                        false,
+                                        "duplicate: already seen",
+                                    )));
+                                    continue;
+                                }
+                                // Tightening #8: Schnorr signature verification.
+                                if let Err(reason) = verify_event_sig(&arr[1]) {
+                                    let _ = tx
+                                        .try_send(OutMsg::Text(make_ok(&event_id, false, reason)));
+                                    continue;
+                                }
+                                // Tightening #2: require exactly one live subscriber.
+                                match relay.subscriber_count(&p_value) {
+                                    0 => {
+                                        let _ = tx.try_send(OutMsg::Text(make_ok(
+                                            &event_id,
+                                            false,
+                                            "no live subscriber",
+                                        )));
+                                    }
+                                    1 => {
+                                        relay.fanout(&p_value, &arr[1]);
+                                        events_accepted += 1;
+                                        let _ =
+                                            tx.try_send(OutMsg::Text(make_ok(&event_id, true, "")));
+                                    }
+                                    _ => {
+                                        let _ = tx.try_send(OutMsg::Text(make_ok(
+                                            &event_id,
+                                            false,
+                                            "ambiguous recipient",
+                                        )));
+                                    }
+                                }
                             }
                             Err(reason) => {
                                 let safe_id = safe_event_id(&arr[1]);
