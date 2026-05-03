@@ -87,30 +87,13 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
             .map_err(|_| MediaError::InsufficientScope)?;
 
         // 5. Relay membership gate (NIP-43).
-        // Extract NIP-OA auth tag for NIP-AA — NIP-AA requires exactly one auth tag.
-        // Zero tags → not a NIP-AA attempt. Multiple tags → malformed, reject with 403.
-        let auth_tags: Vec<_> = auth_event
-            .tags
-            .iter()
-            .filter(|t| {
-                let s = t.as_slice();
-                !s.is_empty() && s[0] == "auth"
-            })
-            .collect();
-        if auth_tags.len() > 1 {
-            return Err(MediaError::MultipleAuthTags);
-        }
-        let auth_tag_json = if auth_tags.len() == 1 {
-            serde_json::to_string(&auth_tags[0].as_slice()).ok()
-        } else {
-            None // Zero auth tags — not a NIP-AA attempt
-        };
-        let event_created_at = Some(auth_event.created_at.as_u64());
+        // NIP-AA is a WebSocket-only (NIP-42) mechanism; Blossom/REST paths use
+        // direct membership only.
         crate::api::relay_members::enforce_relay_membership(
             state,
             &auth_event.pubkey.serialize(),
-            auth_tag_json.as_deref(),
-            event_created_at,
+            None,
+            None,
         )
         .await
         .map_err(|_| MediaError::RelayMembershipRequired)?;

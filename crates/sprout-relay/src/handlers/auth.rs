@@ -277,14 +277,21 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     };
 
                     // NIP-AA spec: virtual members MUST NOT be granted admin privileges.
-                    // Intersect token scopes with the NIP-AA virtual member scope set to
-                    // strip any admin scopes the token may have carried.
+                    // Intersect the token's scopes with the NIP-AA virtual member set —
+                    // do NOT replace them. Replacing could widen a read-only token to
+                    // full write access. Intersection preserves the token's restrictions
+                    // while stripping any admin scopes.
                     let (auth_method, owner_pubkey, final_scopes) = match nip_aa_owner {
-                        Some(owner) => (
-                            sprout_auth::AuthMethod::Nip42AgentAuth,
-                            Some(owner),
-                            sprout_auth::Scope::nip_aa_virtual_member(),
-                        ),
+                        Some(owner) => {
+                            let allowed = sprout_auth::Scope::nip_aa_virtual_member();
+                            let intersected: Vec<sprout_auth::Scope> =
+                                scopes.into_iter().filter(|s| allowed.contains(s)).collect();
+                            (
+                                sprout_auth::AuthMethod::Nip42AgentAuth,
+                                Some(owner),
+                                intersected,
+                            )
+                        }
                         None => (sprout_auth::AuthMethod::Nip42ApiToken, None, scopes),
                     };
 
@@ -472,8 +479,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
 
             // If NIP-AA granted access, upgrade the auth context.
             // NIP-AA spec: virtual members MUST NOT be granted admin privileges.
-            // Override scopes with the restricted virtual-member set regardless of
-            // what the underlying auth method (Okta JWT / pubkey-only) would have granted.
+            // Intersect the original scopes with the virtual-member set — do NOT replace
+            // them. Replacing could widen a read-only JWT/pubkey-only session to full
+            // write access. Intersection preserves the original restrictions while
+            // stripping any admin scopes.
             let final_ctx = match nip_aa_owner {
                 Some(owner_pubkey) => {
                     info!(
@@ -482,10 +491,17 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         owner = %owner_pubkey.to_hex(),
                         "NIP-42 auth successful via NIP-AA"
                     );
+                    let allowed = sprout_auth::Scope::nip_aa_virtual_member();
+                    let intersected: Vec<sprout_auth::Scope> = auth_ctx
+                        .scopes
+                        .iter()
+                        .filter(|s| allowed.contains(s))
+                        .cloned()
+                        .collect();
                     sprout_auth::AuthContext {
                         owner_pubkey: Some(owner_pubkey),
                         auth_method: sprout_auth::AuthMethod::Nip42AgentAuth,
-                        scopes: sprout_auth::Scope::nip_aa_virtual_member(),
+                        scopes: intersected,
                         ..auth_ctx
                     }
                 }
