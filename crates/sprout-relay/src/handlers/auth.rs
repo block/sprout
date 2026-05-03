@@ -44,7 +44,8 @@ async fn enforce_ws_relay_membership(
             );
             metrics::counter!("sprout_auth_failures_total", "reason" => "membership_db_error")
                 .increment(1);
-            *conn.auth_state.write().await = AuthState::Failed;
+            // Do NOT set AuthState here — caller uses reauth_fail! to preserve
+            // existing session on re-auth failure per NIP-AA §6.
             conn.send(RelayMessage::ok(
                 event_id_hex,
                 false,
@@ -74,7 +75,8 @@ async fn enforce_ws_relay_membership(
             warn!(conn_id = %conn_id, pubkey = %pubkey_hex, "not a relay member");
             metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
                 .increment(1);
-            *conn.auth_state.write().await = AuthState::Failed;
+            // Do NOT set AuthState here — caller uses reauth_fail! to preserve
+            // existing session on re-auth failure per NIP-AA §6.
             conn.send(RelayMessage::ok(
                 event_id_hex,
                 false,
@@ -87,7 +89,8 @@ async fn enforce_ws_relay_membership(
             warn!(conn_id = %conn_id, pubkey = %pubkey_hex, reason = %reason, "NIP-AA verification failed");
             metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_invalid")
                 .increment(1);
-            *conn.auth_state.write().await = AuthState::Failed;
+            // Do NOT set AuthState here — caller uses reauth_fail! to preserve
+            // existing session on re-auth failure per NIP-AA §6.
             conn.send(RelayMessage::ok(event_id_hex, false, &reason));
             None
         }
