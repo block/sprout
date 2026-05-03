@@ -59,6 +59,8 @@ pub enum AuthMethod {
     Nip42Okta,
     /// NIP-42 with a `sprout_` API token in the `auth_token` tag.
     Nip42ApiToken,
+    /// NIP-42 with NIP-AA agent authentication — agent proved its owner is a relay member.
+    Nip42AgentAuth,
 }
 
 /// The result of a successful authentication, bound to a WebSocket connection.
@@ -74,6 +76,9 @@ pub struct AuthContext {
     pub channel_ids: Option<Vec<uuid::Uuid>>,
     /// How the connection was authenticated.
     pub auth_method: AuthMethod,
+    /// For NIP-AA virtual members: the owner pubkey that granted access.
+    /// `None` for direct members.
+    pub owner_pubkey: Option<nostr::PublicKey>,
 }
 
 impl AuthContext {
@@ -193,6 +198,7 @@ impl AuthService {
             scopes,
             channel_ids: None,
             auth_method,
+            owner_pubkey: None,
         })
     }
 
@@ -424,6 +430,7 @@ mod tests {
             scopes: vec![Scope::MessagesRead, Scope::ChannelsRead],
             channel_ids: None,
             auth_method: AuthMethod::Nip42PubkeyOnly,
+            owner_pubkey: None,
         };
         assert!(ctx.has_scope(&Scope::MessagesRead));
         assert!(!ctx.has_scope(&Scope::MessagesWrite));

@@ -117,6 +117,18 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         }
     };
 
+    // Extract NIP-OA auth tag for NIP-AA before the event is consumed.
+    let auth_tag_json = auth_msg
+        .event
+        .tags
+        .iter()
+        .find(|t| {
+            let s = t.as_slice();
+            !s.is_empty() && s[0] == "auth"
+        })
+        .map(|t| serde_json::to_string(&t.as_slice()).unwrap_or_default());
+    let event_created_at = Some(auth_msg.event.created_at.as_u64());
+
     let relay_url = state.config.relay_url.clone();
     let auth_ctx = match state
         .auth
@@ -143,9 +155,14 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let parent_channel_id = auth_msg.parent_channel_id;
 
     // ── Relay membership gate (NIP-43) ────────────────────────────────────────
-    if crate::api::relay_members::enforce_relay_membership(&state, &pubkey.serialize())
-        .await
-        .is_err()
+    if crate::api::relay_members::enforce_relay_membership(
+        &state,
+        &pubkey.serialize(),
+        auth_tag_json.as_deref(),
+        event_created_at,
+    )
+    .await
+    .is_err()
     {
         warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
         let _ = ws_send

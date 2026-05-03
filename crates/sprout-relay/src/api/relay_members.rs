@@ -23,19 +23,30 @@ use crate::state::AppState;
 
 // ── Enforcement ───────────────────────────────────────────────────────────────
 
-/// Enforce relay membership for a pubkey.
+/// Enforce relay membership for a pubkey, with optional NIP-AA fallback.
 ///
-/// - If `config.require_relay_membership` is false → always Ok (no-op).
-/// - If enabled → checks `relay_members` table. Returns 403 if not a member.
+/// - If `config.require_relay_membership` is false → always `Ok(None)` (no-op).
+/// - If enabled → checks `relay_members` table.
+///   - Direct member → `Ok(None)`.
+///   - Not a direct member and `auth_tag_json` + `event_created_at` provided →
+///     attempts NIP-AA: verifies the auth tag, checks `created_at` conditions,
+///     and confirms the owner is a relay member. Returns `Ok(Some(owner_pubkey))`
+///     on success.
+///   - Otherwise → `Err(403)`.
 ///
 /// `pubkey_bytes` is the 32-byte compressed pubkey; it is hex-encoded before
 /// the DB lookup (the `relay_members` table stores 64-char hex strings).
+///
+/// `auth_tag_json` is the JSON-serialised NIP-OA `auth` tag array (e.g.
+/// `["auth","<owner_hex>","<conditions>","<sig>"]`). Pass `None` to skip NIP-AA.
 pub async fn enforce_relay_membership(
     state: &AppState,
     pubkey_bytes: &[u8],
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    auth_tag_json: Option<&str>,
+    event_created_at: Option<u64>,
+) -> Result<Option<nostr::PublicKey>, (StatusCode, Json<serde_json::Value>)> {
     if !state.config.require_relay_membership {
-        return Ok(());
+        return Ok(None);
     }
 
     let pubkey_hex = hex::encode(pubkey_bytes);
@@ -46,16 +57,112 @@ pub async fn enforce_relay_membership(
         .map_err(|e| internal_error(&format!("relay membership check failed: {e}")))?;
 
     if is_member {
-        Ok(())
-    } else {
-        Err((
+        return Ok(None);
+    }
+
+    // Not a direct member — attempt NIP-AA if an auth tag was supplied.
+    if let (Some(tag_json), Some(created_at)) = (auth_tag_json, event_created_at) {
+        let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes)
+            .map_err(|e| internal_error(&format!("invalid agent pubkey bytes: {e}")))?;
+
+        // Step 4: Verify the auth tag cryptographically.
+        let owner_pubkey =
+            sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey).map_err(|e| {
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error": "nip_aa_invalid",
+                        "message": format!("restricted: invalid auth tag: {e}")
+                    })),
+                )
+            })?;
+
+        // Step 4b: Evaluate created_at conditions embedded in the tag.
+        // Parse the tag array to extract the conditions string (element [2]).
+        let tag_arr: serde_json::Value = serde_json::from_str(tag_json)
+            .map_err(|e| internal_error(&format!("failed to parse auth tag JSON: {e}")))?;
+        if let Some(conditions) = tag_arr.get(2).and_then(|v| v.as_str()) {
+            if !conditions.is_empty() {
+                evaluate_rest_created_at_conditions(conditions, created_at).map_err(|reason| {
+                    (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({
+                            "error": "nip_aa_condition_failed",
+                            "message": format!("restricted: {reason}")
+                        })),
+                    )
+                })?;
+            }
+        }
+
+        // Step 5: Check the owner is an active relay member.
+        let owner_hex = owner_pubkey.to_hex();
+        let owner_is_member = state
+            .db
+            .is_relay_member(&owner_hex)
+            .await
+            .map_err(|e| internal_error(&format!("owner membership check failed: {e}")))?;
+
+        if owner_is_member {
+            tracing::debug!(
+                agent = %pubkey_hex,
+                owner = %owner_hex,
+                "NIP-AA: virtual membership granted (REST)"
+            );
+            return Ok(Some(owner_pubkey));
+        }
+
+        return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
-                "error": "relay_membership_required",
-                "message": "You must be a relay member to access this relay"
+                "error": "nip_aa_owner_not_member",
+                "message": "restricted: owner is not a relay member"
             })),
-        ))
+        ));
     }
+
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "relay_membership_required",
+            "message": "You must be a relay member to access this relay"
+        })),
+    ))
+}
+
+/// Evaluate `created_at<t` and `created_at>t` conditions for REST NIP-AA checks.
+/// Returns `Ok(())` if all conditions pass, `Err(reason)` if any fail.
+/// `kind=` conditions are intentionally skipped per NIP-AA spec.
+fn evaluate_rest_created_at_conditions(
+    conditions: &str,
+    event_created_at: u64,
+) -> Result<(), String> {
+    for clause in conditions.split('&') {
+        if clause.is_empty() {
+            continue;
+        }
+        if let Some(val_str) = clause.strip_prefix("created_at<") {
+            let threshold: u64 = val_str
+                .parse()
+                .map_err(|_| format!("malformed created_at< condition: {clause}"))?;
+            if event_created_at >= threshold {
+                return Err(format!(
+                    "created_at condition not satisfied: {event_created_at} >= {threshold}"
+                ));
+            }
+        } else if let Some(val_str) = clause.strip_prefix("created_at>") {
+            let threshold: u64 = val_str
+                .parse()
+                .map_err(|_| format!("malformed created_at> condition: {clause}"))?;
+            if event_created_at <= threshold {
+                return Err(format!(
+                    "created_at condition not satisfied: {event_created_at} <= {threshold}"
+                ));
+            }
+        }
+        // kind= clauses are intentionally skipped at admission per NIP-AA §Kind Conditions
+    }
+    Ok(())
 }
 
 // ── REST read handlers ────────────────────────────────────────────────────────

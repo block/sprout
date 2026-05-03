@@ -18,6 +18,7 @@ sprout-auth = { workspace = true }
 sprout-pubsub = { workspace = true }
 sprout-audit = { workspace = true }
 sprout-search = { workspace = true }
+sprout-sdk = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

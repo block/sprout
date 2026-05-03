@@ -9,19 +9,25 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
-/// Check relay membership for a pubkey during NIP-42 auth.
+use super::nip_aa;
+
+/// Check relay membership for a pubkey during NIP-42 auth, with NIP-AA fallback.
 ///
-/// Returns `true` if the pubkey is a relay member (or if membership enforcement
-/// is disabled). Returns `false` and sends a rejection message if not a member.
+/// Returns:
+/// - `Some(None)`              — direct member (or membership not required), access granted
+/// - `Some(Some(owner_pubkey))`— NIP-AA virtual member, access granted
+/// - `None`                    — access denied (rejection message already sent)
 async fn enforce_ws_relay_membership(
     state: &AppState,
     conn: &Arc<ConnectionState>,
     conn_id: uuid::Uuid,
     pubkey: &nostr::PublicKey,
     event_id_hex: &str,
-) -> bool {
+    tags: &[nostr::Tag],
+    event_created_at: u64,
+) -> Option<Option<nostr::PublicKey>> {
     if !state.config.require_relay_membership {
-        return true;
+        return Some(None);
     }
 
     let pubkey_hex = pubkey.to_hex();
@@ -38,20 +44,44 @@ async fn enforce_ws_relay_membership(
         }
     };
 
-    if !is_member {
-        warn!(conn_id = %conn_id, pubkey = %pubkey_hex, "not a relay member");
-        metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
-            .increment(1);
-        *conn.auth_state.write().await = AuthState::Failed;
-        conn.send(RelayMessage::ok(
-            event_id_hex,
-            false,
-            "restricted: not a relay member",
-        ));
-        return false;
+    if is_member {
+        return Some(None);
     }
 
-    true
+    // Not a direct member — try NIP-AA fallback.
+    match nip_aa::verify_nip_aa(state, pubkey, tags, event_created_at).await {
+        Ok(Some(result)) => {
+            debug!(
+                conn_id = %conn_id,
+                agent = %pubkey_hex,
+                owner = %result.owner_pubkey.to_hex(),
+                "NIP-AA: virtual membership granted"
+            );
+            Some(Some(result.owner_pubkey))
+        }
+        Ok(None) => {
+            // No auth tag — not an agent, plain membership failure.
+            warn!(conn_id = %conn_id, pubkey = %pubkey_hex, "not a relay member");
+            metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
+                .increment(1);
+            *conn.auth_state.write().await = AuthState::Failed;
+            conn.send(RelayMessage::ok(
+                event_id_hex,
+                false,
+                "restricted: not a relay member",
+            ));
+            None
+        }
+        Err(reason) => {
+            // Auth tag present but invalid.
+            warn!(conn_id = %conn_id, pubkey = %pubkey_hex, reason = %reason, "NIP-AA verification failed");
+            metrics::counter!("sprout_auth_failures_total", "reason" => "nip_aa_invalid")
+                .increment(1);
+            *conn.auth_state.write().await = AuthState::Failed;
+            conn.send(RelayMessage::ok(event_id_hex, false, &reason));
+            None
+        }
+    }
 }
 
 fn verify_api_token_nip42_binding(
@@ -110,6 +140,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
     if let Some(ref token) = auth_token {
         if token.starts_with("sprout_") {
             // ── API token path ──────────────────────────────────────────────
+            // Extract tags and created_at before event is moved into the blocking task.
+            let event_tags = event.tags.clone().to_vec();
+            let event_created_at_ts = event.created_at.as_u64();
             let event_clone = event.clone();
             let challenge_owned = challenge.clone();
             let relay_owned = relay_url.clone();
@@ -207,21 +240,38 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                             warn!("update_token_last_used failed: {e}");
                         }
                     });
+
+                    // API token users have already proven authorization via their token —
+                    // the pubkey allowlist does not apply here.
+
+                    // Relay membership gate — applies to ALL auth methods; NIP-AA fallback included.
+                    let nip_aa_owner = match enforce_ws_relay_membership(
+                        &state,
+                        &conn,
+                        conn_id,
+                        &pubkey,
+                        &event_id_hex,
+                        &event_tags,
+                        event_created_at_ts,
+                    )
+                    .await
+                    {
+                        Some(owner) => owner,
+                        None => return,
+                    };
+
+                    let (auth_method, owner_pubkey) = match nip_aa_owner {
+                        Some(owner) => (sprout_auth::AuthMethod::Nip42AgentAuth, Some(owner)),
+                        None => (sprout_auth::AuthMethod::Nip42ApiToken, None),
+                    };
+
                     let auth_ctx = sprout_auth::AuthContext {
                         pubkey,
                         scopes,
                         channel_ids: record.channel_ids,
-                        auth_method: sprout_auth::AuthMethod::Nip42ApiToken,
+                        auth_method,
+                        owner_pubkey,
                     };
-                    // API token users have already proven authorization via their token —
-                    // the pubkey allowlist does not apply here.
-
-                    // Relay membership gate (NIP-43) — applies to ALL auth methods.
-                    if !enforce_ws_relay_membership(&state, &conn, conn_id, &pubkey, &event_id_hex)
-                        .await
-                    {
-                        return;
-                    }
 
                     *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
                     state
@@ -246,6 +296,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
 
     // ── Okta JWT / pubkey-only path ─────────────────────────────────────────
     // Non-sprout_ tokens (eyJ* JWTs) and no-token (open-relay) fall through here.
+    // Extract tags and created_at before event is consumed by verify_auth_event.
+    let event_tags = event.tags.clone().to_vec();
+    let event_created_at_ts = event.created_at.as_u64();
     match auth_svc
         .verify_auth_event(event, &challenge, &relay_url)
         .await
@@ -278,13 +331,44 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     return;
                 }
             }
-            // Relay membership gate (NIP-43) — applies to ALL auth methods.
-            if !enforce_ws_relay_membership(&state, &conn, conn_id, &pubkey, &event_id_hex).await {
-                return;
-            }
+            // Relay membership gate — applies to ALL auth methods; NIP-AA fallback included.
+            let nip_aa_owner = match enforce_ws_relay_membership(
+                &state,
+                &conn,
+                conn_id,
+                &pubkey,
+                &event_id_hex,
+                &event_tags,
+                event_created_at_ts,
+            )
+            .await
+            {
+                Some(owner) => owner,
+                None => return,
+            };
 
-            info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
-            *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
+            // If NIP-AA granted access, upgrade the auth context.
+            let final_ctx = match nip_aa_owner {
+                Some(owner_pubkey) => {
+                    info!(
+                        conn_id = %conn_id,
+                        pubkey = %pubkey.to_hex(),
+                        owner = %owner_pubkey.to_hex(),
+                        "NIP-42 auth successful via NIP-AA"
+                    );
+                    sprout_auth::AuthContext {
+                        owner_pubkey: Some(owner_pubkey),
+                        auth_method: sprout_auth::AuthMethod::Nip42AgentAuth,
+                        ..auth_ctx
+                    }
+                }
+                None => {
+                    info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
+                    auth_ctx
+                }
+            };
+
+            *conn.auth_state.write().await = AuthState::Authenticated(final_ctx);
             state
                 .conn_manager
                 .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());

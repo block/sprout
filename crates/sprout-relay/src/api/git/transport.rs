@@ -171,9 +171,17 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // replay protection for v1. Per-request signing requires protocol changes.
 
         // Relay membership gate (NIP-43).
-        if crate::api::relay_members::enforce_relay_membership(state, &pubkey.serialize())
-            .await
-            .is_err()
+        // Extract NIP-OA auth tag for NIP-AA if present.
+        let auth_tag_json = extract_auth_tag_from_event_json(&event_json);
+        let nip98_created_at = extract_created_at_from_event_json(&event_json);
+        if crate::api::relay_members::enforce_relay_membership(
+            state,
+            &pubkey.serialize(),
+            auth_tag_json.as_deref(),
+            nip98_created_at,
+        )
+        .await
+        .is_err()
         {
             warn!(pubkey = %pubkey.to_hex(), "git: relay membership denied");
             return Err((StatusCode::FORBIDDEN, "restricted: not a relay member").into_response());
@@ -741,6 +749,37 @@ async fn publish_ref_state(
     }
 
     Ok(())
+}
+
+// ── NIP-AA helpers ────────────────────────────────────────────────────────────
+
+/// Extract the NIP-OA auth tag JSON from a raw event JSON string.
+///
+/// Returns `Some(tag_json)` only when exactly one `auth` tag is present.
+/// Zero or multiple auth tags return `None` (ambiguous or absent).
+fn extract_auth_tag_from_event_json(event_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(event_json).ok()?;
+    let tags = v.get("tags")?.as_array()?;
+    let auth_tags: Vec<&serde_json::Value> = tags
+        .iter()
+        .filter(|t| {
+            t.as_array()
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                == Some("auth")
+        })
+        .collect();
+    if auth_tags.len() == 1 {
+        Some(auth_tags[0].to_string())
+    } else {
+        None // Zero or multiple auth tags — ambiguous
+    }
+}
+
+/// Extract the `created_at` timestamp from a raw event JSON string.
+fn extract_created_at_from_event_json(event_json: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(event_json).ok()?;
+    v.get("created_at")?.as_u64()
 }
 
 // ── Router Builder ───────────────────────────────────────────────────────────

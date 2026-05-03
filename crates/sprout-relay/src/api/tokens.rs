@@ -292,7 +292,16 @@ pub async fn post_tokens(
                     }
                     // NIP-98 path builds auth context directly — enforce membership here.
                     // Bearer/JWT paths go through extract_auth_context which already checks.
-                    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes).await?;
+                    // Extract NIP-OA auth tag for NIP-AA if present.
+                    let auth_tag_json = extract_auth_tag_from_event_json(&event_json);
+                    let nip98_created_at = extract_created_at_from_event_json(&event_json);
+                    let _owner = super::relay_members::enforce_relay_membership(
+                        &state,
+                        &pubkey_bytes,
+                        auth_tag_json.as_deref(),
+                        nip98_created_at,
+                    )
+                    .await?;
                     super::RestAuthContext {
                         pubkey,
                         pubkey_bytes,
@@ -815,6 +824,35 @@ pub async fn delete_all_tokens(
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/// Extract the NIP-OA auth tag JSON from a raw event JSON string.
+///
+/// Returns `Some(tag_json)` only when exactly one `auth` tag is present.
+/// Zero or multiple auth tags return `None` (ambiguous or absent).
+fn extract_auth_tag_from_event_json(event_json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(event_json).ok()?;
+    let tags = v.get("tags")?.as_array()?;
+    let auth_tags: Vec<&serde_json::Value> = tags
+        .iter()
+        .filter(|t| {
+            t.as_array()
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                == Some("auth")
+        })
+        .collect();
+    if auth_tags.len() == 1 {
+        Some(auth_tags[0].to_string())
+    } else {
+        None // Zero or multiple auth tags — ambiguous
+    }
+}
+
+/// Extract the `created_at` timestamp from a raw event JSON string.
+fn extract_created_at_from_event_json(event_json: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(event_json).ok()?;
+    v.get("created_at")?.as_u64()
+}
 
 /// Derive the canonical token-mint URL from the configured relay identity.
 fn reconstruct_canonical_url_for_tokens(relay_url: &str) -> String {

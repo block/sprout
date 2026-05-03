@@ -5,6 +5,8 @@ pub mod close;
 pub mod event;
 /// Transport-neutral event ingestion pipeline.
 pub mod ingest;
+/// NIP-AA agent authentication via NIP-OA credentials.
+pub mod nip_aa;
 /// NIP-43 relay membership admin command handler (kinds 9030–9032).
 pub mod relay_admin;
 pub mod req;
