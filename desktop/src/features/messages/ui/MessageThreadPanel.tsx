@@ -219,7 +219,7 @@ export function MessageThreadPanel({
             >
               {threadReplies.length > 0 ? (
                 <div className="space-y-2">
-                  {threadReplies.map((entry, index) => {
+                  {threadReplies.map((entry) => {
                     return (
                       <div key={entry.message.id}>
                         <MessageRow
