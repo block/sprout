@@ -36,6 +36,7 @@ pub fn validate_content_size(content: &str) -> Result<(), CliError> {
 
 /// Percent-encode for URL path segments and query parameter values.
 /// Encodes all bytes except RFC 3986 unreserved: A-Z a-z 0-9 - _ . ~
+#[cfg(test)]
 pub fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for byte in s.bytes() {

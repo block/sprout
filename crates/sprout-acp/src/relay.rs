@@ -85,15 +85,17 @@ pub struct ChannelInfo {
     pub channel_type: String,
 }
 
-/// Lightweight REST client for pre-prompt context fetches.
+/// Lightweight HTTP client for pre-prompt context fetches via the Nostr HTTP bridge.
 ///
 /// Extracted from `HarnessRelay` fields so it can be shared (via `Arc`) with
 /// spawned prompt tasks without giving them access to the WebSocket.
+///
+/// All reads go through `POST /query` with NIP-98 auth. Event submission goes
+/// through `POST /events` with NIP-98 auth.
 #[derive(Debug, Clone)]
 pub struct RestClient {
     pub http: reqwest::Client,
     pub base_url: String,
-    pub api_token: Option<String>,
     pub keys: Keys,
 }
 
@@ -111,15 +113,58 @@ const REST_RETRY_BASE_DELAYS: [Duration; 3] = [
 ];
 
 impl RestClient {
+    // ── NIP-98 signing ────────────────────────────────────────────────────
+
+    /// Sign a NIP-98 HTTP Auth event (kind:27235) for the given method/URL/body.
+    ///
+    /// Returns the `Authorization: Nostr <base64>` header value (without the
+    /// `Nostr ` prefix — caller must prepend it or use `nip98_header`).
+    fn sign_nip98(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&[u8]>,
+    ) -> Result<String, RelayError> {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        let u_tag = Tag::parse(&["u", url])
+            .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
+        let method_tag = Tag::parse(&["method", method])
+            .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
+        let mut tags = vec![u_tag, method_tag];
+
+        if let Some(b) = body {
+            let hash = hex::encode(Sha256::digest(b));
+            let payload_tag = Tag::parse(&["payload", &hash])
+                .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
+            tags.push(payload_tag);
+        }
+
+        let event = EventBuilder::new(Kind::HttpAuth, "", tags)
+            .sign_with_keys(&self.keys)
+            .map_err(|e| RelayError::Http(format!("NIP-98 sign error: {e}")))?;
+        let event_json = serde_json::to_string(&event)
+            .map_err(|e| RelayError::Http(format!("NIP-98 serialize error: {e}")))?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(event_json))
+    }
+
+    /// Build the full `Authorization` header value: `Nostr <base64>`.
+    fn nip98_header(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&[u8]>,
+    ) -> Result<String, RelayError> {
+        Ok(format!("Nostr {}", self.sign_nip98(method, url, body)?))
+    }
+
+    // ── Retry helper ──────────────────────────────────────────────────────
+
     /// Retry helper: executes `build_request` up to 4 times (1 attempt + 3 retries)
     /// on transient failures (429, 502, 503, 504, timeout, connect errors).
-    /// Retry delays are jittered to prevent thundering-herd.
     ///
-    /// Safety: all Sprout REST endpoints used by the harness are idempotent or
-    /// deduplicated server-side. GET/PUT/DELETE are inherently safe to retry.
-    /// POST /api/events publishes signed Nostr events whose IDs are deterministic
-    /// hashes — the relay deduplicates by event ID per NIP-01, so retries cannot
-    /// produce duplicate side effects.
+    /// NIP-98 auth events are re-signed on each attempt (they have a ±60s window).
     async fn request_with_retry<F, Fut>(
         &self,
         method: &str,
@@ -155,7 +200,6 @@ impl RestClient {
                     )));
                 }
                 Ok(resp) => {
-                    // Non-retriable error (401, 403, 404, etc.) — fail immediately.
                     return Err(RelayError::Http(format!(
                         "{method} {} returned HTTP {}",
                         path,
@@ -174,33 +218,52 @@ impl RestClient {
             .unwrap_or_else(|| RelayError::Http(format!("{method} {path} failed after retries"))))
     }
 
-    /// GET a JSON endpoint with retry on transient failures (429, 502, 503, 504).
-    pub async fn get_json(&self, path: &str) -> Result<Value, RelayError> {
+    // ── Bridge methods ────────────────────────────────────────────────────
+
+    /// POST with NIP-98 auth and retry. Re-signs on each attempt.
+    async fn bridge_post(
+        &self,
+        path: &str,
+        body_bytes: &[u8],
+    ) -> Result<reqwest::Response, RelayError> {
         let url = format!("{}{}", self.base_url, path);
-        let resp = self
-            .request_with_retry("GET", path, || {
-                let builder = apply_auth(self.http.get(&url), &self.api_token, &self.keys);
-                builder.send()
-            })
-            .await?;
+        let body_owned = body_bytes.to_vec();
+        self.request_with_retry("POST", path, || {
+            // NIP-98 is re-signed each attempt (fresh created_at).
+            // sign_nip98 is infallible in practice (key is always valid).
+            let auth = self
+                .nip98_header("POST", &url, Some(&body_owned))
+                .unwrap_or_default();
+            self.http
+                .post(&url)
+                .header("Authorization", auth)
+                .header("Content-Type", "application/json")
+                .body(body_owned.clone())
+                .send()
+        })
+        .await
+    }
+
+    /// Query events via the HTTP bridge: `POST /query` with NIP-98 auth.
+    ///
+    /// Accepts a slice of `nostr::Filter` (serialized as JSON array).
+    /// Returns the events as a `serde_json::Value` (JSON array of event objects).
+    pub async fn query(&self, filters: &[nostr::Filter]) -> Result<Value, RelayError> {
+        let body_bytes = serde_json::to_vec(filters)
+            .map_err(|e| RelayError::Http(format!("filter serialize error: {e}")))?;
+        let resp = self.bridge_post("/query", &body_bytes).await?;
         resp.json()
             .await
             .map_err(|e| RelayError::Http(e.to_string()))
     }
 
-    /// PUT a JSON body to an endpoint, returning the parsed response.
+    /// Submit a signed event via the HTTP bridge: `POST /events` with NIP-98 auth.
     ///
-    /// Returns `Value::Null` for empty response bodies (e.g. 204 No Content).
-    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value, RelayError> {
-        let url = format!("{}{}", self.base_url, path);
-        let body = body.clone();
-        let resp = self
-            .request_with_retry("PUT", path, || {
-                let builder =
-                    apply_auth(self.http.put(&url).json(&body), &self.api_token, &self.keys);
-                builder.send()
-            })
-            .await?;
+    /// The event must already be signed. Returns the relay response JSON.
+    pub async fn submit_event(&self, event: &Event) -> Result<Value, RelayError> {
+        let body_bytes = serde_json::to_vec(event)
+            .map_err(|e| RelayError::Http(format!("event serialize error: {e}")))?;
+        let resp = self.bridge_post("/events", &body_bytes).await?;
         let text = resp
             .text()
             .await
@@ -209,44 +272,6 @@ impl RestClient {
             return Ok(Value::Null);
         }
         serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
-    }
-
-    /// POST a JSON body to an endpoint, returning the parsed response.
-    ///
-    /// Returns `Value::Null` for empty response bodies (e.g. 204 No Content).
-    pub async fn post_json(&self, path: &str, body: &Value) -> Result<Value, RelayError> {
-        let url = format!("{}{}", self.base_url, path);
-        let body = body.clone();
-        let resp = self
-            .request_with_retry("POST", path, || {
-                let builder = apply_auth(
-                    self.http.post(&url).json(&body),
-                    &self.api_token,
-                    &self.keys,
-                );
-                builder.send()
-            })
-            .await?;
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| RelayError::Http(e.to_string()))?;
-        if text.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
-    }
-
-    /// DELETE an endpoint. Returns `Ok(())` on 2xx.
-    #[allow(dead_code)]
-    pub async fn delete(&self, path: &str) -> Result<(), RelayError> {
-        let url = format!("{}{}", self.base_url, path);
-        self.request_with_retry("DELETE", path, || {
-            let builder = apply_auth(self.http.delete(&url), &self.api_token, &self.keys);
-            builder.send()
-        })
-        .await?;
-        Ok(())
     }
 }
 
@@ -375,13 +400,11 @@ pub struct HarnessRelay {
     observer_control_rx: Option<mpsc::Receiver<Event>>,
     /// Sender for commands to the background task.
     cmd_tx: mpsc::Sender<RelayCommand>,
-    /// HTTP client for REST API calls.
+    /// HTTP client for HTTP bridge calls.
     http: reqwest::Client,
     /// WebSocket URL of the relay.
     relay_url: String,
-    /// Optional API token for Bearer auth.
-    api_token: Option<String>,
-    /// Keys used for NIP-42 signing.
+    /// Keys used for NIP-42 signing and NIP-98 HTTP auth.
     keys: Keys,
     /// Agent public key (hex) used as the `#p` filter on subscriptions.
     #[allow(dead_code)]
@@ -417,13 +440,12 @@ impl HarnessRelay {
     pub async fn connect(
         relay_url: &str,
         keys: &Keys,
-        api_token: Option<&str>,
         agent_pubkey_hex: &str,
     ) -> Result<Self, RelayError> {
         // Perform the initial connection and auth handshake.
         // Finding #8: capture the handshake buffer and pass it to the background
         // task so buffered messages aren't silently discarded.
-        let (ws, handshake_buffer) = do_connect(relay_url, keys, api_token).await?;
+        let (ws, handshake_buffer) = do_connect(relay_url, keys).await?;
 
         let (event_tx, event_rx) = mpsc::channel::<Option<SproutEvent>>(event_channel_capacity());
         let (observer_control_tx, observer_control_rx) =
@@ -432,7 +454,6 @@ impl HarnessRelay {
 
         let bg_keys = keys.clone();
         let bg_relay_url = relay_url.to_string();
-        let bg_api_token = api_token.map(|t| t.to_string());
         let bg_agent_pubkey_hex = agent_pubkey_hex.to_string();
 
         let bg_handle = tokio::spawn(async move {
@@ -444,7 +465,6 @@ impl HarnessRelay {
                 cmd_rx,
                 bg_keys,
                 bg_relay_url,
-                bg_api_token,
                 bg_agent_pubkey_hex,
             )
             .await;
@@ -460,47 +480,117 @@ impl HarnessRelay {
                 .build()
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
             relay_url: relay_url.to_string(),
-            api_token: api_token.map(|t| t.to_string()),
             keys: keys.clone(),
             agent_pubkey_hex: agent_pubkey_hex.to_string(),
             bg_handle: Some(bg_handle),
         })
     }
 
-    /// Discover channels the agent is a member of via `GET /api/channels?member=true`.
+    /// Discover channels the agent is a member of.
     ///
-    /// Uses the retry-enabled `RestClient::get_json` so transient 502/503/429
-    /// errors during startup don't abort the harness.
+    /// Queries kind:39002 (NIP-29 group members) events where `#p` includes
+    /// the agent pubkey to find channel memberships, then queries kind:39000
+    /// (group metadata) for channel names and types.
     pub async fn discover_channels(&self) -> Result<HashMap<Uuid, ChannelInfo>, RelayError> {
+        use nostr::{Alphabet, SingleLetterTag};
+
         let rest = self.rest_client();
-        let body = rest.get_json("/api/channels?member=true").await?;
+        let pk_hex = self.keys.public_key().to_hex();
 
-        let channels = body
+        // Step 1: Find all channels where agent is a member (kind:39002 with #p tag).
+        let p_tag = SingleLetterTag::lowercase(Alphabet::P);
+        let member_filter = nostr::Filter::new()
+            .kind(Kind::Custom(
+                sprout_core::kind::KIND_NIP29_GROUP_MEMBERS as u16,
+            ))
+            .custom_tag(p_tag, [pk_hex.as_str()]);
+        let member_events = rest.query(&[member_filter]).await?;
+
+        let member_arr = member_events
             .as_array()
-            .ok_or_else(|| RelayError::Http("expected JSON array from /api/channels".into()))?;
+            .ok_or_else(|| RelayError::Http("expected JSON array from /query (members)".into()))?;
 
-        let mut map = HashMap::with_capacity(channels.len());
-        for ch in channels {
-            if let Some(id_str) = ch.get("id").and_then(|v| v.as_str()) {
-                match id_str.parse::<Uuid>() {
-                    Ok(uuid) => {
-                        let name = ch
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown")
-                            .to_string();
-                        let channel_type = ch
-                            .get("channel_type")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("stream")
-                            .to_string();
-                        map.insert(uuid, ChannelInfo { name, channel_type });
-                    }
-                    Err(e) => {
-                        warn!("skipping channel with unparseable id {id_str:?}: {e}");
+        // Extract channel UUIDs from #d tags.
+        let mut channel_uuids: Vec<Uuid> = Vec::new();
+        for ev in member_arr {
+            if let Some(tags) = ev.get("tags").and_then(|t| t.as_array()) {
+                for tag in tags {
+                    if let Some(arr) = tag.as_array() {
+                        if arr.first().and_then(|v| v.as_str()) == Some("d") {
+                            if let Some(d_val) = arr.get(1).and_then(|v| v.as_str()) {
+                                if let Ok(uuid) = d_val.parse::<Uuid>() {
+                                    channel_uuids.push(uuid);
+                                }
+                            }
+                        }
                     }
                 }
             }
+        }
+
+        if channel_uuids.is_empty() {
+            debug!("discovered 0 channel(s)");
+            return Ok(HashMap::new());
+        }
+
+        // Step 2: Fetch metadata (kind:39000) for discovered channels.
+        let d_tag = SingleLetterTag::lowercase(Alphabet::D);
+        let d_values: Vec<String> = channel_uuids.iter().map(|u| u.to_string()).collect();
+        let d_refs: Vec<&str> = d_values.iter().map(|s| s.as_str()).collect();
+        let meta_filter = nostr::Filter::new()
+            .kind(Kind::Custom(
+                sprout_core::kind::KIND_NIP29_GROUP_METADATA as u16,
+            ))
+            .custom_tag(d_tag, d_refs);
+        let meta_events = rest.query(&[meta_filter]).await?;
+
+        // Build UUID → (name, channel_type) from metadata events.
+        let mut meta_map: HashMap<Uuid, (String, String)> = HashMap::new();
+        if let Some(arr) = meta_events.as_array() {
+            for ev in arr {
+                let tags = match ev.get("tags").and_then(|t| t.as_array()) {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let mut d_val = None;
+                let mut name = None;
+                let mut is_hidden = false;
+                let mut is_private = false;
+                for tag in tags {
+                    if let Some(arr) = tag.as_array() {
+                        match arr.first().and_then(|v| v.as_str()) {
+                            Some("d") => d_val = arr.get(1).and_then(|v| v.as_str()),
+                            Some("name") => name = arr.get(1).and_then(|v| v.as_str()),
+                            Some("hidden") => is_hidden = true,
+                            Some("private") => is_private = true,
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(d) = d_val {
+                    if let Ok(uuid) = d.parse::<Uuid>() {
+                        let ch_name = name.unwrap_or("unknown").to_string();
+                        // DMs have the "hidden" tag; private channels have "private".
+                        let ch_type = if is_hidden {
+                            "dm".to_string()
+                        } else if is_private {
+                            "private".to_string()
+                        } else {
+                            "stream".to_string()
+                        };
+                        meta_map.insert(uuid, (ch_name, ch_type));
+                    }
+                }
+            }
+        }
+
+        // Step 3: Merge into final map.
+        let mut map = HashMap::with_capacity(channel_uuids.len());
+        for uuid in channel_uuids {
+            let (name, channel_type) = meta_map
+                .remove(&uuid)
+                .unwrap_or_else(|| ("unknown".to_string(), "stream".to_string()));
+            map.insert(uuid, ChannelInfo { name, channel_type });
         }
 
         debug!("discovered {} channel(s)", map.len());
@@ -515,7 +605,6 @@ impl HarnessRelay {
         RestClient {
             http: self.http.clone(),
             base_url: relay_ws_to_http(&self.relay_url),
-            api_token: self.api_token.clone(),
             keys: self.keys.clone(),
         }
     }
@@ -1055,7 +1144,6 @@ async fn run_background_task(
     mut cmd_rx: mpsc::Receiver<RelayCommand>,
     keys: Keys,
     relay_url: String,
-    api_token: Option<String>,
     agent_pubkey_hex: String,
 ) {
     let mut state = BgState::new();
@@ -1070,7 +1158,6 @@ async fn run_background_task(
         &mut state,
         &keys,
         &relay_url,
-        api_token.as_deref(),
         &agent_pubkey_hex,
     )
     .await;
@@ -1085,7 +1172,6 @@ async fn run_background_task(
             &mut state,
             &keys,
             &relay_url,
-            api_token.as_deref(),
             &agent_pubkey_hex,
             &event_tx,
             &observer_control_tx,
@@ -1109,7 +1195,6 @@ async fn run_background_task(
                         &mut state,
                         &keys,
                         &relay_url,
-                        api_token.as_deref(),
                         &agent_pubkey_hex,
                         &event_tx,
                         &observer_control_tx,
@@ -1150,7 +1235,6 @@ async fn run_background_task(
                     &mut state,
                     &keys,
                     &relay_url,
-                    api_token.as_deref(),
                     &agent_pubkey_hex,
                     &event_tx,
                     &observer_control_tx,
@@ -1180,7 +1264,6 @@ async fn run_background_task(
                                 &mut state,
                                 &keys,
                                 &relay_url,
-                                api_token.as_deref(),
                                 &agent_pubkey_hex,
                                 &event_tx,
                                 &observer_control_tx,
@@ -1201,228 +1284,226 @@ async fn run_background_task(
         }
 
         tokio::select! {
-            // ── Incoming WebSocket message ────────────────────────────────────
-            raw = ws.next() => {
-                // Determine if the socket is lost.
-                let socket_lost = match raw {
-                    Some(Ok(msg)) => {
-                        // Finding #31: track pong replies directly, before dispatch.
-                        if matches!(msg, Message::Pong(_)) {
-                            last_pong = Instant::now();
-                            ping_sent = false;
-                            false // pong is healthy — not a socket loss
-                        } else {
-                            !handle_ws_message(
-                                msg,
-                                &mut ws,
-                                &event_tx,
-                                &observer_control_tx,
-                                &mut state,
-                                &keys,
-                                &relay_url,
-                                api_token.as_deref(),
-                                &agent_pubkey_hex,
-                            )
-                            .await
-                        }
-                    }
-                    Some(Err(e)) => {
-                        warn!("WebSocket error in background task: {e}");
-                        true
-                    }
-                    None => {
-                        debug!("WebSocket stream ended");
-                        true
-                    }
-                };
+                   // ── Incoming WebSocket message ────────────────────────────────────
+                   raw = ws.next() => {
+                       // Determine if the socket is lost.
+                       let socket_lost = match raw {
+                           Some(Ok(msg)) => {
+                               // Finding #31: track pong replies directly, before dispatch.
+                               if matches!(msg, Message::Pong(_)) {
+                                   last_pong = Instant::now();
+                                   ping_sent = false;
+                                   false // pong is healthy — not a socket loss
+                               } else {
+                                   !handle_ws_message(
+                                       msg,
+                                       &mut ws,
+                                       &event_tx,
+                                       &observer_control_tx,
+                                       &mut state,
+                                       &keys,
+                                       &relay_url,
+                                       &agent_pubkey_hex,
+                                   )
+                                   .await
+                               }
+                           }
+                           Some(Err(e)) => {
+                               warn!("WebSocket error in background task: {e}");
+                               true
+                           }
+                           None => {
+                               debug!("WebSocket stream ended");
+                               true
+                           }
+                       };
 
-                if socket_lost {
-                    // Signal the caller, then attempt autonomous reconnect.
-                    // Use try_send to avoid blocking on backpressure — recovery
-                    // must not stall when the event channel is full.
-                    let _ = event_tx.try_send(None);
-                    let outcome = try_autonomous_reconnect(
-                        &mut ws,
-                        &mut cmd_rx,
-                        &mut state,
-                        &keys,
-                        &relay_url,
-                        api_token.as_deref(),
-                        &agent_pubkey_hex,
-                        &event_tx,
-                    &observer_control_tx,
-                    )
-                    .await;
-                    match outcome {
-                    ReconnectOutcome::Shutdown => return,
-                    ReconnectOutcome::Ok => {
-                        if matches!(
-                            drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
-                            ReconnectOutcome::Shutdown
-                        ) { return; }
-                        // Reset ping state after reconnect.
-                        ping_sent = false;
-                        last_pong = Instant::now();
-                        connected_since = Instant::now();
-                        stable_logged = false;
-                    }
-                    ReconnectOutcome::Failed => {
-                        if matches!(
-                            wait_for_reconnect(
-                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
-                            ).await,
-                            ReconnectOutcome::Shutdown
-                        ) { return; }
-                        ping_sent = false;
-                        last_pong = Instant::now();
-                        connected_since = Instant::now();
-                        stable_logged = false;
-                    }
-                    } // end match outcome
-                }
-            }
+                       if socket_lost {
+                           // Signal the caller, then attempt autonomous reconnect.
+                           // Use try_send to avoid blocking on backpressure — recovery
+                           // must not stall when the event channel is full.
+                           let _ = event_tx.try_send(None);
+                           let outcome = try_autonomous_reconnect(
+                               &mut ws,
+                               &mut cmd_rx,
+                               &mut state,
+                               &keys,
+                               &relay_url,
+                               &agent_pubkey_hex,
+                               &event_tx,
+                           &observer_control_tx,
+                           )
+                           .await;
+                           match outcome {
+                           ReconnectOutcome::Shutdown => return,
+                           ReconnectOutcome::Ok => {
+                               if matches!(
+                                   drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
+                                   ReconnectOutcome::Shutdown
+                               ) { return; }
+                               // Reset ping state after reconnect.
+                               ping_sent = false;
+                               last_pong = Instant::now();
+                               connected_since = Instant::now();
+                               stable_logged = false;
+                           }
+                           ReconnectOutcome::Failed => {
+                               if matches!(
+                                   wait_for_reconnect(
+                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                                   ).await,
+                                   ReconnectOutcome::Shutdown
+                               ) { return; }
+                               ping_sent = false;
+                               last_pong = Instant::now();
+                               connected_since = Instant::now();
+                               stable_logged = false;
+                           }
+                           } // end match outcome
+                       }
+                   }
 
-            // ── Command from HarnessRelay ─────────────────────────────────────
-            cmd = cmd_rx.recv() => {
-                match cmd {
-                    Some(RelayCommand::Reconnect) => {
-                        if matches!(
-                            wait_for_reconnect(
-                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
-                            ).await,
-                            ReconnectOutcome::Shutdown
-                        ) { return; }
-                        ping_sent = false;
-                        last_pong = Instant::now();
-                        connected_since = Instant::now();
-                        stable_logged = false;
-                    }
-                    Some(RelayCommand::Shutdown) | None => {
-                        debug!("background task shutting down — sending close frame");
-                        let _ = ws_send_timeout(
-                            &mut ws,
-                            Message::Close(None),
-                            WS_SEND_TIMEOUT_SECS,
-                        )
-                        .await;
-                        return;
-                    }
-                    Some(cmd) => {
-                        let ok = execute_connected_command(
-                            &mut ws,
-                            &mut state,
-                            &agent_pubkey_hex,
-                            cmd,
-                        )
-                        .await;
-                        if !ok {
-                            // Send failed — socket is likely dead. Trigger reconnect.
-                            warn!("command send failed — triggering reconnect");
-                            let _ = event_tx.try_send(None);
-                            match try_autonomous_reconnect(
-                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                api_token.as_deref(), &agent_pubkey_hex, &event_tx,
-                            &observer_control_tx,
-                            ).await {
-                                ReconnectOutcome::Shutdown => return,
-                                ReconnectOutcome::Ok => {
-                                    if matches!(
-                                        drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
-                                        ReconnectOutcome::Shutdown
-                                    ) { return; }
-                                }
-                                ReconnectOutcome::Failed => {
-                                    if matches!(
-                                        wait_for_reconnect(
-                                            &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                            api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
-                                        ).await,
-                                        ReconnectOutcome::Shutdown
-                                    ) { return; }
-                                }
-                            }
-                            ping_sent = false;
-                            last_pong = Instant::now();
-                            connected_since = Instant::now();
-                            stable_logged = false;
-                        }
-                    }
-                }
-            }
+                   // ── Command from HarnessRelay ─────────────────────────────────────
+                   cmd = cmd_rx.recv() => {
+                       match cmd {
+                           Some(RelayCommand::Reconnect) => {
+                               if matches!(
+                                   wait_for_reconnect(
+                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                                   ).await,
+                                   ReconnectOutcome::Shutdown
+                               ) { return; }
+                               ping_sent = false;
+                               last_pong = Instant::now();
+                               connected_since = Instant::now();
+                               stable_logged = false;
+                           }
+                           Some(RelayCommand::Shutdown) | None => {
+                               debug!("background task shutting down — sending close frame");
+                               let _ = ws_send_timeout(
+                                   &mut ws,
+                                   Message::Close(None),
+                                   WS_SEND_TIMEOUT_SECS,
+                               )
+                               .await;
+                               return;
+                           }
+                           Some(cmd) => {
+                               let ok = execute_connected_command(
+                                   &mut ws,
+                                   &mut state,
+                                   &agent_pubkey_hex,
+                                   cmd,
+                               )
+                               .await;
+                               if !ok {
+                                   // Send failed — socket is likely dead. Trigger reconnect.
+                                   warn!("command send failed — triggering reconnect");
+                                   let _ = event_tx.try_send(None);
+                                   match try_autonomous_reconnect(
+                                       &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx,
+                                   &observer_control_tx,
+                                   ).await {
+                                       ReconnectOutcome::Shutdown => return,
+                                       ReconnectOutcome::Ok => {
+                                           if matches!(
+                                               drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
+                                               ReconnectOutcome::Shutdown
+                                           ) { return; }
+                                       }
+                                       ReconnectOutcome::Failed => {
+                                           if matches!(
+                                               wait_for_reconnect(
+                                                   &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                                               ).await,
+                                               ReconnectOutcome::Shutdown
+                                           ) { return; }
+                                       }
+                                   }
+                                   ping_sent = false;
+                                   last_pong = Instant::now();
+                                   connected_since = Instant::now();
+                                   stable_logged = false;
+                               }
+                           }
+                       }
+                   }
 
-            // ── Finding #31: client-initiated ping ────────────────────────────
-            _ = ping_interval.tick() => {
-                if ping_sent && last_pong.elapsed() > PONG_TIMEOUT {
-                    // No pong received after our last ping — connection is dead.
-                    warn!("no pong received within {:?} — connection dead, reconnecting", PONG_TIMEOUT);
-                    // Use try_send to avoid blocking on backpressure during recovery.
-                    let _ = event_tx.try_send(None);
-                    match try_autonomous_reconnect(
-                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                        api_token.as_deref(), &agent_pubkey_hex, &event_tx,
-                    &observer_control_tx,
-                    ).await {
-                        ReconnectOutcome::Shutdown => return,
-                        ReconnectOutcome::Ok => {
-                            if matches!(
-                                drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
-                                ReconnectOutcome::Shutdown
-                            ) { return; }
-                        }
-                        ReconnectOutcome::Failed => {
-                            if matches!(
-                                wait_for_reconnect(
-                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                    api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
-                                ).await,
-                                ReconnectOutcome::Shutdown
-                            ) { return; }
-                        }
-                    }
-                    ping_sent = false;
-                    last_pong = Instant::now();
-                    connected_since = Instant::now();
-                    stable_logged = false;
-                } else if !ping_sent {
-                    if let Err(e) = ws_send_timeout(&mut ws, Message::Ping(vec![].into()), WS_SEND_TIMEOUT_SECS).await {
-                        warn!("failed to send ping: {e} — triggering reconnect");
-                        // Use try_send to avoid blocking on backpressure during recovery.
-                        let _ = event_tx.try_send(None);
-                        match try_autonomous_reconnect(
-                            &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                            api_token.as_deref(), &agent_pubkey_hex, &event_tx,
-                        &observer_control_tx,
-                        ).await {
-                            ReconnectOutcome::Shutdown => return,
-                            ReconnectOutcome::Ok => {
-                                if matches!(
-                                    drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
-                                    ReconnectOutcome::Shutdown
-                                ) { return; }
-                            }
-                            ReconnectOutcome::Failed => {
-                                if matches!(
-                                    wait_for_reconnect(
-                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
-                                        api_token.as_deref(), &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
-                                    ).await,
-                                    ReconnectOutcome::Shutdown
-                                ) { return; }
-                            }
-                        }
-                        ping_sent = false;
-                        last_pong = Instant::now();
-                        connected_since = Instant::now();
-                        stable_logged = false;
-                    } else {
-                        ping_sent = true;
-                        debug!("sent ping to relay");
-                    }
-                }
-            }
-        }
+                   // ── Finding #31: client-initiated ping ────────────────────────────
+                   _ = ping_interval.tick() => {
+                       if ping_sent && last_pong.elapsed() > PONG_TIMEOUT {
+                           // No pong received after our last ping — connection is dead.
+                           warn!("no pong received within {:?} — connection dead, reconnecting", PONG_TIMEOUT);
+                           // Use try_send to avoid blocking on backpressure during recovery.
+                           let _ = event_tx.try_send(None);
+                           match try_autonomous_reconnect(
+                               &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx,
+                           &observer_control_tx,
+                           ).await {
+                               ReconnectOutcome::Shutdown => return,
+                               ReconnectOutcome::Ok => {
+                                   if matches!(
+                                       drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
+                                       ReconnectOutcome::Shutdown
+                                   ) { return; }
+                               }
+                               ReconnectOutcome::Failed => {
+                                   if matches!(
+                                       wait_for_reconnect(
+                                           &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                                       ).await,
+                                       ReconnectOutcome::Shutdown
+                                   ) { return; }
+                               }
+                           }
+                           ping_sent = false;
+                           last_pong = Instant::now();
+                           connected_since = Instant::now();
+                           stable_logged = false;
+                       } else if !ping_sent {
+                           if let Err(e) = ws_send_timeout(&mut ws, Message::Ping(vec![].into()), WS_SEND_TIMEOUT_SECS).await {
+                               warn!("failed to send ping: {e} — triggering reconnect");
+                               // Use try_send to avoid blocking on backpressure during recovery.
+                               let _ = event_tx.try_send(None);
+                               match try_autonomous_reconnect(
+                                   &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx,
+                               &observer_control_tx,
+                               ).await {
+                                   ReconnectOutcome::Shutdown => return,
+                                   ReconnectOutcome::Ok => {
+                                       if matches!(
+                                           drain_post_reconnect(&mut ws, &mut cmd_rx, &mut state, &agent_pubkey_hex).await,
+                                           ReconnectOutcome::Shutdown
+                                       ) { return; }
+                                   }
+                                   ReconnectOutcome::Failed => {
+                                       if matches!(
+                                           wait_for_reconnect(
+                                               &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
+        &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                                           ).await,
+                                           ReconnectOutcome::Shutdown
+                                       ) { return; }
+                                   }
+                               }
+                               ping_sent = false;
+                               last_pong = Instant::now();
+                               connected_since = Instant::now();
+                               stable_logged = false;
+                           } else {
+                               ping_sent = true;
+                               debug!("sent ping to relay");
+                           }
+                       }
+                   }
+               }
 
         // Finding #42: log when connection has been stable for STABLE_CONNECTION_SECS.
         // Log once when the connection has been stable. Diagnostic only.
@@ -1447,7 +1528,6 @@ async fn handle_ws_message(
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
-    api_token: Option<&str>,
     agent_pubkey_hex: &str,
 ) -> bool {
     match msg {
@@ -1698,9 +1778,7 @@ async fn handle_ws_message(
                 RelayMessage::Auth { challenge } => {
                     // Finding #18: AUTH send failure must trigger reconnect.
                     debug!("received mid-session AUTH challenge — re-authenticating");
-                    if let Err(e) =
-                        send_auth_response(ws, &challenge, relay_url, keys, api_token).await
-                    {
+                    if let Err(e) = send_auth_response(ws, &challenge, relay_url, keys).await {
                         warn!("failed to respond to mid-session AUTH challenge: {e} — triggering reconnect");
                         return false;
                     }
@@ -1751,7 +1829,6 @@ async fn process_handshake_buffer(
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
-    api_token: Option<&str>,
     agent_pubkey_hex: &str,
 ) -> bool {
     if buffer.is_empty() {
@@ -1794,7 +1871,6 @@ async fn process_handshake_buffer(
                 state,
                 keys,
                 relay_url,
-                api_token,
                 agent_pubkey_hex,
             )
             .await;
@@ -1956,7 +2032,6 @@ async fn try_autonomous_reconnect(
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
-    api_token: Option<&str>,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
@@ -1976,7 +2051,7 @@ async fn try_autonomous_reconnect(
             attempt + 1,
             backoffs.len()
         );
-        match do_connect(relay_url, keys, api_token).await {
+        match do_connect(relay_url, keys).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
                 info!("autonomous reconnect succeeded (attempt {})", attempt + 1);
@@ -1989,7 +2064,6 @@ async fn try_autonomous_reconnect(
                     state,
                     keys,
                     relay_url,
-                    api_token,
                     agent_pubkey_hex,
                 )
                 .await;
@@ -2059,7 +2133,6 @@ async fn wait_for_reconnect(
     state: &mut BgState,
     keys: &Keys,
     relay_url: &str,
-    api_token: Option<&str>,
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
@@ -2091,7 +2164,7 @@ async fn wait_for_reconnect(
     let mut delay = Duration::from_secs(1);
     loop {
         info!("attempting relay reconnect to {relay_url}…");
-        match do_connect(relay_url, keys, api_token).await {
+        match do_connect(relay_url, keys).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
                 info!("relay reconnected to {relay_url}");
@@ -2104,7 +2177,6 @@ async fn wait_for_reconnect(
                     state,
                     keys,
                     relay_url,
-                    api_token,
                     agent_pubkey_hex,
                 )
                 .await;
@@ -2359,24 +2431,12 @@ async fn send_auth_response(
     challenge: &str,
     relay_url: &str,
     keys: &Keys,
-    api_token: Option<&str>,
 ) -> Result<(), RelayError> {
     let relay_nostr_url: NostrUrl = relay_url
         .parse()
         .map_err(|e: url::ParseError| RelayError::Http(format!("invalid relay URL: {e}")))?;
 
-    let auth_event = if let Some(token) = api_token {
-        let tags = vec![
-            Tag::parse(&["relay", relay_url]).map_err(|e| RelayError::AuthFailed(e.to_string()))?,
-            Tag::parse(&["challenge", challenge])
-                .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
-            Tag::parse(&["auth_token", token])
-                .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
-        ];
-        EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?
-    } else {
-        EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?
-    };
+    let auth_event = EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?;
 
     let auth_msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
     ws_send_timeout(ws, Message::Text(auth_msg.into()), WS_SEND_TIMEOUT_SECS).await?;
@@ -2412,18 +2472,6 @@ fn channel_id_from_sub_id(sub_id: &str) -> Option<Uuid> {
 }
 
 /// Apply the appropriate auth header to a reqwest request builder.
-fn apply_auth(
-    builder: reqwest::RequestBuilder,
-    api_token: &Option<String>,
-    keys: &Keys,
-) -> reqwest::RequestBuilder {
-    if let Some(ref token) = api_token {
-        builder.header("Authorization", format!("Bearer {token}"))
-    } else {
-        builder.header("X-Pubkey", keys.public_key().to_hex())
-    }
-}
-
 /// Parse a raw relay text frame into a typed [`RelayMessage`].
 #[allow(private_interfaces)]
 pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError> {
@@ -2525,7 +2573,6 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
 async fn do_connect(
     relay_url: &str,
     keys: &Keys,
-    api_token: Option<&str>,
 ) -> Result<(WsStream, VecDeque<RelayMessage>), RelayError> {
     let parsed = relay_url
         .parse::<url::Url>()
@@ -2544,7 +2591,7 @@ async fn do_connect(
     let challenge = wait_for_auth_challenge(&mut ws, &mut buffer, AUTH_TIMEOUT).await?;
 
     // ── Step 2: Build and send kind:22242 auth event ──────────────────────
-    send_auth_response(&mut ws, &challenge, relay_url, keys, api_token).await?;
+    send_auth_response(&mut ws, &challenge, relay_url, keys).await?;
 
     // ── Step 3: Wait for OK ───────────────────────────────────────────────
     let event_id = {

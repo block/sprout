@@ -695,10 +695,8 @@ pub struct RelayClient {
     keys: Keys,
     /// WebSocket URL of the relay (e.g. "ws://localhost:3000").
     relay_url: String,
-    /// Shared reqwest client for REST API calls.
+    /// Shared reqwest client for HTTP calls (media upload only).
     http: reqwest::Client,
-    /// Optional API token for Bearer auth on REST endpoints.
-    api_token: Option<String>,
     /// Optional NIP-OA auth tag injected into every signed event.
     auth_tag: Option<nostr::Tag>,
 }
@@ -733,13 +731,11 @@ impl RelayClient {
             bg: std::sync::Arc::new(BgTaskHandle { cmd_tx, handle }),
             keys: keys.clone(),
             relay_url: relay_url.to_string(),
-            // Default builder with only timeout config — infallible in practice.
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
                 .connect_timeout(std::time::Duration::from_secs(5))
                 .build()
                 .map_err(|e| RelayClientError::Url(format!("HTTP client build failed: {e}")))?,
-            api_token: api_token.map(|t| t.to_string()),
             auth_tag,
         })
     }
@@ -806,11 +802,6 @@ impl RelayClient {
         &self.keys
     }
 
-    /// Returns the API token, if configured.
-    pub fn api_token(&self) -> Option<&str> {
-        self.api_token.as_deref()
-    }
-
     /// Returns the relay's server authority (host or host:port) for BUD-11 server tags.
     ///
     /// Uses the same logic as the desktop client's `extract_server_authority`:
@@ -833,96 +824,13 @@ impl RelayClient {
         }
     }
 
-    /// Returns the appropriate auth header for REST requests.
+    /// One-shot query: send REQ with auto-generated sub_id, collect events until EOSE.
     ///
-    /// - If an API token is present: `Authorization: Bearer <token>` (production mode).
-    /// - Otherwise: `X-Pubkey: <hex>` (dev mode, relay has `require_auth_token=false`).
-    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(ref token) = self.api_token {
-            builder.header("Authorization", format!("Bearer {}", token))
-        } else {
-            builder.header("X-Pubkey", self.pubkey_hex())
-        }
-    }
-
-    /// Authenticated GET to the relay's REST API. Returns the response body.
-    pub async fn get(&self, path: &str) -> anyhow::Result<String> {
-        let url = format!("{}{}", self.relay_http_url(), path);
-        let resp = self.apply_auth(self.http.get(&url)).send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
-        }
-        Ok(resp.text().await?)
-    }
-
-    /// Authenticated POST (JSON body) to the relay's REST API.
-    pub async fn post(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<String> {
-        let url = format!("{}{}", self.relay_http_url(), path);
-        let resp = self
-            .apply_auth(self.http.post(&url))
-            .json(body)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
-        }
-        Ok(resp.text().await?)
-    }
-
-    /// Authenticated PUT (JSON body) to the relay's REST API.
-    pub async fn put(&self, path: &str, body: &serde_json::Value) -> anyhow::Result<String> {
-        let url = format!("{}{}", self.relay_http_url(), path);
-        let resp = self
-            .apply_auth(self.http.put(&url))
-            .json(body)
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
-        }
-        Ok(resp.text().await?)
-    }
-
-    /// Authenticated DELETE to the relay's REST API.
-    pub async fn delete(&self, path: &str) -> anyhow::Result<String> {
-        let url = format!("{}{}", self.relay_http_url(), path);
-        let resp = self.apply_auth(self.http.delete(&url)).send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
-        }
-        Ok(resp.text().await?)
-    }
-
-    /// Get the canvas content for a channel via REST.
-    pub async fn get_canvas(&self, channel_id: &str) -> anyhow::Result<String> {
-        self.get(&format!("/api/channels/{}/canvas", channel_id))
-            .await
-    }
-
-    /// Set the canvas content for a channel via REST.
-    pub async fn set_canvas(&self, channel_id: &str, content: &str) -> anyhow::Result<String> {
-        let body = serde_json::json!({ "content": content });
-        self.put(&format!("/api/channels/{}/canvas", channel_id), &body)
-            .await
-    }
-
-    /// Authenticated GET to a full URL (for feed tools that build the URL themselves).
-    pub async fn get_api(&self, url: &str) -> anyhow::Result<String> {
-        let resp = self.apply_auth(self.http.get(url)).send().await?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("{} {}: {}", status, url, body));
-        }
-        Ok(resp.text().await?)
+    /// This is the primary read path for the MCP server. Equivalent to calling
+    /// `subscribe()` with a random sub_id.
+    pub async fn query(&self, filters: Vec<Filter>) -> Result<Vec<Event>, RelayClientError> {
+        let sub_id = format!("q-{}", uuid::Uuid::new_v4().simple());
+        self.subscribe(&sub_id, filters).await
     }
 
     /// Publish a signed Nostr event to the relay and wait for the `OK` acknowledgement.
@@ -1352,7 +1260,6 @@ mod tests {
             keys,
             relay_url: "ws://127.0.0.1:1".to_string(),
             http: reqwest::Client::new(),
-            api_token: None,
             auth_tag,
         }
     }

@@ -199,6 +199,11 @@ impl Db {
         sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
     }
 
+    /// Begin a database transaction for atomic multi-statement operations.
+    pub async fn begin_transaction(&self) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        self.pool.begin().await.map_err(Into::into)
+    }
+
     // ── Events ───────────────────────────────────────────────────────────────
 
     /// Inserts an event. Returns `(StoredEvent, was_inserted)` — `false` on duplicate.
@@ -219,6 +224,11 @@ impl Db {
     /// Queries events matching the given filter parameters.
     pub async fn query_events(&self, q: &EventQuery) -> Result<Vec<StoredEvent>> {
         event::query_events(&self.pool, q).await
+    }
+
+    /// Count events matching the given query (NIP-45 COUNT support).
+    pub async fn count_events(&self, q: &EventQuery) -> Result<i64> {
+        event::count_events(&self.pool, q).await
     }
 
     /// Fetch the latest replaceable event for a (kind, pubkey) pair.

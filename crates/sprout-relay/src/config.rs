@@ -169,18 +169,7 @@ impl Config {
                 }
             });
 
-        let mut auth = sprout_auth::AuthConfig::default();
-        auth.okta.require_token = require_auth_token;
-
-        if let Ok(issuer) = std::env::var("OKTA_ISSUER") {
-            auth.okta.issuer = issuer;
-        }
-        if let Ok(audience) = std::env::var("OKTA_AUDIENCE") {
-            auth.okta.audience = audience;
-        }
-        if let Ok(jwks_uri) = std::env::var("OKTA_JWKS_URI") {
-            auth.okta.jwks_uri = jwks_uri;
-        }
+        let auth = sprout_auth::AuthConfig::default();
 
         if !require_auth_token {
             warn!(

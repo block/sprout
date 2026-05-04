@@ -45,6 +45,11 @@ chrono = { workspace = true }
 # URL parsing
 url = { workspace = true }
 
+# NIP-98 HTTP auth signing
+sha2 = { workspace = true }
+base64 = "0.22"
+hex = { workspace = true }
+
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

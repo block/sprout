@@ -36,6 +36,14 @@ pub const KIND_USER_STATUS: u32 = 30315;
 pub const KIND_READ_STATE: u32 = 30078;
 /// NIP-42 auth event — never stored (carries bearer tokens).
 pub const KIND_AUTH: u32 = 22242;
+/// BUD-01: Blossom upload auth (used in upload.rs, not stored).
+pub const KIND_BLOSSOM_AUTH: u32 = 24242;
+/// NIP-98: HTTP auth event (used in nip98.rs, not stored).
+pub const KIND_HTTP_AUTH: u32 = 27235;
+
+// NEW: Sprout command kinds (Pure Nostr plan)
+/// Agent metadata + owner reference (replaceable, agent-authored).
+pub const KIND_AGENT_PROFILE: u32 = 10100;
 
 // NIP-29 group admin events
 /// NIP-29: Add a user to a group.
@@ -93,6 +101,9 @@ pub const KIND_NIP29_GROUP_MEMBERS: u32 = 39002;
 /// NIP-29: Addressable group roles definition.
 pub const KIND_NIP29_GROUP_ROLES: u32 = 39003;
 
+/// Workflow definition (parameterized replaceable, d=workflow_uuid).
+pub const KIND_WORKFLOW_DEF: u32 = 30620;
+
 /// Lower bound of the NIP-33 parameterized replaceable range (30000–39999).
 pub const PARAM_REPLACEABLE_KIND_MIN: u32 = 30000;
 /// Upper bound of the NIP-33 parameterized replaceable range (30000–39999).
@@ -139,7 +150,21 @@ pub const KIND_CANVAS: u32 = 40100;
 /// System message for channel state changes (join, leave, rename, etc.).
 pub const KIND_SYSTEM_MESSAGE: u32 = 40099;
 
+// Relay-only enrichment kinds (never client-submitted)
+/// Thread summaries, reaction rollups (relay-signed sidecar).
+pub const KIND_ENRICHMENT: u32 = 40900;
+/// Channel metadata with computed fields (relay-signed sidecar).
+pub const KIND_CHANNEL_SUMMARY: u32 = 40901;
+/// Bulk presence state (relay-signed sidecar).
+pub const KIND_PRESENCE_SNAPSHOT: u32 = 40902;
+
 // Direct messages (41000–41999)
+/// Open/create DM (p-tags = participants).
+pub const KIND_DM_OPEN: u32 = 41010;
+/// Add member to group DM.
+pub const KIND_DM_ADD_MEMBER: u32 = 41011;
+/// Hide DM from sidebar.
+pub const KIND_DM_HIDE: u32 = 41012;
 /// A new direct-message conversation was created.
 pub const KIND_DM_CREATED: u32 = 41001;
 /// A member was added to a DM conversation.
@@ -198,6 +223,12 @@ pub const KIND_FORUM_VOTE: u32 = 45002;
 pub const KIND_FORUM_COMMENT: u32 = 45003;
 
 // Workflow engine (46000–46999)
+/// Trigger workflow execution.
+pub const KIND_WORKFLOW_TRIGGER: u32 = 46020;
+/// Grant pending approval.
+pub const KIND_APPROVAL_GRANT: u32 = 46030;
+/// Deny pending approval.
+pub const KIND_APPROVAL_DENY: u32 = 46031;
 /// A workflow was triggered by a matching event.
 pub const KIND_WORKFLOW_TRIGGERED: u32 = 46001;
 /// A workflow step began execution.
@@ -289,6 +320,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_REACTION,
     KIND_GIFT_WRAP,
     KIND_FILE_METADATA,
+    KIND_AGENT_PROFILE,
     KIND_NIP29_PUT_USER,
     KIND_NIP29_REMOVE_USER,
     KIND_NIP29_EDIT_METADATA,
@@ -314,8 +346,10 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_GROUP_ROLES,
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
+    KIND_BLOSSOM_AUTH,
     KIND_PAIRING,
     KIND_AGENT_OBSERVER_FRAME,
+    KIND_HTTP_AUTH,
     KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
     KIND_STREAM_MESSAGE_EDIT,
@@ -326,6 +360,12 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_STREAM_MESSAGE_DIFF,
     KIND_CANVAS,
     KIND_SYSTEM_MESSAGE,
+    KIND_ENRICHMENT,
+    KIND_CHANNEL_SUMMARY,
+    KIND_PRESENCE_SNAPSHOT,
+    KIND_DM_OPEN,
+    KIND_DM_ADD_MEMBER,
+    KIND_DM_HIDE,
     KIND_DM_CREATED,
     KIND_DM_MEMBER_ADDED,
     KIND_DM_MEMBER_REMOVED,
@@ -344,12 +384,16 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_SUBSCRIPTION_RESUMED,
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_WORKFLOW_DEF,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
     KIND_READ_STATE,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
     KIND_FORUM_COMMENT,
+    KIND_WORKFLOW_TRIGGER,
+    KIND_APPROVAL_GRANT,
+    KIND_APPROVAL_DENY,
     KIND_WORKFLOW_TRIGGERED,
     KIND_WORKFLOW_STEP_STARTED,
     KIND_WORKFLOW_STEP_COMPLETED,
@@ -421,6 +465,29 @@ pub const fn is_relay_admin_kind(kind: u32) -> bool {
     )
 }
 
+/// Returns `true` if `kind` is a Sprout command kind that requires transactional execution.
+pub const fn is_command_kind(kind: u32) -> bool {
+    matches!(
+        kind,
+        KIND_WORKFLOW_DEF
+            | KIND_DM_OPEN
+            | KIND_DM_ADD_MEMBER
+            | KIND_DM_HIDE
+            | KIND_WORKFLOW_TRIGGER
+            | KIND_APPROVAL_GRANT
+            | KIND_APPROVAL_DENY
+    )
+}
+
+/// Returns `true` if `kind` is a relay-only enrichment kind (40900–40902).
+/// Client submission of these kinds must be rejected.
+pub const fn is_relay_only_kind(kind: u32) -> bool {
+    matches!(
+        kind,
+        KIND_ENRICHMENT | KIND_CHANNEL_SUMMARY | KIND_PRESENCE_SNAPSHOT
+    )
+}
+
 /// Extract the kind from a nostr Event as u32.
 /// NIP-01 specifies kind as an unsigned integer; u32 covers the full range.
 pub fn event_kind_u32(event: &nostr::Event) -> u32 {
@@ -432,6 +499,10 @@ pub fn event_kind_u32(event: &nostr::Event) -> u32 {
 pub fn event_kind_i32(event: &nostr::Event) -> i32 {
     event.kind.as_u16() as i32
 }
+
+// Compile-time: new kinds are in the expected ranges.
+const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
+const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
 
 // Compile-time: NIP-34 parameterized replaceable kinds are in the correct range.
 const _: () = assert!(

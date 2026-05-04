@@ -1196,21 +1196,50 @@ where
 /// persistent failure (graceful degradation — prompt will lack channel name and
 /// DM detection).
 async fn fetch_channel_info(channel_id: Uuid, rest: &RestClient) -> Option<PromptChannelInfo> {
-    let path = format!("/api/channels/{}", channel_id);
+    use nostr::{Alphabet, SingleLetterTag};
+
+    let d_tag = SingleLetterTag::lowercase(Alphabet::D);
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Custom(
+            sprout_core::kind::KIND_NIP29_GROUP_METADATA as u16,
+        ))
+        .custom_tag(d_tag, [channel_id.to_string()]);
+
     fetch_with_retry(|| async {
-        match timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await {
+        match timeout(
+            CONTEXT_FETCH_TIMEOUT,
+            rest.query(std::slice::from_ref(&filter)),
+        )
+        .await
+        {
             Ok(Ok(json)) => {
-                let name = json
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let channel_type = json
-                    .get("channel_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("stream")
-                    .to_string();
-                Some(PromptChannelInfo { name, channel_type })
+                let events = json.as_array()?;
+                let ev = events.first()?;
+                let tags = ev.get("tags")?.as_array()?;
+                let mut name = None;
+                let mut is_hidden = false;
+                let mut is_private = false;
+                for tag in tags {
+                    if let Some(arr) = tag.as_array() {
+                        match arr.first().and_then(|v| v.as_str()) {
+                            Some("name") => name = arr.get(1).and_then(|v| v.as_str()),
+                            Some("hidden") => is_hidden = true,
+                            Some("private") => is_private = true,
+                            _ => {}
+                        }
+                    }
+                }
+                let channel_type = if is_hidden {
+                    "dm".to_string()
+                } else if is_private {
+                    "private".to_string()
+                } else {
+                    "stream".to_string()
+                };
+                Some(PromptChannelInfo {
+                    name: name.unwrap_or("unknown").to_string(),
+                    channel_type,
+                })
             }
             Ok(Err(e)) => {
                 tracing::debug!(
@@ -1315,24 +1344,37 @@ fn collect_prompt_pubkeys(
     pubkeys
 }
 
-fn parse_profile_lookup_response(json: serde_json::Value) -> Option<PromptProfileLookup> {
-    let profiles = json.get("profiles")?.as_object()?;
+/// Parse kind:0 profile events into a `PromptProfileLookup`.
+///
+/// Each kind:0 event has `pubkey` and JSON `content` with optional fields:
+/// `display_name` (or `name`), `nip05`.
+fn parse_kind0_profile_lookup(json: serde_json::Value) -> Option<PromptProfileLookup> {
+    let events = json.as_array()?;
     let mut lookup = PromptProfileLookup::new();
 
-    for (pubkey, profile) in profiles {
-        lookup.insert(
-            pubkey.to_ascii_lowercase(),
-            PromptProfile {
-                display_name: profile
+    for ev in events {
+        let pubkey = ev.get("pubkey").and_then(|v| v.as_str());
+        let content_str = ev.get("content").and_then(|v| v.as_str());
+        if let (Some(pk), Some(content)) = (pubkey, content_str) {
+            if let Ok(profile) = serde_json::from_str::<serde_json::Value>(content) {
+                let display_name = profile
                     .get("display_name")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_string),
-                nip05_handle: profile
-                    .get("nip05_handle")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_string),
-            },
-        );
+                    .or_else(|| profile.get("name"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let nip05_handle = profile
+                    .get("nip05")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                lookup.insert(
+                    pk.to_ascii_lowercase(),
+                    PromptProfile {
+                        display_name,
+                        nip05_handle,
+                    },
+                );
+            }
+        }
     }
 
     if lookup.is_empty() {
@@ -1352,15 +1394,26 @@ async fn fetch_prompt_profile_lookup(
         return None;
     }
 
-    let body = serde_json::json!({ "pubkeys": pubkeys });
+    // Query kind:0 (NIP-01 profile metadata) for all pubkeys.
+    let authors: Vec<nostr::PublicKey> = pubkeys
+        .iter()
+        .filter_map(|s| nostr::PublicKey::from_hex(s).ok())
+        .collect();
+    if authors.is_empty() {
+        return None;
+    }
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Metadata)
+        .authors(authors);
+
     fetch_with_retry(|| async {
         match timeout(
             CONTEXT_FETCH_TIMEOUT,
-            rest.post_json("/api/users/batch", &body),
+            rest.query(std::slice::from_ref(&filter)),
         )
         .await
         {
-            Ok(Ok(json)) => parse_profile_lookup_response(json),
+            Ok(Ok(json)) => parse_kind0_profile_lookup(json),
             Ok(Err(e)) => {
                 tracing::debug!("prompt profile lookup failed: {e} — will retry");
                 None
@@ -1374,15 +1427,16 @@ async fn fetch_prompt_profile_lookup(
     .await
 }
 
-/// Fetch thread context via REST: `GET /api/channels/{id}/threads/{event_id}?limit=N`
+/// Fetch thread context via Nostr query: root event by ID + replies by `#e` tag.
 async fn fetch_thread_context(
     channel_id: Uuid,
     root_event_id: &str,
     limit: u32,
     rest: &RestClient,
 ) -> Option<ConversationContext> {
-    // Defense-in-depth: validate hex before interpolating into URL path.
-    // Nostr event IDs are 32-byte SHA-256 hashes = 64 hex chars.
+    use nostr::{Alphabet, SingleLetterTag};
+
+    // Defense-in-depth: validate hex event ID.
     if root_event_id.is_empty()
         || root_event_id.len() != 64
         || !root_event_id.chars().all(|c| c.is_ascii_hexdigit())
@@ -1394,14 +1448,29 @@ async fn fetch_thread_context(
         return None;
     }
 
-    let path = format!(
-        "/api/channels/{}/threads/{}?limit={}",
-        channel_id, root_event_id, limit
-    );
+    let e_tag = SingleLetterTag::lowercase(Alphabet::E);
+    let h_tag = SingleLetterTag::lowercase(Alphabet::H);
+    let ch_str = channel_id.to_string();
+
+    // Two filters: (1) root event by ID, (2) replies with #e=root + #h=channel.
+    let root_filter = nostr::Filter::new().id(nostr::EventId::from_hex(root_event_id).ok()?);
+    let replies_filter = nostr::Filter::new()
+        .kinds([
+            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
+            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
+        ])
+        .custom_tag(e_tag, [root_event_id])
+        .custom_tag(h_tag, [ch_str.as_str()])
+        .limit(limit as usize);
 
     fetch_with_retry(|| async {
-        match timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await {
-            Ok(Ok(json)) => parse_thread_response(json),
+        match timeout(
+            CONTEXT_FETCH_TIMEOUT,
+            rest.query(&[root_filter.clone(), replies_filter.clone()]),
+        )
+        .await
+        {
+            Ok(Ok(json)) => parse_nostr_thread_response(json, root_event_id),
             Ok(Err(e)) => {
                 tracing::warn!(
                     channel_id = %channel_id,
@@ -1423,17 +1492,32 @@ async fn fetch_thread_context(
     .await
 }
 
-/// Fetch DM context via REST: `GET /api/channels/{id}/messages?limit=N`
+/// Fetch DM context via Nostr query: recent messages in channel by `#h` tag.
 async fn fetch_dm_context(
     channel_id: Uuid,
     limit: u32,
     rest: &RestClient,
 ) -> Option<ConversationContext> {
-    let path = format!("/api/channels/{}/messages?limit={}", channel_id, limit);
+    use nostr::{Alphabet, SingleLetterTag};
+
+    let h_tag = SingleLetterTag::lowercase(Alphabet::H);
+    let ch_str = channel_id.to_string();
+    let filter = nostr::Filter::new()
+        .kinds([
+            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
+            nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
+        ])
+        .custom_tag(h_tag, [ch_str.as_str()])
+        .limit(limit as usize);
 
     fetch_with_retry(|| async {
-        match timeout(CONTEXT_FETCH_TIMEOUT, rest.get_json(&path)).await {
-            Ok(Ok(json)) => parse_dm_response(json, limit),
+        match timeout(
+            CONTEXT_FETCH_TIMEOUT,
+            rest.query(std::slice::from_ref(&filter)),
+        )
+        .await
+        {
+            Ok(Ok(json)) => parse_nostr_dm_response(json, limit),
             Ok(Err(e)) => {
                 tracing::warn!(
                     channel_id = %channel_id,
@@ -1453,9 +1537,8 @@ async fn fetch_dm_context(
     .await
 }
 
-/// Parse the thread REST response into a `ConversationContext::Thread`.
-///
-/// Expected shape: `{ "root": {...}, "replies": [...], "total_replies": N }`
+/// Parse the legacy REST thread response (used in tests only).
+#[cfg(test)]
 fn parse_thread_response(json: serde_json::Value) -> Option<ConversationContext> {
     let mut messages = Vec::new();
 
@@ -1495,8 +1578,8 @@ fn parse_thread_response(json: serde_json::Value) -> Option<ConversationContext>
 
 /// Parse the DM messages REST response into a `ConversationContext::Dm`.
 ///
-/// Expected shape: `{ "messages": [...], "next_cursor": ... }`
-/// Messages arrive newest-first from the API; we reverse to chronological order.
+/// Parse the legacy REST DM response (used in tests only).
+#[cfg(test)]
 fn parse_dm_response(json: serde_json::Value, limit: u32) -> Option<ConversationContext> {
     let arr = json.get("messages").and_then(|v| v.as_array())?;
 
@@ -1554,6 +1637,89 @@ fn json_to_context_message(obj: &serde_json::Value) -> Option<ContextMessage> {
         pubkey: pubkey.to_string(),
         timestamp,
         content: content.to_string(),
+    })
+}
+
+/// Parse a Nostr query response (array of events) into thread context.
+///
+/// Separates the root event (matching `root_event_id`) from replies, sorts
+/// chronologically by `created_at`.
+fn parse_nostr_thread_response(
+    json: serde_json::Value,
+    root_event_id: &str,
+) -> Option<ConversationContext> {
+    let events = json.as_array()?;
+    let mut root_msg = None;
+    let mut reply_msgs = Vec::new();
+
+    for ev in events {
+        let ev_id = ev.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(msg) = json_to_context_message(ev) {
+            if ev_id == root_event_id {
+                root_msg = Some(msg);
+            } else {
+                reply_msgs.push((
+                    ev.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+                    msg,
+                ));
+            }
+        }
+    }
+
+    // Sort replies chronologically.
+    reply_msgs.sort_by_key(|(ts, _)| *ts);
+
+    let mut messages = Vec::new();
+    if let Some(root) = root_msg {
+        messages.push(root);
+    }
+    messages.extend(reply_msgs.into_iter().map(|(_, msg)| msg));
+
+    let total = messages.len();
+    if messages.is_empty() {
+        return None;
+    }
+
+    Some(ConversationContext::Thread {
+        messages,
+        total,
+        truncated: false, // query returns all within limit
+    })
+}
+
+/// Parse a Nostr query response (array of events) into DM context.
+///
+/// Events arrive in relay order (newest first); reversed to chronological.
+fn parse_nostr_dm_response(json: serde_json::Value, limit: u32) -> Option<ConversationContext> {
+    let events = json.as_array()?;
+
+    let mut messages: Vec<(u64, ContextMessage)> = events
+        .iter()
+        .filter_map(|ev| {
+            let ts = ev.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0);
+            json_to_context_message(ev).map(|msg| (ts, msg))
+        })
+        .collect();
+
+    // Sort chronologically (oldest first).
+    messages.sort_by_key(|(ts, _)| *ts);
+
+    let messages: Vec<ContextMessage> = messages.into_iter().map(|(_, msg)| msg).collect();
+    let truncated = messages.len() >= limit as usize;
+    let total = if truncated {
+        messages.len() + 1
+    } else {
+        messages.len()
+    };
+
+    if messages.is_empty() {
+        return None;
+    }
+
+    Some(ConversationContext::Dm {
+        messages,
+        total,
+        truncated,
     })
 }
 
@@ -1661,8 +1827,8 @@ const REACTION_WORKING: &str = "💬";
 /// Best-effort timeout for a single reaction REST call.
 const REACTION_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Percent-encode a string for use in a URL path segment.
-/// Emoji bytes are not URL-safe; event IDs (hex) pass through unchanged.
+/// Percent-encode a string for use in a URL path segment (used in tests only).
+#[cfg(test)]
 fn pct_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for byte in s.bytes() {
@@ -1682,7 +1848,7 @@ fn pct_encode(s: &str) -> String {
 /// Best-effort: add a reaction via a signed Nostr kind-7 event (NIP-25).
 ///
 /// Builds a reaction event with `sprout_sdk::build_reaction`, signs it with
-/// the keys already stored in `RestClient`, and submits via POST /api/events.
+/// the keys already stored in `RestClient`, and submits via `POST /events`.
 /// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
     let target_id = match nostr::EventId::from_hex(event_id) {
@@ -1706,14 +1872,7 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
             return;
         }
     };
-    let body = match serde_json::to_value(&event) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::debug!(event_id, emoji, "reaction add: serialize failed: {e}");
-            return;
-        }
-    };
-    match tokio::time::timeout(REACTION_TIMEOUT, rest.post_json("/api/events", &body)).await {
+    match tokio::time::timeout(REACTION_TIMEOUT, rest.submit_event(&event)).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction add failed: {e}"),
         Err(_) => tracing::debug!(event_id, emoji, "reaction add timed out"),
@@ -1722,44 +1881,43 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
 
 /// Best-effort: remove a reaction via a signed kind:5 (NIP-09) deletion event.
 ///
-/// Looks up our kind:7 reaction event ID via GET /api/messages/{event_id}/reactions,
-/// then submits a signed kind:5 deletion via POST /api/events.
+/// Queries kind:7 reactions by our pubkey targeting the event, finds the matching
+/// emoji, then submits a signed kind:5 deletion via `POST /events`.
 /// Returns immediately on timeout or any error — reactions are cosmetic.
 pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &str, emoji: &str) {
-    // Step 1: look up the reaction event ID we own for this emoji.
-    let path = format!("/api/messages/{}/reactions", pct_encode(event_id));
-    let resp = match tokio::time::timeout(Duration::from_millis(1_000), rest.get_json(&path)).await
+    use nostr::{Alphabet, SingleLetterTag};
+
+    // Step 1: query our kind:7 reactions targeting this event.
+    let my_pubkey = rest.keys.public_key();
+    let e_tag = SingleLetterTag::lowercase(Alphabet::E);
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Reaction)
+        .author(my_pubkey)
+        .custom_tag(e_tag, [event_id]);
+
+    let resp = match tokio::time::timeout(Duration::from_millis(1_000), rest.query(&[filter])).await
     {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            tracing::debug!(event_id, emoji, "reaction remove: fetch failed: {e}");
+            tracing::debug!(event_id, emoji, "reaction remove: query failed: {e}");
             return;
         }
         Err(_) => {
-            tracing::debug!(event_id, emoji, "reaction remove: fetch timed out");
+            tracing::debug!(event_id, emoji, "reaction remove: query timed out");
             return;
         }
     };
 
-    let my_pubkey = rest.keys.public_key().to_hex();
-    let reid = resp
-        .get("reactions")
-        .and_then(|r| r.as_array())
-        .and_then(|groups| {
-            groups.iter().find_map(|group| {
-                if group.get("emoji")?.as_str()? != emoji {
-                    return None;
-                }
-                group.get("users")?.as_array()?.iter().find_map(|user| {
-                    if user.get("pubkey")?.as_str()? != my_pubkey {
-                        return None;
-                    }
-                    user.get("reaction_event_id")?
-                        .as_str()
-                        .map(|s| s.to_string())
-                })
-            })
-        });
+    // Find our reaction event with matching emoji content.
+    let reid = resp.as_array().and_then(|events| {
+        events.iter().find_map(|ev| {
+            let content = ev.get("content")?.as_str()?;
+            if content != emoji {
+                return None;
+            }
+            ev.get("id")?.as_str().map(|s| s.to_string())
+        })
+    });
 
     let reid = match reid {
         Some(id) => id,
@@ -1795,19 +1953,7 @@ pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &
             return;
         }
     };
-    let body = match serde_json::to_value(&event) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::debug!(event_id, emoji, "reaction remove: serialize failed: {e}");
-            return;
-        }
-    };
-    match tokio::time::timeout(
-        Duration::from_millis(1_000),
-        rest.post_json("/api/events", &body),
-    )
-    .await
-    {
+    match tokio::time::timeout(Duration::from_millis(1_000), rest.submit_event(&event)).await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::debug!(event_id, emoji, "reaction remove failed: {e}"),
         Err(_) => tracing::debug!(event_id, emoji, "reaction remove timed out"),
@@ -2135,17 +2281,18 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_profile_lookup_response_extracts_display_name_and_nip05() {
-        let lookup = parse_profile_lookup_response(json!({
-            "profiles": {
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
-                    "display_name": "Wes",
-                    "avatar_url": null,
-                    "nip05_handle": "wes@example.com"
-                }
-            },
-            "missing": []
-        }))
+    fn test_parse_kind0_profile_lookup_extracts_display_name_and_nip05() {
+        let lookup = parse_kind0_profile_lookup(json!([
+            {
+                "id": "0000000000000000000000000000000000000000000000000000000000000001",
+                "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "kind": 0,
+                "content": "{\"display_name\":\"Wes\",\"nip05\":\"wes@example.com\"}",
+                "created_at": 1000,
+                "tags": [],
+                "sig": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            }
+        ]))
         .expect("lookup should parse");
 
         assert_eq!(
@@ -2158,9 +2305,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_profile_lookup_response_returns_none_for_empty() {
-        assert!(parse_profile_lookup_response(json!({"profiles": {}})).is_none());
-        assert!(parse_profile_lookup_response(json!({})).is_none());
+    fn test_parse_kind0_profile_lookup_returns_none_for_empty() {
+        assert!(parse_kind0_profile_lookup(json!([])).is_none());
+        assert!(parse_kind0_profile_lookup(json!({})).is_none());
     }
 
     #[test]

@@ -1,64 +1,38 @@
+use nostr::{EventBuilder, Kind, Tag};
+
 use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::{read_or_stdin, validate_uuid};
 
+// ---------------------------------------------------------------------------
+// Read commands — POST /query
+// ---------------------------------------------------------------------------
+
+/// List workflows in a channel — query kind:30620 workflow definition events.
 pub async fn cmd_list_workflows(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    client
-        .run_get(&format!("/api/channels/{}/workflows", channel_id))
-        .await
+    let filter = serde_json::json!({
+        "kinds": [30620],
+        "#h": [channel_id]
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
-pub async fn cmd_create_workflow(
-    client: &SproutClient,
-    channel_id: &str,
-    yaml: &str,
-) -> Result<(), CliError> {
-    validate_uuid(channel_id)?;
-    let yaml_definition = read_or_stdin(yaml)?;
-    client
-        .run_post(
-            &format!("/api/channels/{}/workflows", channel_id),
-            &serde_json::json!({ "yaml_definition": yaml_definition }),
-        )
-        .await
-}
-
-pub async fn cmd_update_workflow(
-    client: &SproutClient,
-    workflow_id: &str,
-    yaml: &str,
-) -> Result<(), CliError> {
+/// Get a single workflow definition.
+pub async fn cmd_get_workflow(client: &SproutClient, workflow_id: &str) -> Result<(), CliError> {
     validate_uuid(workflow_id)?;
-    let yaml_definition = read_or_stdin(yaml)?;
-    client
-        .run_put(
-            &format!("/api/workflows/{}", workflow_id),
-            &serde_json::json!({ "yaml_definition": yaml_definition }),
-        )
-        .await
+    let filter = serde_json::json!({
+        "kinds": [30620],
+        "#d": [workflow_id]
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
-pub async fn cmd_delete_workflow(client: &SproutClient, workflow_id: &str) -> Result<(), CliError> {
-    validate_uuid(workflow_id)?;
-    client
-        .run_delete(&format!("/api/workflows/{}", workflow_id))
-        .await
-}
-
-pub async fn cmd_trigger_workflow(
-    client: &SproutClient,
-    workflow_id: &str,
-) -> Result<(), CliError> {
-    validate_uuid(workflow_id)?;
-    client
-        .run_post(
-            &format!("/api/workflows/{}/trigger", workflow_id),
-            &serde_json::json!({}),
-        )
-        .await
-}
-
+/// Get workflow run history — query kind:46020 trigger events for this workflow.
 pub async fn cmd_get_workflow_runs(
     client: &SproutClient,
     workflow_id: &str,
@@ -66,34 +40,138 @@ pub async fn cmd_get_workflow_runs(
 ) -> Result<(), CliError> {
     validate_uuid(workflow_id)?;
     let limit = limit.unwrap_or(20).min(100);
-    let path = format!("/api/workflows/{}/runs?limit={}", workflow_id, limit);
-    client.run_get(&path).await
+    let filter = serde_json::json!({
+        "kinds": [46020],
+        "#d": [workflow_id],
+        "limit": limit
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
-pub async fn cmd_get_workflow(client: &SproutClient, workflow_id: &str) -> Result<(), CliError> {
+// ---------------------------------------------------------------------------
+// Write commands — signed events via POST /events
+// ---------------------------------------------------------------------------
+
+/// Create a workflow — sign and submit a kind:30620 event.
+pub async fn cmd_create_workflow(
+    client: &SproutClient,
+    channel_id: &str,
+    yaml: &str,
+) -> Result<(), CliError> {
+    validate_uuid(channel_id)?;
+    let yaml_definition = read_or_stdin(yaml)?;
+    let keys = client.keys();
+
+    // Generate a unique d-tag for this workflow
+    let workflow_id = uuid::Uuid::new_v4().to_string();
+    let tags = vec![
+        Tag::parse(&["d", &workflow_id]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        Tag::parse(&["h", channel_id]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+    ];
+
+    let builder = EventBuilder::new(Kind::Custom(30620), &yaml_definition, tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+/// Update a workflow — sign and submit an updated kind:30620 event with same d-tag.
+pub async fn cmd_update_workflow(
+    client: &SproutClient,
+    workflow_id: &str,
+    yaml: &str,
+) -> Result<(), CliError> {
     validate_uuid(workflow_id)?;
-    client
-        .run_get(&format!("/api/workflows/{}", workflow_id))
-        .await
+    let yaml_definition = read_or_stdin(yaml)?;
+    let keys = client.keys();
+
+    let tags =
+        vec![Tag::parse(&["d", workflow_id])
+            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
+
+    let builder = EventBuilder::new(Kind::Custom(30620), &yaml_definition, tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
 }
 
-/// Route is /grant or /deny based on the `approved` flag.
+/// Delete a workflow — sign and submit a kind:5 deletion event.
+pub async fn cmd_delete_workflow(client: &SproutClient, workflow_id: &str) -> Result<(), CliError> {
+    validate_uuid(workflow_id)?;
+    let keys = client.keys();
+
+    // NIP-09 deletion targeting the parameterized replaceable event
+    let tags = vec![Tag::parse(&[
+        "a",
+        &format!("30620:{}:{}", keys.public_key().to_hex(), workflow_id),
+    ])
+    .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
+
+    let builder = EventBuilder::new(Kind::Custom(5), "", tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+/// Trigger a workflow — sign and submit a kind:46020 event.
+pub async fn cmd_trigger_workflow(
+    client: &SproutClient,
+    workflow_id: &str,
+) -> Result<(), CliError> {
+    validate_uuid(workflow_id)?;
+    let keys = client.keys();
+
+    let tags =
+        vec![Tag::parse(&["d", workflow_id])
+            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
+
+    let builder = EventBuilder::new(Kind::Custom(46020), "", tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
+}
+
+/// Approve or deny a workflow step — sign and submit a kind:46030 (grant) or 46031 (deny) event.
 pub async fn cmd_approve_step(
     client: &SproutClient,
-    approval_token: &str,
+    workflow_id: &str,
     approved: bool,
     note: Option<&str>,
 ) -> Result<(), CliError> {
-    validate_uuid(approval_token)?;
-    let route = if approved { "grant" } else { "deny" };
-    let mut body = serde_json::json!({});
-    if let Some(n) = note {
-        body["note"] = n.into();
-    }
-    client
-        .run_post(
-            &format!("/api/approvals/{}/{}", approval_token, route),
-            &body,
-        )
-        .await
+    validate_uuid(workflow_id)?;
+    let keys = client.keys();
+
+    let kind = if approved { 46030 } else { 46031 };
+    let content = note.unwrap_or("");
+
+    let tags =
+        vec![Tag::parse(&["d", workflow_id])
+            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
+
+    let builder = EventBuilder::new(Kind::Custom(kind), content, tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
 }

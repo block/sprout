@@ -183,8 +183,9 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_PRIVATE_KEY")]
     pub private_key: String,
 
-    #[arg(long, env = "SPROUT_API_TOKEN")]
-    pub api_token: Option<String>,
+    /// Agent owner pubkey (64-char hex). Used for --respond-to=owner-only gate.
+    #[arg(long, env = "SPROUT_ACP_AGENT_OWNER")]
+    pub agent_owner: Option<String>,
 
     #[arg(long, env = "SPROUT_ACP_AGENT_COMMAND", default_value = "goose")]
     pub agent_command: String,
@@ -380,7 +381,6 @@ pub struct ChannelFilter {
 #[derive(Debug)]
 pub struct Config {
     pub keys: Keys,
-    pub api_token: Option<String>,
     pub relay_url: String,
     pub agent_command: String,
     pub agent_args: Vec<String>,
@@ -418,6 +418,9 @@ pub struct Config {
     pub persona_env_vars: Vec<(String, String)>,
     /// Whether to publish encrypted observer frames through the relay.
     pub relay_observer: bool,
+    /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
+    /// Replaces the old REST-based owner lookup.
+    pub agent_owner: Option<String>,
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
@@ -724,7 +727,6 @@ impl Config {
 
         let config = Config {
             keys,
-            api_token: args.api_token,
             relay_url: args.relay_url,
             agent_command,
             agent_args,
@@ -754,6 +756,7 @@ impl Config {
             respond_to_allowlist,
             persona_env_vars,
             relay_observer: args.relay_observer,
+            agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
         };
 
         Ok(config)
@@ -1085,7 +1088,6 @@ mod tests {
     fn test_config(mode: SubscribeMode) -> Config {
         Config {
             keys: nostr::Keys::generate(),
-            api_token: None,
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
@@ -1115,6 +1117,7 @@ mod tests {
             respond_to_allowlist: HashSet::new(),
             persona_env_vars: vec![],
             relay_observer: false,
+            agent_owner: None,
         }
     }
 

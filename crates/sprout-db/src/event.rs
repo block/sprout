@@ -48,6 +48,13 @@ pub struct EventQuery {
     /// invariant (`is_global_only_kind`) ever changes.
     /// Mutually exclusive with `channel_id`.
     pub global_only: bool,
+    /// Restrict results to events from any of these pubkeys (multi-author `IN` pushdown).
+    pub authors: Option<Vec<Vec<u8>>>,
+    /// Restrict results to events with any of these IDs (multi-id `IN` pushdown).
+    pub ids: Option<Vec<Vec<u8>>>,
+    /// Restrict results to events with an `e` tag referencing any of these event IDs (hex).
+    /// Uses JSONB containment (`tags @> ...`) against the `tags` column.
+    pub e_tags: Option<Vec<String>>,
 }
 
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
@@ -155,8 +162,17 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
         ));
     }
 
-    // kinds:[] means "match no kinds" — return empty immediately.
+    // Empty list means "match nothing" — return empty immediately.
     if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
+        return Ok(vec![]);
+    }
+    if q.authors.as_deref().is_some_and(|a| a.is_empty()) {
+        return Ok(vec![]);
+    }
+    if q.ids.as_deref().is_some_and(|i| i.is_empty()) {
+        return Ok(vec![]);
+    }
+    if q.e_tags.as_deref().is_some_and(|e| e.is_empty()) {
         return Ok(vec![]);
     }
 
@@ -204,6 +220,50 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
         qb.push(format!(" AND {col_prefix}pubkey = "))
             .push_bind(pk.clone());
     }
+
+    // Multi-author IN pushdown (mutually exclusive with single pubkey in practice).
+    if let Some(ref authors) = q.authors {
+        if !authors.is_empty() {
+            qb.push(format!(" AND {col_prefix}pubkey IN ("));
+            let mut sep = qb.separated(", ");
+            for a in authors {
+                sep.push_bind(a.clone());
+            }
+            qb.push(")");
+        }
+    }
+
+    // Multi-id IN pushdown.
+    if let Some(ref ids) = q.ids {
+        if !ids.is_empty() {
+            qb.push(format!(" AND {col_prefix}id IN ("));
+            let mut sep = qb.separated(", ");
+            for id in ids {
+                sep.push_bind(id.clone());
+            }
+            qb.push(")");
+        }
+    }
+
+    // e-tag pushdown via JSONB containment: tags @> '[["e","<hex>"]]'.
+    // Multiple e-tags use OR (any match). No GIN index yet — acceptable at
+    // current scale; add `CREATE INDEX ... USING gin(tags)` if this becomes hot.
+    if let Some(ref e_tags) = q.e_tags {
+        if !e_tags.is_empty() {
+            qb.push(" AND (");
+            for (i, hex_id) in e_tags.iter().enumerate() {
+                if i > 0 {
+                    qb.push(" OR ");
+                }
+                // Build the JSONB literal: [["e","<hex>"]]
+                let containment = serde_json::json!([["e", hex_id]]);
+                qb.push(format!("{col_prefix}tags @> "));
+                qb.push_bind(containment);
+            }
+            qb.push(")");
+        }
+    }
+
     if let Some(s) = q.since {
         qb.push(format!(" AND {col_prefix}created_at >= "))
             .push_bind(s);
@@ -295,6 +355,116 @@ pub(crate) fn row_to_stored_event(row: sqlx::postgres::PgRow) -> Result<Option<S
         channel_id,
         true,
     )))
+}
+
+/// Count events matching the given query parameters (NIP-45 COUNT support).
+///
+/// Uses the same filter logic as `query_events` but returns only the count.
+pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
+    // Empty list means "match nothing" — return 0 immediately.
+    if q.kinds.as_deref().is_some_and(|k| k.is_empty()) {
+        return Ok(0);
+    }
+    if q.authors.as_deref().is_some_and(|a| a.is_empty()) {
+        return Ok(0);
+    }
+    if q.ids.as_deref().is_some_and(|i| i.is_empty()) {
+        return Ok(0);
+    }
+    if q.e_tags.as_deref().is_some_and(|e| e.is_empty()) {
+        return Ok(0);
+    }
+
+    let mut qb: QueryBuilder<sqlx::Postgres> = if let Some(ref p_hex) = q.p_tag_hex {
+        let mut b = QueryBuilder::new(
+            "SELECT COUNT(*) as cnt FROM events e \
+             INNER JOIN event_mentions m ON e.id = m.event_id \
+             WHERE e.deleted_at IS NULL AND m.pubkey_hex = ",
+        );
+        b.push_bind(p_hex.to_ascii_lowercase());
+        b
+    } else {
+        QueryBuilder::new("SELECT COUNT(*) as cnt FROM events WHERE deleted_at IS NULL")
+    };
+
+    let col_prefix = if q.p_tag_hex.is_some() { "e." } else { "" };
+
+    if let Some(ch) = q.channel_id {
+        qb.push(format!(" AND {col_prefix}channel_id = "))
+            .push_bind(ch);
+    } else if q.global_only {
+        qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+    }
+
+    if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {
+        qb.push(format!(" AND {col_prefix}kind IN ("));
+        let mut sep = qb.separated(", ");
+        for k in ks {
+            sep.push_bind(*k);
+        }
+        qb.push(")");
+    }
+
+    if let Some(ref pk) = q.pubkey {
+        qb.push(format!(" AND {col_prefix}pubkey = "))
+            .push_bind(pk.clone());
+    }
+
+    if let Some(ref authors) = q.authors {
+        if !authors.is_empty() {
+            qb.push(format!(" AND {col_prefix}pubkey IN ("));
+            let mut sep = qb.separated(", ");
+            for a in authors {
+                sep.push_bind(a.clone());
+            }
+            qb.push(")");
+        }
+    }
+
+    if let Some(ref ids) = q.ids {
+        if !ids.is_empty() {
+            qb.push(format!(" AND {col_prefix}id IN ("));
+            let mut sep = qb.separated(", ");
+            for id in ids {
+                sep.push_bind(id.clone());
+            }
+            qb.push(")");
+        }
+    }
+
+    if let Some(ref e_tags) = q.e_tags {
+        if !e_tags.is_empty() {
+            qb.push(" AND (");
+            for (i, hex_id) in e_tags.iter().enumerate() {
+                if i > 0 {
+                    qb.push(" OR ");
+                }
+                let containment = serde_json::json!([["e", hex_id]]);
+                qb.push(format!("{col_prefix}tags @> "));
+                qb.push_bind(containment);
+            }
+            qb.push(")");
+        }
+    }
+
+    if let Some(s) = q.since {
+        qb.push(format!(" AND {col_prefix}created_at >= "))
+            .push_bind(s);
+    }
+    if let Some(u) = q.until {
+        qb.push(format!(" AND {col_prefix}created_at <= "))
+            .push_bind(u);
+    }
+
+    if let Some(ref d) = q.d_tag {
+        qb.push(format!(" AND {col_prefix}d_tag = "))
+            .push_bind(d.clone());
+    }
+
+    let row = qb.build().fetch_one(pool).await?;
+    let cnt: i64 = row.try_get("cnt")?;
+
+    Ok(cnt)
 }
 
 /// Soft-delete an event by setting `deleted_at = NOW()`.

@@ -384,6 +384,23 @@ async fn handle_text_message(text: String, conn: Arc<ConnectionState>, state: Ar
                 drop(permit);
             });
         }
+        ClientMessage::Count { sub_id, filters } => {
+            let conn = Arc::clone(&conn);
+            let state = Arc::clone(&state);
+            let permit = match state.handler_semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    conn.send(RelayMessage::notice(
+                        "rate-limited: too many concurrent requests",
+                    ));
+                    return;
+                }
+            };
+            tokio::spawn(async move {
+                handlers::count::handle_count(sub_id, filters, conn, state).await;
+                drop(permit);
+            });
+        }
         ClientMessage::Close(sub_id) => {
             handlers::close::handle_close(sub_id, Arc::clone(&conn), Arc::clone(&state)).await;
         }

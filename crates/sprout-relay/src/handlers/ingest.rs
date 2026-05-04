@@ -12,21 +12,24 @@ use uuid::Uuid;
 use nostr::Event;
 use sprout_auth::Scope;
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, is_relay_admin_kind, KIND_AUTH, KIND_CANVAS,
-    KIND_CONTACT_LIST, KIND_DELETION, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE,
-    KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
-    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
-    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
-    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE,
-    KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED, KIND_LONG_FORM,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_CREATE_GROUP,
-    KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
-    KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
-    KIND_NIP43_LEAVE_REQUEST, KIND_PRESENCE_UPDATE, KIND_PROFILE, KIND_REACTION, KIND_READ_STATE,
-    KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF,
-    KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_USER_STATUS,
-    RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    event_kind_u32, is_parameterized_replaceable, is_relay_admin_kind, KIND_APPROVAL_DENY,
+    KIND_APPROVAL_GRANT, KIND_AUTH, KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_FORUM_COMMENT, KIND_FORUM_POST,
+    KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE,
+    KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED,
+    KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED,
+    KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT,
+    KIND_HUDDLE_RECORDING_AVAILABLE, KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED,
+    KIND_LONG_FORM, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
+    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
+    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
+    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST, KIND_PRESENCE_UPDATE,
+    KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF,
+    KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER,
 };
 use sprout_core::verification::verify_event;
 
@@ -39,11 +42,9 @@ use super::event::dispatch_persistent_event;
 /// How the HTTP caller authenticated (for [`IngestAuth::Http`]).
 #[derive(Debug, Clone)]
 pub enum HttpAuthMethod {
-    /// `Authorization: Bearer sprout_*` API token.
-    ApiToken,
-    /// `Authorization: Bearer eyJ*` Okta JWT.
-    OktaJwt,
-    /// `X-Pubkey: <hex>` dev-mode header.
+    /// `Authorization: Nostr <base64>` — NIP-98 HTTP Auth.
+    Nip98,
+    /// `X-Pubkey: <hex>` dev-mode header (backward compat during transition).
     DevPubkey,
 }
 
@@ -61,7 +62,7 @@ pub enum IngestAuth {
         /// WebSocket connection identifier.
         conn_id: Uuid,
     },
-    /// HTTP REST authenticated request.
+    /// HTTP bridge authenticated request (NIP-98 or dev X-Pubkey).
     Http {
         /// The authenticated Nostr public key.
         pubkey: nostr::PublicKey,
@@ -69,10 +70,6 @@ pub enum IngestAuth {
         scopes: Vec<Scope>,
         /// How the HTTP request was authenticated.
         auth_method: HttpAuthMethod,
-        /// API token UUID, if auth_method is `ApiToken`.
-        token_id: Option<Uuid>,
-        /// Token-level channel restriction, if any.
-        channel_ids: Option<Vec<Uuid>>,
     },
 }
 
@@ -104,14 +101,12 @@ impl IngestAuth {
         }
     }
 
-    /// Token-level channel restriction (Http/ApiToken only).
+    /// Token-level channel restriction (WS connections with scoped tokens — legacy).
+    /// In pure Nostr mode this always returns None; channel access is enforced
+    /// via NIP-29 membership checks instead.
     pub fn channel_ids(&self) -> Option<&[Uuid]> {
         match self {
             Self::Nip42 {
-                channel_ids: Some(ids),
-                ..
-            }
-            | Self::Http {
                 channel_ids: Some(ids),
                 ..
             } => Some(ids),
@@ -215,6 +210,10 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_GIT_STATUS_MERGED
         | KIND_GIT_STATUS_CLOSED
         | KIND_GIT_STATUS_DRAFT => Ok(Scope::MessagesWrite),
+        // Command kinds — DM management, workflows, approvals
+        KIND_DM_OPEN | KIND_DM_ADD_MEMBER | KIND_DM_HIDE => Ok(Scope::MessagesWrite),
+        KIND_WORKFLOW_DEF | KIND_WORKFLOW_TRIGGER => Ok(Scope::MessagesWrite),
+        KIND_APPROVAL_GRANT | KIND_APPROVAL_DENY => Ok(Scope::MessagesWrite),
         _ => Err("restricted: unknown event kind"),
     }
 }
@@ -803,6 +802,11 @@ pub async fn ingest_event(
         )));
     }
 
+    // ── 1c. Reject relay-only kinds from external submission ─────────────
+    if sprout_core::kind::is_relay_only_kind(kind_u32) {
+        return Err(IngestError::Rejected("restricted: relay-only kind".into()));
+    }
+
     // ── 2. Signature verification ────────────────────────────────────────
     let event_clone = event.clone();
     let verify_result = tokio::task::spawn_blocking(move || verify_event(&event_clone)).await;
@@ -884,6 +888,13 @@ pub async fn ingest_event(
             "restricted: insufficient scope (need {})",
             required
         )));
+    }
+
+    // ── 4b. Route command kinds to command executor ──────────────────────
+    // Command kinds are routed AFTER signature verification, timestamp check,
+    // pubkey/auth match, and scope validation — never before.
+    if sprout_core::kind::is_command_kind(kind_u32) {
+        return super::command_executor::handle_command(state, event, auth).await;
     }
 
     // ── 5. Channel resolution ────────────────────────────────────────────
@@ -1708,9 +1719,7 @@ mod tests {
         let http_auth = IngestAuth::Http {
             pubkey: keys.public_key(),
             scopes: vec![],
-            auth_method: HttpAuthMethod::ApiToken,
-            token_id: None,
-            channel_ids: None,
+            auth_method: HttpAuthMethod::Nip98,
         };
         assert!(
             http_auth.is_http(),

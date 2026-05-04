@@ -1,10 +1,14 @@
 #![deny(unsafe_code)]
 
+//! Sprout instance administration CLI.
+//!
+//! In the pure Nostr architecture, API tokens no longer exist.
+//! Admin operations are performed via signed Nostr events (NIP-43 relay admin commands).
+//! This binary is retained as a placeholder for future admin tooling.
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nostr::nips::nip19::ToBech32;
-use nostr::{Keys, PublicKey};
-use sprout_auth::token::{generate_token, hash_token};
+use nostr::Keys;
 use sprout_db::{Db, DbConfig};
 
 #[derive(Parser)]
@@ -16,198 +20,69 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Create a new API token for an agent.
-    MintToken {
-        /// Token name
+    /// Add a pubkey to the relay membership list.
+    AddMember {
+        /// Nostr public key (hex) to add.
         #[arg(long)]
-        name: String,
+        pubkey: String,
 
-        /// Comma-separated scopes (messages:read, messages:write, channels:read,
-        /// channels:write, admin:channels, files:read, files:write)
-        #[arg(long)]
-        scopes: String,
-
-        /// Nostr public key (hex). If omitted, generates a new keypair.
-        #[arg(long)]
-        pubkey: Option<String>,
-
-        /// Hex pubkey of the human operator who owns this agent.
-        /// If provided, sets agent_owner_pubkey in the users table.
-        #[arg(long)]
-        owner_pubkey: Option<String>,
+        /// Role: "admin" or "member" (default: member).
+        #[arg(long, default_value = "member")]
+        role: String,
     },
-    /// List all active API tokens.
-    ListTokens,
+    /// List all relay members.
+    ListMembers,
+    /// Generate a new Nostr keypair (for bootstrapping).
+    GenerateKey,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    match cli.command {
+        Command::GenerateKey => {
+            let keys = Keys::generate();
+            println!("Public key:  {}", keys.public_key().to_hex());
+            println!("Secret key:  {}", keys.secret_key().display_secret());
+            println!("\nSet SPROUT_PRIVATE_KEY to the secret key to use this identity.");
+        }
+        Command::AddMember { pubkey, role } => {
+            let db = connect_db().await?;
+            let pk_bytes = hex::decode(&pubkey)?;
+            if pk_bytes.len() != 32 {
+                anyhow::bail!("pubkey must be 32 bytes (64 hex chars)");
+            }
+            db.ensure_user(&pk_bytes).await?;
+            // Add to relay members via DB (admin bootstrap — normally done via kind:9030)
+            db.add_relay_member(&pubkey, &role, None).await?;
+            println!("Added {} as {} to relay membership list.", pubkey, role);
+        }
+        Command::ListMembers => {
+            let db = connect_db().await?;
+            let members = db.list_relay_members().await?;
+            if members.is_empty() {
+                println!("No relay members found.");
+            } else {
+                println!("{:<66}  {:<10}", "Pubkey", "Role");
+                println!("{}", "-".repeat(78));
+                for m in &members {
+                    println!("{:<66}  {:<10}", hex::encode(&m.pubkey), m.role);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn connect_db() -> Result<Db> {
     let db_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://sprout:sprout_dev@localhost:5432/sprout".to_string());
-
     let db = Db::new(&DbConfig {
         database_url: db_url,
         ..DbConfig::default()
     })
     .await?;
-
-    match cli.command {
-        Command::MintToken {
-            name,
-            scopes,
-            pubkey,
-            owner_pubkey,
-        } => mint_token(&db, &name, &scopes, pubkey.as_deref(), owner_pubkey).await?,
-        Command::ListTokens => list_tokens(&db).await?,
-    }
-
-    Ok(())
-}
-
-async fn mint_token(
-    db: &Db,
-    name: &str,
-    scopes_str: &str,
-    pubkey_hex: Option<&str>,
-    owner_pubkey: Option<String>,
-) -> Result<()> {
-    let scopes: Vec<String> = scopes_str
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .collect();
-
-    let (pubkey, generated_keys) = match pubkey_hex {
-        Some(hex) => (PublicKey::from_hex(hex)?, None),
-        None => {
-            let keys = Keys::generate();
-            (keys.public_key(), Some(keys))
-        }
-    };
-
-    let pubkey_bytes = pubkey.serialize().to_vec();
-
-    // ── Enforce shutdown-required scopes (before any DB writes) ─────────────
-    // Two triggers, same as the relay path:
-    // 1. Explicit --owner-pubkey (bootstrap mint)
-    // 2. Agent already has an owner in the DB (re-mint must preserve controllability)
-    // Fail closed: DB lookup error → assume owned → enforce scopes.
-    let has_existing_owner = match db.get_agent_channel_policy(&pubkey_bytes).await {
-        Ok(Some((_, Some(_)))) => true,
-        Ok(_) => false,
-        Err(e) => {
-            eprintln!("warning: owner lookup failed (assuming owned): {e}");
-            true // fail closed
-        }
-    };
-    if owner_pubkey.is_some() || has_existing_owner {
-        let required = [
-            "users:read",
-            "messages:read",
-            "messages:write",
-            "channels:read",
-        ];
-        for r in &required {
-            if !scopes.iter().any(|s| s == r) {
-                anyhow::bail!("owned agents require the '{r}' scope for agent controllability");
-            }
-        }
-    }
-
-    // ── Validate owner_pubkey (before any DB writes) ─────────────────────────
-    let validated_owner = if let Some(ref owner_hex) = owner_pubkey {
-        let owner_bytes =
-            hex::decode(owner_hex).map_err(|e| anyhow::anyhow!("invalid owner pubkey hex: {e}"))?;
-        if owner_bytes.len() != 32 {
-            anyhow::bail!("owner pubkey must be 32 bytes (64 hex chars)");
-        }
-        Some(owner_bytes)
-    } else {
-        None
-    };
-
-    // ── DB writes (all validation passed) ────────────────────────────────────
-    db.ensure_user(&pubkey_bytes).await?;
-
-    if let Some(owner_bytes) = validated_owner {
-        db.ensure_user(&owner_bytes).await?;
-        let was_set = db.set_agent_owner(&pubkey_bytes, &owner_bytes).await?;
-        if !was_set {
-            let existing = db
-                .get_agent_channel_policy(&pubkey_bytes)
-                .await?
-                .and_then(|(_, owner)| owner);
-            if existing.as_deref() != Some(owner_bytes.as_slice()) {
-                anyhow::bail!(
-                    "agent already has a different owner — refusing to mint token for non-owner"
-                );
-            }
-            eprintln!("note: agent already owned by the requested pubkey — proceeding");
-        }
-    }
-
-    let raw_token = generate_token();
-    let token_hash = hash_token(&raw_token);
-
-    let token_id = db
-        .create_api_token(&token_hash, &pubkey_bytes, name, &scopes, None, None)
-        .await?;
-
-    println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║  Token minted successfully!                                 ║");
-    println!("╠══════════════════════════════════════════════════════════════╣");
-    println!("║  Token ID:    {:<46} ║", token_id);
-    println!("║  Name:        {:<46} ║", name);
-    println!("║  Scopes:      {:<46} ║", scopes_str);
-    println!("║  Pubkey:      {}...║", &pubkey.to_hex()[..48]);
-    println!("╠══════════════════════════════════════════════════════════════╣");
-
-    if let Some(keys) = generated_keys {
-        println!("║  ⚠️  SAVE THESE — shown only once!                          ║");
-        println!("╠══════════════════════════════════════════════════════════════╣");
-        println!("║  Private key (nsec):                                        ║");
-        println!(
-            "║  {}  ║",
-            keys.secret_key()
-                .to_bech32()
-                .unwrap_or_else(|_| "error encoding".into())
-        );
-        println!("║                                                              ║");
-    }
-
-    println!("║  API Token:                                                  ║");
-    println!("║  {}  ║", raw_token);
-    println!("╚══════════════════════════════════════════════════════════════╝");
-
-    Ok(())
-}
-
-async fn list_tokens(db: &Db) -> Result<()> {
-    let tokens = db.list_active_tokens().await?;
-
-    if tokens.is_empty() {
-        println!("No active tokens found.");
-        return Ok(());
-    }
-
-    println!(
-        "{:<36}  {:<20}  {:<40}  {:<20}",
-        "ID", "Name", "Scopes", "Created"
-    );
-    println!("{}", "-".repeat(120));
-
-    for t in &tokens {
-        let scopes_str = t.scopes.join(",");
-        let id_str = t.id.to_string();
-        println!(
-            "{:<36}  {:<20}  {:<40}  {:<20}",
-            &id_str[..36.min(id_str.len())],
-            &t.name[..20.min(t.name.len())],
-            &scopes_str[..40.min(scopes_str.len())],
-            t.created_at.format("%Y-%m-%d %H:%M"),
-        );
-    }
-
-    Ok(())
+    Ok(db)
 }

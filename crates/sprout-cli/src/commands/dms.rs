@@ -1,24 +1,24 @@
+use nostr::{EventBuilder, Kind, Tag};
+
 use crate::client::SproutClient;
 use crate::error::CliError;
-use crate::validate::{percent_encode, validate_hex64, validate_uuid};
+use crate::validate::{validate_hex64, validate_uuid};
 
-pub async fn cmd_list_dms(
-    client: &SproutClient,
-    cursor: Option<&str>,
-    limit: Option<u32>,
-) -> Result<(), CliError> {
-    let mut path = "/api/dms".to_string();
-    let mut sep = '?';
-    if let Some(c) = cursor {
-        path.push_str(&format!("{}cursor={}", sep, percent_encode(c)));
-        sep = '&';
-    }
-    if let Some(l) = limit {
-        path.push_str(&format!("{}limit={}", sep, l));
-    }
-    client.run_get(&path).await
+/// List DM conversations by querying kind:41010 (DM open) events authored by us.
+pub async fn cmd_list_dms(client: &SproutClient, limit: Option<u32>) -> Result<(), CliError> {
+    let my_pk = client.keys().public_key().to_hex();
+    let limit = limit.unwrap_or(50).min(200);
+    let filter = serde_json::json!({
+        "kinds": [41010],
+        "authors": [my_pk],
+        "limit": limit
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
+/// Open a DM with one or more users — sign and submit a kind:41010 event.
 pub async fn cmd_open_dm(client: &SproutClient, pubkeys: &[String]) -> Result<(), CliError> {
     if pubkeys.is_empty() || pubkeys.len() > 8 {
         return Err(CliError::Usage("--pubkey: must provide 1–8 pubkeys".into()));
@@ -26,11 +26,24 @@ pub async fn cmd_open_dm(client: &SproutClient, pubkeys: &[String]) -> Result<()
     for pk in pubkeys {
         validate_hex64(pk)?;
     }
-    client
-        .run_post("/api/dms", &serde_json::json!({ "pubkeys": pubkeys }))
-        .await
+
+    let keys = client.keys();
+    let mut tags: Vec<Tag> = Vec::new();
+    for pk in pubkeys {
+        tags.push(Tag::parse(&["p", pk]).map_err(|e| CliError::Other(format!("tag error: {e}")))?);
+    }
+
+    let builder = EventBuilder::new(Kind::Custom(41010), "", tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
 }
 
+/// Add a member to a DM group — sign and submit a kind:41011 event.
 pub async fn cmd_add_dm_member(
     client: &SproutClient,
     channel_id: &str,
@@ -38,10 +51,19 @@ pub async fn cmd_add_dm_member(
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     validate_hex64(pubkey)?;
-    client
-        .run_post(
-            &format!("/api/dms/{}/members", channel_id),
-            &serde_json::json!({ "pubkeys": [pubkey] }),
-        )
-        .await
+
+    let keys = client.keys();
+    let tags = vec![
+        Tag::parse(&["h", channel_id]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        Tag::parse(&["p", pubkey]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+    ];
+
+    let builder = EventBuilder::new(Kind::Custom(41011), "", tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
 }

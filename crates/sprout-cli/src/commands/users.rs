@@ -1,22 +1,13 @@
+use nostr::{EventBuilder, Kind, Tag};
+
 use crate::client::SproutClient;
 use crate::error::CliError;
-use crate::validate::{percent_encode, validate_hex64};
+use crate::validate::validate_hex64;
 
-/// Require keys on the client — fail fast with a clear error if absent.
-macro_rules! require_keys {
-    ($client:expr) => {
-        $client.keys().ok_or_else(|| {
-            CliError::Key(
-                "private key required for write operations (set SPROUT_PRIVATE_KEY)".into(),
-            )
-        })?
-    };
-}
-
-/// 3-way dispatch based on pubkey count:
-///   0 pubkeys → GET /api/users/me/profile
-///   1 pubkey  → GET /api/users/{pk}/profile
-///   2+ pubkeys → POST /api/users/batch
+/// Get user profiles (kind:0 metadata events).
+/// 0 pubkeys → query our own profile
+/// 1 pubkey → query that user's profile
+/// 2+ pubkeys → query batch
 pub async fn cmd_get_users(client: &SproutClient, pubkeys: &[String]) -> Result<(), CliError> {
     for pk in pubkeys {
         validate_hex64(pk)?;
@@ -25,25 +16,19 @@ pub async fn cmd_get_users(client: &SproutClient, pubkeys: &[String]) -> Result<
         return Err(CliError::Usage("--pubkey: maximum 200 pubkeys".into()));
     }
 
-    let resp = match pubkeys.len() {
-        0 => client.get_raw("/api/users/me/profile").await?,
-        1 => {
-            client
-                .get_raw(&format!(
-                    "/api/users/{}/profile",
-                    percent_encode(&pubkeys[0])
-                ))
-                .await?
-        }
-        _ => {
-            client
-                .post_raw(
-                    "/api/users/batch",
-                    &serde_json::json!({ "pubkeys": pubkeys }),
-                )
-                .await?
-        }
+    let my_pk = client.keys().public_key().to_hex();
+    let authors: Vec<&str> = if pubkeys.is_empty() {
+        vec![my_pk.as_str()]
+    } else {
+        pubkeys.iter().map(|s| s.as_str()).collect()
     };
+
+    let filter = serde_json::json!({
+        "kinds": [0],
+        "authors": authors,
+        "limit": authors.len()
+    });
+    let resp = client.query(&filter).await?;
     println!("{resp}");
     Ok(())
 }
@@ -61,11 +46,9 @@ pub async fn cmd_set_profile(
         ));
     }
 
-    let keys = require_keys!(client);
+    let keys = client.keys();
 
     // Read-merge-write: fetch current profile, merge in the new fields, then sign.
-    // This preserves fields the caller didn't specify (e.g. existing avatar stays
-    // intact when only --name is passed).
     let current = fetch_current_profile(client).await?;
 
     // Merge: caller-supplied fields win; fall back to current profile values.
@@ -104,7 +87,7 @@ pub async fn cmd_set_profile(
 
     let builder = sprout_sdk::build_profile(
         merged_name.as_deref(),
-        None, // `name` field (username) — not exposed by CLI; preserve via display_name
+        None, // `name` field (username) — not exposed by CLI
         merged_picture.as_deref(),
         merged_about.as_deref(),
         merged_nip05.as_deref(),
@@ -120,44 +103,58 @@ pub async fn cmd_set_profile(
     Ok(())
 }
 
-/// Fetch the current user's profile metadata from GET /api/users/me/profile.
-/// Returns the parsed JSON object (kind:0 content fields), or an empty object
-/// if the profile hasn't been set yet.
+/// Fetch the current user's profile metadata via POST /query (kind:0).
+/// Returns the parsed content JSON object, or an empty object if no profile exists.
 async fn fetch_current_profile(
     client: &SproutClient,
 ) -> Result<serde_json::Map<String, serde_json::Value>, CliError> {
-    let raw = client.get_raw("/api/users/me/profile").await;
-    match raw {
-        Ok(body) => {
-            let v: serde_json::Value = serde_json::from_str(&body)
-                .map_err(|e| CliError::Other(format!("failed to parse profile response: {e}")))?;
-            // The relay may return the profile fields at top level or nested under "profile"
-            let obj = if let Some(profile) = v.get("profile").and_then(|p| p.as_object()) {
-                profile.clone()
-            } else if let Some(obj) = v.as_object() {
-                obj.clone()
-            } else {
-                serde_json::Map::new()
-            };
-            Ok(obj)
-        }
-        // 404 = no profile yet — start fresh
-        Err(CliError::Relay { status: 404, .. }) => Ok(serde_json::Map::new()),
-        Err(e) => Err(e),
-    }
+    let my_pk = client.keys().public_key().to_hex();
+    let filter = serde_json::json!({
+        "kinds": [0],
+        "authors": [my_pk],
+        "limit": 1
+    });
+    let raw = client.query(&filter).await?;
+    let events: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::Other(format!("failed to parse profile query: {e}")))?;
+
+    let Some(arr) = events.as_array() else {
+        return Ok(serde_json::Map::new());
+    };
+    let Some(event) = arr.first() else {
+        return Ok(serde_json::Map::new());
+    };
+    // kind:0 content is a JSON string containing the profile fields
+    let content_str = event
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or("{}");
+    let content: serde_json::Value = serde_json::from_str(content_str).unwrap_or_default();
+    Ok(content.as_object().cloned().unwrap_or_default())
 }
 
+/// Get presence status for users — query kind:40902 presence snapshot events.
 pub async fn cmd_get_presence(client: &SproutClient, pubkeys_csv: &str) -> Result<(), CliError> {
-    for pk in pubkeys_csv.split(',') {
-        let pk = pk.trim();
-        if !pk.is_empty() {
-            validate_hex64(pk)?;
-        }
+    let pubkeys: Vec<&str> = pubkeys_csv
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for pk in &pubkeys {
+        validate_hex64(pk)?;
     }
-    let path = format!("/api/presence?pubkeys={}", percent_encode(pubkeys_csv));
-    client.run_get(&path).await
+
+    let filter = serde_json::json!({
+        "kinds": [40902],
+        "authors": pubkeys,
+        "limit": pubkeys.len()
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
+/// Set presence status — sign and submit a kind:40902 presence event.
 pub async fn cmd_set_presence(client: &SproutClient, status: &str) -> Result<(), CliError> {
     match status {
         "online" | "away" | "offline" => {}
@@ -167,27 +164,18 @@ pub async fn cmd_set_presence(client: &SproutClient, status: &str) -> Result<(),
             )))
         }
     }
-    client
-        .run_put("/api/presence", &serde_json::json!({ "status": status }))
-        .await
-}
 
-pub async fn cmd_set_channel_add_policy(
-    client: &SproutClient,
-    policy: &str,
-) -> Result<(), CliError> {
-    match policy {
-        "anyone" | "owner_only" | "nobody" => {}
-        _ => {
-            return Err(CliError::Usage(format!(
-                "--policy must be one of: anyone, owner_only, nobody (got: {policy})"
-            )))
-        }
-    }
-    client
-        .run_put(
-            "/api/users/me/channel-add-policy",
-            &serde_json::json!({ "channel_add_policy": policy }),
-        )
-        .await
+    let keys = client.keys();
+    let tags =
+        vec![Tag::parse(&["status", status])
+            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
+
+    let builder = EventBuilder::new(Kind::Custom(40902), "", tags);
+    let event = builder
+        .sign_with_keys(keys)
+        .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{resp}");
+    Ok(())
 }

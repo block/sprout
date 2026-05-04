@@ -235,7 +235,7 @@ pub async fn handle_req(
 /// Maximum Typesense pages to fetch per filter (prevents unbounded loops).
 const MAX_SEARCH_PAGES: u32 = 10;
 
-fn build_search_channel_scope_filter(
+pub(crate) fn build_search_channel_scope_filter(
     accessible_channels: &[uuid::Uuid],
     include_global: bool,
 ) -> Option<String> {
@@ -441,6 +441,34 @@ async fn handle_search_req(
 
 /// Convert a single NIP-01 filter into an [`EventQuery`] for the database.
 ///
+/// Public wrapper for use by the HTTP bridge and COUNT handler.
+/// Resolves accessible channels for the given pubkey and builds the query.
+pub async fn build_event_query_from_filter(
+    filter: &Filter,
+    _pubkey_bytes: &[u8],
+    _state: &AppState,
+) -> EventQuery {
+    let channel_id = extract_channel_id_from_filter(filter);
+    filter_to_query_params(filter, channel_id)
+}
+
+/// Extract a channel UUID from a single filter's `#h` tag.
+fn extract_channel_id_from_filter(filter: &Filter) -> Option<uuid::Uuid> {
+    for (tag_key, tag_values) in filter.generic_tags.iter() {
+        let key = tag_key.to_string();
+        if key == "h" {
+            for val in tag_values {
+                if let Ok(id) = val.parse::<uuid::Uuid>() {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Convert a single NIP-01 filter into an [`EventQuery`] for the database.
+///
 /// Each filter is queried independently so that per-filter `limit` and time
 /// windows are respected. Results are deduplicated by event ID in the caller.
 fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> EventQuery {
@@ -569,7 +597,7 @@ fn extract_channel_id_from_filters(filters: &[Filter]) -> Option<uuid::Uuid> {
     found_id
 }
 
-fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: &str) -> bool {
+pub(crate) fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: &str) -> bool {
     let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
     filters.iter().all(|filter| {
         let can_match_p_gated = filter.kinds.as_ref().is_none_or(|ks| {
