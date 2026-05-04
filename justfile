@@ -4,6 +4,7 @@ set dotenv-load := true
 
 desktop_dir := "desktop"
 desktop_tauri_manifest := "desktop/src-tauri/Cargo.toml"
+web_dir := "web"
 
 # List all available tasks
 default:
@@ -43,7 +44,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check mobile-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check web-check mobile-check
 
 # Format all Rust code
 fmt:
@@ -91,7 +92,7 @@ _ensure-sidecar-stubs:
     set -euo pipefail
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
     mkdir -p desktop/src-tauri/binaries
-    for bin in sprout-acp sprout-mcp-server; do
+    for bin in sprout-acp sprout-mcp-server git-credential-nostr; do
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 
@@ -107,6 +108,7 @@ desktop-release-build target="aarch64-apple-darwin":
     mkdir -p desktop/src-tauri/binaries
     touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+    touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     cd {{desktop_dir}} && pnpm install && pnpm tauri build --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
@@ -125,7 +127,7 @@ desktop-e2e-integration:
     cd {{desktop_dir}} && pnpm test:e2e:integration
 
 # Run all checks suitable for CI / pre-push (no infra needed)
-ci: check test-unit desktop-build desktop-tauri-check mobile-test
+ci: check test-unit desktop-build desktop-tauri-check web-build mobile-test
 
 # ─── Test ─────────────────────────────────────────────────────────────────────
 
@@ -196,6 +198,46 @@ desktop-dev:
 # Run the desktop Tauri app (alias for dev)
 desktop-app *ARGS:
     just dev {{ARGS}}
+
+# ─── Web ─────────────────────────────────────────────────────────────────────
+
+# Run the web frontend dev server (port derived from worktree to avoid collisions)
+web:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{web_dir}}
+    [[ -d node_modules ]] || pnpm install
+    cd ..
+    source scripts/instance-env.sh
+    export VITE_PORT=$((SPROUT_VITE_PORT + 100))
+    export VITE_RELAY_URL="${SPROUT_RELAY_URL}"
+    echo "Starting web dev server on port ${VITE_PORT}, relay ${SPROUT_RELAY_URL}"
+    cd {{web_dir}}
+    pnpm exec vite --port "${VITE_PORT}" --strictPort
+
+# Install web JS dependencies
+web-install:
+    cd {{web_dir}} && pnpm install
+
+# Install web JS dependencies reproducibly for CI
+web-install-ci:
+    cd {{web_dir}} && pnpm install --frozen-lockfile
+
+# Run web lint and format checks
+web-check:
+    cd {{web_dir}} && pnpm check
+
+# Run web TypeScript checks
+web-typecheck:
+    cd {{web_dir}} && pnpm typecheck
+
+# Build web frontend assets
+web-build:
+    cd {{web_dir}} && pnpm build
+
+# Run web browser smoke tests
+web-e2e-smoke:
+    cd {{web_dir}} && pnpm test:e2e:smoke
 
 # ─── Mobile ──────────────────────────────────────────────────────────────────
 

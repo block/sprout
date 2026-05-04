@@ -133,29 +133,7 @@ export const MessageRow = React.memo(
       ? "rounded-md"
       : "rounded-xl";
 
-    const avatarNode = message.pubkey ? (
-      <UserProfilePopover
-        pubkey={message.pubkey}
-        role={message.role}
-        botIdenticonValue={message.author}
-      >
-        <button
-          className={cn(
-            "shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            avatarButtonRadiusClass,
-          )}
-          type="button"
-        >
-          <UserAvatar
-            accent={message.accent}
-            avatarUrl={message.avatarUrl ?? null}
-            className={avatarSizeClass}
-            displayName={message.author}
-            testId="message-avatar"
-          />
-        </button>
-      </UserProfilePopover>
-    ) : (
+    const avatarNode = (
       <UserAvatar
         accent={message.accent}
         avatarUrl={message.avatarUrl ?? null}
@@ -166,18 +144,9 @@ export const MessageRow = React.memo(
     );
 
     const authorNode = message.pubkey ? (
-      <UserProfilePopover
-        pubkey={message.pubkey}
-        role={message.role}
-        botIdenticonValue={message.author}
-      >
-        <button
-          className="truncate rounded text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          type="button"
-        >
-          {message.author}
-        </button>
-      </UserProfilePopover>
+      <span className="truncate text-sm font-semibold tracking-tight hover:underline">
+        {message.author}
+      </span>
     ) : (
       <h3 className="truncate text-sm font-semibold tracking-tight">
         {message.author}
@@ -296,10 +265,30 @@ export const MessageRow = React.memo(
           {isThreadReplyLayout ? (
             <>
               <div className="flex min-w-0 items-start gap-1.5">
-                <div className="flex shrink-0 items-start">{avatarNode}</div>
+                {message.pubkey ? (
+                  <UserProfilePopover
+                    pubkey={message.pubkey}
+                    role={message.role}
+                    botIdenticonValue={message.author}
+                  >
+                    <button
+                      className="flex shrink-0 items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      type="button"
+                    >
+                      {avatarNode}
+                      {authorNode}
+                    </button>
+                  </UserProfilePopover>
+                ) : (
+                  <>
+                    <div className="flex shrink-0 items-start">
+                      {avatarNode}
+                    </div>
+                    {authorNode}
+                  </>
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    {authorNode}
                     {message.personaDisplayName &&
                     message.personaDisplayName !== message.author ? (
                       <span className="text-xs text-muted-foreground">
@@ -316,10 +305,43 @@ export const MessageRow = React.memo(
             </>
           ) : (
             <>
-              <div className="flex shrink-0 items-start">{avatarNode}</div>
+              {message.pubkey ? (
+                <UserProfilePopover
+                  pubkey={message.pubkey}
+                  role={message.role}
+                  botIdenticonValue={message.author}
+                >
+                  <button
+                    className={cn(
+                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      avatarButtonRadiusClass,
+                    )}
+                    type="button"
+                  >
+                    {avatarNode}
+                  </button>
+                </UserProfilePopover>
+              ) : (
+                <div className="flex shrink-0 items-start">{avatarNode}</div>
+              )}
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                  {authorNode}
+                  {message.pubkey ? (
+                    <UserProfilePopover
+                      pubkey={message.pubkey}
+                      role={message.role}
+                      botIdenticonValue={message.author}
+                    >
+                      <button
+                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        type="button"
+                      >
+                        {authorNode}
+                      </button>
+                    </UserProfilePopover>
+                  ) : (
+                    authorNode
+                  )}
                   {message.personaDisplayName &&
                   message.personaDisplayName !== message.author ? (
                     <span className="text-xs text-muted-foreground">

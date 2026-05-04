@@ -27,7 +27,7 @@ export type UseWorkspacesReturn = {
   switchWorkspace: (id: string) => void;
   updateWorkspace: (
     id: string,
-    updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
+    updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token" | "pubkey">>,
   ) => void;
 };
 
@@ -80,7 +80,6 @@ function useWorkspacesInternal(): UseWorkspacesReturn {
                 ...w,
                 name: workspace.name || w.name,
                 token: workspace.token ?? w.token,
-                nsec: workspace.nsec ?? w.nsec,
                 pubkey: workspace.pubkey ?? w.pubkey,
               }
             : w,
@@ -130,7 +129,9 @@ function useWorkspacesInternal(): UseWorkspacesReturn {
   const updateWorkspace = useCallback(
     (
       id: string,
-      updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token">>,
+      updates: Partial<
+        Pick<Workspace, "name" | "relayUrl" | "token" | "pubkey">
+      >,
     ) => {
       setWorkspacesState((prev) => {
         // Prevent duplicate relay URLs across workspaces

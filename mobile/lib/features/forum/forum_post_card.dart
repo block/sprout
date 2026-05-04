@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/theme/theme.dart';
 import '../channels/message_content.dart';
 import '../profile/user_cache_provider.dart';
+import '../profile/user_profile_sheet.dart';
 import '../profile/user_profile.dart';
 import 'forum_models.dart';
 
@@ -63,21 +64,29 @@ class ForumPostCard extends ConsumerWidget {
             // Author row
             Row(
               children: [
-                _PostAvatar(profile: profile, pubkey: post.pubkey),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => showUserProfileSheet(context, post.pubkey),
+                  child: _PostAvatar(profile: profile, pubkey: post.pubkey),
+                ),
                 const SizedBox(width: Grid.xxs),
                 Expanded(
-                  child: Text(
-                    displayName,
-                    style: context.textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => showUserProfileSheet(context, post.pubkey),
+                    child: Text(
+                      displayName,
+                      style: context.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
                 Text(
                   formatRelativeTime(post.createdAt),
                   style: context.textTheme.labelSmall?.copyWith(
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(width: Grid.half),
@@ -89,7 +98,7 @@ class ForumPostCard extends ConsumerWidget {
                     icon: Icon(
                       LucideIcons.ellipsis,
                       size: 16,
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                     padding: EdgeInsets.zero,
                     visualDensity: VisualDensity.compact,
@@ -128,13 +137,13 @@ class ForumPostCard extends ConsumerWidget {
                   Icon(
                     LucideIcons.messageSquare,
                     size: 14,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                   const SizedBox(width: Grid.half),
                   Text(
                     '${summary.replyCount} ${summary.replyCount == 1 ? 'reply' : 'replies'}',
                     style: context.textTheme.labelSmall?.copyWith(
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                   ),
                   if (summary.lastReplyAt != null) ...[
@@ -142,14 +151,16 @@ class ForumPostCard extends ConsumerWidget {
                     Text(
                       '\u00b7',
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline.withValues(alpha: 0.5),
+                        color: context.colors.onSurfaceVariant.withValues(
+                          alpha: 0.5,
+                        ),
                       ),
                     ),
                     const SizedBox(width: Grid.half),
                     Text(
                       'last ${formatRelativeTime(summary.lastReplyAt!)}',
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],

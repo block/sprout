@@ -2,6 +2,7 @@ import * as React from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { X } from "lucide-react";
 
+import { useMyRelayMembershipQuery } from "@/features/relay-members/hooks";
 import { cn } from "@/shared/lib/cn";
 import {
   renderSettingsSection,
@@ -76,6 +77,20 @@ export function SettingsView({
   onSetNeedsActionNotificationsEnabled,
   section,
 }: SettingsViewProps) {
+  const myMembershipQuery = useMyRelayMembershipQuery();
+  const visibleSections = React.useMemo(() => {
+    const membership = myMembershipQuery.data;
+    return settingsSections.filter((s) => {
+      if (s.value === "relay-members") {
+        return (
+          membership != null &&
+          (membership.role === "owner" || membership.role === "admin")
+        );
+      }
+      return true;
+    });
+  }, [myMembershipQuery.data]);
+
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -85,6 +100,12 @@ export function SettingsView({
   React.useEffect(() => {
     void getVersion().then(setAppVersion);
   }, []);
+
+  React.useEffect(() => {
+    if (!visibleSections.some((entry) => entry.value === section)) {
+      onSectionChange("profile");
+    }
+  }, [onSectionChange, section, visibleSections]);
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -159,7 +180,7 @@ export function SettingsView({
               aria-label="Settings sections"
               className="flex gap-1 overflow-x-auto px-3 py-3 md:flex-1 md:flex-col md:overflow-y-auto md:pt-1"
             >
-              {settingsSections.map((entry) => (
+              {visibleSections.map((entry) => (
                 <SettingsSectionButton
                   active={entry.value === section}
                   isLoaded={isLoaded}

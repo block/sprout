@@ -4,6 +4,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { useCallback, useLayoutEffect } from "react";
 
 import { router } from "@/app/router";
+import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
@@ -92,5 +93,9 @@ export function App() {
     return <AppLoadingGate />;
   }
 
-  return <AppReady key={workspaceKey} />;
+  return (
+    <UpdaterProvider>
+      <AppReady key={workspaceKey} />
+    </UpdaterProvider>
+  );
 }

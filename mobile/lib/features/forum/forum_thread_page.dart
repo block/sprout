@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
@@ -11,6 +13,7 @@ import '../channels/compose_bar.dart';
 import '../channels/message_content.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import '../profile/user_profile_sheet.dart';
 import 'forum_models.dart';
 import 'forum_provider.dart';
 
@@ -235,13 +238,13 @@ class _ThreadContent extends HookConsumerWidget {
                     Icon(
                       LucideIcons.messageSquare,
                       size: 16,
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                     const SizedBox(width: Grid.half),
                     Text(
                       '${replies.length} ${replies.length == 1 ? 'reply' : 'replies'}',
                       style: context.textTheme.labelMedium?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -256,7 +259,7 @@ class _ThreadContent extends HookConsumerWidget {
                   child: Text(
                     'No replies yet. Be the first to respond.',
                     style: context.textTheme.bodyMedium?.copyWith(
-                      color: context.colors.outline,
+                      color: context.colors.onSurfaceVariant,
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -320,22 +323,32 @@ class _OriginalPost extends ConsumerWidget {
         children: [
           Row(
             children: [
-              _Avatar(profile: profile, pubkey: post.pubkey, radius: 16),
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, post.pubkey),
+                child: _Avatar(
+                  profile: profile,
+                  pubkey: post.pubkey,
+                  radius: 16,
+                ),
+              ),
               const SizedBox(width: Grid.xxs),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      displayName,
-                      style: context.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    GestureDetector(
+                      onTap: () => showUserProfileSheet(context, post.pubkey),
+                      child: Text(
+                        displayName,
+                        style: context.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                     Text(
                       formatRelativeTime(post.createdAt),
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -389,22 +402,32 @@ class _ReplyRow extends ConsumerWidget {
         children: [
           Row(
             children: [
-              _Avatar(profile: profile, pubkey: reply.pubkey, radius: 12),
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, reply.pubkey),
+                child: _Avatar(
+                  profile: profile,
+                  pubkey: reply.pubkey,
+                  radius: 12,
+                ),
+              ),
               const SizedBox(width: Grid.xxs),
               Expanded(
                 child: Row(
                   children: [
-                    Text(
-                      displayName,
-                      style: context.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    GestureDetector(
+                      onTap: () => showUserProfileSheet(context, reply.pubkey),
+                      child: Text(
+                        displayName,
+                        style: context.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                     const SizedBox(width: Grid.xxs),
                     Text(
                       formatRelativeTime(reply.createdAt),
                       style: context.textTheme.labelSmall?.copyWith(
-                        color: context.colors.outline,
+                        color: context.colors.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -418,7 +441,7 @@ class _ReplyRow extends ConsumerWidget {
                   icon: Icon(
                     LucideIcons.ellipsis,
                     size: 16,
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                   padding: EdgeInsets.zero,
                   visualDensity: VisualDensity.compact,

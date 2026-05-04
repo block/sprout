@@ -34,18 +34,20 @@ void main() {
           .read(channelMessagesProvider(_channelId))
           .value!;
       expect(messages.map((event) => event.id), ['history', 'live']);
-      expect(relaySession.operations, ['subscribe', 'fetch']);
+      // The auto-prefetch fires an extra fetchOlder because fewer than 15
+      // displayable events were loaded. The deduped result sets _reachedOldest.
+      expect(relaySession.operations, ['subscribe', 'fetch', 'fetch']);
       expect(
         relaySession.liveFilters.single.kinds,
         EventKind.channelEventKinds,
       );
       expect(relaySession.liveFilters.single.tags['#h'], [_channelId]);
-      expect(relaySession.liveFilters.single.limit, 50);
+      expect(relaySession.liveFilters.single.limit, 200);
       expect(
-        relaySession.historyFilters.single.kinds,
+        relaySession.historyFilters.first.kinds,
         EventKind.channelEventKinds,
       );
-      expect(relaySession.historyFilters.single.tags['#h'], [_channelId]);
+      expect(relaySession.historyFilters.first.tags['#h'], [_channelId]);
     },
   );
 
@@ -62,7 +64,7 @@ void main() {
 
     final messages = container.read(channelMessagesProvider(_channelId)).value!;
     expect(messages.map((event) => event.id), ['history']);
-    expect(relaySession.operations, ['subscribe', 'fetch']);
+    expect(relaySession.operations, ['subscribe', 'fetch', 'fetch']);
   });
 
   test(

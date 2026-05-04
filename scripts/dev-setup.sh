@@ -193,6 +193,23 @@ else
   warn "Desktop directory not found at ${DESKTOP_DIR} — skipping."
 fi
 
+# ---- Install web dependencies -----------------------------------------------
+
+WEB_DIR="${REPO_ROOT}/web"
+
+if [[ -d "${WEB_DIR}" ]]; then
+  if command -v pnpm &>/dev/null; then
+    log "Installing web dependencies (pnpm install)..."
+    (cd "${WEB_DIR}" && pnpm install)
+    success "Web dependencies installed"
+  else
+    warn "pnpm not found — skipping web dependency install."
+    warn "Run '. ./bin/activate-hermit' to get pnpm, then 'just web-install'."
+  fi
+else
+  warn "Web directory not found at ${WEB_DIR} — skipping."
+fi
+
 # ---- Print connection info --------------------------------------------------
 
 echo ""

@@ -7,6 +7,7 @@ import {
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import type { ChannelMember } from "@/shared/api/types";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
 import { trimMapToSize } from "@/shared/lib/trimMapToSize";
 import { hasMention } from "./hasMention";
@@ -16,6 +17,7 @@ const MENTION_DEBOUNCE_MS = 120;
 export function useMentions(
   channelId: string | null,
   externalMembers?: ChannelMember[],
+  profiles?: UserProfileLookup,
 ) {
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = React.useState(0);
@@ -152,10 +154,17 @@ export function useMentions(
       .map(({ member, label, personaName }) => ({
         pubkey: member.pubkey,
         displayName: label,
+        avatarUrl: profiles?.[member.pubkey.toLowerCase()]?.avatarUrl ?? null,
         role: member.role === "admin" ? "admin" : null,
         personaName,
       }));
-  }, [managedAgentNamesByPubkey, members, mentionQuery, personaNameByPubkey]);
+  }, [
+    managedAgentNamesByPubkey,
+    members,
+    mentionQuery,
+    personaNameByPubkey,
+    profiles,
+  ]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
 

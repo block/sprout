@@ -13,7 +13,6 @@ export type UpdateStatus =
   | { state: "ready" }
   | { state: "error"; message: string };
 
-const TOAST_ID = "update-available";
 const BACKGROUND_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
   "checking",
@@ -43,6 +42,7 @@ export function useUpdater() {
   const statusRef = useRef<UpdateStatus>({ state: "idle" });
   const updateRef = useRef<Update | null>(null);
   const checkInFlightRef = useRef(false);
+  const downloadInFlightRef = useRef(false);
   const manualResultRequestedRef = useRef(false);
 
   const setStatus = useCallback((nextStatus: UpdateStatus) => {
@@ -51,6 +51,9 @@ export function useUpdater() {
   }, []);
 
   const closeUpdate = useCallback(async () => {
+    if (downloadInFlightRef.current) {
+      return;
+    }
     const current = updateRef.current;
     if (current) {
       updateRef.current = null;
@@ -59,13 +62,17 @@ export function useUpdater() {
   }, []);
 
   const downloadAndInstall = useCallback(async () => {
+    if (downloadInFlightRef.current) {
+      return;
+    }
+
+    downloadInFlightRef.current = true;
     try {
       const update = updateRef.current;
       if (!update) {
         return;
       }
 
-      toast.dismiss(TOAST_ID);
       setStatus({ state: "downloading" });
 
       await update.downloadAndInstall((event) => {
@@ -76,8 +83,14 @@ export function useUpdater() {
 
       updateRef.current = null;
       setStatus({ state: "ready" });
+      toast("Update ready", {
+        description: "Restart when you're ready to apply the update.",
+        duration: 8000,
+      });
     } catch (err) {
       setStatus({ state: "error", message: toErrorMessage(err) });
+    } finally {
+      downloadInFlightRef.current = false;
     }
   }, [setStatus]);
 
@@ -112,15 +125,8 @@ export function useUpdater() {
         if (update) {
           updateRef.current = update;
           setStatus({ state: "available", version: update.version });
-          toast("Update Available", {
-            id: TOAST_ID,
-            description: `Version ${update.version} is ready to download.`,
-            duration: Infinity,
-            action: {
-              label: "Download & install",
-              onClick: () => downloadAndInstall(),
-            },
-          });
+          // Start download automatically — user sees "restart" when done
+          void downloadAndInstall();
         } else if (shouldShowQuietResult) {
           setStatus({ state: "up-to-date" });
         }

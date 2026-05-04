@@ -1,11 +1,14 @@
 import * as React from "react";
 
+import { truncatePubkey } from "@/features/profile/lib/identity";
 import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type MentionSuggestion = {
   pubkey: string;
   displayName: string;
+  avatarUrl?: string | null;
   role?: string | null;
   personaName?: string | null;
 };
@@ -63,6 +66,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             tabIndex={-1}
             type="button"
           >
+            <UserAvatar
+              avatarUrl={suggestion.avatarUrl ?? null}
+              displayName={suggestion.displayName}
+              size="xs"
+            />
             <span className="truncate font-medium">
               {suggestion.displayName}
             </span>
@@ -73,6 +81,9 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             ) : suggestion.role ? (
               <Badge variant="secondary">{suggestion.role}</Badge>
             ) : null}
+            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">
+              {truncatePubkey(suggestion.pubkey)}
+            </span>
           </button>
         ))}
       </div>

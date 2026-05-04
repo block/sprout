@@ -6,6 +6,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import '../profile/user_status.dart';
+import '../profile/user_status_cache_provider.dart';
 import 'agent_activity/agent_activity_sheet.dart';
 import 'agent_activity/working_bots_provider.dart';
 import 'channel.dart';
@@ -29,6 +31,7 @@ class MembersSheet extends HookConsumerWidget {
     final bots = allMembers.where((member) => member.isBot).toList();
     final userCache = ref.watch(userCacheProvider);
     final typingBotPubkeys = ref.watch(workingBotPubkeysProvider(channel.id));
+    final statusCache = ref.watch(userStatusCacheProvider);
 
     // Determine if the current user can manage members.
     final currentMember = allMembers.cast<ChannelMember?>().firstWhere(
@@ -63,6 +66,14 @@ class MembersSheet extends HookConsumerWidget {
         ref
             .read(userCacheProvider.notifier)
             .preload(allMembers.map((m) => m.pubkey).toList());
+        // Track user statuses for people (not bots).
+        final peoplePubkeys = allMembers
+            .where((m) => !m.isBot)
+            .map((m) => m.pubkey)
+            .toList();
+        if (peoplePubkeys.isNotEmpty) {
+          ref.read(userStatusCacheProvider.notifier).track(peoplePubkeys);
+        }
       }
       return null;
     }, [allMembers.length]);
@@ -72,92 +83,84 @@ class MembersSheet extends HookConsumerWidget {
         Grid.xs,
         0,
         Grid.xs,
-        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom,
       ),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Members', style: context.textTheme.titleMedium),
-              const SizedBox(height: Grid.xxs),
-              Text(
-                'People in ${channel.displayLabel(currentPubkey: currentPubkey)}.',
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.onSurfaceVariant,
-                ),
-              ),
-              if (!channel.isDm) ...[const Divider(height: Grid.sm)],
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 400),
-                child: membersAsync.when(
-                  data: (_) => ListView(
-                    shrinkWrap: true,
-                    children: [
-                      if (people.isNotEmpty) ...[
-                        _SectionLabel(label: 'People — ${people.length}'),
-                        for (final member in people)
-                          _MemberTile(
-                            member: member,
-                            currentPubkey: currentPubkey,
-                            profile: userCache[member.pubkey.toLowerCase()],
-                            canManage: canManage,
-                            isSelf:
-                                member.pubkey.toLowerCase() ==
-                                currentPubkey?.toLowerCase(),
-                            channelId: channel.id,
-                          ),
-                      ],
-                      if (bots.isNotEmpty) ...[
-                        const SizedBox(height: Grid.xxs),
-                        _SectionLabel(label: 'Bots — ${bots.length}'),
-                        for (final bot in bots)
-                          _MemberTile(
-                            member: bot,
-                            currentPubkey: currentPubkey,
-                            profile: userCache[bot.pubkey.toLowerCase()],
-                            canManage: canManage,
-                            isSelf: false,
-                            channelId: channel.id,
-                            isWorking: typingBotPubkeys.contains(
-                              bot.pubkey.toLowerCase(),
-                            ),
-                            onViewActivity: () => openActivity(bot),
-                            onActivityTap:
-                                typingBotPubkeys.contains(
-                                  bot.pubkey.toLowerCase(),
-                                )
-                                ? () => openActivity(bot)
-                                : null,
-                          ),
-                      ],
-                      if (people.isEmpty && bots.isEmpty)
-                        Center(
-                          child: Text(
-                            'No members found.',
-                            style: context.textTheme.bodySmall?.copyWith(
-                              color: context.colors.outline,
-                            ),
-                          ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Members', style: context.textTheme.titleMedium),
+            const SizedBox(height: Grid.xxs),
+            if (!channel.isDm) ...[const Divider(height: 1)],
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 400),
+              child: membersAsync.when(
+                data: (_) => ListView(
+                  shrinkWrap: true,
+                  padding: const EdgeInsets.only(top: Grid.xxs),
+                  children: [
+                    if (people.isNotEmpty) ...[
+                      _SectionLabel(label: 'People — ${people.length}'),
+                      for (final member in people)
+                        _MemberTile(
+                          member: member,
+                          currentPubkey: currentPubkey,
+                          profile: userCache[member.pubkey.toLowerCase()],
+                          canManage: canManage,
+                          isSelf:
+                              member.pubkey.toLowerCase() ==
+                              currentPubkey?.toLowerCase(),
+                          channelId: channel.id,
+                          userStatus: statusCache[member.pubkey.toLowerCase()],
                         ),
                     ],
-                  ),
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, _) => Center(
-                    child: Text(
-                      error.toString(),
-                      style: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.error,
+                    if (bots.isNotEmpty) ...[
+                      const SizedBox(height: Grid.xxs),
+                      _SectionLabel(label: 'Bots — ${bots.length}'),
+                      for (final bot in bots)
+                        _MemberTile(
+                          member: bot,
+                          currentPubkey: currentPubkey,
+                          profile: userCache[bot.pubkey.toLowerCase()],
+                          canManage: canManage,
+                          isSelf: false,
+                          channelId: channel.id,
+                          isWorking: typingBotPubkeys.contains(
+                            bot.pubkey.toLowerCase(),
+                          ),
+                          onViewActivity: () => openActivity(bot),
+                          onActivityTap:
+                              typingBotPubkeys.contains(
+                                bot.pubkey.toLowerCase(),
+                              )
+                              ? () => openActivity(bot)
+                              : null,
+                        ),
+                    ],
+                    if (people.isEmpty && bots.isEmpty)
+                      Center(
+                        child: Text(
+                          'No members found.',
+                          style: context.textTheme.bodySmall?.copyWith(
+                            color: context.colors.onSurfaceVariant,
+                          ),
+                        ),
                       ),
+                  ],
+                ),
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (error, _) => Center(
+                  child: Text(
+                    error.toString(),
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.error,
                     ),
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -176,7 +179,7 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         label.toUpperCase(),
         style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
+          color: context.colors.onSurfaceVariant,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.8,
         ),
@@ -202,6 +205,7 @@ class _MemberTile extends ConsumerWidget {
   final bool isWorking;
   final VoidCallback? onActivityTap;
   final VoidCallback? onViewActivity;
+  final UserStatus? userStatus;
 
   const _MemberTile({
     required this.member,
@@ -213,6 +217,7 @@ class _MemberTile extends ConsumerWidget {
     this.isWorking = false,
     this.onActivityTap,
     this.onViewActivity,
+    this.userStatus,
   });
 
   @override
@@ -248,10 +253,19 @@ class _MemberTile extends ConsumerWidget {
                 ),
               ],
             )
+          : userStatus != null && !userStatus!.isEmpty
+          ? Text(
+              '${userStatus!.emoji.isNotEmpty ? '${userStatus!.emoji} ' : ''}${userStatus!.text}',
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            )
           : Text(
               _roleLabel(member.role),
               style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
             ),
       trailing: showMenu
@@ -391,7 +405,7 @@ class _RoleSelector extends StatelessWidget {
           Text(
             'Role',
             style: context.textTheme.labelMedium?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: Grid.xxs),

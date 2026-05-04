@@ -32,6 +32,7 @@ import 'read_state/read_state_provider.dart';
 import 'read_state/read_state_time.dart';
 import 'reaction_row.dart';
 import 'send_message_provider.dart';
+import '../profile/user_profile_sheet.dart';
 import 'small_avatar.dart';
 import 'thread_detail_page.dart';
 import 'timeline_message.dart';
@@ -395,7 +396,7 @@ class _MessageList extends HookConsumerWidget {
             Icon(
               LucideIcons.messageSquare,
               size: Grid.xl,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
             const SizedBox(height: Grid.xxs),
             Text(
@@ -408,7 +409,7 @@ class _MessageList extends HookConsumerWidget {
             Text(
               'Be the first to say something!',
               style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
               ),
             ),
           ],
@@ -599,19 +600,7 @@ class _SystemMessageRow extends ConsumerWidget {
           children: [
             Row(
               children: [
-                Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: context.colors.surfaceContainerHighest,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    LucideIcons.arrowLeftRight,
-                    size: 12,
-                    color: context.colors.outline,
-                  ),
-                ),
+                _systemEventAvatar(context, systemEvent, userCache),
                 const SizedBox(width: Grid.xxs),
                 Expanded(
                   child: Text(
@@ -624,7 +613,7 @@ class _SystemMessageRow extends ConsumerWidget {
                 Text(
                   formatMessageTime(message.createdAt),
                   style: context.textTheme.labelSmall?.copyWith(
-                    color: context.colors.outline,
+                    color: context.colors.onSurfaceVariant,
                   ),
                 ),
               ],
@@ -642,6 +631,54 @@ class _SystemMessageRow extends ConsumerWidget {
       ),
     );
   }
+}
+
+Widget _systemEventAvatar(
+  BuildContext context,
+  SystemEvent event,
+  Map<String, UserProfile> userCache,
+) {
+  final hasTarget =
+      event.targetPubkey != null && event.targetPubkey != event.actorPubkey;
+
+  if (event.actorPubkey != null && hasTarget) {
+    // Two-avatar stack: actor + target (e.g. "Alice added Bob").
+    return SizedBox(
+      width: 32,
+      height: 20,
+      child: Stack(
+        children: [
+          SmallAvatar(pubkey: event.actorPubkey!, userCache: userCache),
+          Positioned(
+            left: 12,
+            child: SmallAvatar(
+              pubkey: event.targetPubkey!,
+              userCache: userCache,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  if (event.actorPubkey != null) {
+    return SmallAvatar(pubkey: event.actorPubkey!, userCache: userCache);
+  }
+
+  // Fallback: generic icon when no actor is available.
+  return Container(
+    width: 20,
+    height: 20,
+    decoration: BoxDecoration(
+      color: context.colors.surfaceContainerHighest,
+      shape: BoxShape.circle,
+    ),
+    child: Icon(
+      LucideIcons.arrowLeftRight,
+      size: 12,
+      color: context.colors.onSurfaceVariant,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -797,7 +834,10 @@ class _MessageBubble extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (showAuthor)
-              _UserAvatar(profile: profile, pubkey: message.pubkey)
+              GestureDetector(
+                onTap: () => showUserProfileSheet(context, message.pubkey),
+                child: _UserAvatar(profile: profile, pubkey: message.pubkey),
+              )
             else
               const SizedBox(width: 28),
             const SizedBox(width: Grid.xxs),
@@ -810,18 +850,22 @@ class _MessageBubble extends ConsumerWidget {
                       padding: const EdgeInsets.only(bottom: Grid.quarter),
                       child: Row(
                         children: [
-                          Text(
-                            displayName,
-                            style: context.textTheme.labelMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: context.colors.onSurface,
+                          GestureDetector(
+                            onTap: () =>
+                                showUserProfileSheet(context, message.pubkey),
+                            child: Text(
+                              displayName,
+                              style: context.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: context.colors.onSurface,
+                              ),
                             ),
                           ),
                           const SizedBox(width: Grid.xxs),
                           Text(
                             formatMessageTime(message.createdAt),
                             style: context.textTheme.labelSmall?.copyWith(
-                              color: context.colors.outline,
+                              color: context.colors.onSurfaceVariant,
                             ),
                           ),
                           if (message.edited) ...[
@@ -829,7 +873,7 @@ class _MessageBubble extends ConsumerWidget {
                             Text(
                               '(edited)',
                               style: context.textTheme.labelSmall?.copyWith(
-                                color: context.colors.outline,
+                                color: context.colors.onSurfaceVariant,
                                 fontStyle: FontStyle.italic,
                               ),
                             ),
@@ -1022,18 +1066,45 @@ class _TypingIndicator extends ConsumerWidget {
       _ => '${names[0]} and ${names.length - 1} others are typing…',
     };
 
+    final visibleEntries = entries.take(3).toList();
+    final avatarCount = visibleEntries.length;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(
         horizontal: Grid.xs,
         vertical: Grid.quarter + 2,
       ),
-      child: Text(
-        text,
-        style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
-          fontStyle: FontStyle.italic,
-        ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 20.0 + (avatarCount - 1) * 12.0,
+            height: 20,
+            child: Stack(
+              children: [
+                for (var i = 0; i < avatarCount; i++)
+                  Positioned(
+                    left: i * 12.0,
+                    child: SmallAvatar(
+                      pubkey: visibleEntries[i].pubkey,
+                      userCache: userCache,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Flexible(
+            child: Text(
+              text,
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.outline,
+                fontStyle: FontStyle.italic,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

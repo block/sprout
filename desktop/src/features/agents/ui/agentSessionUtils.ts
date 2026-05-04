@@ -79,3 +79,55 @@ export function shortenMiddle(value: string, maxLength: number) {
   const edgeLength = Math.max(4, Math.floor((maxLength - 3) / 2));
   return `${value.slice(0, edgeLength)}...${value.slice(-edgeLength)}`;
 }
+
+const sameDayTimeFormat = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+const crossDayTimeFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+export function formatTranscriptTime(isoTimestamp: string): string | null {
+  const date = new Date(isoTimestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return sameDay
+    ? sameDayTimeFormat.format(date)
+    : crossDayTimeFormat.format(date);
+}
+
+export function formatDuration(
+  startIso: string,
+  endIso: string,
+): string | null {
+  if (!startIso || !endIso) return null;
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  const ms = end - start;
+  if (ms < 0) return null;
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return totalSeconds < 10
+      ? `${totalSeconds.toFixed(1)}s`
+      : `${Math.round(totalSeconds)}s`;
+  }
+  let minutes = Math.floor(totalSeconds / 60);
+  let seconds = Math.round(totalSeconds % 60);
+  if (seconds === 60) {
+    minutes += 1;
+    seconds = 0;
+  }
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}

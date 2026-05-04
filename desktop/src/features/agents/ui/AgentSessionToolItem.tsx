@@ -2,9 +2,13 @@ import * as React from "react";
 import { ArrowUpRight, ChevronDown, Wrench } from "lucide-react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import type { Channel } from "@/shared/api/types";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import { resolveUserLabel } from "@/features/profile/lib/identity";
+import type { Channel, UserProfileSummary } from "@/shared/api/types";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { TranscriptItem } from "./agentSessionTypes";
 import {
   formatToolTitle,
@@ -14,6 +18,8 @@ import {
 import {
   asRecord,
   formatCodeValue,
+  formatDuration,
+  formatTranscriptTime,
   getResultArray,
   getToolString,
   getToolStringList,
@@ -74,6 +80,7 @@ export function ToolItem({
               {status.label}
             </span>
           ) : null}
+          <ToolTimestamp item={item} />
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
 
@@ -163,6 +170,44 @@ function ToolCodeBlock({
   );
 }
 
+const toolFullDateTimeFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "long",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
+
+function ToolTimestamp({
+  item,
+}: {
+  item: Extract<TranscriptItem, { type: "tool" }>;
+}) {
+  const time = formatTranscriptTime(item.timestamp);
+  if (!time) return null;
+  const duration =
+    item.startedAt && item.completedAt
+      ? formatDuration(item.startedAt, item.completedAt)
+      : null;
+  const date = new Date(item.timestamp);
+  const fullDateTime = Number.isNaN(date.getTime())
+    ? item.timestamp
+    : toolFullDateTimeFormat.format(date);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="shrink-0 cursor-default text-[11px] text-muted-foreground/60">
+          {time}
+          {duration ? ` · ${duration}` : null}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{fullDateTime}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function SproutToolInlineAction({
   args,
   result,
@@ -180,6 +225,14 @@ function SproutToolInlineAction({
   const channelId =
     getToolString(args, ["channel_id", "channelId"]) ??
     getToolString(resultRecord, ["channel_id", "channelId"]);
+  const pubkeys = React.useMemo(
+    () => getToolStringList(args, ["pubkeys", "pubkey"]),
+    [args],
+  );
+  const profilesQuery = useUsersBatchQuery(pubkeys, {
+    enabled: pubkeys.length > 0,
+  });
+  const profiles = profilesQuery.data?.profiles;
   const openChannel = React.useCallback(
     (messageId?: string) => {
       if (!channelId) return;
@@ -194,9 +247,10 @@ function SproutToolInlineAction({
         channelId,
         channels,
         openChannel,
+        profiles,
         resultValue,
       }),
-    [args, channelId, channels, openChannel, resultValue],
+    [args, channelId, channels, openChannel, profiles, resultValue],
   );
 
   if (!action) {
@@ -215,6 +269,7 @@ function SproutToolInlineAction({
         title={action.title}
         type="button"
       >
+        {action.avatar}
         <span className="shrink-0">{action.label}</span>
         <span className="truncate">{action.value}</span>
         <ArrowUpRight className="h-3 w-3 shrink-0" />
@@ -227,6 +282,7 @@ function SproutToolInlineAction({
       className="inline-flex max-w-[14rem] shrink min-w-0 items-center gap-1 rounded-full border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[11px] font-normal leading-none text-muted-foreground"
       title={action.title}
     >
+      {action.avatar}
       <span className="shrink-0">{action.label}</span>
       <span className="truncate">{action.value}</span>
     </span>
@@ -234,6 +290,7 @@ function SproutToolInlineAction({
 }
 
 type SproutToolInlineActionModel = {
+  avatar?: React.ReactNode;
   label: string;
   value: string;
   title: string;
@@ -245,12 +302,14 @@ function getSproutToolInlineAction({
   channelId,
   channels,
   openChannel,
+  profiles,
   resultValue,
 }: {
   args: Record<string, unknown>;
   channelId: string | null;
   channels: Channel[];
   openChannel: (messageId?: string) => void;
+  profiles: Record<string, UserProfileSummary> | undefined;
   resultValue: unknown;
 }): SproutToolInlineActionModel | null {
   const resultRecord = asRecord(resultValue);
@@ -299,13 +358,30 @@ function getSproutToolInlineAction({
 
   const pubkeys = getToolStringList(args, ["pubkeys", "pubkey"]);
   if (pubkeys.length > 0) {
+    if (pubkeys.length === 1) {
+      const pk = pubkeys[0];
+      const displayName = resolveUserLabel({ pubkey: pk, profiles });
+      const profile = profiles?.[pk.toLowerCase()];
+      return {
+        avatar: (
+          <UserAvatar
+            avatarUrl={profile?.avatarUrl ?? null}
+            className="shrink-0"
+            displayName={displayName}
+            size="xs"
+          />
+        ),
+        label: "user",
+        title: pk,
+        value: displayName,
+      };
+    }
     return {
-      label: pubkeys.length === 1 ? "pubkey" : "users",
-      title: pubkeys.join(", "),
-      value:
-        pubkeys.length === 1
-          ? shortenMiddle(pubkeys[0], 24)
-          : `${pubkeys.length} pubkeys`,
+      label: "users",
+      title: pubkeys
+        .map((pk) => resolveUserLabel({ pubkey: pk, profiles }))
+        .join(", "),
+      value: `${pubkeys.length} users`,
     };
   }
 

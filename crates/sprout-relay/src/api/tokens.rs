@@ -290,6 +290,11 @@ pub async fn post_tokens(
                     if let Err(e) = state.db.ensure_user(&pubkey_bytes).await {
                         tracing::warn!("ensure_user failed for NIP-98 pubkey: {e}");
                     }
+                    // NIP-98 path builds auth context directly — enforce membership here.
+                    // Bearer/JWT paths go through extract_auth_context which already checks.
+                    let auth_tag = super::extract_single_auth_tag(&headers)?;
+                    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag)
+                        .await?;
                     super::RestAuthContext {
                         pubkey,
                         pubkey_bytes,

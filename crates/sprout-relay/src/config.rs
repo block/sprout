@@ -11,6 +11,9 @@ pub enum ConfigError {
     /// The `SPROUT_BIND_ADDR` environment variable could not be parsed as a socket address.
     #[error("invalid SPROUT_BIND_ADDR: {0}")]
     InvalidBindAddr(String),
+    /// A configuration value failed validation.
+    #[error("invalid config: {0}")]
+    InvalidValue(String),
 }
 
 /// Relay runtime configuration, loaded from environment variables.
@@ -59,6 +62,27 @@ pub struct Config {
     /// API tokens or Okta JWTs bypass the allowlist entirely.
     /// Applies to all NIP-42 pubkey-only connections, regardless of `require_auth_token`.
     pub pubkey_allowlist_enabled: bool,
+
+    /// When true, every authenticated request must also pass a relay-level
+    /// membership check against the `relay_members` table.
+    /// When false (default), the check is a no-op and all authenticated callers
+    /// are permitted regardless of auth method (API token, JWT, NIP-42).
+    pub require_relay_membership: bool,
+
+    /// Optional hex-encoded pubkey of the relay owner.
+    /// When set, this pubkey is automatically bootstrapped into `relay_members`
+    /// with the `owner` role on first startup.
+    pub relay_owner_pubkey: Option<String>,
+
+    /// Allow NIP-OA owner attestation for relay membership.
+    ///
+    /// When `true` and `require_relay_membership` is also `true`, agents
+    /// bearing a valid NIP-OA `auth` tag can authenticate by proving their
+    /// owner is a relay member. The agent gets session-scoped access.
+    ///
+    /// Default: `false`. Set via `SPROUT_ALLOW_NIP_OA_AUTH=true`.
+    pub allow_nip_oa_auth: bool,
+
     /// Media storage configuration (S3/MinIO).
     pub media: sprout_media::MediaConfig,
 
@@ -79,6 +103,9 @@ pub struct Config {
     pub git_max_repos_per_pubkey: u32,
     /// Maximum concurrent git subprocess operations. Default: 20.
     pub git_max_concurrent_ops: usize,
+    /// HMAC secret for git pre-receive hook callbacks.
+    /// Used to authenticate internal policy endpoint requests.
+    pub git_hook_hmac_secret: String,
 }
 
 impl Config {
@@ -126,6 +153,34 @@ impl Config {
         let pubkey_allowlist_enabled = std::env::var("SPROUT_PUBKEY_ALLOWLIST")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
+
+        let require_relay_membership = std::env::var("SPROUT_REQUIRE_RELAY_MEMBERSHIP")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        let allow_nip_oa_auth = std::env::var("SPROUT_ALLOW_NIP_OA_AUTH")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        // Note: intentionally not prefixed with SPROUT_ — this is a relay-identity
+        // config that may be shared across multiple services (e.g., ACP agent).
+        let relay_owner_pubkey = std::env::var("RELAY_OWNER_PUBKEY")
+            .ok()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| {
+                // Must be exactly 64 lowercase hex characters (32-byte pubkey).
+                let valid = s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit());
+                if valid {
+                    Some(s)
+                } else {
+                    warn!(
+                        "RELAY_OWNER_PUBKEY is not a valid 64-char hex pubkey — ignoring. \
+                         Got: {s:?}"
+                    );
+                    None
+                }
+            });
 
         let mut auth = sprout_auth::AuthConfig::default();
         auth.okta.require_token = require_auth_token;
@@ -244,6 +299,21 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20);
+        let git_hook_hmac_secret: String = std::env::var("SPROUT_GIT_HOOK_HMAC_SECRET")
+            .unwrap_or_else(|_| {
+                // Generate a random secret if not configured (dev mode).
+                let secret: [u8; 32] = rand::random();
+                hex::encode(secret)
+            });
+        // Reject explicitly-configured secrets that are too short.
+        // The auto-generated fallback is always 64 hex chars (32 bytes), so this
+        // only fires when someone sets SPROUT_GIT_HOOK_HMAC_SECRET to a weak value.
+        if std::env::var("SPROUT_GIT_HOOK_HMAC_SECRET").is_ok() && git_hook_hmac_secret.len() < 32 {
+            return Err(ConfigError::InvalidValue(
+                "SPROUT_GIT_HOOK_HMAC_SECRET must be at least 32 characters (16 bytes hex)"
+                    .to_string(),
+            ));
+        }
 
         Ok(Self {
             bind_addr,
@@ -263,12 +333,16 @@ impl Config {
             health_port,
             metrics_port,
             pubkey_allowlist_enabled,
+            require_relay_membership,
+            relay_owner_pubkey,
+            allow_nip_oa_auth,
             media,
             ephemeral_ttl_override,
             git_repo_path,
             git_max_pack_bytes,
             git_max_repos_per_pubkey,
             git_max_concurrent_ops,
+            git_hook_hmac_secret,
         })
     }
 }
@@ -294,6 +368,18 @@ mod tests {
         assert!(
             !config.pubkey_allowlist_enabled,
             "pubkey_allowlist_enabled should default to false"
+        );
+        assert!(
+            !config.require_relay_membership,
+            "require_relay_membership should default to false"
+        );
+        assert!(
+            config.relay_owner_pubkey.is_none(),
+            "relay_owner_pubkey should default to None"
+        );
+        assert!(
+            !config.allow_nip_oa_auth,
+            "allow_nip_oa_auth should default to false"
         );
     }
 

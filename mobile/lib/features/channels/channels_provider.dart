@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
@@ -7,8 +9,11 @@ import 'channel.dart';
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
 class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
+  static const _backstopInterval = Duration(seconds: 60);
+
   final List<void Function()> _unsubscribers = [];
   int _subscriptionVersion = 0;
+  Timer? _backstopTimer;
 
   @override
   Future<List<Channel>> build() {
@@ -25,6 +30,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     ref.onDispose(() {
       _clearLiveSubscriptions();
+      _backstopTimer?.cancel();
+      _backstopTimer = null;
     });
 
     if (sessionState.status != SessionStatus.connected) {
@@ -59,6 +66,9 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     return channels;
   }
 
+  /// Subscribe per-channel to live events (requires `#h` tag for relay
+  /// channel-scoped fan-out). Also starts a 60s REST backstop timer to
+  /// detect newly created channels that we don't yet have subscriptions for.
   Future<void> _subscribeLive(List<Channel> channels) async {
     _clearLiveSubscriptions();
     final subscriptionVersion = _subscriptionVersion;
@@ -103,6 +113,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     }
 
     _unsubscribers.addAll(subscriptions.whereType<void Function()>());
+
+    // Start a lightweight REST backstop so newly created channels (which we
+    // don't have a WS subscription for) get picked up within 60s.
+    // Uses _backstopRefresh instead of refresh() to preserve existing state
+    // on transient REST failures (avoids AsyncError overwriting good data).
+    _backstopTimer?.cancel();
+    _backstopTimer = Timer.periodic(
+      _backstopInterval,
+      (_) => _backstopRefresh(),
+    );
   }
 
   void _handleLiveEvent(NostrEvent event) {
@@ -131,6 +151,23 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     });
   }
 
+  /// Backstop refresh that preserves existing state on transient REST failure.
+  ///
+  /// Unlike [refresh], this won't overwrite state with [AsyncError] if the
+  /// network request fails — keeping WS live-event handling functional.
+  Future<void> _backstopRefresh() async {
+    try {
+      final sessionState = ref.read(relaySessionProvider);
+      final channels = await _fetch(
+        subscribeLive: sessionState.status == SessionStatus.connected,
+      );
+      state = AsyncData(channels);
+    } catch (error) {
+      debugPrint('[ChannelsNotifier] backstop refresh failed: $error');
+      // Keep current state — WS events continue working.
+    }
+  }
+
   Future<void> refresh() async {
     final sessionState = ref.read(relaySessionProvider);
     state = await AsyncValue.guard(
@@ -145,6 +182,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       unsubscribe();
     }
     _unsubscribers.clear();
+    _backstopTimer?.cancel();
+    _backstopTimer = null;
   }
 }
 

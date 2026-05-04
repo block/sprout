@@ -1,20 +1,18 @@
 import * as React from "react";
 import { Activity } from "lucide-react";
 
-import {
-  useUserNotesQuery,
-  useUserProfileQuery,
-} from "@/features/profile/hooks";
+import { useUserProfileQuery } from "@/features/profile/hooks";
 import {
   useRelayAgentsQuery,
   useManagedAgentsQuery,
 } from "@/features/agents/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { useUserStatusQuery } from "@/features/user-status/hooks";
 import { PresenceBadge } from "@/features/presence/ui/PresenceBadge";
-import { formatRelativeTime } from "@/features/forum/lib/time";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
-import { Markdown } from "@/shared/ui/markdown";
+import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
+
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 
@@ -26,6 +24,9 @@ type UserProfilePopoverProps = {
   /** Value used to generate the BotIdenticon glyph (typically the author name). */
   botIdenticonValue?: string;
 };
+
+const HOVER_OPEN_DELAY_MS = 300;
+const HOVER_CLOSE_DELAY_MS = 200;
 
 const RUNTIME_LABELS: Record<string, string> = {
   goose: "Goose",
@@ -61,11 +62,10 @@ export function UserProfilePopover({
   botIdenticonValue,
 }: UserProfilePopoverProps) {
   const [open, setOpen] = React.useState(false);
-  const [showAllNotes, setShowAllNotes] = React.useState(false);
+  const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const profileQuery = useUserProfileQuery(open ? pubkey : undefined);
-  const notesQuery = useUserNotesQuery(open ? pubkey : undefined, {
-    limit: showAllNotes ? 20 : 3,
-  });
   const relayAgentsQuery = useRelayAgentsQuery({
     enabled: open && role === "bot",
   });
@@ -75,8 +75,10 @@ export function UserProfilePopover({
   const presenceQuery = usePresenceQuery(open ? [pubkey] : [], {
     enabled: open,
   });
+  const userStatusQuery = useUserStatusQuery(open ? [pubkey] : []);
 
   const { onOpenAgentSession } = useAgentSession();
+  const { openProfilePanel } = useProfilePanel();
   const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
   const managedAgent = managedAgentsQuery.data?.find(
     (a) => a.pubkey === pubkey,
@@ -86,13 +88,81 @@ export function UserProfilePopover({
     managedAgent?.backend.type === "local" &&
     Boolean(onOpenAgentSession);
   const profile = profileQuery.data;
-  const notes = notesQuery.data?.notes ?? [];
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
+  const userStatus = userStatusQuery.data?.[pubkey.toLowerCase()];
+
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const handleTriggerMouseEnter = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, HOVER_OPEN_DELAY_MS);
+  }, [clearHoverTimer]);
+
+  const handleMouseLeave = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, HOVER_CLOSE_DELAY_MS);
+  }, [clearHoverTimer]);
+
+  const handleContentMouseEnter = React.useCallback(() => {
+    clearHoverTimer();
+  }, [clearHoverTimer]);
+
+  const handleTriggerClick = React.useCallback(
+    (event: React.MouseEvent) => {
+      clearHoverTimer();
+      if (openProfilePanel) {
+        event.preventDefault();
+        setOpen(false);
+        openProfilePanel(pubkey);
+      }
+    },
+    [clearHoverTimer, openProfilePanel, pubkey],
+  );
+
+  React.useEffect(() => {
+    return () => clearHoverTimer();
+  }, [clearHoverTimer]);
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent align="start" className="w-80" side="top" sideOffset={8}>
+      <PopoverTrigger asChild>
+        {/* biome-ignore lint/a11y/useSemanticElements: wrapper div for hover/click behavior */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={handleTriggerClick}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && openProfilePanel) {
+              e.preventDefault();
+              clearHoverTimer();
+              setOpen(false);
+              openProfilePanel(pubkey);
+            }
+          }}
+          onMouseEnter={handleTriggerMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          className="inline-flex"
+        >
+          {children}
+        </div>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-80"
+        onMouseEnter={handleContentMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        side="top"
+        sideOffset={8}
+      >
         <div className="flex flex-col gap-3">
           <div className="flex items-start gap-3">
             {profile?.avatarUrl ? (
@@ -128,10 +198,27 @@ export function UserProfilePopover({
                   {profile.nip05Handle}
                 </p>
               ) : null}
+              {profile?.displayName ? (
+                <p className="truncate font-mono text-[10px] text-muted-foreground/50">
+                  {truncatePubkey(pubkey)}
+                </p>
+              ) : null}
             </div>
 
             {presenceStatus ? <PresenceBadge status={presenceStatus} /> : null}
           </div>
+
+          {userStatus ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="user-profile-status"
+            >
+              {userStatus.emoji ? (
+                <span className="mr-1">{userStatus.emoji}</span>
+              ) : null}
+              {userStatus.text}
+            </p>
+          ) : null}
 
           {role === "bot" && (managedAgent || relayAgent) ? (
             <div className="flex flex-wrap gap-1.5">
@@ -168,67 +255,6 @@ export function UserProfilePopover({
               <Activity className="h-3.5 w-3.5 text-muted-foreground" />
               View activity log
             </button>
-          ) : null}
-
-          <p className="truncate font-mono text-[10px] text-muted-foreground/60">
-            {truncatePubkey(pubkey)}
-          </p>
-
-          {notesQuery.isLoading ? (
-            <div
-              className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
-              data-testid="user-profile-notes-loading"
-            >
-              Loading recent notes…
-            </div>
-          ) : null}
-
-          {!notesQuery.isLoading && notes.length > 0 ? (
-            <div
-              className="border-t border-border/60 pt-3"
-              data-testid="user-profile-notes"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Recent Notes
-                </p>
-                {notes.length >= 3 ? (
-                  <button
-                    className="text-[11px] text-primary hover:underline"
-                    onClick={() => setShowAllNotes(!showAllNotes)}
-                    type="button"
-                  >
-                    {showAllNotes ? "Show less" : "View all"}
-                  </button>
-                ) : null}
-              </div>
-              <div
-                className={`space-y-2 ${showAllNotes ? "max-h-64 overflow-y-auto" : ""}`}
-              >
-                {notes.map((note) => (
-                  <article
-                    className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
-                    data-testid="user-profile-note"
-                    key={note.id}
-                  >
-                    <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/80">
-                      {formatRelativeTime(note.createdAt)}
-                    </p>
-                    <Markdown
-                      className="max-w-none text-xs text-foreground"
-                      content={note.content}
-                      tight
-                    />
-                  </article>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {notesQuery.isError ? (
-            <p className="text-xs text-muted-foreground">
-              Recent notes are unavailable right now.
-            </p>
           ) : null}
         </div>
       </PopoverContent>

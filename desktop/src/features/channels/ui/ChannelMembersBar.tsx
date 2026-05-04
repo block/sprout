@@ -7,20 +7,11 @@ import {
   useAcpProvidersQuery,
   useBackendProvidersQuery,
   useManagedAgentsQuery,
-  usePersonasQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
-import { pickBotName } from "@/features/agents/lib/pickBotName";
-import {
-  useBotRecents,
-  pickQuickBotPersonas,
-} from "@/features/agents/lib/useBotRecents";
-import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
-import { QuickBotBar } from "@/features/channels/ui/QuickBotBar";
-import { useQuickBotDrop } from "@/features/channels/ui/useQuickBotDrop";
 import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
-import type { AgentPersona, Channel } from "@/shared/api/types";
+import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
@@ -69,58 +60,6 @@ export function ChannelMembersBar({
     members.find(
       (member) => normalizePubkey(member.pubkey) === normalizedCurrentPubkey,
     ) ?? null;
-  const personasQuery2 = usePersonasQuery();
-  const allPersonas = React.useMemo(
-    () => getActivePersonas(personasQuery2.data ?? []),
-    [personasQuery2.data],
-  );
-  const { recentIds, pushRecent } = useBotRecents();
-  const quickDrop = useQuickBotDrop(channel.id);
-
-  // Track in-flight instance names so rapid clicks don't produce duplicates.
-  // Cleared when the members query refetches with the new member.
-  const inflightNamesRef = React.useRef<Record<string, string[]>>({});
-
-  // Resolve the 3 personas to show in the quick bar.
-  const quickPersonas = React.useMemo(() => {
-    if (allPersonas.length === 0) return [];
-
-    const resolved = pickQuickBotPersonas(allPersonas, recentIds);
-
-    // Reset in-flight names when members list updates (the new bot appeared).
-    inflightNamesRef.current = {};
-
-    // Build the set of names already used in this channel
-    const usedNames = new Set(
-      members.map((m) => m.displayName ?? "").filter((n) => n.length > 0),
-    );
-
-    // Compute instance names from persona name pools
-    return resolved.map((persona) => {
-      // Include in-flight names to avoid duplicates on rapid clicks
-      const inflight = inflightNamesRef.current[persona.id] ?? [];
-      const combinedUsed = new Set(usedNames);
-      for (const n of inflight) combinedUsed.add(n);
-
-      const instanceName = pickBotName(persona.namePool ?? [], combinedUsed);
-      return { persona, instanceName };
-    });
-  }, [allPersonas, recentIds, members]);
-
-  const addBot = quickDrop.addBot;
-  const handleQuickAdd = React.useCallback(
-    async (persona: AgentPersona, instanceName: string) => {
-      // Optimistically track the chosen name to avoid duplicates on rapid clicks.
-      inflightNamesRef.current[persona.id] = [
-        ...(inflightNamesRef.current[persona.id] ?? []),
-        instanceName,
-      ];
-      pushRecent(persona.id);
-      await addBot(persona, instanceName);
-    },
-    [pushRecent, addBot],
-  );
-
   const canManageMembers =
     selfMember?.role === "owner" || selfMember?.role === "admin";
   const canAddAgents =
@@ -151,29 +90,20 @@ export function ChannelMembersBar({
   return (
     <React.Fragment>
       <div className="flex items-center gap-2">
-        <div className="group/quick flex items-center">
-          {canAddAgents ? (
-            <QuickBotBar
-              personas={quickPersonas}
-              pending={quickDrop.pending}
-              onAdd={handleQuickAdd}
-            />
-          ) : null}
-          <Button
-            aria-label="Add agent"
-            className="h-9 w-9 rounded-full"
-            data-testid="channel-add-bot-trigger"
-            disabled={!canAddAgents}
-            onClick={() => {
-              setIsAddBotOpen(true);
-            }}
-            size="icon"
-            type="button"
-            variant="outline"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
+        <Button
+          aria-label="Add agent"
+          className="h-9 w-9 rounded-full"
+          data-testid="channel-add-bot-trigger"
+          disabled={!canAddAgents}
+          onClick={() => {
+            setIsAddBotOpen(true);
+          }}
+          size="icon"
+          type="button"
+          variant="outline"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
 
         <Button
           aria-label="Create workflow"

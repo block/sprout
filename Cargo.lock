@@ -1362,6 +1362,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-sign-nostr"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "hex",
+ "libc",
+ "nostr",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3825,6 +3838,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "sprout-pair-relay"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "parking_lot",
+ "rand 0.8.5",
+ "secp256k1",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+]
+
+[[package]]
 name = "sprout-pairing-cli"
 version = "0.1.0"
 dependencies = [
@@ -3911,11 +3942,13 @@ dependencies = [
  "deadpool-redis",
  "futures-util",
  "hex",
+ "hmac 0.13.0",
  "infer",
  "metrics",
  "metrics-exporter-prometheus",
  "moka",
  "nostr",
+ "rand 0.10.0",
  "redis",
  "serde",
  "serde_json",
@@ -3927,9 +3960,11 @@ dependencies = [
  "sprout-db",
  "sprout-media",
  "sprout-pubsub",
+ "sprout-sdk",
  "sprout-search",
  "sprout-workflow",
  "sqlx",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -5676,6 +5711,20 @@ name = "zeroize"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85a5b4158499876c763cb03bc4e49185d3cccbabb15b33c627f7884f43db852e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "zerotrie"

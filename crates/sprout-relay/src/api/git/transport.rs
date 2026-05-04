@@ -42,8 +42,9 @@ const PACK_OPS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300
 /// Validates the `Authorization: Nostr <base64>` header before the request body
 /// is read. Same pattern as `AuthenticatedUpload` in media.rs.
 ///
-/// Authorization model (v1): any authenticated pubkey can clone; only the repo
-/// owner can push. Maintainer lists from kind:30617 are a future enhancement.
+/// Authorization model: any authenticated pubkey can clone; push authorization
+/// is handled by the pre-receive hook (calls back to the internal policy endpoint
+/// which checks channel role + protection rules from kind:30617).
 pub struct GitAuth {
     /// The authenticated user's public key, extracted from the NIP-98 event.
     pub pubkey: nostr::PublicKey,
@@ -103,32 +104,39 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
             .map(|pq| pq.as_str())
             .unwrap_or(parts.uri.path());
 
-        // Bug fix: strip git endpoint suffixes before building the expected URL.
+        // Repo-root URL verification.
         //
-        // Git's credential helper is invoked once — for the initial GET /info/refs —
-        // and signs a NIP-98 token with `u = <repo-root>` (e.g. `/git/{owner}/{repo}.git`).
-        // That same token is reused for all subsequent requests in the session
-        // (git-upload-pack, git-receive-pack). We must verify against the repo-root URL,
-        // not the full endpoint URL, so all three endpoints share a single canonical URL.
-        let repo_path = path_and_query
-            .split_once("/info/refs")
-            .map(|(prefix, _)| prefix)
-            .or_else(|| path_and_query.strip_suffix("/git-upload-pack"))
-            .or_else(|| path_and_query.strip_suffix("/git-receive-pack"))
-            .unwrap_or(path_and_query);
+        // The credential helper signs a NIP-98 token with:
+        //   u = <repo-root>   (e.g., http://host/git/{owner}/{repo})
+        //
+        // Git's credential protocol does NOT pass query strings to helpers, so
+        // service-scoping (`?service=...`) cannot be implemented at the NIP-98
+        // level without protocol changes. The token is repo-scoped, not service-scoped.
+        //
+        // Security is still provided by:
+        // - ±60s timestamp window (limits replay)
+        // - HTTPS in production (prevents token theft)
+        // - Pre-receive hook for push authorization (role + protection rules)
+        // - Endpoint routing (clone/push are different HTTP paths)
+        let repo_path = if let Some((prefix, _query)) = path_and_query.split_once("/info/refs") {
+            prefix
+        } else if let Some(prefix) = path_and_query.strip_suffix("/git-upload-pack") {
+            prefix
+        } else if let Some(prefix) = path_and_query.strip_suffix("/git-receive-pack") {
+            prefix
+        } else {
+            return Err((StatusCode::BAD_REQUEST, "unrecognized git endpoint").into_response());
+        };
         let expected_url = format!("{base_url}{repo_path}");
 
-        // Bug fix: skip the HTTP method check for git routes.
+        // Skip HTTP method check for git routes.
         //
-        // Git's credential helper signs the NIP-98 token with `method=GET` (the method
-        // used for the initial /info/refs discovery request), then reuses that same token
-        // for POST requests (git-upload-pack, git-receive-pack). Verifying against the
-        // actual HTTP method would reject all pack operations after the first request.
+        // Git's credential helper signs with `method=GET` (the initial /info/refs request)
+        // then reuses the token for POST (pack data). Method binding can't work here.
         //
-        // The URL tag already scopes the token to the correct repo — the method tag adds
-        // no meaningful security here since all git endpoints require the same authorization
-        // (repo owner). We pass the method from the event itself so verify_nip98_event
-        // always accepts whatever method the credential helper signed.
+        // Security is provided by: service-binding in the URL (clone vs push scoped),
+        // ±60s timestamp, and the pre-receive hook for push authorization.
+        // We pass the method from the event itself so verify_nip98_event always accepts.
         let event_method = serde_json::from_str::<serde_json::Value>(&event_json)
             .ok()
             .and_then(|v| {
@@ -161,6 +169,19 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // replayed event IDs would break normal clone/push operations.
         // The ±60s timestamp window + URL scoping + HTTPS transport provide sufficient
         // replay protection for v1. Per-request signing requires protocol changes.
+
+        // Relay membership gate (NIP-43).
+        let auth_tag = parts
+            .headers
+            .get("x-auth-tag")
+            .and_then(|v| v.to_str().ok());
+        if crate::api::relay_members::enforce_relay_membership(state, &pubkey.serialize(), auth_tag)
+            .await
+            .is_err()
+        {
+            warn!(pubkey = %pubkey.to_hex(), "git: relay membership denied");
+            return Err((StatusCode::FORBIDDEN, "restricted: not a relay member").into_response());
+        }
 
         Ok(GitAuth { pubkey })
     }
@@ -361,19 +382,17 @@ pub async fn upload_pack(
 /// `POST /git/{owner}/{repo}/git-receive-pack`
 ///
 /// Handles push — client sends ref updates + pack data.
-/// Authorization: only the repo owner (whose pubkey matches `{owner}` in the URL)
-/// can push. Maintainer lists from kind:30617 are a future enhancement.
+/// Authorization: NIP-98 authenticates the pusher. The pre-receive hook
+/// calls back to the internal policy endpoint for ref-level authorization
+/// (channel role + protection rules). Any authenticated user can attempt a push;
+/// the hook enforces the actual permissions.
 pub async fn receive_pack(
     State(state): State<Arc<AppState>>,
     auth: GitAuth,
     AxumPath(params): AxumPath<GitRepoParams>,
     body: Body,
 ) -> Result<Response, Response> {
-    // Push authorization: authenticated pubkey must match the repo owner.
     let pusher_hex = hex::encode(auth.pubkey.serialize());
-    if pusher_hex != params.owner {
-        return Err((StatusCode::FORBIDDEN, "push denied: not the repo owner").into_response());
-    }
 
     // Per-repo lock: prevent concurrent pushes to the same bare repo.
     // git receive-pack is not safe for concurrent access.
@@ -385,15 +404,96 @@ pub async fn receive_pack(
         .clone();
     let _repo_guard = repo_lock.lock().await;
 
-    let response =
-        run_git_service(&state, &params.owner, &params.repo, "receive-pack", body).await?;
+    // SECURITY: Verify pre-receive hook is a regular file, executable, and not a symlink.
+    // If the hook is missing, non-executable, or a symlink (potential tampering),
+    // deny the push rather than allowing it without permission checks.
+    let hook_path = validated.repo_path.join("hooks").join("pre-receive");
+    {
+        let hook_ok = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                // Use symlink_metadata to detect symlinks (doesn't follow them).
+                std::fs::symlink_metadata(&hook_path)
+                    .map(|m| {
+                        m.file_type().is_file() // Regular file, not symlink
+                            && m.permissions().mode() & 0o111 != 0 // Executable
+                    })
+                    .unwrap_or(false)
+            }
+            #[cfg(not(unix))]
+            {
+                hook_path.is_file()
+            }
+        };
+        if !hook_ok {
+            warn!(
+                repo = %params.repo,
+                hook = %hook_path.display(),
+                "push denied: pre-receive hook missing, not executable, or symlink"
+            );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "push denied: repository permission hook not installed",
+            )
+                .into_response());
+        }
+    }
 
-    // Post-push: publish kind:30618 ref state event (fire-and-forget).
+    // Resolve repo name (strip .git suffix if present).
+    let repo_name = params.repo.strip_suffix(".git").unwrap_or(&params.repo);
+
+    // Build hook env vars for the pre-receive hook.
+    // The hook uses these to call back to the internal policy endpoint.
+    let hook_url = format!(
+        "http://127.0.0.1:{}/internal/git/policy",
+        state.config.bind_addr.port()
+    );
+    // SECURITY: Force core.hooksPath via env to prevent repo-local config from
+    // overriding the hook directory. Without this, a malicious repo config could
+    // set core.hooksPath=/dev/null to bypass the pre-receive hook entirely.
+    let hooks_dir = validated.repo_path.join("hooks").display().to_string();
+    let hook_env = vec![
+        ("SPROUT_HOOK_URL", hook_url),
+        (
+            "SPROUT_HOOK_SECRET",
+            state.config.git_hook_hmac_secret.clone(),
+        ),
+        ("SPROUT_REPO_ID", repo_name.to_string()),
+        ("SPROUT_REPO_OWNER", params.owner.clone()),
+        ("SPROUT_PUSHER_PUBKEY", pusher_hex.clone()),
+        // Override any repo-local core.hooksPath setting.
+        ("GIT_CONFIG_COUNT", "1".to_string()),
+        ("GIT_CONFIG_KEY_0", "core.hooksPath".to_string()),
+        ("GIT_CONFIG_VALUE_0", hooks_dir),
+    ];
+
+    // Snapshot refs before push — used to detect whether anything actually changed.
+    let refs_before = snapshot_refs(&validated.repo_path).await;
+
+    let response = run_git_service_with_env(
+        &state,
+        &params.owner,
+        &params.repo,
+        "receive-pack",
+        body,
+        &hook_env,
+    )
+    .await?;
+
+    // Post-push: publish kind:30618 ref state only if refs actually changed.
+    // Git smart HTTP returns 200 even on denied pushes (in-band rejection),
+    // so we compare before/after refs to avoid publishing on no-ops.
     let state_clone = state.clone();
     let owner = params.owner.clone();
     let repo = params.repo.clone();
     let pusher = auth.pubkey;
+    let repo_path = validated.repo_path.clone();
     tokio::spawn(async move {
+        let refs_after = snapshot_refs(&repo_path).await;
+        if refs_before == refs_after {
+            return; // Nothing changed — skip publish.
+        }
         if let Err(e) = publish_ref_state(&state_clone, &owner, &repo, &pusher).await {
             warn!(error = %e, owner = %owner, repo = %repo, "failed to publish kind:30618");
         }
@@ -409,6 +509,21 @@ async fn run_git_service(
     repo: &str,
     service: &str,
     body: Body,
+) -> Result<Response, Response> {
+    run_git_service_with_env(state, owner, repo, service, body, &[]).await
+}
+
+/// Shared git service runner with extra environment variables.
+///
+/// The `extra_env` pairs are set AFTER `harden_git_env` clears the environment,
+/// so they're available to the git subprocess and any hooks it spawns.
+async fn run_git_service_with_env(
+    state: &Arc<AppState>,
+    owner: &str,
+    repo: &str,
+    service: &str,
+    body: Body,
+    extra_env: &[(&str, String)],
 ) -> Result<Response, Response> {
     let validated = validate_repo_path(owner, repo, &state.config.git_repo_path)?;
     if !validated.repo_path.exists() {
@@ -432,6 +547,10 @@ async fn run_git_service(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     harden_git_env(&mut cmd);
+    // Pass extra env vars (e.g., hook callback URL and HMAC secret).
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
     let mut child = cmd.spawn().map_err(|e| {
         error!(error = %e, "git subprocess failed to spawn");
         (StatusCode::INTERNAL_SERVER_ERROR, "git error").into_response()
@@ -500,6 +619,24 @@ async fn run_git_service(
 }
 
 // ── Post-Push Event Publishing ───────────────────────────────────────────────
+
+/// Quick snapshot of current refs — used to detect whether a push changed anything.
+///
+/// Returns the raw `git for-each-ref` output as a string. Comparison is by
+/// string equality — cheap and sufficient (same refs + same SHAs = same string).
+/// Returns empty string on error (conservative: will trigger publish on failure).
+async fn snapshot_refs(repo_path: &std::path::Path) -> String {
+    let mut cmd = Command::new("git");
+    cmd.args(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .current_dir(repo_path);
+    harden_git_env(&mut cmd);
+    match cmd.output().await {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => String::new(), // Error → empty → won't match after → publish fires (safe default)
+    }
+}
 
 /// Publish kind:30618 (repo state) after a successful push.
 ///

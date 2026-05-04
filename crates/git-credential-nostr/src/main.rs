@@ -180,10 +180,14 @@ fn main() {
     let method = parse_method(wwwauth)
         .unwrap_or_else(|| fail("server did not include method hint in WWW-Authenticate"));
 
-    // Sign the repo root URL, not the full endpoint URL.
-    // Git's credential helper is invoked once (for info/refs) and the token is reused
-    // for subsequent requests (upload-pack, receive-pack). The server verifies against
-    // the canonical repo root, so we strip endpoint suffixes here.
+    // Sign the repo root URL — strip endpoint suffixes to get the canonical form.
+    //
+    // Git's credential helper is invoked once (for the initial info/refs GET) and the
+    // token is reused for subsequent requests (upload-pack, receive-pack POST). The
+    // server verifies against the bare repo root URL.
+    //
+    // Git's credential protocol does NOT pass query strings in the `path` field, so
+    // we never see `?service=...` here — just the path component.
     let repo_path = path
         .split_once("/info/refs")
         .map(|(prefix, _)| prefix)

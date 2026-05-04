@@ -20,6 +20,7 @@ import {
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat("en-US", {
   numeric: "auto",
@@ -190,7 +191,19 @@ export function FeedSection({
                   >
                     {feedHeadline(item)}
                   </span>
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <UserAvatar
+                      avatarUrl={
+                        profiles?.[item.pubkey.toLowerCase()]?.avatarUrl ?? null
+                      }
+                      displayName={resolveUserLabel({
+                        pubkey: item.pubkey,
+                        currentPubkey,
+                        profiles,
+                        preferResolvedSelfLabel: true,
+                      })}
+                      size="xs"
+                    />
                     {resolveUserLabel({
                       pubkey: item.pubkey,
                       currentPubkey,
