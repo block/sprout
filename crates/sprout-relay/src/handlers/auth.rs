@@ -328,7 +328,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     .await
                     {
                         Some(owner) => owner,
-                        None => return,
+                        None => {
+                            // First-auth membership denial is terminal — transition to Failed to
+                            // prevent infinite retry with the same challenge.
+                            reauth_fail!(AuthState::Failed);
+                            return;
+                        }
                     };
 
                     // NIP-AA spec: virtual members MUST NOT be granted admin privileges.
@@ -391,10 +396,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         // previous virtual-member session on this connection.
                         state.conn_manager.clear_owner_pubkey(conn_id);
                     }
-                    // NIP-AA §6: "The relay MUST NOT combine their privileges."
-                    // On identity switch, clear all subscriptions registered under the
-                    // previous identity to prevent privilege leakage.
-                    if prev_auth_ctx.as_ref().map(|p| p.pubkey) != Some(pubkey) {
+                    // NIP-AA §6: re-auth replaces the entire auth context. Clear all
+                    // subscriptions so the client must re-subscribe under the new scope.
+                    // Prevents privilege leakage when re-authing with narrower scopes.
+                    if prev_auth_ctx.is_some() {
                         conn.subscriptions.lock().await.clear();
                         state.sub_registry.remove_connection(conn_id);
                     }
@@ -506,10 +511,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 state
                     .conn_manager
                     .set_owner_pubkey(conn_id, owner_pubkey.serialize().to_vec());
-                // NIP-AA §6: "The relay MUST NOT combine their privileges."
-                // On identity switch, clear all subscriptions registered under the
-                // previous identity to prevent privilege leakage.
-                if prev_auth_ctx.as_ref().map(|p| p.pubkey) != Some(pubkey) {
+                // NIP-AA §6: re-auth replaces the entire auth context. Clear all
+                // subscriptions so the client must re-subscribe under the new scope.
+                // Prevents privilege leakage when re-authing with narrower scopes.
+                if prev_auth_ctx.is_some() {
                     conn.subscriptions.lock().await.clear();
                     state.sub_registry.remove_connection(conn_id);
                 }
@@ -522,6 +527,9 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             }
             None => {
                 // enforce_ws_relay_membership already sent the rejection message.
+                // First-auth membership denial is terminal — transition to Failed to
+                // prevent infinite retry with the same challenge.
+                reauth_fail!(AuthState::Failed);
                 return;
             }
         }
@@ -578,7 +586,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             .await
             {
                 Some(owner) => owner,
-                None => return,
+                None => {
+                    // First-auth membership denial is terminal — transition to Failed to
+                    // prevent infinite retry with the same challenge.
+                    reauth_fail!(AuthState::Failed);
+                    return;
+                }
             };
 
             // If NIP-AA granted access, upgrade the auth context.
@@ -657,10 +670,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 // previous virtual-member session on this connection.
                 state.conn_manager.clear_owner_pubkey(conn_id);
             }
-            // NIP-AA §6: "The relay MUST NOT combine their privileges."
-            // On identity switch, clear all subscriptions registered under the
-            // previous identity to prevent privilege leakage.
-            if prev_auth_ctx.as_ref().map(|p| p.pubkey) != Some(pubkey) {
+            // NIP-AA §6: re-auth replaces the entire auth context. Clear all
+            // subscriptions so the client must re-subscribe under the new scope.
+            // Prevents privilege leakage when re-authing with narrower scopes.
+            if prev_auth_ctx.is_some() {
                 conn.subscriptions.lock().await.clear();
                 state.sub_registry.remove_connection(conn_id);
             }

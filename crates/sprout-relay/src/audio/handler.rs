@@ -11,6 +11,7 @@
 //!        └─ cleanup: remove peer, broadcast left, emit lifecycle events
 //! ```
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,9 +23,9 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use nostr::{EventBuilder, Kind, Tag};
+use nostr::{EventBuilder, Filter, Kind, Tag};
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -441,6 +442,45 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         "audio peer joined"
     );
 
+    // ── Register in ConnectionManager ─────────────────────────────────────────
+    // Audio connections are registered in the shared ConnectionManager so that:
+    //   1. `connection_ids_for_owner()` sees NIP-AA audio sessions, enabling
+    //      owner-scoped termination when an owner is removed from the relay.
+    //   2. `connection_ids_for_pubkey()` can enumerate all live sessions for
+    //      a given agent pubkey, including audio-only connections.
+    //
+    // We register using `peer_id` as the connection ID (already a UUIDv4) and
+    // `ctrl_tx` as the outbound sender so that `conn_manager.send_to()` routes
+    // control messages to the priority channel (matching the main WS handler).
+    //
+    // Audio connections carry no Nostr subscriptions — the empty map is correct.
+    //
+    // Scope intersection note: NIP-AA §5 grants virtual members read/write
+    // scopes but not admin. The audio handler only relays binary frames and
+    // emits relay-signed lifecycle events (kinds 48101–48103) — it never
+    // publishes events on behalf of the agent. Scope enforcement is therefore
+    // N/A here; it applies in the main WebSocket event handler.
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<WsMessage>(8);
+    let cancel = CancellationToken::new();
+    let conn_backpressure = Arc::new(AtomicU8::new(0));
+    let conn_subscriptions = Arc::new(Mutex::new(HashMap::<String, Vec<Filter>>::new()));
+
+    state.conn_manager.register(
+        peer_id,
+        ctrl_tx.clone(),
+        cancel.clone(),
+        Arc::clone(&conn_backpressure),
+        conn_subscriptions,
+    );
+    state
+        .conn_manager
+        .set_authenticated_pubkey(peer_id, pubkey_bytes.clone());
+    if let Some(ref owner) = owner_pubkey {
+        state
+            .conn_manager
+            .set_owner_pubkey(peer_id, owner.serialize().to_vec());
+    }
+
     // ── Step 5: broadcast joined + send welcome ───────────────────────────────
     let peers_snapshot: Vec<serde_json::Value> = room
         .peer_pubkeys()
@@ -470,13 +510,13 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     .await;
 
     // ── Step 7: spawn send + heartbeat loops ──────────────────────────────────
-    let cancel = CancellationToken::new();
+    // cancel, ctrl_tx, and ctrl_rx were created above during ConnectionManager
+    // registration. data_tx/data_rx are audio-only and not needed for conn_manager.
     let missed_pongs = Arc::new(AtomicU8::new(0));
 
     // Dual-channel pattern (matches connection.rs): data channel for audio,
     // control channel for Ping/Pong/Close/control JSON with priority drain.
     let (data_tx, data_rx) = mpsc::channel::<WsMessage>(16);
-    let (ctrl_tx, ctrl_rx) = mpsc::channel::<WsMessage>(8);
 
     let send_cancel = cancel.child_token();
     let send_task = tokio::spawn(send_loop(ws_send, data_rx, ctrl_rx, send_cancel));
@@ -511,6 +551,10 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let _ = send_task.await;
     let _ = heartbeat_task.await;
     let _ = forward_task.await;
+
+    // Deregister from ConnectionManager — mirrors the main WS handler cleanup.
+    // This removes the audio session from owner-scoped and pubkey-scoped lookups.
+    state.conn_manager.deregister(peer_id);
 
     // Atomic remove + end check: remove_peer_and_check_ended holds the
     // AdmissionGuard lock across index recycling AND the is_empty + ended=true
