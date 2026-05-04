@@ -60,6 +60,12 @@ pub enum IngestAuth {
         channel_ids: Option<Vec<Uuid>>,
         /// WebSocket connection identifier.
         conn_id: Uuid,
+        /// Whether this connection authenticated via NIP-AA (agent-on-behalf-of-owner).
+        /// Virtual members must not use the gift-wrap pubkey bypass.
+        is_nip_aa_virtual: bool,
+        /// For NIP-AA virtual members: optional session expiry from `created_at<T` conditions.
+        /// Events submitted after this Unix timestamp are rejected.
+        session_expiry: Option<u64>,
     },
     /// HTTP REST authenticated request.
     Http {
@@ -104,6 +110,18 @@ impl IngestAuth {
         }
     }
 
+    /// Whether this is a NIP-AA virtual-member connection.
+    /// Virtual members must not use the gift-wrap pubkey bypass.
+    pub fn is_nip_aa_virtual(&self) -> bool {
+        matches!(
+            self,
+            Self::Nip42 {
+                is_nip_aa_virtual: true,
+                ..
+            }
+        )
+    }
+
     /// Token-level channel restriction (Http/ApiToken only).
     pub fn channel_ids(&self) -> Option<&[Uuid]> {
         match self {
@@ -122,6 +140,15 @@ impl IngestAuth {
     /// Whether this auth context is an HTTP request (not WebSocket).
     pub fn is_http(&self) -> bool {
         matches!(self, Self::Http { .. })
+    }
+
+    /// NIP-AA session expiry (Nip42 virtual members only).
+    /// Returns `None` for direct members, HTTP auth, or NIP-AA without a `created_at<T` bound.
+    pub fn session_expiry(&self) -> Option<u64> {
+        match self {
+            Self::Nip42 { session_expiry, .. } => *session_expiry,
+            Self::Http { .. } => None,
+        }
     }
 }
 
@@ -844,11 +871,30 @@ pub async fn ingest_event(
     }
 
     // ── 3. Pubkey match ──────────────────────────────────────────────────
-    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP;
+    // Gift-wrap exception: kind:1059 allows an ephemeral outer pubkey for privacy.
+    // NIP-AA virtual members are excluded — they must only submit events signed
+    // by their own authenticated pubkey (mirrors the check in handle_event).
+    let is_gift_wrap = kind_u32 == KIND_GIFT_WRAP && !auth.is_nip_aa_virtual();
     if event.pubkey != *auth.pubkey() && !auth.has_proxy_scope() && !is_gift_wrap {
         return Err(IngestError::AuthFailed(
             "invalid: event pubkey does not match authenticated identity".into(),
         ));
+    }
+
+    // ── 3b. NIP-AA session expiry ────────────────────────────────────────
+    // Reject events after the delegation's created_at<T bound. This enforces
+    // the time-limited delegation even after a successful login — an agent
+    // that authenticated before expiry cannot keep publishing indefinitely.
+    if let Some(expiry) = auth.session_expiry() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now >= expiry {
+            return Err(IngestError::Rejected(
+                "restricted: NIP-AA session expired (created_at< condition exceeded)".into(),
+            ));
+        }
     }
 
     // ── 4. Per-kind scope allowlist ──────────────────────────────────────
@@ -1063,6 +1109,24 @@ pub async fn ingest_event(
                 return Err(IngestError::Internal(
                     "unexpected RoleMismatch from remove_relay_member".into(),
                 ));
+            }
+        }
+
+        // NIP-AA: disconnect agent connections owned by the leaving member.
+        // Agents inherit access from their owner — when the owner leaves, their
+        // agents must be disconnected immediately (mirrors admin removal logic).
+        {
+            let sender_bytes = hex::decode(&sender_hex).unwrap_or_default();
+            let agent_conn_ids = state.conn_manager.connection_ids_for_owner(&sender_bytes);
+            for conn_id in &agent_conn_ids {
+                state.conn_manager.close_connection(*conn_id);
+            }
+            if !agent_conn_ids.is_empty() {
+                tracing::info!(
+                    owner = %sender_hex,
+                    disconnected = agent_conn_ids.len(),
+                    "disconnected NIP-AA agent connections after owner self-leave"
+                );
             }
         }
 
@@ -1512,6 +1576,45 @@ pub async fn ingest_event(
         }
     }
 
+    // ── 21b. NIP-AA: terminate agent sessions for removed/leaving members ─
+    // kind:9001 (remove user) — target is the `p` tag pubkey.
+    // kind:9022 (leave request) — target is the event sender.
+    // Both paths mirror the NIP-43 leave logic above (step 9b).
+    if kind_u32 == KIND_NIP29_REMOVE_USER || kind_u32 == KIND_NIP29_LEAVE_REQUEST {
+        let owner_bytes: Option<Vec<u8>> = if kind_u32 == KIND_NIP29_REMOVE_USER {
+            // Extract target pubkey from first `p` tag (same logic as side_effects::extract_p_tag).
+            event.tags.iter().find_map(|t| {
+                if t.kind().to_string() == "p" {
+                    if let Some(val) = t.content() {
+                        if let Ok(bytes) = hex::decode(val) {
+                            if bytes.len() == 32 {
+                                return Some(bytes);
+                            }
+                        }
+                    }
+                }
+                None
+            })
+        } else {
+            // kind:9022 — sender is removing themselves.
+            Some(event.pubkey.serialize().to_vec())
+        };
+
+        if let Some(owner_bytes) = owner_bytes {
+            let agent_conn_ids = state.conn_manager.connection_ids_for_owner(&owner_bytes);
+            for conn_id in &agent_conn_ids {
+                state.conn_manager.close_connection(*conn_id);
+            }
+            if !agent_conn_ids.is_empty() {
+                tracing::info!(
+                    owner = hex::encode(&owner_bytes),
+                    agent_sessions = agent_conn_ids.len(),
+                    "terminated NIP-AA agent sessions for removed member"
+                );
+            }
+        }
+    }
+
     // ── 22. Fan-out ──────────────────────────────────────────────────────
     let pubkey_hex = auth.pubkey().to_hex();
     dispatch_persistent_event(state, &stored_event, kind_u32, &pubkey_hex).await;
@@ -1727,6 +1830,8 @@ mod tests {
             scopes: vec![],
             channel_ids: None,
             conn_id: uuid::Uuid::new_v4(),
+            is_nip_aa_virtual: false,
+            session_expiry: None,
         };
         assert!(
             !ws_auth.is_http(),

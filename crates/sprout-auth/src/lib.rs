@@ -79,6 +79,11 @@ pub struct AuthContext {
     /// For NIP-AA virtual members: the owner pubkey that granted access.
     /// `None` for direct members.
     pub owner_pubkey: Option<nostr::PublicKey>,
+    /// For NIP-AA virtual members: optional session expiry derived from
+    /// `created_at<T` conditions in the NIP-OA auth tag. Events submitted
+    /// after this Unix timestamp are rejected.
+    /// `None` for direct members or delegations without time bounds.
+    pub session_expiry: Option<u64>,
 }
 
 impl AuthContext {
@@ -199,6 +204,7 @@ impl AuthService {
             channel_ids: None,
             auth_method,
             owner_pubkey: None,
+            session_expiry: None,
         })
     }
 
@@ -431,6 +437,7 @@ mod tests {
             channel_ids: None,
             auth_method: AuthMethod::Nip42PubkeyOnly,
             owner_pubkey: None,
+            session_expiry: None,
         };
         assert!(ctx.has_scope(&Scope::MessagesRead));
         assert!(!ctx.has_scope(&Scope::MessagesWrite));

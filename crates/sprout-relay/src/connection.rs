@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -76,6 +76,11 @@ pub struct ConnectionState {
     /// Shared with `ConnectionManager::ConnEntry` so both direct sends and
     /// fan-out broadcasts track the same counter.
     pub backpressure_count: Arc<AtomicU8>,
+    /// Monotonically increasing counter, bumped on every successful re-auth.
+    /// Used by spawned handlers (REQ) to detect stale auth context.
+    pub auth_epoch: AtomicU64,
+    /// Timestamp of the last auth attempt (successful or not). Rate-limits re-auth.
+    pub last_auth_at: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl ConnectionState {
@@ -146,6 +151,8 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
         ctrl_tx: ctrl_tx.clone(),
         cancel: cancel.clone(),
         backpressure_count: Arc::clone(&backpressure_count),
+        auth_epoch: AtomicU64::new(0),
+        last_auth_at: std::sync::Mutex::new(None),
     });
 
     info!(conn_id = %conn_id, addr = %addr, "WebSocket connection established");
@@ -379,10 +386,20 @@ async fn handle_text_message(
                         == Some("AUTH")
                 }
                 Err(_) => {
-                    // JSON parse failed — presence of `"AUTH"` (with quotes) in
-                    // the raw frame is a reliable signal that this was an AUTH
-                    // attempt, regardless of where in the frame it appears.
-                    text.contains(r#""AUTH""#)
+                    // JSON parse failed — check if this looks like an AUTH frame
+                    // by verifying it starts with `["AUTH"` (the canonical Nostr
+                    // message envelope). This is stricter than scanning for "AUTH"
+                    // anywhere in the frame, which could false-positive on message
+                    // content containing that string.
+                    // Strip leading whitespace, then check for `[` followed by optional
+                    // whitespace and `"AUTH"` — handles both `["AUTH"` and `[ "AUTH"`.
+                    let trimmed = text.trim_start();
+                    if let Some(after_bracket_raw) = trimmed.strip_prefix('[') {
+                        let after_bracket = after_bracket_raw.trim_start();
+                        after_bracket.starts_with(r#""AUTH""#)
+                    } else {
+                        false
+                    }
                 }
             };
             if is_auth_frame {
@@ -420,6 +437,8 @@ async fn handle_text_message(
                         return false;
                     }
                 }
+                // OK false already carries the error — no NOTICE needed.
+                return true;
             }
             conn.send(RelayMessage::notice(&format!("invalid message: {e}")));
             return true;

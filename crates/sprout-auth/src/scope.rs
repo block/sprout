@@ -86,21 +86,18 @@ impl Scope {
         ]
     }
 
-    /// Return the scopes granted to NIP-AA virtual members.
-    ///
-    /// Virtual members get the minimum set needed for messaging and channel
-    /// interaction. Excluded: admin scopes, jobs, subscriptions, `UsersWrite`
-    /// (agents shouldn't modify profiles), and `ReposWrite` (git push requires
-    /// explicit enrollment).
+    /// Minimal scope set for NIP-AA virtual members (agents authenticating via
+    /// NIP-OA credentials). Intentionally excludes write operations beyond
+    /// messaging — agents should not create channels, upload files, or modify
+    /// user profiles. Scope can be further restricted by the NIP-OA credential's
+    /// conditions (intersection applied in auth.rs).
     pub fn nip_aa_virtual_member() -> Vec<Scope> {
         vec![
             Self::MessagesRead,
             Self::MessagesWrite,
             Self::ChannelsRead,
-            Self::ChannelsWrite,
             Self::UsersRead,
             Self::FilesRead,
-            Self::FilesWrite,
             Self::ReposRead,
         ]
     }

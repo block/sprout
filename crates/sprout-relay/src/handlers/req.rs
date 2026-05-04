@@ -16,6 +16,8 @@ use sprout_db::EventQuery;
 
 use sprout_auth::Scope;
 
+use std::sync::atomic::Ordering;
+
 use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
@@ -36,6 +38,10 @@ pub async fn handle_req(
     conn: Arc<ConnectionState>,
     state: Arc<AppState>,
 ) {
+    // Capture auth epoch before any async work. Checked again just before subscription
+    // registration to detect re-auth that occurred while this task was in-flight.
+    let auth_epoch_at_start = conn.auth_epoch.load(Ordering::Acquire);
+
     let (conn_id, pubkey_bytes, token_channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
@@ -47,6 +53,22 @@ pub async fn handle_req(
                         "restricted: insufficient scope",
                     ));
                     return;
+                }
+
+                // NIP-AA §Expiry: reject reads after the delegation's created_at<T bound.
+                // Without this, an agent that authenticated before expiry could keep
+                // reading indefinitely. Writes are separately enforced in ingest.rs.
+                if let Some(expiry) = ctx.session_expiry {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if now >= expiry {
+                        let msg =
+                            RelayMessage::closed(&sub_id, "auth-required: NIP-AA session expired");
+                        conn.send(msg);
+                        return;
+                    }
                 }
 
                 let pk_bytes = ctx.pubkey.serialize().to_vec();
@@ -140,6 +162,17 @@ pub async fn handle_req(
             ));
             return;
         }
+    }
+
+    // Guard against in-flight REQ registering a stale subscription after re-auth.
+    // If the epoch changed since we captured it, the auth context we used for
+    // access checks belongs to the old identity — reject to prevent privilege leak.
+    if conn.auth_epoch.load(Ordering::Acquire) != auth_epoch_at_start {
+        conn.send(RelayMessage::closed(
+            &sub_id,
+            "auth-required: identity changed during request",
+        ));
+        return;
     }
 
     {

@@ -12,6 +12,10 @@ use crate::state::AppState;
 pub struct NipAaResult {
     /// The owner pubkey that granted virtual membership.
     pub owner_pubkey: PublicKey,
+    /// Optional session expiry derived from `created_at<T` conditions.
+    /// The minimum (most restrictive) `created_at<T` threshold found in the
+    /// auth tag conditions, or `None` if no such condition is present.
+    pub session_expiry: Option<u64>,
 }
 
 /// Extract exactly one `auth` tag from a slice of event tags.
@@ -40,16 +44,11 @@ pub fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag
 /// Pre-validate that an `auth` tag's owner pubkey and signature fields are
 /// 64-char and 128-char lowercase hex respectively.
 ///
-/// NIP-OA mandates lowercase hex; secp256k1's `from_hex` silently accepts
+/// NIP-OA mandates lowercase hex; `secp256k1::from_hex` silently accepts
 /// uppercase, so we enforce the spec constraint here before the crypto call.
 ///
-/// Only runs when the tag has ≥ 4 elements (the minimum for a well-formed auth
-/// tag). Tags with fewer elements are passed through and will fail the
+/// Tags with fewer than 4 elements are passed through and will fail the
 /// `verify_auth_tag` element-count check instead.
-///
-/// This is a defense-in-depth check: the SDK's `verify_auth_tag` also validates
-/// these fields, but `secp256k1::from_hex` silently accepts uppercase hex. This
-/// pre-check enforces the NIP-OA lowercase-only constraint before the crypto call.
 fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
     let tag_slice = auth_tag.as_slice();
     if tag_slice.len() >= 4 {
@@ -81,6 +80,13 @@ fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
 
 /// Extract and verify a NIP-OA auth tag from event tags for NIP-AA authentication.
 ///
+/// ## Performance note — rate-limit re-auth attempts
+///
+/// This function performs CPU-intensive Schnorr signature verification (offloaded
+/// to `spawn_blocking`). Callers **must** apply a per-IP or per-pubkey rate limit
+/// on re-authentication attempts to prevent CPU exhaustion. The rate limiting is
+/// implemented in `auth.rs`, not here.
+///
 /// Implements NIP-AA Steps 3-5:
 /// - Step 3: Extract exactly one `auth` tag (zero → Ok(None); >1 → Err)
 /// - Step 4: Verify the auth tag cryptographically (reuses sprout-sdk nip_oa)
@@ -101,6 +107,7 @@ fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
 /// | Signature not 128-char lowercase hex | `Err` | `"restricted: signature must be 128 lowercase hex chars"` |
 /// | NIP-OA signature verification fails | `Err` | `"restricted: invalid auth tag: …"` |
 /// | Self-attestation (agent == owner) | `Err` | `"restricted: invalid auth tag: …"` (from sprout-sdk) |
+/// | `kind=` condition present | `Err` | `"restricted: unsupported condition for NIP-AA: kind= restrictions are not yet enforced per-action…"` |
 /// | `created_at<T` condition not satisfied | `Err` | `"restricted: created_at condition not satisfied: …"` |
 /// | `created_at>T` condition not satisfied | `Err` | `"restricted: created_at condition not satisfied: …"` |
 /// | Malformed `created_at` threshold | `Err` | `"restricted: malformed created_at< condition: …"` |
@@ -114,40 +121,50 @@ pub async fn verify_nip_aa(
 ) -> Result<Option<NipAaResult>, String> {
     // Step 3: Extract exactly one auth tag
     let auth_tag = match extract_single_auth_tag(tags)? {
-        None => return Ok(None), // No auth tag — not an agent, not a NIP-AA attempt
+        None => return Ok(None),
         Some(tag) => tag,
     };
-    // Step 4: Pre-validate lowercase hex requirements before calling verify_auth_tag.
-    // NIP-OA requires 64-char lowercase hex owner pubkey and 128-char lowercase hex sig.
-    // secp256k1's from_hex accepts uppercase, so we enforce the spec constraint here.
+    // Step 4: Pre-validate lowercase hex before the crypto call.
     validate_auth_tag_hex(auth_tag)?;
 
     let tag_json = serde_json::to_string(&auth_tag.as_slice())
         .map_err(|e| format!("restricted: failed to serialize auth tag: {e}"))?;
 
-    // Step 4: Verify the auth tag cryptographically
-    let owner_pubkey = match sprout_sdk::nip_oa::verify_auth_tag(&tag_json, agent_pubkey) {
-        Ok(pk) => pk,
-        Err(e) => {
+    // Step 4: Verify the auth tag — CPU-intensive, run on blocking thread pool.
+    let agent_pk_owned = *agent_pubkey;
+    let tag_json_owned = tag_json.clone();
+    let owner_pubkey = match tokio::task::spawn_blocking(move || {
+        sprout_sdk::nip_oa::verify_auth_tag(&tag_json_owned, &agent_pk_owned)
+    })
+    .await
+    {
+        Ok(Ok(pk)) => pk,
+        Ok(Err(e)) => {
             return Err(format!("restricted: invalid auth tag: {e}"));
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "NIP-AA: verify_auth_tag task panicked");
+            return Err("restricted: verification failed".to_string());
         }
     };
 
-    // Step 4b: Evaluate created_at conditions
-    // Parse conditions from the auth tag (element [2])
+    // Step 4b: Evaluate created_at conditions from the auth tag (element [2]).
     let tag_slice = auth_tag.as_slice();
-    if tag_slice.len() >= 3 {
+    let session_expiry = if tag_slice.len() >= 3 {
         let conditions = &tag_slice[2];
         if !conditions.is_empty() {
             if let Err(reason) = evaluate_created_at_conditions(conditions, event_created_at) {
                 return Err(format!("restricted: {reason}"));
             }
+            extract_session_expiry(conditions)
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
-    // Step 5: Check owner is an active relay member.
-    // Log DB errors server-side; send a sanitized fail-closed message to the client
-    // to avoid leaking internal error details.
+    // Step 5: Check owner is an active relay member. Fail closed on DB errors.
     let owner_hex = owner_pubkey.to_hex();
     let is_member = match state.db.is_relay_member(&owner_hex).await {
         Ok(v) => v,
@@ -172,13 +189,47 @@ pub async fn verify_nip_aa(
         "NIP-AA: virtual membership granted"
     );
 
-    Ok(Some(NipAaResult { owner_pubkey }))
+    Ok(Some(NipAaResult {
+        owner_pubkey,
+        session_expiry,
+    }))
+}
+
+/// Extract the minimum `created_at<T` threshold from a conditions string.
+///
+/// Returns the smallest (most restrictive) upper-bound threshold found, or `None`
+/// if no `created_at<T` condition is present. Used to derive session expiry for
+/// NIP-AA virtual members so the relay can enforce the time bound post-login.
+pub fn extract_session_expiry(conditions: &str) -> Option<u64> {
+    if conditions.is_empty() {
+        return None;
+    }
+    let mut min_expiry: Option<u64> = None;
+    for clause in conditions.split('&') {
+        if let Some(val_str) = clause.strip_prefix("created_at<") {
+            if let Ok(threshold) = val_str.parse::<u64>() {
+                min_expiry = Some(match min_expiry {
+                    Some(prev) => prev.min(threshold),
+                    None => threshold,
+                });
+            }
+        }
+    }
+    min_expiry
 }
 
 /// Evaluate `created_at<t` and `created_at>t` conditions against an event's created_at.
-/// Returns Ok(()) if all conditions pass, Err(reason) if any fail.
-/// `kind=` conditions are intentionally skipped per NIP-AA spec — they are valid
-/// but not evaluated at connection admission.
+/// Returns `Ok(())` if all conditions pass, `Err(reason)` if any fail.
+///
+/// ## `kind=` conditions are rejected (fail-closed)
+///
+/// `kind=` clauses restrict which event kinds the agent may publish. We cannot
+/// enforce these per-action yet — silently skipping them would grant broader
+/// access than the owner intended, which is a privilege escalation vector.
+/// Until per-action enforcement is implemented, we reject any auth tag that
+/// contains a `kind=` clause so that owner intent is always honoured.
+///
+/// ## Other constraints
 ///
 /// Per NIP-OA spec: verifiers MUST reject an auth tag that contains an unsupported
 /// clause. Empty clauses (from leading/trailing `&`) and unknown clause types are
@@ -210,7 +261,14 @@ fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Re
                 ));
             }
         } else if clause.starts_with("kind=") {
-            // kind= clauses are intentionally skipped at admission per NIP-AA §Kind Conditions
+            // kind= conditions restrict which event kinds the agent may publish.
+            // We cannot enforce these per-action yet — silently skipping them would
+            // grant broader access than the owner intended (privilege escalation).
+            // Reject fail-closed until per-action enforcement is implemented.
+            return Err(format!(
+                "unsupported condition for NIP-AA: kind= restrictions are not yet enforced \
+                 per-action; rejecting to prevent privilege escalation (clause: {clause})"
+            ));
         } else {
             return Err(format!("unsupported condition clause: {clause}"));
         }
@@ -285,9 +343,30 @@ mod tests {
     }
 
     #[test]
-    fn kind_condition_is_skipped() {
-        // kind= clauses must not cause failure — they are skipped per spec
-        assert!(evaluate_created_at_conditions("kind=9&created_at>500", 1000).is_ok());
+    fn kind_condition_is_rejected() {
+        // kind= clauses must be rejected fail-closed to prevent privilege escalation
+        assert!(evaluate_created_at_conditions("kind=9&created_at>500", 1000).is_err());
+    }
+
+    #[test]
+    fn kind_condition_alone_is_rejected() {
+        let result = evaluate_created_at_conditions("kind=9", 1000);
+        assert!(result.is_err(), "expected Err for kind= condition, got Ok");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("kind="),
+            "expected error to mention kind=, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn kind_and_created_at_conditions_rejected_due_to_kind() {
+        // The kind= clause causes rejection even when created_at would pass.
+        let result = evaluate_created_at_conditions("kind=9&created_at>500", 1000);
+        assert!(
+            result.is_err(),
+            "expected Err because of kind= clause, got Ok"
+        );
     }
 
     #[test]
@@ -296,21 +375,15 @@ mod tests {
     }
 
     // ── extract_single_auth_tag ───────────────────────────────────────────────
-    // These tests cover the NIP-AA §Step 3 logic (no auth tags → Ok(None),
-    // multiple auth tags → Err) without requiring AppState or async runtime.
 
     #[test]
     fn no_auth_tags_returns_ok_none() {
-        // verify_nip_aa returns Ok(None) when no auth tag is present — the
-        // caller treats this as "not an agent" and falls through to a plain
-        // membership failure.
         let tags: Vec<nostr::Tag> = vec![];
         assert!(matches!(extract_single_auth_tag(&tags), Ok(None)));
     }
 
     #[test]
     fn non_auth_tags_ignored_returns_ok_none() {
-        // Unrelated tags (e.g. "p", "e") must not be mistaken for auth tags.
         let tags = vec![
             nostr::Tag::parse(&["p", "deadbeef"]).expect("valid tag"),
             nostr::Tag::parse(&["e", "cafebabe"]).expect("valid tag"),
@@ -320,8 +393,6 @@ mod tests {
 
     #[test]
     fn multiple_auth_tags_returns_err() {
-        // NIP-AA §Step 3: more than one auth tag is ambiguous and must be
-        // rejected. verify_nip_aa propagates this as Err.
         let tags = vec![
             nostr::Tag::parse(&["auth", "owner1hex", "", "sig1"]).expect("valid tag"),
             nostr::Tag::parse(&["auth", "owner2hex", "", "sig2"]).expect("valid tag"),
@@ -370,9 +441,7 @@ mod tests {
 
     #[test]
     fn validate_hex_rejects_uppercase_owner_pubkey() {
-        // NIP-OA mandates lowercase hex. Uppercase must be rejected even though
-        // secp256k1's from_hex would silently accept it.
-        let owner = make_hex(64, true); // uppercase
+        let owner = make_hex(64, true); // uppercase — secp256k1 accepts it, NIP-OA forbids it
         let sig = make_hex(128, false);
         let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
         let err = validate_auth_tag_hex(&tag).unwrap_err();
@@ -420,9 +489,7 @@ mod tests {
 
     #[test]
     fn validate_hex_skips_check_for_tag_with_fewer_than_4_elements() {
-        // Tags with < 4 elements bypass the hex check here and will fail later
-        // in verify_auth_tag's element-count check. We must not panic or error
-        // prematurely on short tags.
+        // Short tags pass here and fail later in verify_auth_tag's element-count check.
         let tag2 = nostr::Tag::parse(&["auth", "short"]).expect("valid tag");
         assert!(
             validate_auth_tag_hex(&tag2).is_ok(),
@@ -440,47 +507,39 @@ mod tests {
 
     #[test]
     fn created_at_lt_passes_one_below_boundary() {
-        // Strict less-than: value one below threshold must pass.
         assert!(evaluate_created_at_conditions("created_at<1001", 1000).is_ok());
     }
 
     #[test]
     fn created_at_gt_passes_one_above_boundary() {
-        // Strict greater-than: value one above threshold must pass.
         assert!(evaluate_created_at_conditions("created_at>999", 1000).is_ok());
     }
 
     #[test]
-    fn multiple_kind_conditions_are_all_skipped() {
-        // Multiple kind= clauses must all be skipped — none should cause failure.
+    fn multiple_kind_conditions_are_all_rejected() {
+        // Each kind= clause triggers a rejection; the first one encountered returns Err.
         assert!(
-            evaluate_created_at_conditions("kind=9&kind=1&kind=30023&created_at>0", 1000).is_ok()
+            evaluate_created_at_conditions("kind=9&kind=1&kind=30023&created_at>0", 1000).is_err()
         );
     }
 
     #[test]
     fn empty_clause_from_leading_ampersand_is_rejected() {
-        // A leading & produces an empty first clause — must be rejected per NIP-OA spec.
         assert!(evaluate_created_at_conditions("&created_at>0", 1000).is_err());
     }
 
     #[test]
     fn empty_clause_from_trailing_ampersand_is_rejected() {
-        // A trailing & produces an empty last clause — must be rejected per NIP-OA spec.
         assert!(evaluate_created_at_conditions("created_at>0&", 1000).is_err());
     }
 
     #[test]
     fn unknown_clause_type_is_rejected() {
-        // Unknown condition types must be rejected — NIP-OA: verifiers MUST reject
-        // auth tags containing unsupported clauses.
+        // NIP-OA: verifiers MUST reject auth tags with unsupported clauses.
         assert!(evaluate_created_at_conditions("foo=bar&created_at>0", 1000).is_err());
     }
 
     // ── self-attestation rejection ────────────────────────────────────────────
-    // verify_auth_tag (sprout-sdk) rejects self-attestation. Verify that
-    // verify_nip_aa propagates this as Err without requiring AppState by
-    // calling sprout_sdk::nip_oa::verify_auth_tag directly.
 
     #[test]
     fn self_attestation_rejected_by_verify_auth_tag() {

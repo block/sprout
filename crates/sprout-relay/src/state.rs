@@ -651,6 +651,8 @@ mod tests {
             ctrl_tx,
             cancel: cancel.clone(),
             backpressure_count: Arc::clone(&bp),
+            auth_epoch: std::sync::atomic::AtomicU64::new(0),
+            last_auth_at: std::sync::Mutex::new(None),
         };
 
         let mgr = ConnectionManager::new();

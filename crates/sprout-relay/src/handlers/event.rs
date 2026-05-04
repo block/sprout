@@ -164,7 +164,15 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     // ── Extract auth from WS connection state ────────────────────────────
-    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids, is_nip_aa_virtual) = {
+    let (
+        conn_id,
+        pubkey_bytes,
+        auth_pubkey,
+        scopes,
+        channel_ids,
+        is_nip_aa_virtual,
+        session_expiry,
+    ) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated { ctx, .. } => (
@@ -174,6 +182,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 ctx.scopes.clone(),
                 ctx.channel_ids.clone(),
                 ctx.auth_method == sprout_auth::AuthMethod::Nip42AgentAuth,
+                ctx.session_expiry,
             ),
             _ => {
                 reject("auth");
@@ -186,6 +195,25 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             }
         }
     };
+
+    // ── NIP-AA §Expiry: reject all event submissions after delegation expiry ──
+    // Defense-in-depth — ingest.rs also checks, but catching it here prevents
+    // any processing of events from expired sessions.
+    if let Some(expiry) = session_expiry {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now >= expiry {
+            let msg = RelayMessage::ok(
+                &event.id.to_hex(),
+                false,
+                "restricted: NIP-AA session expired",
+            );
+            conn.send(msg.to_string());
+            return;
+        }
+    }
 
     // ── Pubkey / auth identity match (all events) ─────────────────────
     // Must run before both ephemeral and persistent branches. Persistent
@@ -272,6 +300,8 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         scopes,
         channel_ids,
         conn_id,
+        is_nip_aa_virtual,
+        session_expiry,
     };
 
     match super::ingest::ingest_event(&state, event, ingest_auth).await {
