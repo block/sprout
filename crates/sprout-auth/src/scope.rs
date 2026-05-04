@@ -88,11 +88,21 @@ impl Scope {
 
     /// Return the scopes granted to NIP-AA virtual members.
     ///
-    /// NIP-AA spec: virtual members MUST NOT gain admin privileges. This returns all
-    /// known scopes except `AdminChannels` and `AdminUsers`, which require a real
-    /// operator-minted token even when relay membership is delegated via NIP-AA.
+    /// Virtual members get the minimum set needed for messaging and channel
+    /// interaction. Excluded: admin scopes, jobs, subscriptions, `UsersWrite`
+    /// (agents shouldn't modify profiles), and `ReposWrite` (git push requires
+    /// explicit enrollment).
     pub fn nip_aa_virtual_member() -> Vec<Scope> {
-        Self::all_non_admin()
+        vec![
+            Self::MessagesRead,
+            Self::MessagesWrite,
+            Self::ChannelsRead,
+            Self::ChannelsWrite,
+            Self::UsersRead,
+            Self::FilesRead,
+            Self::FilesWrite,
+            Self::ReposRead,
+        ]
     }
 
     /// Return a `Vec` containing every known scope variant except admin scopes.

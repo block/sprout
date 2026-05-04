@@ -189,7 +189,7 @@ fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Re
     }
     for clause in conditions.split('&') {
         if clause.is_empty() {
-            return Err("restricted: malformed conditions string (empty clause)".to_string());
+            return Err("malformed conditions string (empty clause)".to_string());
         }
         if let Some(val_str) = clause.strip_prefix("created_at<") {
             let threshold: u64 = val_str
@@ -212,9 +212,7 @@ fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Re
         } else if clause.starts_with("kind=") {
             // kind= clauses are intentionally skipped at admission per NIP-AA §Kind Conditions
         } else {
-            return Err(format!(
-                "restricted: unsupported condition clause: {clause}"
-            ));
+            return Err(format!("unsupported condition clause: {clause}"));
         }
     }
     Ok(())

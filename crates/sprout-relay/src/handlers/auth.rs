@@ -391,6 +391,13 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         // previous virtual-member session on this connection.
                         state.conn_manager.clear_owner_pubkey(conn_id);
                     }
+                    // NIP-AA §6: "The relay MUST NOT combine their privileges."
+                    // On identity switch, clear all subscriptions registered under the
+                    // previous identity to prevent privilege leakage.
+                    if prev_auth_ctx.as_ref().map(|p| p.pubkey) != Some(pubkey) {
+                        conn.subscriptions.lock().await.clear();
+                        state.sub_registry.remove_connection(conn_id);
+                    }
                     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 }
                 Err(e) => {
@@ -455,7 +462,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
-                    "auth-required: verification failed",
+                    "invalid: verification failed",
                 ));
                 return;
             }
@@ -499,6 +506,13 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 state
                     .conn_manager
                     .set_owner_pubkey(conn_id, owner_pubkey.serialize().to_vec());
+                // NIP-AA §6: "The relay MUST NOT combine their privileges."
+                // On identity switch, clear all subscriptions registered under the
+                // previous identity to prevent privilege leakage.
+                if prev_auth_ctx.as_ref().map(|p| p.pubkey) != Some(pubkey) {
+                    conn.subscriptions.lock().await.clear();
+                    state.sub_registry.remove_connection(conn_id);
+                }
                 conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 return;
             }
@@ -642,6 +656,13 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 // Direct member re-auth: clear any stale NIP-AA owner from a
                 // previous virtual-member session on this connection.
                 state.conn_manager.clear_owner_pubkey(conn_id);
+            }
+            // NIP-AA §6: "The relay MUST NOT combine their privileges."
+            // On identity switch, clear all subscriptions registered under the
+            // previous identity to prevent privilege leakage.
+            if prev_auth_ctx.as_ref().map(|p| p.pubkey) != Some(pubkey) {
+                conn.subscriptions.lock().await.clear();
+                state.sub_registry.remove_connection(conn_id);
             }
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }

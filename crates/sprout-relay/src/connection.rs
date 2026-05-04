@@ -386,13 +386,40 @@ async fn handle_text_message(
                 }
             };
             if is_auth_frame {
-                warn!(conn_id = %conn.conn_id, error = %e, "malformed AUTH frame — closing connection");
-                let _ = conn.ctrl_tx.try_send(WsMessage::Close(Some(CloseFrame {
-                    code: 4000,
-                    reason: "malformed AUTH".into(),
-                })));
-                conn.cancel.cancel();
-                return false;
+                // NIP-AA spec: only close if no parseable event id can be extracted.
+                // If the event id is present and valid, send OK false instead.
+                let maybe_event_id = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| {
+                        v.as_array()?
+                            .get(1)?
+                            .as_object()?
+                            .get("id")?
+                            .as_str()
+                            .map(|s| s.to_string())
+                    });
+
+                match maybe_event_id {
+                    Some(id) if id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()) => {
+                        // Parseable event id — reject gracefully without closing.
+                        warn!(conn_id = %conn.conn_id, event_id = %id, error = %e, "malformed AUTH event — sending OK false");
+                        conn.send(RelayMessage::ok(
+                            &id,
+                            false,
+                            "invalid: malformed AUTH event",
+                        ));
+                    }
+                    _ => {
+                        // No parseable event id — close per spec.
+                        warn!(conn_id = %conn.conn_id, error = %e, "malformed AUTH frame (no event id) — closing connection");
+                        let _ = conn.ctrl_tx.try_send(WsMessage::Close(Some(CloseFrame {
+                            code: 4000,
+                            reason: "malformed AUTH".into(),
+                        })));
+                        conn.cancel.cancel();
+                        return false;
+                    }
+                }
             }
             conn.send(RelayMessage::notice(&format!("invalid message: {e}")));
             return true;
