@@ -823,6 +823,32 @@ fn row_to_approval_record(row: sqlx::postgres::PgRow) -> Result<ApprovalRecord> 
     })
 }
 
+/// Find a workflow by owner pubkey and name. Returns the first match (active or not).
+pub async fn find_by_owner_and_name(
+    pool: &PgPool,
+    owner_pubkey: &[u8],
+    name: &str,
+) -> Result<Option<WorkflowRecord>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, name, owner_pubkey, channel_id, definition, definition_hash,
+               status::text AS status, enabled, created_at, updated_at
+        FROM workflows
+        WHERE owner_pubkey = $1 AND name = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(owner_pubkey)
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => Ok(Some(row_to_workflow_record(r)?)),
+        None => Ok(None),
+    }
+}
+
 // -- Tests --------------------------------------------------------------------
 
 #[cfg(test)]

@@ -105,7 +105,23 @@ pub async fn validate_standard_deletion_event(
     let target_ids = extract_target_event_ids(event);
 
     if target_ids.is_empty() {
-        return Err(anyhow::anyhow!("missing e tag for target event"));
+        // a-tag deletion: verify author owns the addressable event
+        let a_tag = event
+            .tags
+            .iter()
+            .find(|t| t.kind().to_string() == "a")
+            .and_then(|t| t.content().map(|s| s.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("missing e or a tag for target"))?;
+        let parts: Vec<&str> = a_tag.splitn(3, ':').collect();
+        if parts.len() < 2 {
+            return Err(anyhow::anyhow!("invalid a-tag format"));
+        }
+        let target_pubkey_bytes =
+            hex::decode(parts[1]).map_err(|_| anyhow::anyhow!("invalid pubkey in a-tag"))?;
+        if target_pubkey_bytes != actor_bytes {
+            return Err(anyhow::anyhow!("must be event author"));
+        }
+        return Ok(());
     }
 
     for target_id in target_ids {
@@ -1245,13 +1261,81 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
 // handle_reaction() removed — kind:7 reaction dedup and DB writes are now
 // handled inline in ingest_event() before storage (see ingest.rs step 20a).
 
+/// Handle NIP-09 deletion via `a` tag (addressable/parameterized-replaceable events).
+/// Parses "kind:pubkey:d-tag" and deletes the corresponding DB record.
+async fn handle_a_tag_deletion(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
+    let a_value = event
+        .tags
+        .iter()
+        .find(|t| t.kind().to_string() == "a")
+        .and_then(|t| t.content().map(|s| s.to_string()))
+        .ok_or_else(|| anyhow::anyhow!("missing a tag for addressable deletion"))?;
+
+    let parts: Vec<&str> = a_value.splitn(3, ':').collect();
+    if parts.len() < 3 {
+        return Err(anyhow::anyhow!("invalid a-tag format: {a_value}"));
+    }
+    let kind_num: u32 = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid kind in a-tag"))?;
+    let pubkey_hex = parts[1];
+    let d_tag = parts[2];
+
+    match kind_num {
+        sprout_core::kind::KIND_WORKFLOW_DEF => {
+            // Try UUID first (workflow_id); fall back to name-based lookup.
+            if let Ok(wf_id) = uuid::Uuid::parse_str(d_tag) {
+                state
+                    .db
+                    .delete_workflow(wf_id)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to delete workflow {wf_id}: {e}"))?;
+                tracing::info!(workflow_id = %wf_id, "Workflow deleted via NIP-09 a-tag (UUID)");
+            } else {
+                // Name-based lookup
+                let owner_bytes = hex::decode(pubkey_hex).unwrap_or_default();
+                match state
+                    .db
+                    .find_workflow_by_owner_and_name(&owner_bytes, d_tag)
+                    .await
+                {
+                    Ok(Some(wf)) => {
+                        state.db.delete_workflow(wf.id).await.map_err(|e| {
+                            anyhow::anyhow!("failed to delete workflow {}: {e}", wf.id)
+                        })?;
+                        tracing::info!(workflow_id = %wf.id, name = d_tag, "Workflow deleted via NIP-09 a-tag (name)");
+                    }
+                    Ok(None) => {
+                        tracing::warn!(
+                            "NIP-09 a-tag deletion: no workflow '{d_tag}' found for owner"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("NIP-09 a-tag deletion: DB lookup failed: {e}");
+                    }
+                }
+            }
+        }
+        _ => {
+            tracing::debug!(
+                kind = kind_num,
+                d_tag = d_tag,
+                "NIP-09 a-tag deletion for unhandled kind — no side effect"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_standard_deletion_event(
     event: &Event,
     state: &Arc<AppState>,
 ) -> anyhow::Result<()> {
     let target_ids = extract_target_event_ids(event);
     if target_ids.is_empty() {
-        return Err(anyhow::anyhow!("missing e tag for target event"));
+        // NIP-09 a-tag deletion path for addressable events
+        return handle_a_tag_deletion(event, state).await;
     }
 
     for target_id in target_ids {

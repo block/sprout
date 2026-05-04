@@ -1129,11 +1129,18 @@ pub async fn ingest_event(
     }
 
     // ── 12. Single-target enforcement (kind:9005, kind:5) ────────────────
+    // NIP-09: kind:5 may reference targets via `e` tag (regular events) OR
+    // `a` tag (addressable/parameterized-replaceable events like kind:30620).
     if kind_u32 == KIND_NIP29_DELETE_EVENT || kind_u32 == KIND_DELETION {
         let e_count = count_e_tags(&event);
-        if e_count != 1 {
+        let a_count = event
+            .tags
+            .iter()
+            .filter(|t| t.kind().to_string() == "a")
+            .count();
+        if (e_count + a_count) != 1 {
             return Err(IngestError::Rejected(format!(
-                "invalid: deletion events must reference exactly one target (got {e_count})"
+                "invalid: deletion events must reference exactly one target via e or a tag (got e={e_count}, a={a_count})"
             )));
         }
     }
