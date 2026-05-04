@@ -1,9 +1,9 @@
 use nostr::{nips::nip44, EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp, ToBech32};
-use tauri::Manager;
 use nostr_compat::{
     Event as CompatEvent, JsonUtil as CompatJsonUtil, Keys as CompatKeys,
     PublicKey as CompatPublicKey,
 };
+use tauri::Manager;
 use tauri::State;
 
 use crate::{
@@ -186,10 +186,7 @@ pub fn import_identity(
         bech32
     };
 
-    eprintln!(
-        "sprout-desktop: imported identity pubkey {}",
-        pubkey_hex
-    );
+    eprintln!("sprout-desktop: imported identity pubkey {}", pubkey_hex);
 
     Ok(IdentityInfo {
         pubkey: pubkey_hex,

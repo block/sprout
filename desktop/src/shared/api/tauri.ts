@@ -471,10 +471,7 @@ export async function getNsec(): Promise<string> {
 
 export async function importIdentity(nsec: string): Promise<Identity> {
   const raw = await invokeTauri<RawIdentity>("import_identity", { nsec });
-  return {
-    pubkey: raw.pubkey,
-    displayName: raw.display_name,
-  };
+  return { pubkey: raw.pubkey, displayName: raw.display_name };
 }
 
 export async function getProfile(): Promise<Profile> {
