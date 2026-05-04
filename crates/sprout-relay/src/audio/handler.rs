@@ -361,7 +361,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
         let _ = ws_send
             .send(WsMessage::Text(
-                serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                serde_json::json!({"type": "error", "message": "restricted: agent authentication failed"})
                     .to_string()
                     .into(),
             ))

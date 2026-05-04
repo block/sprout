@@ -4,7 +4,7 @@
 //! carries a valid NIP-OA `auth` tag whose owner is an active member.
 
 use nostr::PublicKey;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::state::AppState;
 
@@ -37,7 +37,10 @@ pub fn extract_single_auth_tag(tags: &[nostr::Tag]) -> Result<Option<&nostr::Tag
     match auth_tags.len() {
         0 => Ok(None),
         1 => Ok(Some(auth_tags[0])),
-        _ => Err("restricted: multiple auth tags present".to_string()),
+        _ => {
+            warn!("NIP-AA: multiple auth tags present in event");
+            Err("restricted: agent authentication failed".to_string())
+        }
     }
 }
 
@@ -58,10 +61,11 @@ fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
-            return Err(format!(
-                "restricted: owner pubkey must be 64 lowercase hex chars, got {:?}",
-                owner_hex
-            ));
+            warn!(
+                owner_hex = %owner_hex,
+                "NIP-AA: owner pubkey must be 64 lowercase hex chars"
+            );
+            return Err("invalid: malformed agent credential".to_string());
         }
         let sig_hex = &tag_slice[3];
         if sig_hex.len() != 128
@@ -69,10 +73,11 @@ fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         {
-            return Err(format!(
-                "restricted: signature must be 128 lowercase hex chars, got length {}",
-                sig_hex.len()
-            ));
+            warn!(
+                sig_len = sig_hex.len(),
+                "NIP-AA: signature must be 128 lowercase hex chars"
+            );
+            return Err("invalid: malformed agent credential".to_string());
         }
     }
     Ok(())
@@ -102,17 +107,17 @@ fn validate_auth_tag_hex(auth_tag: &nostr::Tag) -> Result<(), String> {
 /// | Condition | Return value | Reason prefix |
 /// |-----------|-------------|---------------|
 /// | No `auth` tag | `Ok(None)` | — (not an agent) |
-/// | Multiple `auth` tags | `Err` | `"restricted: multiple auth tags present"` |
-/// | Owner pubkey not 64-char lowercase hex | `Err` | `"restricted: owner pubkey must be 64 lowercase hex chars"` |
-/// | Signature not 128-char lowercase hex | `Err` | `"restricted: signature must be 128 lowercase hex chars"` |
-/// | NIP-OA signature verification fails | `Err` | `"restricted: invalid auth tag: …"` |
-/// | Self-attestation (agent == owner) | `Err` | `"restricted: invalid auth tag: …"` (from sprout-sdk) |
-/// | `kind=` condition present | `Err` | `"restricted: unsupported condition for NIP-AA: kind= restrictions are not yet enforced per-action…"` |
-/// | `created_at<T` condition not satisfied | `Err` | `"restricted: created_at condition not satisfied: …"` |
-/// | `created_at>T` condition not satisfied | `Err` | `"restricted: created_at condition not satisfied: …"` |
-/// | Malformed `created_at` threshold | `Err` | `"restricted: malformed created_at< condition: …"` |
-/// | Owner not an active relay member | `Err` | `"restricted: owner is not a relay member"` |
-/// | DB membership check fails | `Err` | `"restricted: membership check failed"` |
+/// | Multiple `auth` tags | `Err` | `"restricted: agent authentication failed"` |
+/// | Owner pubkey not 64-char lowercase hex | `Err` | `"invalid: malformed agent credential"` |
+/// | Signature not 128-char lowercase hex | `Err` | `"invalid: malformed agent credential"` |
+/// | NIP-OA signature verification fails | `Err` | `"restricted: agent authentication failed"` |
+/// | Self-attestation (agent == owner) | `Err` | `"restricted: agent authentication failed"` |
+/// | `kind=` condition present | `Err` | `"restricted: agent authentication failed"` |
+/// | `created_at<T` condition not satisfied | `Err` | `"restricted: agent authentication failed"` |
+/// | `created_at>T` condition not satisfied | `Err` | `"restricted: agent authentication failed"` |
+/// | Malformed `created_at` threshold | `Err` | `"restricted: agent authentication failed"` |
+/// | Owner not an active relay member | `Err` | `"restricted: agent authentication failed"` |
+/// | DB membership check fails | `Err` | `"restricted: agent authentication failed"` |
 pub async fn verify_nip_aa(
     state: &AppState,
     agent_pubkey: &PublicKey,
@@ -127,8 +132,10 @@ pub async fn verify_nip_aa(
     // Step 4: Pre-validate lowercase hex before the crypto call.
     validate_auth_tag_hex(auth_tag)?;
 
-    let tag_json = serde_json::to_string(&auth_tag.as_slice())
-        .map_err(|e| format!("restricted: failed to serialize auth tag: {e}"))?;
+    let tag_json = serde_json::to_string(&auth_tag.as_slice()).map_err(|e| {
+        warn!(error = %e, "NIP-AA: failed to serialize auth tag");
+        "invalid: malformed agent credential".to_string()
+    })?;
 
     // Step 4: Verify the auth tag — CPU-intensive, run on blocking thread pool.
     let agent_pk_owned = *agent_pubkey;
@@ -140,11 +147,12 @@ pub async fn verify_nip_aa(
     {
         Ok(Ok(pk)) => pk,
         Ok(Err(e)) => {
-            return Err(format!("restricted: invalid auth tag: {e}"));
+            warn!(error = %e, "NIP-AA: auth tag verification failed");
+            return Err("restricted: agent authentication failed".to_string());
         }
         Err(e) => {
-            tracing::warn!(error = %e, "NIP-AA: verify_auth_tag task panicked");
-            return Err("restricted: verification failed".to_string());
+            warn!(error = %e, "NIP-AA: verify_auth_tag task panicked");
+            return Err("restricted: agent authentication failed".to_string());
         }
     };
 
@@ -154,7 +162,8 @@ pub async fn verify_nip_aa(
         let conditions = &tag_slice[2];
         if !conditions.is_empty() {
             if let Err(reason) = evaluate_created_at_conditions(conditions, event_created_at) {
-                return Err(format!("restricted: {reason}"));
+                warn!(reason = %reason, "NIP-AA: created_at condition check failed");
+                return Err("restricted: agent authentication failed".to_string());
             }
             extract_session_expiry(conditions)
         } else {
@@ -175,12 +184,17 @@ pub async fn verify_nip_aa(
                 error = %e,
                 "NIP-AA: owner membership DB check failed"
             );
-            return Err("restricted: membership check failed".to_string());
+            return Err("restricted: agent authentication failed".to_string());
         }
     };
 
     if !is_member {
-        return Err("restricted: owner is not a relay member".to_string());
+        warn!(
+            agent = %agent_pubkey.to_hex(),
+            owner = %owner_hex,
+            "NIP-AA: owner is not a relay member"
+        );
+        return Err("restricted: agent authentication failed".to_string());
     }
 
     debug!(
@@ -402,7 +416,7 @@ mod tests {
             result.is_err(),
             "expected Err for multiple auth tags, got {result:?}"
         );
-        assert!(result.unwrap_err().contains("multiple auth tags"));
+        assert!(result.unwrap_err().contains("agent authentication failed"));
     }
 
     #[test]
@@ -446,7 +460,7 @@ mod tests {
         let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
         let err = validate_auth_tag_hex(&tag).unwrap_err();
         assert!(
-            err.contains("owner pubkey must be 64 lowercase hex chars"),
+            err.contains("malformed agent credential"),
             "unexpected error: {err}"
         );
     }
@@ -474,7 +488,7 @@ mod tests {
         let tag = nostr::Tag::parse(&["auth", &owner, "", &sig]).expect("valid tag");
         let err = validate_auth_tag_hex(&tag).unwrap_err();
         assert!(
-            err.contains("signature must be 128 lowercase hex chars"),
+            err.contains("malformed agent credential"),
             "unexpected error: {err}"
         );
     }
