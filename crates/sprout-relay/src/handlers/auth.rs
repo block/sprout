@@ -125,6 +125,37 @@ fn verify_api_token_nip42_binding(
 pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state: Arc<AppState>) {
     let event_id_hex_early = event.id.to_hex();
 
+    // Rate-limit ALL auth attempts (initial and re-auth) to 500ms per connection.
+    // Acquire the sync mutex briefly to read/update the timestamp, then drop it
+    // before any await so we never hold a sync lock across an await point.
+    {
+        const AUTH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+        let sleep_for = {
+            let mut last = match conn.last_auth_at.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("last_auth_at mutex poisoned — recovering");
+                    poisoned.into_inner()
+                }
+            };
+            let remaining = last
+                .map(|t| {
+                    let elapsed = t.elapsed();
+                    if elapsed < AUTH_MIN_INTERVAL {
+                        Some(AUTH_MIN_INTERVAL - elapsed)
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
+            *last = Some(std::time::Instant::now());
+            remaining
+        };
+        if let Some(delay) = sleep_for {
+            tokio::time::sleep(delay).await;
+        }
+    }
+
     // Extract challenge, conn_id, and (for re-auth) the previous AuthContext.
     // NIP-AA §6: a failed re-auth must not invalidate the existing identity —
     // we save prev_auth_ctx and restore it on failure instead of going to Failed.
