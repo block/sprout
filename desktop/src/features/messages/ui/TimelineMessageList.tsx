@@ -52,27 +52,32 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchMatchingMessageIds,
   searchQuery,
 }: TimelineMessageListProps) {
-  const elements: React.ReactNode[] = [];
   const entries = React.useMemo(
     () => buildMainTimelineEntries(messages),
     [messages],
   );
+  const dayGroups: Array<{
+    key: string;
+    label: string;
+    elements: React.ReactNode[];
+  }> = [];
+  let currentDayGroup: (typeof dayGroups)[number] | null = null;
 
   for (let i = 0; i < entries.length; i++) {
     const { message, summary } = entries[i];
     const prev = i > 0 ? entries[i - 1]?.message : null;
 
     if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
-      elements.push(
-        <DayDivider
-          key={`day-${message.createdAt}`}
-          label={formatDayHeading(message.createdAt)}
-        />,
-      );
+      currentDayGroup = {
+        key: `day-${message.createdAt}`,
+        label: formatDayHeading(message.createdAt),
+        elements: [],
+      };
+      dayGroups.push(currentDayGroup);
     }
 
     if (message.kind === KIND_SYSTEM_MESSAGE) {
-      elements.push(
+      currentDayGroup?.elements.push(
         <SystemMessageRow
           key={message.id}
           message={message}
@@ -83,7 +88,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
         />,
       );
     } else if (summary && onReply) {
-      elements.push(
+      currentDayGroup?.elements.push(
         <div key={message.id} className="flex flex-col gap-0">
           <MessageRow
             activeReplyTargetId={activeReplyTargetId}
@@ -115,7 +120,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       const isSearchMatch = searchMatchingMessageIds?.has(message.id) ?? false;
       const isSearchActive = message.id === searchActiveMessageId;
 
-      elements.push(
+      currentDayGroup?.elements.push(
         <MessageRow
           key={message.id}
           activeReplyTargetId={activeReplyTargetId}
@@ -140,5 +145,10 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
     }
   }
 
-  return elements;
+  return dayGroups.map((group) => (
+    <section className="flex flex-col gap-2" key={group.key}>
+      <DayDivider label={group.label} />
+      {group.elements}
+    </section>
+  ));
 });
