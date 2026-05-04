@@ -177,16 +177,19 @@ pub async fn verify_nip_aa(
 
 /// Evaluate `created_at<t` and `created_at>t` conditions against an event's created_at.
 /// Returns Ok(()) if all conditions pass, Err(reason) if any fail.
-/// `kind=` conditions are intentionally skipped per NIP-AA spec.
+/// `kind=` conditions are intentionally skipped per NIP-AA spec — they are valid
+/// but not evaluated at connection admission.
 ///
-/// **Precondition**: This function is only called after `verify_auth_tag` has validated
-/// the conditions string. Empty clauses and unknown clause types are unreachable in
-/// production — they are handled defensively (skipped) rather than rejected, because
-/// the upstream SDK validation is the authoritative guard.
+/// Per NIP-OA spec: verifiers MUST reject an auth tag that contains an unsupported
+/// clause. Empty clauses (from leading/trailing `&`) and unknown clause types are
+/// therefore rejected with an error.
 fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Result<(), String> {
+    if conditions.is_empty() {
+        return Ok(());
+    }
     for clause in conditions.split('&') {
         if clause.is_empty() {
-            continue;
+            return Err("restricted: malformed conditions string (empty clause)".to_string());
         }
         if let Some(val_str) = clause.strip_prefix("created_at<") {
             let threshold: u64 = val_str
@@ -206,8 +209,13 @@ fn evaluate_created_at_conditions(conditions: &str, event_created_at: u64) -> Re
                     "created_at condition not satisfied: {event_created_at} <= {threshold}"
                 ));
             }
+        } else if clause.starts_with("kind=") {
+            // kind= clauses are intentionally skipped at admission per NIP-AA §Kind Conditions
+        } else {
+            return Err(format!(
+                "restricted: unsupported condition clause: {clause}"
+            ));
         }
-        // kind= clauses are intentionally skipped at admission per NIP-AA §Kind Conditions
     }
     Ok(())
 }
@@ -453,21 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn empty_clause_from_leading_ampersand_is_skipped() {
-        // A leading & produces an empty first clause — must not error.
-        assert!(evaluate_created_at_conditions("&created_at>0", 1000).is_ok());
+    fn empty_clause_from_leading_ampersand_is_rejected() {
+        // A leading & produces an empty first clause — must be rejected per NIP-OA spec.
+        assert!(evaluate_created_at_conditions("&created_at>0", 1000).is_err());
     }
 
     #[test]
-    fn empty_clause_from_trailing_ampersand_is_skipped() {
-        // A trailing & produces an empty last clause — must not error.
-        assert!(evaluate_created_at_conditions("created_at>0&", 1000).is_ok());
+    fn empty_clause_from_trailing_ampersand_is_rejected() {
+        // A trailing & produces an empty last clause — must be rejected per NIP-OA spec.
+        assert!(evaluate_created_at_conditions("created_at>0&", 1000).is_err());
     }
 
     #[test]
-    fn unknown_clause_type_is_skipped() {
-        // Unknown condition types (future extensions) must be ignored, not rejected.
-        assert!(evaluate_created_at_conditions("foo=bar&created_at>0", 1000).is_ok());
+    fn unknown_clause_type_is_rejected() {
+        // Unknown condition types must be rejected — NIP-OA: verifiers MUST reject
+        // auth tags containing unsupported clauses.
+        assert!(evaluate_created_at_conditions("foo=bar&created_at>0", 1000).is_err());
     }
 
     // ── self-attestation rejection ────────────────────────────────────────────

@@ -125,6 +125,20 @@ impl ConnectionManager {
         }
     }
 
+    /// Clear the owner pubkey for a connection that has re-authenticated as a
+    /// direct member (API token or Okta JWT without NIP-AA).
+    ///
+    /// Removes the connection from the `owner_to_conns` reverse index so that
+    /// `connection_ids_for_owner` no longer returns stale results for the old
+    /// NIP-AA owner.
+    pub fn clear_owner_pubkey(&self, conn_id: Uuid) {
+        if let Some(entry) = self.connections.get(&conn_id) {
+            if let Ok(mut slot) = entry.owner_pubkey.write() {
+                *slot = None;
+            }
+        }
+    }
+
     /// Return all live connection IDs whose NIP-AA owner matches `owner_bytes`.
     pub fn connection_ids_for_owner(&self, owner_bytes: &[u8]) -> Vec<Uuid> {
         self.connections
@@ -717,6 +731,29 @@ mod tests {
         assert!(
             mgr.connection_ids_for_owner(&owner).is_empty(),
             "deregistered connection must not appear in owner index"
+        );
+    }
+
+    /// Verify that `clear_owner_pubkey` removes the connection from the owner
+    /// index — models re-auth from NIP-AA virtual member to direct member.
+    #[tokio::test]
+    async fn owner_pubkey_cleared_on_reauth_to_direct_member() {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        mgr.register(conn_id, tx, cancel, bp, subscriptions);
+
+        let owner = vec![0xDDu8; 32];
+        mgr.set_owner_pubkey(conn_id, owner.clone());
+        assert_eq!(mgr.connection_ids_for_owner(&owner), vec![conn_id]);
+
+        mgr.clear_owner_pubkey(conn_id);
+        assert!(
+            mgr.connection_ids_for_owner(&owner).is_empty(),
+            "owner index must be empty after clear_owner_pubkey"
         );
     }
 

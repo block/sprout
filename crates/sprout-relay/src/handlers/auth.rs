@@ -386,6 +386,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         state
                             .conn_manager
                             .set_owner_pubkey(conn_id, owner.serialize().to_vec());
+                    } else {
+                        // Direct member re-auth: clear any stale NIP-AA owner from a
+                        // previous virtual-member session on this connection.
+                        state.conn_manager.clear_owner_pubkey(conn_id);
                     }
                     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 }
@@ -634,6 +638,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 state
                     .conn_manager
                     .set_owner_pubkey(conn_id, owner.serialize().to_vec());
+            } else {
+                // Direct member re-auth: clear any stale NIP-AA owner from a
+                // previous virtual-member session on this connection.
+                state.conn_manager.clear_owner_pubkey(conn_id);
             }
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
