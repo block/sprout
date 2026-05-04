@@ -4,6 +4,11 @@
 //! [`enforce_relay_membership`] is the single gate — called at every authenticated
 //! entry point. When `require_relay_membership` is disabled, it's a no-op.
 //!
+//! When `allow_nip_oa_auth` is enabled and the agent is not a direct member,
+//! the `X-Auth-Tag` header is checked: if it contains a valid NIP-OA owner
+//! attestation for the agent's pubkey, and the attesting owner IS a relay
+//! member, access is granted.
+//!
 //! ## Routes
 //! - `GET /api/relay/members`    — list all relay members (any authenticated member)
 //! - `GET /api/relay/members/me` — get own membership record (or 404)
@@ -17,22 +22,28 @@ use axum::{
 };
 
 use sprout_auth::Scope;
+use sprout_sdk::nip_oa;
+use tracing::debug;
 
 use super::{extract_auth_context, extract_auth_context_inner, internal_error};
 use crate::state::AppState;
 
 // ── Enforcement ───────────────────────────────────────────────────────────────
 
-/// Enforce relay membership for a pubkey.
+/// Enforce relay membership for a pubkey, with optional NIP-OA fallback.
 ///
 /// - If `config.require_relay_membership` is false → always Ok (no-op).
-/// - If enabled → checks `relay_members` table. Returns 403 if not a member.
+/// - If the pubkey is a direct relay member → Ok.
+/// - If `config.allow_nip_oa_auth` is true and `auth_tag_header` contains a
+///   valid NIP-OA tag proving an owner who IS a member → Ok.
+/// - Otherwise → 403.
 ///
 /// `pubkey_bytes` is the 32-byte compressed pubkey; it is hex-encoded before
 /// the DB lookup (the `relay_members` table stores 64-char hex strings).
 pub async fn enforce_relay_membership(
     state: &AppState,
     pubkey_bytes: &[u8],
+    auth_tag_header: Option<&str>,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if !state.config.require_relay_membership {
         return Ok(());
@@ -46,16 +57,51 @@ pub async fn enforce_relay_membership(
         .map_err(|e| internal_error(&format!("relay membership check failed: {e}")))?;
 
     if is_member {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "relay_membership_required",
-                "message": "You must be a relay member to access this relay"
-            })),
-        ))
+        return Ok(());
     }
+
+    // ── NIP-OA fallback: check owner attestation ──────────────────────────
+    if state.config.allow_nip_oa_auth {
+        if let Some(tag_json) = auth_tag_header {
+            let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes).map_err(|e| {
+                internal_error(&format!("invalid agent pubkey for NIP-OA check: {e}"))
+            })?;
+
+            match nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
+                Ok(owner_pubkey) => {
+                    let owner_hex = owner_pubkey.to_hex();
+                    let owner_is_member =
+                        state.db.is_relay_member(&owner_hex).await.map_err(|e| {
+                            internal_error(&format!("relay membership check (owner) failed: {e}"))
+                        })?;
+
+                    if owner_is_member {
+                        debug!(
+                            agent = %pubkey_hex,
+                            owner = %owner_hex,
+                            "REST NIP-OA membership granted via owner"
+                        );
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        agent = %pubkey_hex,
+                        error = %e,
+                        "REST NIP-OA auth tag verification failed"
+                    );
+                }
+            }
+        }
+    }
+
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "relay_membership_required",
+            "message": "You must be a relay member to access this relay"
+        })),
+    ))
 }
 
 // ── REST read handlers ────────────────────────────────────────────────────────

@@ -3960,6 +3960,7 @@ dependencies = [
  "sprout-db",
  "sprout-media",
  "sprout-pubsub",
+ "sprout-sdk",
  "sprout-search",
  "sprout-workflow",
  "sqlx",

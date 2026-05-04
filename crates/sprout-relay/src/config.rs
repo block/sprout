@@ -74,6 +74,15 @@ pub struct Config {
     /// with the `owner` role on first startup.
     pub relay_owner_pubkey: Option<String>,
 
+    /// Allow NIP-OA owner attestation for relay membership.
+    ///
+    /// When `true` and `require_relay_membership` is also `true`, agents
+    /// bearing a valid NIP-OA `auth` tag can authenticate by proving their
+    /// owner is a relay member. The agent gets session-scoped access.
+    ///
+    /// Default: `false`. Set via `SPROUT_ALLOW_NIP_OA_AUTH=true`.
+    pub allow_nip_oa_auth: bool,
+
     /// Media storage configuration (S3/MinIO).
     pub media: sprout_media::MediaConfig,
 
@@ -146,6 +155,10 @@ impl Config {
             .unwrap_or(false);
 
         let require_relay_membership = std::env::var("SPROUT_REQUIRE_RELAY_MEMBERSHIP")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        let allow_nip_oa_auth = std::env::var("SPROUT_ALLOW_NIP_OA_AUTH")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
@@ -322,6 +335,7 @@ impl Config {
             pubkey_allowlist_enabled,
             require_relay_membership,
             relay_owner_pubkey,
+            allow_nip_oa_auth,
             media,
             ephemeral_ttl_override,
             git_repo_path,
@@ -362,6 +376,10 @@ mod tests {
         assert!(
             config.relay_owner_pubkey.is_none(),
             "relay_owner_pubkey should default to None"
+        );
+        assert!(
+            !config.allow_nip_oa_auth,
+            "allow_nip_oa_auth should default to false"
         );
     }
 

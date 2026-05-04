@@ -157,8 +157,33 @@ pub(crate) async fn extract_auth_context(
     state: &AppState,
 ) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
     let ctx = extract_auth_context_inner(headers, state).await?;
-    relay_members::enforce_relay_membership(state, &ctx.pubkey_bytes).await?;
+    let auth_tag = extract_single_auth_tag(headers)?;
+    relay_members::enforce_relay_membership(state, &ctx.pubkey_bytes, auth_tag).await?;
     Ok(ctx)
+}
+
+/// Extract the `X-Auth-Tag` header, rejecting requests with multiple values.
+///
+/// Mirrors the WS path's "exactly 0 or 1 auth tags" rule — duplicates are
+/// rejected rather than silently using the first value.
+pub(crate) fn extract_single_auth_tag(
+    headers: &HeaderMap,
+) -> Result<Option<&str>, (StatusCode, Json<serde_json::Value>)> {
+    let mut iter = headers.get_all("x-auth-tag").iter();
+    let first = match iter.next() {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    if iter.next().is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_auth_tag",
+                "message": "multiple X-Auth-Tag headers not allowed"
+            })),
+        ));
+    }
+    Ok(first.to_str().ok())
 }
 
 /// Inner auth extraction — no relay membership check.
