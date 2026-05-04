@@ -139,6 +139,17 @@ impl ConnectionManager {
         }
     }
 
+    /// Forcibly close a connection by cancelling its token.
+    /// Used for owner-scoped termination when a relay member is removed.
+    pub fn close_connection(&self, conn_id: Uuid) -> bool {
+        if let Some(entry) = self.connections.get(&conn_id) {
+            entry.cancel.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Return all live connection IDs whose NIP-AA owner matches `owner_bytes`.
     pub fn connection_ids_for_owner(&self, owner_bytes: &[u8]) -> Vec<Uuid> {
         self.connections

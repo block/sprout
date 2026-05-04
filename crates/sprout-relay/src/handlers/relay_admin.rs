@@ -210,20 +210,20 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
                 "relay member removed"
             );
 
-            // TODO(nip-aa): Forcibly disconnect NIP-AA agent connections when owner is removed.
-            // `connection_ids_for_owner` can enumerate them, but ConnectionManager lacks a
-            // close/disconnect method. The cancel token is stored in the private `ConnEntry`
-            // struct and is not accessible from outside `state.rs`. Need to add a public
-            // `close_connection(conn_id: Uuid)` method to ConnectionManager that calls
-            // `conn.cancel.cancel()` — mirroring the slow-client path in `send_to`.
+            // NIP-AA: disconnect agent connections owned by the removed member.
+            // Agents inherit access from their owner — when the owner loses membership,
+            // their agents must be disconnected immediately.
             {
                 let target_bytes = hex::decode(&target_hex).unwrap_or_default();
                 let agent_conn_ids = state.conn_manager.connection_ids_for_owner(&target_bytes);
+                for conn_id in &agent_conn_ids {
+                    state.conn_manager.close_connection(*conn_id);
+                }
                 if !agent_conn_ids.is_empty() {
-                    tracing::warn!(
+                    tracing::info!(
                         owner = %target_hex,
-                        orphaned_agents = agent_conn_ids.len(),
-                        "owner removed but NIP-AA agent connections not yet terminated (not implemented)"
+                        disconnected = agent_conn_ids.len(),
+                        "disconnected NIP-AA agent connections after owner removal"
                     );
                 }
             }

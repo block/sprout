@@ -118,27 +118,6 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         }
     };
 
-    // Extract NIP-OA auth tag for NIP-AA before the event is consumed.
-    // Delegates to the canonical extract_single_auth_tag from nip_aa.rs:
-    //   Ok(None)     → zero auth tags — not a NIP-AA attempt
-    //   Ok(Some(t))  → exactly one auth tag — serialize to JSON for later use
-    //   Err(reason)  → multiple auth tags — malformed, reject immediately
-    let auth_tag_json =
-        match crate::handlers::nip_aa::extract_single_auth_tag(auth_msg.event.tags.as_slice()) {
-            Ok(None) => None,
-            Ok(Some(tag)) => serde_json::to_string(&tag.as_slice()).ok(),
-            Err(reason) => {
-                warn!(channel_id = %channel_id, "audio: multiple auth tags in NIP-42 event");
-                let _ = ws_send
-                    .send(WsMessage::Text(
-                        serde_json::json!({"type": "error", "message": reason})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await;
-                return;
-            }
-        };
     let event_created_at = auth_msg.event.created_at.as_u64();
 
     // Extract auth_token tag before the event is consumed — API tokens and
@@ -154,11 +133,14 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
 
     let relay_url = state.config.relay_url.clone();
 
-    // ── NIP-AA agent auth path ───────────────────────────────────────────────
-    // If there is no auth_token but there IS a NIP-OA auth tag, this *might*
-    // be a NIP-AA agent. Verify NIP-42 binding first, then check relay
-    // membership to confirm it is a virtual member — not just a direct member
-    // with a dummy auth tag trying to bypass verify_auth_event.
+    // ── Auth dispatch ────────────────────────────────────────────────────────
+    // Ordering mirrors the main WS auth handler (auth.rs):
+    //   1. Check direct relay membership first.
+    //   2. Only if NOT a direct member, attempt NIP-AA (which includes auth tag
+    //      extraction and validation). This ensures a direct member who happens
+    //      to have multiple `auth` tags (e.g. misconfigured client) is never
+    //      incorrectly rejected — they're a legitimate member regardless.
+    //
     // Track whether this pubkey was granted access via NIP-AA virtual membership.
     // Virtual members already passed the relay membership check inside verify_nip_aa
     // (Step 5), so the direct-only membership gate below must be skipped for them.
@@ -168,43 +150,9 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         nostr::PublicKey,
         bool,
         Option<nostr::PublicKey>,
-    ) = if audio_auth_token.is_none() && auth_tag_json.is_some() {
-        let event_for_verify = auth_msg.event.clone();
-        let challenge_owned = challenge.clone();
-        let relay_owned = relay_url.clone();
-        match tokio::task::spawn_blocking(move || {
-            sprout_auth::verify_nip42_event(&event_for_verify, &challenge_owned, &relay_owned)
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                warn!(channel_id = %channel_id, "audio NIP-AA: NIP-42 binding failed: {e}");
-                let _ = ws_send
-                    .send(WsMessage::Text(
-                        serde_json::json!({"type":"error","message":"auth failed"})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await;
-                return;
-            }
-            Err(e) => {
-                warn!(channel_id = %channel_id, "audio NIP-AA: NIP-42 verify task panicked: {e}");
-                let _ = ws_send
-                    .send(WsMessage::Text(
-                        serde_json::json!({"type":"error","message":"auth failed"})
-                            .to_string()
-                            .into(),
-                    ))
-                    .await;
-                return;
-            }
-        }
-
-        // NIP-AA Step 2: check direct membership first. If the agent is already a
-        // direct member, skip NIP-AA entirely and fall through to verify_auth_event.
-        // This matches the main WS auth handler's ordering.
+    ) = if audio_auth_token.is_none() {
+        // No API token — could be a direct member (with or without auth tags)
+        // or a NIP-AA agent. Check direct membership first.
         let candidate_pubkey = auth_msg.event.pubkey;
         let candidate_pubkey_hex = candidate_pubkey.to_hex();
         let is_direct_member = if state.config.require_relay_membership {
@@ -229,8 +177,9 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         };
 
         if is_direct_member {
-            // Direct member with an auth tag — go through verify_auth_event to
-            // enforce token requirements (same as the Ok(None) branch below).
+            // Direct member — go through verify_auth_event to enforce token
+            // requirements. Auth tag count is irrelevant here; verify_auth_event
+            // handles the event normally regardless of extra tags.
             let auth_ctx = match state
                 .auth
                 .verify_auth_event(auth_msg.event, &challenge, &relay_url)
@@ -252,60 +201,21 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
             // Direct member — not a NIP-AA virtual member.
             (auth_ctx.pubkey, false, None)
         } else {
-            // Not a direct member — attempt NIP-AA (Steps 3-5).
-            let event_tags_slice: Vec<nostr::Tag> = auth_msg.event.tags.clone().to_vec();
-            let nip_aa_result = crate::handlers::nip_aa::verify_nip_aa(
-                &state,
-                &candidate_pubkey,
-                &event_tags_slice,
-                event_created_at,
-            )
-            .await;
-
-            match nip_aa_result {
-                Ok(Some(result)) => {
-                    // NIP-AA virtual member — NIP-42 binding already verified above.
-                    // verify_nip_aa already confirmed the owner is an active relay member
-                    // (Step 5), so the direct membership gate below must be skipped.
-                    //
-                    // owner_pubkey is persisted in AudioPeer for the full session lifetime
-                    // for audit, quota aggregation, and future owner-scoped
-                    // enumeration/termination (NIP-AA §6).
-                    let nip_aa_owner = result.owner_pubkey;
-                    tracing::info!(
-                        channel_id = %channel_id,
-                        agent = %candidate_pubkey.to_hex(),
-                        owner = %nip_aa_owner.to_hex(),
-                        "NIP-AA: audio virtual membership granted"
-                    );
-                    (candidate_pubkey, true, Some(nip_aa_owner))
-                }
-                Ok(None) => {
-                    // No auth tag (or direct member) — must go through verify_auth_event
-                    // to enforce token requirements.
-                    let auth_ctx = match state
-                        .auth
-                        .verify_auth_event(auth_msg.event, &challenge, &relay_url)
-                        .await
-                    {
-                        Ok(ctx) => ctx,
-                        Err(e) => {
-                            warn!(channel_id = %channel_id, "audio auth failed for direct member: {e}");
-                            let _ = ws_send
-                                .send(WsMessage::Text(
-                                    serde_json::json!({"type":"error","message":"auth failed"})
-                                        .to_string()
-                                        .into(),
-                                ))
-                                .await;
-                            return;
-                        }
-                    };
-                    (auth_ctx.pubkey, false, None)
-                }
+            // Not a direct member — attempt NIP-AA. Extract and validate the
+            // auth tag now (only for non-direct-member paths). Multiple auth
+            // tags are only rejected here, never for direct members.
+            //
+            // Delegates to the canonical extract_single_auth_tag from nip_aa.rs:
+            //   Ok(None)     → zero auth tags — not a NIP-AA attempt
+            //   Ok(Some(t))  → exactly one auth tag — proceed with NIP-AA
+            //   Err(reason)  → multiple auth tags — malformed, reject
+            let auth_tag_present = match crate::handlers::nip_aa::extract_single_auth_tag(
+                auth_msg.event.tags.as_slice(),
+            ) {
+                Ok(None) => false,
+                Ok(Some(_)) => true,
                 Err(reason) => {
-                    // Auth tag present but invalid, or owner not a member — deny.
-                    warn!(channel_id = %candidate_pubkey.to_hex(), reason = %reason, "audio NIP-AA: denied");
+                    warn!(channel_id = %channel_id, "audio: multiple auth tags in NIP-42 event");
                     let _ = ws_send
                         .send(WsMessage::Text(
                             serde_json::json!({"type": "error", "message": reason})
@@ -315,8 +225,133 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
                         .await;
                     return;
                 }
+            };
+
+            if auth_tag_present {
+                // NIP-AA path: verify NIP-42 binding first, then verify_nip_aa.
+                let event_for_verify = auth_msg.event.clone();
+                let challenge_owned = challenge.clone();
+                let relay_owned = relay_url.clone();
+                match tokio::task::spawn_blocking(move || {
+                    sprout_auth::verify_nip42_event(
+                        &event_for_verify,
+                        &challenge_owned,
+                        &relay_owned,
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        warn!(channel_id = %channel_id, "audio NIP-AA: NIP-42 binding failed: {e}");
+                        let _ = ws_send
+                            .send(WsMessage::Text(
+                                serde_json::json!({"type":"error","message":"auth failed"})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(channel_id = %channel_id, "audio NIP-AA: NIP-42 verify task panicked: {e}");
+                        let _ = ws_send
+                            .send(WsMessage::Text(
+                                serde_json::json!({"type":"error","message":"auth failed"})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        return;
+                    }
+                }
+
+                let event_tags_slice: Vec<nostr::Tag> = auth_msg.event.tags.clone().to_vec();
+                let nip_aa_result = crate::handlers::nip_aa::verify_nip_aa(
+                    &state,
+                    &candidate_pubkey,
+                    &event_tags_slice,
+                    event_created_at,
+                )
+                .await;
+
+                match nip_aa_result {
+                    Ok(Some(result)) => {
+                        // NIP-AA virtual member — NIP-42 binding already verified above.
+                        // verify_nip_aa already confirmed the owner is an active relay member
+                        // (Step 5), so the direct membership gate below must be skipped.
+                        //
+                        // owner_pubkey is persisted in AudioPeer for the full session lifetime
+                        // for audit, quota aggregation, and future owner-scoped
+                        // enumeration/termination (NIP-AA §6).
+                        let nip_aa_owner = result.owner_pubkey;
+                        tracing::info!(
+                            channel_id = %channel_id,
+                            agent = %candidate_pubkey.to_hex(),
+                            owner = %nip_aa_owner.to_hex(),
+                            "NIP-AA: audio virtual membership granted"
+                        );
+                        (candidate_pubkey, true, Some(nip_aa_owner))
+                    }
+                    Ok(None) => {
+                        // No auth tag — not a NIP-AA agent and not a direct member.
+                        // Fall through to verify_auth_event which will reject.
+                        let auth_ctx = match state
+                            .auth
+                            .verify_auth_event(auth_msg.event, &challenge, &relay_url)
+                            .await
+                        {
+                            Ok(ctx) => ctx,
+                            Err(e) => {
+                                warn!(channel_id = %channel_id, "audio auth failed (non-member): {e}");
+                                let _ = ws_send
+                                    .send(WsMessage::Text(
+                                        serde_json::json!({"type":"error","message":"auth failed"})
+                                            .to_string()
+                                            .into(),
+                                    ))
+                                    .await;
+                                return;
+                            }
+                        };
+                        (auth_ctx.pubkey, false, None)
+                    }
+                    Err(reason) => {
+                        // Auth tag present but invalid, or owner not a member — deny.
+                        warn!(channel_id = %candidate_pubkey.to_hex(), reason = %reason, "audio NIP-AA: denied");
+                        let _ = ws_send
+                            .send(WsMessage::Text(
+                                serde_json::json!({"type": "error", "message": reason})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                // No auth tag and not a direct member — verify_auth_event will reject.
+                let auth_ctx = match state
+                    .auth
+                    .verify_auth_event(auth_msg.event, &challenge, &relay_url)
+                    .await
+                {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        warn!(channel_id = %channel_id, "audio auth failed (non-member, no auth tag): {e}");
+                        let _ = ws_send
+                            .send(WsMessage::Text(
+                                serde_json::json!({"type":"error","message":"auth failed"})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await;
+                        return;
+                    }
+                };
+                (auth_ctx.pubkey, false, None)
             }
-        } // close else { // Not a direct member — attempt NIP-AA
+        }
     } else {
         // ── Standard auth path (Okta JWT / API token / pubkey-only) ─────────
         let auth_ctx = match state
