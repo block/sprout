@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useQueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { useCallback, useLayoutEffect } from "react";
+import { useCallback, useEffect, useLayoutEffect } from "react";
 
 import { router } from "@/app/router";
 import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
@@ -10,6 +10,7 @@ import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
+import { listenForDeepLinks } from "@/shared/deep-link";
 
 function AppLoadingGate() {
   return (
@@ -56,7 +57,15 @@ export function App() {
   }, []);
 
   const queryClient = useQueryClient();
-  const { activeWorkspace, reinitKey } = useWorkspaces();
+  const { activeWorkspace, reinitKey, addWorkspace, switchWorkspace } =
+    useWorkspaces();
+
+  useEffect(() => {
+    const unlisten = listenForDeepLinks({ addWorkspace, switchWorkspace });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [addWorkspace, switchWorkspace]);
   const workspace = useWorkspaceInit(activeWorkspace);
 
   // Composite key: changes when workspace ID changes OR when
