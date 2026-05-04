@@ -313,7 +313,7 @@ fn merge_mcp_servers(
 
     // Return in deterministic order (sorted by name)
     let mut servers: Vec<_> = by_name.into_values().collect();
-    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    servers.sort_by_key(|s| s.name.clone());
     servers
 }
 

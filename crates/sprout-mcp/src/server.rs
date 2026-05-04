@@ -1847,7 +1847,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
 
         match self.client.query(vec![filter]).await {
             Ok(mut events) => {
-                events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                events.sort_by_key(|e| std::cmp::Reverse(e.created_at));
                 let feed: Vec<serde_json::Value> = events
                     .iter()
                     .map(|e| {

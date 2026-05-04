@@ -138,7 +138,7 @@ fn compute_hmac(secret: &[u8], req: &HookCallbackRequest) -> Vec<u8> {
     // Deterministic ref update representation: sorted by ref_name.
     // Each ref is length-prefixed to prevent concatenation ambiguity.
     let mut refs_sorted: Vec<&HookRefUpdate> = req.ref_updates.iter().collect();
-    refs_sorted.sort_by(|a, b| a.ref_name.cmp(&b.ref_name));
+    refs_sorted.sort_by_key(|r| r.ref_name.clone());
     for r in &refs_sorted {
         mac.update(r.old_oid.as_bytes()); // Fixed 40 chars.
         mac.update(r.new_oid.as_bytes()); // Fixed 40 chars.
