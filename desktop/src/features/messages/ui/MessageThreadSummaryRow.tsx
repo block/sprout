@@ -30,17 +30,19 @@ function ParticipantAvatar({
 
 export function MessageThreadSummaryRow({
   depth = 0,
+  layoutVariant = "default",
   message,
   onOpenThread,
   summary,
 }: {
   depth?: number;
+  layoutVariant?: "default" | "thread-reply";
   message: TimelineMessage;
   onOpenThread: (message: TimelineMessage) => void;
   summary: TimelineThreadSummary;
 }) {
   const visibleDepth = Math.min(Math.max(depth, 0), 6);
-  const messageTextOffsetPx = 50;
+  const messageTextOffsetPx = layoutVariant === "thread-reply" ? 8 : 50;
   const marginLeftPx = visibleDepth * 28 + messageTextOffsetPx;
   const depthGuideOffsets = Array.from(
     { length: visibleDepth },

@@ -220,10 +220,6 @@ export function MessageThreadPanel({
               {threadReplies.length > 0 ? (
                 <div className="space-y-2">
                   {threadReplies.map((entry, index) => {
-                    const nextDepth =
-                      threadReplies[index + 1]?.message.depth ?? -1;
-                    const isExpanded = nextDepth > entry.message.depth;
-
                     return (
                       <div key={entry.message.id}>
                         <MessageRow
@@ -246,9 +242,10 @@ export function MessageThreadPanel({
                           onToggleReaction={onToggleReaction}
                           profiles={profiles}
                         />
-                        {entry.summary && !isExpanded ? (
+                        {entry.summary ? (
                           <MessageThreadSummaryRow
                             depth={entry.message.depth}
+                            layoutVariant="thread-reply"
                             message={entry.message}
                             onOpenThread={onExpandReplies}
                             summary={entry.summary}

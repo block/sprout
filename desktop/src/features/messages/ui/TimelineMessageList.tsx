@@ -104,6 +104,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
             profiles={profiles}
           />
           <MessageThreadSummaryRow
+            depth={message.depth}
             message={message}
             onOpenThread={onReply}
             summary={summary}

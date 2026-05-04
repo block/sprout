@@ -265,6 +265,23 @@ export function ChannelScreen({
     (messageId: string) => directReplyIdsByParentId.get(messageId)?.[0] ?? null,
     [directReplyIdsByParentId],
   );
+  const getReplyDescendantIdsForMessage = React.useCallback(
+    (messageId: string) => {
+      const descendantIds: string[] = [];
+      const pendingIds = [...(directReplyIdsByParentId.get(messageId) ?? [])];
+
+      while (pendingIds.length > 0) {
+        const currentId = pendingIds.pop();
+        if (!currentId) continue;
+
+        descendantIds.push(currentId);
+        pendingIds.push(...(directReplyIdsByParentId.get(currentId) ?? []));
+      }
+
+      return descendantIds;
+    },
+    [directReplyIdsByParentId],
+  );
   const threadPanelData = React.useMemo(
     () =>
       buildThreadPanelData(
@@ -309,6 +326,7 @@ export function ChannelScreen({
     editTargetId,
     expandedThreadReplyIds,
     getFirstReplyIdForMessage,
+    getReplyDescendantIdsForMessage,
     openThreadHeadId,
     sendMessageMutation,
     setExpandedThreadReplyIds,
