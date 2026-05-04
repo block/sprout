@@ -292,7 +292,9 @@ pub async fn post_tokens(
                     }
                     // NIP-98 path builds auth context directly — enforce membership here.
                     // Bearer/JWT paths go through extract_auth_context which already checks.
-                    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes).await?;
+                    let auth_tag = super::extract_single_auth_tag(&headers)?;
+                    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag)
+                        .await?;
                     super::RestAuthContext {
                         pubkey,
                         pubkey_bytes,

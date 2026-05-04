@@ -332,10 +332,23 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 // Defense-in-depth: verify_auth_event already checks pubkey match,
                 // but NIP-OA verification depends on the agent pubkey being the
                 // event signer, so assert the invariant explicitly.
-                debug_assert_eq!(
-                    agent_pubkey, auth_ctx.pubkey,
-                    "agent pubkey must match authenticated pubkey for NIP-OA"
-                );
+                if agent_pubkey != auth_ctx.pubkey {
+                    warn!(
+                        conn_id = %conn_id,
+                        agent = %agent_pubkey.to_hex(),
+                        authenticated = %auth_ctx.pubkey.to_hex(),
+                        "NIP-OA: agent pubkey does not match authenticated pubkey"
+                    );
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "nip_oa_pubkey_mismatch")
+                        .increment(1);
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "auth-required: pubkey mismatch",
+                    ));
+                    return;
+                }
                 match nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
                     Ok(owner_pubkey) => {
                         info!(

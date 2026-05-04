@@ -849,15 +849,23 @@ impl RelayClient {
         }
     }
 
-    /// Returns the appropriate auth header for REST requests.
+    /// Returns the appropriate auth headers for REST requests.
     ///
     /// - If an API token is present: `Authorization: Bearer <token>` (production mode).
     /// - Otherwise: `X-Pubkey: <hex>` (dev mode, relay has `require_auth_token=false`).
+    /// - If a NIP-OA auth tag is configured: adds `X-Auth-Tag` for relay membership.
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-        if let Some(ref token) = self.api_token {
+        let builder = if let Some(ref token) = self.api_token {
             builder.header("Authorization", format!("Bearer {}", token))
         } else {
             builder.header("X-Pubkey", self.pubkey_hex())
+        };
+        if let Some(ref tag) = self.auth_tag {
+            let slice = tag.as_slice();
+            let json = serde_json::json!([slice[0], slice[1], slice[2], slice[3]]).to_string();
+            builder.header("X-Auth-Tag", json)
+        } else {
+            builder
         }
     }
 

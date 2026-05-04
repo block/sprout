@@ -171,7 +171,11 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // replay protection for v1. Per-request signing requires protocol changes.
 
         // Relay membership gate (NIP-43).
-        if crate::api::relay_members::enforce_relay_membership(state, &pubkey.serialize())
+        let auth_tag = parts
+            .headers
+            .get("x-auth-tag")
+            .and_then(|v| v.to_str().ok());
+        if crate::api::relay_members::enforce_relay_membership(state, &pubkey.serialize(), auth_tag)
             .await
             .is_err()
         {

@@ -95,6 +95,8 @@ pub struct RestClient {
     pub base_url: String,
     pub api_token: Option<String>,
     pub keys: Keys,
+    /// NIP-OA auth tag sent as `X-Auth-Tag` header for relay membership.
+    pub auth_tag: Option<Tag>,
 }
 
 /// Whether an HTTP status code is retriable (transient server/rate-limit errors).
@@ -179,7 +181,12 @@ impl RestClient {
         let url = format!("{}{}", self.base_url, path);
         let resp = self
             .request_with_retry("GET", path, || {
-                let builder = apply_auth(self.http.get(&url), &self.api_token, &self.keys);
+                let builder = apply_auth_with_tag(
+                    self.http.get(&url),
+                    &self.api_token,
+                    &self.keys,
+                    self.auth_tag.as_ref(),
+                );
                 builder.send()
             })
             .await?;
@@ -196,8 +203,12 @@ impl RestClient {
         let body = body.clone();
         let resp = self
             .request_with_retry("PUT", path, || {
-                let builder =
-                    apply_auth(self.http.put(&url).json(&body), &self.api_token, &self.keys);
+                let builder = apply_auth_with_tag(
+                    self.http.put(&url).json(&body),
+                    &self.api_token,
+                    &self.keys,
+                    self.auth_tag.as_ref(),
+                );
                 builder.send()
             })
             .await?;
@@ -219,10 +230,11 @@ impl RestClient {
         let body = body.clone();
         let resp = self
             .request_with_retry("POST", path, || {
-                let builder = apply_auth(
+                let builder = apply_auth_with_tag(
                     self.http.post(&url).json(&body),
                     &self.api_token,
                     &self.keys,
+                    self.auth_tag.as_ref(),
                 );
                 builder.send()
             })
@@ -242,7 +254,12 @@ impl RestClient {
     pub async fn delete(&self, path: &str) -> Result<(), RelayError> {
         let url = format!("{}{}", self.base_url, path);
         self.request_with_retry("DELETE", path, || {
-            let builder = apply_auth(self.http.delete(&url), &self.api_token, &self.keys);
+            let builder = apply_auth_with_tag(
+                self.http.delete(&url),
+                &self.api_token,
+                &self.keys,
+                self.auth_tag.as_ref(),
+            );
             builder.send()
         })
         .await?;
@@ -535,6 +552,7 @@ impl HarnessRelay {
             base_url: relay_ws_to_http(&self.relay_url),
             api_token: self.api_token.clone(),
             keys: self.keys.clone(),
+            auth_tag: self.auth_tag.clone(),
         }
     }
 
@@ -2454,15 +2472,23 @@ fn channel_id_from_sub_id(sub_id: &str) -> Option<Uuid> {
 }
 
 /// Apply the appropriate auth header to a reqwest request builder.
-fn apply_auth(
+fn apply_auth_with_tag(
     builder: reqwest::RequestBuilder,
     api_token: &Option<String>,
     keys: &Keys,
+    auth_tag: Option<&Tag>,
 ) -> reqwest::RequestBuilder {
-    if let Some(ref token) = api_token {
+    let builder = if let Some(ref token) = api_token {
         builder.header("Authorization", format!("Bearer {token}"))
     } else {
         builder.header("X-Pubkey", keys.public_key().to_hex())
+    };
+    if let Some(tag) = auth_tag {
+        let slice = tag.as_slice();
+        let json = serde_json::json!([slice[0], slice[1], slice[2], slice[3]]).to_string();
+        builder.header("X-Auth-Tag", json)
+    } else {
+        builder
     }
 }
 
