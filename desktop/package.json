@@ -76,7 +76,7 @@
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
+    "@vitejs/plugin-react": "^6.0.0",
     "autoprefixer": "^10.4.27",
     "nostr-tools": "^2.23.3",
     "postcss": "^8.5.8",
