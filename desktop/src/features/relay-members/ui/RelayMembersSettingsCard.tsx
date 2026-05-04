@@ -39,12 +39,6 @@ import { Input } from "@/shared/ui/input";
 
 type AssignableRelayRole = Exclude<RelayMemberRole, "owner">;
 
-/**
- * Accepts hex pubkeys, npub bech32 strings, and the `nostr:` URI prefix.
- * Returns a lowercase 64-char hex string when input is recognized, or
- * the lowercased trimmed input otherwise (so callers can show a validation
- * error against the original-ish value).
- */
 function normalizeRelayPubkeyInput(value: string): string {
   const trimmed = value.trim();
   const withoutPrefix = trimmed.toLowerCase().startsWith("nostr:")

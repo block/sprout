@@ -7,7 +7,7 @@ import {
   listRelayMembers,
   removeRelayMember,
 } from "@/shared/api/tauri";
-import type { RelayMember, RelayMemberRole } from "@/shared/api/types";
+import type { RelayMember } from "@/shared/api/types";
 
 export const relayMembersQueryKey = ["relayMembers"] as const;
 export const myRelayMembershipQueryKey = ["myRelayMembership"] as const;
@@ -33,13 +33,8 @@ export function useAddRelayMemberMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({
-      pubkey,
-      role,
-    }: {
-      pubkey: string;
-      role: Exclude<RelayMemberRole, "owner">;
-    }) => addRelayMember(pubkey, role),
+    mutationFn: ({ pubkey, role }: { pubkey: string; role: string }) =>
+      addRelayMember(pubkey, role),
     onMutate: async ({ pubkey, role }) => {
       await queryClient.cancelQueries({ queryKey: relayMembersQueryKey });
       const previous =
@@ -49,7 +44,7 @@ export function useAddRelayMemberMutation() {
         ...(old ?? []),
         {
           pubkey,
-          role,
+          role: role as RelayMember["role"],
           addedBy: null,
           createdAt: new Date().toISOString(),
         },
@@ -108,11 +103,14 @@ export function useChangeRelayMemberRoleMutation() {
     mutationFn: ({
       pubkey,
       role,
+      newRole,
     }: {
       pubkey: string;
-      role: Exclude<RelayMemberRole, "owner">;
-    }) => changeRelayMemberRole(pubkey, role),
-    onMutate: async ({ pubkey, role }) => {
+      role?: string;
+      newRole?: string;
+    }) => changeRelayMemberRole(pubkey, role ?? newRole ?? "member"),
+    onMutate: async ({ pubkey, role, newRole }) => {
+      const nextRole = (role ?? newRole ?? "member") as RelayMember["role"];
       await queryClient.cancelQueries({ queryKey: relayMembersQueryKey });
       const previous =
         queryClient.getQueryData<RelayMember[]>(relayMembersQueryKey);
@@ -120,7 +118,7 @@ export function useChangeRelayMemberRoleMutation() {
       queryClient.setQueryData<RelayMember[]>(relayMembersQueryKey, (old) =>
         old?.map((m) =>
           m.pubkey.toLowerCase() === pubkey.toLowerCase()
-            ? { ...m, role }
+            ? { ...m, role: nextRole }
             : m,
         ),
       );
