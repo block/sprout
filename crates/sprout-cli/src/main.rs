@@ -362,8 +362,9 @@ enum Cmd {
     },
     /// Approve or deny a workflow approval step
     ApproveStep {
+        /// The approval token UUID (from the approval request)
         #[arg(long)]
-        workflow: String,
+        token: String,
         /// Whether to approve: "true" or "false"
         #[arg(long)]
         approved: String,
@@ -752,13 +753,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             commands::workflows::cmd_get_workflow(&client, &workflow).await
         }
         Cmd::ApproveStep {
-            workflow,
+            token,
             approved,
             note,
         } => {
             let approved = parse_bool_flag("--approved", &approved)?;
-            commands::workflows::cmd_approve_step(&client, &workflow, approved, note.as_deref())
-                .await
+            commands::workflows::cmd_approve_step(&client, &token, approved, note.as_deref()).await
         }
 
         // ---- Feed ----------------------------------------------------------

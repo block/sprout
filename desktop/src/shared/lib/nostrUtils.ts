@@ -1,0 +1,48 @@
+import { decode, npubEncode } from "nostr-tools/nip19";
+import { getPublicKey } from "nostr-tools/pure";
+
+/**
+ * Convert a hex-encoded Nostr public key to its npub (bech32) representation.
+ *
+ * @param hexPubkey — 64-character hex string
+ * @returns npub1… bech32-encoded public key
+ */
+export function pubkeyToNpub(hexPubkey: string): string {
+  return npubEncode(hexPubkey);
+}
+
+/**
+ * Decode a bech32 nsec string and derive the matching npub. Returns null if
+ * the input is not a syntactically valid `nsec1…` (does NOT throw — this is
+ * intended for live form validation where the user is mid-typing).
+ *
+ * The input is trimmed first; surrounding whitespace from copy-paste or a
+ * dropped `.key` file is tolerated.
+ */
+export function nsecToNpub(nsec: string): string | null {
+  const trimmed = nsec.trim();
+  if (!trimmed.startsWith("nsec1")) {
+    return null;
+  }
+  try {
+    const decoded = decode(trimmed);
+    if (decoded.type !== "nsec") {
+      return null;
+    }
+    const pubkeyHex = getPublicKey(decoded.data);
+    return npubEncode(pubkeyHex);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Format an npub for compact display: `npub1abcd…wxyz`. Falls back to the
+ * original string if it's shorter than the truncation thresholds.
+ */
+export function shortenNpub(npub: string): string {
+  if (npub.length <= 16) {
+    return npub;
+  }
+  return `${npub.slice(0, 12)}…${npub.slice(-6)}`;
+}

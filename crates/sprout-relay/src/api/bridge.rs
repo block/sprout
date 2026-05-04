@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::handlers::ingest::{IngestAuth, IngestError};
 use crate::state::AppState;
 
-use super::{api_error, internal_error};
+use super::{api_error, internal_error, not_found};
 
 // ── NIP-98 verification ──────────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ pub async fn submit_event(
     let pubkey_bytes = pubkey.serialize().to_vec();
 
     // Enforce relay membership
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes).await?;
+    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, None).await?;
 
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
@@ -178,7 +178,7 @@ pub async fn query_events(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes).await?;
+    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, None).await?;
 
     let filters: Vec<nostr::Filter> = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid filters: {e}")))?;
@@ -267,7 +267,7 @@ pub async fn count_events(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes).await?;
+    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, None).await?;
 
     let filters: Vec<nostr::Filter> = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid filters: {e}")))?;
@@ -473,4 +473,150 @@ async fn handle_bridge_search(
     }
 
     Ok(Json(Value::Array(events)))
+}
+
+// ── POST /hooks/{id} — Webhook trigger ───────────────────────────────────────
+
+/// Query parameters for the webhook trigger endpoint.
+#[derive(serde::Deserialize)]
+pub struct WebhookQuery {
+    /// Webhook secret for authentication. Prefer the `X-Webhook-Secret` header instead.
+    pub secret: Option<String>,
+}
+
+/// Webhook trigger endpoint. No user auth — the webhook secret authenticates the caller.
+///
+/// Prefers `X-Webhook-Secret` header over `?secret=` query param (headers aren't logged
+/// by most proxies). Returns 202 Accepted; execution is async.
+pub async fn workflow_webhook(
+    State(state): State<Arc<AppState>>,
+    Path(id_str): Path<String>,
+    Query(query): Query<WebhookQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let id = uuid::Uuid::parse_str(&id_str)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workflow UUID"))?;
+
+    let workflow = state
+        .db
+        .get_workflow(id)
+        .await
+        .map_err(|_| not_found("workflow not found"))?;
+
+    let def: sprout_workflow::WorkflowDef = serde_json::from_value(workflow.definition.clone())
+        .map_err(|e| super::internal_error(&format!("corrupt workflow definition: {e}")))?;
+
+    if !matches!(def.trigger, sprout_workflow::TriggerDef::Webhook) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "workflow does not have a webhook trigger",
+        ));
+    }
+
+    // Verify webhook secret. Prefer header (not logged by proxies); fall back to query param.
+    let stored_secret = crate::webhook_secret::extract_secret(&workflow.definition);
+    let provided_secret = headers
+        .get("x-webhook-secret")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| query.secret.clone())
+        .unwrap_or_default();
+
+    match &stored_secret {
+        Some(secret) => {
+            if !crate::webhook_secret::verify_secret(&provided_secret, secret) {
+                tracing::warn!("webhook: invalid secret for workflow {id}");
+                return Err(api_error(StatusCode::UNAUTHORIZED, "authentication failed"));
+            }
+        }
+        None => {
+            return Err(api_error(
+                StatusCode::UNAUTHORIZED,
+                "webhook secret required but not configured — re-save the workflow to generate one",
+            ));
+        }
+    }
+
+    // Parse optional JSON body as trigger context.
+    let body_json: Option<Value> =
+        if body.is_empty() {
+            None
+        } else {
+            Some(serde_json::from_slice(&body).map_err(|e| {
+                api_error(StatusCode::BAD_REQUEST, &format!("invalid JSON body: {e}"))
+            })?)
+        };
+
+    // Build trigger context from webhook body fields.
+    let mut trigger_ctx = sprout_workflow::executor::TriggerContext {
+        channel_id: workflow
+            .channel_id
+            .map(|ch| ch.to_string())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    if let Some(Value::Object(ref map)) = body_json {
+        for (k, v) in map {
+            let val_str = match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            trigger_ctx.webhook_fields.insert(k.clone(), val_str);
+        }
+    }
+    let trigger_ctx_json = serde_json::to_value(&trigger_ctx).ok();
+
+    let run_id = state
+        .db
+        .create_workflow_run(id, None, trigger_ctx_json.as_ref())
+        .await
+        .map_err(|e| super::internal_error(&format!("db error: {e}")))?;
+
+    // Spawn workflow execution asynchronously.
+    let engine = Arc::clone(&state.workflow_engine);
+    let db = state.db.clone();
+    let def_value = workflow.definition.clone();
+    let trigger_ctx_clone = trigger_ctx.clone();
+    tokio::spawn(async move {
+        let def: sprout_workflow::WorkflowDef = match serde_json::from_value(def_value) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("webhook: failed to parse definition: {e}");
+                if let Err(db_err) = db
+                    .update_workflow_run(
+                        run_id,
+                        sprout_db::workflow::RunStatus::Failed,
+                        0,
+                        &serde_json::json!([]),
+                        Some(&format!("definition parse error: {e}")),
+                    )
+                    .await
+                {
+                    tracing::error!("webhook: failed to mark run as failed: {db_err}");
+                }
+                return;
+            }
+        };
+
+        let result = sprout_workflow::executor::execute_from_step(
+            &engine,
+            run_id,
+            &def,
+            &trigger_ctx_clone,
+            0,
+            None,
+        )
+        .await;
+        engine.finalize_run(run_id, result, None).await;
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "run_id": run_id.to_string(),
+            "workflow_id": id.to_string(),
+            "status": "pending",
+        })),
+    ))
 }

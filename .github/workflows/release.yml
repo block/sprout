@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+      id-token: write # required by block/apple-codesign-action for OIDC
     env:
       VERSION: ${{ inputs.version }}
     steps:
@@ -54,8 +55,8 @@ jobs:
           cargo build --release -p sprout-acp -p sprout-mcp -p git-credential-nostr
           ./scripts/bundle-sidecars.sh
 
-      - name: Build Tauri app
-        run: cd desktop && pnpm tauri build --verbose --config src-tauri/tauri.release.conf.json
+      - name: Build unsigned Tauri app
+        run: cd desktop && pnpm tauri build --verbose --no-sign --config src-tauri/tauri.release.conf.json
         env:
           SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
@@ -63,9 +64,60 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
 
+      - name: Locate unsigned DMG
+        id: unsigned
+        run: |
+          BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
+          DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
+          if [[ -z "$DMG" ]]; then
+            echo "::error::No DMG found in $BUNDLE_DIR/dmg"
+            exit 1
+          fi
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Codesign and Notarize
+        id: codesign
+        uses: block/apple-codesign-action@679535d1ab7c5a7c18e6f9afcba3464512cc3dde # v1.1.0
+        with:
+          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
+          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
+          unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
+          entitlements-plist-path: desktop/src-tauri/Entitlements.plist
+          artifact-name: sprout-${{ github.sha }}-${{ github.run_id }}-arm64
+
+      - name: Replace DMG and rebuild updater archive
+        env:
+          SIGNED_DMG: ${{ steps.codesign.outputs.signed-dmg-path }}
+          SIGNED_APP_ZIP: ${{ steps.codesign.outputs.signed-artifact-path }}
+          UNSIGNED_DMG: ${{ steps.unsigned.outputs.dmg }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
+          APP_DIR="${BUNDLE_DIR}/macos"
+
+          # Replace unsigned DMG with the signed/notarized one.
+          cp "$SIGNED_DMG" "$UNSIGNED_DMG"
+
+          # Swap the unsigned .app for the signed .app extracted from the action's zip.
+          EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract"
+          rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
+          ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
+          rm -rf "${APP_DIR}/Sprout.app"
+          cp -R "${EXTRACT_DIR}/Sprout.app" "${APP_DIR}/Sprout.app"
+
+          # Rebuild the updater archive from the signed .app and re-sign it with the Tauri updater key.
+          rm -f "${APP_DIR}/Sprout.app.tar.gz" "${APP_DIR}/Sprout.app.tar.gz.sig"
+          (cd "$APP_DIR" && tar -czf Sprout.app.tar.gz Sprout.app)
+          TARBALL_ABS="$(pwd)/${APP_DIR}/Sprout.app.tar.gz"
+          (cd desktop && pnpm tauri signer sign "$TARBALL_ABS")
+
       - name: Verify code signature
         run: |
           codesign --verify --deep --strict --verbose=2 \
+            desktop/src-tauri/target/release/bundle/macos/Sprout.app
+          spctl --assess --type execute --verbose=4 \
             desktop/src-tauri/target/release/bundle/macos/Sprout.app
 
       - name: Locate build artifacts

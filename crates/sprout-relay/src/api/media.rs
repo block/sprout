@@ -87,9 +87,14 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
             .map_err(|_| MediaError::InsufficientScope)?;
 
         // 5. Relay membership gate (NIP-43).
-        crate::api::relay_members::enforce_relay_membership(state, &auth_event.pubkey.serialize())
-            .await
-            .map_err(|_| MediaError::RelayMembershipRequired)?;
+        let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+        crate::api::relay_members::enforce_relay_membership(
+            state,
+            &auth_event.pubkey.serialize(),
+            auth_tag,
+        )
+        .await
+        .map_err(|_| MediaError::RelayMembershipRequired)?;
 
         Ok(AuthenticatedUpload { auth_event, scopes })
     }

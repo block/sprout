@@ -1,4 +1,5 @@
 use nostr::{EventBuilder, Kind, Tag};
+use sha2::{Digest, Sha256};
 
 use crate::client::SproutClient;
 use crate::error::CliError;
@@ -152,18 +153,20 @@ pub async fn cmd_trigger_workflow(
 /// Approve or deny a workflow step — sign and submit a kind:46030 (grant) or 46031 (deny) event.
 pub async fn cmd_approve_step(
     client: &SproutClient,
-    workflow_id: &str,
+    approval_token: &str,
     approved: bool,
     note: Option<&str>,
 ) -> Result<(), CliError> {
-    validate_uuid(workflow_id)?;
+    validate_uuid(approval_token)?;
     let keys = client.keys();
 
     let kind = if approved { 46030 } else { 46031 };
     let content = note.unwrap_or("");
 
+    // The relay expects d-tag = hex(SHA256(token)), not the raw token UUID.
+    let token_hash = hex::encode(Sha256::digest(approval_token.as_bytes()));
     let tags =
-        vec![Tag::parse(&["d", workflow_id])
+        vec![Tag::parse(&["d", &token_hash])
             .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
 
     let builder = EventBuilder::new(Kind::Custom(kind), content, tags);

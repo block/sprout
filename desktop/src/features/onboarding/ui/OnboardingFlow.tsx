@@ -1,7 +1,21 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { useUpdateProfileMutation } from "@/features/profile/hooks";
-import { uploadMediaBytes } from "@/shared/api/tauri";
+import {
+  profileQueryKey,
+  useUpdateProfileMutation,
+} from "@/features/profile/hooks";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
+import {
+  getIdentity,
+  getMyRelayMembership,
+  importIdentity as tauriImportIdentity,
+  uploadMediaBytes,
+} from "@/shared/api/tauri";
+import { useIdentityQuery } from "@/shared/api/hooks";
+import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
+import { relayClient } from "@/shared/api/relayClient";
+import { MembershipDenied } from "./MembershipDenied";
 import { ProfileStep } from "./ProfileStep";
 import { SetupStep } from "./SetupStep";
 import type {
@@ -12,6 +26,31 @@ import type {
   OnboardingProfileValues,
   ProfileStepState,
 } from "./types";
+
+/**
+ * Check whether the relay denies access due to membership gating.
+ *
+ * Uses the `/api/relay/members/me` endpoint which bypasses the membership
+ * middleware — it returns null (404) when authenticated but not a member.
+ *
+ * Returns `true` if denied, `false` if the user is a member (or if the
+ * relay doesn't enforce membership / isn't reachable).
+ */
+async function checkMembershipDenied(): Promise<boolean> {
+  try {
+    const membership = await getMyRelayMembership();
+    return membership === null;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("relay returned 403")
+    ) {
+      return true;
+    }
+    // Network errors, 401s, 500s — not membership denials.
+    return false;
+  }
+}
 
 type OnboardingFlowProps = {
   actions: OnboardingActions;
@@ -108,6 +147,32 @@ export function OnboardingFlow({
     string | null
   >(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
+  const [deniedPubkey, setDeniedPubkey] = React.useState<string>("");
+
+  // For displaying the current identity at the top of the profile step and
+  // for refreshing the UI in place after `import_identity` completes — the
+  // `key={currentPubkey}` on this component in App.tsx remounts the whole
+  // tree once the cache update lands, giving us a clean reset of all
+  // form/import state without a `window.location.reload()`.
+  const queryClient = useQueryClient();
+  const identityQuery = useIdentityQuery();
+  const currentNpub = React.useMemo(() => {
+    const pubkey = identityQuery.data?.pubkey;
+    if (!pubkey) {
+      return null;
+    }
+    try {
+      return pubkeyToNpub(pubkey);
+    } catch {
+      return null;
+    }
+  }, [identityQuery.data?.pubkey]);
+
+  // Used by the import action to update the active workspace's display
+  // pubkey. Workspaces never store the nsec — `identity.key` on disk is the
+  // single source of truth — but we keep `pubkey` accurate so switcher
+  // labels and similar UI reflect the active identity.
+  const { activeWorkspace, updateWorkspace } = useWorkspaces();
 
   const openAvatarPicker = React.useCallback(() => {
     avatarInputRef.current?.click();
@@ -185,6 +250,20 @@ export function OnboardingFlow({
       return;
     }
 
+    // Check membership before attempting the profile save. On open relays
+    // this passes instantly. On gated relays it prevents a 403 during save.
+    const denied = await checkMembershipDenied();
+    if (denied) {
+      try {
+        const identity = await getIdentity();
+        setDeniedPubkey(identity.pubkey);
+      } catch {
+        setDeniedPubkey("");
+      }
+      setCurrentPage("membership-denied");
+      return;
+    }
+
     const updatePayload = createProfileUpdatePayload({
       draftProfile: profileDraft,
       savedProfile,
@@ -194,6 +273,7 @@ export function OnboardingFlow({
       try {
         await profileUpdateMutation.mutateAsync(updatePayload);
       } catch {
+        // Error falls through to the error banner / recovery buttons.
         return;
       }
     }
@@ -235,6 +315,7 @@ export function OnboardingFlow({
       isUploading: isUploadingAvatar,
       savedUrl: savedProfile.avatarUrl,
     },
+    currentNpub,
     isSaving: isSavingProfile,
     name: {
       draftValue: profileDraft.displayName,
@@ -245,6 +326,57 @@ export function OnboardingFlow({
       savedProfile.displayName,
     ),
   };
+
+  const handleImportIdentity = React.useCallback(
+    async (nsec: string) => {
+      // Backend writes the nsec to `identity.key`, swaps `state.keys`, and
+      // clears any session token. After this returns, every Rust command
+      // reads the new key fresh on the next call.
+      const next = await tauriImportIdentity(nsec);
+
+      // Drop the WebSocket so it re-AUTHs as the new pubkey on next use.
+      // Stale subscriptions bound to the old pubkey would otherwise leak
+      // through and cause confusing membership/permission errors until the
+      // user navigated away.
+      try {
+        relayClient.disconnect();
+      } catch (error) {
+        console.warn("relayClient.disconnect() during import failed", error);
+      }
+
+      // Update the active workspace's display pubkey. The workspace never
+      // stores nsec — this is purely cosmetic for the workspace switcher.
+      if (activeWorkspace && activeWorkspace.pubkey !== next.pubkey) {
+        updateWorkspace(activeWorkspace.id, { pubkey: next.pubkey });
+      }
+
+      // Drop any membership-denied banner from a previous identity.
+      setDeniedPubkey("");
+
+      // Refresh identity + profile caches. The identity query lives at
+      // staleTime: Infinity so an explicit invalidation is required.
+      // Once `["identity"]` updates, App.tsx's `key={currentPubkey}` will
+      // remount this entire component, giving us a clean form state for
+      // the new identity without a page reload.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["identity"] }),
+        queryClient.invalidateQueries({ queryKey: profileQueryKey }),
+      ]);
+    },
+    [activeWorkspace, queryClient, updateWorkspace],
+  );
+
+  if (currentPage === "membership-denied") {
+    return (
+      <MembershipDenied
+        onChangeKey={showProfilePage}
+        onRetry={() => {
+          void saveProfileAndContinue();
+        }}
+        pubkey={deniedPubkey}
+      />
+    );
+  }
 
   return (
     <div
@@ -257,6 +389,7 @@ export function OnboardingFlow({
             actions={{
               advanceWithoutSaving: showSetupPage,
               clearAvatarDraft: resetAvatarDraft,
+              importIdentity: handleImportIdentity,
               openAvatarPicker,
               skipForNow,
               submit: () => {

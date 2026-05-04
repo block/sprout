@@ -63,6 +63,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/events", post(api::bridge::submit_event))
         .route("/query", post(api::bridge::query_events))
         .route("/count", post(api::bridge::count_events))
+        // Webhook trigger (secret-authenticated, no NIP-98)
+        .route("/hooks/{id}", post(api::bridge::workflow_webhook))
         // Huddle audio WebSocket route
         .route(
             "/huddle/{channel_id}/audio",

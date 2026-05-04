@@ -5,6 +5,7 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::relay_client::RelayClient;
 use sprout_core::kind;
@@ -1801,7 +1802,9 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
             kind::KIND_APPROVAL_DENY
         };
         let content = p.note.as_deref().unwrap_or("");
-        let tags = vec![Tag::parse(&["d", &p.approval_token]).unwrap()];
+        // The relay expects d-tag = hex(SHA256(token)), not the raw token UUID.
+        let token_hash = hex::encode(Sha256::digest(p.approval_token.as_bytes()));
+        let tags = vec![Tag::parse(&["d", &token_hash]).unwrap()];
         let builder = EventBuilder::new(k(kind_num), content, tags);
         let event = match self.client.sign_event(builder) {
             Ok(e) => e,

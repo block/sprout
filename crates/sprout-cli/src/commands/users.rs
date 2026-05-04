@@ -154,7 +154,12 @@ pub async fn cmd_get_presence(client: &SproutClient, pubkeys_csv: &str) -> Resul
     Ok(())
 }
 
-/// Set presence status — sign and submit a kind:40902 presence event.
+/// Set presence status — sign and submit a kind:20001 presence update event.
+///
+/// NOTE: Kind 20001 is ephemeral and only accepted via WebSocket connections.
+/// The CLI uses the HTTP bridge (POST /events) which rejects ephemeral kinds.
+/// This will fail until the CLI gains a WS publish path. The kind is correct
+/// per the protocol spec (KIND_PRESENCE_UPDATE = 20001).
 pub async fn cmd_set_presence(client: &SproutClient, status: &str) -> Result<(), CliError> {
     match status {
         "online" | "away" | "offline" => {}
@@ -170,7 +175,9 @@ pub async fn cmd_set_presence(client: &SproutClient, status: &str) -> Result<(),
         vec![Tag::parse(&["status", status])
             .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
 
-    let builder = EventBuilder::new(Kind::Custom(40902), "", tags);
+    // KIND_PRESENCE_UPDATE (20001) — ephemeral, WS-only. HTTP bridge will reject this
+    // until the CLI gains a WebSocket publish path.
+    let builder = EventBuilder::new(Kind::Custom(20001), "", tags);
     let event = builder
         .sign_with_keys(keys)
         .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;

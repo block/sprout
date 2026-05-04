@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { getIdentity, getNsec } from "@/shared/api/tauri";
+import { getIdentity } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
@@ -40,13 +40,15 @@ export function WelcomeSetup({
     setError(null);
 
     try {
-      const [identity, nsec] = await Promise.all([getIdentity(), getNsec()]);
+      // We snapshot only the pubkey for display purposes (workspace switcher
+      // labels, etc.). The private key lives on disk in `identity.key` and
+      // is the single source of truth — never copied into localStorage.
+      const identity = await getIdentity();
 
       const workspace: Workspace = {
         id: crypto.randomUUID(),
         name: deriveWorkspaceName(normalizedUrl),
         relayUrl: normalizedUrl,
-        nsec,
         pubkey: identity.pubkey,
         addedAt: new Date().toISOString(),
       };

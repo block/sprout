@@ -143,7 +143,7 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let parent_channel_id = auth_msg.parent_channel_id;
 
     // ── Relay membership gate (NIP-43) ────────────────────────────────────────
-    if crate::api::relay_members::enforce_relay_membership(&state, &pubkey.serialize())
+    if crate::api::relay_members::enforce_relay_membership(&state, &pubkey.serialize(), None)
         .await
         .is_err()
     {
