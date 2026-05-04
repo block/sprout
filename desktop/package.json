@@ -38,7 +38,7 @@
     "@tanstack/react-router": "^1.168.10",
     "@tauri-apps/api": "~2.10",
     "@tauri-apps/plugin-notification": "^2.3.3",
-    "@tauri-apps/plugin-opener": "~2.4",
+    "@tauri-apps/plugin-opener": "~2.5",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.0",
     "@tiptap/core": "^3.22.3",
