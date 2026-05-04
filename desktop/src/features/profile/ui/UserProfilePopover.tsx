@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Activity } from "lucide-react";
+import { Activity, ExternalLink } from "lucide-react";
 
 import {
   useUserNotesQuery,
@@ -76,7 +76,7 @@ export function UserProfilePopover({
     enabled: open,
   });
 
-  const { onOpenAgentSession } = useAgentSession();
+  const { onDetachAgentSession, onOpenAgentSession } = useAgentSession();
   const relayAgent = relayAgentsQuery.data?.find((a) => a.pubkey === pubkey);
   const managedAgent = managedAgentsQuery.data?.find(
     (a) => a.pubkey === pubkey,
@@ -85,6 +85,10 @@ export function UserProfilePopover({
     role === "bot" &&
     managedAgent?.backend.type === "local" &&
     Boolean(onOpenAgentSession);
+  const canDetachActivity =
+    role === "bot" &&
+    managedAgent?.backend.type === "local" &&
+    Boolean(onDetachAgentSession);
   const profile = profileQuery.data;
   const notes = notesQuery.data?.notes ?? [];
   const presenceStatus = presenceQuery.data?.[pubkey.toLowerCase()];
@@ -155,19 +159,37 @@ export function UserProfilePopover({
             </p>
           ) : null}
 
-          {canViewActivity ? (
-            <button
-              className="flex w-full items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-muted/50"
-              data-testid={`user-profile-view-activity-${pubkey}`}
-              onClick={() => {
-                setOpen(false);
-                onOpenAgentSession?.(pubkey);
-              }}
-              type="button"
-            >
-              <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-              View activity log
-            </button>
+          {canViewActivity || canDetachActivity ? (
+            <div className="flex gap-2">
+              {canViewActivity ? (
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-left text-xs font-medium text-foreground transition-colors hover:bg-muted/50"
+                  data-testid={`user-profile-view-activity-${pubkey}`}
+                  onClick={() => {
+                    setOpen(false);
+                    onOpenAgentSession?.(pubkey);
+                  }}
+                  type="button"
+                >
+                  <Activity className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">View activity log</span>
+                </button>
+              ) : null}
+              {canDetachActivity && managedAgent ? (
+                <button
+                  aria-label={`Open ${managedAgent.name} activity in a separate window`}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                  data-testid={`user-profile-detach-activity-${pubkey}`}
+                  onClick={() => {
+                    setOpen(false);
+                    onDetachAgentSession?.(managedAgent);
+                  }}
+                  type="button"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           <p className="truncate font-mono text-[10px] text-muted-foreground/60">

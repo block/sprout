@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Hash, LogIn } from "lucide-react";
+import { toast } from "sonner";
 
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
@@ -8,6 +9,7 @@ import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { BotActivityBar } from "@/features/channels/ui/BotActivityBar";
+import { openDetachedAgentSessionWindow } from "@/features/agents/ui/detachedAgentSessionWindow";
 import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
@@ -235,6 +237,23 @@ export const ChannelPane = React.memo(function ChannelPane({
     [agentSessionAgents, openAgentSessionPubkey],
   );
 
+  const handleDetachAgentSession = React.useCallback(
+    (agent: ManagedAgent) => {
+      void openDetachedAgentSessionWindow({
+        agentName: agent.name,
+        agentPubkey: agent.pubkey,
+        channelId: activeChannel?.id ?? null,
+      }).catch((error) => {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to open detached agent window.",
+        );
+      });
+    },
+    [activeChannel?.id],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -274,6 +293,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             botTypingPubkeys.length > 0 ? (
               <BotActivityBar
                 agents={agentSessionAgents}
+                onDetachAgentSession={handleDetachAgentSession}
                 onOpenAgentSession={onOpenAgentSession}
                 openAgentSessionPubkey={openAgentSessionPubkey}
                 profiles={profiles}
@@ -379,6 +399,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             threadBotTypingPubkeys.length > 0 ? (
               <BotActivityBar
                 agents={agentSessionAgents}
+                onDetachAgentSession={handleDetachAgentSession}
                 onOpenAgentSession={onOpenAgentSession}
                 openAgentSessionPubkey={openAgentSessionPubkey}
                 profiles={profiles}
@@ -404,6 +425,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
           )}
           onClose={onCloseAgentSession}
+          onDetach={() => handleDetachAgentSession(selectedAgent)}
           onResetWidth={handleThreadPanelWidthReset}
           onResizeStart={handleThreadPanelResizeStart}
           profiles={profiles}

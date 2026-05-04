@@ -21,8 +21,10 @@ import {
 } from "./agentSessionUtils";
 
 export function ToolItem({
+  enableInlineNavigation = true,
   item,
 }: {
+  enableInlineNavigation?: boolean;
   item: Extract<TranscriptItem, { type: "tool" }>;
 }) {
   const [isExpanded, setIsExpanded] = React.useState(false);
@@ -60,7 +62,7 @@ export function ToolItem({
           <span className="min-w-0 truncate text-sm font-medium">
             {toolTitle}
           </span>
-          {sproutTool ? (
+          {sproutTool && enableInlineNavigation ? (
             <SproutToolInlineAction args={item.args} result={item.result} />
           ) : null}
           {showStatus ? (

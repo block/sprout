@@ -9,11 +9,13 @@ import { ToolItem } from "./AgentSessionToolItem";
 export function AgentSessionTranscriptList({
   agentAvatarUrl,
   agentName,
+  enableInlineNavigation = true,
   emptyDescription,
   items,
 }: {
   agentAvatarUrl: string | null;
   agentName: string;
+  enableInlineNavigation?: boolean;
   emptyDescription: string;
   items: TranscriptItem[];
 }) {
@@ -39,6 +41,7 @@ export function AgentSessionTranscriptList({
           <TranscriptItemView
             agentAvatarUrl={agentAvatarUrl}
             agentName={agentName}
+            enableInlineNavigation={enableInlineNavigation}
             item={item}
           />
         </div>
@@ -50,10 +53,12 @@ export function AgentSessionTranscriptList({
 function TranscriptItemView({
   agentAvatarUrl,
   agentName,
+  enableInlineNavigation,
   item,
 }: {
   agentAvatarUrl: string | null;
   agentName: string;
+  enableInlineNavigation: boolean;
   item: TranscriptItem;
 }) {
   if (item.type === "message") {
@@ -61,15 +66,23 @@ function TranscriptItemView({
       <MessageItem
         agentAvatarUrl={agentAvatarUrl}
         agentName={agentName}
+        enableInlineNavigation={enableInlineNavigation}
         item={item}
       />
     );
   }
   if (item.type === "tool") {
-    return <ToolItem item={item} />;
+    return (
+      <ToolItem enableInlineNavigation={enableInlineNavigation} item={item} />
+    );
   }
   if (item.type === "thought") {
-    return <ThoughtItem item={item} />;
+    return (
+      <ThoughtItem
+        enableInlineNavigation={enableInlineNavigation}
+        item={item}
+      />
+    );
   }
   if (item.type === "metadata") {
     return <MetadataItem item={item} />;
@@ -80,10 +93,12 @@ function TranscriptItemView({
 function MessageItem({
   agentAvatarUrl,
   agentName,
+  enableInlineNavigation,
   item,
 }: {
   agentAvatarUrl: string | null;
   agentName: string;
+  enableInlineNavigation: boolean;
   item: Extract<TranscriptItem, { type: "message" }>;
 }) {
   const isAssistant = item.role === "assistant";
@@ -114,7 +129,11 @@ function MessageItem({
           )}
         >
           {isAssistant ? (
-            <Markdown compact content={text || " "} />
+            <Markdown
+              compact
+              content={text || " "}
+              enableChannelLinks={enableInlineNavigation}
+            />
           ) : (
             <p className="whitespace-pre-wrap break-words">{text}</p>
           )}
@@ -125,8 +144,10 @@ function MessageItem({
 }
 
 function ThoughtItem({
+  enableInlineNavigation,
   item,
 }: {
+  enableInlineNavigation: boolean;
   item: Extract<TranscriptItem, { type: "thought" }>;
 }) {
   return (
@@ -137,7 +158,11 @@ function ThoughtItem({
         <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
       </summary>
       <div className="py-2 pl-5 text-sm leading-6 text-muted-foreground">
-        <Markdown compact content={item.text.trim() || " "} />
+        <Markdown
+          compact
+          content={item.text.trim() || " "}
+          enableChannelLinks={enableInlineNavigation}
+        />
       </div>
     </details>
   );

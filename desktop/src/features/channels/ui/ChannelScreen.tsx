@@ -1,5 +1,7 @@
 import * as React from "react";
+import { toast } from "sonner";
 import { useAppShell } from "@/app/AppShellContext";
+import { openDetachedAgentSessionWindow } from "@/features/agents/ui/detachedAgentSessionWindow";
 import { useActiveChannelHeader } from "@/features/channels/useActiveChannelHeader";
 import { useChannelPaneHandlers } from "@/features/channels/useChannelPaneHandlers";
 import {
@@ -40,6 +42,7 @@ import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type {
   Channel,
   Identity,
+  ManagedAgent,
   Profile,
   RelayEvent,
 } from "@/shared/api/types";
@@ -359,6 +362,22 @@ export function ChannelScreen({
     targetMessageId,
     timelineMessages,
   });
+  const handleDetachAgentSession = React.useCallback(
+    (agent: ManagedAgent) => {
+      void openDetachedAgentSessionWindow({
+        agentName: agent.name,
+        agentPubkey: agent.pubkey,
+        channelId: activeChannel?.id ?? null,
+      }).catch((error) => {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to open detached agent window.",
+        );
+      });
+    },
+    [activeChannel?.id],
+  );
 
   const isTimelineLoading =
     activeChannel !== null &&
@@ -414,7 +433,10 @@ export function ChannelScreen({
   useLoadMissingAncestors(activeChannel, resolvedMessages);
 
   return (
-    <AgentSessionProvider onOpenAgentSession={handleOpenAgentSession}>
+    <AgentSessionProvider
+      onDetachAgentSession={handleDetachAgentSession}
+      onOpenAgentSession={handleOpenAgentSession}
+    >
       <ChannelScreenHeader
         activeChannel={activeChannel}
         activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}

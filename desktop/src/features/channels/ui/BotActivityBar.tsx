@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { Loader2 } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ManagedAgent } from "@/shared/api/types";
@@ -13,6 +13,7 @@ const MAX_INLINE_AGENT_AVATARS = 3;
 
 type BotActivityBarProps = {
   agents: ManagedAgent[];
+  onDetachAgentSession?: (agent: ManagedAgent) => void;
   onOpenAgentSession: (pubkey: string) => void;
   openAgentSessionPubkey: string | null;
   profiles?: UserProfileLookup;
@@ -25,6 +26,7 @@ type BotActivityBarProps = {
  */
 export function BotActivityBar({
   agents,
+  onDetachAgentSession,
   onOpenAgentSession,
   openAgentSessionPubkey,
   profiles,
@@ -160,31 +162,50 @@ export function BotActivityBar({
             {activeAgentCountLabel}
           </div>
           {typingAgents.map((agent) => (
-            <button
+            <div
               className={cn(
-                "flex w-full cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
+                "flex w-full select-none items-center gap-1 rounded-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground",
                 "animate-in fade-in-0 duration-150 motion-reduce:animate-none",
                 selectedAgent?.pubkey === agent.pubkey && "bg-primary/10",
               )}
-              data-testid={`bot-chip-overflow-item-${agent.pubkey}`}
               key={agent.pubkey}
-              onClick={() => {
-                setIsOpen(false);
-                onOpenAgentSession(agent.pubkey);
-              }}
-              type="button"
             >
-              <UserAvatar
-                avatarUrl={
-                  profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null
-                }
-                className="rounded-full"
-                displayName={agent.name}
-                size="sm"
-              />
-              <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
-            </button>
+              <button
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-sm outline-none focus-visible:bg-accent focus-visible:text-accent-foreground"
+                data-testid={`bot-chip-overflow-item-${agent.pubkey}`}
+                onClick={() => {
+                  setIsOpen(false);
+                  onOpenAgentSession(agent.pubkey);
+                }}
+                type="button"
+              >
+                <UserAvatar
+                  avatarUrl={
+                    profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null
+                  }
+                  className="rounded-full"
+                  displayName={agent.name}
+                  size="sm"
+                />
+                <span className="min-w-0 flex-1 truncate">{agent.name}</span>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
+              </button>
+              {onDetachAgentSession ? (
+                <button
+                  aria-label={`Detach ${agent.name} activity`}
+                  className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:bg-background/80 focus-visible:text-foreground focus-visible:outline-none"
+                  data-testid={`bot-chip-detach-${agent.pubkey}`}
+                  onClick={() => {
+                    setIsOpen(false);
+                    onDetachAgentSession(agent);
+                  }}
+                  title={`Detach ${agent.name} activity`}
+                  type="button"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
           ))}
         </PopoverContent>
       </Popover>

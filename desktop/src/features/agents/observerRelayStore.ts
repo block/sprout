@@ -8,6 +8,7 @@ import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { ConnectionState, ObserverEvent } from "./ui/agentSessionTypes";
 
 const MAX_OBSERVER_EVENTS = 800;
+const OBSERVER_SYNC_CHANNEL_NAME = "sprout-agent-observer-events";
 
 type ObserverSnapshot = {
   connectionState: ConnectionState;
@@ -28,11 +29,109 @@ let unsubscribeRelay: (() => Promise<void>) | null = null;
 let startPromise: Promise<void> | null = null;
 let eventProcessingQueue: Promise<void> = Promise.resolve();
 let generation = 0;
+let observerSyncChannel: BroadcastChannel | null = null;
+let observerSyncInitialized = false;
+
+type ObserverSyncMessage =
+  | {
+      type: "event";
+      agentPubkey: string;
+      event: ObserverEvent;
+    }
+  | {
+      type: "snapshot-request";
+    }
+  | {
+      type: "snapshot-response";
+      eventsByAgent: Array<[string, ObserverEvent[]]>;
+    };
 
 function notifyListeners() {
   for (const listener of listeners) {
     listener();
   }
+}
+
+function postObserverSyncMessage(message: ObserverSyncMessage) {
+  observerSyncChannel?.postMessage(message);
+}
+
+function replaceObserverEventsFromSnapshot(
+  snapshotEntries: Array<[string, ObserverEvent[]]>,
+) {
+  let changed = false;
+
+  for (const [agentPubkey, events] of snapshotEntries) {
+    const key = normalizePubkey(agentPubkey);
+    const current = eventsByAgent.get(key) ?? [];
+    const merged = [...current];
+
+    for (const event of events) {
+      if (
+        !merged.some(
+          (existing) =>
+            existing.seq === event.seq &&
+            existing.timestamp === event.timestamp,
+        )
+      ) {
+        merged.push(event);
+      }
+    }
+
+    if (merged.length !== current.length) {
+      eventsByAgent.set(
+        key,
+        merged.sort(compareObserverEvents).slice(-MAX_OBSERVER_EVENTS),
+      );
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    notifyListeners();
+  }
+}
+
+function ensureObserverSyncChannel() {
+  if (observerSyncInitialized) {
+    return;
+  }
+  observerSyncInitialized = true;
+
+  if (typeof BroadcastChannel === "undefined") {
+    return;
+  }
+
+  observerSyncChannel = new BroadcastChannel(OBSERVER_SYNC_CHANNEL_NAME);
+  observerSyncChannel.onmessage = (
+    message: MessageEvent<ObserverSyncMessage>,
+  ) => {
+    const payload = message.data;
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+
+    if (payload.type === "event") {
+      appendAgentEvent(payload.agentPubkey, payload.event, {
+        broadcast: false,
+      });
+      return;
+    }
+
+    if (payload.type === "snapshot-request") {
+      postObserverSyncMessage({
+        type: "snapshot-response",
+        eventsByAgent: [...eventsByAgent.entries()],
+      });
+      return;
+    }
+
+    if (payload.type === "snapshot-response") {
+      replaceObserverEventsFromSnapshot(payload.eventsByAgent);
+    }
+  };
+
+  postObserverSyncMessage({ type: "snapshot-request" });
 }
 
 function setConnectionState(
@@ -48,7 +147,11 @@ function observerTag(event: RelayEvent, tagName: string) {
   return event.tags.find((tag) => tag[0] === tagName)?.[1] ?? null;
 }
 
-function appendAgentEvent(agentPubkey: string, event: ObserverEvent) {
+function appendAgentEvent(
+  agentPubkey: string,
+  event: ObserverEvent,
+  options: { broadcast?: boolean } = {},
+) {
   const key = normalizePubkey(agentPubkey);
   const current = eventsByAgent.get(key) ?? [];
   if (
@@ -68,6 +171,9 @@ function appendAgentEvent(agentPubkey: string, event: ObserverEvent) {
       : next,
   );
   notifyListeners();
+  if (options.broadcast !== false) {
+    postObserverSyncMessage({ type: "event", agentPubkey: key, event });
+  }
 }
 
 function compareObserverEvents(left: ObserverEvent, right: ObserverEvent) {
@@ -125,6 +231,7 @@ async function handleRelayObserverEvent(
 }
 
 export function ensureRelayObserverSubscription() {
+  ensureObserverSyncChannel();
   if (unsubscribeRelay) {
     return Promise.resolve();
   }
@@ -181,6 +288,7 @@ export function ensureRelayObserverSubscription() {
 }
 
 export function subscribeAgentObserverStore(listener: () => void) {
+  ensureObserverSyncChannel();
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -190,6 +298,7 @@ export function subscribeAgentObserverStore(listener: () => void) {
 export function getAgentObserverSnapshot(
   agentPubkey: string,
 ): ObserverSnapshot {
+  ensureObserverSyncChannel();
   return {
     connectionState,
     errorMessage,

@@ -29,6 +29,7 @@ type MarkdownProps = {
   className?: string;
   compact?: boolean;
   content: string;
+  enableChannelLinks?: boolean;
   imetaByUrl?: ImetaLookup;
   mentionNames?: string[];
   searchQuery?: string;
@@ -349,23 +350,26 @@ function createMarkdownComponents(
   } as Components;
 }
 
-function MarkdownInner({
+function MarkdownContent({
   channelNames,
   className,
   compact = false,
   content,
+  goChannel,
   imetaByUrl,
   mentionNames,
+  channels,
   searchQuery,
   tight = false,
-}: MarkdownProps) {
+}: MarkdownProps & {
+  channels: Channel[];
+  goChannel: (channelId: string) => void;
+}) {
   const variant: MarkdownVariant = tight
     ? "tight"
     : compact
       ? "compact"
       : "default";
-  const { channels } = useChannelNavigation();
-  const { goChannel } = useAppNavigation();
 
   const components = React.useMemo(
     () =>
@@ -373,7 +377,7 @@ function MarkdownInner({
         variant,
         channels,
         (channelId) => {
-          void goChannel(channelId);
+          goChannel(channelId);
         },
         imetaByUrl,
       ),
@@ -437,12 +441,45 @@ function MarkdownInner({
   );
 }
 
+function NavigableMarkdownInner(props: MarkdownProps) {
+  const { channels } = useChannelNavigation();
+  const { goChannel } = useAppNavigation();
+  const handleGoChannel = React.useCallback(
+    (channelId: string) => {
+      void goChannel(channelId);
+    },
+    [goChannel],
+  );
+
+  return (
+    <MarkdownContent
+      {...props}
+      channels={channels}
+      goChannel={handleGoChannel}
+    />
+  );
+}
+
+function StaticMarkdownInner(props: MarkdownProps) {
+  const noopGoChannel = React.useCallback(() => {}, []);
+  return <MarkdownContent {...props} channels={[]} goChannel={noopGoChannel} />;
+}
+
+function MarkdownInner(props: MarkdownProps) {
+  if (props.enableChannelLinks === false) {
+    return <StaticMarkdownInner {...props} />;
+  }
+
+  return <NavigableMarkdownInner {...props} />;
+}
+
 export const Markdown = React.memo(
   MarkdownInner,
   (prev, next) =>
     prev.content === next.content &&
     prev.className === next.className &&
     prev.compact === next.compact &&
+    prev.enableChannelLinks === next.enableChannelLinks &&
     prev.tight === next.tight &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
     shallowArrayEqual(prev.channelNames, next.channelNames) &&

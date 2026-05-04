@@ -2,10 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "agent-session-*"],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
     "core:webview:allow-set-webview-zoom",
+    "core:window:allow-create",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",

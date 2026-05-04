@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { Activity, CircleDot, Octagon, X } from "lucide-react";
+import { Activity, CircleDot, ExternalLink, Octagon, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
@@ -26,6 +26,7 @@ type AgentSessionThreadPanelProps = {
   channel: Channel;
   isWorking: boolean;
   onClose: () => void;
+  onDetach: () => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   profiles?: UserProfileLookup;
@@ -38,6 +39,7 @@ export function AgentSessionThreadPanel({
   channel,
   isWorking,
   onClose,
+  onDetach,
   onResetWidth,
   onResizeStart,
   profiles,
@@ -120,6 +122,23 @@ export function AgentSessionThreadPanel({
               Idle
             </Badge>
           )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Detach activity panel"
+                data-testid="agent-session-detach"
+                onClick={onDetach}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <ExternalLink className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              Open this agent activity in a separate window.
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

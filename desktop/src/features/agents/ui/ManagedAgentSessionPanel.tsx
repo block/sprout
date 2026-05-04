@@ -29,6 +29,7 @@ type ManagedAgentSessionPanelProps = {
   channelId?: string | null;
   className?: string;
   emptyDescription?: string;
+  enableInlineNavigation?: boolean;
   showHeader?: boolean;
   showRaw?: boolean;
 };
@@ -39,6 +40,7 @@ export function ManagedAgentSessionPanel({
   channelId = null,
   className,
   emptyDescription = "Mention this agent in a channel to watch the next turn.",
+  enableInlineNavigation = true,
   showHeader = true,
   showRaw = true,
 }: ManagedAgentSessionPanelProps) {
@@ -84,6 +86,7 @@ export function ManagedAgentSessionPanel({
         agentName={agent.name}
         connectionState={connectionState}
         emptyDescription={emptyDescription}
+        enableInlineNavigation={enableInlineNavigation}
         errorMessage={errorMessage}
         events={scopedEvents}
         hasObserver={agent.status === "running"}
@@ -134,6 +137,7 @@ function SessionBody({
   agentName,
   connectionState,
   emptyDescription,
+  enableInlineNavigation,
   errorMessage,
   events,
   hasObserver,
@@ -144,6 +148,7 @@ function SessionBody({
   agentName: string;
   connectionState: ConnectionState;
   emptyDescription: string;
+  enableInlineNavigation: boolean;
   errorMessage: string | null;
   events: ObserverEvent[];
   hasObserver: boolean;
@@ -167,6 +172,7 @@ function SessionBody({
           <AgentSessionTranscriptList
             agentAvatarUrl={agentAvatarUrl}
             agentName={agentName}
+            enableInlineNavigation={enableInlineNavigation}
             emptyDescription={emptyDescription}
             items={transcript}
           />
