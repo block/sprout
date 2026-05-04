@@ -740,7 +740,7 @@ mod tests {
     /// granted through the NIP-AA path.
     #[test]
     fn nip_aa_scope_intersection_strips_admin() {
-        let admin_only = vec![
+        let admin_only = [
             sprout_auth::Scope::AdminChannels,
             sprout_auth::Scope::AdminUsers,
         ];
@@ -760,7 +760,7 @@ mod tests {
     /// virtual member set — NIP-AA agents must retain messaging access.
     #[test]
     fn nip_aa_scope_intersection_preserves_read_write() {
-        let token_scopes = vec![
+        let token_scopes = [
             sprout_auth::Scope::MessagesRead,
             sprout_auth::Scope::MessagesWrite,
         ];

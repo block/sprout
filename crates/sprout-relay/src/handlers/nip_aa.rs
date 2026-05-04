@@ -350,7 +350,7 @@ mod tests {
 
     fn make_hex(len: usize, uppercase: bool) -> String {
         let ch = if uppercase { 'A' } else { 'a' };
-        std::iter::repeat(ch).take(len).collect()
+        std::iter::repeat_n(ch, len).collect()
     }
 
     #[test]
