@@ -113,55 +113,67 @@ class _SubmittedEvent {
   const _SubmittedEvent({required this.kind, required this.tags});
 }
 
-class _FakeSignedEventRelay extends SignedEventRelay {
+/// Build a stub NostrEvent for tests that just need a "ack" return value.
+NostrEvent _stubAckEvent() => const NostrEvent(
+  id: 'stub',
+  pubkey: '',
+  createdAt: 0,
+  kind: 0,
+  tags: [],
+  content: '',
+  sig: '',
+);
+
+class _FakeSignedEventRelay implements SignedEventRelay {
   final Completer<_SubmittedEvent> submitted = Completer<_SubmittedEvent>();
 
-  _FakeSignedEventRelay()
-    : super(client: RelayClient(baseUrl: 'http://localhost:3000'), nsec: null);
+  @override
+  String? get pubkey => null;
 
   @override
-  Future<void> submit({
+  Future<NostrEvent> submit({
     required int kind,
     required String content,
     required List<List<String>> tags,
     int? createdAt,
   }) async {
     submitted.complete(_SubmittedEvent(kind: kind, tags: tags));
+    return _stubAckEvent();
   }
 }
 
-class _UnsupportedKindSignedEventRelay extends SignedEventRelay {
+class _UnsupportedKindSignedEventRelay implements SignedEventRelay {
   int submitCount = 0;
 
-  _UnsupportedKindSignedEventRelay()
-    : super(client: RelayClient(baseUrl: 'http://localhost:3000'), nsec: null);
+  @override
+  String? get pubkey => null;
 
   @override
-  Future<void> submit({
+  Future<NostrEvent> submit({
     required int kind,
     required String content,
     required List<List<String>> tags,
     int? createdAt,
   }) async {
     submitCount++;
-    throw RelayException(400, '{"error":"restricted: unknown event kind"}');
+    throw Exception('restricted: unknown event kind');
   }
 }
 
-class _MissingScopeSignedEventRelay extends SignedEventRelay {
+class _MissingScopeSignedEventRelay implements SignedEventRelay {
   int submitCount = 0;
 
-  _MissingScopeSignedEventRelay()
-    : super(client: RelayClient(baseUrl: 'http://localhost:3000'), nsec: null);
+  @override
+  String? get pubkey => null;
 
   @override
-  Future<void> submit({
+  Future<NostrEvent> submit({
     required int kind,
     required String content,
     required List<List<String>> tags,
     int? createdAt,
   }) async {
     submitCount++;
-    throw RelayException(403, '{"message":"missing users:write"}');
+    throw Exception('missing users:write');
   }
 }

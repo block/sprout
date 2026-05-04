@@ -329,11 +329,13 @@ async fn handle_dm_open(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "channel_id": channel.id.to_string(),
-            "created": was_created,
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "channel_id": channel.id.to_string(),
+                "created": was_created,
+            })
+        ),
     })
 }
 
@@ -456,10 +458,12 @@ async fn handle_dm_add_member(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "channel_id": new_channel.id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "channel_id": new_channel.id.to_string(),
+            })
+        ),
     })
 }
 
@@ -623,7 +627,7 @@ async fn handle_workflow_def(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: resp.to_string(),
+        message: format!("response:{}", resp),
     })
 }
 
@@ -748,10 +752,12 @@ async fn handle_workflow_trigger(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "run_id": run_id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "run_id": run_id.to_string(),
+            })
+        ),
     })
 }
 
@@ -887,11 +893,13 @@ async fn handle_approval_grant(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "status": "granted",
-            "run_id": run_id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "status": "granted",
+                "run_id": run_id.to_string(),
+            })
+        ),
     })
 }
 
@@ -1018,11 +1026,13 @@ async fn handle_approval_deny(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "status": "denied",
-            "run_id": run_id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "status": "denied",
+                "run_id": run_id.to_string(),
+            })
+        ),
     })
 }
 

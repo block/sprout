@@ -566,6 +566,10 @@ pub async fn emit_group_discovery_events(
         }
         if channel.visibility == "private" {
             tags.push(Tag::parse(&["private"])?);
+        } else {
+            // Explicit "public" tag complements NIP-29's absence-of-"private" convention,
+            // making channel visibility self-describing for clients.
+            tags.push(Tag::parse(&["public"])?);
         }
         // NIP-29 hidden tag: hint to clients not to show DMs in public group lists.
         // Not a security boundary — access control is handled by channel-scoped storage.
@@ -574,6 +578,19 @@ pub async fn emit_group_discovery_events(
         }
         // Sprout channels always require explicit membership
         tags.push(Tag::parse(&["closed"])?);
+        // Channel type tag so clients can distinguish stream/forum/dm without inference
+        tags.push(Tag::parse(&["t", &channel.channel_type])?);
+        // Optional topic / purpose for richer client UX
+        if let Some(ref topic) = channel.topic {
+            if !topic.is_empty() {
+                tags.push(Tag::parse(&["topic", topic])?);
+            }
+        }
+        if let Some(ref purpose) = channel.purpose {
+            if !purpose.is_empty() {
+                tags.push(Tag::parse(&["purpose", purpose])?);
+            }
+        }
         emit_addressable_discovery_event(
             state,
             channel_id,
@@ -609,7 +626,9 @@ pub async fn emit_group_discovery_events(
         let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
         for m in &members {
             let pubkey_hex = hex::encode(&m.pubkey);
-            tags.push(Tag::parse(&["p", &pubkey_hex])?);
+            // NIP-29 convention: ["p", pubkey, relay_url, role]. Empty relay_url
+            // because the canonical relay is implicit (this event is signed by it).
+            tags.push(Tag::parse(&["p", &pubkey_hex, "", &m.role])?);
         }
         emit_addressable_discovery_event(
             state,

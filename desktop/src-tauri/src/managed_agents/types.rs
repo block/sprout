@@ -74,7 +74,6 @@ pub struct ManagedAgentRecord {
     /// Re-attestation requires agent recreation (v2 migration scope).
     #[serde(default)]
     pub auth_tag: Option<String>,
-    pub api_token: Option<String>,
     pub relay_url: String,
     pub acp_command: String,
     pub agent_command: String,
@@ -146,7 +145,6 @@ pub struct ManagedAgentSummary {
     pub system_prompt: Option<String>,
     pub model: Option<String>,
     pub mcp_toolsets: Option<String>,
-    pub has_api_token: bool,
     pub backend: BackendKind,
     pub backend_agent_id: Option<String>,
     pub status: String,
@@ -182,11 +180,6 @@ pub struct CreateManagedAgentRequest {
     pub model: Option<String>,
     pub mcp_toolsets: Option<String>,
     #[serde(default)]
-    pub mint_token: bool,
-    #[serde(default)]
-    pub token_scopes: Vec<String>,
-    pub token_name: Option<String>,
-    #[serde(default)]
     pub spawn_after_create: bool,
     #[serde(default = "default_start_on_app_launch")]
     pub start_on_app_launch: bool,
@@ -198,7 +191,6 @@ pub struct CreateManagedAgentRequest {
 pub struct CreateManagedAgentResponse {
     pub agent: ManagedAgentSummary,
     pub private_key_nsec: String,
-    pub api_token: Option<String>,
     pub profile_sync_error: Option<String>,
     pub spawn_error: Option<String>,
 }
@@ -230,21 +222,6 @@ pub struct UpdatePersonaRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub name_pool: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MintManagedAgentTokenRequest {
-    pub pubkey: String,
-    pub token_name: Option<String>,
-    #[serde(default)]
-    pub scopes: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MintManagedAgentTokenResponse {
-    pub agent: ManagedAgentSummary,
-    pub token: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,7 +411,6 @@ mod tests {
                 "pubkey": "abcd1234",
                 "name": "test-agent",
                 "private_key_nsec": "nsec1fake",
-                "api_token": "sprt_tok_fake",
                 "relay_url": "wss://localhost:3000",
                 "acp_command": "sprout-acp",
                 "agent_command": "goose",
@@ -464,7 +440,6 @@ mod tests {
             "name": "test-agent",
             "private_key_nsec": "nsec1fake",
             "auth_tag": "[\"auth\",\"deadbeef\",\"\",\"cafebabe\"]",
-            "api_token": "sprt_tok_fake",
             "relay_url": "wss://localhost:3000",
             "acp_command": "sprout-acp",
             "agent_command": "goose",

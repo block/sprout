@@ -17,7 +17,6 @@ enum SocketState { disconnected, connecting, authenticating, connected }
 class RelaySocket {
   final String _wsUrl;
   final String? _nsec;
-  final String? _apiToken;
   final void Function(List<dynamic> message) _onMessage;
   final void Function() _onConnected;
   final void Function(Object? error) _onDisconnected;
@@ -34,13 +33,11 @@ class RelaySocket {
   RelaySocket({
     required String wsUrl,
     required String? nsec,
-    required String? apiToken,
     required void Function(List<dynamic> message) onMessage,
     required void Function() onConnected,
     required void Function(Object? error) onDisconnected,
   }) : _wsUrl = wsUrl,
        _nsec = nsec,
-       _apiToken = apiToken,
        _onMessage = onMessage,
        _onConnected = onConnected,
        _onDisconnected = onDisconnected;
@@ -191,7 +188,6 @@ class RelaySocket {
       final tags = <List<String>>[
         ['relay', _wsUrl],
         ['challenge', challenge],
-        if (_apiToken != null) ['auth_token', _apiToken],
       ];
 
       // Create and sign the kind:22242 AUTH event.

@@ -40,16 +40,10 @@ import 'timeline_message.dart';
 /// Fetch channel members and preload their profiles into the user cache.
 Future<void> _preloadMembers(WidgetRef ref, String channelId) async {
   // Capture references before async gap to avoid using disposed ref.
-  final client = ref.read(relayClientProvider);
   final notifier = ref.read(userCacheProvider.notifier);
   try {
-    final json =
-        await client.get('/api/channels/$channelId/members')
-            as Map<String, dynamic>;
-    final members = json['members'] as List<dynamic>? ?? [];
-    final pubkeys = members
-        .map((m) => (m as Map<String, dynamic>)['pubkey'] as String)
-        .toList();
+    final members = await ref.read(channelMembersProvider(channelId).future);
+    final pubkeys = members.map((m) => m.pubkey).toList();
     if (pubkeys.isNotEmpty) {
       notifier.preload(pubkeys);
     }

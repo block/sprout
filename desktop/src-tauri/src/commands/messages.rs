@@ -1,18 +1,19 @@
 use nostr::EventId;
-use reqwest::Method;
 use tauri::State;
 
 use crate::{
     app_state::AppState,
     events,
     models::{
-        FeedResponse, ForumPostsResponse, ForumThreadResponse, GetFeedQuery, GetForumPostsQuery,
-        GetForumThreadQuery, SearchQueryParams, SearchResponse, SendChannelMessageResponse,
+        FeedItemInfo, FeedMeta, FeedResponse, FeedSections, ForumMessageInfo, ForumPostsResponse,
+        ForumThreadReplyInfo, ForumThreadResponse, SearchResponse, SendChannelMessageResponse,
+        ThreadSummary,
     },
-    relay::{api_path, build_authed_request, relay_error_message, send_json_request, submit_event},
+    nostr_convert,
+    relay::{query_relay, submit_event},
 };
 
-// ── Reads (unchanged) ────────────────────────────────────────────────────────
+// ── Reads (pure-nostr) ──────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_feed(
@@ -21,14 +22,81 @@ pub async fn get_feed(
     types: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FeedResponse, String> {
-    let request = build_authed_request(&state.http_client, Method::GET, "/api/feed", &state)?
-        .query(&GetFeedQuery {
-            since,
-            limit,
-            types: types.as_deref(),
-        });
+    let cap = limit.unwrap_or(50).min(100);
 
-    send_json_request(request).await
+    // Parse types filter — if absent, run all sub-queries.
+    // Comma-separated: e.g. "mentions,needs_action".
+    let want_mentions = types
+        .as_deref()
+        .map(|t| t.split(',').any(|s| s.trim() == "mentions"))
+        .unwrap_or(true);
+    let want_needs_action = types
+        .as_deref()
+        .map(|t| t.split(',').any(|s| s.trim() == "needs_action"))
+        .unwrap_or(true);
+
+    let my_pubkey = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        keys.public_key().to_hex()
+    };
+
+    // Mentions: messages that reference me via #p.
+    let mut mention_filter = serde_json::json!({
+        "kinds": [9, 40002, 1, 45001, 45003],
+        "#p": [my_pubkey],
+        "limit": cap,
+    });
+    if let Some(s) = since {
+        mention_filter["since"] = serde_json::json!(s);
+    }
+    // Needs-action: workflow approval-request events sent to me.
+    let mut approval_filter = serde_json::json!({
+        "kinds": [46010, 46011, 46012],
+        "#p": [my_pubkey],
+        "limit": 20,
+    });
+    if let Some(s) = since {
+        approval_filter["since"] = serde_json::json!(s);
+    }
+
+    let mention_events = if want_mentions {
+        query_relay(&state, &[mention_filter])
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let approval_events = if want_needs_action {
+        query_relay(&state, &[approval_filter])
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let mentions: Vec<FeedItemInfo> = mention_events
+        .iter()
+        .map(|ev| feed_item_from_event(ev, "mentions"))
+        .collect();
+    let needs_action: Vec<FeedItemInfo> = approval_events
+        .iter()
+        .map(|ev| feed_item_from_event(ev, "needs_action"))
+        .collect();
+
+    let total = (mentions.len() + needs_action.len()) as u64;
+    Ok(FeedResponse {
+        feed: FeedSections {
+            mentions,
+            needs_action,
+            activity: Vec::new(),
+            agent_activity: Vec::new(),
+        },
+        meta: FeedMeta {
+            since: since.unwrap_or(0),
+            total,
+            generated_at: chrono::Utc::now().timestamp(),
+        },
+    })
 }
 
 #[tauri::command]
@@ -38,14 +106,20 @@ pub async fn search_messages(
     channel_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<SearchResponse, String> {
-    let request = build_authed_request(&state.http_client, Method::GET, "/api/search", &state)?
-        .query(&SearchQueryParams {
-            q: q.trim(),
-            limit,
-            channel_id: channel_id.as_deref(),
-        });
+    let cap = limit.unwrap_or(20).min(100);
+    let mut filter = serde_json::Map::new();
+    filter.insert(
+        "kinds".to_string(),
+        serde_json::json!([9, 40002, 45001, 45003]),
+    );
+    filter.insert("search".to_string(), serde_json::json!(q.trim()));
+    filter.insert("limit".to_string(), serde_json::json!(cap));
+    if let Some(cid) = channel_id {
+        filter.insert("#h".to_string(), serde_json::json!([cid]));
+    }
 
-    send_json_request(request).await
+    let events = query_relay(&state, &[serde_json::Value::Object(filter)]).await?;
+    Ok(nostr_convert::search_response_from_events(&events))
 }
 
 #[tauri::command]
@@ -55,16 +129,26 @@ pub async fn get_forum_posts(
     before: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<ForumPostsResponse, String> {
-    let path = api_path(&["channels", &channel_id, "messages"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?.query(
-        &GetForumPostsQuery {
-            limit,
-            before,
-            with_threads: true,
-        },
-    );
+    let cap = limit.unwrap_or(20).min(100);
+    let mut filter = serde_json::Map::new();
+    filter.insert("kinds".to_string(), serde_json::json!([45001]));
+    filter.insert("#h".to_string(), serde_json::json!([channel_id.clone()]));
+    filter.insert("limit".to_string(), serde_json::json!(cap));
+    if let Some(t) = before {
+        filter.insert("until".to_string(), serde_json::json!(t));
+    }
 
-    send_json_request(request).await
+    let events = query_relay(&state, &[serde_json::Value::Object(filter)]).await?;
+    let messages: Vec<ForumMessageInfo> = events
+        .iter()
+        .map(|ev| forum_message_from_event(ev, &channel_id))
+        .collect();
+
+    let next_cursor = messages.last().map(|m| m.created_at);
+    Ok(ForumPostsResponse {
+        messages,
+        next_cursor,
+    })
 }
 
 #[tauri::command]
@@ -75,36 +159,63 @@ pub async fn get_forum_thread(
     cursor: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<ForumThreadResponse, String> {
-    let path = api_path(&["channels", &channel_id, "threads", &event_id]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?
-        .query(&GetForumThreadQuery { limit, cursor });
+    let _ = (limit, cursor);
+    // Two filters: the root event itself, plus any reply (kinds 9/45003)
+    // that references it via #e.
+    let events = query_relay(
+        &state,
+        &[
+            serde_json::json!({ "ids": [event_id.clone()], "kinds": [9, 40002, 45001, 45003] }),
+            serde_json::json!({
+                "kinds": [9, 45003],
+                "#e": [event_id.clone()],
+                "#h": [channel_id.clone()],
+            }),
+        ],
+    )
+    .await?;
 
-    send_json_request(request).await
+    let mut root: Option<ForumMessageInfo> = None;
+    let mut replies: Vec<ForumThreadReplyInfo> = Vec::new();
+    for ev in &events {
+        if ev.id.to_hex() == event_id {
+            root = Some(forum_message_from_event(ev, &channel_id));
+        } else {
+            replies.push(forum_reply_from_event(ev, &channel_id, &event_id));
+        }
+    }
+    let total_replies = replies.len() as u32;
+
+    let root = root.ok_or_else(|| "forum thread root event not found".to_string())?;
+    Ok(ForumThreadResponse {
+        root,
+        replies,
+        total_replies,
+        next_cursor: None,
+    })
 }
 
 #[tauri::command]
 pub async fn get_event(event_id: String, state: State<'_, AppState>) -> Result<String, String> {
-    let path = api_path(&["events", &event_id]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("request failed: {error}"))?;
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "ids": [event_id],
+            "kinds": [0, 1, 3, 5, 7, 9, 30078, 40002, 40003, 40008, 40099, 40100, 45001, 45003],
+            "limit": 1
+        })],
+    )
+    .await?;
 
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
-
-    response
-        .text()
-        .await
-        .map_err(|error| format!("parse failed: {error}"))
+    let ev = events
+        .first()
+        .ok_or_else(|| "event not found".to_string())?;
+    serde_json::to_string(ev).map_err(|e| format!("serialize event: {e}"))
 }
 
-// ── Writes (migrated to signed events via POST /api/events) ──────────────────
+// ── Writes ──────────────────────────────────────────────────────────────────
 
 /// Fetch a parent event and extract the thread root from its NIP-10 e-tags.
-/// Same logic as MCP's `resolve_thread_ref`.
 async fn resolve_thread_ref(
     parent_event_id: &str,
     state: &AppState,
@@ -112,41 +223,33 @@ async fn resolve_thread_ref(
     let parent_eid =
         EventId::from_hex(parent_event_id).map_err(|e| format!("invalid parent event ID: {e}"))?;
 
-    let path = api_path(&["events", parent_event_id]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("failed to fetch parent event: {e}"))?;
+    let evs = query_relay(
+        state,
+        &[serde_json::json!({
+            "ids": [parent_event_id],
+            "kinds": [9, 40002, 45001, 45003],
+            "limit": 1
+        })],
+    )
+    .await?;
 
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
+    let parent = evs
+        .first()
+        .ok_or_else(|| "parent event not found".to_string())?;
 
-    let event_json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse parent event: {e}"))?;
-
-    // Walk tags looking for NIP-10 root/reply markers — same as MCP's find_root_from_tags.
-    let root_hex = event_json
-        .get("tags")
-        .and_then(|t| t.as_array())
-        .and_then(|tags| {
-            let mut root = None;
-            let mut reply = None;
-            for tag in tags {
-                let parts = tag.as_array()?;
-                if parts.len() >= 4 && parts[0].as_str() == Some("e") {
-                    match parts[3].as_str() {
-                        Some("root") => root = parts[1].as_str().map(|s| s.to_string()),
-                        Some("reply") => reply = parts[1].as_str().map(|s| s.to_string()),
-                        _ => {}
-                    }
-                }
+    // Walk tags looking for NIP-10 root/reply markers.
+    let (mut root, mut reply) = (None, None);
+    for tag in parent.tags.iter() {
+        let s = tag.as_slice();
+        if s.len() >= 4 && s[0] == "e" {
+            match s[3].as_str() {
+                "root" => root = Some(s[1].clone()),
+                "reply" => reply = Some(s[1].clone()),
+                _ => {}
             }
-            root.or(reply)
-        });
+        }
+    }
+    let root_hex = root.or(reply);
 
     let root_eid = match root_hex {
         Some(hex) if hex != parent_event_id => {
@@ -178,7 +281,6 @@ pub async fn send_channel_message(
     let media = media_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
 
-    // Track the resolved thread ref so we can return accurate metadata.
     let mut resolved_root: Option<String> = None;
 
     let builder = match kind_num {
@@ -200,7 +302,6 @@ pub async fn send_channel_message(
             )?
         }
         _ => {
-            // Stream message (kind 9) — with optional thread ref for replies.
             let thread_ref = match parent_event_id.as_deref() {
                 Some(pid) => {
                     let tr = resolve_thread_ref(pid, &state).await?;
@@ -221,7 +322,6 @@ pub async fn send_channel_message(
 
     let result = submit_event(builder, &state).await?;
 
-    // Derive depth: 0 = top-level, 1 = direct reply, 2+ = nested.
     let depth = match (&parent_event_id, &resolved_root) {
         (None, _) => 0,
         (Some(pid), Some(root)) if pid == root => 1,
@@ -256,39 +356,30 @@ pub async fn remove_reaction(
     emoji: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Fetch reactions to find our reaction event ID — same pattern as MCP.
-    let path = api_path(&["messages", event_id.trim(), "reactions"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
-    let reactions: serde_json::Value = send_json_request(request).await?;
+    // Find our own kind:7 reaction event referencing the target.
+    let my_pubkey = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        keys.public_key().to_hex()
+    };
+    let target = event_id.trim();
+    let trimmed_emoji = emoji.trim();
 
-    let my_pubkey = state
-        .keys
-        .lock()
-        .map_err(|e| e.to_string())?
-        .public_key()
-        .to_hex();
+    let reactions = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [7],
+            "#e": [target],
+            "authors": [my_pubkey],
+        })],
+    )
+    .await?;
 
-    let reaction_event_id_hex = reactions
-        .get("reactions")
-        .and_then(|r| r.as_array())
-        .and_then(|groups| {
-            groups.iter().find_map(|group| {
-                if group.get("emoji")?.as_str()? != emoji.trim() {
-                    return None;
-                }
-                group.get("users")?.as_array()?.iter().find_map(|user| {
-                    if user.get("pubkey")?.as_str()? != my_pubkey {
-                        return None;
-                    }
-                    user.get("reaction_event_id")?.as_str().map(String::from)
-                })
-            })
-        })
+    let reaction_event = reactions
+        .iter()
+        .find(|ev| ev.content.trim() == trimmed_emoji)
         .ok_or("could not find your reaction event for this emoji")?;
 
-    let reaction_eid = EventId::from_hex(&reaction_event_id_hex)
-        .map_err(|e| format!("invalid reaction event ID: {e}"))?;
-    let builder = events::build_remove_reaction(reaction_eid)?;
+    let builder = events::build_remove_reaction(reaction_event.id)?;
     submit_event(builder, &state).await?;
     Ok(())
 }
@@ -318,4 +409,99 @@ pub async fn delete_message(event_id: String, state: State<'_, AppState>) -> Res
     let builder = events::build_delete_compat(target_eid)?;
     submit_event(builder, &state).await?;
     Ok(())
+}
+
+// ── Local helpers ───────────────────────────────────────────────────────────
+
+fn channel_id_from_tags(ev: &nostr::Event) -> Option<String> {
+    ev.tags.iter().find_map(|t| {
+        let s = t.as_slice();
+        if s.len() >= 2 && s[0] == "h" {
+            Some(s[1].clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn tags_to_vec(ev: &nostr::Event) -> Vec<Vec<String>> {
+    ev.tags.iter().map(|t| t.as_slice().to_vec()).collect()
+}
+
+fn feed_item_from_event(ev: &nostr::Event, category: &str) -> FeedItemInfo {
+    let channel_id = channel_id_from_tags(ev);
+    FeedItemInfo {
+        id: ev.id.to_hex(),
+        kind: ev.kind.as_u16() as u32,
+        pubkey: ev.pubkey.to_hex(),
+        content: ev.content.clone(),
+        created_at: ev.created_at.as_u64(),
+        channel_id,
+        channel_name: String::new(),
+        channel_type: None,
+        tags: tags_to_vec(ev),
+        category: category.to_string(),
+    }
+}
+
+fn forum_message_from_event(ev: &nostr::Event, channel_id: &str) -> ForumMessageInfo {
+    ForumMessageInfo {
+        event_id: ev.id.to_hex(),
+        pubkey: ev.pubkey.to_hex(),
+        content: ev.content.clone(),
+        kind: ev.kind.as_u16() as u32,
+        created_at: ev.created_at.as_u64() as i64,
+        channel_id: channel_id.to_string(),
+        tags: tags_to_vec(ev),
+        thread_summary: Some(ThreadSummary {
+            reply_count: 0,
+            descendant_count: 0,
+            last_reply_at: None,
+            participants: Vec::new(),
+        }),
+        reactions: serde_json::Value::Null,
+    }
+}
+
+fn forum_reply_from_event(
+    ev: &nostr::Event,
+    channel_id: &str,
+    root_event_id: &str,
+) -> ForumThreadReplyInfo {
+    // Walk e-tags for NIP-10 parent/root markers.
+    let (mut parent_id, mut explicit_root) = (None, None);
+    for t in ev.tags.iter() {
+        let s = t.as_slice();
+        if s.len() >= 2 && s[0] == "e" {
+            match s.get(3).map(|x| x.as_str()) {
+                Some("root") => explicit_root = Some(s[1].clone()),
+                Some("reply") => parent_id = Some(s[1].clone()),
+                _ => {
+                    if parent_id.is_none() {
+                        parent_id = Some(s[1].clone());
+                    }
+                }
+            }
+        }
+    }
+    let parent = parent_id
+        .clone()
+        .unwrap_or_else(|| root_event_id.to_string());
+    let root = explicit_root.unwrap_or_else(|| root_event_id.to_string());
+    let depth = if parent == root { 1 } else { 2 };
+
+    ForumThreadReplyInfo {
+        event_id: ev.id.to_hex(),
+        pubkey: ev.pubkey.to_hex(),
+        content: ev.content.clone(),
+        kind: ev.kind.as_u16() as u32,
+        created_at: ev.created_at.as_u64() as i64,
+        channel_id: channel_id.to_string(),
+        tags: tags_to_vec(ev),
+        parent_event_id: Some(parent),
+        root_event_id: Some(root),
+        depth,
+        broadcast: false,
+        reactions: serde_json::Value::Null,
+    }
 }

@@ -1,12 +1,12 @@
 use nostr::EventId;
-use reqwest::Method;
 use tauri::State;
 
 use crate::{
     app_state::AppState,
     events,
-    models::{ContactEntry, ContactListResponse, UserNotesResponse},
-    relay::{api_path, build_authed_request, send_json_request, submit_event, SubmitEventResponse},
+    models::{ContactEntry, ContactListResponse, UserNoteInfo, UserNotesResponse},
+    nostr_convert,
+    relay::{query_relay, submit_event, SubmitEventResponse},
 };
 
 /// Publish a global kind:1 text note (NIP-01).
@@ -34,9 +34,21 @@ pub async fn get_contact_list(
     pubkey: String,
     state: State<'_, AppState>,
 ) -> Result<ContactListResponse, String> {
-    let path = api_path(&["users", &pubkey, "contact-list"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
-    send_json_request(request).await
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [3],
+            "authors": [pubkey],
+            "limit": 1
+        })],
+    )
+    .await?;
+
+    events
+        .first()
+        .map(nostr_convert::contact_list_from_event)
+        .transpose()?
+        .ok_or_else(|| "contact list not found".to_string())
 }
 
 /// Replace the full contact list (kind:3, NIP-02). Read-before-write required
@@ -61,17 +73,22 @@ pub async fn set_contact_list(
     submit_event(builder, &state).await
 }
 
-/// Maximum number of pubkeys per timeline request to prevent unbounded
-/// sequential HTTP requests.
+/// Maximum number of pubkeys per timeline request to keep filter size bounded.
 const MAX_TIMELINE_PUBKEYS: usize = 100;
 
-/// Fetch notes for multiple pubkeys sequentially and return a merged, sorted timeline.
+/// Fetch notes for multiple pubkeys with a single multi-author query.
 #[tauri::command]
 pub async fn get_notes_timeline(
     pubkeys: Vec<String>,
     limit_per_user: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<UserNotesResponse, String> {
+    if pubkeys.is_empty() {
+        return Ok(UserNotesResponse {
+            notes: Vec::new(),
+            next_cursor: None,
+        });
+    }
     if pubkeys.len() > MAX_TIMELINE_PUBKEYS {
         return Err(format!(
             "too many pubkeys (max {MAX_TIMELINE_PUBKEYS}, got {})",
@@ -79,34 +96,38 @@ pub async fn get_notes_timeline(
         ));
     }
 
-    let per_user = limit_per_user.unwrap_or(10).min(50);
-    let mut all_notes = Vec::new();
-    let mut errors = 0u32;
+    // One filter for all authors: `limit` here is the total cap. We use
+    // `limit_per_user * pubkeys.len()` as a rough approximation, capped at 200
+    // to match the prior implementation's behavior.
+    let per_user = limit_per_user.unwrap_or(10).min(50) as usize;
+    let cap: usize = (per_user * pubkeys.len()).min(200);
 
-    for pk in &pubkeys {
-        let path = api_path(&["users", pk, "notes"]);
-        let req = build_authed_request(&state.http_client, Method::GET, &path, &state)
-            .map(|r| r.query(&[("limit", per_user.to_string())]));
-        match req {
-            Ok(r) => match send_json_request::<UserNotesResponse>(r).await {
-                Ok(resp) => all_notes.extend(resp.notes),
-                Err(_) => errors += 1,
-            },
-            Err(_) => errors += 1,
-        }
-    }
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [1],
+            "authors": pubkeys,
+            "limit": cap,
+        })],
+    )
+    .await?;
 
-    // If all requests failed, surface the error instead of returning empty.
-    if errors > 0 && all_notes.is_empty() && !pubkeys.is_empty() {
-        return Err("failed to fetch notes from any user".into());
-    }
+    let mut notes: Vec<UserNoteInfo> = events
+        .iter()
+        .map(|ev| UserNoteInfo {
+            id: ev.id.to_hex(),
+            pubkey: ev.pubkey.to_hex(),
+            created_at: ev.created_at.as_u64() as i64,
+            content: ev.content.clone(),
+        })
+        .collect();
 
     // Sort newest-first.
-    all_notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    all_notes.truncate(200);
+    notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    notes.truncate(200);
 
     Ok(UserNotesResponse {
-        notes: all_notes,
+        notes,
         next_cursor: None,
     })
 }

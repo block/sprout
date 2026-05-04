@@ -691,6 +691,13 @@ fn extract_channel_id_from_filters(filters: &[Filter]) -> Option<uuid::Uuid> {
 pub(crate) fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: &str) -> bool {
     let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
     filters.iter().all(|filter| {
+        // Filters with explicit `ids` are targeting specific known events — they
+        // can't be used to fish for p-gated events you don't own because the
+        // caller already knows the event ID. Skip the p-gate check.
+        if filter.ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            return true;
+        }
+
         let can_match_p_gated = filter.kinds.as_ref().is_none_or(|ks| {
             ks.iter()
                 .any(|kind| P_GATED_KINDS.contains(&(kind.as_u16() as u32)))

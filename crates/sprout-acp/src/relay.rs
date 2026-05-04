@@ -132,7 +132,10 @@ impl RestClient {
             .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
         let method_tag = Tag::parse(&["method", method])
             .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
-        let mut tags = vec![u_tag, method_tag];
+        // Nonce prevents replay rejection for rapid-fire requests with identical bodies.
+        let nonce_tag = Tag::parse(&["nonce", &uuid::Uuid::new_v4().to_string()])
+            .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
+        let mut tags = vec![u_tag, method_tag, nonce_tag];
 
         if let Some(b) = body {
             let hash = hex::encode(Sha256::digest(b));

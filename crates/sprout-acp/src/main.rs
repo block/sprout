@@ -110,30 +110,149 @@ fn resolve_agent_owner(config: &Config) -> Option<String> {
 /// Cache for the agent's owner pubkey.
 ///
 /// Owner is now provided via `--agent-owner` config flag (no REST lookup).
-/// Kept as a struct for API compatibility with the sibling cache.
+/// Cache for the agent's owner pubkey + sibling lookups.
+///
+/// Siblings are other agents whose NIP-OA auth tag proves the same owner.
+/// Lookup results are cached for the process lifetime (attestations are immutable).
 struct OwnerCache {
     pubkey: Option<String>,
+    /// author_hex → is_sibling (true = same owner, false = not)
+    siblings: std::sync::Mutex<HashMap<String, bool>>,
 }
 
 impl OwnerCache {
     fn new(initial: Option<String>) -> Self {
-        Self { pubkey: initial }
+        Self {
+            pubkey: initial,
+            siblings: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     /// Return the cached owner pubkey.
     fn get(&self) -> Option<&str> {
         self.pubkey.as_deref()
     }
+
+    /// Check if author is a known sibling (cached result).
+    fn is_known_sibling(&self, author: &str) -> Option<bool> {
+        self.siblings.lock().ok()?.get(author).copied()
+    }
+
+    /// Cache a sibling lookup result.
+    fn cache_sibling(&self, author: String, is_sibling: bool) {
+        if let Ok(mut map) = self.siblings.lock() {
+            // Cap at 256 entries to prevent unbounded growth.
+            if map.len() >= 256 {
+                map.clear();
+            }
+            map.insert(author, is_sibling);
+        }
+    }
 }
 
-/// Check if `author` is the owner.
+/// Check if `author` is the owner OR a sibling (same owner via NIP-OA).
 ///
-/// Used by the `OwnerOnly` author gate mode. Owner is provided via config.
-fn is_owner(author: &str, owner_cache: &OwnerCache) -> bool {
-    match owner_cache.get() {
-        Some(o) => author == o,
-        None => false, // no owner configured — fail closed
+/// For unknown authors, queries their kind:0 profile to extract the NIP-OA
+/// auth tag and verify the owner matches. Result is cached.
+async fn is_owner_or_sibling(
+    author: &str,
+    owner_cache: &OwnerCache,
+    rest_client: &relay::RestClient,
+) -> bool {
+    let my_owner = match owner_cache.get() {
+        Some(o) => o,
+        None => return false, // no owner configured — fail closed
+    };
+
+    // Direct owner check.
+    if author == my_owner {
+        return true;
     }
+
+    // Check sibling cache.
+    if let Some(cached) = owner_cache.is_known_sibling(author) {
+        return cached;
+    }
+
+    // Query the author's kind:0 profile to check for NIP-OA auth tag.
+    let is_sibling = check_sibling_via_profile(author, my_owner, rest_client).await;
+    owner_cache.cache_sibling(author.to_string(), is_sibling);
+    is_sibling
+}
+
+/// Query an author's kind:0 profile and check if their NIP-OA auth tag
+/// proves the same owner as us.
+async fn check_sibling_via_profile(
+    author: &str,
+    expected_owner: &str,
+    rest_client: &relay::RestClient,
+) -> bool {
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Metadata)
+        .author(match nostr::PublicKey::from_hex(author) {
+            Ok(pk) => pk,
+            Err(_) => return false,
+        })
+        .limit(1);
+
+    let resp = match tokio::time::timeout(Duration::from_millis(2000), rest_client.query(&[filter]))
+        .await
+    {
+        Ok(Ok(v)) => v,
+        _ => return false, // timeout or error — fail closed
+    };
+
+    // Look for an "auth" tag in the profile event.
+    let events = match resp.as_array() {
+        Some(arr) => arr,
+        None => return false,
+    };
+    let event = match events.first() {
+        Some(e) => e,
+        None => return false,
+    };
+    let tags = match event.get("tags").and_then(|t| t.as_array()) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    // Find ["auth", owner_pk, conditions, sig] and verify the Schnorr signature.
+    // Don't trust the relay — verify ourselves.
+    let agent_pk = match nostr::PublicKey::from_hex(author) {
+        Ok(pk) => pk,
+        Err(_) => return false,
+    };
+
+    for tag in tags {
+        let parts = match tag.as_array() {
+            Some(p) if p.len() >= 4 => p,
+            _ => continue,
+        };
+        if parts[0].as_str() != Some("auth") {
+            continue;
+        }
+        let tag_owner = match parts[1].as_str() {
+            Some(o) => o,
+            None => continue,
+        };
+        // Only verify if the owner field matches ours.
+        if !tag_owner.eq_ignore_ascii_case(expected_owner) {
+            continue;
+        }
+        // Cryptographically verify the NIP-OA attestation signature.
+        let tag_json = serde_json::to_string(tag).unwrap_or_default();
+        match sprout_sdk::nip_oa::verify_auth_tag(&tag_json, &agent_pk) {
+            Ok(_) => {
+                tracing::debug!(author, expected_owner, "sibling verified via NIP-OA");
+                return true;
+            }
+            Err(e) => {
+                tracing::debug!(author, "NIP-OA auth tag verification failed: {e}");
+            }
+        }
+    }
+
+    false
 }
 
 fn spawn_relay_observer_publisher(
@@ -1392,7 +1511,7 @@ async fn tokio_main() -> Result<()> {
                                     RespondTo::Anyone => true,
                                     RespondTo::Nobody => false,
                                     RespondTo::OwnerOnly => {
-                                        is_owner(&author, &owner_cache)
+                                        is_owner_or_sibling(&author, &owner_cache, &ctx.rest_client).await
                                     }
                                     RespondTo::Allowlist => {
                                         let owner = owner_cache.get();

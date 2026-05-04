@@ -1,20 +1,37 @@
-use reqwest::Method;
 use tauri::State;
 
 use crate::{
     app_state::AppState,
     events,
-    relay::{api_path, build_authed_request, send_json_request, submit_event},
+    relay::{query_relay, submit_event},
 };
 
+/// Read the most recent canvas event (kind:40100) for a channel.
 #[tauri::command]
 pub async fn get_canvas(
     channel_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let path = api_path(&["channels", &channel_id, "canvas"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, &state)?;
-    send_json_request(request).await
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [40100],
+            "#h": [channel_id],
+            "limit": 1
+        })],
+    )
+    .await?;
+
+    let Some(event) = events.first() else {
+        return Ok(serde_json::json!({ "content": "" }));
+    };
+
+    Ok(serde_json::json!({
+        "content": event.content,
+        "event_id": event.id.to_hex(),
+        "created_at": event.created_at.as_u64(),
+        "pubkey": event.pubkey.to_hex(),
+    }))
 }
 
 #[tauri::command]

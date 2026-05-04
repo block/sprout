@@ -101,9 +101,9 @@ class RelaySessionNotifier extends Notifier<SessionState> {
 
     ref.onDispose(_dispose);
 
-    // Auto-connect when authenticated and we have credentials.
+    // Auto-connect when authenticated and we have a signing key (NIP-42 AUTH).
     final isAuthenticated = authState.value?.status == AuthStatus.authenticated;
-    if (isAuthenticated && config.apiToken != null) {
+    if (isAuthenticated && config.nsec != null) {
       // Schedule connection after build completes.
       Future.microtask(() => _connect(config));
     }
@@ -268,7 +268,6 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     _socket = RelaySocket(
       wsUrl: config.wsUrl,
       nsec: config.nsec,
-      apiToken: config.apiToken,
       onMessage: _handleMessage,
       onConnected: _handleConnected,
       onDisconnected: _handleDisconnected,
@@ -434,6 +433,9 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     if (data.length < 3) return;
     final eventId = data[1] as String;
     final accepted = data[2] as bool;
+    final message = data.length > 3 && data[3] is String
+        ? data[3] as String
+        : '';
 
     final pending = _pendingEvents.remove(eventId);
     if (pending == null) return;
@@ -441,7 +443,8 @@ class RelaySessionNotifier extends Notifier<SessionState> {
 
     if (accepted) {
       // We don't have the full event here; create a minimal placeholder.
-      // The caller typically already has the event they published.
+      // Command kinds (e.g. 41010, 30620, 46020) return "response:{...}" in
+      // the OK message — preserve it in `content` so callers can parse it.
       if (!pending.completer.isCompleted) {
         pending.completer.complete(
           NostrEvent(
@@ -450,15 +453,16 @@ class RelaySessionNotifier extends Notifier<SessionState> {
             createdAt: 0,
             kind: 0,
             tags: [],
-            content: '',
+            content: message,
             sig: '',
           ),
         );
       }
     } else {
-      final message = data.length > 3 ? data[3] as String : 'Event rejected';
       if (!pending.completer.isCompleted) {
-        pending.completer.completeError(Exception(message));
+        pending.completer.completeError(
+          Exception(message.isNotEmpty ? message : 'Event rejected'),
+        );
       }
     }
   }

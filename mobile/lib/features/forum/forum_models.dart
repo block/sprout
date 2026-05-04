@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../shared/relay/relay.dart';
+
 /// A top-level forum post with an optional thread summary.
 @immutable
 class ForumPost {
@@ -38,6 +40,19 @@ class ForumPost {
       threadSummary: rawSummary != null
           ? ForumThreadSummary.fromJson(rawSummary)
           : null,
+    );
+  }
+
+  /// Build a [ForumPost] from a raw Nostr event (kind:45001).
+  factory ForumPost.fromEvent(NostrEvent event) {
+    return ForumPost(
+      eventId: event.id,
+      pubkey: event.pubkey,
+      content: event.content,
+      kind: event.kind,
+      createdAt: event.createdAt,
+      channelId: event.channelId ?? '',
+      tags: event.tags,
     );
   }
 
@@ -121,6 +136,23 @@ class ThreadReply {
     );
   }
 
+  /// Build a [ThreadReply] from a raw Nostr event.
+  factory ThreadReply.fromEvent(NostrEvent event) {
+    final ref = event.threadReference;
+    return ThreadReply(
+      eventId: event.id,
+      pubkey: event.pubkey,
+      content: event.content,
+      kind: event.kind,
+      createdAt: event.createdAt,
+      channelId: event.channelId ?? '',
+      tags: event.tags,
+      parentEventId: ref.parentId,
+      rootEventId: ref.rootId,
+      depth: 0,
+    );
+  }
+
   /// Extract mention pubkeys from p-tags.
   List<String> get mentionPubkeys => [
     for (final tag in tags)
@@ -145,6 +177,13 @@ class ForumPostsResponse {
           .toList(),
       nextCursor: json['next_cursor'] as int?,
     );
+  }
+
+  /// Build from a list of kind:45001 events. Posts are sorted newest-first.
+  factory ForumPostsResponse.fromEvents(List<NostrEvent> events) {
+    final posts = events.map(ForumPost.fromEvent).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return ForumPostsResponse(posts: posts, nextCursor: null);
   }
 }
 
@@ -173,6 +212,22 @@ class ForumThreadResponse {
           .toList(),
       totalReplies: json['total_replies'] as int? ?? 0,
       nextCursor: json['next_cursor'] as String?,
+    );
+  }
+
+  /// Build from a root event and a list of reply events. Replies are sorted
+  /// oldest-first so the UI can render them top-down.
+  factory ForumThreadResponse.fromEvents({
+    required NostrEvent root,
+    required List<NostrEvent> replies,
+  }) {
+    final sortedReplies = replies.map(ThreadReply.fromEvent).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return ForumThreadResponse(
+      post: ForumPost.fromEvent(root),
+      replies: sortedReplies,
+      totalReplies: sortedReplies.length,
+      nextCursor: null,
     );
   }
 }

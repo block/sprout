@@ -124,7 +124,10 @@ pub struct ChannelDetailInfo {
 pub struct ChannelMemberInfo {
     pub pubkey: String,
     pub role: String,
-    pub joined_at: String,
+    /// Optional — kind:39002 events do not carry per-member join timestamps,
+    /// so this is `None` when populated from a NIP-29 members event.
+    #[serde(default)]
+    pub joined_at: Option<String>,
     pub display_name: Option<String>,
 }
 
@@ -132,87 +135,6 @@ pub struct ChannelMemberInfo {
 pub struct ChannelMembersResponse {
     pub members: Vec<ChannelMemberInfo>,
     pub next_cursor: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct OpenDmBody<'a> {
-    pub pubkeys: &'a [String],
-}
-
-#[derive(Deserialize)]
-pub struct OpenDmResponse {
-    pub channel_id: String,
-}
-
-#[derive(Serialize)]
-pub struct SetPresenceBody {
-    pub status: PresenceStatus,
-}
-
-#[derive(Serialize)]
-pub struct GetFeedQuery<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub since: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub types: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-pub struct SearchQueryParams<'a> {
-    pub q: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-pub struct MintTokenBody<'a> {
-    pub name: &'a str,
-    pub scopes: &'a [String],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_ids: Option<&'a [String]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_in_days: Option<u32>,
-    /// Owner pubkey (hex). Only accepted via NIP-98 auth.
-    /// Sets agent_owner_pubkey on the agent's user record.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_pubkey: Option<&'a str>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct MintTokenResponse {
-    pub id: String,
-    pub token: String,
-    pub name: String,
-    pub scopes: Vec<String>,
-    pub channel_ids: Vec<String>,
-    pub created_at: String,
-    pub expires_at: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct TokenInfo {
-    pub id: String,
-    pub name: String,
-    pub scopes: Vec<String>,
-    pub channel_ids: Vec<String>,
-    pub created_at: String,
-    pub expires_at: Option<String>,
-    pub last_used_at: Option<String>,
-    pub revoked_at: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ListTokensResponse {
-    pub tokens: Vec<TokenInfo>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct RevokeAllTokensResponse {
-    pub revoked_count: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -278,21 +200,6 @@ pub struct SendChannelMessageResponse {
     pub created_at: i64,
 }
 
-#[derive(Serialize)]
-pub struct GetUsersBatchBody<'a> {
-    pub pubkeys: &'a [String],
-}
-
-#[derive(Serialize)]
-pub struct GetUserNotesQuery<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub before: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub before_id: Option<&'a str>,
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub reply_count: u32,
@@ -345,23 +252,6 @@ pub struct ForumThreadResponse {
     pub replies: Vec<ForumThreadReplyInfo>,
     pub total_replies: u32,
     pub next_cursor: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct GetForumPostsQuery {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub before: Option<i64>,
-    pub with_threads: bool,
-}
-
-#[derive(Serialize)]
-pub struct GetForumThreadQuery {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
 }
 
 fn deserialize_null_string_as_empty<'de, D>(deserializer: D) -> Result<String, D::Error>

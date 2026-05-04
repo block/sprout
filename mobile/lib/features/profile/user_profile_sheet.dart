@@ -41,14 +41,15 @@ class UserProfileSheet extends HookConsumerWidget {
     final statusCache = ref.watch(userStatusCacheProvider);
     final userStatus = statusCache[pk];
 
-    // Fetch about from the individual profile endpoint.
+    // Fetch about from the user's kind:0 profile event.
     final aboutFuture = useMemoized(
       () => ref
-          .read(relayClientProvider)
-          .get('/api/users/$pk/profile')
-          .then(
-            (json) => (json as Map<String, dynamic>)['about'] as String? ?? '',
-          )
+          .read(relaySessionProvider.notifier)
+          .fetchHistory(NostrFilters.profile(pk))
+          .then((events) {
+            if (events.isEmpty) return '';
+            return ProfileData.fromEvent(events.first).about ?? '';
+          })
           .catchError((_) => ''),
       [pk],
     );

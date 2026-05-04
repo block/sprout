@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 /// Nostr event kind constants.
@@ -146,9 +148,15 @@ class NostrEvent {
 class NostrFilter {
   final List<int> kinds;
   final List<String>? authors;
+
+  /// Specific event IDs (NIP-01 single-event lookup).
+  final List<String>? ids;
   final int limit;
   final int? since;
   final int? until;
+
+  /// NIP-50 full-text search query.
+  final String? search;
 
   /// Tag filters, e.g. `{'#h': ['channel-id']}`.
   final Map<String, List<String>> tags;
@@ -156,9 +164,11 @@ class NostrFilter {
   const NostrFilter({
     required this.kinds,
     this.authors,
+    this.ids,
     this.limit = 100,
     this.since,
     this.until,
+    this.search,
     this.tags = const {},
   });
 
@@ -166,20 +176,161 @@ class NostrFilter {
   NostrFilter copyWithSince(int since) => NostrFilter(
     kinds: kinds,
     authors: authors,
+    ids: ids,
     limit: limit,
     since: since,
     until: until,
+    search: search,
     tags: tags,
   );
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'kinds': kinds, 'limit': limit};
     if (authors != null) json['authors'] = authors;
+    if (ids != null) json['ids'] = ids;
     if (since != null) json['since'] = since;
     if (until != null) json['until'] = until;
+    if (search != null) json['search'] = search;
     for (final entry in tags.entries) {
       json[entry.key] = entry.value;
     }
     return json;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Model converters — parse common Nostr event kinds into typed records.
+// ---------------------------------------------------------------------------
+
+/// Parsed kind:0 user profile metadata.
+@immutable
+class ProfileData {
+  final String pubkey;
+  final String? displayName;
+  final String? avatarUrl;
+  final String? about;
+  final String? nip05;
+
+  const ProfileData({
+    required this.pubkey,
+    this.displayName,
+    this.avatarUrl,
+    this.about,
+    this.nip05,
+  });
+
+  factory ProfileData.fromEvent(NostrEvent event) {
+    Map<String, dynamic> meta = {};
+    try {
+      final decoded = jsonDecode(event.content);
+      if (decoded is Map<String, dynamic>) meta = decoded;
+    } catch (_) {}
+    return ProfileData(
+      pubkey: event.pubkey,
+      displayName:
+          (meta['display_name'] as String?) ?? (meta['name'] as String?),
+      avatarUrl: meta['picture'] as String?,
+      about: meta['about'] as String?,
+      nip05: meta['nip05'] as String?,
+    );
+  }
+}
+
+/// Parsed kind:39000 channel metadata.
+@immutable
+class ChannelData {
+  final String id;
+  final String name;
+  final String channelType;
+  final String visibility;
+  final String description;
+  final String? topic;
+  final List<String> participantPubkeys;
+
+  const ChannelData({
+    required this.id,
+    required this.name,
+    required this.channelType,
+    required this.visibility,
+    required this.description,
+    this.topic,
+    this.participantPubkeys = const [],
+  });
+
+  factory ChannelData.fromEvent(NostrEvent event) {
+    final id = event.getTagValue('d') ?? '';
+    final name = event.getTagValue('name') ?? '';
+    // Prefer explicit ["t", type]; fall back to ["hidden"] => dm, else "stream".
+    // The fallback exists for relays that haven't been upgraded to emit the
+    // explicit type tag yet.
+    final explicitType = event.getTagValue('t');
+    final hasHidden = event.tags.any((t) => t.isNotEmpty && t[0] == 'hidden');
+    final channelType = explicitType ?? (hasHidden ? 'dm' : 'stream');
+    // Prefer explicit ["public"]; fall back to NIP-29 absence-of-"private".
+    final hasPublic = event.tags.any((t) => t.isNotEmpty && t[0] == 'public');
+    final hasPrivate = event.tags.any((t) => t.isNotEmpty && t[0] == 'private');
+    final visibility = hasPublic
+        ? 'open'
+        : hasPrivate
+        ? 'private'
+        : 'open';
+    final description = event.getTagValue('about') ?? '';
+    final topic = event.getTagValue('topic');
+    final participants = [
+      for (final t in event.tags)
+        if (t.length >= 2 && t[0] == 'p') t[1],
+    ];
+    return ChannelData(
+      id: id,
+      name: name,
+      channelType: channelType,
+      visibility: visibility,
+      description: description,
+      topic: topic,
+      participantPubkeys: participants,
+    );
+  }
+}
+
+/// A single member entry parsed from a kind:39002 members event.
+@immutable
+class MemberEntry {
+  final String pubkey;
+  final String role;
+
+  const MemberEntry({required this.pubkey, required this.role});
+}
+
+/// Parse a kind:39002 members event into the list of `(pubkey, role)` entries.
+///
+/// NIP-29 members tags follow the shape `["p", <pubkey>, <relay>, <role>]`.
+List<MemberEntry> membersFromEvent(NostrEvent event) {
+  return [
+    for (final t in event.tags)
+      if (t.length >= 2 && t[0] == 'p')
+        MemberEntry(pubkey: t[1], role: t.length >= 4 ? t[3] : 'member'),
+  ];
+}
+
+/// Parse a Sprout command response from the relay's OK message content.
+///
+/// Command kinds (e.g. 41010, 30620, 46020) return `"response:{...}"` in the
+/// OK message. Returns `null` if the message is not a command response or the
+/// JSON is invalid.
+Map<String, dynamic>? parseCommandResponse(String message) {
+  // Try the spec format first: "response:{...}".
+  const prefix = 'response:';
+  if (message.startsWith(prefix)) {
+    try {
+      final decoded = jsonDecode(message.substring(prefix.length));
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {}
+    return null;
+  }
+  // Fallback: raw JSON object (older relays, backward compat).
+  try {
+    final decoded = jsonDecode(message);
+    if (decoded is Map<String, dynamic>) return decoded;
+  } catch (_) {}
+  return null;
 }

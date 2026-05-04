@@ -1,84 +1,35 @@
-import 'dart:convert';
-
 import 'package:http/http.dart' as http;
 
-/// Lightweight HTTP client for talking to the Sprout relay REST API.
+/// Lightweight HTTP context for talking to the Sprout relay.
+///
+/// In the pure-nostr architecture, all data flow happens over the relay
+/// WebSocket. This client now exists only to provide a base URL (and a
+/// shared HTTP client) for the media upload endpoint, which is the one
+/// remaining HTTP path because Blossom uses kind:24242 NIP-98 auth on a
+/// regular HTTP POST.
 class RelayClient {
   final String baseUrl;
-  final String? apiToken;
-  final String? devPubkey;
   final http.Client _http;
 
-  RelayClient({
-    required this.baseUrl,
-    this.apiToken,
-    this.devPubkey,
-    http.Client? httpClient,
-  }) : _http = httpClient ?? http.Client();
+  RelayClient({required this.baseUrl, http.Client? httpClient})
+    : _http = httpClient ?? http.Client();
 
-  Map<String, String> get _headers {
-    final h = {'Content-Type': 'application/json'};
-    if (apiToken case final token?) {
-      h['Authorization'] = 'Bearer $token';
-    } else if (devPubkey case final pk?) {
-      h['X-Pubkey'] = pk;
-    }
-    return h;
-  }
+  /// Shared underlying HTTP client (used by [MediaUploader]).
+  http.Client get httpClient => _http;
 
-  Uri _uri(String path, {Map<String, String>? queryParams}) {
+  /// Fully-qualified URL for the relay's Blossom-style media upload endpoint.
+  String get mediaUploadUrl {
     final base = Uri.parse(baseUrl);
-    // Resolve path against base to avoid double-slash issues.
-    final resolved = base.resolve(path);
-    if (queryParams?.isNotEmpty == true) {
-      return resolved.replace(queryParameters: queryParams);
-    }
-    return resolved;
-  }
-
-  /// GET [path] and return decoded JSON.
-  Future<dynamic> get(String path, {Map<String, String>? queryParams}) async {
-    final response = await _http.get(
-      _uri(path, queryParams: queryParams),
-      headers: _headers,
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw RelayException(response.statusCode, response.body);
-    }
-    return jsonDecode(response.body);
-  }
-
-  /// POST [path] with a JSON [body] and return decoded JSON, or null for
-  /// empty responses (e.g. 204).
-  Future<dynamic> post(String path, {Object? body}) async {
-    final response = await _http.post(
-      _uri(path),
-      headers: _headers,
-      body: body != null ? jsonEncode(body) : null,
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw RelayException(response.statusCode, response.body);
-    }
-    if (response.body.isEmpty) return null;
-    return jsonDecode(response.body);
-  }
-
-  /// POST [path] with a pre-encoded string body. Returns the raw response body.
-  Future<String> postRaw(String path, {required String body}) async {
-    final response = await _http.post(
-      _uri(path),
-      headers: _headers,
-      body: body,
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw RelayException(response.statusCode, response.body);
-    }
-    return response.body;
+    return base.resolve('/media/upload').toString();
   }
 
   void dispose() => _http.close();
 }
 
+/// Thrown when an HTTP call to the relay returns a non-2xx status code.
+///
+/// Retained for backwards compatibility with provider code that still
+/// references it during the migration to pure-nostr WebSocket flows.
 class RelayException implements Exception {
   final int statusCode;
   final String body;
