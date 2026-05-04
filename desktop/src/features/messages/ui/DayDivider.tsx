@@ -1,18 +1,14 @@
-import { Separator } from "@/shared/ui/separator";
-
 export function DayDivider({ label }: { label: string }) {
   return (
     <section
       aria-label={label}
-      className="sticky top-0 z-30 flex items-center gap-2.5 bg-background/80 py-1 backdrop-blur-sm"
+      className="sticky top-0 z-30 flex justify-center py-1"
       data-testid="message-timeline-day-divider"
       data-day-label={label}
     >
-      <Separator className="flex-1 bg-border/35" />
-      <p className="text-[10px] font-medium tracking-[0.02em] text-muted-foreground/65">
+      <p className="shrink-0 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-medium tracking-[0.02em] text-muted-foreground/65 backdrop-blur-sm">
         {label}
       </p>
-      <Separator className="flex-1 bg-border/35" />
     </section>
   );
 }
