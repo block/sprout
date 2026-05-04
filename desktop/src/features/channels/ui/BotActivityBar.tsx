@@ -56,7 +56,7 @@ export function BotActivityBar({
 
   return (
     <div
-      className="flex min-w-0 shrink items-center justify-end gap-1 overflow-hidden"
+      className="flex min-w-0 shrink items-center justify-start gap-1 overflow-hidden"
       data-testid="bot-activity-bar"
     >
       {visibleAgents.map((agent) => {

@@ -229,6 +229,8 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel.archivedAt !== null ||
     activeChannel.channelType === "forum" ||
     isSending;
+  const hasTypingActivity = typingPubkeys.length > 0;
+  const hasBotActivity = botTypingPubkeys.length > 0;
 
   const selectedAgent = React.useMemo(
     () =>
@@ -260,6 +262,18 @@ export const ChannelPane = React.memo(function ChannelPane({
           currentPubkey={currentPubkey}
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
+          inlineFooter={
+            hasBotActivity ? (
+              <div className="flex justify-start pl-[3.125rem]">
+                <BotActivityBar
+                  agents={agentSessionAgents}
+                  onOpenAgentSession={onOpenAgentSession}
+                  openAgentSessionPubkey={openAgentSessionPubkey}
+                  typingBotPubkeys={botTypingPubkeys}
+                />
+              </div>
+            ) : null
+          }
           isFetchingOlder={isFetchingOlder}
           personaLookup={personaLookup}
           profiles={profiles}
@@ -287,6 +301,16 @@ export const ChannelPane = React.memo(function ChannelPane({
           searchQuery={channelFind.query}
           targetMessageId={targetMessageId}
         />
+        {hasTypingActivity ? (
+          <div className="relative bg-background">
+            <TypingIndicatorRow
+              channel={activeChannel}
+              currentPubkey={currentPubkey}
+              profiles={profiles}
+              typingPubkeys={typingPubkeys}
+            />
+          </div>
+        ) : null}
         {isNonMemberView ? (
           <div
             data-testid="join-banner"
@@ -338,22 +362,6 @@ export const ChannelPane = React.memo(function ChannelPane({
             />
           </div>
         )}
-        <div className="relative bg-background">
-          <TypingIndicatorRow
-            channel={activeChannel}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-            typingPubkeys={typingPubkeys}
-          />
-          <div className="absolute right-0 top-0 flex h-8 items-center pr-8 sm:pr-10">
-            <BotActivityBar
-              agents={agentSessionAgents}
-              onOpenAgentSession={onOpenAgentSession}
-              openAgentSessionPubkey={openAgentSessionPubkey}
-              typingBotPubkeys={botTypingPubkeys}
-            />
-          </div>
-        </div>
       </div>
 
       {threadHeadMessage ? (
