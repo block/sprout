@@ -3838,6 +3838,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "sprout-pair-relay"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "parking_lot",
+ "rand 0.8.5",
+ "secp256k1",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+]
+
+[[package]]
 name = "sprout-pairing-cli"
 version = "0.1.0"
 dependencies = [
