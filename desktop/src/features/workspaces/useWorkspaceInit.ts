@@ -25,7 +25,11 @@ function resetWorkspaceState(): void {
 
 type WorkspaceInitResult =
   | { isReady: true; needsSetup: false }
-  | { isReady: false; needsSetup: true; defaultRelayUrl: string }
+  | {
+      isReady: false;
+      needsSetup: true;
+      defaultRelayUrl: string;
+    }
   | { isReady: false; needsSetup: false };
 
 /**
@@ -58,7 +62,11 @@ export function useWorkspaceInit(
         try {
           const defaultRelayUrl = await getDefaultRelayUrl();
           if (!cancelled) {
-            setResult({ isReady: false, needsSetup: true, defaultRelayUrl });
+            setResult({
+              isReady: false,
+              needsSetup: true,
+              defaultRelayUrl,
+            });
           }
         } catch {
           if (!cancelled) {
@@ -82,11 +90,19 @@ export function useWorkspaceInit(
       // Show loading gate while we apply the new workspace config
       setResult({ isReady: false, needsSetup: false });
 
-      // Apply workspace config to the Tauri backend
+      // Apply workspace config to the Tauri backend.
+      //
+      // Note: we deliberately do NOT pass an nsec here. The persisted
+      // `identity.key` file (resolved at startup by `resolve_persisted_identity`,
+      // and updated atomically by `import_identity`) is the single source of
+      // truth for the active key. Older builds stored the nsec in localStorage
+      // and re-applied it on every reload, which silently overwrote any
+      // imported key. `loadWorkspaces()` strips lingering `nsec` fields from
+      // legacy entries; this site refuses to apply one even if present.
       try {
         await applyWorkspace(
           activeWorkspace.relayUrl,
-          activeWorkspace.nsec,
+          undefined,
           activeWorkspace.token,
         );
       } catch (error) {

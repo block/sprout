@@ -29,14 +29,12 @@ export function AddWorkspaceDialog({
   const [name, setName] = React.useState("");
   const [relayUrl, setRelayUrl] = React.useState("");
   const [token, setToken] = React.useState("");
-  const [nsec, setNsec] = React.useState("");
 
   const handleClose = React.useCallback(() => {
     onOpenChange(false);
     setName("");
     setRelayUrl("");
     setToken("");
-    setNsec("");
   }, [onOpenChange]);
 
   const handleSubmit = React.useCallback(
@@ -51,14 +49,13 @@ export function AddWorkspaceDialog({
         name: name.trim() || deriveWorkspaceName(relayUrl.trim()),
         relayUrl: normalizeRelayUrl(relayUrl.trim()),
         token: token.trim() || undefined,
-        nsec: nsec.trim() || undefined,
         addedAt: new Date().toISOString(),
       };
 
       onSubmit(workspace);
       handleClose();
     },
-    [name, relayUrl, token, nsec, onSubmit, handleClose],
+    [name, relayUrl, token, onSubmit, handleClose],
   );
 
   return (
@@ -124,24 +121,10 @@ export function AddWorkspaceDialog({
               value={token}
             />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label
-              className="text-sm font-medium text-foreground"
-              htmlFor="ws-nsec"
-            >
-              Private Key (nsec)
-              <span className="ml-1 text-xs font-normal text-muted-foreground">
-                (optional — uses current identity if blank)
-              </span>
-            </label>
-            <Input
-              id="ws-nsec"
-              onChange={(e) => setNsec(e.target.value)}
-              placeholder="nsec1..."
-              type="password"
-              value={nsec}
-            />
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Workspaces share your active identity. To use a different key,
+            import it on the profile step (or in settings).
+          </p>
           <div className="flex justify-end gap-2 pt-2">
             <Button onClick={handleClose} type="button" variant="outline">
               Cancel
