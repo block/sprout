@@ -122,7 +122,15 @@ pub async fn start_pairing(
     let ws_url = relay_ws_url_with_override(&state);
     let http_url = relay_api_base_url_with_override(&state);
 
-    let (session, qr_payload) = PairingSession::new_source(ws_url.clone());
+    // Detect NIP-43: if the relay requires auth, the target device should
+    // connect to the /pair sidecar instead of the main relay.
+    let qr_relay_url = if probe_relay_requires_auth(&ws_url).await {
+        format!("{}/pair", ws_url.trim_end_matches('/'))
+    } else {
+        ws_url.clone()
+    };
+
+    let (session, qr_payload) = PairingSession::new_source(qr_relay_url);
     let qr_uri = encode_qr(&qr_payload);
 
     let payload_json = serde_json::json!({
@@ -443,6 +451,38 @@ fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr_compat::Event> {
         return None;
     }
     serde_json::from_value(arr[2].clone()).ok()
+}
+
+/// Quick probe: connect to the relay and check if it sends a NIP-42 AUTH
+/// challenge within 3 seconds. Returns `true` if auth is required (NIP-43
+/// locked relay), `false` if no challenge arrives (open relay).
+///
+/// Uses a throwaway connection — the real pairing session connects separately.
+async fn probe_relay_requires_auth(relay_url: &str) -> bool {
+    let ws = match tokio::time::timeout(Duration::from_secs(5), connect_async(relay_url)).await {
+        Ok(Ok((ws, _))) => ws,
+        _ => return false, // connection failed — assume open (will fail later anyway)
+    };
+
+    let (_, mut read) = ws.split();
+
+    // Wait up to 3 seconds for an AUTH challenge.
+    let result = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match read.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    if parse_auth_challenge(text.as_str()).is_some() {
+                        return true;
+                    }
+                }
+                Some(Ok(_)) => continue,
+                _ => return false,
+            }
+        }
+    })
+    .await;
+
+    matches!(result, Ok(true))
 }
 
 fn parse_auth_challenge(text: &str) -> Option<String> {
