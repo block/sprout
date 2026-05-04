@@ -382,6 +382,11 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     state
                         .conn_manager
                         .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
+                    if let Some(owner) = final_owner_pubkey {
+                        state
+                            .conn_manager
+                            .set_owner_pubkey(conn_id, owner.serialize().to_vec());
+                    }
                     conn.send(RelayMessage::ok(&event_id_hex, true, ""));
                 }
                 Err(e) => {
@@ -617,6 +622,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
             };
 
+            let nip_aa_owner_for_conn = final_ctx.owner_pubkey;
             *conn.auth_state.write().await = AuthState::Authenticated {
                 ctx: final_ctx,
                 challenge: challenge.clone(),
@@ -624,6 +630,11 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             state
                 .conn_manager
                 .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
+            if let Some(owner) = nip_aa_owner_for_conn {
+                state
+                    .conn_manager
+                    .set_owner_pubkey(conn_id, owner.serialize().to_vec());
+            }
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
         Err(e) => {
