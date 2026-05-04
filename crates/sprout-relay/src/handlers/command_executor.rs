@@ -57,11 +57,28 @@ pub async fn handle_command(
     }
 }
 
-/// Persist a command event transactionally. All command handlers call this
-/// to store the event before executing any mutations.
+/// Result of persisting a command event: either a duplicate (already processed)
+/// or an open transaction that the handler must commit after executing mutations.
+enum PersistResult {
+    /// Event was already processed — return idempotent success.
+    Duplicate,
+    /// Event inserted — transaction is open, handler must commit after mutations.
+    Inserted(sqlx::Transaction<'static, sqlx::Postgres>),
+}
+
+/// Persist a command event inside a transaction. Returns the OPEN transaction
+/// so the caller can execute mutations atomically before committing.
 ///
-/// Returns `Ok(true)` if inserted, `Ok(false)` if duplicate (idempotent).
-async fn persist_command_event(state: &Arc<AppState>, event: &Event) -> Result<bool, IngestError> {
+/// If the event is a duplicate (ON CONFLICT DO NOTHING), the transaction is
+/// rolled back and `PersistResult::Duplicate` is returned — no mutations needed.
+///
+/// INVARIANT: The caller MUST commit the returned transaction after successful
+/// mutations. If the mutation fails, the transaction rolls back automatically
+/// on drop, ensuring the event is never stored without its side effects.
+async fn persist_command_event(
+    state: &Arc<AppState>,
+    event: &Event,
+) -> Result<PersistResult, IngestError> {
     let channel_id = extract_channel_id(event);
 
     let mut tx = state
@@ -117,11 +134,12 @@ async fn persist_command_event(state: &Arc<AppState>, event: &Event) -> Result<b
     .await
     .map_err(|e| IngestError::Internal(format!("error: insert event: {e}")))?;
 
-    tx.commit()
-        .await
-        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
-
-    Ok(result.rows_affected() > 0)
+    if result.rows_affected() == 0 {
+        // Duplicate — rollback (implicit on drop) and signal idempotent success.
+        Ok(PersistResult::Duplicate)
+    } else {
+        Ok(PersistResult::Inserted(tx))
+    }
 }
 
 // ── Tag extraction helpers ───────────────────────────────────────────────────
@@ -241,15 +259,17 @@ async fn handle_dm_open(
         }
     }
 
-    // Persist the command event (idempotency)
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event (idempotency) — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 4. Execute: open_dm
     let all_refs: Vec<&[u8]> = all_bytes.iter().map(|b| b.as_slice()).collect();
@@ -259,7 +279,12 @@ async fn handle_dm_open(
         .await
         .map_err(|e| IngestError::Internal(format!("error: db open_dm: {e}")))?;
 
-    // 5. Side effects if newly created
+    // Commit: event + mutation succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
+
+    // 5. Side effects if newly created (post-commit, best-effort)
     if was_created {
         // Invalidate caches for all participants
         for pk in &all_bytes {
@@ -377,15 +402,17 @@ async fn handle_dm_add_member(
         ));
     }
 
-    // Persist the command event
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 6. Execute: open_dm with expanded set (creates NEW DM — DM sets are immutable)
     let all_refs: Vec<&[u8]> = all_bytes.iter().map(|b| b.as_slice()).collect();
@@ -395,7 +422,12 @@ async fn handle_dm_add_member(
         .await
         .map_err(|e| IngestError::Internal(format!("error: db open_dm: {e}")))?;
 
-    // 7. Cache invalidation + notifications for new DM
+    // Commit: event + mutation succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
+
+    // 7. Cache invalidation + notifications for new DM (post-commit, best-effort)
     if was_created {
         for pk in &all_bytes {
             state.invalidate_membership(new_channel.id, pk);
@@ -465,15 +497,17 @@ async fn handle_dm_hide(
         return Err(IngestError::Rejected("invalid: channel is not a DM".into()));
     }
 
-    // Persist the command event
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 4. Execute: hide_dm
     state
@@ -481,6 +515,11 @@ async fn handle_dm_hide(
         .hide_dm(channel_id, &self_bytes)
         .await
         .map_err(|e| IngestError::Internal(format!("error: db hide_dm: {e}")))?;
+
+    // Commit: event + mutation succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
 
     // 5. Return response
     Ok(IngestResult {
@@ -543,15 +582,17 @@ async fn handle_workflow_def(
         .map_err(|e| IngestError::Internal(format!("error: json serialize: {e}")))?;
     let hash = compute_definition_hash(&definition_json_final);
 
-    // Persist the command event
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 4. Execute: create_workflow
     let workflow_id = state
@@ -565,6 +606,11 @@ async fn handle_workflow_def(
         )
         .await
         .map_err(|e| IngestError::Internal(format!("error: db create_workflow: {e}")))?;
+
+    // Commit: event + workflow creation succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
 
     // 5. Return response
     let mut resp = serde_json::json!({
@@ -621,15 +667,17 @@ async fn handle_workflow_trigger(
         ));
     }
 
-    // Persist the command event
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 4. Execute: create workflow run
     let trigger_ctx = TriggerContext {
@@ -652,6 +700,11 @@ async fn handle_workflow_trigger(
         )
         .await
         .map_err(|e| IngestError::Internal(format!("error: db create_workflow_run: {e}")))?;
+
+    // Commit: event + run creation succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
 
     // 5. Spawn workflow execution
     let engine = Arc::clone(&state.workflow_engine);
@@ -778,15 +831,17 @@ async fn handle_approval_grant(
     // 4. Validate caller is authorized approver
     check_approver_spec(&approval.approver_spec, &self_hex)?;
 
-    // Persist the command event
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 5. Execute: update approval status to granted
     let note = if event.content.is_empty() {
@@ -812,7 +867,12 @@ async fn handle_approval_grant(
         ));
     }
 
-    // 6. Resume workflow execution
+    // Commit: event + approval update succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
+
+    // 6. Resume workflow execution (post-commit, async)
     let run_id = approval.run_id;
     let workflow_id = approval.workflow_id;
     let resume_index = approval.step_index as usize + 1;
@@ -876,15 +936,17 @@ async fn handle_approval_deny(
     // 4. Validate caller is authorized approver
     check_approver_spec(&approval.approver_spec, &self_hex)?;
 
-    // Persist the command event
-    let was_inserted = persist_command_event(state, event).await?;
-    if !was_inserted {
-        return Ok(IngestResult {
-            event_id: event.id.to_hex(),
-            accepted: true,
-            message: "duplicate: already processed".into(),
-        });
-    }
+    // Persist the command event — returns open transaction
+    let tx = match persist_command_event(state, event).await? {
+        PersistResult::Duplicate => {
+            return Ok(IngestResult {
+                event_id: event.id.to_hex(),
+                accepted: true,
+                message: "duplicate: already processed".into(),
+            });
+        }
+        PersistResult::Inserted(tx) => tx,
+    };
 
     // 5. Execute: update approval status to denied
     let note = if event.content.is_empty() {
@@ -910,7 +972,12 @@ async fn handle_approval_deny(
         ));
     }
 
-    // 6. Cancel the workflow run
+    // Commit: event + approval denial succeeded atomically.
+    tx.commit()
+        .await
+        .map_err(|e| IngestError::Internal(format!("error: commit transaction: {e}")))?;
+
+    // 6. Cancel the workflow run (post-commit, async)
     let run_id = approval.run_id;
     let pubkey_hex = self_hex.clone();
     let db = state.db.clone();

@@ -73,34 +73,72 @@ pub async fn handle_count(
             if !accessible_channels.contains(&ch_id) {
                 continue; // Skip filters targeting inaccessible channels.
             }
-            // Channel is accessible — safe to count directly via DB.
+            // Channel is accessible — count with pushability check.
             let query =
                 super::req::build_event_query_from_filter(filter, &pubkey_bytes, &state).await;
-            match state.db.count_events(&query).await {
-                Ok(n) => total += n as u64,
-                Err(e) => {
-                    conn.send(RelayMessage::closed(&sub_id, &format!("error: {e}")));
-                    return;
+            if super::req::filter_fully_pushable(filter) {
+                match state.db.count_events(&query).await {
+                    Ok(n) => total += n as u64,
+                    Err(e) => {
+                        conn.send(RelayMessage::closed(&sub_id, &format!("error: {e}")));
+                        return;
+                    }
+                }
+            } else {
+                // Fallback: query + post-filter for non-pushable constraints.
+                let mut q = query;
+                q.limit = Some(10_000);
+                match state.db.query_events(&q).await {
+                    Ok(stored_events) => {
+                        for se in stored_events {
+                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            {
+                                total += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        conn.send(RelayMessage::closed(&sub_id, &format!("error: {e}")));
+                        return;
+                    }
                 }
             }
         } else {
-            // No channel filter — must count only accessible events.
-            // Fall back to query + post-filter since count_events can't
-            // restrict to a set of channels.
-            let query =
+            // No channel filter — use SQL-level channel_ids pushdown to count
+            // only events in accessible channels (+ global events).
+            //
+            // If the filter has generic tags beyond what SQL can push down
+            // (#h, #p single, #d single, #e), we must fall back to
+            // query + post-filter to avoid overcounting.
+            let mut query =
                 super::req::build_event_query_from_filter(filter, &pubkey_bytes, &state).await;
-            match state.db.query_events(&query).await {
-                Ok(stored_events) => {
-                    for se in stored_events {
-                        match se.channel_id {
-                            Some(ch_id) if !accessible_channels.contains(&ch_id) => continue,
-                            _ => total += 1,
-                        }
+            query.channel_ids = Some(accessible_channels.to_vec());
+
+            if super::req::filter_fully_pushable(filter) {
+                query.limit = None; // COUNT doesn't need a row limit
+                match state.db.count_events(&query).await {
+                    Ok(n) => total += n as u64,
+                    Err(e) => {
+                        conn.send(RelayMessage::closed(&sub_id, &format!("error: {e}")));
+                        return;
                     }
                 }
-                Err(e) => {
-                    conn.send(RelayMessage::closed(&sub_id, &format!("error: {e}")));
-                    return;
+            } else {
+                // Fallback: query with high limit + post-filter for correctness.
+                query.limit = Some(10_000);
+                match state.db.query_events(&query).await {
+                    Ok(stored_events) => {
+                        for se in stored_events {
+                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            {
+                                total += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        conn.send(RelayMessage::closed(&sub_id, &format!("error: {e}")));
+                        return;
+                    }
                 }
             }
         }

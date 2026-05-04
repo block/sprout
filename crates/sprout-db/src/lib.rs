@@ -200,7 +200,10 @@ impl Db {
     }
 
     /// Begin a database transaction for atomic multi-statement operations.
-    pub async fn begin_transaction(&self) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+    ///
+    /// Returns a `'static` transaction because `PgPool` is `Arc`-backed internally.
+    /// The transaction holds an owned pool handle, not a borrow.
+    pub async fn begin_transaction(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
         self.pool.begin().await.map_err(Into::into)
     }
 
@@ -1133,6 +1136,16 @@ impl Db {
     /// Delete a workflow and all its runs/approvals.
     pub async fn delete_workflow(&self, id: Uuid) -> Result<()> {
         workflow::delete_workflow(&self.pool, id).await
+    }
+
+    /// Find a workflow by owner pubkey and name. Used for NIP-09 a-tag deletion
+    /// where the d-tag is the workflow name (not UUID).
+    pub async fn find_workflow_by_owner_and_name(
+        &self,
+        owner_pubkey: &[u8],
+        name: &str,
+    ) -> Result<Option<workflow::WorkflowRecord>> {
+        workflow::find_by_owner_and_name(&self.pool, owner_pubkey, name).await
     }
 
     /// Create a new workflow run.

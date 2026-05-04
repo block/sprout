@@ -55,6 +55,9 @@ pub struct EventQuery {
     /// Restrict results to events with an `e` tag referencing any of these event IDs (hex).
     /// Uses JSONB containment (`tags @> ...`) against the `tags` column.
     pub e_tags: Option<Vec<String>>,
+    /// Restrict results to events in any of these channels (multi-channel `IN` pushdown).
+    /// Used by NIP-45 COUNT to enforce channel access without fetching all rows.
+    pub channel_ids: Option<Vec<uuid::Uuid>>,
 }
 
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
@@ -205,6 +208,28 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
             .push_bind(ch);
     } else if q.global_only {
         qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+    }
+
+    // Multi-channel IN pushdown: restrict to events in any of these channels
+    // OR global events (channel_id IS NULL). Used by NIP-45 COUNT to enforce
+    // channel access at the SQL level without fetching all rows.
+    //
+    // SECURITY: Some(empty vec) means "user has access to NO channels" —
+    // only global events (channel_id IS NULL) should be returned.
+    if let Some(ref ch_ids) = q.channel_ids {
+        if ch_ids.is_empty() {
+            // No channel access — only global (non-channel) events visible.
+            qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+        } else {
+            qb.push(format!(
+                " AND ({col_prefix}channel_id IS NULL OR {col_prefix}channel_id IN ("
+            ));
+            let mut sep = qb.separated(", ");
+            for ch in ch_ids {
+                sep.push_bind(*ch);
+            }
+            qb.push("))");
+        }
     }
 
     if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {
@@ -394,6 +419,23 @@ pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
             .push_bind(ch);
     } else if q.global_only {
         qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+    }
+
+    // Multi-channel IN pushdown for COUNT: restrict to accessible channels + global.
+    // SECURITY: Some(empty vec) = no channel access → global events only.
+    if let Some(ref ch_ids) = q.channel_ids {
+        if ch_ids.is_empty() {
+            qb.push(format!(" AND {col_prefix}channel_id IS NULL"));
+        } else {
+            qb.push(format!(
+                " AND ({col_prefix}channel_id IS NULL OR {col_prefix}channel_id IN ("
+            ));
+            let mut sep = qb.separated(", ");
+            for ch in ch_ids {
+                sep.push_bind(*ch);
+            }
+            qb.push("))");
+        }
     }
 
     if let Some(ks) = q.kinds.as_deref().filter(|k| !k.is_empty()) {

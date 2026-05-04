@@ -69,7 +69,10 @@ fn verify_bridge_auth(
     Err(api_error(StatusCode::UNAUTHORIZED, "missing Nostr auth"))
 }
 
-/// Check NIP-98 replay and record the event ID.
+/// Check NIP-98 replay and record the event ID atomically.
+///
+/// Uses moka's `entry` API for atomic insert-if-absent — no race window
+/// between "check if seen" and "mark as seen".
 fn check_nip98_replay(
     state: &AppState,
     event_id_bytes: [u8; 32],
@@ -78,13 +81,16 @@ fn check_nip98_replay(
     if event_id_bytes == [0u8; 32] {
         return Ok(());
     }
-    if state.nip98_seen.get(&event_id_bytes).is_some() {
+    // Atomic: get_with inserts the value if absent and returns it.
+    // If the entry already existed, this is a replay.
+    let entry = state.nip98_seen.entry(event_id_bytes);
+    let result = entry.or_insert(());
+    if !result.is_fresh() {
         return Err(api_error(
             StatusCode::UNAUTHORIZED,
             "NIP-98: replay detected",
         ));
     }
-    state.nip98_seen.insert(event_id_bytes, ());
     Ok(())
 }
 
@@ -294,39 +300,66 @@ pub async fn count_events(
             if !accessible_channels.contains(&ch_id) {
                 continue; // Skip filters targeting inaccessible channels.
             }
-            // Channel is accessible — safe to count directly via DB.
+            // Channel is accessible — count with pushability check.
             let query =
                 crate::handlers::req::build_event_query_from_filter(filter, &pubkey_bytes, &state)
                     .await;
-            match state.db.count_events(&query).await {
-                Ok(n) => total += n as u64,
-                Err(e) => {
-                    return Err(internal_error(&format!("count error: {e}")));
+            if crate::handlers::req::filter_fully_pushable(filter) {
+                match state.db.count_events(&query).await {
+                    Ok(n) => total += n as u64,
+                    Err(e) => {
+                        return Err(internal_error(&format!("count error: {e}")));
+                    }
+                }
+            } else {
+                // Fallback: query + post-filter for non-pushable constraints.
+                let mut q = query;
+                q.limit = Some(10_000);
+                match state.db.query_events(&q).await {
+                    Ok(stored_events) => {
+                        for se in stored_events {
+                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            {
+                                total += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(internal_error(&format!("count error: {e}")));
+                    }
                 }
             }
         } else {
-            // No channel filter — must count only accessible events.
-            // Fall back to query + post-filter since count_events can't
-            // restrict to a set of channels.
-            let query =
+            // No channel filter — use SQL-level channel_ids pushdown to count
+            // only events in accessible channels (+ global events).
+            let mut query =
                 crate::handlers::req::build_event_query_from_filter(filter, &pubkey_bytes, &state)
                     .await;
-            match state.db.query_events(&query).await {
-                Ok(stored_events) => {
-                    for se in stored_events {
-                        match se.channel_id {
-                            Some(ch_id) if !accessible_channels.contains(&ch_id) => continue,
-                            _ => {}
-                        }
-                        // Post-filter: verify event matches the full filter (generic tags, etc.).
-                        if !sprout_core::filter::filters_match(std::slice::from_ref(filter), &se) {
-                            continue;
-                        }
-                        total += 1;
+            query.channel_ids = Some(accessible_channels.to_vec());
+
+            if crate::handlers::req::filter_fully_pushable(filter) {
+                query.limit = None;
+                match state.db.count_events(&query).await {
+                    Ok(n) => total += n as u64,
+                    Err(e) => {
+                        return Err(internal_error(&format!("count error: {e}")));
                     }
                 }
-                Err(e) => {
-                    return Err(internal_error(&format!("count error: {e}")));
+            } else {
+                // Fallback: query with high limit + post-filter for correctness.
+                query.limit = Some(10_000);
+                match state.db.query_events(&query).await {
+                    Ok(stored_events) => {
+                        for se in stored_events {
+                            if sprout_core::filter::filters_match(std::slice::from_ref(filter), &se)
+                            {
+                                total += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(internal_error(&format!("count error: {e}")));
+                    }
                 }
             }
         }
