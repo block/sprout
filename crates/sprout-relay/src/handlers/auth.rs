@@ -398,16 +398,18 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         session_expiry: final_session_expiry,
                     };
 
-                    // Clear subscriptions BEFORE setting new identity to prevent privilege-leak window.
-                    clear_subscriptions_on_reauth(&conn, &state, conn_id, &prev_auth_ctx).await;
-                    *conn.auth_state.write().await = AuthState::Authenticated {
-                        ctx: auth_ctx,
-                        challenge: challenge.clone(),
-                    };
+                    // 1. Bump epoch first — invalidates any in-flight REQs using the old epoch.
                     if prev_auth_ctx.is_some() {
                         conn.auth_epoch
                             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
+                    // 2. Clear old subscriptions.
+                    clear_subscriptions_on_reauth(&conn, &state, conn_id, &prev_auth_ctx).await;
+                    // 3. Write new auth state.
+                    *conn.auth_state.write().await = AuthState::Authenticated {
+                        ctx: auth_ctx,
+                        challenge: challenge.clone(),
+                    };
                     state
                         .conn_manager
                         .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
@@ -558,16 +560,18 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     owner = %owner_pubkey.to_hex(),
                     "NIP-AA agent auth successful"
                 );
-                // Clear subscriptions BEFORE setting new identity to prevent privilege-leak window.
-                clear_subscriptions_on_reauth(&conn, &state, conn_id, &prev_auth_ctx).await;
-                *conn.auth_state.write().await = AuthState::Authenticated {
-                    ctx: auth_ctx,
-                    challenge: challenge.clone(),
-                };
+                // 1. Bump epoch first — invalidates any in-flight REQs using the old epoch.
                 if prev_auth_ctx.is_some() {
                     conn.auth_epoch
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
+                // 2. Clear old subscriptions.
+                clear_subscriptions_on_reauth(&conn, &state, conn_id, &prev_auth_ctx).await;
+                // 3. Write new auth state.
+                *conn.auth_state.write().await = AuthState::Authenticated {
+                    ctx: auth_ctx,
+                    challenge: challenge.clone(),
+                };
                 state
                     .conn_manager
                     .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
@@ -738,16 +742,18 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
 
             let nip_aa_owner_for_conn = final_ctx.owner_pubkey;
             let final_ctx_session_expiry = final_ctx.session_expiry;
-            // Clear subscriptions BEFORE setting new identity to prevent privilege-leak window.
-            clear_subscriptions_on_reauth(&conn, &state, conn_id, &prev_auth_ctx).await;
-            *conn.auth_state.write().await = AuthState::Authenticated {
-                ctx: final_ctx,
-                challenge: challenge.clone(),
-            };
+            // 1. Bump epoch first — invalidates any in-flight REQs using the old epoch.
             if prev_auth_ctx.is_some() {
                 conn.auth_epoch
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
+            // 2. Clear old subscriptions.
+            clear_subscriptions_on_reauth(&conn, &state, conn_id, &prev_auth_ctx).await;
+            // 3. Write new auth state.
+            *conn.auth_state.write().await = AuthState::Authenticated {
+                ctx: final_ctx,
+                challenge: challenge.clone(),
+            };
             state
                 .conn_manager
                 .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
