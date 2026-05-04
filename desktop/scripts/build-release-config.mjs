@@ -9,15 +9,14 @@ import { resolve } from "node:path";
 //
 // For OSS release builds this script emits:
 // 1. bundle.macOS.minimumSystemVersion = "10.15" for broad compatibility.
-// 2. bundle.createUpdaterArtifacts = true so Tauri produces the .tar.gz
-//    archive and .sig signature during the build.
-// 3. plugins.updater with the public key and endpoint from env vars.
+// 2. plugins.updater with the public key and endpoint from env vars.
 //    Both SPROUT_UPDATER_PUBLIC_KEY and SPROUT_UPDATER_ENDPOINT are required —
 //    the script fails if either is missing (OSS builds always ship with updater).
-// 4. bundle.macOS.signingIdentity = "-" for ad-hoc code signing. This
-//    prevents macOS Gatekeeper from rejecting the app as "damaged".
-//    Users will see the standard "unidentified developer" dialog on first
-//    launch, which they can bypass via right-click > Open.
+//
+// Note: signingIdentity is intentionally omitted — the workflow uses
+// block/apple-codesign-action to sign the .app post-build. Updater
+// artifacts (tar.gz + minisign signature) are also created post-signing
+// so the archive contains the properly signed .app.
 
 const outputConfigPath = resolve(
   process.cwd(),
@@ -41,9 +40,7 @@ const releaseConfig = {
   bundle: {
     macOS: {
       minimumSystemVersion: "10.15",
-      signingIdentity: "-",
     },
-    createUpdaterArtifacts: true,
   },
   plugins: {
     updater: {

@@ -15,9 +15,10 @@ jobs:
   release:
     name: Release
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: write
+      id-token: write
     env:
       VERSION: ${{ inputs.version }}
     steps:
@@ -59,38 +60,57 @@ jobs:
         env:
           SPROUT_UPDATER_PUBLIC_KEY: ${{ secrets.SPROUT_UPDATER_PUBLIC_KEY }}
           SPROUT_UPDATER_ENDPOINT: https://github.com/block/sprout/releases/download/sprout-desktop-latest/latest.json
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Sign with Apple codesigning service
+        id: codesign
+        uses: block/apple-codesign-action@679535d1ab7c5a7c18e6f9afcba3464512cc3dde # v1.1.0
+        with:
+          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
+          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
+          unsigned-artifact-path: desktop/src-tauri/target/release/bundle/dmg/Sprout_${{ env.VERSION }}_aarch64.dmg
+          entitlements-plist-path: desktop/src-tauri/Entitlements.plist
 
       - name: Verify code signature
         run: |
-          codesign --verify --deep --strict --verbose=2 \
-            desktop/src-tauri/target/release/bundle/macos/Sprout.app
+          # Extract signed .app from the action's output zip
+          SIGNED_APP_DIR="${RUNNER_TEMP}/signed-app"
+          mkdir -p "$SIGNED_APP_DIR"
+          ditto -x -k "${{ steps.codesign.outputs.signed-artifact-path }}" "$SIGNED_APP_DIR"
+          if [[ ! -d "$SIGNED_APP_DIR/Sprout.app" ]]; then
+            echo "::error::Sprout.app not found after extracting signed artifact"
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$SIGNED_APP_DIR/Sprout.app"
+          spctl -a -t exec -vv "$SIGNED_APP_DIR/Sprout.app"
 
-      - name: Locate build artifacts
-        id: artifacts
+      - name: Create updater artifacts
+        id: updater
         run: |
-          BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
+          SIGNED_APP_DIR="${RUNNER_TEMP}/signed-app"
 
-          # Find the DMG (Tauri names it Sprout_<version>_<arch>.dmg)
-          DMG=$(find "$BUNDLE_DIR/dmg" -name '*.dmg' -type f | head -1)
-          if [[ -z "$DMG" ]]; then
-            echo "::error::No DMG found in $BUNDLE_DIR/dmg"
+          ARCHIVE_NAME="Sprout_${VERSION}_aarch64.app.tar.gz"
+
+          # Create updater tarball from signed .app
+          ARCHIVE="${RUNNER_TEMP}/${ARCHIVE_NAME}"
+          (cd "$SIGNED_APP_DIR" && tar -czf "$ARCHIVE" "Sprout.app")
+
+          # Sign the archive with Tauri's minisign key
+          # tauri signer reads TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD from env
+          cd desktop && pnpm exec tauri signer sign "$ARCHIVE"
+
+          SIGNATURE="${ARCHIVE}.sig"
+          if [[ ! -f "$SIGNATURE" ]]; then
+            echo "::error::tauri signer produced no signature file"
             exit 1
           fi
-          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
 
-          # Find the updater .tar.gz and .sig
-          ARCHIVE=$(find "$BUNDLE_DIR/macos" -name '*.tar.gz' ! -name '*.sig' -type f | head -1)
-          SIG="${ARCHIVE}.sig"
-          if [[ -z "$ARCHIVE" || ! -f "$SIG" ]]; then
-            echo "::error::Updater archive or signature not found in $BUNDLE_DIR/macos"
-            exit 1
-          fi
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
-          echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
-          echo "sig=$SIG" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$ARCHIVE_NAME" >> "$GITHUB_OUTPUT"
+          echo "sig=$SIGNATURE" >> "$GITHUB_OUTPUT"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Generate latest.json
         run: |
@@ -101,8 +121,8 @@ jobs:
             > latest.json
           cat latest.json
         env:
-          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
-          ARCHIVE_NAME: ${{ steps.artifacts.outputs.archive_name }}
+          SIG_PATH: ${{ steps.updater.outputs.sig }}
+          ARCHIVE_NAME: ${{ steps.updater.outputs.archive_name }}
 
       - name: Create versioned GitHub release
         run: |
@@ -114,7 +134,7 @@ jobs:
             "$DMG_PATH"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
+          DMG_PATH: ${{ steps.codesign.outputs.signed-dmg-path }}
 
       - name: Update rolling release for auto-updater
         run: |
@@ -130,5 +150,5 @@ jobs:
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ARCHIVE_PATH: ${{ steps.artifacts.outputs.archive }}
-          SIG_PATH: ${{ steps.artifacts.outputs.sig }}
+          ARCHIVE_PATH: ${{ steps.updater.outputs.archive }}
+          SIG_PATH: ${{ steps.updater.outputs.sig }}

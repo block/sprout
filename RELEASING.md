@@ -17,6 +17,8 @@ desktop app.
   | `SPROUT_UPDATER_PUBLIC_KEY` | Tauri updater public key (minisign) |
   | `TAURI_SIGNING_PRIVATE_KEY` | Tauri updater private key (used to sign the update archive) |
   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for the private key |
+  | `OSX_CODESIGN_ROLE` | AWS IAM role ARN for OIDC authentication with the signing service |
+  | `CODESIGN_S3_BUCKET` | S3 bucket used for artifact transfer during signing |
 
 ---
 
@@ -42,8 +44,9 @@ The workflow will:
 - Patch the version into `package.json`, `tauri.conf.json`, and `Cargo.toml`
 - Build all sidecar binaries (`sprout-acp`, `sprout-mcp`,
   `git-credential-nostr`)
-- Build the Tauri desktop app with updater signing enabled
-- Create a versioned GitHub release (`v0.4.0`) with the `.dmg` installer
+- Build the Tauri desktop app
+- Sign and notarize the app via Block's Apple code signing service
+- Create a versioned GitHub release (`v0.4.0`) with the signed `.dmg` installer
 - Update the rolling `sprout-desktop-latest` release with the signed
   update archive and `latest.json` manifest for the auto-updater
 
@@ -71,14 +74,17 @@ adding a matrix build to the workflow.
 
 ## Code Signing (macOS)
 
-OSS release builds use **ad-hoc code signing** (`signingIdentity: "-"`)
-rather than a Developer ID certificate. This means the app is not
-notarized by Apple.
+OSS release builds are **signed and notarized** via Block's Apple code
+signing service (`block/apple-codesign-action`). The app is signed with a
+Developer ID certificate and notarized by Apple, so users will not see
+Gatekeeper warnings on first launch.
 
-On first launch, macOS Gatekeeper will block the app with a "damaged" or
-"unidentified developer" message. Users can bypass this by
-**right-clicking the app > Open** (or via System Settings > Privacy &
-Security). After the first launch the app will open normally.
+The following additional secrets are required for code signing:
+
+| Secret | Purpose |
+|--------|---------|
+| `OSX_CODESIGN_ROLE` | AWS IAM role ARN for OIDC authentication with the signing service |
+| `CODESIGN_S3_BUCKET` | S3 bucket used for artifact transfer during signing |
 
 ---
 
@@ -104,10 +110,11 @@ The version string must be valid semver: `MAJOR.MINOR.PATCH` with an
 optional pre-release suffix (e.g. `1.0.0-beta.1`). Do not include a `v`
 prefix.
 
-### Build fails at "Build Tauri app"
-Check that the signing secrets are configured correctly. The build
-requires `TAURI_SIGNING_PRIVATE_KEY` and
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to be set.
+### Build fails at "Sign with Apple codesigning service"
+Check that `OSX_CODESIGN_ROLE` and `CODESIGN_S3_BUCKET` secrets are
+configured correctly. The signing service requires valid AWS OIDC
+credentials. Also verify the repository has `id-token: write` permission
+in the workflow.
 
 ### Auto-updater reports "no update available"
 Verify that the `sprout-desktop-latest` release exists and contains a
