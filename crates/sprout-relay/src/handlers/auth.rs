@@ -47,7 +47,7 @@ async fn enforce_ws_relay_membership(
             conn.send(RelayMessage::ok(
                 event_id_hex,
                 false,
-                "restricted: membership check failed",
+                "restricted: agent authentication failed",
             ));
             return None;
         }
@@ -191,35 +191,6 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             }
         }
     };
-
-    /// Minimum interval between auth attempts on an already-authenticated connection.
-    const REAUTH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-
-    // Rate-limit re-auth: reject immediately if too soon after the last attempt.
-    // Uses a per-connection Instant rather than a sleep so the recv loop is
-    // never blocked and queued attempts are dropped rather than processed.
-    if prev_auth_ctx.is_some() {
-        let mut last = match conn.last_auth_at.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                // Mutex poisoned (a prior holder panicked). Recover the guard
-                // and continue — rate-limiting is best-effort, not safety-critical.
-                warn!("last_auth_at mutex poisoned — recovering");
-                poisoned.into_inner()
-            }
-        };
-        if let Some(t) = *last {
-            if t.elapsed() < REAUTH_MIN_INTERVAL {
-                conn.send(RelayMessage::ok(
-                    &event_id_hex_early,
-                    false,
-                    "auth-required: re-auth rate limited, try again later",
-                ));
-                return;
-            }
-        }
-        *last = Some(std::time::Instant::now());
-    }
 
     // On re-auth failure, restore the previous AuthContext (NIP-AA §6).
     macro_rules! reauth_fail {
@@ -544,7 +515,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 conn.send(RelayMessage::ok(
                     &event_id_hex,
                     false,
-                    &format!("invalid: {e}"),
+                    "invalid: verification failed",
                 ));
                 return;
             }
@@ -702,13 +673,16 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
             }
             // Relay membership gate — applies to ALL auth methods; NIP-AA fallback included.
+            // Confused-deputy prevention: pass empty tag slice so a non-agent user who
+            // happens to carry an `auth` tag cannot be escalated via the NIP-AA path.
+            // Only the dedicated NIP-AA agent path (above) passes real event tags.
             let nip_aa_owner = match enforce_ws_relay_membership(
                 &state,
                 &conn,
                 conn_id,
                 &pubkey,
                 &event_id_hex,
-                &event_tags,
+                &[], // Okta/JWT path: auth tags intentionally ignored per confused-deputy rule
                 event_created_at_ts,
             )
             .await
