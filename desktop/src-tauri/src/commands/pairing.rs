@@ -125,7 +125,10 @@ pub async fn start_pairing(
     // Detect NIP-43: if the relay requires auth, the target device should
     // connect to the /pair sidecar instead of the main relay.
     let qr_relay_url = if probe_relay_requires_auth(&ws_url).await {
-        format!("{}/pair", ws_url.trim_end_matches('/'))
+        let mut url = url::Url::parse(&ws_url).map_err(|e| format!("invalid relay URL: {e}"))?;
+        let path = url.path().trim_end_matches('/').to_string();
+        url.set_path(&format!("{path}/pair"));
+        url.to_string()
     } else {
         ws_url.clone()
     };
@@ -453,36 +456,47 @@ fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr_compat::Event> {
     serde_json::from_value(arr[2].clone()).ok()
 }
 
-/// Quick probe: connect to the relay and check if it sends a NIP-42 AUTH
-/// challenge within 3 seconds. Returns `true` if auth is required (NIP-43
-/// locked relay), `false` if no challenge arrives (open relay).
+/// Check the relay's NIP-11 information document to determine if auth is
+/// required (indicating NIP-43 access control). Returns `true` if the relay
+/// advertises `limitation.auth_required: true`, `false` otherwise.
 ///
-/// Uses a throwaway connection — the real pairing session connects separately.
+/// Converts the WebSocket URL to HTTP(S) and fetches `GET /` with
+/// `Accept: application/nostr+json` per NIP-11.
 async fn probe_relay_requires_auth(relay_url: &str) -> bool {
-    let ws = match tokio::time::timeout(Duration::from_secs(5), connect_async(relay_url)).await {
-        Ok(Ok((ws, _))) => ws,
-        _ => return false, // connection failed — assume open (will fail later anyway)
+    // Convert ws(s):// to http(s):// for the NIP-11 fetch.
+    let http_url = if let Some(rest) = relay_url.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = relay_url.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else {
+        return false;
     };
 
-    let (_, mut read) = ws.split();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
 
-    // Wait up to 3 seconds for an AUTH challenge.
-    let result = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            match read.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    if parse_auth_challenge(text.as_str()).is_some() {
-                        return true;
-                    }
-                }
-                Some(Ok(_)) => continue,
-                _ => return false,
-            }
-        }
-    })
-    .await;
+    let resp = match client
+        .get(&http_url)
+        .header("Accept", "application/nostr+json")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return false, // can't reach relay — assume open
+    };
 
-    matches!(result, Ok(true))
+    let json: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    // Check limitation.auth_required per NIP-11.
+    json.get("limitation")
+        .and_then(|l| l.get("auth_required"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 fn parse_auth_challenge(text: &str) -> Option<String> {
