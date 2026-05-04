@@ -34,6 +34,7 @@ export default defineConfig({
       name: "integration",
       testMatch: [
         "**/agents.spec.ts",
+        "**/onboarding.spec.ts",
         "**/stream.spec.ts",
         "**/integration.spec.ts",
         "**/profile.spec.ts",

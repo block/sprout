@@ -25,20 +25,12 @@ String _encodePairingCode({
 /// A fake [AuthNotifier] that records calls instead of touching secure storage.
 class FakeAuthNotifier extends AsyncNotifier<AuthState>
     implements AuthNotifier {
-  StoredCredentials? lastCredentials;
+  Workspace? lastWorkspace;
   bool signedOut = false;
 
   @override
   Future<AuthState> build() async =>
       const AuthState(status: AuthStatus.unauthenticated);
-
-  @override
-  Future<void> authenticate(StoredCredentials creds) async {
-    lastCredentials = creds;
-    state = AsyncData(
-      AuthState(status: AuthStatus.authenticated, credentials: creds),
-    );
-  }
 
   @override
   Future<void> signOut() async {
@@ -48,6 +40,14 @@ class FakeAuthNotifier extends AsyncNotifier<AuthState>
 
   @override
   Future<void> retry() async {}
+
+  @override
+  Future<void> authenticateWithWorkspace(Workspace workspace) async {
+    lastWorkspace = workspace;
+    state = AsyncData(
+      AuthState(status: AuthStatus.authenticated, workspace: workspace),
+    );
+  }
 }
 
 void main() {
@@ -90,8 +90,8 @@ void main() {
 
       final state = container.read(pairingProvider);
       expect(state.status, PairingStatus.success);
-      expect(fakeAuth.lastCredentials?.relayUrl, 'http://test:3000');
-      expect(fakeAuth.lastCredentials?.token, 'sprout_test_token');
+      expect(fakeAuth.lastWorkspace?.relayUrl, 'http://test:3000');
+      expect(fakeAuth.lastWorkspace?.token, 'sprout_test_token');
     });
 
     test('successful pairing with sprout:// prefix', () async {
@@ -116,7 +116,25 @@ void main() {
       await container.read(pairingProvider.notifier).pair(code);
 
       expect(container.read(pairingProvider).status, PairingStatus.success);
-      expect(fakeAuth.lastCredentials?.pubkey, 'abc123');
+      expect(fakeAuth.lastWorkspace?.pubkey, 'abc123');
+    });
+
+    test('reuses provider HTTP client across pairing attempts', () async {
+      var requestCount = 0;
+      final mock = http_testing.MockClient((_) async {
+        requestCount++;
+        return http.Response(jsonEncode({'id': '$requestCount'}), 200);
+      });
+      container = createContainer(mock);
+
+      await container.read(pairingProvider.notifier).pair(_encodePairingCode());
+      expect(container.read(pairingProvider).status, PairingStatus.success);
+
+      container.read(pairingProvider.notifier).reset();
+      await container.read(pairingProvider.notifier).pair(_encodePairingCode());
+
+      expect(container.read(pairingProvider).status, PairingStatus.success);
+      expect(requestCount, 2);
     });
 
     test('relay 401 sets error state', () async {

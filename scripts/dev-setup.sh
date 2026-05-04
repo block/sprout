@@ -130,6 +130,14 @@ if [[ ! -f "${SCHEMA_FILE}" ]]; then
   warn "No schema.sql found at ${SCHEMA_FILE}. Skipping."
 else
   if [[ -x "${PGSCHEMA}" ]]; then
+    # pgschema uses CREATE INDEX CONCURRENTLY for new indexes, which Postgres
+    # does not support on partitioned tables. Pre-create any such indexes here
+    # so pgschema sees them as already existing and skips the CONCURRENTLY path.
+    log "Pre-creating indexes on partitioned tables (if needed)..."
+    docker exec sprout-postgres psql -U "${PGUSER}" -d "${PGDATABASE}" -q -c \
+      "CREATE INDEX IF NOT EXISTS idx_events_parameterized ON events (kind, pubkey, d_tag, deleted_at) WHERE d_tag IS NOT NULL;" \
+      2>/dev/null || true
+
     log "Using pgschema for migrations..."
     attempts=0
     max_attempts=10
@@ -183,6 +191,23 @@ if [[ -d "${DESKTOP_DIR}" ]]; then
   fi
 else
   warn "Desktop directory not found at ${DESKTOP_DIR} — skipping."
+fi
+
+# ---- Install web dependencies -----------------------------------------------
+
+WEB_DIR="${REPO_ROOT}/web"
+
+if [[ -d "${WEB_DIR}" ]]; then
+  if command -v pnpm &>/dev/null; then
+    log "Installing web dependencies (pnpm install)..."
+    (cd "${WEB_DIR}" && pnpm install)
+    success "Web dependencies installed"
+  else
+    warn "pnpm not found — skipping web dependency install."
+    warn "Run '. ./bin/activate-hermit' to get pnpm, then 'just web-install'."
+  fi
+else
+  warn "Web directory not found at ${WEB_DIR} — skipping."
 fi
 
 # ---- Print connection info --------------------------------------------------

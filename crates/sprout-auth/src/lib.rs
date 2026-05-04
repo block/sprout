@@ -59,6 +59,11 @@ pub enum AuthMethod {
     Nip42Okta,
     /// NIP-42 with a `sprout_` API token in the `auth_token` tag.
     Nip42ApiToken,
+    /// NIP-42 with a NIP-OA owner attestation `auth` tag.
+    ///
+    /// The agent key signed the AUTH event; the `auth` tag proves an owner
+    /// key authorized it. Relay membership is checked against the owner.
+    Nip42OwnerAttestation,
 }
 
 /// The result of a successful authentication, bound to a WebSocket connection.
@@ -68,8 +73,18 @@ pub struct AuthContext {
     pub pubkey: nostr::PublicKey,
     /// Permission scopes granted to this connection.
     pub scopes: Vec<Scope>,
+    /// Token-level channel restriction, if authentication used a scoped API token.
+    ///
+    /// `None` means unrestricted or not token-authenticated.
+    pub channel_ids: Option<Vec<uuid::Uuid>>,
     /// How the connection was authenticated.
     pub auth_method: AuthMethod,
+    /// The owner pubkey from a NIP-OA `auth` tag, if present.
+    ///
+    /// When an agent authenticates via owner attestation, this holds the
+    /// owner's pubkey. Relay membership is checked against this key.
+    /// `None` for all other auth methods.
+    pub owner_pubkey: Option<nostr::PublicKey>,
 }
 
 impl AuthContext {
@@ -187,7 +202,9 @@ impl AuthService {
         Ok(AuthContext {
             pubkey: verified_pubkey,
             scopes,
+            channel_ids: None,
             auth_method,
+            owner_pubkey: None,
         })
     }
 
@@ -417,7 +434,9 @@ mod tests {
         let ctx = AuthContext {
             pubkey: keys.public_key(),
             scopes: vec![Scope::MessagesRead, Scope::ChannelsRead],
+            channel_ids: None,
             auth_method: AuthMethod::Nip42PubkeyOnly,
+            owner_pubkey: None,
         };
         assert!(ctx.has_scope(&Scope::MessagesRead));
         assert!(!ctx.has_scope(&Scope::MessagesWrite));

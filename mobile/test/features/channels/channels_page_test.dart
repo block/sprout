@@ -5,6 +5,7 @@ import 'package:hooks_riverpod/misc.dart';
 import 'package:sprout_mobile/features/channels/channel.dart';
 import 'package:sprout_mobile/features/channels/channels_page.dart';
 import 'package:sprout_mobile/features/channels/channels_provider.dart';
+import 'package:sprout_mobile/features/channels/read_state/read_state_provider.dart';
 import 'package:sprout_mobile/features/profile/profile_provider.dart';
 import 'package:sprout_mobile/features/profile/user_profile.dart';
 import 'package:sprout_mobile/shared/theme/theme.dart';
@@ -18,10 +19,7 @@ void main() {
         presenceProvider.overrideWith(() => _FakePresenceNotifier()),
         ...overrides,
       ],
-      child: MaterialApp(
-        theme: AppTheme.lightTheme,
-        home: const ChannelsPage(),
-      ),
+      child: MaterialApp(theme: AppTheme.light(), home: const ChannelsPage()),
     );
   }
 
@@ -39,18 +37,31 @@ void main() {
     ),
     Channel(
       id: '2',
-      name: 'secret',
-      channelType: 'stream',
-      visibility: 'private',
-      description: 'Private channel',
+      name: 'design-forum',
+      channelType: 'forum',
+      visibility: 'open',
+      description: 'Discuss designs',
       createdBy: 'abc',
       createdAt: DateTime(2025),
       memberCount: 3,
-      isMember: false,
+      isMember: true,
+    ),
+    Channel(
+      id: '3',
+      name: 'dm-alice',
+      channelType: 'dm',
+      visibility: 'open',
+      description: 'Direct message',
+      createdBy: 'abc',
+      createdAt: DateTime(2025),
+      memberCount: 2,
+      participants: const ['Test', 'Alice'],
+      participantPubkeys: const ['aabb', 'alice'],
+      isMember: true,
     ),
   ];
 
-  testWidgets('shows channel list when data loads', (tester) async {
+  testWidgets('shows grouped channel list when data loads', (tester) async {
     await tester.pumpWidget(
       buildTestable(
         overrides: [
@@ -61,9 +72,58 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('general'), findsOneWidget);
-    expect(find.text('secret'), findsOneWidget);
-    // Section header shows channel count
-    expect(find.text('2'), findsOneWidget);
+    expect(find.text('design-forum'), findsOneWidget);
+    expect(find.text('Alice'), findsOneWidget);
+    expect(find.text('CHANNELS'), findsOneWidget);
+    expect(find.text('FORUMS'), findsOneWidget);
+    expect(find.text('DMS'), findsOneWidget);
+    expect(find.text('\u{1F331}'), findsOneWidget);
+    expect(find.byTooltip('Create or start conversation'), findsOneWidget);
+  });
+
+  testWidgets('hides unjoined and archived channels from the main list', (
+    tester,
+  ) async {
+    final channels = [
+      ...testChannels,
+      Channel(
+        id: '4',
+        name: 'open-stream',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'Available to join',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 8,
+        isMember: false,
+      ),
+      Channel(
+        id: '5',
+        name: 'archived-stream',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'Archived channel',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 4,
+        isMember: true,
+        archivedAt: DateTime(2025, 1, 2),
+      ),
+    ];
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Unjoined and archived channels should not appear in the main list.
+    expect(find.text('general'), findsOneWidget);
+    expect(find.text('open-stream'), findsNothing);
+    expect(find.text('archived-stream'), findsNothing);
   });
 
   testWidgets('shows empty state when no channels', (tester) async {
@@ -74,7 +134,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('No channels yet'), findsOneWidget);
+    expect(find.text('No conversations yet'), findsOneWidget);
   });
 
   testWidgets('shows error view with retry button', (tester) async {
@@ -87,6 +147,142 @@ void main() {
 
     expect(find.text('Could not load channels'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+  });
+
+  testWidgets('renders and clears unread indicator', (tester) async {
+    final channels = [
+      Channel(
+        id: '1',
+        name: 'general',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'General discussion',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 10,
+        lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+          20 * 1000,
+          isUtc: true,
+        ),
+        isMember: true,
+      ),
+    ];
+    final readState = _FakeReadStateNotifier(
+      const ReadStateState(
+        isReady: true,
+        pubkey: 'pk',
+        contexts: {'1': 10},
+        version: 0,
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+          readStateProvider.overrideWith(() => readState),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('channel-unread-1')), findsOneWidget);
+
+    readState.markContextRead('1', 20);
+    await tester.pump();
+
+    expect(find.byKey(const Key('channel-unread-1')), findsNothing);
+  });
+
+  testWidgets('seeds first loaded channels as read', (tester) async {
+    final channels = [
+      Channel(
+        id: '1',
+        name: 'general',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'General discussion',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 10,
+        lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+          20 * 1000,
+          isUtc: true,
+        ),
+        isMember: true,
+      ),
+    ];
+    final readState = _FakeReadStateNotifier(
+      const ReadStateState(
+        isReady: true,
+        pubkey: 'pk',
+        contexts: {},
+        version: 0,
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+          readStateProvider.overrideWith(() => readState),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(readState.seededContexts, {'1': 20});
+    expect(readState.markedContexts, isEmpty);
+    expect(find.byKey(const Key('channel-unread-1')), findsNothing);
+  });
+
+  testWidgets('waits for read-state readiness before initial seeding', (
+    tester,
+  ) async {
+    final channels = [
+      Channel(
+        id: '1',
+        name: 'general',
+        channelType: 'stream',
+        visibility: 'open',
+        description: 'General discussion',
+        createdBy: 'abc',
+        createdAt: DateTime(2025),
+        memberCount: 10,
+        lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+          20 * 1000,
+          isUtc: true,
+        ),
+        isMember: true,
+      ),
+    ];
+    final readState = _FakeReadStateNotifier(
+      const ReadStateState(
+        isReady: false,
+        pubkey: 'pk',
+        contexts: {},
+        version: 0,
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildTestable(
+        overrides: [
+          channelsProvider.overrideWith(() => _FakeNotifier(channels)),
+          readStateProvider.overrideWith(() => readState),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(readState.seededContexts, isEmpty);
+    expect(readState.markedContexts, isEmpty);
+
+    readState.setReady();
+    await tester.pumpAndSettle();
+
+    expect(readState.seededContexts, {'1': 20});
+    expect(readState.markedContexts, isEmpty);
   });
 }
 
@@ -112,4 +308,36 @@ class _FakeProfileNotifier extends ProfileNotifier {
 class _FakePresenceNotifier extends PresenceNotifier {
   @override
   Future<String> build() async => 'online';
+}
+
+class _FakeReadStateNotifier extends ReadStateNotifier {
+  final ReadStateState _initialState;
+  final Map<String, int> seededContexts = {};
+  final Map<String, int> markedContexts = {};
+
+  _FakeReadStateNotifier(this._initialState);
+
+  @override
+  ReadStateState build() => _initialState;
+
+  void setReady() {
+    state = ReadStateState(
+      isReady: true,
+      pubkey: state.pubkey,
+      contexts: state.contexts,
+      version: state.version + 1,
+    );
+  }
+
+  @override
+  void seedContextRead(String contextId, int unixTimestamp) {
+    seededContexts[contextId] = unixTimestamp;
+    state = state.copyWithContext(contextId, unixTimestamp);
+  }
+
+  @override
+  void markContextRead(String contextId, int unixTimestamp) {
+    markedContexts[contextId] = unixTimestamp;
+    state = state.copyWithContext(contextId, unixTimestamp);
+  }
 }

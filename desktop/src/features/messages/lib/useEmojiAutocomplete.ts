@@ -1,0 +1,223 @@
+import * as React from "react";
+
+import { init, SearchIndex } from "emoji-mart";
+import data from "@emoji-mart/data";
+
+export type EmojiSuggestion = {
+  id: string;
+  name: string;
+  native: string;
+};
+
+const EMOJI_DEBOUNCE_MS = 120;
+const MIN_QUERY_LENGTH = 2;
+const MAX_RESULTS = 8;
+
+// Initialize emoji-mart search index once
+init({ data });
+
+/**
+ * Detect an emoji shortcode query at the cursor position.
+ * Matches `:query` where `:` is preceded by whitespace or start-of-string,
+ * and `query` contains no whitespace or `:`.
+ */
+function detectEmojiQuery(
+  value: string,
+  cursorPosition: number,
+): { query: string; startIndex: number } | null {
+  const beforeCursor = value.slice(0, cursorPosition);
+  const match = beforeCursor.match(/(?:^|[\s])(:([^\s:]{2,})?)$/);
+  if (!match) return null;
+
+  const full = match[1]; // includes the `:`
+  const query = match[2]; // just the text after `:`
+  if (!query || query.length < MIN_QUERY_LENGTH) return null;
+
+  const startIndex = beforeCursor.length - full.length;
+  return { query, startIndex };
+}
+
+export function useEmojiAutocomplete() {
+  const [emojiQuery, setEmojiQuery] = React.useState<string | null>(null);
+  const [emojiStartIndex, setEmojiStartIndex] = React.useState(0);
+  const [emojiSelectedIndex, setEmojiSelectedIndex] = React.useState(0);
+  const [suggestions, setSuggestions] = React.useState<EmojiSuggestion[]>([]);
+
+  const debounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const latestValueRef = React.useRef<string>("");
+  const latestCursorRef = React.useRef<number>(0);
+
+  // Clean up pending timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Search emoji-mart when query changes
+  React.useEffect(() => {
+    if (emojiQuery === null) {
+      setSuggestions([]);
+      return;
+    }
+
+    let cancelled = false;
+    SearchIndex.search(emojiQuery)
+      .then(
+        (
+          results: Array<{
+            id: string;
+            name: string;
+            skins: Array<{ native: string }>;
+          }> | null,
+        ) => {
+          if (cancelled) return;
+          const mapped: EmojiSuggestion[] = (results ?? [])
+            .slice(0, MAX_RESULTS)
+            .map((emoji) => ({
+              id: emoji.id,
+              name: emoji.name,
+              native: emoji.skins[0]?.native ?? "",
+            }))
+            .filter((e) => e.native !== "");
+          setSuggestions(mapped);
+          setEmojiSelectedIndex(0);
+        },
+      )
+      .catch(() => {
+        if (cancelled) return;
+        setSuggestions([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [emojiQuery]);
+
+  const isEmojiAutocompleteOpen = emojiQuery !== null && suggestions.length > 0;
+
+  const insertEmoji = React.useCallback(
+    (
+      suggestion: EmojiSuggestion,
+      content: string,
+      selectionEnd: number,
+    ): { nextContent: string; nextCursor: number } => {
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+
+      const before = content.slice(0, emojiStartIndex);
+      const after = content.slice(selectionEnd);
+      const inserted = `${suggestion.native} `;
+      const nextContent = `${before}${inserted}${after}`;
+      const nextCursor = before.length + inserted.length;
+
+      setEmojiQuery(null);
+      setEmojiSelectedIndex(0);
+
+      return { nextContent, nextCursor };
+    },
+    [emojiStartIndex],
+  );
+
+  const updateEmojiQuery = React.useCallback(
+    (value: string, cursorPosition: number) => {
+      latestValueRef.current = value;
+      latestCursorRef.current = cursorPosition;
+
+      if (debounceTimerRef.current !== null) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        const result = detectEmojiQuery(
+          latestValueRef.current,
+          latestCursorRef.current,
+        );
+        if (result) {
+          setEmojiQuery(result.query);
+          setEmojiStartIndex(result.startIndex);
+        } else {
+          setEmojiQuery(null);
+        }
+      }, EMOJI_DEBOUNCE_MS);
+    },
+    [],
+  );
+
+  const clearEmojis = React.useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    setEmojiQuery(null);
+    setEmojiSelectedIndex(0);
+    setSuggestions([]);
+  }, []);
+
+  const handleEmojiKeyDown = React.useCallback(
+    (
+      event: React.KeyboardEvent,
+    ): { handled: boolean; suggestion?: EmojiSuggestion } => {
+      if (!isEmojiAutocompleteOpen) {
+        return { handled: false };
+      }
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setEmojiSelectedIndex((current) =>
+          current < suggestions.length - 1 ? current + 1 : 0,
+        );
+        return { handled: true };
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setEmojiSelectedIndex((current) =>
+          current > 0 ? current - 1 : suggestions.length - 1,
+        );
+        return { handled: true };
+      }
+
+      if (
+        event.key === "Tab" ||
+        (event.key === "Enter" &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          !event.shiftKey)
+      ) {
+        event.preventDefault();
+        return {
+          handled: true,
+          suggestion: suggestions[emojiSelectedIndex],
+        };
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setEmojiQuery(null);
+        return { handled: true };
+      }
+
+      return { handled: false };
+    },
+    [isEmojiAutocompleteOpen, emojiSelectedIndex, suggestions],
+  );
+
+  return {
+    clearEmojis,
+    emojiSelectedIndex,
+    emojiSuggestions: suggestions,
+    handleEmojiKeyDown,
+    insertEmoji,
+    isEmojiAutocompleteOpen,
+    updateEmojiQuery,
+  };
+}

@@ -18,6 +18,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::api;
 use crate::api::tokens;
+use crate::audio;
 use crate::connection::handle_connection;
 use crate::metrics::track_metrics;
 use crate::nip11::{relay_info_handler, RelayInfo};
@@ -49,15 +50,14 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(RequestBodyLimitLayer::new(media_body_limit))
         .with_state(state.clone());
 
+    // ── Git routes: configurable body limit (default 500 MB) ─────────────────
+    let git_router = api::git::git_router(state.clone());
+
+    // ── Internal git policy route (pre-receive hook callback) ────────────────
+    let git_policy_router = api::git::git_policy_router(state.clone());
+
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
-        // ── Internal routes (not exposed through the public API gateway) ─────
-        // LiveKit fires this on participant_joined/left (including crashes),
-        // providing authoritative presence tracking for crash-orphan recovery.
-        .route(
-            "/internal/livekit/webhook",
-            post(api::handle_livekit_webhook),
-        )
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
@@ -111,8 +111,20 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/approvals/by-hash/{hash}/deny",
             post(api::deny_approval_by_hash),
         )
-        // Huddle routes
-        .route("/api/huddles/{channel_id}/token", post(api::huddle_token))
+        // Huddle audio WebSocket route
+        .route(
+            "/huddle/{channel_id}/audio",
+            get(audio::handler::ws_audio_handler),
+        )
+        // Relay membership routes (NIP-43)
+        .route(
+            "/api/relay/members",
+            get(api::relay_members::list_relay_members),
+        )
+        .route(
+            "/api/relay/members/me",
+            get(api::relay_members::get_my_relay_membership),
+        )
         // Membership routes
         .route("/api/channels/{channel_id}/members", get(api::list_members))
         // Channel detail + metadata routes
@@ -167,6 +179,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     // Metrics → Trace → CORS applied once over the combined router.
     api_router
         .merge(media_router)
+        .merge(git_router)
+        .merge(git_policy_router)
         .layer(middleware::from_fn(track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.cors_origins))
@@ -210,8 +224,15 @@ async fn nip11_or_ws_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
+    // Only advertise NIP-11 `self` when a stable relay key is configured.
+    let relay_pubkey = if state.config.relay_private_key.is_some() {
+        Some(state.relay_keypair.public_key().to_hex())
+    } else {
+        None
+    };
+
     if accept.contains("application/nostr+json") {
-        let info = RelayInfo::from_config(&state.config);
+        let info = RelayInfo::from_config(&state.config, relay_pubkey.as_deref());
         return Json(info).into_response();
     }
 
@@ -221,7 +242,7 @@ async fn nip11_or_ws_handler(
             .into_response(),
         Err(_) => {
             // Not a WS request and not asking for nostr+json — serve NIP-11 as fallback.
-            let info = RelayInfo::from_config(&state.config);
+            let info = RelayInfo::from_config(&state.config, relay_pubkey.as_deref());
             Json(info).into_response()
         }
     }

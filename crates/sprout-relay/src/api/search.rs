@@ -14,7 +14,7 @@ use sprout_search::SearchQuery;
 
 use crate::state::AppState;
 
-use super::extract_auth_context;
+use super::{constrain_channel_ids, extract_auth_context};
 
 /// Query parameters for the search endpoint.
 #[derive(Debug, Deserialize)]
@@ -23,6 +23,10 @@ pub struct SearchParams {
     pub q: Option<String>,
     /// Maximum number of results to return. Defaults to 20, capped at 100.
     pub limit: Option<u32>,
+    /// Restrict results to a single channel. When present, ANDed with the
+    /// ACL-based channel filter so the caller can only see results they already
+    /// have access to.
+    pub channel_id: Option<String>,
 }
 
 /// Full-text search over messages accessible to the authenticated user.
@@ -42,21 +46,37 @@ pub async fn search_handler(
     let query_str = params.q.unwrap_or_default();
     let per_page = params.limit.unwrap_or(20).min(100);
 
-    let channel_ids = state
-        .db
-        .get_accessible_channel_ids(&pubkey_bytes)
-        .await
-        .unwrap_or_default();
+    let channel_ids = constrain_channel_ids(
+        state
+            .get_accessible_channel_ids_cached(&pubkey_bytes)
+            .await
+            .unwrap_or_default(),
+        ctx.channel_ids.as_deref(),
+    );
 
-    // Build Typesense filter_by: channel_id:=[id1,id2,...] || global events
-    let filter_by = if channel_ids.is_empty() {
+    // Channel-restricted tokens must stay within their allowlist; unrestricted callers
+    // may also see global events.
+    let include_global = ctx.channel_ids.is_none();
+    if channel_ids.is_empty() && !include_global {
+        return Ok(Json(serde_json::json!({ "hits": [], "found": 0 })));
+    }
+    let filter_by = if let Some(ref cid) = params.channel_id {
+        // Scoped to a single channel — verify it's in the accessible set.
+        if !channel_ids.iter().any(|id| id.to_string() == *cid) {
+            return Ok(Json(serde_json::json!({ "hits": [], "found": 0 })));
+        }
+        Some(format!("channel_id:={cid}"))
+    } else if channel_ids.is_empty() {
         Some("channel_id:=__global__".to_string())
-    } else {
+    } else if include_global {
         let ids: Vec<String> = channel_ids.iter().map(|id| id.to_string()).collect();
         Some(format!(
             "(channel_id:=[{}] || channel_id:=__global__)",
             ids.join(",")
         ))
+    } else {
+        let ids: Vec<String> = channel_ids.iter().map(|id| id.to_string()).collect();
+        Some(format!("channel_id:=[{}]", ids.join(",")))
     };
 
     let search_query = SearchQuery {

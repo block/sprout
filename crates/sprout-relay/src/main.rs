@@ -10,7 +10,6 @@ use sprout_db::{Db, DbConfig};
 use sprout_pubsub::PubSubManager;
 use sprout_search::{SearchConfig, SearchService};
 
-use sprout_huddle::{HuddleConfig, HuddleService};
 use sprout_relay::config::Config;
 use sprout_relay::metrics as relay_metrics;
 use sprout_relay::router::{build_health_router, build_router};
@@ -60,6 +59,73 @@ async fn main() -> anyhow::Result<()> {
         error!("Failed to ensure partitions: {e}");
     }
 
+    // NIP-43: if membership enforcement is on, a valid owner pubkey is required.
+    // config.rs already strips invalid values with a warning; catch the resulting
+    // None here so we fail fast with a clear message rather than starting a relay
+    // that no one can administer.
+    if config.require_relay_membership && config.relay_owner_pubkey.is_none() {
+        error!(
+            "SPROUT_REQUIRE_RELAY_MEMBERSHIP=true but RELAY_OWNER_PUBKEY is not set or invalid. \
+             Set RELAY_OWNER_PUBKEY to a valid 64-char hex pubkey."
+        );
+        return Err(anyhow::anyhow!(
+            "RELAY_OWNER_PUBKEY required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true"
+        ));
+    }
+
+    // NIP-43: relay membership requires a stable signing key.
+    // Check this before any DB mutations so we fail fast — no point backfilling
+    // or bootstrapping if we'll reject the config anyway.
+    if config.require_relay_membership && config.relay_private_key.is_none() {
+        return Err(anyhow::anyhow!(
+            "SPROUT_RELAY_PRIVATE_KEY is required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true. \
+             NIP-43 events signed with an ephemeral key become unverifiable after restart."
+        ));
+    }
+
+    // NIP-43: migrate any existing pubkey_allowlist entries to relay_members.
+    // Idempotent — safe to run every startup. Must run before bootstrap_owner
+    // so that existing allowlist users become relay members before the owner
+    // is promoted (otherwise enabling membership locks everyone out).
+    match db.backfill_from_allowlist().await {
+        Ok(0) => {}
+        Ok(n) => info!("Backfilled {n} pubkey_allowlist entries into relay_members"),
+        Err(e) => {
+            if config.require_relay_membership {
+                error!(
+                    "Fatal: failed to backfill allowlist with membership enforcement enabled: {e}"
+                );
+                return Err(anyhow::anyhow!(
+                    "Failed to backfill pubkey_allowlist (required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
+                ));
+            } else {
+                error!("Failed to backfill pubkey_allowlist (non-fatal): {e}");
+            }
+        }
+    }
+
+    // NIP-43: ensure the configured relay owner always holds the owner role.
+    if let Some(ref owner_pubkey) = config.relay_owner_pubkey {
+        match db.bootstrap_owner(owner_pubkey).await {
+            Ok(()) => info!(pubkey = %owner_pubkey, "Relay owner bootstrapped"),
+            Err(e) => {
+                if config.require_relay_membership {
+                    // Membership enforcement is on — a missing owner means no one
+                    // can administer the relay. Fail fast rather than silently start
+                    // in a broken state.
+                    error!("Fatal: failed to bootstrap relay owner with membership enforcement enabled: {e}");
+                    return Err(anyhow::anyhow!(
+                        "Failed to bootstrap relay owner (required when SPROUT_REQUIRE_RELAY_MEMBERSHIP=true): {e}"
+                    ));
+                } else {
+                    error!(
+                        "Failed to bootstrap relay owner (non-fatal, membership not required): {e}"
+                    );
+                }
+            }
+        }
+    }
+
     // NIP-33: backfill d_tag for any existing parameterized replaceable events
     // that predate the column addition. Idempotent — no-ops when fully populated.
     match db.backfill_d_tags().await {
@@ -68,7 +134,10 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => error!("Failed to backfill d_tags: {e}"),
     }
 
-    let audit_pool = sqlx::PgPool::connect(&config.database_url)
+    let audit_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .min_connections(1)
+        .connect(&config.database_url)
         .await
         .map_err(|e| anyhow::anyhow!("Audit DB connection failed: {e}"))?;
     let audit = AuditService::new(audit_pool);
@@ -128,29 +197,7 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to initialize media storage: {e}"))?;
     info!("Media storage connected");
 
-    // Huddles are enabled by default with dev credentials.
-    // Set SPROUT_HUDDLES_DISABLED=true to turn them off.
-    // Override LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET for production.
-    let huddle_service = if std::env::var("SPROUT_HUDDLES_DISABLED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
-    {
-        info!("Huddles explicitly disabled via SPROUT_HUDDLES_DISABLED");
-        None
-    } else {
-        let url = std::env::var("LIVEKIT_URL").unwrap_or_else(|_| "ws://localhost:7880".into());
-        let key = std::env::var("LIVEKIT_API_KEY").unwrap_or_else(|_| "devkey".into());
-        let secret = std::env::var("LIVEKIT_API_SECRET").unwrap_or_else(|_| "secret".into());
-        info!("Huddles enabled (LiveKit URL: {url})");
-        let svc = HuddleService::new(HuddleConfig {
-            livekit_url: url.clone(),
-            livekit_api_key: key,
-            livekit_api_secret: secret,
-        });
-        Some((svc, url))
-    };
-
-    let state = Arc::new(AppState::new(
+    let (app_state, audit_shutdown) = AppState::new(
         config.clone(),
         db,
         redis_health_pool,
@@ -161,8 +208,24 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&workflow_engine),
         relay_keypair,
         media_storage,
-        huddle_service,
-    ));
+    );
+    let state = Arc::new(app_state);
+
+    // NIP-43: publish the initial membership list on startup so clients can
+    // REQ kind:13534 immediately without waiting for the next membership change.
+    if config.require_relay_membership {
+        let startup_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(e) =
+                sprout_relay::handlers::side_effects::publish_nip43_membership_list(&startup_state)
+                    .await
+            {
+                tracing::warn!(error = %e, "failed to publish initial NIP-43 membership list on startup");
+            } else {
+                tracing::info!("NIP-43 membership list published on startup");
+            }
+        });
+    }
 
     // Wire the action sink — must happen after AppState (which creates
     // sub_registry, conn_manager) and before the cron loop starts.
@@ -243,10 +306,18 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 match rx.recv().await {
                     Ok(channel_event) => {
-                        let stored = sprout_core::StoredEvent::new(
-                            channel_event.event,
-                            Some(channel_event.channel_id),
-                        );
+                        // Nil UUID is the sentinel for channel-less global events
+                        // (see event.rs `else` branch). Convert back to None so
+                        // fan_out() uses the global subscriber index instead of
+                        // looking up subscribers under Some(Uuid::nil()), which
+                        // would find nothing and silently drop every cross-node
+                        // global event.
+                        let channel_id = if channel_event.channel_id.is_nil() {
+                            None
+                        } else {
+                            Some(channel_event.channel_id)
+                        };
+                        let stored = sprout_core::StoredEvent::new(channel_event.event, channel_id);
 
                         // Skip events that were already fanned out in-process (local echo).
                         // The cache has TTL-based eviction (60s) so entries are bounded
@@ -303,7 +374,17 @@ async fn main() -> anyhow::Result<()> {
     let router = build_router(Arc::clone(&state));
     let health_router = build_health_router(Arc::clone(&state));
 
-    serve(router, health_router, Arc::clone(&state)).await
+    serve(router, health_router, Arc::clone(&state)).await?;
+
+    // ── Drain audit queue ────────────────────────────────────────────────────
+    // Signal the audit worker to stop accepting, flush buffered entries, and
+    // exit. Uses a CancellationToken so it works regardless of how many
+    // Arc<AppState> clones are still alive in background tasks.
+    audit_shutdown
+        .drain(std::time::Duration::from_secs(5))
+        .await;
+
+    Ok(())
 }
 
 /// Bind all listeners and run with graceful shutdown.

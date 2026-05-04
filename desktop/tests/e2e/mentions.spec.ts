@@ -53,7 +53,7 @@ test("selecting a mention inserts @Name into input", async ({ page }) => {
   const dropdown = autocomplete(page);
   await dropdown.getByText("alice").click();
 
-  await expect(input).toHaveValue("Hey @alice ");
+  await expect(input).toHaveText("Hey @alice ");
 });
 
 test("mention button opens autocomplete and inserts a selected member", async ({
@@ -71,7 +71,7 @@ test("mention button opens autocomplete and inserts a selected member", async ({
   await expect(dropdown).toBeVisible();
   await dropdown.getByText("alice").click();
 
-  await expect(input).toHaveValue("Hey @alice ");
+  await expect(input).toHaveText("Hey @alice ");
 });
 
 test("keyboard navigation selects mention with Enter", async ({ page }) => {
@@ -89,7 +89,7 @@ test("keyboard navigation selects mention with Enter", async ({ page }) => {
   await input.press("Enter");
 
   // Should insert @alice and NOT send the message
-  await expect(input).toHaveValue("@alice ");
+  await expect(input).toHaveText("@alice ");
 });
 
 test("Escape dismisses autocomplete dropdown", async ({ page }) => {
@@ -127,7 +127,7 @@ test("mention text is highlighted in sent messages", async ({ page }) => {
   await expect(mentionSpan).toBeVisible();
 });
 
-test("clicking author name opens user profile popover", async ({ page }) => {
+test("clicking author name opens user profile panel", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
@@ -139,25 +139,32 @@ test("clicking author name opens user profile popover", async ({ page }) => {
   });
   await authorButton.click();
 
-  const popover = page.locator("[data-radix-popper-content-wrapper]");
-  await expect(popover).toBeVisible();
-  await expect(popover).toContainText("deadbeef");
-  await expect(page.getByTestId("user-profile-notes")).toContainText(
-    "Shipped the new desktop sidebar polish today.",
-  );
+  // Click now opens the full profile panel instead of the popover
+  const panel = page.getByTestId("user-profile-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText("deadbeef");
 });
 
-test("clicking avatar opens user profile popover", async ({ page }) => {
+test("hovering avatar opens popover, clicking opens profile panel", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 
-  // Click the avatar button on the first message
   const firstMessage = page.getByTestId("message-row").first();
   const avatarButton = firstMessage.locator("button").first();
-  await avatarButton.click();
 
+  // Hover should open the popover
+  await avatarButton.hover();
   await expect(
     page.locator("[data-radix-popper-content-wrapper]"),
   ).toBeVisible();
+
+  // Click should close the popover and open the profile panel
+  await avatarButton.click();
+  await expect(
+    page.locator("[data-radix-popper-content-wrapper]"),
+  ).not.toBeVisible();
+  await expect(page.getByTestId("user-profile-panel")).toBeVisible();
 });

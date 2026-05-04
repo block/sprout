@@ -2,7 +2,11 @@ export type TimelineReaction = {
   emoji: string;
   count: number;
   reactedByCurrentUser?: boolean;
-  users: Array<{ pubkey: string; displayName: string }>;
+  users: Array<{
+    pubkey: string;
+    displayName: string;
+    avatarUrl: string | null;
+  }>;
 };
 
 /** Sidebar thread summary for a root message (main timeline). */

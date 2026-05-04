@@ -1,4 +1,5 @@
 import {
+  Activity,
   Ellipsis,
   Play,
   RotateCcw,
@@ -12,8 +13,8 @@ import {
   isManagedAgentActive,
 } from "@/features/agents/lib/managedAgentControlActions";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
-import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+import { truncatePubkey } from "@/features/profile/lib/identity";
 import type {
   ChannelMember,
   ManagedAgent,
@@ -29,6 +30,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { Badge } from "@/shared/ui/badge";
 
 type MembersSidebarMemberCardProps = {
   canChangeRole: boolean;
@@ -42,6 +44,7 @@ type MembersSidebarMemberCardProps = {
   onChangeRole: (member: ChannelMember, role: string) => void;
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
+  onViewActivity?: (pubkey: string) => void;
   presenceStatus?: PresenceStatus | null;
   profileAvatarUrl?: string | null;
 };
@@ -79,13 +82,18 @@ export function MembersSidebarMemberCard({
   onChangeRole,
   onManagedAgentAction,
   onRemoveMember,
+  onViewActivity,
   presenceStatus,
   profileAvatarUrl,
 }: MembersSidebarMemberCardProps) {
   const roleLabel = formatRoleLabel(member, memberIsBot);
   const disabled = isActionPending || isArchived;
+  const canViewActivity =
+    memberIsBot &&
+    managedAgent?.backend.type === "local" &&
+    Boolean(onViewActivity);
   const hasActions = memberIsBot
-    ? Boolean(managedAgent) || canRemoveMember
+    ? Boolean(managedAgent) || canRemoveMember || canViewActivity
     : canRemoveMember || canChangeRole;
 
   return (
@@ -94,46 +102,50 @@ export function MembersSidebarMemberCard({
       data-testid={`sidebar-member-${member.pubkey}`}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <ProfileAvatar
-          avatarUrl={profileAvatarUrl ?? null}
-          className="h-9 w-9 rounded-full text-[11px] shadow-none"
-          iconClassName="h-4 w-4"
-          label={memberLabel}
-        />
-        <div className="min-w-0 space-y-0.5">
-          <p className="truncate text-sm font-medium leading-5">
-            {memberLabel}
-          </p>
-          <div
-            className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
-            data-testid={`sidebar-member-presence-${member.pubkey}`}
-          >
-            {presenceStatus ? (
-              <>
-                <PresenceDot className="h-2 w-2" status={presenceStatus} />
-                <span>{getPresenceLabel(presenceStatus)}</span>
-                <span aria-hidden="true">&middot;</span>
-              </>
-            ) : null}
-            <span>{roleLabel}</span>
+        <div className="relative shrink-0">
+          <ProfileAvatar
+            avatarUrl={profileAvatarUrl ?? null}
+            className="h-9 w-9 rounded-full text-[11px] shadow-none"
+            iconClassName="h-4 w-4"
+            label={memberLabel}
+          />
+          {presenceStatus ? (
+            <span
+              className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background"
+              data-testid={`sidebar-member-presence-${member.pubkey}`}
+            >
+              <PresenceDot className="h-2 w-2" status={presenceStatus} />
+            </span>
+          ) : null}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <p className="truncate text-sm font-medium leading-5">
+              {memberLabel}
+            </p>
+            <Badge className="shrink-0" variant="secondary">
+              {roleLabel}
+            </Badge>
             {managedAgent ? (
-              <>
-                <span aria-hidden="true">&middot;</span>
-                <span
-                  className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-                  data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
-                >
-                  {formatManagedAgentStatus(managedAgent)}
-                </span>
-              </>
+              <Badge
+                className="shrink-0"
+                data-testid={`sidebar-managed-agent-status-${member.pubkey}`}
+                variant="secondary"
+              >
+                {formatManagedAgentStatus(managedAgent)}
+              </Badge>
             ) : null}
           </div>
+          <p className="truncate font-mono text-[10px] text-muted-foreground/50">
+            {truncatePubkey(member.pubkey)}
+          </p>
         </div>
       </div>
       {hasActions ? (
         <MemberActionsMenu
           canChangeRole={canChangeRole}
           canRemoveMember={canRemoveMember}
+          canViewActivity={canViewActivity}
           disabled={disabled}
           managedAgent={managedAgent}
           member={member}
@@ -141,6 +153,7 @@ export function MembersSidebarMemberCard({
           onChangeRole={onChangeRole}
           onManagedAgentAction={onManagedAgentAction}
           onRemoveMember={onRemoveMember}
+          onViewActivity={onViewActivity}
         />
       ) : null}
     </div>
@@ -152,6 +165,7 @@ const PEOPLE_ROLES = ["admin", "member", "guest"] as const;
 function MemberActionsMenu({
   canChangeRole,
   canRemoveMember,
+  canViewActivity,
   disabled,
   managedAgent,
   member,
@@ -159,9 +173,11 @@ function MemberActionsMenu({
   onChangeRole,
   onManagedAgentAction,
   onRemoveMember,
+  onViewActivity,
 }: {
   canChangeRole: boolean;
   canRemoveMember: boolean;
+  canViewActivity: boolean;
   disabled: boolean;
   managedAgent?: ManagedAgent;
   member: ChannelMember;
@@ -169,6 +185,7 @@ function MemberActionsMenu({
   onChangeRole: (member: ChannelMember, role: string) => void;
   onManagedAgentAction: (agent: ManagedAgent) => void;
   onRemoveMember: (member: ChannelMember) => void;
+  onViewActivity?: (pubkey: string) => void;
 }) {
   const showChangeRole =
     canChangeRole && !memberIsBot && member.role !== "owner";
@@ -188,8 +205,18 @@ function MemberActionsMenu({
         align="end"
         onCloseAutoFocus={(event) => event.preventDefault()}
       >
+        {canViewActivity ? (
+          <DropdownMenuItem
+            data-testid={`sidebar-view-activity-${member.pubkey}`}
+            onClick={() => onViewActivity?.(member.pubkey)}
+          >
+            <Activity className="h-4 w-4" />
+            View activity
+          </DropdownMenuItem>
+        ) : null}
         {memberIsBot && managedAgent ? (
           <>
+            {canViewActivity ? <DropdownMenuSeparator /> : null}
             <DropdownMenuItem
               data-testid={`sidebar-agent-action-${member.pubkey}`}
               disabled={disabled}

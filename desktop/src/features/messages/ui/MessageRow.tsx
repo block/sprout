@@ -2,10 +2,12 @@ import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
+import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
+import { Badge } from "@/shared/ui/badge";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
@@ -13,6 +15,7 @@ import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const DiffMessage = React.lazy(() => import("./DiffMessage"));
 const DiffMessageExpanded = React.lazy(() => import("./DiffMessageExpanded"));
@@ -21,15 +24,18 @@ export const MessageRow = React.memo(
   function MessageRow({
     activeReplyTargetId = null,
     highlighted = false,
+    layoutVariant = "default",
     message,
     onDelete,
     onEdit,
     onToggleReaction,
     onReply,
     profiles,
+    searchQuery,
   }: {
     activeReplyTargetId?: string | null;
     highlighted?: boolean;
+    layoutVariant?: "default" | "thread-reply";
     message: TimelineMessage;
     onDelete?: (message: TimelineMessage) => void;
     onEdit?: (message: TimelineMessage) => void;
@@ -40,14 +46,18 @@ export const MessageRow = React.memo(
     ) => Promise<void>;
     onReply?: (message: TimelineMessage) => void;
     profiles?: UserProfileLookup;
+    searchQuery?: string;
   }) {
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
-    const [reactionErrorMessage, setReactionErrorMessage] = React.useState<
-      string | null
-    >(null);
-    const [reactionPending, setReactionPending] = React.useState(false);
+    const {
+      reactions,
+      canToggle: canToggleReactions,
+      pending: reactionPending,
+      errorMessage: reactionErrorMessage,
+      select: handleReactionSelect,
+    } = useReactionHandler(message, onToggleReaction);
     const mentionNames = React.useMemo(
       () => resolveMentionNames(message.tags, profiles),
       [profiles, message.tags],
@@ -66,6 +76,12 @@ export const MessageRow = React.memo(
 
     const visibleDepth = Math.min(message.depth, 6);
     const indentPx = visibleDepth * 28;
+    const depthGuideOffsets = React.useMemo(() => {
+      return Array.from(
+        { length: visibleDepth },
+        (_, index) => 14 + index * 28,
+      );
+    }, [visibleDepth]);
     const getTag = (name: string) =>
       message.tags?.find((tag) => tag[0] === name)?.[1];
 
@@ -101,49 +117,113 @@ export const MessageRow = React.memo(
               content={message.body}
               imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
+              searchQuery={searchQuery}
               tight
             />
           );
       }
     };
 
-    const reactions = [...(message.reactions ?? [])].sort((left, right) => {
-      if (left.count !== right.count) {
-        return right.count - left.count;
-      }
+    const isThreadReplyLayout = layoutVariant === "thread-reply";
+    const guideBleedPx = isThreadReplyLayout ? 4 : 0;
+    const avatarSizeClass = isThreadReplyLayout
+      ? "!h-5 !w-5 !rounded-md"
+      : "!h-[42px] !w-[42px]";
+    const avatarButtonRadiusClass = isThreadReplyLayout
+      ? "rounded-md"
+      : "rounded-xl";
 
-      return left.emoji.localeCompare(right.emoji);
-    });
-    const canToggleReactions = Boolean(onToggleReaction && !message.pending);
+    const avatarNode = (
+      <UserAvatar
+        accent={message.accent}
+        avatarUrl={message.avatarUrl ?? null}
+        className={cn("shrink-0", avatarSizeClass)}
+        displayName={message.author}
+        testId="message-avatar"
+      />
+    );
 
-    const handleReactionSelect = React.useCallback(
-      async (emoji: string) => {
-        if (!onToggleReaction || reactionPending) {
-          return;
-        }
+    const authorNode = message.pubkey ? (
+      <span className="truncate text-sm font-semibold tracking-tight hover:underline">
+        {message.author}
+      </span>
+    ) : (
+      <h3 className="truncate text-sm font-semibold tracking-tight">
+        {message.author}
+      </h3>
+    );
 
-        const remove = reactions.some(
-          (reaction) =>
-            reaction.emoji === emoji && reaction.reactedByCurrentUser,
-        );
+    const metadataNode = (
+      <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="relative">
+          <div className="absolute right-0 top-1/2 -translate-y-1/2">
+            <MessageActionBar
+              activeReplyTargetId={activeReplyTargetId}
+              message={message}
+              onDelete={onDelete}
+              onEdit={onEdit}
+              onReactionSelect={
+                canToggleReactions ? handleReactionSelect : undefined
+              }
+              onReply={onReply}
+              reactionErrorMessage={reactionErrorMessage}
+              reactionPending={reactionPending}
+              reactions={reactions}
+            />
+          </div>
+        </div>
+        {message.pending ? (
+          <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
+            Sending
+          </p>
+        ) : null}
+        {message.edited ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <p className="text-muted-foreground/70">(edited)</p>
+            </TooltipTrigger>
+            <TooltipContent>This message has been edited</TooltipContent>
+          </Tooltip>
+        ) : null}
+        <MessageTimestamp createdAt={message.createdAt} time={message.time} />
+      </div>
+    );
 
-        setReactionErrorMessage(null);
-        setReactionPending(true);
-
-        try {
-          await onToggleReaction(message, emoji, remove);
-        } catch (error) {
-          const nextMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to update the reaction.";
-          setReactionErrorMessage(nextMessage);
-          throw error;
-        } finally {
-          setReactionPending(false);
-        }
-      },
-      [message, onToggleReaction, reactionPending, reactions],
+    const messageBodyNode = (
+      <>
+        {renderBody()}
+        <MessageReactions
+          messageId={message.id}
+          reactions={reactions}
+          canToggle={canToggleReactions}
+          pending={reactionPending}
+          onSelect={(emoji) => {
+            void handleReactionSelect(emoji);
+          }}
+        />
+        {reactionErrorMessage ? (
+          <p className="mt-1.5 text-xs text-destructive">
+            {reactionErrorMessage}
+          </p>
+        ) : null}
+        {expandedDiffId === message.id ? (
+          <React.Suspense
+            fallback={
+              <div className="p-3 text-sm text-muted-foreground">
+                Loading diff viewer…
+              </div>
+            }
+          >
+            <DiffMessageExpanded
+              content={message.body}
+              filePath={getTag("file")}
+              onClose={() => {
+                setExpandedDiffId(null);
+              }}
+            />
+          </React.Suspense>
+        ) : null}
+      </>
     );
 
     return (
@@ -151,55 +231,80 @@ export const MessageRow = React.memo(
         className="relative"
         style={indentPx > 0 ? { paddingLeft: `${indentPx}px` } : undefined}
       >
-        {message.depth > 0 ? (
+        {depthGuideOffsets.length > 0 ? (
           <div
             aria-hidden
-            className="absolute bottom-1.5 left-3 top-1.5 rounded-full border-l border-border/70"
-            style={{ left: `${Math.max(indentPx - 14, 12)}px` }}
-          />
+            className="pointer-events-none absolute left-0"
+            style={{
+              bottom: `${-guideBleedPx}px`,
+              top: `${-guideBleedPx}px`,
+            }}
+          >
+            {depthGuideOffsets.map((offset, index) => (
+              <div
+                className="absolute bottom-0 top-0 border-l border-border/70"
+                key={`${message.id}-depth-guide-${offset}`}
+                style={{
+                  left: `${offset}px`,
+                  opacity: index === depthGuideOffsets.length - 1 ? 0.9 : 0.55,
+                }}
+              />
+            ))}
+          </div>
         ) : null}
 
         <article
           className={cn(
-            "group/message flex items-start gap-2.5 rounded-2xl px-2 py-1.5 transition-colors",
+            "group/message rounded-2xl px-2 py-1.5 transition-colors",
+            isThreadReplyLayout ? "space-y-1.5" : "flex items-start gap-2.5",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
           )}
           data-message-id={message.id}
           data-testid="message-row"
         >
-          <div className="flex shrink-0 items-start">
-            {message.pubkey ? (
-              <UserProfilePopover
-                pubkey={message.pubkey}
-                role={message.role}
-                botIdenticonValue={message.author}
-              >
-                <button
-                  className="shrink-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  type="button"
-                >
-                  <UserAvatar
-                    accent={message.accent}
-                    avatarUrl={message.avatarUrl ?? null}
-                    className="!h-[42px] !w-[42px]"
-                    displayName={message.author}
-                    testId="message-avatar"
-                  />
-                </button>
-              </UserProfilePopover>
-            ) : (
-              <UserAvatar
-                accent={message.accent}
-                avatarUrl={message.avatarUrl ?? null}
-                className="shrink-0 !h-[42px] !w-[42px]"
-                displayName={message.author}
-                testId="message-avatar"
-              />
-            )}
-          </div>
-
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {isThreadReplyLayout ? (
+            <>
+              <div className="flex min-w-0 items-start gap-1.5">
+                {message.pubkey ? (
+                  <UserProfilePopover
+                    pubkey={message.pubkey}
+                    role={message.role}
+                    botIdenticonValue={message.author}
+                  >
+                    <button
+                      className="flex shrink-0 items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      type="button"
+                    >
+                      {avatarNode}
+                      {authorNode}
+                    </button>
+                  </UserProfilePopover>
+                ) : (
+                  <>
+                    <div className="flex shrink-0 items-start">
+                      {avatarNode}
+                    </div>
+                    {authorNode}
+                  </>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    {message.personaDisplayName &&
+                    message.personaDisplayName !== message.author ? (
+                      <span className="text-xs text-muted-foreground">
+                        {message.personaDisplayName}
+                      </span>
+                    ) : message.role ? (
+                      <Badge variant="secondary">{message.role}</Badge>
+                    ) : null}
+                    {metadataNode}
+                  </div>
+                </div>
+              </div>
+              <div className="min-w-0 space-y-1">{messageBodyNode}</div>
+            </>
+          ) : (
+            <>
               {message.pubkey ? (
                 <UserProfilePopover
                   pubkey={message.pubkey}
@@ -207,99 +312,50 @@ export const MessageRow = React.memo(
                   botIdenticonValue={message.author}
                 >
                   <button
-                    className="truncate rounded text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className={cn(
+                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      avatarButtonRadiusClass,
+                    )}
                     type="button"
                   >
-                    {message.author}
+                    {avatarNode}
                   </button>
                 </UserProfilePopover>
               ) : (
-                <h3 className="truncate text-sm font-semibold tracking-tight">
-                  {message.author}
-                </h3>
+                <div className="flex shrink-0 items-start">{avatarNode}</div>
               )}
-              {message.personaDisplayName &&
-              message.personaDisplayName !== message.author ? (
-                <span className="text-xs text-muted-foreground">
-                  {message.personaDisplayName}
-                </span>
-              ) : message.role ? (
-                <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                  {message.role}
-                </p>
-              ) : null}
-              <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-                <div className="relative">
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2">
-                    <MessageActionBar
-                      activeReplyTargetId={activeReplyTargetId}
-                      message={message}
-                      onDelete={onDelete}
-                      onEdit={onEdit}
-                      onReactionSelect={
-                        canToggleReactions ? handleReactionSelect : undefined
-                      }
-                      onReply={onReply}
-                      reactionErrorMessage={reactionErrorMessage}
-                      reactionPending={reactionPending}
-                      reactions={reactions}
-                    />
-                  </div>
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  {message.pubkey ? (
+                    <UserProfilePopover
+                      pubkey={message.pubkey}
+                      role={message.role}
+                      botIdenticonValue={message.author}
+                    >
+                      <button
+                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        type="button"
+                      >
+                        {authorNode}
+                      </button>
+                    </UserProfilePopover>
+                  ) : (
+                    authorNode
+                  )}
+                  {message.personaDisplayName &&
+                  message.personaDisplayName !== message.author ? (
+                    <span className="text-xs text-muted-foreground">
+                      {message.personaDisplayName}
+                    </span>
+                  ) : message.role ? (
+                    <Badge variant="secondary">{message.role}</Badge>
+                  ) : null}
+                  {metadataNode}
                 </div>
-                {message.pending ? (
-                  <p className="font-medium uppercase tracking-[0.14em] text-primary/80">
-                    Sending
-                  </p>
-                ) : null}
-                {message.edited ? (
-                  <p
-                    className="text-muted-foreground/70"
-                    title="This message has been edited"
-                  >
-                    (edited)
-                  </p>
-                ) : null}
-                <MessageTimestamp
-                  createdAt={message.createdAt}
-                  time={message.time}
-                />
+                {messageBodyNode}
               </div>
-            </div>
-            {renderBody()}
-            <MessageReactions
-              messageId={message.id}
-              reactions={reactions}
-              canToggle={canToggleReactions}
-              pending={reactionPending}
-              onSelect={(emoji) => {
-                void handleReactionSelect(emoji).catch(() => {
-                  return;
-                });
-              }}
-            />
-            {reactionErrorMessage ? (
-              <p className="mt-1.5 text-xs text-destructive">
-                {reactionErrorMessage}
-              </p>
-            ) : null}
-            {expandedDiffId === message.id ? (
-              <React.Suspense
-                fallback={
-                  <div className="p-3 text-sm text-muted-foreground">
-                    Loading diff viewer…
-                  </div>
-                }
-              >
-                <DiffMessageExpanded
-                  content={message.body}
-                  filePath={getTag("file")}
-                  onClose={() => {
-                    setExpandedDiffId(null);
-                  }}
-                />
-              </React.Suspense>
-            ) : null}
-          </div>
+            </>
+          )}
         </article>
       </div>
     );
@@ -322,7 +378,9 @@ export const MessageRow = React.memo(
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
     prev.activeReplyTargetId === next.activeReplyTargetId &&
-    prev.profiles === next.profiles,
+    prev.layoutVariant === next.layoutVariant &&
+    prev.profiles === next.profiles &&
+    prev.searchQuery === next.searchQuery,
 );
 
 MessageRow.displayName = "MessageRow";

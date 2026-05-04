@@ -26,8 +26,8 @@ pub mod dms;
 pub mod events;
 /// Personalized home feed endpoint.
 pub mod feed;
-/// LiveKit huddle token endpoint.
-pub mod huddles;
+/// Smart HTTP git transport (clone, fetch, push).
+pub mod git;
 /// Blossom-compatible media upload, retrieval, and existence check endpoints.
 pub mod media;
 /// Channel membership endpoints.
@@ -40,14 +40,14 @@ pub mod nip05;
 pub mod presence;
 /// Reaction endpoints.
 pub mod reactions;
+/// Relay membership enforcement and read endpoints.
+pub mod relay_members;
 /// Full-text search endpoint.
 pub mod search;
 /// Self-service API token minting, listing, and revocation endpoints.
 pub mod tokens;
 /// User profile endpoints.
 pub mod users;
-/// LiveKit webhook handler for server-side presence tracking.
-pub mod webhooks;
 /// Shared helpers for workflow API handlers.
 pub mod workflow_helpers;
 /// Workflow CRUD, trigger, and webhook endpoints.
@@ -62,17 +62,16 @@ pub use channels_metadata::get_channel_handler;
 pub use dms::{add_dm_member_handler, hide_dm_handler, list_dms_handler, open_dm_handler};
 pub use events::get_event;
 pub use feed::feed_handler;
-pub use huddles::huddle_token;
 pub use members::list_members;
 pub use messages::{get_thread, list_messages, validate_imeta_tags, verify_imeta_blobs};
 pub use presence::{presence_handler, set_presence_handler};
 pub use reactions::list_reactions_handler;
+pub use relay_members::{enforce_relay_membership, get_my_relay_membership, list_relay_members};
 pub use search::search_handler;
 pub use users::{
     get_contact_list, get_profile, get_user_notes, get_user_profile, get_users_batch,
     put_channel_add_policy, search_users,
 };
-pub use webhooks::handle_livekit_webhook;
 pub use workflows::{
     create_workflow, delete_workflow, get_workflow, list_channel_workflows, list_run_approvals,
     list_workflow_runs, trigger_workflow, update_workflow, workflow_webhook,
@@ -137,7 +136,7 @@ pub struct RestAuthContext {
     pub channel_ids: Option<Vec<Uuid>>,
 }
 
-/// Extract the full auth context from request headers.
+/// Extract the full auth context from request headers and enforce relay membership.
 ///
 /// Auth resolution order:
 /// 1. `Authorization: Bearer sprout_*` — API token; revocation + expiry checked here
@@ -149,8 +148,50 @@ pub struct RestAuthContext {
 /// request that sends a `Nostr` auth header to a non-token endpoint will receive
 /// a 401 with `"nip98_not_supported"`.
 ///
-/// Returns a populated [`RestAuthContext`] on success, or a 401 response on failure.
+/// After successful authentication, relay membership is enforced when
+/// `config.require_relay_membership` is enabled.
+///
+/// Returns a populated [`RestAuthContext`] on success, or a 401/403 response on failure.
 pub(crate) async fn extract_auth_context(
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
+    let ctx = extract_auth_context_inner(headers, state).await?;
+    let auth_tag = extract_single_auth_tag(headers)?;
+    relay_members::enforce_relay_membership(state, &ctx.pubkey_bytes, auth_tag).await?;
+    Ok(ctx)
+}
+
+/// Extract the `X-Auth-Tag` header, rejecting requests with multiple values.
+///
+/// Mirrors the WS path's "exactly 0 or 1 auth tags" rule — duplicates are
+/// rejected rather than silently using the first value.
+pub(crate) fn extract_single_auth_tag(
+    headers: &HeaderMap,
+) -> Result<Option<&str>, (StatusCode, Json<serde_json::Value>)> {
+    let mut iter = headers.get_all("x-auth-tag").iter();
+    let first = match iter.next() {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    if iter.next().is_some() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_auth_tag",
+                "message": "multiple X-Auth-Tag headers not allowed"
+            })),
+        ));
+    }
+    Ok(first.to_str().ok())
+}
+
+/// Inner auth extraction — no relay membership check.
+///
+/// Used by `extract_auth_context` (which layers the membership gate on top)
+/// and by handlers that need auth without the membership gate (e.g. the
+/// `/api/relay/members/me` endpoint which must work for non-members to return 404).
+pub(crate) async fn extract_auth_context_inner(
     headers: &HeaderMap,
     state: &AppState,
 ) -> Result<RestAuthContext, (StatusCode, Json<serde_json::Value>)> {
@@ -435,6 +476,28 @@ pub fn check_token_channel_access(
     Ok(())
 }
 
+/// Intersect an owner-accessible channel list with a token's `channel_ids`, when present.
+pub(crate) fn constrain_channel_ids(
+    mut channel_ids: Vec<Uuid>,
+    allowed: Option<&[Uuid]>,
+) -> Vec<Uuid> {
+    if let Some(allowed) = allowed {
+        channel_ids.retain(|channel_id| allowed.contains(channel_id));
+    }
+    channel_ids
+}
+
+/// Filter accessible channel records against a token's `channel_ids`, when present.
+pub(crate) fn constrain_accessible_channels(
+    mut channels: Vec<sprout_db::channel::AccessibleChannel>,
+    allowed: Option<&[Uuid]>,
+) -> Vec<sprout_db::channel::AccessibleChannel> {
+    if let Some(allowed) = allowed {
+        channels.retain(|channel| allowed.contains(&channel.channel.id));
+    }
+    channels
+}
+
 /// Convert a scope-check failure into a 403 Forbidden response.
 ///
 /// Used by handlers to propagate `require_scope` errors via `?`.
@@ -504,8 +567,7 @@ pub(crate) async fn check_channel_membership(
     pubkey_bytes: &[u8],
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let is_member = state
-        .db
-        .is_member(channel_id, pubkey_bytes)
+        .is_member_cached(channel_id, pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
     if is_member {
@@ -563,7 +625,40 @@ where
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
+
+    fn accessible_channel(id: Uuid) -> sprout_db::channel::AccessibleChannel {
+        let now = Utc::now();
+        sprout_db::channel::AccessibleChannel {
+            channel: sprout_db::channel::ChannelRecord {
+                id,
+                name: "restricted".to_string(),
+                channel_type: "stream".to_string(),
+                visibility: "private".to_string(),
+                description: None,
+                canvas: None,
+                created_by: vec![0; 32],
+                created_at: now,
+                updated_at: now,
+                archived_at: None,
+                deleted_at: None,
+                nip29_group_id: None,
+                topic_required: false,
+                max_members: None,
+                topic: None,
+                topic_set_by: None,
+                topic_set_at: None,
+                purpose: None,
+                purpose_set_by: None,
+                purpose_set_at: None,
+                ttl_seconds: None,
+                ttl_deadline: None,
+            },
+            is_member: true,
+        }
+    }
 
     // ── decode_jwt_payload_unverified ─────────────────────────────────────────
     //
@@ -768,5 +863,39 @@ mod tests {
         let (status, body) = not_found("approval not found");
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body.0["error"], "approval not found");
+    }
+
+    #[test]
+    fn constrain_channel_ids_intersects_with_token_allowlist() {
+        let allowed = uuid::Uuid::new_v4();
+        let denied = uuid::Uuid::new_v4();
+
+        let constrained = constrain_channel_ids(vec![allowed, denied], Some(&[allowed]));
+
+        assert_eq!(constrained, vec![allowed]);
+    }
+
+    #[test]
+    fn constrain_channel_ids_leaves_unrestricted_lists_unchanged() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+
+        let constrained = constrain_channel_ids(vec![a, b], None);
+
+        assert_eq!(constrained, vec![a, b]);
+    }
+
+    #[test]
+    fn constrain_accessible_channels_respects_token_allowlist() {
+        let allowed = uuid::Uuid::new_v4();
+        let denied = uuid::Uuid::new_v4();
+
+        let constrained = constrain_accessible_channels(
+            vec![accessible_channel(allowed), accessible_channel(denied)],
+            Some(&[allowed]),
+        );
+
+        assert_eq!(constrained.len(), 1);
+        assert_eq!(constrained[0].channel.id, allowed);
     }
 }

@@ -23,8 +23,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Badge } from "@/shared/ui/badge";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MIN_QUERY_LENGTH = 2;
 
@@ -339,12 +341,20 @@ export function SearchDialog({
                             <p className="text-sm font-semibold tracking-tight">
                               {hit.channelName}
                             </p>
-                            <p className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                            <Badge variant="secondary">
                               {describeSearchHit(hit)}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
+                            </Badge>
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <UserAvatar
+                                avatarUrl={
+                                  resultProfiles?.[hit.pubkey.toLowerCase()]
+                                    ?.avatarUrl ?? null
+                                }
+                                displayName={authorLabel}
+                                size="xs"
+                              />
                               {authorLabel}
-                            </p>
+                            </span>
                             <p className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
                               {formatRelativeTime(hit.createdAt)}
                             </p>

@@ -1,4 +1,4 @@
-import { Filter, RefreshCw } from "lucide-react";
+import { Check, Filter, RefreshCw } from "lucide-react";
 import * as React from "react";
 
 import { useRelayAgentsQuery } from "@/features/agents/hooks";
@@ -13,14 +13,28 @@ import {
 } from "@/features/pulse/hooks";
 import { groupAgentNotes } from "@/features/pulse/lib/groupAgentNotes";
 import { AgentActivityCard } from "@/features/pulse/ui/AgentActivityCard";
-import { ComposeNote } from "@/features/pulse/ui/ComposeNote";
+import { ForumComposer } from "@/features/forum/ui/ForumComposer";
 import { NoteCard } from "@/features/pulse/ui/NoteCard";
 import type { UserNote } from "@/shared/api/socialTypes";
-import type { RelayAgent, UserProfileSummary } from "@/shared/api/types";
+import type {
+  ChannelMember,
+  RelayAgent,
+  UserProfileSummary,
+} from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 
 type PulseTab = "foryou" | "people" | "agents" | "mine";
+
+const tabTriggerClassName =
+  "rounded-none border-b-2 border-transparent px-3 py-2.5 text-sm font-medium shadow-none transition-colors data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:shadow-none text-muted-foreground hover:text-foreground data-[state=active]:bg-transparent";
 
 type PulseViewProps = {
   currentPubkey?: string;
@@ -64,20 +78,6 @@ function AgentFilter({
   selectedPubkey: string | null;
   onSelect: (pubkey: string | null) => void;
 }) {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
-
   const selectedName = selectedPubkey
     ? (profiles[selectedPubkey.toLowerCase()]?.displayName ??
       agents.find((a) => a.pubkey === selectedPubkey)?.name ??
@@ -85,54 +85,48 @@ function AgentFilter({
     : null;
 
   return (
-    <div className="relative" ref={ref}>
-      <Button
-        className="h-7 gap-1.5 px-2 text-xs"
-        onClick={() => setOpen(!open)}
-        size="sm"
-        variant={selectedPubkey ? "secondary" : "ghost"}
-      >
-        <Filter className="h-3 w-3" />
-        {selectedName ?? "All agents"}
-      </Button>
-      {open ? (
-        <div className="absolute right-0 top-8 z-50 max-h-48 w-48 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
-          <button
-            className={`w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent ${
-              !selectedPubkey ? "bg-accent font-medium" : ""
-            }`}
-            onClick={() => {
-              onSelect(null);
-              setOpen(false);
-            }}
-            type="button"
-          >
-            All agents
-          </button>
-          {agents.map((agent) => {
-            const name =
-              profiles[agent.pubkey.toLowerCase()]?.displayName ??
-              agent.name ??
-              `${agent.pubkey.slice(0, 8)}...`;
-            return (
-              <button
-                className={`w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent ${
-                  selectedPubkey === agent.pubkey ? "bg-accent font-medium" : ""
-                }`}
-                key={agent.pubkey}
-                onClick={() => {
-                  onSelect(agent.pubkey);
-                  setOpen(false);
-                }}
-                type="button"
-              >
-                {name}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          className="h-7 gap-1.5 px-2 text-xs"
+          size="sm"
+          variant={selectedPubkey ? "secondary" : "ghost"}
+        >
+          <Filter className="h-3 w-3" />
+          {selectedName ?? "All agents"}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-48 overflow-y-auto">
+        <DropdownMenuItem onClick={() => onSelect(null)}>
+          {!selectedPubkey ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : (
+            <span className="h-3.5 w-3.5" />
+          )}
+          All agents
+        </DropdownMenuItem>
+        {agents.map((agent) => {
+          const name =
+            profiles[agent.pubkey.toLowerCase()]?.displayName ??
+            agent.name ??
+            `${agent.pubkey.slice(0, 8)}...`;
+          const isSelected = selectedPubkey === agent.pubkey;
+          return (
+            <DropdownMenuItem
+              key={agent.pubkey}
+              onClick={() => onSelect(agent.pubkey)}
+            >
+              {isSelected ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : (
+                <span className="h-3.5 w-3.5" />
+              )}
+              {name}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -243,6 +237,26 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   const profiles: Record<string, UserProfileSummary> =
     profilesQuery.data?.profiles ?? {};
 
+  // ── Mention members for ForumComposer ─────────────────────────────────
+  const mentionProfilesQuery = useUsersBatchQuery(forYouPubkeys, {
+    enabled: forYouPubkeys.length > 0,
+  });
+  const mentionProfiles = mentionProfilesQuery.data?.profiles ?? {};
+
+  const pulseMentionMembers = React.useMemo<ChannelMember[]>(() => {
+    const members: ChannelMember[] = [];
+    for (const pubkey of forYouPubkeys) {
+      const profile = mentionProfiles[pubkey.toLowerCase()];
+      members.push({
+        pubkey,
+        role: "member",
+        joinedAt: "",
+        displayName: profile?.displayName ?? null,
+      });
+    }
+    return members;
+  }, [forYouPubkeys, mentionProfiles]);
+
   // ── Loading / refresh state ────────────────────────────────────────────
   const activeQuery =
     activeTab === "foryou"
@@ -279,134 +293,121 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     mine: "You haven't posted any notes yet.",
   };
 
+  function renderTimeline() {
+    if (isLoading) return <TimelineSkeleton />;
+
+    if (activeTab === "agents") {
+      return agentNoteGroups.length === 0 ? (
+        <EmptyState message={emptyMessages.agents} />
+      ) : (
+        agentNoteGroups.map((group) => (
+          <AgentActivityCard
+            agentStatus={agentStatusMap[group.pubkey]}
+            group={group}
+            key={`${group.pubkey}-${group.latestAt}`}
+            profile={profiles[group.pubkey.toLowerCase()] ?? null}
+          />
+        ))
+      );
+    }
+
+    return visibleNotes.length === 0 ? (
+      <EmptyState message={emptyMessages[activeTab]} />
+    ) : (
+      visibleNotes.map((note) => (
+        <NoteCard
+          isAgent={agentPubkeySet.has(note.pubkey)}
+          isFollowing={followingSet.has(note.pubkey)}
+          isOwnNote={note.pubkey === currentPubkey}
+          key={note.id}
+          note={note}
+          onFollow={handleFollow}
+          onUnfollow={handleUnfollow}
+          profile={profiles[note.pubkey.toLowerCase()] ?? null}
+        />
+      ))
+    );
+  }
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div className="flex items-center gap-1 border-b border-border/60 px-4 sm:px-6">
-        <TabButton
-          active={activeTab === "foryou"}
-          label="For You"
-          onClick={() => setActiveTab("foryou")}
-        />
-        <TabButton
-          active={activeTab === "people"}
-          label="People"
-          onClick={() => setActiveTab("people")}
-        />
-        <TabButton
-          active={activeTab === "agents"}
-          count={relayAgents.length}
-          label="Agents"
-          onClick={() => setActiveTab("agents")}
-        />
-        <TabButton
-          active={activeTab === "mine"}
-          label="My Notes"
-          onClick={() => setActiveTab("mine")}
-        />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as PulseTab)}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-border/60 px-4 sm:px-6">
+          <TabsList className="h-auto gap-1 rounded-none border-none bg-transparent p-0">
+            <TabsTrigger value="foryou" className={tabTriggerClassName}>
+              For You
+            </TabsTrigger>
+            <TabsTrigger value="people" className={tabTriggerClassName}>
+              People
+            </TabsTrigger>
+            <TabsTrigger value="agents" className={tabTriggerClassName}>
+              Agents
+              {relayAgents.length > 0 ? (
+                <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                  {relayAgents.length}
+                </span>
+              ) : null}
+            </TabsTrigger>
+            <TabsTrigger value="mine" className={tabTriggerClassName}>
+              My Notes
+            </TabsTrigger>
+          </TabsList>
 
-        <div className="ml-auto flex items-center gap-1">
-          {activeTab === "agents" && relayAgents.length > 1 ? (
-            <AgentFilter
-              agents={relayAgents}
-              onSelect={setAgentFilter}
-              profiles={profiles}
-              selectedPubkey={agentFilter}
-            />
-          ) : null}
-          <Button
-            className="h-7 w-7"
-            disabled={isRefetching}
-            onClick={handleRefresh}
-            size="icon"
-            variant="ghost"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
-            />
-          </Button>
-        </div>
-      </div>
-
-      {/* Timeline */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {isLoading ? (
-          <TimelineSkeleton />
-        ) : activeTab === "agents" ? (
-          agentNoteGroups.length === 0 ? (
-            <EmptyState message={emptyMessages.agents} />
-          ) : (
-            agentNoteGroups.map((group) => (
-              <AgentActivityCard
-                agentStatus={agentStatusMap[group.pubkey]}
-                group={group}
-                key={`${group.pubkey}-${group.latestAt}`}
-                profile={profiles[group.pubkey.toLowerCase()] ?? null}
+          <div className="ml-auto flex items-center gap-1">
+            {activeTab === "agents" && relayAgents.length > 1 ? (
+              <AgentFilter
+                agents={relayAgents}
+                onSelect={setAgentFilter}
+                profiles={profiles}
+                selectedPubkey={agentFilter}
               />
-            ))
-          )
-        ) : visibleNotes.length === 0 ? (
-          <EmptyState message={emptyMessages[activeTab]} />
-        ) : (
-          visibleNotes.map((note) => (
-            <NoteCard
-              isAgent={agentPubkeySet.has(note.pubkey)}
-              isFollowing={followingSet.has(note.pubkey)}
-              isOwnNote={note.pubkey === currentPubkey}
-              key={note.id}
-              note={note}
-              onFollow={handleFollow}
-              onUnfollow={handleUnfollow}
-              profile={profiles[note.pubkey.toLowerCase()] ?? null}
-            />
-          ))
+            ) : null}
+            <Button
+              className="h-7 w-7"
+              disabled={isRefetching}
+              onClick={handleRefresh}
+              size="icon"
+              variant="ghost"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${isRefetching ? "animate-spin" : ""}`}
+              />
+            </Button>
+          </div>
+        </div>
+
+        {/* Timeline — TabsContent with forceMount so aria-controls resolves */}
+        <TabsContent
+          value={activeTab}
+          forceMount
+          className="mt-0 min-h-0 flex-1 overflow-y-auto"
+        >
+          {renderTimeline()}
+        </TabsContent>
+      </Tabs>
+
+      <div className="border-t border-border/60 px-4 py-3 sm:px-6">
+        {publishMutation.isError && (
+          <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {publishMutation.error instanceof Error
+              ? publishMutation.error.message
+              : "Failed to publish note"}
+          </div>
         )}
+        <ForumComposer
+          members={pulseMentionMembers}
+          placeholder="Post to Pulse..."
+          isSending={publishMutation.isPending}
+          onSubmit={(content, mentionPubkeys, mediaTags) =>
+            publishMutation.mutateAsync({ content, mentionPubkeys, mediaTags })
+          }
+        />
       </div>
-
-      <ComposeNote
-        errorMessage={
-          publishMutation.error instanceof Error
-            ? publishMutation.error.message
-            : publishMutation.error
-              ? String(publishMutation.error)
-              : undefined
-        }
-        isPending={publishMutation.isPending}
-        onPublish={async (content) => {
-          await publishMutation.mutateAsync({ content });
-        }}
-      />
     </div>
-  );
-}
-
-function TabButton({
-  active,
-  count,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  count?: number;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={`border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-        active
-          ? "border-primary text-foreground"
-          : "border-transparent text-muted-foreground hover:text-foreground"
-      }`}
-      onClick={onClick}
-      type="button"
-    >
-      {label}
-      {count != null && count > 0 ? (
-        <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-          {count}
-        </span>
-      ) : null}
-    </button>
   );
 }

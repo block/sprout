@@ -43,15 +43,12 @@ pub struct HuddleState {
     pub phase: HuddlePhase,
     pub parent_channel_id: Option<String>,
     pub ephemeral_channel_id: Option<String>,
-    /// Skipped from serialization — the frontend gets the token from
-    /// start_huddle/join_huddle return values. Exposing the LiveKit JWT
-    /// on every 2-second get_huddle_state poll is unnecessary attack surface.
+    /// Cancellation token for the audio relay WS task.
     #[serde(skip)]
-    pub livekit_token: Option<String>,
-    /// Skipped from serialization — same rationale as livekit_token.
+    pub audio_ws_cancel: Option<tokio_util::sync::CancellationToken>,
+    /// Sends PCM batches from push_audio_pcm to the audio relay encode thread.
     #[serde(skip)]
-    pub livekit_url: Option<String>,
-    pub livekit_room: Option<String>,
+    pub audio_relay_pcm_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     /// Participant pubkey hex strings (all members, including humans).
     pub participants: Vec<String>,
     /// Agent pubkeys only — used as p-tags on transcribed messages.
@@ -148,9 +145,8 @@ impl Clone for HuddleState {
             phase: self.phase.clone(),
             parent_channel_id: self.parent_channel_id.clone(),
             ephemeral_channel_id: self.ephemeral_channel_id.clone(),
-            livekit_token: self.livekit_token.clone(),
-            livekit_url: self.livekit_url.clone(),
-            livekit_room: self.livekit_room.clone(),
+            audio_ws_cancel: None,    // Never clone handles.
+            audio_relay_pcm_tx: None, // Never clone handles.
             participants: self.participants.clone(),
             agent_pubkeys: Arc::new(Mutex::new(agent_pubkeys_snapshot)),
             stt_pipeline: None, // Never clone the pipeline handle.
@@ -175,9 +171,8 @@ impl Default for HuddleState {
             phase: HuddlePhase::Idle,
             parent_channel_id: None,
             ephemeral_channel_id: None,
-            livekit_token: None,
-            livekit_url: None,
-            livekit_room: None,
+            audio_ws_cancel: None,
+            audio_relay_pcm_tx: None,
             participants: Vec::new(),
             agent_pubkeys: Arc::new(Mutex::new(Vec::new())),
             stt_pipeline: None,
@@ -230,15 +225,4 @@ pub fn emit_huddle_state(app: &tauri::AppHandle, state: &HuddleState) {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HuddleJoinInfo {
     pub ephemeral_channel_id: String,
-    pub livekit_token: String,
-    pub livekit_url: String,
-    pub livekit_room: String,
-}
-
-/// Raw response from `POST /api/huddles/{channel_id}/token`.
-#[derive(Debug, Deserialize)]
-pub(crate) struct LiveKitTokenResponse {
-    pub token: String,
-    pub url: String,
-    pub room: String,
 }

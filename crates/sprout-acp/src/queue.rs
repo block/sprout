@@ -814,6 +814,19 @@ fn format_event_block(
     block
 }
 
+/// Append a reply instruction when the agent is responding to a thread event.
+///
+/// Tells the agent to pass the triggering event's ID as `parent_event_id` on
+/// every tool call in this turn, and to leave `broadcast_to_channel` unset so
+/// replies stay inside the thread.
+fn append_reply_instruction(s: &mut String, event_id: &str) {
+    s.push_str(&format!(
+        "\nIMPORTANT: When responding, pass parent_event_id=\"{event_id}\" \
+         on EVERY send_message and send_diff_message call in this turn. \
+         Do not set broadcast_to_channel."
+    ));
+}
+
 /// Format a `[Context]` hints section based on event scope.
 fn format_context_hints(
     channel_id: Uuid,
@@ -821,6 +834,7 @@ fn format_context_hints(
     thread_tags: &ThreadTags,
     is_dm: bool,
     has_conversation_context: bool,
+    triggering_event_id: Option<&str>,
 ) -> String {
     let channel_display = match channel_info {
         Some(ci) => format!("{} (#{channel_id})", ci.name),
@@ -856,6 +870,9 @@ fn format_context_hints(
                     s.push_str(&format!("\nParent: {parent}"));
                 }
             }
+            if let Some(event_id) = triggering_event_id {
+                append_reply_instruction(&mut s, event_id);
+            }
         }
         s
     } else if let Some(ref root) = thread_tags.root_event_id {
@@ -876,6 +893,9 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
+        if let Some(event_id) = triggering_event_id {
+            append_reply_instruction(&mut s, event_id);
+        }
         s
     } else {
         format!(
@@ -959,13 +979,19 @@ pub fn format_prompt(
         sections.push(format!("[System]\n{sp}"));
     }
 
-    // 2. Context hints.
+    // 2. Context hints (with reply instruction for thread replies).
+    let triggering_event_id = if thread_tags.root_event_id.is_some() {
+        Some(last_event.event.id.to_hex())
+    } else {
+        None
+    };
     sections.push(format_context_hints(
         batch.channel_id,
         channel_info,
         &thread_tags,
         is_dm,
         conversation_context.is_some(),
+        triggering_event_id.as_deref(),
     ));
 
     // 3. Conversation context (thread or DM).
@@ -2560,6 +2586,220 @@ mod tests {
             batch3.cancelled_events.len(),
             3,
             "should accumulate all 3 cancelled events"
+        );
+    }
+
+    // ── reply instruction tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_reply_instruction_present_for_channel_thread_reply() {
+        let ch = Uuid::new_v4();
+        let root_id = "a".repeat(64);
+        let event = make_event_with_tags(
+            "@bot help",
+            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+        );
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None, None);
+        assert!(
+            prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
+            "channel thread reply should include reply instruction with triggering event ID"
+        );
+        assert!(
+            prompt.contains("Do not set broadcast_to_channel"),
+            "channel thread reply should include broadcast suppression hint"
+        );
+    }
+
+    #[test]
+    fn test_reply_instruction_present_for_dm_thread_reply() {
+        let ch = Uuid::new_v4();
+        let root_id = "b".repeat(64);
+        let event = make_event_with_tags(
+            "thanks",
+            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+        );
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        assert!(
+            prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
+            "DM thread reply should include reply instruction"
+        );
+    }
+
+    #[test]
+    fn test_reply_instruction_absent_for_top_level_channel_message() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello world");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None, None);
+        assert!(
+            !prompt.contains("parent_event_id"),
+            "top-level message should NOT include reply instruction"
+        );
+    }
+
+    #[test]
+    fn test_reply_instruction_absent_for_dm_non_reply() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hey there");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        let prompt = format_prompt(&batch, None, Some(&ci), None, None);
+        assert!(
+            !prompt.contains("parent_event_id"),
+            "DM non-reply should NOT include reply instruction"
+        );
+    }
+
+    #[test]
+    fn test_reply_instruction_uses_triggering_event_id_not_root_or_parent() {
+        let ch = Uuid::new_v4();
+        let root_id = "a".repeat(64);
+        let parent_id = "b".repeat(64);
+        let event = make_event_with_tags(
+            "@bot nested question",
+            vec![
+                vec!["e".into(), root_id.clone(), "".into(), "root".into()],
+                vec!["e".into(), parent_id.clone(), "".into(), "reply".into()],
+            ],
+        );
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None, None);
+        // The instruction should use the triggering event's own ID — not root or parent.
+        assert!(
+            prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
+            "nested reply instruction should use the triggering event ID"
+        );
+        assert!(
+            !prompt.contains(&format!("parent_event_id=\"{root_id}\"")),
+            "instruction should NOT use root_event_id"
+        );
+        assert!(
+            !prompt.contains(&format!("parent_event_id=\"{parent_id}\"")),
+            "instruction should NOT use parent_event_id from tags"
+        );
+    }
+
+    #[test]
+    fn test_reply_instruction_batched_last_event_is_threaded() {
+        let ch = Uuid::new_v4();
+        let plain = make_event("unrelated");
+        let root_id = "c".repeat(64);
+        let threaded = make_event_with_tags(
+            "@bot help",
+            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+        );
+        let threaded_id = threaded.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![
+                BatchEvent {
+                    event: plain,
+                    prompt_tag: "test".into(),
+                    received_at: Instant::now(),
+                },
+                BatchEvent {
+                    event: threaded,
+                    prompt_tag: "@mention".into(),
+                    received_at: Instant::now(),
+                },
+            ],
+            cancelled_events: vec![],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None, None);
+        assert!(
+            prompt.contains(&format!("parent_event_id=\"{threaded_id}\"")),
+            "batched prompt should use last (threaded) event's ID"
+        );
+    }
+
+    #[test]
+    fn test_reply_instruction_batched_last_event_is_top_level() {
+        let ch = Uuid::new_v4();
+        let root_id = "d".repeat(64);
+        let threaded = make_event_with_tags(
+            "earlier thread msg",
+            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+        );
+        let plain = make_event("latest top-level");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![
+                BatchEvent {
+                    event: threaded,
+                    prompt_tag: "@mention".into(),
+                    received_at: Instant::now(),
+                },
+                BatchEvent {
+                    event: plain,
+                    prompt_tag: "test".into(),
+                    received_at: Instant::now(),
+                },
+            ],
+            cancelled_events: vec![],
+        };
+
+        let prompt = format_prompt(&batch, None, None, None, None);
+        assert!(
+            !prompt.contains("parent_event_id"),
+            "batched prompt where last event is top-level should NOT include reply instruction"
         );
     }
 }

@@ -68,11 +68,11 @@ const darkColorScheme = ColorScheme(
   surfaceContainerHighest: Color(0xFF1E2030), // Macchiato Mantle
 );
 
-/// Compute a contrast-safe onPrimary color for a given accent.
+/// Compute a contrast-safe foreground color for a given background.
 /// Uses WCAG contrast ratio (higher ratio wins) instead of a simple luminance
 /// cutoff, so colors like Blue (#3B82F6) correctly get black text (5.7:1)
 /// rather than white (3.7:1).
-Color _contrastForeground(Color bg) {
+Color contrastForeground(Color bg) {
   final lum = bg.computeLuminance();
   // WCAG contrast ratio: (L1 + 0.05) / (L2 + 0.05), L1 >= L2
   final contrastWithBlack = (lum + 0.05) / 0.05; // black luminance = 0
@@ -94,7 +94,7 @@ ColorScheme applyAccent(ColorScheme base, int accentIndex) {
   final color = base.brightness == Brightness.light
       ? accent.light
       : accent.dark;
-  final onColor = _contrastForeground(color);
+  final onColor = contrastForeground(color);
 
   return base.copyWith(primary: color, onPrimary: onColor, surfaceTint: color);
 }

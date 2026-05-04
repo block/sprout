@@ -4,6 +4,8 @@
 
 /// REST API route handlers.
 pub mod api;
+/// WebSocket audio relay for huddle voice channels.
+pub mod audio;
 /// Relay configuration from environment variables.
 pub mod config;
 /// WebSocket connection lifecycle and state.

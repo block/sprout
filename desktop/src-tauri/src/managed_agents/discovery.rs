@@ -22,16 +22,31 @@ struct KnownAcpProvider {
     avatar_url: &'static str,
 }
 
-const GOOSE_AVATAR_URL: &str = "https://block.github.io/goose/img/logo_dark.png";
+const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
 const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
 const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
 
-const COMMON_BINARY_PATHS: &[&str] = &[
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "/home/linuxbrew/.linuxbrew/bin",
-];
+fn common_binary_paths() -> &'static [PathBuf] {
+    use std::sync::OnceLock;
+    static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    PATHS.get_or_init(|| {
+        let mut paths = vec![
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        ];
+        if let Some(home) = dirs::home_dir() {
+            paths.extend([
+                home.join(".local/share/mise/shims"),
+                home.join(".local/bin"),
+                home.join(".volta/bin"),
+                home.join(".asdf/shims"),
+            ]);
+        }
+        paths
+    })
+}
 
 const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
     KnownAcpProvider {
@@ -192,7 +207,36 @@ fn resolve_workspace_command(command: &str, app: Option<&AppHandle>) -> Option<P
         .find(|candidate| candidate.exists())
 }
 
+/// Resolve a command to an absolute path, caching results for the app lifetime.
+/// The cache eliminates redundant login-shell spawns when multiple agents share
+/// the same binaries (e.g. `npx`, `uvx`).
 pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Fast path: return cached result without allocating a key.
+    if let Ok(guard) = cache.lock() {
+        if let Some(result) = guard.get(command) {
+            return result.clone();
+        }
+    }
+
+    // Slow path: resolve and cache.
+    let result = resolve_command_uncached(command, app);
+
+    if result.is_some() {
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(command.to_string(), result.clone());
+        }
+    }
+
+    result
+}
+
+fn resolve_command_uncached(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
     if let Some(path) = resolve_workspace_command(command, app) {
         return Some(path);
     }
@@ -211,9 +255,8 @@ pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf
     if let Some(path) = find_via_login_shell(command) {
         return Some(path);
     }
-
-    for dir in COMMON_BINARY_PATHS {
-        let candidate = PathBuf::from(dir).join(executable_basename(command));
+    for dir in common_binary_paths() {
+        let candidate = dir.join(executable_basename(command));
         if candidate.exists() {
             return Some(candidate);
         }
@@ -232,29 +275,43 @@ fn path_candidates_from_env(command: &str) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-fn find_via_login_shell(command: &str) -> Option<PathBuf> {
-    let which_cmd = format!("command -v {command}");
-
+/// Run a command in a login shell (tries zsh then bash).
+/// Returns trimmed stdout if the command succeeds with non-empty output.
+fn run_in_login_shell(args: &[&str]) -> Option<String> {
     for shell in ["/bin/zsh", "/bin/bash"] {
-        let Ok(output) = Command::new(shell).args(["-l", "-c", &which_cmd]).output() else {
+        let Ok(output) = Command::new(shell).args(args).output() else {
             continue;
         };
-
         if !output.status.success() {
             continue;
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let Some(resolved) = stdout.lines().rfind(|line| !line.trim().is_empty()) else {
-            continue;
-        };
-        let path = PathBuf::from(resolved.trim());
-        if path.is_absolute() && path.exists() {
-            return Some(path);
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !stdout.is_empty() {
+            return Some(stdout);
         }
     }
-
     None
+}
+
+fn find_via_login_shell(command: &str) -> Option<PathBuf> {
+    let stdout = run_in_login_shell(&["-l", "-c", r#"command -v -- "$1""#, "_", command])?;
+    let resolved = stdout.lines().rfind(|line| !line.trim().is_empty())?;
+    let path = PathBuf::from(resolved.trim());
+    (path.is_absolute() && path.exists()).then_some(path)
+}
+
+/// Return the user's full PATH from a login shell.
+/// Cached via OnceLock so we only spawn one shell per app lifetime.
+pub fn login_shell_path() -> Option<String> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let stdout = run_in_login_shell(&["-l", "-c", "echo $PATH"])?;
+            let last_line = stdout.lines().rfind(|l| !l.trim().is_empty())?;
+            Some(last_line.trim().to_string())
+        })
+        .clone()
 }
 
 fn find_command(command: &str) -> Option<PathBuf> {
@@ -370,8 +427,8 @@ pub async fn mint_token_via_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        managed_agent_avatar_url, normalize_agent_args, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
-        GOOSE_AVATAR_URL,
+        find_via_login_shell, managed_agent_avatar_url, normalize_agent_args,
+        CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
     };
 
     #[test]
@@ -419,6 +476,24 @@ mod tests {
         assert_eq!(
             normalize_agent_args("codex-acp", vec!["acp".into()]),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn login_shell_lookup_treats_command_as_data() {
+        let marker =
+            std::env::temp_dir().join(format!("sprout-discovery-marker-{}", uuid::Uuid::new_v4()));
+        let payload = format!("doesnotexist; touch {} #", marker.display());
+
+        let resolved = find_via_login_shell(&payload);
+
+        assert!(
+            resolved.is_none(),
+            "payload should not resolve to a command"
+        );
+        assert!(
+            !marker.exists(),
+            "shell lookup must not execute injected commands"
         );
     }
 }

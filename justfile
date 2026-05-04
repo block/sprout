@@ -4,6 +4,7 @@ set dotenv-load := true
 
 desktop_dir := "desktop"
 desktop_tauri_manifest := "desktop/src-tauri/Cargo.toml"
+web_dir := "web"
 
 # List all available tasks
 default:
@@ -43,7 +44,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check mobile-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check web-check mobile-check
 
 # Format all Rust code
 fmt:
@@ -85,9 +86,30 @@ desktop-tauri-fmt:
 desktop-tauri-fmt-check:
     cargo fmt --manifest-path {{desktop_tauri_manifest}} --all -- --check
 
+# Ensure sidecar placeholder binaries exist (Tauri validates externalBin at compile time)
+_ensure-sidecar-stubs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TARGET=$(rustc -vV | sed -n 's|host: ||p')
+    mkdir -p desktop/src-tauri/binaries
+    for bin in sprout-acp sprout-mcp-server git-credential-nostr; do
+        touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
+    done
+
 # Check the desktop Tauri Rust crate compiles
-desktop-tauri-check:
+desktop-tauri-check: _ensure-sidecar-stubs
     cargo check --manifest-path {{desktop_tauri_manifest}}
+
+# Build the full desktop Tauri app locally (unsigned, for testing)
+desktop-release-build target="aarch64-apple-darwin":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TARGET={{target}}
+    mkdir -p desktop/src-tauri/binaries
+    touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
+    touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+    touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
+    cd {{desktop_dir}} && pnpm install && pnpm tauri build --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-tauri-fmt-check desktop-build desktop-tauri-check
@@ -105,7 +127,7 @@ desktop-e2e-integration:
     cd {{desktop_dir}} && pnpm test:e2e:integration
 
 # Run all checks suitable for CI / pre-push (no infra needed)
-ci: check test-unit desktop-build desktop-tauri-check mobile-test
+ci: check test-unit desktop-build desktop-tauri-check web-build mobile-test
 
 # ─── Test ─────────────────────────────────────────────────────────────────────
 
@@ -140,7 +162,7 @@ proxy-release:
     cargo run -p sprout-proxy --release
 
 # Run the desktop Tauri app in dev mode (ports and identity derived from worktree)
-dev *ARGS:
+dev *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
@@ -150,10 +172,18 @@ dev *ARGS:
     pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
-staging *ARGS:
-    cd {{desktop_dir}} && pnpm install
+staging *ARGS: _ensure-sidecar-stubs
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{desktop_dir}}
+    pnpm install
+    cd ..
     cargo build --release -p sprout-acp -p sprout-mcp
-    cd {{desktop_dir}} && SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co" pnpm exec tauri dev --config src-tauri/tauri.dev.conf.json {{ARGS}}
+    cd {{desktop_dir}}
+    source ../scripts/instance-env.sh
+    export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
+    echo "Starting staging on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
+    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop frontend dev server (port derived from worktree)
 desktop-dev:
@@ -169,31 +199,45 @@ desktop-dev:
 desktop-app *ARGS:
     just dev {{ARGS}}
 
-# ─── Desktop Release ──────────────────────────────────────────────────────────
+# ─── Web ─────────────────────────────────────────────────────────────────────
 
-# Tag and push to trigger the desktop release workflow (CI handles version bumping)
-desktop-release version:
+# Run the web frontend dev server (port derived from worktree to avoid collisions)
+web:
     #!/usr/bin/env bash
     set -euo pipefail
+    cd {{web_dir}}
+    [[ -d node_modules ]] || pnpm install
+    cd ..
+    source scripts/instance-env.sh
+    export VITE_PORT=$((SPROUT_VITE_PORT + 100))
+    export VITE_RELAY_URL="${SPROUT_RELAY_URL}"
+    echo "Starting web dev server on port ${VITE_PORT}, relay ${SPROUT_RELAY_URL}"
+    cd {{web_dir}}
+    pnpm exec vite --port "${VITE_PORT}" --strictPort
 
-    git tag "desktop/v{{version}}"
-    git push origin "desktop/v{{version}}"
+# Install web JS dependencies
+web-install:
+    cd {{web_dir}} && pnpm install
 
-    echo "Pushed tag desktop/v{{version}} — CI will set the version, build, and publish the release."
+# Install web JS dependencies reproducibly for CI
+web-install-ci:
+    cd {{web_dir}} && pnpm install --frozen-lockfile
 
-# Set the desktop app version (patches package.json, tauri.conf.json, Cargo.toml)
-desktop-set-version version:
-    cd {{desktop_dir}} && node scripts/set-version-from-tag.mjs "{{version}}"
-    cd {{desktop_dir}}/src-tauri && cargo generate-lockfile
+# Run web lint and format checks
+web-check:
+    cd {{web_dir}} && pnpm check
 
-# Build a local desktop release (for testing). Optionally set a version first.
-desktop-release-build version="" target="aarch64-apple-darwin" *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -n "{{version}}" ]; then
-        just desktop-set-version "{{version}}"
-    fi
-    cd {{desktop_dir}} && pnpm exec tauri build --target {{target}} --config src-tauri/tauri.release.conf.json {{args}}
+# Run web TypeScript checks
+web-typecheck:
+    cd {{web_dir}} && pnpm typecheck
+
+# Build web frontend assets
+web-build:
+    cd {{web_dir}} && pnpm build
+
+# Run web browser smoke tests
+web-e2e-smoke:
+    cd {{web_dir}} && pnpm test:e2e:smoke
 
 # ─── Mobile ──────────────────────────────────────────────────────────────────
 
@@ -201,15 +245,15 @@ mobile_dir := "mobile"
 
 # Install mobile Flutter dependencies
 mobile-install:
-    cd {{mobile_dir}} && flutter pub get
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter pub get
 
 # Run mobile lint and format checks
 mobile-check:
-    cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && dart format --output=none --set-exit-if-changed . && flutter analyze
 
 # Run mobile tests
 mobile-test:
-    cd {{mobile_dir}} && flutter test
+    unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

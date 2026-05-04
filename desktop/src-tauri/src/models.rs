@@ -164,6 +164,8 @@ pub struct SearchQueryParams<'a> {
     pub q: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -222,6 +224,8 @@ pub struct FeedItemInfo {
     pub created_at: u64,
     pub channel_id: Option<String>,
     pub channel_name: String,
+    #[serde(default)]
+    pub channel_type: Option<String>,
     pub tags: Vec<Vec<String>>,
     pub category: String,
 }

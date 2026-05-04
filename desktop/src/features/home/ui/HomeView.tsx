@@ -1,11 +1,12 @@
 import * as React from "react";
-import { AtSign, CircleAlert, RefreshCcw } from "lucide-react";
+import { Activity, AtSign, Bot, CircleAlert, RefreshCcw } from "lucide-react";
 
 import { useRelayAgentsQuery } from "@/features/agents/hooks";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useContactListQuery, useTimelineQuery } from "@/features/pulse/hooks";
-import type { HomeFeedResponse } from "@/shared/api/types";
+import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
+import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -19,13 +20,18 @@ const RecentNotesSection = React.lazy(async () => {
   return { default: module.RecentNotesSection };
 });
 
-type FeedFilter = "all" | "mention" | "needs_action";
+type FeedFilter =
+  | "all"
+  | "mention"
+  | "needs_action"
+  | "activity"
+  | "agent_activity";
 
 function HomeLoadingState() {
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="grid gap-4">
           {["mentions", "actions"].map((section) => (
             <div key={section}>
               <Skeleton className="mb-2 h-4 w-24" />
@@ -46,6 +52,8 @@ const FILTER_OPTIONS: { value: FeedFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "mention", label: "Mentions" },
   { value: "needs_action", label: "Needs Action" },
+  { value: "activity", label: "Activity" },
+  { value: "agent_activity", label: "Agent Updates" },
 ];
 
 type HomeViewProps = {
@@ -54,7 +62,7 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
-  onOpenChannel: (channelId: string) => void;
+  onOpenFeedItem: (item: FeedItem) => void;
   onOpenPulse: () => void;
   onRefresh: () => void;
 };
@@ -65,25 +73,29 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
-  onOpenChannel,
+  onOpenFeedItem,
   onOpenPulse,
   onRefresh,
 }: HomeViewProps) {
   const [filter, setFilter] = React.useState<FeedFilter>("all");
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
 
+  // Defer Pulse widget queries until the shell is interactive
+  const startupReady = useDeferredStartup();
+  const deferredPubkey = startupReady ? currentPubkey : undefined;
+
   // Recent notes for the Pulse widget
-  const contactListQuery = useContactListQuery(currentPubkey);
+  const contactListQuery = useContactListQuery(deferredPubkey);
   const contactPubkeys = React.useMemo(
     () => (contactListQuery.data?.contacts ?? []).map((c) => c.pubkey),
     [contactListQuery.data],
   );
   const notesPubkeys = React.useMemo(
     () =>
-      currentPubkey
-        ? [...new Set([currentPubkey, ...contactPubkeys])]
+      deferredPubkey
+        ? [...new Set([deferredPubkey, ...contactPubkeys])]
         : contactPubkeys,
-    [currentPubkey, contactPubkeys],
+    [deferredPubkey, contactPubkeys],
   );
   const notesTimelineQuery = useTimelineQuery(
     notesPubkeys,
@@ -98,14 +110,19 @@ export function HomeView({
     enabled: noteAuthorPubkeys.length > 0,
   });
   const noteProfiles = noteProfilesQuery.data?.profiles ?? {};
-  const relayAgentsQuery = useRelayAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery({ enabled: startupReady });
   const agentPubkeySet = React.useMemo(
     () => new Set((relayAgentsQuery.data ?? []).map((a) => a.pubkey)),
     [relayAgentsQuery.data],
   );
 
   const feedItems = feed
-    ? [...feed.feed.mentions, ...feed.feed.needsAction]
+    ? [
+        ...feed.feed.mentions,
+        ...feed.feed.needsAction,
+        ...(feed.feed.activity ?? []),
+        ...(feed.feed.agentActivity ?? []),
+      ]
     : [];
   const feedProfilesQuery = useUsersBatchQuery(
     feedItems.map((item) => item.pubkey),
@@ -142,8 +159,8 @@ export function HomeView({
 
   const showMentions = filter === "all" || filter === "mention";
   const showNeedsAction = filter === "all" || filter === "needs_action";
-  const singleColumn = filter !== "all";
-
+  const showActivity = filter === "all" || filter === "activity";
+  const showAgentActivity = filter === "all" || filter === "agent_activity";
   return (
     <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
@@ -174,7 +191,7 @@ export function HomeView({
         ) : null}
 
         <React.Suspense fallback={null}>
-          <div className={`grid gap-5 ${singleColumn ? "" : "xl:grid-cols-2"}`}>
+          <div className="grid gap-5">
             {showMentions ? (
               <FeedSection
                 availableChannelIds={availableChannelIds}
@@ -186,7 +203,7 @@ export function HomeView({
                 icon={AtSign}
                 items={feed.feed.mentions}
                 onMarkDone={markDone}
-                onOpenChannel={onOpenChannel}
+                onOpenItem={onOpenFeedItem}
                 onUndoDone={undoDone}
                 showDoneAction={false}
                 title="Mentions"
@@ -203,10 +220,44 @@ export function HomeView({
                 icon={CircleAlert}
                 items={feed.feed.needsAction}
                 onMarkDone={markDone}
-                onOpenChannel={onOpenChannel}
+                onOpenItem={onOpenFeedItem}
                 onUndoDone={undoDone}
                 showDoneAction={true}
                 title="Needs Action"
+              />
+            ) : null}
+            {showActivity ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="Recent channel messages and forum posts will show up here."
+                emptyTitle="No channel activity yet"
+                icon={Activity}
+                items={feed.feed.activity ?? []}
+                onMarkDone={markDone}
+                onOpenItem={onOpenFeedItem}
+                onUndoDone={undoDone}
+                showDoneAction={false}
+                title="Channel Activity"
+              />
+            ) : null}
+            {showAgentActivity ? (
+              <FeedSection
+                availableChannelIds={availableChannelIds}
+                currentPubkey={currentPubkey}
+                profiles={feedProfiles}
+                doneSet={doneSet}
+                emptyDescription="Agent job requests, progress, and results will appear here."
+                emptyTitle="No agent updates yet"
+                icon={Bot}
+                items={feed.feed.agentActivity ?? []}
+                onMarkDone={markDone}
+                onOpenItem={onOpenFeedItem}
+                onUndoDone={undoDone}
+                showDoneAction={false}
+                title="Agent Updates"
               />
             ) : null}
           </div>

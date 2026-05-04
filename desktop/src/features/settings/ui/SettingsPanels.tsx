@@ -2,8 +2,11 @@ import { useState, useMemo, useRef } from "react";
 import {
   BellRing,
   Check,
+  Download,
+  Keyboard,
   KeyRound,
   MonitorCog,
+  Shield,
   Moon,
   Search,
   Smartphone,
@@ -16,21 +19,27 @@ import type {
   DesktopNotificationPermissionState,
   NotificationSettings,
 } from "@/features/notifications/hooks";
+import { RelayMembersCard } from "@/features/relay-members/ui/RelayMembersCard";
 import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
+import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
+import { UpdateChecker } from "../UpdateChecker";
 
 export type SettingsSection =
   | "profile"
   | "notifications"
   | "appearance"
+  | "shortcuts"
   | "tokens"
+  | "relay-members"
   | "mobile"
+  | "updates"
   | "doctor";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSection = "profile";
@@ -71,14 +80,29 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     icon: MonitorCog,
   },
   {
+    value: "shortcuts",
+    label: "Shortcuts",
+    icon: Keyboard,
+  },
+  {
     value: "tokens",
     label: "Tokens",
     icon: KeyRound,
   },
   {
+    value: "relay-members",
+    label: "Members",
+    icon: Shield,
+  },
+  {
     value: "mobile",
     label: "Mobile",
     icon: Smartphone,
+  },
+  {
+    value: "updates",
+    label: "Updates",
+    icon: Download,
   },
   {
     value: "doctor",
@@ -234,10 +258,16 @@ export function renderSettingsSection(
       );
     case "appearance":
       return <ThemeSettingsCard />;
+    case "shortcuts":
+      return <KeyboardShortcutsCard />;
     case "tokens":
       return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
+    case "relay-members":
+      return <RelayMembersCard currentPubkey={props.currentPubkey} />;
     case "mobile":
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
+    case "updates":
+      return <UpdateChecker />;
     case "doctor":
       return <DoctorSettingsPanel />;
     default: {

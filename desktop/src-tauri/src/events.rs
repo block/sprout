@@ -66,6 +66,7 @@ fn mention_tags(mentions: &[&str]) -> Result<Vec<Tag>, String> {
     let mut seen = std::collections::HashSet::new();
     let mut tags = Vec::new();
     for &hex in mentions {
+        check_pubkey(hex)?;
         let lower = hex.to_ascii_lowercase();
         if seen.insert(lower.clone()) {
             tags.push(tag(vec!["p", &lower])?);
@@ -395,51 +396,8 @@ fn build_huddle_event(
 pub fn build_huddle_started(
     parent_channel_id: &str,
     ephemeral_channel_id: &str,
-    livekit_room: &str,
 ) -> Result<EventBuilder, String> {
-    build_huddle_event(
-        48100,
-        parent_channel_id,
-        ephemeral_channel_id,
-        &[("livekit_room", livekit_room)],
-        None,
-    )
-}
-
-/// Kind 48101 — participant joined a huddle, posted to the parent channel.
-///
-/// `participant_pubkey`: when provided, adds a `["p", pubkey]` tag so
-/// consumers can identify who joined without parsing the event's author.
-pub fn build_huddle_participant_joined(
-    parent_channel_id: &str,
-    ephemeral_channel_id: &str,
-    participant_pubkey: Option<&str>,
-) -> Result<EventBuilder, String> {
-    build_huddle_event(
-        48101,
-        parent_channel_id,
-        ephemeral_channel_id,
-        &[],
-        participant_pubkey,
-    )
-}
-
-/// Kind 48102 — participant left a huddle, posted to the parent channel.
-///
-/// `participant_pubkey`: when provided, adds a `["p", pubkey]` tag so
-/// consumers can identify who left without parsing the event's author.
-pub fn build_huddle_participant_left(
-    parent_channel_id: &str,
-    ephemeral_channel_id: &str,
-    participant_pubkey: Option<&str>,
-) -> Result<EventBuilder, String> {
-    build_huddle_event(
-        48102,
-        parent_channel_id,
-        ephemeral_channel_id,
-        &[],
-        participant_pubkey,
-    )
+    build_huddle_event(48100, parent_channel_id, ephemeral_channel_id, &[], None)
 }
 
 /// Kind 48103 — huddle ended, posted to the parent channel.
@@ -471,13 +429,64 @@ pub fn build_huddle_guidelines(
 pub fn build_note(
     content: &str,
     reply_to_event_id: Option<EventId>,
+    mentions: &[&str],
+    media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = Vec::new();
     if let Some(parent) = reply_to_event_id {
         tags.push(tag(vec!["e", &parent.to_hex(), "", "reply"])?);
     }
+    tags.extend(mention_tags(mentions)?);
+    imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::TextNote, content).tags(tags))
+}
+
+// ── Relay admin (NIP-43) ────────────────────────────────────────────────────
+
+/// Allowed relay member roles for NIP-43 admin commands.
+const VALID_RELAY_ROLES: &[&str] = &["owner", "admin", "member"];
+
+fn check_relay_role(role: &str) -> Result<(), String> {
+    if !VALID_RELAY_ROLES.contains(&role) {
+        return Err(format!(
+            "invalid relay role \"{role}\" (expected one of: {})",
+            VALID_RELAY_ROLES.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Kind 9030 — add a pubkey to the relay member list.
+pub fn build_relay_admin_add(target_pubkey: &str, role: &str) -> Result<EventBuilder, String> {
+    check_pubkey(target_pubkey)?;
+    check_relay_role(role)?;
+    let tags = vec![
+        tag(vec!["p", &target_pubkey.to_ascii_lowercase()])?,
+        tag(vec!["role", role])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(9030), "").tags(tags))
+}
+
+/// Kind 9031 — remove a pubkey from the relay member list.
+pub fn build_relay_admin_remove(target_pubkey: &str) -> Result<EventBuilder, String> {
+    check_pubkey(target_pubkey)?;
+    let tags = vec![tag(vec!["p", &target_pubkey.to_ascii_lowercase()])?];
+    Ok(EventBuilder::new(Kind::Custom(9031), "").tags(tags))
+}
+
+/// Kind 9032 — change the role of an existing relay member.
+pub fn build_relay_admin_change_role(
+    target_pubkey: &str,
+    new_role: &str,
+) -> Result<EventBuilder, String> {
+    check_pubkey(target_pubkey)?;
+    check_relay_role(new_role)?;
+    let tags = vec![
+        tag(vec!["p", &target_pubkey.to_ascii_lowercase()])?,
+        tag(vec!["role", new_role])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(9032), "").tags(tags))
 }
 
 /// Maximum contacts per contact list event.
@@ -515,8 +524,8 @@ pub fn build_contact_list(
 /// Post a pre-signed event to the relay.
 ///
 /// Standalone helper for async tasks that don't have access to `&AppState`.
-/// The caller pre-captures `http_client`, `api_token`, and `pubkey_hex` at
-/// spawn time and passes them here.
+/// The caller pre-captures `http_client`, `api_token`, `pubkey_hex`, and
+/// `relay_base_url` at spawn time and passes them here.
 ///
 /// Returns `Err` on transport failure OR non-2xx HTTP status.
 pub async fn post_event_raw(
@@ -524,8 +533,9 @@ pub async fn post_event_raw(
     api_token: Option<&str>,
     pubkey_hex: &str,
     event_json: String,
+    relay_base_url: &str,
 ) -> Result<(), String> {
-    let url = format!("{}/api/events", crate::relay::relay_api_base_url());
+    let url = format!("{relay_base_url}/api/events");
     let req = match api_token {
         Some(token) => http_client
             .post(&url)

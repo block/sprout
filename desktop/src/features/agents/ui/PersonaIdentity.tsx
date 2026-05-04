@@ -4,6 +4,7 @@ import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import type { AgentPersona } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { promptPreview } from "@/shared/lib/promptPreview";
+import { Badge } from "@/shared/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type PersonaIdentityProps = {
@@ -35,9 +36,7 @@ export function PersonaIdentity({
               {persona.displayName}
             </p>
             {showBuiltInBadge ? (
-              <span className="whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                Built-in
-              </span>
+              <Badge variant="secondary">Built-in</Badge>
             ) : null}
             {showPromptTooltip && preview ? (
               <Tooltip>

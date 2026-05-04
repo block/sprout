@@ -1,4 +1,6 @@
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+
+import { Spinner } from "@/shared/ui/spinner";
 import React from "react";
 
 import type { AgentModelsResponse, ManagedAgent } from "@/shared/api/types";
@@ -101,7 +103,7 @@ export function ModelPicker({
         >
           {loading ? (
             <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner className="h-3.5 w-3.5" />
               Loading models...
             </div>
           ) : error ? (

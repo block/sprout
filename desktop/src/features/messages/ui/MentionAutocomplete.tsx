@@ -1,10 +1,14 @@
 import * as React from "react";
 
+import { truncatePubkey } from "@/features/profile/lib/identity";
+import { Badge } from "@/shared/ui/badge";
 import { cn } from "@/shared/lib/cn";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type MentionSuggestion = {
   pubkey: string;
   displayName: string;
+  avatarUrl?: string | null;
   role?: string | null;
   personaName?: string | null;
 };
@@ -13,12 +17,14 @@ type MentionAutocompleteProps = {
   suggestions: MentionSuggestion[];
   selectedIndex: number;
   onSelect: (suggestion: MentionSuggestion) => void;
+  position?: "above" | "below";
 };
 
 export const MentionAutocomplete = React.memo(function MentionAutocomplete({
   suggestions,
   selectedIndex,
   onSelect,
+  position = "above",
 }: MentionAutocompleteProps) {
   const listRef = React.useRef<HTMLDivElement>(null);
 
@@ -34,7 +40,12 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
   }
 
   return (
-    <div className="absolute bottom-full left-0 right-0 z-50 mb-1 px-3 sm:px-4">
+    <div
+      className={cn(
+        "absolute left-0 right-0 z-50 px-3 sm:px-4",
+        position === "below" ? "top-full mt-1" : "bottom-full mb-1",
+      )}
+    >
       <div
         className="max-h-48 overflow-y-auto rounded-xl border bg-popover p-1 shadow-lg"
         ref={listRef}
@@ -55,6 +66,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
             tabIndex={-1}
             type="button"
           >
+            <UserAvatar
+              avatarUrl={suggestion.avatarUrl ?? null}
+              displayName={suggestion.displayName}
+              size="xs"
+            />
             <span className="truncate font-medium">
               {suggestion.displayName}
             </span>
@@ -63,10 +79,11 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 ({suggestion.personaName})
               </span>
             ) : suggestion.role ? (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                {suggestion.role}
-              </span>
+              <Badge variant="secondary">{suggestion.role}</Badge>
             ) : null}
+            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/50">
+              {truncatePubkey(suggestion.pubkey)}
+            </span>
           </button>
         ))}
       </div>

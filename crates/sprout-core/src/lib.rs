@@ -13,10 +13,16 @@ pub mod error;
 pub mod event;
 /// NIP-01 subscription filter matching.
 pub mod filter;
+/// Git permission types — ref patterns, protection rules, policy evaluation.
+pub mod git_perms;
 /// Sprout kind number registry — custom event type constants.
 pub mod kind;
 /// Network utilities — SSRF-safe IP classification.
 pub mod network;
+/// Agent observer frame helpers.
+pub mod observer;
+/// NIP-AB device pairing — crypto primitives, message types, and errors.
+pub mod pairing;
 /// Presence status types shared across crates.
 pub mod presence;
 /// Schnorr signature and event ID verification.

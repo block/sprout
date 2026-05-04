@@ -3,6 +3,7 @@ mod commands;
 mod events;
 mod huddle;
 mod managed_agents;
+mod media_proxy;
 mod migration;
 mod models;
 mod relay;
@@ -10,6 +11,9 @@ mod util;
 
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
+use huddle::audio_output::{
+    get_audio_output_device, list_audio_output_devices, set_audio_output_device,
+};
 use huddle::{
     add_agent_to_huddle, check_pipeline_hotstart, confirm_huddle_active, download_voice_models,
     end_huddle, get_huddle_agent_pubkeys, get_huddle_state, get_model_status, get_voice_input_mode,
@@ -17,82 +21,16 @@ use huddle::{
     speak_agent_message, start_huddle, start_stt_pipeline,
 };
 use managed_agents::{
-    ensure_nest, find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents,
-    save_managed_agents, start_managed_agent_process, sync_managed_agent_processes, BackendKind,
-    ManagedAgentProcess,
+    ensure_nest, kill_stale_tracked_processes, load_managed_agents,
+    restore_managed_agents_on_launch, save_managed_agents, sync_managed_agent_processes,
+    BackendKind, ManagedAgentProcess,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::{http, Emitter, Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
-
-fn restore_managed_agents_on_launch(
-    app: &tauri::AppHandle,
-    shutdown_started: &AtomicBool,
-) -> Result<(), String> {
-    if shutdown_started.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    let state = app.state::<AppState>();
-    let _store_guard = state
-        .managed_agents_store_lock
-        .lock()
-        .map_err(|error| error.to_string())?;
-
-    if shutdown_started.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    let mut records = load_managed_agents(app)?;
-    let mut runtimes = state
-        .managed_agent_processes
-        .lock()
-        .map_err(|error| error.to_string())?;
-    let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
-    changed |= kill_stale_tracked_processes(&mut records, &runtimes);
-
-    // PID-file sweep: kill any orphaned agent processes we have receipts for
-    // that weren’t tracked in records (e.g. escaped process groups, double-forked).
-    let tracked_pids: Vec<u32> = records
-        .iter()
-        .filter_map(|r| r.runtime_pid)
-        .chain(runtimes.values().map(|rt| rt.child.id()))
-        .collect();
-    managed_agents::sweep_orphaned_agent_processes(app, &tracked_pids);
-
-    let pubkeys_to_restore = records
-        .iter()
-        .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
-        .map(|record| record.pubkey.clone())
-        .collect::<Vec<_>>();
-
-    for pubkey in pubkeys_to_restore {
-        if shutdown_started.load(Ordering::SeqCst) {
-            break;
-        }
-
-        let record = find_managed_agent_mut(&mut records, &pubkey)?;
-        match start_managed_agent_process(app, record, &mut runtimes) {
-            Ok(()) => {
-                changed = true;
-            }
-            Err(error) => {
-                record.updated_at = util::now_iso();
-                record.last_error = Some(error);
-                changed = true;
-            }
-        }
-    }
-
-    if changed {
-        save_managed_agents(app, &records)?;
-    }
-
-    Ok(())
-}
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -211,133 +149,6 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-/// Defense-in-depth cap: refuse to buffer responses larger than this into RAM.
-/// Range requests (≤16 MiB from server) always fit. Full GETs for huge videos
-/// get a clear 413 instead of OOM — the <video> element always uses range
-/// requests for seeking, so this only catches edge cases.
-const MAX_PROXY_RESPONSE: u64 = 20 * 1024 * 1024;
-
-/// Proxy media requests through the Rust backend so they traverse the WARP tunnel.
-///
-/// WKWebView's networking stack bypasses WARP, causing 403s from Cloudflare Access.
-/// This handler routes `sprout-media://localhost/{path}` through reqwest, which
-/// runs in the Tauri process and goes through WARP.
-async fn handle_sprout_media(
-    app: &tauri::AppHandle,
-    request: &http::Request<Vec<u8>>,
-) -> http::Response<Vec<u8>> {
-    let state = app.state::<AppState>();
-    let base = relay::relay_api_base_url();
-
-    // Preserve path + query (thumbnails may have query params).
-    // Only proxy /media/ paths — reject anything else.
-    let path_and_query = request
-        .uri()
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-
-    if !path_and_query.starts_with("/media/") {
-        return error_response(404, "not found");
-    }
-
-    let has_range = request.headers().contains_key("range");
-    let upstream_url = format!("{base}{path_and_query}");
-
-    // Forward Range header if present — enables video seeking through the proxy.
-    let mut upstream = state
-        .http_client
-        .get(&upstream_url)
-        .timeout(std::time::Duration::from_secs(60));
-    if let Some(range) = request.headers().get("range") {
-        if let Ok(v) = range.to_str() {
-            upstream = upstream.header("range", v);
-        }
-    }
-
-    let result = upstream.send().await;
-
-    match result {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let content_type = resp
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("application/octet-stream")
-                .to_string();
-
-            // Propagate range-related headers so <video> seeking works.
-            let content_range = resp
-                .headers()
-                .get("content-range")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let accept_ranges = resp
-                .headers()
-                .get("accept-ranges")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let content_length = resp
-                .headers()
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-
-            // OOM guard: if this is a non-range GET and the upstream body is
-            // larger than our cap, bail with 413 instead of buffering into RAM.
-            // Tauri's protocol handler requires Vec<u8> so we can't truly stream.
-            if !has_range {
-                if let Some(ref cl) = content_length {
-                    if let Ok(len) = cl.parse::<u64>() {
-                        if len > MAX_PROXY_RESPONSE {
-                            return error_response(
-                                413,
-                                "response too large — use range requests for video playback",
-                            );
-                        }
-                    }
-                }
-            }
-
-            match resp.bytes().await {
-                Ok(bytes) => {
-                    let mut builder = http::Response::builder()
-                        .status(status)
-                        .header("content-type", &content_type);
-                    if let Some(ref cr) = content_range {
-                        builder = builder.header("content-range", cr);
-                    }
-                    if let Some(ref ar) = accept_ranges {
-                        builder = builder.header("accept-ranges", ar);
-                    }
-                    if let Some(ref cl) = content_length {
-                        builder = builder.header("content-length", cl);
-                    }
-                    builder
-                        .body(bytes.to_vec())
-                        .unwrap_or_else(|_| error_response(500, "response build failed"))
-                }
-                Err(_) => error_response(502, "failed to read upstream body"),
-            }
-        }
-        Err(_) => error_response(502, "upstream request failed"),
-    }
-}
-
-fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
-    http::Response::builder()
-        .status(status)
-        .header("content-type", "text/plain")
-        .body(msg.as_bytes().to_vec())
-        .unwrap_or_else(|_| {
-            http::Response::builder()
-                .status(500)
-                .body(Vec::new())
-                .unwrap()
-        })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -460,11 +271,12 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("sprout-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                let response = handle_sprout_media(&app, &request).await;
+                let response = media_proxy::handle_sprout_media(&app, &request).await;
                 responder.respond(response);
             });
         })
         .manage(build_app_state())
+        .manage(commands::pairing::PairingHandle::new())
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
@@ -489,6 +301,20 @@ pub fn run() {
 
             resolve_persisted_identity(&app_handle, &state)
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+            // Start the localhost media streaming proxy. Uses the shared HTTP
+            // client so WARP tunnelling applies. The port is stored in AppState
+            // and exposed to the frontend via the `get_media_proxy_port` command.
+            let proxy_client = state.http_client.clone();
+            let proxy_base_url = relay::relay_api_base_url_with_override(&state);
+            let proxy_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let port = media_proxy::spawn_media_proxy(proxy_client, proxy_base_url).await;
+                let state = proxy_handle.state::<AppState>();
+                state
+                    .media_proxy_port
+                    .store(port, std::sync::atomic::Ordering::Relaxed);
+            });
 
             // Create the Sprout nest (~/.sprout) before agents are restored,
             // so default_agent_workdir() resolves to the nest directory.
@@ -530,6 +356,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_identity,
+            get_nsec,
+            import_identity,
             get_profile,
             update_profile,
             get_user_profile,
@@ -538,12 +366,18 @@ pub fn run() {
             search_users,
             get_presence,
             set_presence,
+            get_default_relay_url,
             get_relay_ws_url,
             get_relay_http_url,
+            get_media_proxy_port,
             discover_acp_providers,
             discover_managed_agent_prereqs,
             sign_event,
+            decrypt_observer_event,
+            build_observer_control_event,
             create_auth_event,
+            nip44_encrypt_to_self,
+            nip44_decrypt_from_self,
             get_channels,
             create_channel,
             open_dm,
@@ -580,6 +414,11 @@ pub fn run() {
             mint_token,
             revoke_token,
             revoke_all_tokens,
+            list_relay_members,
+            get_my_relay_membership,
+            add_relay_member,
+            remove_relay_member,
+            change_relay_member_role,
             list_relay_agents,
             list_managed_agents,
             create_managed_agent,
@@ -640,6 +479,14 @@ pub fn run() {
             get_huddle_agent_pubkeys,
             set_voice_input_mode,
             get_voice_input_mode,
+            list_audio_output_devices,
+            set_audio_output_device,
+            get_audio_output_device,
+            start_pairing,
+            confirm_pairing_sas,
+            cancel_pairing,
+            apply_workspace,
+            get_active_workspace,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

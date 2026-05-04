@@ -76,10 +76,14 @@ type RawPublishNoteResult = {
 export async function publishNote(
   content: string,
   replyTo?: string,
+  mentionPubkeys?: string[],
+  mediaTags?: string[][],
 ): Promise<PublishNoteResult> {
   const raw = await invokeTauri<RawPublishNoteResult>("publish_note", {
     content,
     replyTo: replyTo ?? null,
+    mentionPubkeys: mentionPubkeys ?? null,
+    mediaTags: mediaTags ?? null,
   });
   return {
     eventId: raw.event_id,

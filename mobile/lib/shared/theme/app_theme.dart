@@ -19,10 +19,10 @@ class Radii {
 class AppTheme {
   static ThemeData light({ColorScheme? colorScheme}) {
     final scheme = colorScheme ?? lightColorScheme;
-    const appColors = AppColors(
-      success: Color(0xFF40A02B), // Latte Green
-      warning: Color(0xFFDF8E1D), // Latte Yellow
-      accent: Color(0xFF1E66F5), // Latte Blue
+    final appColors = AppColors(
+      success: const Color(0xFF40A02B), // Catppuccin Latte Green — universal
+      warning: const Color(0xFFDF8E1D), // Latte Yellow
+      accent: scheme.tertiary,
     );
 
     return _buildTheme(
@@ -36,10 +36,12 @@ class AppTheme {
 
   static ThemeData dark({ColorScheme? colorScheme}) {
     final scheme = colorScheme ?? darkColorScheme;
-    const appColors = AppColors(
-      success: Color(0xFFA6DA95), // Macchiato Green
-      warning: Color(0xFFEED49F), // Macchiato Yellow
-      accent: Color(0xFF8AADF4), // Macchiato Blue
+    final appColors = AppColors(
+      success: const Color(
+        0xFFA6DA95,
+      ), // Catppuccin Macchiato Green — universal
+      warning: const Color(0xFFEED49F), // Macchiato Yellow
+      accent: scheme.tertiary,
     );
 
     return _buildTheme(
@@ -50,10 +52,6 @@ class AppTheme {
       statusBarBrightness: Brightness.dark,
     );
   }
-
-  /// Legacy getters for backwards compatibility.
-  static ThemeData get lightTheme => light();
-  static ThemeData get darkTheme => dark();
 
   static ThemeData _buildTheme({
     required ColorScheme scheme,
@@ -66,12 +64,14 @@ class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       extensions: [appColors],
+      fontFamily: 'Geist',
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
-        backgroundColor: scheme.surface,
+        backgroundColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
+        scrolledUnderElevation: 0,
         titleTextStyle: textTheme.titleMedium?.copyWith(
           color: scheme.onSurface,
         ),
@@ -80,6 +80,28 @@ class AppTheme {
           statusBarIconBrightness: statusBarIconBrightness,
           statusBarBrightness: statusBarBrightness,
         ),
+      ),
+
+      // Bottom navigation: clean style, no indicator pill
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: scheme.surface,
+        elevation: 0,
+        indicatorColor: Colors.transparent,
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return IconThemeData(color: scheme.primary, size: 24);
+          }
+          return IconThemeData(color: scheme.onSurfaceVariant, size: 24);
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return textTheme.labelSmall?.copyWith(
+              color: scheme.primary,
+              fontWeight: FontWeight.w600,
+            );
+          }
+          return textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant);
+        }),
       ),
 
       // Buttons: desktop uses rounded-md (8px), h-9 (36px), px-4 (16px)

@@ -26,6 +26,7 @@ export const ACCENT_COLORS = [
   { name: "Orange", value: "#f97316" },
   { name: "Red", value: "#ef4444" },
   { name: "Pink", value: "#ec4899" },
+  { name: "Lilac", value: "#c0a2f1" },
   { name: "Purple", value: "#a855f7" },
   { name: "Indigo", value: "#6366f1" },
 ] as const;

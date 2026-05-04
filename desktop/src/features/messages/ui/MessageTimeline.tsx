@@ -1,10 +1,11 @@
 import * as React from "react";
-import { ArrowDown, Loader2 } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
 import { Separator } from "@/shared/ui/separator";
+import { Spinner } from "@/shared/ui/spinner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
@@ -34,6 +35,12 @@ type MessageTimelineProps = {
     emoji: string,
     remove: boolean,
   ) => Promise<void>;
+  /** The message ID of the currently active find-in-channel match. */
+  searchActiveMessageId?: string | null;
+  /** Set of message IDs that match the current find-in-channel query. */
+  searchMatchingMessageIds?: Set<string>;
+  /** The current find-in-channel query string. */
+  searchQuery?: string;
   targetMessageId?: string | null;
   onTargetReached?: (messageId: string) => void;
 };
@@ -55,6 +62,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onEdit,
   onReply,
   onToggleReaction,
+  searchActiveMessageId = null,
+  searchMatchingMessageIds,
+  searchQuery,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
@@ -78,6 +88,29 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     scrollContainerRef,
     targetMessageId,
   });
+
+  // Scroll to the active search match when it changes.
+  const prevSearchActiveRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (
+      !searchActiveMessageId ||
+      searchActiveMessageId === prevSearchActiveRef.current
+    ) {
+      prevSearchActiveRef.current = searchActiveMessageId;
+      return;
+    }
+    prevSearchActiveRef.current = searchActiveMessageId;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const el = container.querySelector<HTMLElement>(
+      `[data-message-id="${searchActiveMessageId}"]`,
+    );
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [searchActiveMessageId]);
 
   useLoadOlderOnScroll({
     fetchOlder,
@@ -104,7 +137,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           </div>
         ) : null}
         <div
-          className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 [overflow-anchor:none] sm:px-6"
+          className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-6 pt-3 [overflow-anchor:none] sm:px-6"
           data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
@@ -115,7 +148,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
             {isFetchingOlder ? (
               <div className="flex justify-center py-2">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <Spinner className="h-4 w-4 text-muted-foreground" />
               </div>
             ) : null}
 
@@ -160,6 +193,9 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 onToggleReaction={onToggleReaction}
                 personaLookup={personaLookup}
                 profiles={profiles}
+                searchActiveMessageId={searchActiveMessageId}
+                searchMatchingMessageIds={searchMatchingMessageIds}
+                searchQuery={searchQuery}
               />
             ) : null}
 
@@ -168,7 +204,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         </div>
 
         {!isAtBottom ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center px-4">
             <Button
               className="pointer-events-auto rounded-full shadow-lg"
               data-testid="message-scroll-to-latest"

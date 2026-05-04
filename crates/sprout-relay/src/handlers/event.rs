@@ -4,9 +4,15 @@ use std::sync::Arc;
 
 use tracing::{debug, error, info, warn};
 
-use nostr::Event;
+use nostr::{Event, PublicKey};
 use sprout_core::event::StoredEvent;
-use sprout_core::kind::{event_kind_u32, is_ephemeral, KIND_GIFT_WRAP, KIND_PRESENCE_UPDATE};
+use sprout_core::kind::{
+    event_kind_u32, is_ephemeral, KIND_AGENT_OBSERVER_FRAME, KIND_GIFT_WRAP, KIND_PRESENCE_UPDATE,
+};
+use sprout_core::observer::{
+    content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
+    OBSERVER_FRAME_TELEMETRY,
+};
 use sprout_core::verification::verify_event;
 
 use crate::connection::{AuthState, ConnectionState};
@@ -24,9 +30,9 @@ fn reject(reason: &'static str) {
 fn bounded_kind_label(kind: u32) -> String {
     match kind {
         0..=9 | 1059 | 1063 => kind.to_string(),
-        9000..=9022 | 9100 | 9110 | 9900 => kind.to_string(),
+        9000..=9022 | 9030..=9032 | 9100 | 9110 | 9900 => kind.to_string(),
         20000..=29999 => kind.to_string(),
-        30023 | 39000..=39003 => kind.to_string(),
+        30023 | 30315 | 39000..=39003 => kind.to_string(),
         40002..=40100 => kind.to_string(),
         41001..=41003 => kind.to_string(),
         42001..=42003 => kind.to_string(),
@@ -61,6 +67,7 @@ pub(crate) async fn dispatch_persistent_event(
     }
 
     let matches = state.sub_registry.fan_out(stored_event);
+    metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
     debug!(
         event_id = %event_id_hex,
         channel_id = ?stored_event.channel_id,
@@ -96,26 +103,25 @@ pub(crate) async fn dispatch_persistent_event(
         warn!(event_id = %event_id_hex, "Search index channel full — dropping event");
     }
 
-    let audit = Arc::clone(&state.audit);
-    let audit_event_id = event_id_hex.clone();
-    let audit_actor_pubkey = actor_pubkey_hex.to_string();
-    let audit_channel_id = stored_event.channel_id;
-    tokio::spawn(async move {
-        let entry = sprout_audit::NewAuditEntry {
-            event_id: audit_event_id.clone(),
-            event_kind: kind_u32,
-            actor_pubkey: audit_actor_pubkey,
-            action: sprout_audit::AuditAction::EventCreated,
-            channel_id: audit_channel_id,
-            metadata: serde_json::Value::Null,
-        };
-        let t = std::time::Instant::now();
-        if let Err(e) = audit.log(entry).await {
-            error!(event_id = %audit_event_id, "Audit log failed: {e}");
-        } else {
-            metrics::histogram!("sprout_audit_log_seconds").record(t.elapsed().as_secs_f64());
-        }
-    });
+    // Audit via bounded channel (capacity 1000). Uses .send().await so entries
+    // are never silently dropped — backpressure propagates to the event handler
+    // if the queue is full. This is intentional: the audit advisory lock already
+    // serializes writes (at most 1 in-flight), so a full queue means the audit
+    // DB is genuinely overloaded and the relay should slow down rather than
+    // accumulate unbounded in-memory state. DB write failures in the worker are
+    // logged but not retried (same as the previous per-event tokio::spawn).
+    let audit_entry = sprout_audit::NewAuditEntry {
+        event_id: event_id_hex.clone(),
+        event_kind: kind_u32,
+        actor_pubkey: actor_pubkey_hex.to_string(),
+        action: sprout_audit::AuditAction::EventCreated,
+        channel_id: stored_event.channel_id,
+        metadata: serde_json::Value::Null,
+    };
+    if let Err(e) = state.audit_tx.send(audit_entry).await {
+        error!(event_id = %event_id_hex, "Audit channel closed — entry lost: {e}");
+        metrics::counter!("sprout_audit_send_errors_total").increment(1);
+    }
 
     // Skip workflow triggering for workflow-execution kinds and relay-signed workflow messages.
     let is_relay_workflow_msg = stored_event.event.pubkey == state.relay_keypair.public_key()
@@ -158,7 +164,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     metrics::counter!("sprout_events_received_total", "kind" => kind_str.clone()).increment(1);
 
     // ── Extract auth from WS connection state ────────────────────────────
-    let (conn_id, pubkey_bytes, auth_pubkey, scopes) = {
+    let (conn_id, pubkey_bytes, auth_pubkey, scopes, channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
             AuthState::Authenticated(ctx) => (
@@ -166,6 +172,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
                 ctx.pubkey.serialize().to_vec(),
                 ctx.pubkey,
                 ctx.scopes.clone(),
+                ctx.channel_ids.clone(),
             ),
             _ => {
                 reject("auth");
@@ -206,6 +213,24 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         return;
     }
 
+    // ── Agent observer frames are owner-scoped, encrypted, and never stored ──
+    if kind_u32 == KIND_AGENT_OBSERVER_FRAME {
+        if !scopes.is_empty()
+            && !scopes.contains(&sprout_auth::Scope::MessagesWrite)
+            && !has_proxy_scope
+        {
+            reject("scope");
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                "restricted: insufficient scope for agent observer frames",
+            ));
+            return;
+        }
+        handle_agent_observer_event(event, conn_id, &event_id_hex, conn, state).await;
+        return;
+    }
+
     // ── Ephemeral events are WS-only (never stored) ──────────────────────
     // Scope enforcement for ephemeral kinds: require MessagesWrite or
     // ProxySubmit. Persistent events skip this gate and rely on
@@ -241,6 +266,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
     let ingest_auth = IngestAuth::Nip42 {
         pubkey: auth_pubkey,
         scopes,
+        channel_ids,
         conn_id,
     };
 
@@ -330,6 +356,7 @@ async fn handle_ephemeral_event(
 
         let stored_event = StoredEvent::new(event.clone(), None);
         let matches = state.sub_registry.fan_out(&stored_event);
+        metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
         let mut drop_count = 0u32;
@@ -373,6 +400,44 @@ async fn handle_ephemeral_event(
         // Pass the channel_id so fan_out() uses the channel-kind index.
         let stored_event = StoredEvent::new(event.clone(), Some(ch_id));
         let matches = state.sub_registry.fan_out(&stored_event);
+        metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
+        let event_json = serde_json::to_string(&event)
+            .expect("nostr::Event serialization is infallible for well-formed events");
+        let mut drop_count = 0u32;
+        for (target_conn_id, sub_id) in &matches {
+            let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+            if !state.conn_manager.send_to(*target_conn_id, msg) {
+                drop_count += 1;
+            }
+        }
+        if drop_count > 0 {
+            tracing::warn!(
+                event_id = %event_id_hex,
+                drop_count,
+                "fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+            );
+        }
+    } else {
+        // Channel-less ephemeral events (e.g., NIP-AB pairing kind:24134).
+        //
+        // Sentinel pattern: we use `Uuid::nil()` (all-zeros UUID) as a
+        // "global channel" routing key in Redis pub/sub. This lets other relay
+        // nodes receive and fan out these events without any real channel_id.
+        // The nil UUID is ONLY a Redis routing key — it never reaches the DB.
+        // On the receiving end (main.rs subscriber loop), `is_nil()` is checked
+        // and converted back to `None` so `fan_out()` uses the global index.
+        state.mark_local_event(&event.id);
+
+        if let Err(e) = state.pubsub.publish_event(uuid::Uuid::nil(), &event).await {
+            state.local_event_ids.invalidate(&event.id.to_bytes());
+            warn!(conn_id = %conn_id, event_id = %event_id_hex, "Ephemeral global publish failed: {e}");
+        }
+
+        // Direct fan-out to local WS subscribers.
+        // Pass channel_id=None so fan_out() uses the global subscriber index.
+        let stored_event = StoredEvent::new(event.clone(), None);
+        let matches = state.sub_registry.fan_out(&stored_event);
+        metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
         let event_json = serde_json::to_string(&event)
             .expect("nostr::Event serialization is infallible for well-formed events");
         let mut drop_count = 0u32;
@@ -394,11 +459,262 @@ async fn handle_ephemeral_event(
     conn.send(RelayMessage::ok(event_id_hex, true, ""));
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentObserverDirection {
+    Telemetry,
+    Control,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AgentObserverRoute {
+    agent: PublicKey,
+    owner: PublicKey,
+    direction: AgentObserverDirection,
+}
+
+/// Handle encrypted agent observer frames (kind 24200).
+///
+/// These frames bypass storage and are routed as global ephemeral events. The
+/// relay gates publication by the existing `agent_owner_pubkey` mapping and
+/// gates subscription in the REQ handler via the cleartext `p` tag.
+async fn handle_agent_observer_event(
+    event: Event,
+    conn_id: uuid::Uuid,
+    event_id_hex: &str,
+    conn: Arc<ConnectionState>,
+    state: Arc<AppState>,
+) {
+    let event_clone = event.clone();
+    let verify_result = tokio::task::spawn_blocking(move || verify_event(&event_clone)).await;
+    match verify_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            conn.send(RelayMessage::ok(
+                event_id_hex,
+                false,
+                &format!("invalid: {e}"),
+            ));
+            return;
+        }
+        Err(_) => {
+            conn.send(RelayMessage::ok(
+                event_id_hex,
+                false,
+                "error: internal error",
+            ));
+            return;
+        }
+    }
+
+    // Freshness check: reject observer frames with stale/future timestamps
+    let now = chrono::Utc::now().timestamp();
+    let event_ts = event.created_at.as_u64() as i64;
+    if (event_ts - now).unsigned_abs() > 300 {
+        conn.send(RelayMessage::ok(
+            event_id_hex,
+            false,
+            "invalid: observer frame timestamp outside ±5 minute freshness window",
+        ));
+        return;
+    }
+
+    let route = match agent_observer_route(&event) {
+        Ok(Some(route)) => route,
+        Ok(None) => {
+            // Unknown frame value — silently drop, no error to publisher.
+            conn.send(RelayMessage::ok(event_id_hex, true, ""));
+            return;
+        }
+        Err(message) => {
+            reject("invalid");
+            conn.send(RelayMessage::ok(event_id_hex, false, &message));
+            return;
+        }
+    };
+
+    let agent_bytes = route.agent.serialize().to_vec();
+    let owner_bytes = route.owner.serialize().to_vec();
+    let cache_key = (agent_bytes.clone(), owner_bytes.clone());
+    let is_owner = match state.observer_owner_cache.get(&cache_key) {
+        Some(cached) => cached,
+        None => {
+            let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
+            match result {
+                Ok(v) => {
+                    state.observer_owner_cache.insert(cache_key, v);
+                    v
+                }
+                Err(e) => {
+                    warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
+                    conn.send(RelayMessage::ok(
+                        event_id_hex,
+                        false,
+                        "error: internal server error",
+                    ));
+                    return;
+                }
+            }
+        }
+    };
+    if !is_owner {
+        reject("auth");
+        conn.send(RelayMessage::ok(
+            event_id_hex,
+            false,
+            "restricted: observer frame is not authorized for this agent owner",
+        ));
+        return;
+    }
+
+    // Rate limit telemetry frames only (100/sec per agent).
+    // Control frames (owner → agent) bypass the limiter — they are rare and must not
+    // be starved by bursty telemetry from the agent.
+    if matches!(route.direction, AgentObserverDirection::Telemetry) {
+        let agent_key: [u8; 32] = agent_bytes.as_slice().try_into().unwrap_or([0u8; 32]);
+        let now = std::time::Instant::now();
+        let mut entry = state
+            .observer_rate_limiter
+            .entry(agent_key)
+            .or_insert((0, now));
+        let (count, window_start) = entry.value_mut();
+        if now.duration_since(*window_start).as_secs() >= 1 {
+            *count = 1;
+            *window_start = now;
+        } else {
+            *count += 1;
+            if *count > 100 {
+                conn.send(RelayMessage::ok(
+                    event_id_hex,
+                    false,
+                    "rate-limited: observer frame rate exceeded (100/sec per agent)",
+                ));
+                return;
+            }
+        }
+    }
+
+    let event_json = match serde_json::to_string(&event) {
+        Ok(json) => json,
+        Err(e) => {
+            error!(event_id = %event_id_hex, "Failed to serialize agent observer event: {e}");
+            conn.send(RelayMessage::ok(
+                event_id_hex,
+                false,
+                "error: internal server error",
+            ));
+            return;
+        }
+    };
+
+    state.mark_local_event(&event.id);
+    if let Err(e) = state.pubsub.publish_event(uuid::Uuid::nil(), &event).await {
+        state.local_event_ids.invalidate(&event.id.to_bytes());
+        warn!(conn_id = %conn_id, event_id = %event_id_hex, "Agent observer publish failed: {e}");
+    }
+
+    let stored_event = StoredEvent::new(event.clone(), None);
+    let matches = state.sub_registry.fan_out(&stored_event);
+    metrics::histogram!("sprout_fanout_recipients").record(matches.len() as f64);
+    debug!(
+        event_id = %event_id_hex,
+        agent = %route.agent.to_hex(),
+        owner = %route.owner.to_hex(),
+        direction = ?route.direction,
+        match_count = matches.len(),
+        "Agent observer fan-out"
+    );
+
+    let mut drop_count = 0u32;
+    for (target_conn_id, sub_id) in &matches {
+        let msg = format!(r#"["EVENT","{}",{}]"#, sub_id, event_json);
+        if !state.conn_manager.send_to(*target_conn_id, msg) {
+            drop_count += 1;
+        }
+    }
+    if drop_count > 0 {
+        tracing::warn!(
+            event_id = %event_id_hex,
+            drop_count,
+            "agent observer fan-out: {drop_count} connection(s) cancelled due to full/closed buffers"
+        );
+    }
+
+    conn.send(RelayMessage::ok(event_id_hex, true, ""));
+}
+
+fn agent_observer_route(event: &Event) -> Result<Option<AgentObserverRoute>, String> {
+    if !content_looks_like_nip44(&event.content) {
+        return Err("invalid: observer content must be NIP-44 encrypted".into());
+    }
+
+    let recipient = parse_single_pubkey_tag(event, "p")?;
+    let agent = parse_single_pubkey_tag(event, OBSERVER_AGENT_TAG)?;
+    let frame = single_tag_content(event, OBSERVER_FRAME_TAG)?;
+
+    let (owner, direction, expected_frame) = if event.pubkey == agent && recipient != agent {
+        (
+            recipient,
+            AgentObserverDirection::Telemetry,
+            OBSERVER_FRAME_TELEMETRY,
+        )
+    } else if recipient == agent && event.pubkey != agent {
+        (
+            event.pubkey,
+            AgentObserverDirection::Control,
+            OBSERVER_FRAME_CONTROL,
+        )
+    } else {
+        return Err(
+            "invalid: observer frame must be agent-to-owner telemetry or owner-to-agent control"
+                .into(),
+        );
+    };
+
+    if frame != expected_frame {
+        // Unknown frame value — silently drop without notifying the publisher.
+        return Ok(None);
+    }
+
+    Ok(Some(AgentObserverRoute {
+        agent,
+        owner,
+        direction,
+    }))
+}
+
+fn parse_single_pubkey_tag(event: &Event, tag_name: &str) -> Result<PublicKey, String> {
+    let value = single_tag_content(event, tag_name)?;
+    PublicKey::from_hex(value)
+        .map_err(|_| format!("invalid: observer {tag_name} tag must be a hex pubkey"))
+}
+
+fn single_tag_content<'a>(event: &'a Event, tag_name: &str) -> Result<&'a str, String> {
+    let mut values = event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind().to_string() == tag_name)
+        .filter_map(|tag| tag.content());
+    let Some(value) = values.next() else {
+        return Err(format!("invalid: observer frame missing {tag_name} tag"));
+    };
+    if values.next().is_some() {
+        return Err(format!(
+            "invalid: observer frame has multiple {tag_name} tags"
+        ));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
+    use nostr::{EventBuilder, Keys, Kind, Tag};
     use sprout_core::kind::{
-        KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE,
-        KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
+        KIND_AGENT_OBSERVER_FRAME, KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST,
+        KIND_FORUM_VOTE, KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF,
+    };
+    use sprout_core::observer::{
+        encrypt_observer_payload, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
+        OBSERVER_FRAME_TELEMETRY,
     };
 
     #[test]
@@ -428,5 +744,85 @@ mod tests {
             !super::super::ingest::requires_h_channel_scope(KIND_PRESENCE_UPDATE),
             "presence updates are global/ephemeral"
         );
+    }
+
+    #[test]
+    fn agent_observer_route_accepts_agent_to_owner_telemetry() {
+        let agent = Keys::generate();
+        let owner = Keys::generate();
+        let encrypted = encrypt_observer_payload(
+            &agent,
+            &owner.public_key(),
+            &serde_json::json!({"type": "acp_read"}),
+        )
+        .expect("encrypt observer payload");
+        let event = EventBuilder::new(
+            Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
+            encrypted,
+            [
+                Tag::parse(&["p", &owner.public_key().to_hex()]).expect("p tag"),
+                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
+            ],
+        )
+        .sign_with_keys(&agent)
+        .expect("sign event");
+
+        let route = super::agent_observer_route(&event)
+            .expect("observer route")
+            .expect("route should be Some");
+        assert_eq!(route.agent, agent.public_key());
+        assert_eq!(route.owner, owner.public_key());
+        assert_eq!(route.direction, super::AgentObserverDirection::Telemetry);
+    }
+
+    #[test]
+    fn agent_observer_route_accepts_owner_to_agent_control() {
+        let agent = Keys::generate();
+        let owner = Keys::generate();
+        let encrypted = encrypt_observer_payload(
+            &owner,
+            &agent.public_key(),
+            &serde_json::json!({"type": "cancel_turn"}),
+        )
+        .expect("encrypt observer payload");
+        let event = EventBuilder::new(
+            Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
+            encrypted,
+            [
+                Tag::parse(&["p", &agent.public_key().to_hex()]).expect("p tag"),
+                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).expect("frame tag"),
+            ],
+        )
+        .sign_with_keys(&owner)
+        .expect("sign event");
+
+        let route = super::agent_observer_route(&event)
+            .expect("observer route")
+            .expect("route should be Some");
+        assert_eq!(route.agent, agent.public_key());
+        assert_eq!(route.owner, owner.public_key());
+        assert_eq!(route.direction, super::AgentObserverDirection::Control);
+    }
+
+    #[test]
+    fn agent_observer_route_rejects_plaintext_content() {
+        let agent = Keys::generate();
+        let owner = Keys::generate();
+        let event = EventBuilder::new(
+            Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
+            "not encrypted",
+            [
+                Tag::parse(&["p", &owner.public_key().to_hex()]).expect("p tag"),
+                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
+            ],
+        )
+        .sign_with_keys(&agent)
+        .expect("sign event");
+
+        let err = super::agent_observer_route(&event).expect_err("route should reject plaintext");
+        assert!(err.contains("NIP-44"));
     }
 }

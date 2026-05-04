@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'features/home/home_page.dart';
 import 'features/pairing/pairing_page.dart';
+import 'features/channels/agent_activity/observer_subscription.dart';
+import 'features/profile/user_status_cache_provider.dart';
 import 'shared/auth/auth.dart';
+import 'shared/relay/relay.dart';
 import 'shared/theme/theme.dart';
 
 class App extends HookConsumerWidget {
@@ -14,16 +18,30 @@ class App extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeProvider);
     final accentIndex = ref.watch(accentProvider);
+    final schemeName = ref.watch(schemeProvider);
     final authState = ref.watch(authProvider);
 
-    final lightScheme = applyAccent(lightColorScheme, accentIndex);
-    final darkScheme = applyAccent(darkColorScheme, accentIndex);
+    final resolved = resolveSchemes(schemeName);
+    final lightScheme = applyAccent(resolved.light, accentIndex);
+    final darkScheme = applyAccent(resolved.dark, accentIndex);
+    // When a named scheme is selected it forces light or dark mode;
+    // otherwise respect the user's ThemeMode preference.
+    final effectiveMode = resolved.forcedMode ?? themeMode;
+
+    // Eagerly initialize websocket session and lifecycle observer when
+    // authenticated. These providers connect and manage the websocket.
+    if (authState.value?.status == AuthStatus.authenticated) {
+      ref.watch(relaySessionProvider);
+      ref.watch(observerRelayProvider);
+      ref.watch(appLifecycleProvider);
+      ref.watch(userStatusCacheProvider);
+    }
 
     return MaterialApp(
       title: 'Sprout',
       theme: AppTheme.light(colorScheme: lightScheme),
       darkTheme: AppTheme.dark(colorScheme: darkScheme),
-      themeMode: themeMode,
+      themeMode: effectiveMode,
       home: authState.when(
         loading: () => const _SplashScreen(),
         error: (_, _) => const PairingPage(),
@@ -81,6 +99,14 @@ class _OfflineScreen extends ConsumerWidget {
                 onPressed: () => ref.read(authProvider.notifier).retry(),
                 icon: const Icon(LucideIcons.refreshCw),
                 label: const Text('Retry'),
+              ),
+              const SizedBox(height: Grid.twelve),
+              TextButton(
+                onPressed: () => ref.read(authProvider.notifier).signOut(),
+                child: Text(
+                  'Remove workspace and re-pair',
+                  style: TextStyle(color: context.colors.onSurfaceVariant),
+                ),
               ),
             ],
           ),

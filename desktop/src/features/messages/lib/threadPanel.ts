@@ -24,6 +24,20 @@ export type MainTimelineEntry = {
   summary: TimelineThreadSummary | null;
 };
 
+type ThreadDescendantStats = {
+  descendantCount: number;
+  recentParticipantsNewestFirst: TimelineThreadSummaryParticipant[];
+};
+
+const MAX_SUMMARY_PARTICIPANTS = 3;
+
+function isBroadcastReply(message: TimelineMessage): boolean {
+  return (
+    message.tags?.some((tag) => tag[0] === "broadcast" && tag[1] === "1") ??
+    false
+  );
+}
+
 function normalizeHeadMessage(message: TimelineMessage): TimelineMessage {
   return {
     ...message,
@@ -31,41 +45,14 @@ function normalizeHeadMessage(message: TimelineMessage): TimelineMessage {
   };
 }
 
-function normalizeBranchReply(message: TimelineMessage): TimelineMessage {
+function normalizeInlineReplyMessage(
+  message: TimelineMessage,
+  depth: number,
+): TimelineMessage {
   return {
     ...message,
-    // Thread-panel replies render flat like Slack's side thread view.
-    depth: 0,
+    depth,
   };
-}
-
-function buildSummaryParticipants(
-  replies: TimelineMessage[],
-): TimelineThreadSummaryParticipant[] {
-  const recentUniqueParticipants = new Map<
-    string,
-    TimelineThreadSummaryParticipant
-  >();
-
-  for (let index = replies.length - 1; index >= 0; index -= 1) {
-    const reply = replies[index];
-    const participantKey = reply.pubkey ?? reply.id;
-    if (recentUniqueParticipants.has(participantKey)) {
-      continue;
-    }
-
-    recentUniqueParticipants.set(participantKey, {
-      id: participantKey,
-      author: reply.author,
-      avatarUrl: reply.avatarUrl ?? null,
-    });
-
-    if (recentUniqueParticipants.size >= 3) {
-      break;
-    }
-  }
-
-  return [...recentUniqueParticipants.values()].reverse();
 }
 
 function buildDirectChildrenByParentId(messages: TimelineMessage[]) {
@@ -84,35 +71,164 @@ function buildDirectChildrenByParentId(messages: TimelineMessage[]) {
   return childrenByParentId;
 }
 
+function buildDescendantStatsByMessageId(
+  messages: TimelineMessage[],
+): Map<string, ThreadDescendantStats> {
+  const messageById = new Map(messages.map((message) => [message.id, message]));
+  const descendantStatsByMessageId = new Map<string, ThreadDescendantStats>(
+    messages.map((message) => [
+      message.id,
+      {
+        descendantCount: 0,
+        recentParticipantsNewestFirst: [],
+      },
+    ]),
+  );
+
+  const orderedMessages = messages
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      if (left.message.createdAt !== right.message.createdAt) {
+        return left.message.createdAt - right.message.createdAt;
+      }
+
+      return left.index - right.index;
+    });
+
+  for (let index = orderedMessages.length - 1; index >= 0; index -= 1) {
+    const message = orderedMessages[index].message;
+    const participantKey = message.pubkey ?? message.id;
+    const participant: TimelineThreadSummaryParticipant = {
+      id: participantKey,
+      author: message.author,
+      avatarUrl: message.avatarUrl ?? null,
+    };
+
+    let ancestorId = message.parentId ?? null;
+    let hops = 0;
+    const maxHops = messages.length + 1;
+
+    while (ancestorId && hops < maxHops) {
+      const ancestorStats = descendantStatsByMessageId.get(ancestorId);
+      if (!ancestorStats) {
+        break;
+      }
+
+      ancestorStats.descendantCount += 1;
+
+      if (
+        ancestorStats.recentParticipantsNewestFirst.length <
+          MAX_SUMMARY_PARTICIPANTS &&
+        !ancestorStats.recentParticipantsNewestFirst.some(
+          (existingParticipant) => existingParticipant.id === participant.id,
+        )
+      ) {
+        ancestorStats.recentParticipantsNewestFirst.push(participant);
+      }
+
+      ancestorId = messageById.get(ancestorId)?.parentId ?? null;
+      hops += 1;
+    }
+  }
+
+  return descendantStatsByMessageId;
+}
+
 function buildSummaryForDirectReplies(
   messageId: string,
-  directChildrenByParentId: Map<string, TimelineMessage[]>,
+  descendantStatsByMessageId: Map<string, ThreadDescendantStats>,
 ): TimelineThreadSummary | null {
-  const directReplies = directChildrenByParentId.get(messageId) ?? [];
-  if (directReplies.length === 0) {
+  const descendantStats = descendantStatsByMessageId.get(messageId);
+  if (!descendantStats || descendantStats.descendantCount === 0) {
     return null;
   }
 
   return {
     threadHeadId: messageId,
-    replyCount: directReplies.length,
-    participants: buildSummaryParticipants(directReplies),
+    replyCount: descendantStats.descendantCount,
+    participants: [...descendantStats.recentParticipantsNewestFirst].reverse(),
   };
+}
+
+function appendExpandedReplies(params: {
+  entries: MainTimelineEntry[];
+  parentId: string;
+  depth: number;
+  directChildrenByParentId: Map<string, TimelineMessage[]>;
+  descendantStatsByMessageId: Map<string, ThreadDescendantStats>;
+  expandedReplyIds: ReadonlySet<string>;
+}) {
+  const {
+    entries,
+    parentId,
+    depth,
+    directChildrenByParentId,
+    descendantStatsByMessageId,
+    expandedReplyIds,
+  } = params;
+  const directReplies = directChildrenByParentId.get(parentId) ?? [];
+
+  for (const reply of directReplies) {
+    entries.push({
+      message: normalizeInlineReplyMessage(reply, depth),
+      summary: buildSummaryForDirectReplies(
+        reply.id,
+        descendantStatsByMessageId,
+      ),
+    });
+
+    if (expandedReplyIds.has(reply.id)) {
+      appendExpandedReplies({
+        entries,
+        parentId: reply.id,
+        depth: depth + 1,
+        directChildrenByParentId,
+        descendantStatsByMessageId,
+        expandedReplyIds,
+      });
+    }
+  }
+}
+
+function buildVisibleThreadReplies(params: {
+  openThreadHeadId: string;
+  directChildrenByParentId: Map<string, TimelineMessage[]>;
+  descendantStatsByMessageId: Map<string, ThreadDescendantStats>;
+  expandedReplyIds: ReadonlySet<string>;
+}) {
+  const {
+    openThreadHeadId,
+    directChildrenByParentId,
+    descendantStatsByMessageId,
+    expandedReplyIds,
+  } = params;
+  const entries: MainTimelineEntry[] = [];
+
+  appendExpandedReplies({
+    entries,
+    parentId: openThreadHeadId,
+    depth: 1,
+    directChildrenByParentId,
+    descendantStatsByMessageId,
+    expandedReplyIds,
+  });
+
+  return entries;
 }
 
 export function buildMainTimelineEntries(
   messages: TimelineMessage[],
 ): MainTimelineEntry[] {
-  const directChildrenByParentId = buildDirectChildrenByParentId(messages);
+  const descendantStatsByMessageId = buildDescendantStatsByMessageId(messages);
 
   return messages
-    .filter((message) => message.parentId == null)
+    .filter((message) => message.parentId == null || isBroadcastReply(message))
     .map((message) => {
       return {
         message,
         summary: buildSummaryForDirectReplies(
           message.id,
-          directChildrenByParentId,
+          descendantStatsByMessageId,
         ),
       };
     });
@@ -122,6 +238,7 @@ export function buildThreadPanelData(
   messages: TimelineMessage[],
   openThreadHeadId: string | null,
   threadReplyTargetId: string | null,
+  expandedReplyIds: ReadonlySet<string>,
 ): ThreadPanelData {
   if (!openThreadHeadId) {
     return {
@@ -145,14 +262,14 @@ export function buildThreadPanelData(
   }
 
   const directChildrenByParentId = buildDirectChildrenByParentId(messages);
+  const descendantStatsByMessageId = buildDescendantStatsByMessageId(messages);
   const normalizedThreadHead = normalizeHeadMessage(threadHead);
-  const directReplies = (
-    directChildrenByParentId.get(openThreadHeadId) ?? []
-  ).map((message) => normalizeBranchReply(message));
-  const visibleReplies = directReplies.map((message) => ({
-    message,
-    summary: buildSummaryForDirectReplies(message.id, directChildrenByParentId),
-  }));
+  const visibleReplies = buildVisibleThreadReplies({
+    openThreadHeadId,
+    directChildrenByParentId,
+    descendantStatsByMessageId,
+    expandedReplyIds,
+  });
 
   const replyTargetInBranch =
     threadReplyTargetId === threadHead.id
@@ -161,7 +278,8 @@ export function buildThreadPanelData(
 
   return {
     threadHead: normalizedThreadHead,
-    totalReplyCount: directReplies.length,
+    totalReplyCount:
+      descendantStatsByMessageId.get(openThreadHeadId)?.descendantCount ?? 0,
     visibleReplies,
     replyTargetMessage: replyTargetInBranch ?? normalizedThreadHead,
   };

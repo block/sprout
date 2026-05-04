@@ -3,6 +3,7 @@ import type { RelayEvent } from "@/shared/api/types";
 export type RelaySubscriptionFilter = {
   kinds: number[];
   limit: number;
+  authors?: string[];
   since?: number;
   until?: number;
 } & Partial<Record<`#${string}`, string[]>>;
@@ -12,7 +13,7 @@ type HistorySubscription = {
   events: RelayEvent[];
   resolve: (events: RelayEvent[]) => void;
   reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
+  timeout: number;
 };
 
 type LiveSubscription = {
@@ -27,7 +28,7 @@ export type PendingEvent = {
   event: RelayEvent;
   resolve: (event: RelayEvent) => void;
   reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
+  timeout: number;
 };
 
 export type RelaySubscription = HistorySubscription | LiveSubscription;

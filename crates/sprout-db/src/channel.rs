@@ -178,6 +178,12 @@ pub async fn create_channel_with_id(
         )));
     }
 
+    if channel_id.is_nil() {
+        return Err(DbError::InvalidData(
+            "channel_id must not be nil (reserved for global fan-out)".into(),
+        ));
+    }
+
     let mut tx = pool.begin().await?;
 
     let rows_affected = sqlx::query(
@@ -511,6 +517,32 @@ pub async fn get_members(pool: &PgPool, channel_id: Uuid) -> Result<Vec<MemberRe
         "#,
     )
     .bind(channel_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter().map(row_to_member_record).collect()
+}
+
+/// Returns active members for multiple channels in a single query.
+///
+/// Designed for small-batch use (e.g. DM participant resolution where each
+/// channel has 2-9 members). For large channel sets, consider pagination.
+/// Returns a flat `Vec<MemberRecord>` ordered by `joined_at`; callers should
+/// group by `channel_id` if per-channel access is needed.
+/// Returns an empty vec immediately when `channel_ids` is empty.
+pub async fn get_members_bulk(pool: &PgPool, channel_ids: &[Uuid]) -> Result<Vec<MemberRecord>> {
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        r#"
+        SELECT cm.channel_id, cm.pubkey, cm.role::text AS role, cm.joined_at, cm.invited_by, cm.removed_at
+        FROM channel_members cm
+        JOIN channels c ON cm.channel_id = c.id AND c.deleted_at IS NULL
+        WHERE cm.channel_id = ANY($1) AND cm.removed_at IS NULL
+        ORDER BY cm.joined_at ASC
+        "#,
+    )
+    .bind(channel_ids)
     .fetch_all(pool)
     .await?;
     rows.into_iter().map(row_to_member_record).collect()

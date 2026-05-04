@@ -82,9 +82,78 @@ export function usePresenceQuery(
     enabled,
     queryKey: presenceQueryKey(normalizedPubkeys),
     queryFn: () => getPresence(normalizedPubkeys),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
+    staleTime: 30_000,
+    // Backstop poll: catches REST-only writers (ACP agents) and TTL expiry
+    // (crashed clients). WS events handle the fast path.
+    refetchInterval: 60_000,
   });
+}
+
+/**
+ * Subscribe to kind:20001 presence events over WebSocket and update the
+ * TanStack Query presence cache in-place when updates arrive. Call once
+ * in AppShell. Uses setQueriesData for targeted per-pubkey updates without
+ * triggering refetches. Retries with exponential backoff on failure.
+ */
+export function usePresenceSubscription() {
+  const queryClient = useQueryClient();
+
+  React.useEffect(() => {
+    let unsub: (() => Promise<void>) | null = null;
+    let isCancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function handlePresenceEvent(event: { pubkey: string; content: string }) {
+      if (isCancelled) return;
+      const status = event.content;
+      if (status !== "online" && status !== "away" && status !== "offline")
+        return;
+      const pubkey = event.pubkey.toLowerCase();
+      queryClient.setQueriesData<PresenceLookup>(
+        { queryKey: ["presence"] },
+        (old) => {
+          if (!old || !(pubkey in old)) return old;
+          if (old[pubkey] === status) return old;
+          return { ...old, [pubkey]: status };
+        },
+      );
+    }
+
+    function subscribeWithRetry(attempt = 0) {
+      if (isCancelled) return;
+      void relayClient
+        .subscribeToPresenceUpdates(handlePresenceEvent)
+        .then((unsubFn) => {
+          if (isCancelled) {
+            void unsubFn();
+            return;
+          }
+          unsub = unsubFn;
+        })
+        .catch(() => {
+          if (!isCancelled) {
+            const delay = Math.min(1000 * 2 ** attempt, 30_000);
+            retryTimer = setTimeout(
+              () => subscribeWithRetry(attempt + 1),
+              delay,
+            );
+          }
+        });
+    }
+    subscribeWithRetry();
+
+    const unsubReconnect = relayClient.subscribeToReconnects(() => {
+      if (!isCancelled)
+        void queryClient.invalidateQueries({ queryKey: ["presence"] });
+    });
+
+    return () => {
+      isCancelled = true;
+      unsubReconnect();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (unsub) void unsub();
+    };
+  }, [queryClient]);
 }
 
 export function useSetPresenceMutation(pubkey?: string) {
@@ -93,40 +162,33 @@ export function useSetPresenceMutation(pubkey?: string) {
 
   return useMutation({
     mutationFn: async (status: PresenceStatus) => {
+      // Prefer WS — triggers fan-out to subscribers. REST fallback if WS fails.
       try {
-        return await setPresence(status);
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          (!error.message.includes("relay returned 404") &&
-            !error.message.includes("relay returned 405"))
-        ) {
-          throw error;
-        }
-
         await relayClient.sendPresence(status);
-
         return {
           status,
           ttlSeconds: status === "offline" ? 0 : PRESENCE_TTL_SECONDS,
+          viaWs: true,
         };
+      } catch {
+        const result = await setPresence(status);
+        return { ...result, viaWs: false };
       }
     },
-    onSuccess: ({ status }) => {
-      if (normalizedPubkey.length === 0) {
-        return;
-      }
-
-      queryClient.setQueryData<PresenceLookup>(
-        presenceQueryKey([normalizedPubkey]),
-        (current = {}) => ({
-          ...current,
-          [normalizedPubkey]: status,
-        }),
+    onSuccess: ({ status, viaWs }) => {
+      if (normalizedPubkey.length === 0) return;
+      // Update all cached presence queries containing this pubkey.
+      queryClient.setQueriesData<PresenceLookup>(
+        { queryKey: ["presence"] },
+        (old) => {
+          if (!old || !(normalizedPubkey in old)) return old;
+          if (old[normalizedPubkey] === status) return old;
+          return { ...old, [normalizedPubkey]: status };
+        },
       );
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ["presence"] });
+      // REST fallback: no WS echo will arrive, invalidate for full refresh.
+      if (!viaWs)
+        void queryClient.invalidateQueries({ queryKey: ["presence"] });
     },
   });
 }
@@ -232,10 +294,6 @@ export function usePresenceSession(pubkey?: string) {
       ),
     [isDocumentHidden, lastActivityAt, statusClock],
   );
-  const relayStatus =
-    normalizedPubkey.length > 0
-      ? (presenceQuery.data?.[normalizedPubkey] ?? "offline")
-      : "offline";
   const currentStatus =
     normalizedPubkey.length === 0
       ? "offline"
@@ -245,7 +303,7 @@ export function usePresenceSession(pubkey?: string) {
           ? "away"
           : presencePreference === "auto"
             ? automaticStatus
-            : relayStatus;
+            : automaticStatus;
 
   const updatePresence = React.useCallback(
     async (status: PresenceStatus) => {
@@ -283,7 +341,7 @@ export function usePresenceSession(pubkey?: string) {
   });
 
   React.useEffect(() => {
-    if (normalizedPubkey.length === 0 || presencePreference === null) {
+    if (normalizedPubkey.length === 0) {
       return;
     }
 
@@ -293,14 +351,10 @@ export function usePresenceSession(pubkey?: string) {
     }
 
     syncPresence(currentStatus);
-  }, [currentStatus, normalizedPubkey, presencePreference]);
+  }, [currentStatus, normalizedPubkey]);
 
   React.useEffect(() => {
-    if (
-      normalizedPubkey.length === 0 ||
-      presencePreference === null ||
-      currentStatus === "offline"
-    ) {
+    if (normalizedPubkey.length === 0 || currentStatus === "offline") {
       return;
     }
 
@@ -311,7 +365,7 @@ export function usePresenceSession(pubkey?: string) {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [currentStatus, normalizedPubkey, presencePreference]);
+  }, [currentStatus, normalizedPubkey]);
 
   return {
     currentStatus,

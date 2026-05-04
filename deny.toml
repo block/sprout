@@ -3,13 +3,6 @@ ignore = [
     # instant 0.1.13 — unmaintained crate. Transitive dep: nostr → instant.
     # Will be resolved when nostr crate updates its dependencies.
     { id = "RUSTSEC-2024-0384", reason = "transitive dep via nostr; no upstream fix available" },
-    # rustls-webpki 0.101.7 — CRL distribution point matching bug. Transitive dep pinned by
-    # old rustls 0.21 stack (via rust-s3). 0.103 branch updated; 0.101 has no fix available.
-    { id = "RUSTSEC-2026-0049", reason = "transitive dep via rust-s3 → old rustls stack; 0.101 branch has no fix" },
-    # rustls-pemfile 1.0.4 — unmaintained crate. Transitive dep: rust-s3 → rustls-native-certs 0.6 → rustls-pemfile.
-    # The tokio-rustls-tls feature of rust-s3 pins an old rustls 0.21 stack internally.
-    # Not a security vulnerability — just an unmaintained notice. No fix until rust-s3 updates.
-    { id = "RUSTSEC-2025-0134", reason = "transitive dep via rust-s3; no upstream fix available" },
 ]
 
 [licenses]

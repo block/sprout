@@ -116,6 +116,14 @@ pub async fn open_dm_handler(
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
     if was_created {
+        // Invalidate membership + accessible-channels caches for all participants
+        // so REQ, /api/feed, and /api/search immediately include the new DM.
+        // Note: DM hide/unhide does NOT need cache invalidation because
+        // get_accessible_channel_ids() does not filter on hidden_at.
+        for pk in &all_bytes {
+            state.invalidate_membership(channel.id, pk);
+        }
+
         let actor_hex = nostr_hex::encode(&self_bytes);
         let participant_hexes: Vec<String> = all_bytes.iter().map(nostr_hex::encode).collect();
         if let Err(e) = emit_system_message(
@@ -199,8 +207,7 @@ pub async fn add_dm_member_handler(
 
     // Verify caller is a member of the existing DM.
     let is_member = state
-        .db
-        .is_member(channel_id, &self_bytes)
+        .is_member_cached(channel_id, &self_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
     if !is_member {
@@ -262,6 +269,12 @@ pub async fn add_dm_member_handler(
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 
     if was_created {
+        // Invalidate membership + accessible-channels caches for all participants
+        // so REQ, /api/feed, and /api/search immediately include the new DM.
+        for pk in &all_bytes {
+            state.invalidate_membership(new_channel.id, pk);
+        }
+
         // Emit NIP-29 group discovery events for the new expanded DM.
         if let Err(e) = emit_group_discovery_events(&state, new_channel.id).await {
             tracing::warn!(channel = %new_channel.id, "DM discovery emission failed: {e}");
@@ -393,8 +406,7 @@ pub async fn hide_dm_handler(
 
     // Verify caller is a member.
     let is_member = state
-        .db
-        .is_member(channel_id, &ctx.pubkey_bytes)
+        .is_member_cached(channel_id, &ctx.pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("db error: {e}")))?;
 

@@ -29,6 +29,12 @@ type TimelineMessageListProps = {
   /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
+  /** The message ID of the currently active find-in-channel match. */
+  searchActiveMessageId?: string | null;
+  /** Set of message IDs that match the current find-in-channel query. */
+  searchMatchingMessageIds?: Set<string>;
+  /** The current find-in-channel query string. */
+  searchQuery?: string;
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
@@ -42,6 +48,9 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   onToggleReaction,
   personaLookup,
   profiles,
+  searchActiveMessageId = null,
+  searchMatchingMessageIds,
+  searchQuery,
 }: TimelineMessageListProps) {
   const elements: React.ReactNode[] = [];
   const entries = React.useMemo(
@@ -66,20 +75,22 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       elements.push(
         <SystemMessageRow
           key={message.id}
-          body={message.body}
-          createdAt={message.createdAt}
+          message={message}
           currentPubkey={currentPubkey}
+          onToggleReaction={onToggleReaction}
           personaLookup={personaLookup}
           profiles={profiles}
-          time={message.time}
         />,
       );
     } else {
+      const isSearchMatch = searchMatchingMessageIds?.has(message.id) ?? false;
+      const isSearchActive = message.id === searchActiveMessageId;
+
       elements.push(
         <MessageRow
           key={message.id}
           activeReplyTargetId={activeReplyTargetId}
-          highlighted={message.id === highlightedMessageId}
+          highlighted={message.id === highlightedMessageId || isSearchActive}
           message={message}
           onDelete={
             onDelete && currentPubkey && message.pubkey === currentPubkey
@@ -94,6 +105,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           onToggleReaction={onToggleReaction}
           onReply={onReply}
           profiles={profiles}
+          searchQuery={isSearchMatch ? searchQuery : undefined}
         />,
       );
 

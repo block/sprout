@@ -10,14 +10,17 @@ members = [
     "crates/sprout-mcp",
     "crates/sprout-acp",
     "crates/sprout-proxy",
-    "crates/sprout-huddle",
     "crates/sprout-test-client",
     "crates/sprout-admin",
     "crates/sprout-workflow",
     "crates/sprout-media",
     "crates/sprout-cli",
+    "crates/sprout-pairing-cli",
     "crates/sprout-sdk",
     "crates/sprout-persona",
+    "crates/git-credential-nostr",
+    "crates/git-sign-nostr",
+    "crates/sprout-pair-relay",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
@@ -81,6 +84,8 @@ hmac      = "0.13"
 
 # Randomness
 rand = "0.10"
+subtle = "2.6"
+zeroize = "1.8"
 
 # Concurrent data structures
 dashmap = "6"
@@ -110,7 +115,6 @@ sprout-search = { path = "crates/sprout-search" }
 sprout-audit = { path = "crates/sprout-audit" }
 sprout-mcp = { path = "crates/sprout-mcp" }
 sprout-proxy = { path = "crates/sprout-proxy" }
-sprout-huddle = { path = "crates/sprout-huddle" }
 sprout-workflow = { path = "crates/sprout-workflow" }
 sprout-media = { path = "crates/sprout-media" }
 sprout-sdk = { path = "crates/sprout-sdk" }

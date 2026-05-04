@@ -6,11 +6,41 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import '../../shared/relay/relay_client.dart';
+import '../../shared/auth/auth.dart';
+import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
+import '../../shared/widgets/frosted_app_bar.dart';
+import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/profile_avatar.dart';
+import '../profile/profile_provider.dart';
+import '../settings/settings_page.dart';
+import '../profile/presence_cache_provider.dart';
+import '../profile/user_cache_provider.dart';
+import '../pairing/pairing_page.dart';
+import '../pairing/pairing_provider.dart';
 import 'channel.dart';
+import 'channel_detail_page.dart';
+import 'channel_management_provider.dart';
 import 'channels_provider.dart';
+import 'read_state/deferred_read_state_update.dart';
+import 'read_state/read_state_provider.dart';
+import 'read_state/read_state_time.dart';
+
+enum _QuickAction { createChannel, createForum, newDm }
+
+/// Height of the [_ConnectionBanner]: vertical padding (Grid.quarter + 2) × 2
+/// plus the ~16px row content (12px spinner / labelSmall text).
+const double _kBannerHeight = 24.0;
+
+bool _isUnread(Channel channel, ReadStateState readState) {
+  final lastMessageAt = dateTimeToUnixSeconds(channel.lastMessageAt);
+  if (lastMessageAt == null) {
+    return false;
+  }
+
+  final readAt = readState.effectiveTimestamp(channel.id);
+  return readAt == null || lastMessageAt > readAt;
+}
 
 class ChannelsPage extends HookConsumerWidget {
   const ChannelsPage({super.key});
@@ -18,209 +48,1004 @@ class ChannelsPage extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final channelsAsync = ref.watch(channelsProvider);
+    final sessionState = ref.watch(relaySessionProvider);
+    final currentPubkey = ref
+        .watch(profileProvider)
+        .whenData((value) => value?.pubkey)
+        .value;
 
-    // Poll every 30s while this page is mounted, matching desktop's pattern.
-    useEffect(() {
-      final timer = Timer.periodic(
-        const Duration(seconds: 30),
-        (_) => ref.read(channelsProvider.notifier).refresh(),
-      );
-      return timer.cancel;
-    }, const []);
+    // Cache the last successfully loaded channels so the UI never flashes
+    // back to a loading state when the provider rebuilds (e.g. reconnect).
+    // Clear the cache on workspace switch so we show a full loader instead of
+    // stale channels from the previous workspace. unwrapPrevious() ensures the
+    // selector sees null during loading (not the previous workspace's ID).
+    final activeWorkspaceId = ref.watch(
+      activeWorkspaceProvider.select((v) => v.unwrapPrevious().value?.id),
+    );
+    final cachedChannels = useRef<List<Channel>?>(null);
+    final lastWorkspaceId = useRef<String?>(null);
+    if (lastWorkspaceId.value != activeWorkspaceId) {
+      cachedChannels.value = null;
+      lastWorkspaceId.value = activeWorkspaceId;
+    }
+    if (channelsAsync.asData?.value case final data?) {
+      cachedChannels.value = data;
+    }
+    final channels = cachedChannels.value;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sprout'),
-        actions: const [ProfileAvatar()],
-      ),
-      body: channelsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => _ErrorView(
-          error: error,
-          onRetry: () => ref.read(channelsProvider.notifier).refresh(),
+    Future<void> openChannel(Channel channel) async {
+      if (!context.mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChannelDetailPage(channel: channel),
         ),
-        data: (channels) => _ChannelsList(channels: channels),
+      );
+    }
+
+    Future<void> openQuickActions() async {
+      final action = await showModalBottomSheet<_QuickAction>(
+        context: context,
+        showDragHandle: true,
+        builder: (_) => const _QuickActionsSheet(),
+      );
+
+      if (!context.mounted || action == null) {
+        return;
+      }
+
+      switch (action) {
+        case _QuickAction.createChannel:
+        case _QuickAction.createForum:
+          final created = await showModalBottomSheet<Channel>(
+            context: context,
+            isScrollControlled: true,
+            showDragHandle: true,
+            builder: (_) => _CreateChannelSheet(
+              channelType: action == _QuickAction.createForum
+                  ? 'forum'
+                  : 'stream',
+            ),
+          );
+          if (created != null && context.mounted) {
+            await openChannel(created);
+          }
+        case _QuickAction.newDm:
+          final opened = await showModalBottomSheet<Channel>(
+            context: context,
+            isScrollControlled: true,
+            showDragHandle: true,
+            builder: (_) =>
+                _NewDirectMessageSheet(currentPubkey: currentPubkey),
+          );
+          if (opened != null && context.mounted) {
+            await openChannel(opened);
+          }
+      }
+    }
+
+    return FrostedScaffold(
+      appBar: FrostedAppBar(
+        leading: _WorkspaceIndicator(
+          onTap: () => showModalBottomSheet<void>(
+            context: context,
+            showDragHandle: true,
+            builder: (_) => const _WorkspaceSwitcherSheet(),
+          ),
+        ),
+        title: const SizedBox.shrink(),
+        actions: [
+          ProfileAvatar(
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+            ),
+          ),
+          const SizedBox(width: Grid.xs),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: openQuickActions,
+        tooltip: 'Create or start conversation',
+        shape: const CircleBorder(),
+        child: const Icon(LucideIcons.plus),
+      ),
+      body: _ChannelsBody(
+        channels: channels,
+        channelsAsync: channelsAsync,
+        sessionStatus: sessionState.status,
+        currentPubkey: currentPubkey,
+        onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
+        onSelectChannel: openChannel,
       ),
     );
   }
 }
 
-class _ChannelsList extends ConsumerWidget {
-  final List<Channel> channels;
+class _ChannelsBody extends StatelessWidget {
+  final List<Channel>? channels;
+  final AsyncValue<List<Channel>> channelsAsync;
+  final SessionStatus sessionStatus;
+  final String? currentPubkey;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function(Channel channel) onSelectChannel;
 
-  const _ChannelsList({required this.channels});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return RefreshIndicator(
-      onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
-      child: channels.isEmpty
-          ? ListView(
-              children: [
-                SizedBox(
-                  height: MediaQuery.sizeOf(context).height * 0.6,
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          LucideIcons.hash,
-                          size: Grid.xl,
-                          color: context.colors.outline,
-                        ),
-                        const SizedBox(height: Grid.xs),
-                        Text(
-                          'No channels yet',
-                          style: context.textTheme.bodyLarge?.copyWith(
-                            color: context.colors.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.only(top: Grid.xxs),
-              itemCount: channels.length + 1, // +1 for section header
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return _SectionHeader(
-                    label: 'Channels',
-                    count: channels.length,
-                  );
-                }
-                return _ChannelTile(channel: channels[index - 1]);
-              },
-            ),
-    );
-  }
-}
-
-/// Slack-style section header: "Channels  12"
-class _SectionHeader extends StatelessWidget {
-  final String label;
-  final int count;
-
-  const _SectionHeader({required this.label, required this.count});
+  const _ChannelsBody({
+    required this.channels,
+    required this.channelsAsync,
+    required this.sessionStatus,
+    required this.currentPubkey,
+    required this.onRefresh,
+    required this.onSelectChannel,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xs,
-        vertical: Grid.xxs,
-      ),
-      child: Row(
+    final barHeight = frostedAppBarHeight(context);
+
+    if (channels != null) {
+      return Stack(
         children: [
-          Text(
-            label,
-            style: context.textTheme.labelMedium?.copyWith(
-              color: context.colors.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
+          RefreshIndicator(
+            edgeOffset: barHeight,
+            onRefresh: onRefresh,
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(child: SizedBox(height: barHeight)),
+                // Extra space for the connection banner when visible.
+                if (sessionStatus != SessionStatus.connected &&
+                    sessionStatus != SessionStatus.disconnected)
+                  const SliverToBoxAdapter(
+                    child: SizedBox(height: _kBannerHeight),
+                  ),
+                _SliverChannelsList(
+                  channels: channels!,
+                  currentPubkey: currentPubkey,
+                  onSelectChannel: onSelectChannel,
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: Grid.xxs),
-          Text(
-            '$count',
-            style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline,
-            ),
+          Positioned(
+            top: barHeight,
+            left: 0,
+            right: 0,
+            child: _ConnectionBanner(status: sessionStatus),
           ),
+        ],
+      );
+    }
+
+    if (channelsAsync.hasError) {
+      return Padding(
+        padding: EdgeInsets.only(top: barHeight),
+        child: _ErrorView(error: channelsAsync.error!, onRetry: onRefresh),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.only(top: barHeight),
+      child: const _ConnectionBanner(status: SessionStatus.connecting),
+    );
+  }
+}
+
+class _SliverChannelsList extends HookConsumerWidget {
+  final List<Channel> channels;
+  final String? currentPubkey;
+  final Future<void> Function(Channel channel) onSelectChannel;
+
+  const _SliverChannelsList({
+    required this.channels,
+    required this.currentPubkey,
+    required this.onSelectChannel,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final readState = ref.watch(readStateProvider);
+    final visibleChannels = channels
+        .where((channel) => channel.isMember && !channel.isArchived)
+        .toList();
+    final streamChannels = visibleChannels
+        .where((channel) => channel.isStream)
+        .toList();
+    final forumChannels = visibleChannels
+        .where((channel) => channel.isForum)
+        .toList();
+    final dmChannels = visibleChannels
+        .where((channel) => channel.isDm)
+        .toList();
+
+    final channelsExpanded = useState(true);
+    final forumsExpanded = useState(true);
+    final dmsExpanded = useState(true);
+    final initialSeedComplete = useState(false);
+    final seededPubkey = useRef<String?>(null);
+    final seedCompleteForPubkey =
+        seededPubkey.value == readState.pubkey && initialSeedComplete.value;
+
+    useEffect(() {
+      if (!readState.isReady) {
+        return null;
+      }
+
+      return deferReadStateUpdate(context, () {
+        if (seededPubkey.value != readState.pubkey) {
+          seededPubkey.value = readState.pubkey;
+          initialSeedComplete.value = false;
+        }
+
+        if (initialSeedComplete.value) {
+          return;
+        }
+
+        final notifier = ref.read(readStateProvider.notifier);
+        for (final channel in visibleChannels) {
+          if (readState.effectiveTimestamp(channel.id) != null) {
+            continue;
+          }
+
+          final lastMessageAt = dateTimeToUnixSeconds(channel.lastMessageAt);
+          if (lastMessageAt != null) {
+            notifier.seedContextRead(channel.id, lastMessageAt);
+          }
+        }
+        initialSeedComplete.value = true;
+      });
+    }, [readState.isReady, readState.pubkey, visibleChannels]);
+
+    final unreadChannelIds = readState.isReady
+        ? {
+            for (final channel in visibleChannels)
+              if ((seedCompleteForPubkey ||
+                      readState.effectiveTimestamp(channel.id) != null) &&
+                  _isUnread(channel, readState))
+                channel.id,
+          }
+        : const <String>{};
+
+    return SliverPadding(
+      padding: const EdgeInsets.only(top: Grid.xxs, bottom: 80),
+      sliver: SliverList.list(
+        children: [
+          if (visibleChannels.isEmpty)
+            const _EmptyState()
+          else ...[
+            _ChannelSection(
+              title: 'Channels',
+              icon: LucideIcons.hash,
+              expanded: channelsExpanded.value,
+              onToggle: () => channelsExpanded.value = !channelsExpanded.value,
+              channels: streamChannels,
+              unreadChannelIds: unreadChannelIds,
+              currentPubkey: currentPubkey,
+              emptyLabel: 'No stream channels yet',
+              onSelectChannel: onSelectChannel,
+            ),
+            _ChannelSection(
+              title: 'Forums',
+              icon: LucideIcons.messageSquareText,
+              expanded: forumsExpanded.value,
+              onToggle: () => forumsExpanded.value = !forumsExpanded.value,
+              channels: forumChannels,
+              unreadChannelIds: unreadChannelIds,
+              currentPubkey: currentPubkey,
+              emptyLabel: 'No forums yet',
+              onSelectChannel: onSelectChannel,
+            ),
+            _ChannelSection(
+              title: 'DMs',
+              icon: LucideIcons.messagesSquare,
+              expanded: dmsExpanded.value,
+              onToggle: () => dmsExpanded.value = !dmsExpanded.value,
+              channels: dmChannels,
+              unreadChannelIds: unreadChannelIds,
+              currentPubkey: currentPubkey,
+              emptyLabel: 'No direct messages yet',
+              onSelectChannel: onSelectChannel,
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-/// Compact Slack-style channel row:
-///   # channel-name                      3m
-class _ChannelTile extends StatelessWidget {
-  final Channel channel;
+class _ChannelSection extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final List<Channel> channels;
+  final Set<String> unreadChannelIds;
+  final String? currentPubkey;
+  final String emptyLabel;
+  final Future<void> Function(Channel channel) onSelectChannel;
 
-  const _ChannelTile({required this.channel});
+  const _ChannelSection({
+    required this.title,
+    required this.icon,
+    required this.expanded,
+    required this.onToggle,
+    required this.channels,
+    required this.unreadChannelIds,
+    required this.currentPubkey,
+    required this.emptyLabel,
+    required this.onSelectChannel,
+  });
 
   @override
   Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(
+          label: title,
+          icon: icon,
+          expanded: expanded,
+          onToggle: onToggle,
+        ),
+        if (expanded) ...[
+          if (channels.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: Grid.xs + Grid.xxs,
+                right: Grid.xs,
+                top: Grid.half,
+                bottom: Grid.half,
+              ),
+              child: Text(
+                emptyLabel,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ),
+            )
+          else
+            for (final channel in channels)
+              _ChannelTile(
+                channel: channel,
+                isUnread: unreadChannelIds.contains(channel.id),
+                currentPubkey: currentPubkey,
+                onTap: () => onSelectChannel(channel),
+              ),
+        ],
+      ],
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.55,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              LucideIcons.messagesSquare,
+              size: Grid.xl,
+              color: context.colors.onSurfaceVariant,
+            ),
+            const SizedBox(height: Grid.xs),
+            Text(
+              'No conversations yet',
+              style: context.textTheme.bodyLarge?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  const _SectionHeader({
+    required this.label,
+    required this.icon,
+    required this.expanded,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onToggle,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Grid.xs,
+          Grid.twelve,
+          Grid.xs,
+          Grid.half,
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 14, color: context.colors.onSurfaceVariant),
+            const SizedBox(width: Grid.half),
+            Text(
+              label.toUpperCase(),
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
+            ),
+            const Spacer(),
+            Icon(
+              expanded ? LucideIcons.chevronDown : LucideIcons.chevronRight,
+              size: 14,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChannelTile extends ConsumerWidget {
+  final Channel channel;
+  final bool isUnread;
+  final String? currentPubkey;
+  final VoidCallback onTap;
+
+  const _ChannelTile({
+    required this.channel,
+    required this.isUnread,
+    required this.currentPubkey,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final hasActivity = channel.lastMessageAt != null;
 
     return InkWell(
       borderRadius: BorderRadius.circular(Radii.md),
-      onTap: () {
-        // TODO: navigate to channel
-      },
+      onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: Grid.xs,
-          vertical: Grid.xxs + Grid.quarter,
+        padding: const EdgeInsets.only(
+          left: Grid.xs + Grid.xxs,
+          right: Grid.xs,
+          top: Grid.xxs + Grid.quarter,
+          bottom: Grid.xxs + Grid.quarter,
         ),
         child: Row(
           children: [
-            // Channel type icon
-            Icon(
-              _iconFor(channel),
-              size: 18,
-              color: hasActivity
-                  ? context.colors.onSurface
-                  : context.colors.outline,
-            ),
+            if (channel.isDm)
+              _DmAvatar(channel: channel, currentPubkey: currentPubkey)
+            else
+              Icon(
+                channelIcon(channel),
+                size: 18,
+                color: hasActivity
+                    ? context.colors.onSurface
+                    : context.colors.onSurfaceVariant,
+              ),
             const SizedBox(width: Grid.xxs),
-
-            // Channel name
             Expanded(
-              child: Text(
-                channel.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: context.textTheme.bodyMedium?.copyWith(
-                  color: hasActivity
-                      ? context.colors.onSurface
-                      : context.colors.onSurfaceVariant,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    channel.displayLabel(currentPubkey: currentPubkey),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.textTheme.bodyMedium?.copyWith(
+                      color: isUnread
+                          ? context.colors.onSurface
+                          : hasActivity
+                          ? context.colors.onSurface
+                          : context.colors.onSurfaceVariant,
+                      fontWeight: isUnread ? FontWeight.w700 : null,
+                    ),
+                  ),
+                ],
               ),
             ),
-
-            // Ephemeral badge
+            if (isUnread) ...[
+              const SizedBox(width: Grid.xxs),
+              Container(
+                key: Key('channel-unread-${channel.id}'),
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: context.colors.primary,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+            if (!channel.isMember && !channel.isDm)
+              Padding(
+                padding: const EdgeInsets.only(right: Grid.xxs),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Grid.half + 2,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: context.colors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                  ),
+                  child: Text(
+                    'Open',
+                    style: context.textTheme.labelSmall?.copyWith(
+                      color: context.colors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
             if (channel.isEphemeral) ...[
               const SizedBox(width: Grid.xxs),
               _EphemeralBadge(channel: channel),
-            ],
-
-            // Relative timestamp
-            if (channel.lastMessageAt != null) ...[
-              const SizedBox(width: Grid.xxs),
-              Text(
-                _relativeTime(channel.lastMessageAt!),
-                style: context.textTheme.labelSmall?.copyWith(
-                  color: context.colors.outline,
-                ),
-              ),
             ],
           ],
         ),
       ),
     );
   }
+}
 
-  IconData _iconFor(Channel channel) {
-    if (channel.isPrivate) return LucideIcons.lock;
-    if (channel.isForum) return LucideIcons.messageSquare;
-    return LucideIcons.hash;
+class _DmAvatar extends ConsumerWidget {
+  final Channel channel;
+  final String? currentPubkey;
+
+  const _DmAvatar({required this.channel, required this.currentPubkey});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profiles = ref.watch(userCacheProvider);
+    final presenceMap = ref.watch(presenceCacheProvider);
+    final normalizedCurrent = currentPubkey?.toLowerCase();
+
+    // Find the other participant's pubkey.
+    String? otherPubkey;
+    for (final pk in channel.participantPubkeys) {
+      if (pk.toLowerCase() != normalizedCurrent) {
+        otherPubkey = pk.toLowerCase();
+        break;
+      }
+    }
+
+    final profile = otherPubkey != null ? profiles[otherPubkey] : null;
+
+    // Trigger fetches if not cached yet.
+    if (otherPubkey != null) {
+      if (profile == null) {
+        ref.read(userCacheProvider.notifier).preload([otherPubkey]);
+      }
+      ref.read(presenceCacheProvider.notifier).track([otherPubkey]);
+    }
+
+    final avatarUrl = profile?.avatarUrl;
+    final initial =
+        profile?.initial ??
+        (channel.participants.isNotEmpty
+            ? channel.participants.first[0].toUpperCase()
+            : '?');
+    final presence = otherPubkey != null
+        ? (presenceMap[otherPubkey] ?? 'offline')
+        : 'offline';
+
+    return SizedBox(
+      width: 22,
+      height: 22,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          CircleAvatar(
+            radius: 10,
+            backgroundColor: context.colors.primaryContainer,
+            backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+            child: avatarUrl == null
+                ? Text(
+                    initial,
+                    style: context.textTheme.labelSmall?.copyWith(
+                      fontSize: 9,
+                      color: context.colors.onPrimaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  )
+                : null,
+          ),
+          Positioned(
+            right: -1,
+            bottom: -1,
+            child: Container(
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                color: _presenceColor(context, presence),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: context.theme.scaffoldBackgroundColor,
+                  width: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
-  static String _relativeTime(DateTime dt) {
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
-    if (diff.inDays < 7) return '${diff.inDays}d';
-    if (diff.inDays < 365) return '${(diff.inDays / 7).floor()}w';
-    return '${(diff.inDays / 365).floor()}y';
+  Color _presenceColor(BuildContext context, String presence) {
+    return switch (presence) {
+      'online' => context.appColors.success,
+      'away' => context.appColors.warning,
+      _ => context.colors.outline,
+    };
   }
 }
 
-/// Small amber clock badge matching the desktop's EphemeralChannelBadge.
+class _QuickActionsSheet extends StatelessWidget {
+  const _QuickActionsSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(Grid.xs, 0, Grid.xs, Grid.xs),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              leading: const Icon(LucideIcons.hash),
+              title: const Text('Create channel'),
+              subtitle: const Text('Start a new stream channel'),
+              onTap: () =>
+                  Navigator.of(context).pop(_QuickAction.createChannel),
+            ),
+            ListTile(
+              leading: const Icon(LucideIcons.messageSquareText),
+              title: const Text('Create forum'),
+              subtitle: const Text('Set up a threaded discussion space'),
+              onTap: () => Navigator.of(context).pop(_QuickAction.createForum),
+            ),
+            ListTile(
+              leading: const Icon(LucideIcons.messagesSquare),
+              title: const Text('New direct message'),
+              subtitle: const Text('Open a DM with one or more people'),
+              onTap: () => Navigator.of(context).pop(_QuickAction.newDm),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CreateChannelSheet extends HookConsumerWidget {
+  final String channelType;
+
+  const _CreateChannelSheet({required this.channelType});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final nameController = useTextEditingController();
+    final descriptionController = useTextEditingController();
+    final visibility = useState('open');
+    final isSubmitting = useState(false);
+    final errorMessage = useState<String?>(null);
+
+    Future<void> submit() async {
+      final name = nameController.text.trim();
+      if (name.isEmpty || isSubmitting.value) {
+        return;
+      }
+
+      isSubmitting.value = true;
+      errorMessage.value = null;
+      try {
+        final created = await ref
+            .read(channelActionsProvider)
+            .createChannel(
+              name: name,
+              channelType: channelType,
+              visibility: visibility.value,
+              description: descriptionController.text.trim(),
+            );
+        if (context.mounted) {
+          Navigator.of(context).pop(created);
+        }
+      } catch (error) {
+        errorMessage.value = error.toString();
+      } finally {
+        isSubmitting.value = false;
+      }
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        Grid.xs,
+        0,
+        Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: nameController,
+              enabled: !isSubmitting.value,
+              decoration: InputDecoration(
+                labelText: 'Name',
+                hintText: channelType == 'forum'
+                    ? 'design-discussions'
+                    : 'release-notes',
+              ),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: Grid.xxs),
+            TextField(
+              controller: descriptionController,
+              enabled: !isSubmitting.value,
+              decoration: const InputDecoration(
+                labelText: 'Description',
+                hintText: 'What this space is for',
+              ),
+              minLines: 2,
+              maxLines: 3,
+            ),
+            const SizedBox(height: Grid.xxs),
+            SwitchListTile(
+              title: const Text('Private'),
+              contentPadding: EdgeInsets.zero,
+              value: visibility.value == 'private',
+              onChanged: isSubmitting.value
+                  ? null
+                  : (on) => visibility.value = on ? 'private' : 'open',
+            ),
+            if (errorMessage.value case final error?) ...[
+              const SizedBox(height: Grid.xxs),
+              Text(
+                error,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.error,
+                ),
+              ),
+            ],
+            const SizedBox(height: Grid.xs),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: isSubmitting.value
+                      ? null
+                      : () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: Grid.half),
+                FilledButton(
+                  onPressed: isSubmitting.value ? null : submit,
+                  child: Text(isSubmitting.value ? 'Creating…' : 'Create'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NewDirectMessageSheet extends HookConsumerWidget {
+  final String? currentPubkey;
+
+  const _NewDirectMessageSheet({required this.currentPubkey});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final queryController = useTextEditingController();
+    final query = useState('');
+    final debouncedQuery = useState('');
+    final selectedUsers = useState<List<DirectoryUser>>([]);
+    final isSubmitting = useState(false);
+    final submitError = useState<String?>(null);
+
+    useEffect(() {
+      final timer = Timer(const Duration(milliseconds: 250), () {
+        debouncedQuery.value = query.value.trim();
+      });
+      return timer.cancel;
+    }, [query.value]);
+
+    final searchFuture = useMemoized(() {
+      if (debouncedQuery.value.isEmpty || selectedUsers.value.length >= 8) {
+        return Future.value(const <DirectoryUser>[]);
+      }
+      return ref
+          .read(channelActionsProvider)
+          .searchUsers(debouncedQuery.value, limit: 8);
+    }, [debouncedQuery.value, selectedUsers.value.length]);
+    final searchResults = useFuture(searchFuture);
+
+    final selectedPubkeys = selectedUsers.value
+        .map((user) => user.pubkey.toLowerCase())
+        .toSet();
+    final availableResults =
+        searchResults.data
+            ?.where(
+              (user) =>
+                  !selectedPubkeys.contains(user.pubkey.toLowerCase()) &&
+                  user.pubkey.toLowerCase() != currentPubkey?.toLowerCase(),
+            )
+            .toList() ??
+        const <DirectoryUser>[];
+    final canSubmit = !isSubmitting.value && selectedUsers.value.isNotEmpty;
+
+    Future<void> submit() async {
+      if (selectedUsers.value.isEmpty || isSubmitting.value) {
+        return;
+      }
+
+      isSubmitting.value = true;
+      submitError.value = null;
+      try {
+        final channel = await ref
+            .read(channelActionsProvider)
+            .openDm(
+              pubkeys: selectedUsers.value.map((user) => user.pubkey).toList(),
+            );
+        if (context.mounted) {
+          Navigator.of(context).pop(channel);
+        }
+      } catch (error) {
+        submitError.value = error.toString();
+      } finally {
+        isSubmitting.value = false;
+      }
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        Grid.xs,
+        0,
+        Grid.xs,
+        MediaQuery.viewInsetsOf(context).bottom + Grid.xs,
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: queryController,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(LucideIcons.search),
+                hintText: 'Search by name, NIP-05, or pubkey',
+              ),
+              enabled: !isSubmitting.value,
+              onChanged: (value) => query.value = value,
+            ),
+            if (selectedUsers.value.isNotEmpty) ...[
+              const SizedBox(height: Grid.xxs),
+              Wrap(
+                spacing: Grid.half,
+                runSpacing: Grid.half,
+                children: [
+                  for (final user in selectedUsers.value)
+                    InputChip(
+                      label: Text(user.label),
+                      onDeleted: isSubmitting.value
+                          ? null
+                          : () {
+                              selectedUsers.value = [
+                                for (final candidate in selectedUsers.value)
+                                  if (candidate.pubkey != user.pubkey)
+                                    candidate,
+                              ];
+                            },
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: Grid.xs),
+            SizedBox(
+              height: 280,
+              child: Builder(
+                builder: (context) {
+                  if (selectedUsers.value.length >= 8) {
+                    return const Center(
+                      child: Text(
+                        'Direct messages support up to 9 people including you.',
+                      ),
+                    );
+                  }
+                  if (debouncedQuery.value.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        'Search for someone to start a conversation.',
+                      ),
+                    );
+                  }
+                  if (searchResults.connectionState ==
+                      ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (availableResults.isEmpty) {
+                    return const Center(child: Text('No matching users.'));
+                  }
+                  return ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final user in availableResults)
+                        ListTile(
+                          leading: CircleAvatar(
+                            backgroundImage: user.avatarUrl != null
+                                ? NetworkImage(user.avatarUrl!)
+                                : null,
+                            child: user.avatarUrl == null
+                                ? Text(user.label.substring(0, 1).toUpperCase())
+                                : null,
+                          ),
+                          title: Text(user.label),
+                          subtitle: Text(user.secondaryLabel),
+                          onTap: () {
+                            selectedUsers.value = [
+                              ...selectedUsers.value,
+                              user,
+                            ];
+                            queryController.clear();
+                            query.value = '';
+                            debouncedQuery.value = '';
+                          },
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            if (submitError.value case final error?) ...[
+              const SizedBox(height: Grid.xxs),
+              Text(
+                error,
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.error,
+                ),
+              ),
+            ],
+            const SizedBox(height: Grid.xs),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: isSubmitting.value
+                      ? null
+                      : () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: Grid.half),
+                FilledButton(
+                  onPressed: canSubmit ? submit : null,
+                  child: Text(isSubmitting.value ? 'Opening…' : 'Open DM'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _EphemeralBadge extends StatelessWidget {
   final Channel channel;
 
@@ -264,8 +1089,8 @@ class _EphemeralBadge extends StatelessWidget {
 
   Color _amberColor(BuildContext context) {
     return context.colors.brightness == Brightness.light
-        ? const Color(0xFFB45309) // amber-700
-        : const Color(0xFFFCD34D); // amber-300
+        ? const Color(0xFFB45309)
+        : const Color(0xFFFCD34D);
   }
 
   String? _label() {
@@ -276,6 +1101,52 @@ class _EphemeralBadge extends StatelessWidget {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     return '${diff.inDays}d';
+  }
+}
+
+class _ConnectionBanner extends StatelessWidget {
+  final SessionStatus status;
+
+  const _ConnectionBanner({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == SessionStatus.connected ||
+        status == SessionStatus.disconnected) {
+      return const SizedBox.shrink();
+    }
+
+    final isConnecting = status == SessionStatus.connecting;
+    final message = isConnecting ? 'Connecting…' : 'Reconnecting…';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: Grid.xs,
+        vertical: Grid.quarter + 2,
+      ),
+      color: context.colors.surfaceContainerHighest,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: Grid.xxs),
+          Text(
+            message,
+            style: context.textTheme.labelSmall?.copyWith(
+              color: context.colors.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -339,5 +1210,333 @@ class _ErrorView extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _WorkspaceSwitcherSheet extends ConsumerWidget {
+  const _WorkspaceSwitcherSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workspacesAsync = ref.watch(workspaceListProvider);
+    final activeAsync = ref.watch(activeWorkspaceProvider);
+    final sessionState = ref.watch(relaySessionProvider);
+
+    return SafeArea(
+      child: workspacesAsync.when(
+        loading: () => const SizedBox(
+          height: 120,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+        error: (e, _) => Padding(
+          padding: const EdgeInsets.all(Grid.xs),
+          child: Text('Error loading workspaces: $e'),
+        ),
+        data: (workspaces) {
+          final activeId = activeAsync.value?.id;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final workspace in workspaces)
+                _WorkspaceSwitcherTile(
+                  workspace: workspace,
+                  isActive: workspace.id == activeId,
+                  sessionStatus: workspace.id == activeId
+                      ? sessionState.status
+                      : null,
+                  onTap: () async {
+                    if (workspace.id != activeId) {
+                      await ref
+                          .read(workspaceListProvider.notifier)
+                          .switchWorkspace(workspace.id);
+                    }
+                    if (context.mounted) Navigator.of(context).pop();
+                  },
+                  onRename: () async {
+                    final nav = Navigator.of(context, rootNavigator: true);
+                    final notifier = ref.read(workspaceListProvider.notifier);
+                    Navigator.of(context).pop();
+                    final name = await showDialog<String>(
+                      context: nav.context,
+                      useRootNavigator: true,
+                      builder: (_) =>
+                          _RenameWorkspaceDialog(currentName: workspace.name),
+                    );
+                    if (name != null && name.isNotEmpty) {
+                      await notifier.renameWorkspace(workspace.id, name);
+                    }
+                  },
+                  onRemove: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (dialogContext) => AlertDialog(
+                        title: const Text('Remove Workspace'),
+                        content: Text(
+                          'Remove "${workspace.name}"? You can re-pair later.',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(false),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.of(dialogContext).pop(true),
+                            child: const Text('Remove'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true && context.mounted) {
+                      final messenger = ScaffoldMessenger.of(context);
+                      try {
+                        await ref
+                            .read(workspaceListProvider.notifier)
+                            .removeWorkspace(workspace.id);
+                        if (context.mounted) Navigator.of(context).pop();
+                      } catch (e) {
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text('Failed to remove workspace: $e'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(LucideIcons.plus),
+                title: const Text('Add Workspace'),
+                onTap: () {
+                  final nav = Navigator.of(context, rootNavigator: true);
+                  ref.read(pairingProvider.notifier).reset();
+                  Navigator.of(context).pop();
+                  nav.push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const PairingPage(addingWorkspace: true),
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _WorkspaceSwitcherTile extends StatelessWidget {
+  final Workspace workspace;
+  final bool isActive;
+  final SessionStatus? sessionStatus;
+  final VoidCallback onTap;
+  final VoidCallback onRename;
+  final VoidCallback onRemove;
+
+  const _WorkspaceSwitcherTile({
+    required this.workspace,
+    required this.isActive,
+    required this.sessionStatus,
+    required this.onTap,
+    required this.onRename,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final host = Uri.tryParse(workspace.relayUrl)?.host ?? workspace.relayUrl;
+
+    return ListTile(
+      leading: _StatusDot(isActive: isActive, sessionStatus: sessionStatus),
+      title: Text(
+        workspace.name,
+        style: context.textTheme.bodyLarge?.copyWith(
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
+      subtitle: Text(
+        host,
+        style: context.textTheme.bodySmall?.copyWith(
+          color: context.colors.onSurfaceVariant,
+        ),
+      ),
+      trailing: PopupMenuButton<String>(
+        icon: Icon(
+          LucideIcons.ellipsisVertical,
+          size: 18,
+          color: context.colors.onSurfaceVariant,
+        ),
+        onSelected: (value) {
+          switch (value) {
+            case 'rename':
+              onRename();
+            case 'remove':
+              onRemove();
+          }
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'rename', child: Text('Rename')),
+          const PopupMenuItem(value: 'remove', child: Text('Remove')),
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  final bool isActive;
+  final SessionStatus? sessionStatus;
+
+  const _StatusDot({required this.isActive, required this.sessionStatus});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isActive) {
+      return Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: context.colors.outline.withValues(alpha: 0.3),
+        ),
+      );
+    }
+
+    final color = switch (sessionStatus) {
+      SessionStatus.connected => context.appColors.success,
+      SessionStatus.connecting ||
+      SessionStatus.reconnecting => context.appColors.warning,
+      _ => context.colors.outline,
+    };
+
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+    );
+  }
+}
+
+class _RenameWorkspaceDialog extends HookWidget {
+  final String currentName;
+
+  const _RenameWorkspaceDialog({required this.currentName});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = useTextEditingController(text: currentName);
+
+    return AlertDialog(
+      title: const Text('Rename Workspace'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Name'),
+        onSubmitted: (value) {
+          final name = value.trim();
+          if (name.isNotEmpty) Navigator.of(context).pop(name);
+        },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            final name = controller.text.trim();
+            if (name.isNotEmpty) Navigator.of(context).pop(name);
+          },
+          child: const Text('Rename'),
+        ),
+      ],
+    );
+  }
+}
+
+class _WorkspaceIndicator extends ConsumerWidget {
+  final VoidCallback onTap;
+
+  const _WorkspaceIndicator({required this.onTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeAsync = ref.watch(activeWorkspaceProvider);
+    final sessionState = ref.watch(relaySessionProvider);
+
+    final name = activeAsync.value?.name;
+    final host = activeAsync.value != null
+        ? Uri.tryParse(activeAsync.value!.relayUrl)?.host
+        : null;
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.only(left: Grid.xs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _statusColor(context, sessionState.status),
+              ),
+            ),
+            const SizedBox(width: Grid.half),
+            if (name != null)
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.textTheme.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (host != null)
+                      Text(
+                        host,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.textTheme.labelSmall?.copyWith(
+                          color: context.colors.onSurfaceVariant,
+                          fontSize: 10,
+                        ),
+                      ),
+                  ],
+                ),
+              )
+            else
+              const Text('\u{1F331}', style: TextStyle(fontSize: 28)),
+            const SizedBox(width: Grid.quarter),
+            Icon(
+              LucideIcons.chevronDown,
+              size: 14,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _statusColor(BuildContext context, SessionStatus status) {
+    return switch (status) {
+      SessionStatus.connected => context.appColors.success,
+      SessionStatus.connecting ||
+      SessionStatus.reconnecting => context.appColors.warning,
+      _ => context.colors.outline,
+    };
   }
 }

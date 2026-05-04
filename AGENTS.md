@@ -127,6 +127,84 @@ just desktop-dev   # web-only dev server (faster iteration)
 just desktop-app   # full Tauri app with native shell
 ```
 
+### Workspace Switching
+
+The desktop app supports multiple workspaces (each backed by a different relay).
+Switching workspaces does **not** reload the page — it uses React key-based
+remounting. `<AppReady key={workspaceKey} />` in `App.tsx` forces the entire
+workspace-scoped subtree to unmount and remount with fresh state.
+
+**Module-level singletons must be explicitly reset.** React remounting only
+clears React state (useState, useRef, context). Module-level variables (Maps,
+class instances, cached promises) survive across remounts. Every workspace-scoped
+singleton needs a reset function wired into `resetWorkspaceState()` in
+`desktop/src/features/workspaces/useWorkspaceInit.ts`.
+
+Current singletons that are reset on workspace switch:
+- `relayClient.disconnect()` — WebSocket teardown + promise rejection
+- `resetMediaCaches()` — proxy port and relay origin caches
+- `clearSearchHitEventCache()` — search result event cache
+- `clearAllDrafts()` — message draft cache
+
+**If you add a new module-level cache, Map, or class instance that holds
+workspace-scoped data, you must add its reset to `resetWorkspaceState()`.**
+Failure to do so causes data from the old workspace to leak into the new one.
+
+Key files:
+- `desktop/src/app/App.tsx` — workspace key, init gate, remount boundary
+- `desktop/src/features/workspaces/useWorkspaceInit.ts` — `resetWorkspaceState()`, applies config to Tauri backend
+- `desktop/src/features/workspaces/useWorkspaces.tsx` — `WorkspacesProvider` context (shared state for App + AppShell)
+- `desktop/src/main.tsx` — provider hierarchy (`QueryClientProvider` > `WorkspacesProvider` > `App`)
+
+---
+
+## Mobile App (Flutter)
+
+The mobile app lives in `mobile/` — a Flutter app using Riverpod + Hooks.
+
+### Architecture
+
+- **State management:** Riverpod + `flutter_hooks` (`HookConsumerWidget`)
+- **Theme:** Catppuccin Latte (light) / Macchiato (dark) — matches desktop
+- **Features:** Isolated under `lib/features/`, shared code in `lib/shared/`
+- **Nostr models:** `lib/shared/relay/nostr_models.dart` — event kinds must
+  stay in sync with `desktop/src/shared/constants/kinds.ts`
+
+### Rules
+
+- **NEVER use `StatefulWidget`** — always use `HookConsumerWidget` or
+  `ConsumerWidget` with `flutter_hooks` for local state.
+- **NEVER run `flutter run`, `flutter build`, `flutter clean`, or
+  `flutter upgrade`** — only `flutter test`, `flutter analyze`, and
+  `dart format` are safe for agents to run.
+- **Do NOT use `print()`** — use `debugPrint()` or structured logging.
+- Prefer `context.colors` and `context.textTheme` (via theme extensions)
+  over raw `Theme.of(context)` calls.
+- Keep widgets small and composable.
+- Feature modules must not import from other feature modules — only from
+  `shared/`.
+- Use `Grid` tokens for spacing, `Radii` for border radius.
+
+### Quality Checks
+
+```bash
+cd mobile
+dart format --output=none --set-exit-if-changed .
+flutter analyze
+flutter test
+```
+
+Or from repo root: `just mobile-check` and `just mobile-test`.
+
+### Testing Conventions
+
+- Prefer **widget tests** over unit tests for UI components — test the
+  whole widget tree, not individual methods.
+- Use `ProviderScope(overrides: [...])` to inject fake notifiers.
+- Fake notifiers should extend the real notifier class and override `build()`.
+- Use the `WidgetHelpers.testable()` wrapper for simple widget tests or
+  build a custom `ProviderScope` + `MaterialApp` when you need specific overrides.
+
 ---
 
 ## See Also

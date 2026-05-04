@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:nostr/nostr.dart' as nostr;
 
 import '../../shared/relay/relay.dart';
 import 'user_profile.dart';
@@ -33,12 +37,89 @@ final profileProvider = AsyncNotifierProvider<ProfileNotifier, UserProfile?>(
 );
 
 /// Presence status for the current user.
+///
+/// Sends a heartbeat every 60s while the app is active. Prefers WebSocket
+/// (kind:20001) which triggers fan-out to other subscribers for real-time
+/// updates. Falls back to REST POST if WS is unavailable. Watches
+/// [appLifecycleProvider] to send "away" when backgrounded.
 class PresenceNotifier extends AsyncNotifier<String> {
+  static const _heartbeatInterval = Duration(seconds: 60);
+
+  Timer? _heartbeatTimer;
+
   @override
   Future<String> build() {
     ref.watch(relayClientProvider);
     ref.watch(profileProvider);
+
+    final lifecycle = ref.watch(appLifecycleProvider);
+
+    ref.onDispose(() {
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
+    });
+
+    if (lifecycle == AppLifecycleState.resumed) {
+      _startHeartbeat();
+      return _setPresence('online');
+    } else if (lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.detached) {
+      _heartbeatTimer?.cancel();
+      _heartbeatTimer = null;
+      return _setPresence('away');
+    }
+
     return _fetch();
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
+      _setPresence('online');
+    });
+  }
+
+  /// Set presence, preferring WebSocket (triggers fan-out to subscribers).
+  /// Falls back to REST POST if WS is unavailable.
+  Future<String> _setPresence(String status) async {
+    // Try WS first — triggers fan-out to other subscribers so they see the
+    // change immediately. Matches desktop's useSetPresenceMutation pattern.
+    final sessionState = ref.read(relaySessionProvider);
+    if (sessionState.status == SessionStatus.connected) {
+      try {
+        final config = ref.read(relayConfigProvider);
+        final nsec = config.nsec;
+        if (nsec != null && nsec.isNotEmpty) {
+          final privkeyHex = nostr.Nip19.decodePrivkey(nsec);
+          if (privkeyHex.isNotEmpty) {
+            final event = nostr.Event.from(
+              kind: EventKind.presenceUpdate,
+              content: status,
+              tags: [],
+              privkey: privkeyHex,
+              verify: false,
+            );
+            final session = ref.read(relaySessionProvider.notifier);
+            await session.publish(
+              NostrEvent.fromJson(Map<String, dynamic>.from(event.toJson())),
+            );
+            return status;
+          }
+        }
+      } catch (_) {
+        // Fall through to REST.
+      }
+    }
+
+    // REST fallback — no WS fan-out, other clients rely on backstop polling.
+    final client = ref.read(relayClientProvider);
+    try {
+      await client.post('/api/presence', body: {'status': status});
+    } catch (_) {
+      // Optimistically report the requested status even if the POST fails —
+      // the heartbeat will retry on the next tick.
+    }
+    return status;
   }
 
   Future<String> _fetch() async {

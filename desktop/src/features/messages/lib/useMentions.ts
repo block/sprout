@@ -7,19 +7,26 @@ import {
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
+import type { ChannelMember } from "@/shared/api/types";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { detectPrefixQuery } from "@/shared/lib/detectPrefixQuery";
-import { escapeRegExp } from "@/shared/lib/mentionPattern";
+import { trimMapToSize } from "@/shared/lib/trimMapToSize";
+import { hasMention } from "./hasMention";
 
 const MENTION_DEBOUNCE_MS = 120;
 
-export function useMentions(channelId: string | null) {
+export function useMentions(
+  channelId: string | null,
+  externalMembers?: ChannelMember[],
+  profiles?: UserProfileLookup,
+) {
   const [mentionQuery, setMentionQuery] = React.useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = React.useState(0);
   const [mentionSelectedIndex, setMentionSelectedIndex] = React.useState(0);
   const mentionMapRef = React.useRef<Map<string, string>>(new Map());
 
   const membersQuery = useChannelMembersQuery(channelId);
-  const members = membersQuery.data;
+  const members = externalMembers ?? membersQuery.data;
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
   const personasQuery = usePersonasQuery();
@@ -179,6 +186,7 @@ export function useMentions(channelId: string | null) {
       .map(({ member, label, personaName }) => ({
         pubkey: member.pubkey,
         displayName: label,
+        avatarUrl: profiles?.[member.pubkey.toLowerCase()]?.avatarUrl ?? null,
         role: member.role === "admin" ? "admin" : null,
         personaName,
       }));
@@ -188,6 +196,7 @@ export function useMentions(channelId: string | null) {
     mentionQuery,
     personaNameByPubkey,
     relayAgentNamesByPubkey,
+    profiles,
   ]);
 
   const isMentionOpen = mentionQuery !== null && suggestions.length > 0;
@@ -210,7 +219,9 @@ export function useMentions(channelId: string | null) {
       const nextContent = `${before}${inserted}${after}`;
       const nextCursor = before.length + inserted.length;
 
-      mentionMapRef.current.set(displayName, suggestion.pubkey);
+      const mentions = mentionMapRef.current;
+      mentions.set(displayName, suggestion.pubkey);
+      trimMapToSize(mentions, 200);
       setMentionQuery(null);
       setMentionSelectedIndex(0);
 
@@ -253,17 +264,8 @@ export function useMentions(channelId: string | null) {
     (text: string): string[] => {
       const pubkeys: string[] = [];
 
-      const hasMention = (name: string): boolean => {
-        const escaped = escapeRegExp(name);
-        const pattern = new RegExp(
-          `(?:^|\\s)@${escaped}(?=[\\s,;.!?:)\\]}]|$)`,
-          "i",
-        );
-        return pattern.test(text);
-      };
-
       for (const [displayName, pubkey] of mentionMapRef.current) {
-        if (hasMention(displayName)) {
+        if (hasMention(text, displayName)) {
           pubkeys.push(pubkey);
         }
       }
@@ -278,11 +280,11 @@ export function useMentions(channelId: string | null) {
           managedAgentNamesByPubkey.get(pubkeyLower) ??
           relayAgentNamesByPubkey.get(pubkeyLower);
         const personaName = personaNameByPubkey.get(pubkeyLower);
-        if (name && hasMention(name)) {
+        if (name && hasMention(text, name)) {
           pubkeys.push(member.pubkey);
           continue;
         }
-        if (personaName && hasMention(personaName)) {
+        if (personaName && hasMention(text, personaName)) {
           pubkeys.push(member.pubkey);
         }
       }
@@ -296,7 +298,7 @@ export function useMentions(channelId: string | null) {
         if (channelId && !agent.channelIds.includes(channelId)) {
           continue;
         }
-        if (hasMention(agent.name)) {
+        if (hasMention(text, agent.name)) {
           pubkeys.push(agent.pubkey);
         }
       }

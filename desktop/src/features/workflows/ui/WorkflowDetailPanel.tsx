@@ -13,6 +13,7 @@ import { WorkflowContextEditorPanel } from "@/features/workflows/ui/WorkflowCont
 import { WorkflowDefinitionGraph } from "@/features/workflows/ui/WorkflowDefinitionGraph";
 import { WorkflowPropertiesPanel } from "@/features/workflows/ui/WorkflowPropertiesPanel";
 import { WorkflowRunHistoryList } from "@/features/workflows/ui/WorkflowRunHistoryList";
+import { Badge, type BadgeProps } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import {
   Sheet,
@@ -376,23 +377,21 @@ function formatStatusLabel(status: string) {
 }
 
 function RunStatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    active: "bg-green-500/15 text-green-500",
-    disabled: "bg-muted text-muted-foreground",
-    archived: "bg-amber-500/15 text-amber-500",
-    completed: "bg-green-500/15 text-green-500",
-    failed: "bg-red-500/15 text-red-500",
-    running: "bg-blue-500/15 text-blue-500",
-    pending: "bg-muted text-muted-foreground",
-    cancelled: "bg-muted text-muted-foreground",
-    waiting_approval: "bg-amber-500/15 text-amber-500",
+  const variants: Record<string, BadgeProps["variant"]> = {
+    active: "success",
+    disabled: "secondary",
+    archived: "warning",
+    completed: "success",
+    failed: "destructive",
+    running: "info",
+    pending: "secondary",
+    cancelled: "secondary",
+    waiting_approval: "warning",
   };
 
   return (
-    <span
-      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] ${colors[status] ?? colors.pending}`}
-    >
+    <Badge variant={variants[status] ?? "secondary"}>
       {formatStatusLabel(status)}
-    </span>
+    </Badge>
   );
 }

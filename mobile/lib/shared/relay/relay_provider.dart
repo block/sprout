@@ -1,5 +1,6 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
+import '../workspace/workspace_provider.dart';
 import 'relay_client.dart';
 
 /// Relay connection configuration.
@@ -11,7 +12,22 @@ class RelayConfig {
   /// Used when the relay has `SPROUT_REQUIRE_AUTH_TOKEN=false`.
   final String? devPubkey;
 
-  const RelayConfig({required this.baseUrl, this.apiToken, this.devPubkey});
+  /// Nostr secret key (bech32 nsec) for signing NIP-42 AUTH events.
+  final String? nsec;
+
+  const RelayConfig({
+    required this.baseUrl,
+    this.apiToken,
+    this.devPubkey,
+    this.nsec,
+  });
+
+  /// Derive the websocket URL from the HTTP base URL.
+  String get wsUrl {
+    final uri = Uri.parse(baseUrl);
+    final scheme = uri.scheme == 'https' ? 'wss' : 'ws';
+    return uri.replace(scheme: scheme).toString();
+  }
 }
 
 /// Compile-time environment config via --dart-define.
@@ -34,21 +50,38 @@ class Env {
 
 class RelayConfigNotifier extends Notifier<RelayConfig> {
   @override
-  RelayConfig build() => RelayConfig(
-    baseUrl: Env.relayUrl,
-    apiToken: Env.apiToken.isEmpty ? null : Env.apiToken,
-    devPubkey: Env.devPubkey.isEmpty ? null : Env.devPubkey,
-  );
+  RelayConfig build() {
+    // Watch the active workspace so that when it changes (workspace switch),
+    // the config rebuilds, triggering the full provider cascade.
+    final activeAsync = ref.watch(activeWorkspaceProvider);
+    final active = activeAsync.value;
+    if (active != null) {
+      return RelayConfig(
+        baseUrl: active.relayUrl,
+        apiToken: active.token,
+        nsec: active.nsec,
+      );
+    }
+
+    // Fallback to compile-time env config (dev mode).
+    return RelayConfig(
+      baseUrl: Env.relayUrl,
+      apiToken: Env.apiToken.isEmpty ? null : Env.apiToken,
+      devPubkey: Env.devPubkey.isEmpty ? null : Env.devPubkey,
+    );
+  }
 
   void update({
     required String baseUrl,
     required String? apiToken,
     required String? devPubkey,
+    String? nsec,
   }) {
     state = RelayConfig(
       baseUrl: baseUrl,
       apiToken: apiToken,
       devPubkey: devPubkey,
+      nsec: nsec,
     );
   }
 }

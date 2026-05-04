@@ -86,6 +86,16 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         sprout_auth::require_scope(&scopes, Scope::FilesWrite)
             .map_err(|_| MediaError::InsufficientScope)?;
 
+        // 5. Relay membership gate (NIP-43).
+        let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+        crate::api::relay_members::enforce_relay_membership(
+            state,
+            &auth_event.pubkey.serialize(),
+            auth_tag,
+        )
+        .await
+        .map_err(|_| MediaError::RelayMembershipRequired)?;
+
         Ok(AuthenticatedUpload { auth_event, scopes })
     }
 }
@@ -159,26 +169,28 @@ pub async fn upload_blob(
     };
     metrics::counter!("sprout_media_uploads_total", "mime" => mime_label.to_owned()).increment(1);
 
-    // Fire-and-forget audit — never block the response on audit I/O.
-    let audit = state.audit.clone();
+    // Audit via bounded channel — same pattern as event audit.
     let desc = descriptor.clone();
     let uploader = auth.auth_event.pubkey.to_hex();
-    tokio::spawn(async move {
-        let _ = audit
-            .log(NewAuditEntry {
-                event_id: desc.sha256.clone(),
-                event_kind: sprout_core::kind::KIND_MEDIA_UPLOAD,
-                actor_pubkey: uploader,
-                action: AuditAction::MediaUploaded,
-                channel_id: None,
-                metadata: serde_json::json!({
-                    "sha256": desc.sha256,
-                    "size": desc.size,
-                    "mime": desc.mime_type,
-                }),
-            })
-            .await;
-    });
+    if let Err(e) = state
+        .audit_tx
+        .send(NewAuditEntry {
+            event_id: desc.sha256.clone(),
+            event_kind: sprout_core::kind::KIND_MEDIA_UPLOAD,
+            actor_pubkey: uploader,
+            action: AuditAction::MediaUploaded,
+            channel_id: None,
+            metadata: serde_json::json!({
+                "sha256": desc.sha256,
+                "size": desc.size,
+                "mime": desc.mime_type,
+            }),
+        })
+        .await
+    {
+        tracing::error!("Media audit channel closed — entry lost: {e}");
+        metrics::counter!("sprout_audit_send_errors_total").increment(1);
+    }
 
     Ok(Json(descriptor))
 }

@@ -1,13 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  Check,
-  Copy,
-  KeyRound,
-  Plus,
-  Trash2,
-  TriangleAlert,
-} from "lucide-react";
+import { Copy, KeyRound, Plus, Trash2, TriangleAlert } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 
 import { useChannelsQuery } from "@/features/channels/hooks";
 import {
@@ -202,7 +196,6 @@ function CreateTokenDialog({
   >(new Set());
   const [expiryDays, setExpiryDays] = React.useState<number>(30);
   const [mintedToken, setMintedToken] = React.useState<string | null>(null);
-  const [copied, setCopied] = React.useState(false);
 
   const canCreate =
     activeTokenCount < MAX_ACTIVE_TOKENS &&
@@ -219,7 +212,6 @@ function CreateTokenDialog({
     setSelectedChannelIds(new Set());
     setExpiryDays(30);
     setMintedToken(null);
-    setCopied(false);
     mintMutation.reset();
   }
 
@@ -268,8 +260,7 @@ function CreateTokenDialog({
   async function handleCopy() {
     if (!mintedToken) return;
     await navigator.clipboard.writeText(mintedToken);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    toast.success("Copied to clipboard");
   }
 
   if (mintedToken) {
@@ -294,11 +285,7 @@ function CreateTokenDialog({
                     {mintedToken}
                   </code>
                   <Button onClick={handleCopy} size="sm" variant="outline">
-                    {copied ? (
-                      <Check className="h-3.5 w-3.5" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
+                    <Copy className="h-3.5 w-3.5" />
                   </Button>
                 </div>
                 <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-warning">

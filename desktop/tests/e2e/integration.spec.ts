@@ -492,6 +492,10 @@ test("manage sheet updates channel details and context through the relay", async
 
   await page.getByTestId(`channel-${renamedChannel}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(renamedChannel);
+  // channelDescription deduplicates by showing only the first non-empty field
+  await expect(page.getByTestId("chat-description")).toContainText(
+    updatedTopic,
+  );
 
   await openChannelManagement(page);
   await expect(page.getByTestId("channel-management-name")).toHaveValue(
@@ -523,7 +527,10 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await closeChannelManagement(page);
 
   await expect(page.getByTestId("stream-list")).not.toContainText(channelName);
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
   await expect(page.getByTestId("send-message")).toBeDisabled();
 
   await page.reload();
@@ -537,7 +544,10 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await page.getByTestId(`browse-channel-${channelName}`).click();
   await expect(page.getByTestId("channel-browser-dialog")).not.toBeVisible();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
-  await expect(page.getByTestId("message-input")).toBeDisabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "false",
+  );
 
   await openChannelManagement(page);
   await page.getByTestId("channel-management-unarchive").click();
@@ -545,5 +555,8 @@ test("manage sheet archive and unarchive survives a reload through the relay", a
   await closeChannelManagement(page);
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
-  await expect(page.getByTestId("message-input")).toBeEnabled();
+  await expect(page.getByTestId("message-input")).toHaveAttribute(
+    "contenteditable",
+    "true",
+  );
 });

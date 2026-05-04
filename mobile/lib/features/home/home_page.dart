@@ -3,8 +3,9 @@ import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../activity/activity_page.dart';
 import '../channels/channels_page.dart';
-import '../settings/settings_page.dart';
+import '../search/search_page.dart';
 
 class HomePage extends HookConsumerWidget {
   const HomePage({super.key});
@@ -13,7 +14,7 @@ class HomePage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tabIndex = useState(0);
 
-    const pages = [ChannelsPage(), SettingsPage()];
+    const pages = [ChannelsPage(), ActivityPage(), SearchPage()];
 
     return Scaffold(
       body: IndexedStack(index: tabIndex.value, children: pages),
@@ -22,14 +23,19 @@ class HomePage extends HookConsumerWidget {
         onDestinationSelected: (i) => tabIndex.value = i,
         destinations: const [
           NavigationDestination(
-            icon: Icon(LucideIcons.hash),
-            selectedIcon: Icon(LucideIcons.hash),
-            label: 'Channels',
+            icon: Icon(LucideIcons.house),
+            selectedIcon: Icon(LucideIcons.house),
+            label: 'Home',
           ),
           NavigationDestination(
-            icon: Icon(LucideIcons.settings),
-            selectedIcon: Icon(LucideIcons.settings),
-            label: 'Settings',
+            icon: Icon(LucideIcons.bell),
+            selectedIcon: Icon(LucideIcons.bell),
+            label: 'Activity',
+          ),
+          NavigationDestination(
+            icon: Icon(LucideIcons.search),
+            selectedIcon: Icon(LucideIcons.search),
+            label: 'Search',
           ),
         ],
       ),

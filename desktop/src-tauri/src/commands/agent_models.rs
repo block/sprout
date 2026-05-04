@@ -11,7 +11,7 @@ use crate::{
         normalize_agent_args, resolve_command, save_managed_agents, sync_managed_agent_processes,
         AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest, UpdateManagedAgentResponse,
     },
-    relay::{relay_ws_url, sync_managed_agent_profile},
+    relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
 };
 
@@ -49,12 +49,11 @@ pub async fn get_agent_models(
 
         let args = normalize_agent_args(&record.agent_command, record.agent_args.clone());
 
-        (
-            resolved,
-            record.agent_command.clone(),
-            args,
-            record.model.clone(),
-        )
+        let resolved_agent = resolve_command(&record.agent_command, Some(&app))
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| record.agent_command.clone());
+
+        (resolved, resolved_agent, args, record.model.clone())
     }; // store lock released — subprocess runs without holding the lock
 
     // Use spawn_blocking because the desktop Tauri crate doesn't enable
@@ -64,6 +63,9 @@ pub async fn get_agent_models(
         let mut cmd = std::process::Command::new(&resolved_acp);
         if let Some(home) = default_agent_workdir() {
             cmd.current_dir(home);
+        }
+        if let Some(ref path) = crate::managed_agents::login_shell_path() {
+            cmd.env("PATH", path);
         }
         cmd.arg("models")
             .arg("--json")
@@ -152,7 +154,7 @@ pub async fn update_managed_agent(
         if let Some(relay_url) = input.relay_url {
             let trimmed = relay_url.trim();
             record.relay_url = if trimmed.is_empty() {
-                relay_ws_url()
+                relay_ws_url_with_override(&state)
             } else {
                 trimmed.to_string()
             };
@@ -185,7 +187,15 @@ pub async fn update_managed_agent(
             let api_token = record.api_token.clone();
             let display_name = record.name.clone();
             let avatar_url = managed_agent_avatar_url(&record.agent_command);
-            Some((agent_keys, relay_url, api_token, display_name, avatar_url))
+            let auth_tag = record.auth_tag.clone();
+            Some((
+                agent_keys,
+                relay_url,
+                api_token,
+                display_name,
+                avatar_url,
+                auth_tag,
+            ))
         } else {
             None
         };
@@ -196,7 +206,9 @@ pub async fn update_managed_agent(
 
     // Phase 2: relay profile sync (async, best-effort, outside lock)
     let profile_sync_error =
-        if let Some((agent_keys, relay_url, api_token, display_name, avatar_url)) = sync_params {
+        if let Some((agent_keys, relay_url, api_token, display_name, avatar_url, auth_tag)) =
+            sync_params
+        {
             match sync_managed_agent_profile(
                 &state,
                 &relay_url,
@@ -205,6 +217,7 @@ pub async fn update_managed_agent(
                 &[],
                 &display_name,
                 avatar_url.as_deref(),
+                auth_tag.as_deref(),
             )
             .await
             {

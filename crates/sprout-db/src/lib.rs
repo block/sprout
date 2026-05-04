@@ -25,6 +25,8 @@ pub mod feed;
 pub mod partition;
 /// Reaction persistence.
 pub mod reaction;
+/// Relay-level membership persistence (NIP-43).
+pub mod relay_members;
 /// Thread metadata persistence.
 pub mod thread;
 /// User profile persistence.
@@ -141,11 +143,14 @@ pub struct DbConfig {
 }
 
 impl Default for DbConfig {
+    /// Sized for a single relay pod against PG max_connections=100.
+    /// Staging measured 51 idle + 1 active out of 50 — most connections sat unused.
+    /// At 20 main + 5 audit = 25/pod, four relay pods fit within the PG limit.
     fn default() -> Self {
         Self {
             database_url: "postgres://sprout:sprout_dev@localhost:5432/sprout".to_string(),
-            max_connections: 50,
-            min_connections: 5,
+            max_connections: 20,
+            min_connections: 2,
             acquire_timeout_secs: 3,
             max_lifetime_secs: 1800,
             idle_timeout_secs: 600,
@@ -396,6 +401,14 @@ impl Db {
     /// Returns all active members of a channel.
     pub async fn get_members(&self, channel_id: Uuid) -> Result<Vec<channel::MemberRecord>> {
         channel::get_members(&self.pool, channel_id).await
+    }
+
+    /// Returns active members for multiple channels in a single query.
+    pub async fn get_members_bulk(
+        &self,
+        channel_ids: &[Uuid],
+    ) -> Result<Vec<channel::MemberRecord>> {
+        channel::get_members_bulk(&self.pool, channel_ids).await
     }
 
     /// Get all channel IDs accessible to a pubkey.
@@ -1298,6 +1311,75 @@ impl Db {
             });
         }
         Ok(out)
+    }
+
+    // ── Relay Members (NIP-43) ───────────────────────────────────────────────
+
+    /// Returns `true` if `pubkey` (64-char hex) is in the relay member list.
+    pub async fn is_relay_member(&self, pubkey: &str) -> Result<bool> {
+        relay_members::is_relay_member(&self.pool, pubkey).await
+    }
+
+    /// Returns the relay member record for `pubkey`, or `None` if not found.
+    pub async fn get_relay_member(
+        &self,
+        pubkey: &str,
+    ) -> Result<Option<relay_members::RelayMember>> {
+        relay_members::get_relay_member(&self.pool, pubkey).await
+    }
+
+    /// Returns all relay members ordered by `created_at` ascending.
+    pub async fn list_relay_members(&self) -> Result<Vec<relay_members::RelayMember>> {
+        relay_members::list_relay_members(&self.pool).await
+    }
+
+    /// Adds a new relay member. No-ops silently if the pubkey already exists (idempotent).
+    /// Adds a new relay member.
+    ///
+    /// Returns `true` if the row was actually inserted, `false` if the pubkey
+    /// already existed (idempotent — `ON CONFLICT DO NOTHING`).
+    pub async fn add_relay_member(
+        &self,
+        pubkey: &str,
+        role: &str,
+        added_by: Option<&str>,
+    ) -> Result<bool> {
+        relay_members::add_relay_member(&self.pool, pubkey, role, added_by).await
+    }
+
+    /// Removes a relay member atomically, refusing to delete the owner.
+    pub async fn remove_relay_member(&self, pubkey: &str) -> Result<relay_members::RemoveResult> {
+        relay_members::remove_relay_member(&self.pool, pubkey).await
+    }
+
+    /// Removes a relay member only if their current role matches `expected_role`.
+    ///
+    /// Atomic conditional delete — eliminates the TOCTOU race between a
+    /// prior role read and the delete. See [`relay_members::remove_relay_member_if_role`].
+    pub async fn remove_relay_member_if_role(
+        &self,
+        pubkey: &str,
+        expected_role: &str,
+    ) -> Result<relay_members::RemoveResult> {
+        relay_members::remove_relay_member_if_role(&self.pool, pubkey, expected_role).await
+    }
+
+    /// Updates the role of an existing relay member. Returns `true` if updated.
+    pub async fn update_relay_member_role(&self, pubkey: &str, new_role: &str) -> Result<bool> {
+        relay_members::update_relay_member_role(&self.pool, pubkey, new_role).await
+    }
+
+    /// Ensures the owner pubkey exists with role `"owner"`. Called at startup.
+    pub async fn bootstrap_owner(&self, owner_pubkey: &str) -> Result<()> {
+        relay_members::bootstrap_owner(&self.pool, owner_pubkey).await
+    }
+
+    /// Migrates existing `pubkey_allowlist` entries into `relay_members`.
+    ///
+    /// Idempotent — uses `ON CONFLICT DO NOTHING`. Returns the number of rows
+    /// inserted, or 0 if the `pubkey_allowlist` table doesn't exist.
+    pub async fn backfill_from_allowlist(&self) -> Result<u64> {
+        relay_members::backfill_from_allowlist(&self.pool).await
     }
 
     // ── Discovery events ─────────────────────────────────────────────────────

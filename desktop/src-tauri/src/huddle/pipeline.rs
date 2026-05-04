@@ -15,7 +15,7 @@ use crate::app_state::AppState;
 use crate::events;
 
 use super::models;
-use super::relay_api::{fetch_channel_members, parse_channel_uuid};
+use super::relay_api::{self, fetch_channel_members, parse_channel_uuid};
 use super::state::{HuddlePhase, VoiceInputMode};
 use super::stt;
 use super::tts;
@@ -42,6 +42,20 @@ pub(crate) async fn post_connect_setup(
     if let Some(mgr) = models::global_model_manager() {
         mgr.start_moonshine_download(state.http_client.clone());
         mgr.start_kokoro_download(state.http_client.clone());
+    }
+
+    // Connect audio relay WebSocket (Opus encode/decode pipeline).
+    // This is the core audio path — failure is fatal for the huddle.
+    let parent_id = {
+        let hs = state.huddle()?;
+        hs.parent_channel_id.clone()
+    };
+    let (cancel, pcm_tx) =
+        relay_api::connect_audio_relay(ephemeral_channel_id, parent_id.as_deref(), state).await?;
+    {
+        let mut hs = state.huddle()?;
+        hs.audio_ws_cancel = Some(cancel);
+        hs.audio_relay_pcm_tx = Some(pcm_tx);
     }
 
     // Start pipelines: TTS first (so STT can capture tts_cancel for barge-in).
@@ -179,7 +193,12 @@ pub(crate) async fn maybe_start_tts_pipeline(state: &AppState) -> Result<bool, S
 
     // Construct outside the lock — this spawns the TTS worker thread and
     // loads ONNX sessions (~200ms). If this fails, clear the sentinel.
-    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active, tts_cancel) {
+    let output_device = state
+        .audio_output_device
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let pipeline = match tts::TtsPipeline::new(model_dir, tts_active, tts_cancel, output_device) {
         Ok(p) => Arc::new(p),
         Err(e) => {
             let hs = state.huddle()?;
@@ -229,6 +248,7 @@ pub(crate) fn spawn_transcription_task(
         Err(_) => return,
     };
     let configured_api_token = state.configured_api_token.clone();
+    let relay_base_url = crate::relay::relay_api_base_url_with_override(state);
 
     tauri::async_runtime::spawn(async move {
         // recv().await yields (not blocks) until text arrives or sender is dropped.
@@ -269,9 +289,14 @@ pub(crate) fn spawn_transcription_task(
             let api_token_ref = configured_api_token.as_deref();
             let pubkey_hex = keys.public_key().to_hex();
 
-            if let Err(e) =
-                crate::events::post_event_raw(&http_client, api_token_ref, &pubkey_hex, event_json)
-                    .await
+            if let Err(e) = crate::events::post_event_raw(
+                &http_client,
+                api_token_ref,
+                &pubkey_hex,
+                event_json,
+                &relay_base_url,
+            )
+            .await
             {
                 eprintln!("sprout-desktop: STT kind:9 post failed: {e}");
             }

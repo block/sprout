@@ -51,7 +51,7 @@ test("updates presence from the profile menu", async ({ page }) => {
   await openProfileMenu(page);
   await expect(
     page.getByTestId("profile-popover-current-status"),
-  ).toContainText("Offline");
+  ).toContainText("Online");
 
   await page.getByTestId("profile-popover-status-away").click();
   await openProfileMenu(page);
@@ -393,9 +393,6 @@ test("shows doctor checks for local sprout tooling", async ({ page }) => {
   await openSettings(page, "doctor");
 
   await expect(page.getByTestId("settings-doctor")).toBeVisible();
-  await expect(page.getByTestId("doctor-check-admin")).toContainText(
-    "sprout-admin",
-  );
   await expect(page.getByTestId("doctor-check-acp")).toContainText(
     "sprout-acp",
   );

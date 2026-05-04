@@ -41,7 +41,8 @@ CREATE TABLE channels (
     purpose_set_at  TIMESTAMPTZ,
     participant_hash BYTEA,
     ttl_seconds     INT,
-    ttl_deadline    TIMESTAMPTZ
+    ttl_deadline    TIMESTAMPTZ,
+    CONSTRAINT chk_channels_id_not_nil CHECK (id <> '00000000-0000-0000-0000-000000000000'::uuid)
 );
 
 CREATE INDEX idx_channels_type ON channels (channel_type);
@@ -64,6 +65,9 @@ CREATE TABLE channel_members (
     hidden_at   TIMESTAMPTZ,
     PRIMARY KEY (channel_id, pubkey)
 );
+
+CREATE INDEX idx_channel_members_pubkey ON channel_members (pubkey)
+    WHERE removed_at IS NULL;
 
 -- ── Users ─────────────────────────────────────────────────────────────────────
 
@@ -325,3 +329,15 @@ CREATE TABLE pubkey_allowlist (
     added_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     note        TEXT
 );
+
+-- ── Relay members (NIP-43) ────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS relay_members (
+    pubkey      TEXT PRIMARY KEY,
+    role        TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+    added_by    TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_relay_members_role ON relay_members(role);

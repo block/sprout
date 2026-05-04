@@ -10,9 +10,16 @@ import {
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
 import {
+  KIND_JOB_ACCEPTED,
+  KIND_JOB_CANCEL,
+  KIND_JOB_ERROR,
+  KIND_JOB_PROGRESS,
+  KIND_JOB_REQUEST,
+  KIND_JOB_RESULT,
   KIND_DELETION,
   KIND_REACTION,
   KIND_STREAM_MESSAGE,
+  KIND_STREAM_MESSAGE_V2,
   KIND_STREAM_MESSAGE_EDIT,
   KIND_STREAM_MESSAGE_DIFF,
   KIND_SYSTEM_MESSAGE,
@@ -25,8 +32,15 @@ const HEX_RE = /^[0-9a-f]+$/i;
 function isTimelineContentEvent(event: RelayEvent) {
   return (
     event.kind === KIND_STREAM_MESSAGE ||
+    event.kind === KIND_STREAM_MESSAGE_V2 ||
     event.kind === KIND_STREAM_MESSAGE_DIFF ||
-    event.kind === KIND_SYSTEM_MESSAGE
+    event.kind === KIND_SYSTEM_MESSAGE ||
+    event.kind === KIND_JOB_REQUEST ||
+    event.kind === KIND_JOB_ACCEPTED ||
+    event.kind === KIND_JOB_PROGRESS ||
+    event.kind === KIND_JOB_RESULT ||
+    event.kind === KIND_JOB_CANCEL ||
+    event.kind === KIND_JOB_ERROR
   );
 }
 
@@ -220,7 +234,11 @@ export function formatTimelineMessages(
       profile?.displayName?.trim() ||
       profile?.nip05Handle?.trim() ||
       `${actorPubkey.slice(0, 8)}…`;
-    existing.users.push({ pubkey: actorPubkey, displayName });
+    existing.users.push({
+      pubkey: actorPubkey,
+      displayName,
+      avatarUrl: profile?.avatarUrl ?? null,
+    });
 
     current.set(emoji, existing);
     reactionsByEventId.set(targetId, current);
