@@ -487,9 +487,9 @@ pub fn filter_fully_pushable(filter: &Filter) -> bool {
                 }
             }
             "d" => {
-                // Single #d is pushed ONLY for NIP-33-only kind filters.
+                // #d is pushed (single or multi) ONLY for NIP-33-only kind filters.
                 // Otherwise it's silently ignored by SQL → overcount.
-                if tag_values.len() > 1 || (!tag_values.is_empty() && !is_nip33_only) {
+                if !tag_values.is_empty() && !is_nip33_only {
                     return false;
                 }
             }
@@ -621,16 +621,21 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
                 .all(|&k| sprout_core::kind::is_parameterized_replaceable(k as u32))
     });
     let d_tag_key = nostr::SingleLetterTag::lowercase(nostr::Alphabet::D);
-    let d_tag = if filter_is_nip33_only {
-        filter.generic_tags.get(&d_tag_key).and_then(|values| {
-            if values.len() == 1 {
-                values.iter().next().map(|v| v.to_string())
-            } else {
-                None
-            }
-        })
+    let (d_tag, d_tags) = if filter_is_nip33_only {
+        let values = filter.generic_tags.get(&d_tag_key);
+        match values.map(|v| v.len()) {
+            Some(1) => (
+                values.and_then(|vs| vs.iter().next().map(|v| v.to_string())),
+                None,
+            ),
+            Some(n) if n > 1 => (
+                None,
+                values.map(|vs| vs.iter().map(|v| v.to_string()).collect::<Vec<_>>()),
+            ),
+            _ => (None, None),
+        }
     } else {
-        None
+        (None, None)
     };
 
     EventQuery {
@@ -642,6 +647,7 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
         limit: Some(limit),
         p_tag_hex,
         d_tag,
+        d_tags,
         authors,
         ids,
         e_tags,

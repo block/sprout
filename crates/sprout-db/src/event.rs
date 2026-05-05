@@ -37,6 +37,9 @@ pub struct EventQuery {
     /// Restrict to events with this exact `d_tag` value (NIP-33).
     /// Pushed into SQL via the `idx_events_parameterized` index.
     pub d_tag: Option<String>,
+    /// Restrict to events with any of these `d_tag` values (multi-value NIP-33 pushdown).
+    /// Used when a filter has multiple `#d` values and targets only NIP-33 kinds.
+    pub d_tags: Option<Vec<String>>,
     /// Composite keyset cursor: exclude events at or "after" this (created_at, id) pair.
     /// Used with `until` for stable pagination: events where
     /// `created_at < until OR (created_at = until AND id > before_id)`.
@@ -319,6 +322,15 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
     if let Some(ref d) = q.d_tag {
         qb.push(format!(" AND {col_prefix}d_tag = "))
             .push_bind(d.clone());
+    } else if let Some(ref ds) = q.d_tags {
+        if !ds.is_empty() {
+            qb.push(format!(" AND {col_prefix}d_tag IN ("));
+            let mut sep = qb.separated(", ");
+            for d in ds {
+                sep.push_bind(d.clone());
+            }
+            qb.push(")");
+        }
     }
 
     // Composite ordering for deterministic pagination across ALL callers of
@@ -506,6 +518,15 @@ pub async fn count_events(pool: &PgPool, q: &EventQuery) -> Result<i64> {
     if let Some(ref d) = q.d_tag {
         qb.push(format!(" AND {col_prefix}d_tag = "))
             .push_bind(d.clone());
+    } else if let Some(ref ds) = q.d_tags {
+        if !ds.is_empty() {
+            qb.push(format!(" AND {col_prefix}d_tag IN ("));
+            let mut sep = qb.separated(", ");
+            for d in ds {
+                sep.push_bind(d.clone());
+            }
+            qb.push(")");
+        }
     }
 
     let row = qb.build().fetch_one(pool).await?;
