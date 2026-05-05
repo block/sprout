@@ -5,14 +5,8 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/root";
-import { Route as reposRouteImport } from "./routes/repos";
 import { Route as indexRouteImport } from "./routes/index";
 
-const reposRoute = reposRouteImport.update({
-  id: "/repos",
-  path: "/repos",
-  getParentRoute: () => rootRouteImport,
-} as any);
 const indexRoute = indexRouteImport.update({
   id: "/",
   path: "/",
@@ -21,39 +15,28 @@ const indexRoute = indexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
-  "/repos": typeof reposRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof indexRoute;
-  "/repos": typeof reposRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof indexRoute;
-  "/repos": typeof reposRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/repos";
+  fullPaths: "/";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/repos";
-  id: "__root__" | "/" | "/repos";
+  to: "/";
+  id: "__root__" | "/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
-  reposRoute: typeof reposRoute;
 }
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    "/repos": {
-      id: "/repos";
-      path: "/repos";
-      fullPath: "/repos";
-      preLoaderRoute: typeof reposRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
     "/": {
       id: "/";
       path: "/";
@@ -66,7 +49,6 @@ declare module "@tanstack/react-router" {
 
 const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
-  reposRoute: reposRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
