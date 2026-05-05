@@ -29,19 +29,23 @@ function relativeTime(unix: number): string {
 }
 
 export function RepoListItem({ repo }: { repo: Repo }) {
-  const link = repo.webUrl ?? "#";
-
   return (
     <div className="py-6">
       {/* Row 1: Name + badge */}
       <div className="flex items-center gap-2">
         <BookMarked className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <a
-          href={link}
-          className="text-lg font-semibold text-primary hover:underline"
-        >
-          {repo.name}
-        </a>
+        {repo.webUrl ? (
+          <a
+            href={repo.webUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-lg font-semibold text-primary hover:underline"
+          >
+            {repo.name}
+          </a>
+        ) : (
+          <span className="text-lg font-semibold">{repo.name}</span>
+        )}
         <Badge variant="outline" className="ml-1">
           Public
         </Badge>
