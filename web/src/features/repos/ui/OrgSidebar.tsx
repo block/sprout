@@ -3,30 +3,9 @@ import { useMemo } from "react";
 
 import type { Repo } from "../use-repos";
 import { ConnectButton } from "./ConnectButton";
+import { PubkeyAvatar } from "./PubkeyAvatar";
 
 const MAX_AVATARS = 20;
-
-/** Simple hash of a hex pubkey to a hue value (0-360). */
-function pubkeyToHue(hex: string): number {
-  let hash = 0;
-  for (let i = 0; i < hex.length; i++) {
-    hash = (hash * 31 + hex.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash) % 360;
-}
-
-function PubkeyAvatar({ pubkey }: { pubkey: string }) {
-  const hue = pubkeyToHue(pubkey);
-  return (
-    <div
-      className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium text-white"
-      style={{ backgroundColor: `hsl(${hue}, 55%, 45%)` }}
-      title={pubkey}
-    >
-      {pubkey.slice(0, 2)}
-    </div>
-  );
-}
 
 export function OrgSidebar({ repos }: { repos: Repo[] }) {
   const uniquePubkeys = useMemo(() => {
@@ -45,7 +24,7 @@ export function OrgSidebar({ repos }: { repos: Repo[] }) {
 
   return (
     <div className="space-y-6">
-      {/* Connect to Relay */}
+      {/* Open in Sprout */}
       <ConnectButton className="w-full" />
 
       {/* People section */}

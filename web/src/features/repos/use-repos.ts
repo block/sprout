@@ -72,3 +72,12 @@ export function useRepos() {
     staleTime: 60_000,
   });
 }
+
+export function useRepo(repoId: string) {
+  return useQuery({
+    queryKey: ["repos"],
+    queryFn: fetchRepos,
+    staleTime: 60_000,
+    select: (repos) => repos.find((r) => r.id === repoId),
+  });
+}
