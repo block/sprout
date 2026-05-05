@@ -1,10 +1,9 @@
-import { Inbox, Search } from "lucide-react";
+import { Inbox } from "lucide-react";
 
 import type { InboxFilter, InboxItem } from "@/features/home/lib/inbox";
 import { groupInboxItems } from "@/features/home/lib/inbox";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
-import { Input } from "@/shared/ui/input";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const FILTER_OPTIONS: Array<{ label: string; value: InboxFilter }> = [
@@ -20,9 +19,7 @@ type InboxListPaneProps = {
   filter: InboxFilter;
   items: InboxItem[];
   onFilterChange: (filter: InboxFilter) => void;
-  onSearchChange: (value: string) => void;
   onSelect: (itemId: string) => void;
-  searchValue: string;
   selectedId: string | null;
 };
 
@@ -31,9 +28,7 @@ export function InboxListPane({
   filter,
   items,
   onFilterChange,
-  onSearchChange,
   onSelect,
-  searchValue,
   selectedId,
 }: InboxListPaneProps) {
   const groups = groupInboxItems(items);
@@ -53,17 +48,6 @@ export function InboxListPane({
             Inbox
           </h1>
         </div>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="h-10 rounded-md border-border/70 bg-background pl-9 shadow-none"
-            data-testid="home-inbox-search"
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="Search mail"
-            value={searchValue}
-          />
-        </div>
-
         <div className="mt-3 flex flex-wrap gap-1.5">
           {FILTER_OPTIONS.map((option) => (
             <Button
@@ -90,13 +74,13 @@ export function InboxListPane({
             <div>
               <p className="text-sm font-medium text-foreground">No messages found</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Try a different search or switch back to all mail.
+                Try switching back to all mail.
               </p>
             </div>
           </div>
         ) : (
           groups.map((group) => (
-            <div className="border-b border-border/60 last:border-b-0" key={group.label}>
+            <div key={group.label}>
               <div className="sticky top-0 z-10 bg-background px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/95">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                   {group.label}
