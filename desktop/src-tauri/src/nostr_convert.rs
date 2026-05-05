@@ -438,24 +438,44 @@ pub fn agents_from_events(events: &[Event]) -> Value {
 
 /// Convert a kind:13534 relay membership list to the relay members format.
 ///
-/// Each `p` tag shaped as `["p", pubkey, relay_url?, role?]` becomes a
-/// `{pubkey, role}` entry.
+/// The relay emits `["member", pubkey]` or `["member", pubkey, role]` tags.
+/// For backward compatibility, also accepts `["p", pubkey, relay_url?, role?]`.
 pub fn relay_members_from_event(event: &Event) -> Value {
     let mut seen = BTreeSet::new();
-    let members: Vec<Value> = tags_named(event, "p")
-        .filter_map(|slice| {
-            let pubkey = slice.get(1)?.clone();
-            if pubkey.is_empty() || !seen.insert(pubkey.clone()) {
-                return None;
-            }
-            let role = slice
-                .get(3)
-                .filter(|s| !s.is_empty())
-                .cloned()
-                .unwrap_or_else(|| "member".to_string());
-            Some(json!({ "pubkey": pubkey, "role": role }))
-        })
-        .collect();
+    let mut members: Vec<Value> = Vec::new();
+
+    // Primary: parse ["member", pubkey, role?] tags (current relay format).
+    for slice in tags_named(event, "member") {
+        let Some(pubkey) = slice.get(1).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !seen.insert(pubkey.clone()) {
+            continue;
+        }
+        let role = slice
+            .get(2)
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "member".to_string());
+        members.push(json!({ "pubkey": pubkey, "role": role }));
+    }
+
+    // Fallback: parse ["p", pubkey, relay_url?, role?] tags (NIP-29 convention).
+    for slice in tags_named(event, "p") {
+        let Some(pubkey) = slice.get(1).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !seen.insert(pubkey.clone()) {
+            continue;
+        }
+        let role = slice
+            .get(3)
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "member".to_string());
+        members.push(json!({ "pubkey": pubkey, "role": role }));
+    }
+
     json!({ "members": members })
 }
 
@@ -792,19 +812,37 @@ mod tests {
     fn relay_members_dedupes_and_defaults_role() {
         let pk1 = "a".repeat(64);
         let pk2 = "b".repeat(64);
+        // Current relay format: ["member", pubkey, role]
         let e = ev(
             13534,
             "",
             vec![
-                vec!["p", &pk1, "", "owner"],
-                vec!["p", &pk2],
-                vec!["p", &pk1, "wss://x", "moderator"],
+                vec!["member", &pk1, "owner"],
+                vec!["member", &pk2],
+                vec!["member", &pk1, "moderator"], // dupe — ignored
             ],
         );
         let v = relay_members_from_event(&e);
         let arr = v.get("members").and_then(Value::as_array).unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0].get("role").and_then(Value::as_str), Some("owner"));
+        assert_eq!(arr[1].get("role").and_then(Value::as_str), Some("member"));
+    }
+
+    #[test]
+    fn relay_members_fallback_p_tags() {
+        let pk1 = "a".repeat(64);
+        let pk2 = "b".repeat(64);
+        // Legacy/fallback format: ["p", pubkey, relay_url?, role?]
+        let e = ev(
+            13534,
+            "",
+            vec![vec!["p", &pk1, "", "admin"], vec!["p", &pk2]],
+        );
+        let v = relay_members_from_event(&e);
+        let arr = v.get("members").and_then(Value::as_array).unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].get("role").and_then(Value::as_str), Some("admin"));
         assert_eq!(arr[1].get("role").and_then(Value::as_str), Some("member"));
     }
 

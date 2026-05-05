@@ -210,6 +210,11 @@ pub async fn query_events(
         return handle_bridge_search(&state, &filters, &accessible_channels).await;
     }
 
+    // ── Presence: synthesize kind:20001 from Redis (ephemeral, never in DB) ──
+    if let Some(presence_events) = synthesize_presence(&state, &filters).await {
+        return Ok(Json(Value::Array(presence_events)));
+    }
+
     // Execute each filter and collect results, enforcing channel access.
     let mut events: Vec<Value> = Vec::new();
     for filter in &filters {
@@ -652,4 +657,76 @@ pub async fn workflow_webhook(
             "status": "pending",
         })),
     ))
+}
+
+// ── Presence synthesis from Redis ────────────────────────────────────────────
+
+/// If all filters target kind:20001 or kind:40902 with authors, synthesize
+/// presence from Redis instead of querying the DB (ephemeral events are never
+/// stored, and kind:40902 snapshots are relay-generated on demand).
+///
+/// Returns `Some(events)` if handled, `None` to fall through to normal query.
+async fn synthesize_presence(state: &AppState, filters: &[nostr::Filter]) -> Option<Vec<Value>> {
+    use sprout_core::kind::{KIND_PRESENCE_SNAPSHOT, KIND_PRESENCE_UPDATE};
+
+    // Only intercept if every filter targets kind:20001 or 40902 with authors.
+    let mut all_pubkeys: Vec<nostr::PublicKey> = Vec::new();
+    for filter in filters {
+        let kinds = filter.kinds.as_ref()?;
+        let only_kind = kinds.iter().next()?;
+        let k = only_kind.as_u16() as u32;
+        if kinds.len() != 1 || (k != KIND_PRESENCE_UPDATE && k != KIND_PRESENCE_SNAPSHOT) {
+            return None;
+        }
+        let authors = filter.authors.as_ref()?;
+        if authors.is_empty() {
+            return None;
+        }
+        all_pubkeys.extend(authors.iter().copied());
+    }
+
+    if all_pubkeys.is_empty() {
+        return Some(Vec::new());
+    }
+
+    // Dedup pubkeys.
+    all_pubkeys.sort_by_key(|pk| pk.to_hex());
+    all_pubkeys.dedup();
+
+    // Look up Redis.
+    let presence_map = state
+        .pubsub
+        .get_presence_bulk(&all_pubkeys)
+        .await
+        .unwrap_or_default();
+
+    if presence_map.is_empty() {
+        return Some(Vec::new());
+    }
+
+    // Synthesize kind:20001 events signed by the relay.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut events = Vec::with_capacity(presence_map.len());
+    for (pubkey_hex, status) in &presence_map {
+        // Build a synthetic event: relay-signed, content = status, p-tag = subject.
+        let tags = vec![nostr::Tag::parse(&["p", pubkey_hex]).ok()?];
+        let event = nostr::EventBuilder::new(
+            nostr::Kind::Custom(KIND_PRESENCE_UPDATE as u16),
+            status,
+            tags,
+        )
+        .custom_created_at(nostr::Timestamp::from(now))
+        .sign_with_keys(&state.relay_keypair)
+        .ok()?;
+
+        if let Ok(v) = serde_json::to_value(&event) {
+            events.push(v);
+        }
+    }
+
+    Some(events)
 }

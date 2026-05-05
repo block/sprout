@@ -418,12 +418,11 @@ class PairingNotifier extends Notifier<PairingState> {
       // Parse the custom payload.
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final relayUrl = data['relayUrl'] as String?;
-      final token = data['token'] as String?;
       final pubkey = data['pubkey'] as String?;
       final nsec = data['nsec'] as String?;
 
-      if (relayUrl == null || token == null) {
-        throw const FormatException('Missing relayUrl or token in payload');
+      if (relayUrl == null) {
+        throw const FormatException('Missing relayUrl in payload');
       }
 
       // Validate relay URL to prevent SSRF via private network addresses.
@@ -439,7 +438,6 @@ class PairingNotifier extends Notifier<PairingState> {
       final workspace = Workspace.create(
         name: Workspace.nameFromUrl(relayUrl),
         relayUrl: relayUrl,
-        token: token,
         pubkey: pubkey,
         nsec: nsec,
       );
@@ -607,9 +605,8 @@ class PairingNotifier extends Notifier<PairingState> {
     }
 
     final relayUrl = decoded['relayUrl'] as String?;
-    final token = decoded['token'] as String?;
-    if (relayUrl == null || token == null) {
-      throw const FormatException('Missing relayUrl or token');
+    if (relayUrl == null) {
+      throw const FormatException('Missing relayUrl in payload');
     }
 
     _validateRelayUrl(relayUrl);
@@ -617,7 +614,6 @@ class PairingNotifier extends Notifier<PairingState> {
     return Workspace.create(
       name: Workspace.nameFromUrl(relayUrl),
       relayUrl: relayUrl,
-      token: token,
       pubkey: decoded['pubkey'] as String?,
       nsec: decoded['nsec'] as String?,
     );

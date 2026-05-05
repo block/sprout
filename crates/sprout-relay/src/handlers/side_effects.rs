@@ -1772,7 +1772,7 @@ pub async fn publish_nip43_membership_list(state: &Arc<AppState>) -> anyhow::Res
 
     for member in &members {
         tags.push(
-            Tag::parse(&["member", &member.pubkey])
+            Tag::parse(&["member", &member.pubkey, &member.role])
                 .map_err(|e| anyhow::anyhow!("failed to build member tag: {e}"))?,
         );
     }

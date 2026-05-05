@@ -7,7 +7,6 @@ class Workspace {
   final String id;
   final String name;
   final String relayUrl;
-  final String token;
   final String? pubkey;
   final String? nsec;
   final DateTime addedAt;
@@ -16,7 +15,6 @@ class Workspace {
     required this.id,
     required this.name,
     required this.relayUrl,
-    required this.token,
     this.pubkey,
     this.nsec,
     required this.addedAt,
@@ -25,7 +23,6 @@ class Workspace {
   factory Workspace.create({
     required String name,
     required String relayUrl,
-    required String token,
     String? pubkey,
     String? nsec,
   }) {
@@ -33,7 +30,6 @@ class Workspace {
       id: _uuid.v4(),
       name: name,
       relayUrl: relayUrl,
-      token: token,
       pubkey: pubkey,
       nsec: nsec,
       addedAt: DateTime.now(),
@@ -43,7 +39,6 @@ class Workspace {
   Workspace copyWith({
     String? name,
     String? relayUrl,
-    String? token,
     Object? pubkey = _sentinel,
     Object? nsec = _sentinel,
   }) {
@@ -51,7 +46,6 @@ class Workspace {
       id: id,
       name: name ?? this.name,
       relayUrl: relayUrl ?? this.relayUrl,
-      token: token ?? this.token,
       pubkey: pubkey == _sentinel ? this.pubkey : pubkey as String?,
       nsec: nsec == _sentinel ? this.nsec : nsec as String?,
       addedAt: addedAt,
@@ -62,7 +56,6 @@ class Workspace {
     'id': id,
     'name': name,
     'relayUrl': relayUrl,
-    'token': token,
     if (pubkey != null) 'pubkey': pubkey,
     if (nsec != null) 'nsec': nsec,
     'addedAt': addedAt.toIso8601String(),
@@ -72,7 +65,6 @@ class Workspace {
     id: json['id'] as String,
     name: json['name'] as String,
     relayUrl: json['relayUrl'] as String,
-    token: json['token'] as String,
     pubkey: json['pubkey'] as String?,
     nsec: json['nsec'] as String?,
     addedAt: DateTime.parse(json['addedAt'] as String),

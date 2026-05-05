@@ -215,7 +215,20 @@ pub async fn get_presence(
 
     let mut latest: HashMap<String, (u64, PresenceStatus)> = HashMap::new();
     for ev in &events {
-        let pk = ev.pubkey.to_hex();
+        // Relay-synthesized presence events use a p-tag to identify the subject.
+        // Self-signed presence events (live WS) use the event author directly.
+        let pk = ev
+            .tags
+            .iter()
+            .find_map(|t| {
+                let s = t.as_slice();
+                if s.len() >= 2 && s[0] == "p" {
+                    Some(s[1].clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| ev.pubkey.to_hex());
         let ts = ev.created_at.as_u64();
         let status = match ev.content.trim() {
             "online" => PresenceStatus::Online,

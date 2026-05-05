@@ -41,7 +41,6 @@ class WorkspaceStorage {
       final workspace = Workspace.create(
         name: name,
         relayUrl: legacyUrl,
-        token: legacyToken,
         pubkey: legacyPubkey,
         nsec: legacyNsec,
       );

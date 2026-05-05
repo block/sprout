@@ -59,6 +59,10 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// Ephemeral kinds (20000-29999) are rejected by the HTTP bridge, so presence
 /// updates must be routed through the WS path.
+///
+/// Content is a bare status string (`"online"`, `"away"`, `"offline"`) matching
+/// the desktop client's format. The relay stores this in Redis and synthesizes
+/// it back on presence queries.
 async fn publish_presence(
     publisher: &relay::RelayEventPublisher,
     keys: &nostr::Keys,
@@ -67,8 +71,7 @@ async fn publish_presence(
     use nostr::{EventBuilder, Kind};
     use sprout_core::kind::KIND_PRESENCE_UPDATE;
 
-    let content = serde_json::json!({ "status": status }).to_string();
-    let event = EventBuilder::new(Kind::Custom(KIND_PRESENCE_UPDATE as u16), &content, [])
+    let event = EventBuilder::new(Kind::Custom(KIND_PRESENCE_UPDATE as u16), status, [])
         .sign_with_keys(keys)
         .map_err(|e| relay::RelayError::Http(format!("presence sign error: {e}")))?;
     publisher.publish_event(event).await?;

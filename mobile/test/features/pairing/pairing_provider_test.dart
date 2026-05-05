@@ -75,7 +75,7 @@ void main() {
 
       final state = container.read(pairingProvider);
       expect(state.status, PairingStatus.error);
-      expect(state.errorMessage, contains('Missing relayUrl or token'));
+      expect(state.errorMessage, contains('Missing relayUrl'));
     });
 
     test('empty input errors', () async {
@@ -143,13 +143,11 @@ void main() {
 /// Encode a credentials payload the same way the desktop app would.
 String _encodePairingCode({
   String relayUrl = 'http://test:3000',
-  String token = 'sprout_test_token',
   String? pubkey,
   String? nsec,
 }) {
   final json = <String, dynamic>{
     'relayUrl': relayUrl,
-    'token': token,
     // ignore: use_null_aware_elements
     if (pubkey != null) 'pubkey': pubkey,
     // ignore: use_null_aware_elements

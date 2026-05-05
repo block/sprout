@@ -104,7 +104,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Test',
         relayUrl: 'https://relay.example.com',
-        token: 'tok_123',
         pubkey: 'abc123',
       );
 
@@ -115,7 +114,6 @@ void main() {
       expect(loaded.first.id, ws.id);
       expect(loaded.first.name, 'Test');
       expect(loaded.first.relayUrl, 'https://relay.example.com');
-      expect(loaded.first.token, 'tok_123');
       expect(loaded.first.pubkey, 'abc123');
     });
 
@@ -123,7 +121,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Original',
         relayUrl: 'https://relay.example.com',
-        token: 'tok_123',
       );
 
       await storage.save(ws);
@@ -138,12 +135,10 @@ void main() {
       final ws1 = Workspace.create(
         name: 'One',
         relayUrl: 'https://one.example.com',
-        token: 'tok_1',
       );
       final ws2 = Workspace.create(
         name: 'Two',
         relayUrl: 'https://two.example.com',
-        token: 'tok_2',
       );
 
       await storage.save(ws1);
@@ -179,7 +174,6 @@ void main() {
 
         expect(loaded, hasLength(1));
         expect(loaded.first.relayUrl, 'https://legacy.example.com');
-        expect(loaded.first.token, 'legacy_token');
         expect(loaded.first.pubkey, 'legacy_pub');
         expect(loaded.first.nsec, 'legacy_nsec');
         expect(loaded.first.name, isNotEmpty);
