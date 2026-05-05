@@ -7,6 +7,7 @@
 import { Route as rootRouteImport } from "./routes/root";
 import { Route as reposRouteImport } from "./routes/repos";
 import { Route as indexRouteImport } from "./routes/index";
+import { Route as reposDotrepoIdRouteImport } from "./routes/repos.$repoId";
 
 const reposRoute = reposRouteImport.update({
   id: "/repos",
@@ -18,31 +19,40 @@ const indexRoute = indexRouteImport.update({
   path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
+const reposDotrepoIdRoute = reposDotrepoIdRouteImport.update({
+  id: "/repos/$repoId",
+  path: "/repos/$repoId",
+  getParentRoute: () => rootRouteImport,
+} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
   "/repos": typeof reposRoute;
+  "/repos/$repoId": typeof reposDotrepoIdRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof indexRoute;
   "/repos": typeof reposRoute;
+  "/repos/$repoId": typeof reposDotrepoIdRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof indexRoute;
   "/repos": typeof reposRoute;
+  "/repos/$repoId": typeof reposDotrepoIdRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/repos";
+  fullPaths: "/" | "/repos" | "/repos/$repoId";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/repos";
-  id: "__root__" | "/" | "/repos";
+  to: "/" | "/repos" | "/repos/$repoId";
+  id: "__root__" | "/" | "/repos" | "/repos/$repoId";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
   reposRoute: typeof reposRoute;
+  reposDotrepoIdRoute: typeof reposDotrepoIdRoute;
 }
 
 declare module "@tanstack/react-router" {
@@ -61,12 +71,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof indexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/repos/$repoId": {
+      id: "/repos/$repoId";
+      path: "/repos/$repoId";
+      fullPath: "/repos/$repoId";
+      preLoaderRoute: typeof reposDotrepoIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
   reposRoute: reposRoute,
+  reposDotrepoIdRoute: reposDotrepoIdRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

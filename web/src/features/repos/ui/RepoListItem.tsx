@@ -1,4 +1,5 @@
 import { BookMarked } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 
 import { Badge } from "@/shared/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -34,18 +35,13 @@ export function RepoListItem({ repo }: { repo: Repo }) {
       {/* Row 1: Name + badge */}
       <div className="flex items-center gap-2">
         <BookMarked className="h-4 w-4 shrink-0 text-muted-foreground" />
-        {repo.webUrl ? (
-          <a
-            href={repo.webUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-lg font-semibold text-primary hover:underline"
-          >
-            {repo.name}
-          </a>
-        ) : (
-          <span className="text-lg font-semibold">{repo.name}</span>
-        )}
+        <Link
+          to="/repos/$repoId"
+          params={{ repoId: repo.id }}
+          className="text-lg font-semibold text-primary hover:underline"
+        >
+          {repo.name}
+        </Link>
         <Badge variant="outline" className="ml-1">
           Public
         </Badge>
