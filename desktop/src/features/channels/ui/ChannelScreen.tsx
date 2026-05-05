@@ -34,7 +34,10 @@ import {
 import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
-import { useChannelTyping } from "@/features/messages/useChannelTyping";
+import {
+  type TypingIndicatorEntry,
+  useChannelTyping,
+} from "@/features/messages/useChannelTyping";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { mergeCurrentProfileIntoLookup } from "@/features/profile/lib/identity";
 import type {
@@ -142,13 +145,6 @@ export function ChannelScreen({
     currentPubkey,
     latestMessageEvent,
   );
-  const mainTypingPubkeys = React.useMemo(
-    () =>
-      typingEntries
-        .filter((entry) => entry.threadHeadId === null)
-        .map((entry) => entry.pubkey),
-    [typingEntries],
-  );
   const threadTypingPubkeys = React.useMemo(
     () =>
       typingEntries
@@ -170,21 +166,28 @@ export function ChannelScreen({
   });
   const managedAgentsQuery = useManagedAgentsQuery();
   useManagedAgentObserverBridge(managedAgentsQuery.data ?? []);
-  const { humanTypingPubkeys, botTypingPubkeys } = React.useMemo(() => {
+  const { botTypingEntries, humanTypingPubkeys } = React.useMemo<{
+    botTypingEntries: TypingIndicatorEntry[];
+    humanTypingPubkeys: string[];
+  }>(() => {
     const localAgentSet = new Set(
       (managedAgentsQuery.data ?? [])
         .filter((agent) => agent.backend.type === "local")
         .map((agent) => agent.pubkey.toLowerCase()),
     );
+    const channelTypingEntries = typingEntries.filter(
+      (entry) => entry.threadHeadId === null,
+    );
+    const agentTypingEntries = typingEntries.filter((entry) =>
+      localAgentSet.has(entry.pubkey.toLowerCase()),
+    );
     return {
-      humanTypingPubkeys: mainTypingPubkeys.filter(
-        (pk) => !localAgentSet.has(pk.toLowerCase()),
-      ),
-      botTypingPubkeys: mainTypingPubkeys.filter((pk) =>
-        localAgentSet.has(pk.toLowerCase()),
-      ),
+      botTypingEntries: agentTypingEntries,
+      humanTypingPubkeys: channelTypingEntries
+        .filter((entry) => !localAgentSet.has(entry.pubkey.toLowerCase()))
+        .map((entry) => entry.pubkey),
     };
-  }, [mainTypingPubkeys, managedAgentsQuery.data]);
+  }, [managedAgentsQuery.data, typingEntries]);
   const messageProfiles = React.useMemo(() => {
     const base =
       mergeCurrentProfileIntoLookup(
@@ -468,7 +471,7 @@ export function ChannelScreen({
                 <ChannelPane
                   activeChannel={activeChannel}
                   agentSessionAgents={channelAgentSessionAgents}
-                  botTypingPubkeys={botTypingPubkeys}
+                  botTypingEntries={botTypingEntries}
                   channelFind={channelFind}
                   currentPubkey={currentPubkey}
                   fetchOlder={fetchOlder}

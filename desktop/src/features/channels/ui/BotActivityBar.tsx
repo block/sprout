@@ -1,5 +1,6 @@
-import { Bot, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import {
@@ -10,11 +11,13 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 type BotActivityBarProps = {
   agents: ManagedAgent[];
   onOpenAgentSession: (pubkey: string) => void;
   openAgentSessionPubkey: string | null;
+  profiles?: UserProfileLookup;
   typingBotPubkeys: string[];
 };
 
@@ -30,6 +33,7 @@ export function BotActivityBar({
   agents,
   onOpenAgentSession,
   openAgentSessionPubkey,
+  profiles,
   typingBotPubkeys,
 }: BotActivityBarProps) {
   if (typingBotPubkeys.length === 0) {
@@ -53,6 +57,8 @@ export function BotActivityBar({
     openAgentSessionPubkey,
   );
   const isCompact = typingAgents.length >= COMPACT_THRESHOLD;
+  const agentAvatarUrl = (agent: ManagedAgent) =>
+    profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null;
 
   return (
     <div
@@ -77,7 +83,11 @@ export function BotActivityBar({
                 onClick={() => onOpenAgentSession(agent.pubkey)}
                 type="button"
               >
-                <Bot className="h-3 w-3 shrink-0" />
+                <UserAvatar
+                  avatarUrl={agentAvatarUrl(agent)}
+                  className="!h-4 !w-4 shrink-0 rounded-full text-[7px]"
+                  displayName={agent.name}
+                />
                 <span className="min-w-0 truncate">{agent.name}</span>
                 <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-60" />
               </button>
@@ -112,7 +122,11 @@ export function BotActivityBar({
                 key={agent.pubkey}
                 onClick={() => onOpenAgentSession(agent.pubkey)}
               >
-                <Bot className="h-4 w-4 text-muted-foreground" />
+                <UserAvatar
+                  avatarUrl={agentAvatarUrl(agent)}
+                  className="!h-5 !w-5 shrink-0 rounded-full text-[8px]"
+                  displayName={agent.name}
+                />
                 <span className="min-w-0 flex-1 truncate">{agent.name}</span>
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
               </DropdownMenuItem>

@@ -5,6 +5,7 @@ import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
+import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
@@ -50,10 +51,49 @@ function getInitialThreadPanelWidth(): number {
   }
 }
 
+function messageMentionsPubkey(message: TimelineMessage, pubkey: string) {
+  const normalizedPubkey = pubkey.toLowerCase();
+  if (message.pubkey?.toLowerCase() === normalizedPubkey) {
+    return false;
+  }
+
+  return (
+    message.tags?.some(
+      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === normalizedPubkey,
+    ) ?? false
+  );
+}
+
+function findLatestMentionedMessageId(
+  messages: TimelineMessage[],
+  pubkey: string,
+) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message && messageMentionsPubkey(message, pubkey)) {
+      return message.id;
+    }
+  }
+
+  return null;
+}
+
+function addPubkey(
+  map: Map<string, string[]>,
+  messageId: string,
+  pubkey: string,
+) {
+  const current = map.get(messageId) ?? [];
+  if (!current.some((value) => value.toLowerCase() === pubkey.toLowerCase())) {
+    current.push(pubkey);
+  }
+  map.set(messageId, current);
+}
+
 type ChannelPaneProps = {
   activeChannel: Channel | null;
   agentSessionAgents: ManagedAgent[];
-  botTypingPubkeys: string[];
+  botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
   currentPubkey?: string;
   editTarget?: {
@@ -118,7 +158,7 @@ type ChannelPaneProps = {
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentSessionAgents,
-  botTypingPubkeys,
+  botTypingEntries,
   channelFind,
   currentPubkey,
   editTarget = null,
@@ -230,7 +270,53 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel.channelType === "forum" ||
     isSending;
   const hasTypingActivity = typingPubkeys.length > 0;
-  const hasBotActivity = botTypingPubkeys.length > 0;
+  const { messageActivityFooters, unanchoredBotTypingPubkeys } =
+    React.useMemo(() => {
+      const botPubkeysByMessageId = new Map<string, string[]>();
+      const unanchoredPubkeys: string[] = [];
+      for (const entry of botTypingEntries) {
+        const messageId =
+          entry.threadHeadId ??
+          findLatestMentionedMessageId(messages, entry.pubkey);
+        if (messageId) {
+          addPubkey(botPubkeysByMessageId, messageId, entry.pubkey);
+        } else if (
+          !unanchoredPubkeys.some(
+            (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
+          )
+        ) {
+          unanchoredPubkeys.push(entry.pubkey);
+        }
+      }
+
+      const footers: Record<string, React.ReactNode> = {};
+      for (const [messageId, pubkeys] of botPubkeysByMessageId) {
+        footers[messageId] = (
+          <div className="flex justify-start pl-[3.125rem]">
+            <BotActivityBar
+              agents={agentSessionAgents}
+              onOpenAgentSession={onOpenAgentSession}
+              openAgentSessionPubkey={openAgentSessionPubkey}
+              profiles={profiles}
+              typingBotPubkeys={pubkeys}
+            />
+          </div>
+        );
+      }
+
+      return {
+        messageActivityFooters: footers,
+        unanchoredBotTypingPubkeys: unanchoredPubkeys,
+      };
+    }, [
+      agentSessionAgents,
+      botTypingEntries,
+      messages,
+      onOpenAgentSession,
+      openAgentSessionPubkey,
+      profiles,
+    ]);
+  const hasBotActivity = unanchoredBotTypingPubkeys.length > 0;
 
   const selectedAgent = React.useMemo(
     () =>
@@ -263,6 +349,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
           isFetchingOlder={isFetchingOlder}
+          messageFooters={messageActivityFooters}
           personaLookup={personaLookup}
           profiles={profiles}
           emptyDescription={
@@ -306,7 +393,8 @@ export const ChannelPane = React.memo(function ChannelPane({
                 agents={agentSessionAgents}
                 onOpenAgentSession={onOpenAgentSession}
                 openAgentSessionPubkey={openAgentSessionPubkey}
-                typingBotPubkeys={botTypingPubkeys}
+                profiles={profiles}
+                typingBotPubkeys={unanchoredBotTypingPubkeys}
               />
             </div>
           </div>
@@ -401,9 +489,9 @@ export const ChannelPane = React.memo(function ChannelPane({
           agent={selectedAgent}
           canResetWidth={canResetThreadPanelWidth}
           channel={activeChannel}
-          isWorking={botTypingPubkeys.some(
-            (pubkey) =>
-              pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
+          isWorking={botTypingEntries.some(
+            (entry) =>
+              entry.pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
           )}
           onClose={onCloseAgentSession}
           onResetWidth={handleThreadPanelWidthReset}

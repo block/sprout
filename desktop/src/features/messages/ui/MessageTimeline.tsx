@@ -23,6 +23,7 @@ type MessageTimelineProps = {
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
+  messageFooters?: Record<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
@@ -55,6 +56,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   fetchOlder,
   hasOlderMessages = true,
   isFetchingOlder = false,
+  messageFooters,
   personaLookup,
   profiles,
   onDelete,
@@ -172,23 +174,22 @@ export const MessageTimeline = React.memo(function MessageTimeline({
             ) : null}
 
             {!isLoading && messages.length > 0 ? (
-              <>
-                <TimelineMessageList
-                  activeReplyTargetId={activeReplyTargetId}
-                  currentPubkey={currentPubkey}
-                  highlightedMessageId={highlightedMessageId}
-                  messages={messages}
-                  onDelete={onDelete}
-                  onEdit={onEdit}
-                  onReply={onReply}
-                  onToggleReaction={onToggleReaction}
-                  personaLookup={personaLookup}
-                  profiles={profiles}
-                  searchActiveMessageId={searchActiveMessageId}
-                  searchMatchingMessageIds={searchMatchingMessageIds}
-                  searchQuery={searchQuery}
-                />
-              </>
+              <TimelineMessageList
+                activeReplyTargetId={activeReplyTargetId}
+                currentPubkey={currentPubkey}
+                highlightedMessageId={highlightedMessageId}
+                messageFooters={messageFooters}
+                messages={messages}
+                onDelete={onDelete}
+                onEdit={onEdit}
+                onReply={onReply}
+                onToggleReaction={onToggleReaction}
+                personaLookup={personaLookup}
+                profiles={profiles}
+                searchActiveMessageId={searchActiveMessageId}
+                searchMatchingMessageIds={searchMatchingMessageIds}
+                searchQuery={searchQuery}
+              />
             ) : null}
 
             <div aria-hidden className="h-px" ref={bottomAnchorRef} />

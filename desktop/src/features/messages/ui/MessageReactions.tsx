@@ -63,7 +63,12 @@ export function MessageReactions({
   }
 
   return (
-    <div className={cn("mt-1.5 flex flex-wrap items-center gap-1.5 pt-1", className)}>
+    <div
+      className={cn(
+        "mt-1.5 flex flex-wrap items-center gap-1.5 pt-1",
+        className,
+      )}
+    >
       {reactions.map((reaction) => (
         <ReactionPill
           key={`${messageId}-${reaction.emoji}`}
