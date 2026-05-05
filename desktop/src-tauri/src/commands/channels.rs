@@ -45,28 +45,74 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
     channel_ids.sort();
     channel_ids.dedup();
 
-    if channel_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Step 2: fetch channel metadata events (kind:39000) for those ids.
+    // Step 2: fetch channel metadata events (kind:39000) for member channels.
     // kind:39000 is addressable: exactly one event per `d` tag, so a limit
     // equal to the number of ids is both necessary and sufficient. Without
     // an explicit limit, multi-value `#d` filters fall through to the relay's
     // default LIMIT and can drop results when there are many channels.
-    let meta_events = query_relay(
+    let meta_events = if !channel_ids.is_empty() {
+        query_relay(
+            &state,
+            &[serde_json::json!({
+                "kinds": [39000],
+                "#d": channel_ids,
+                "limit": channel_ids.len(),
+            })],
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+
+    // Step 3: fetch ALL open channel metadata so the channel browser can show
+    // discoverable channels the user hasn't joined yet. The relay's access
+    // control allows reading kind:39000 for open channels regardless of membership.
+    let open_meta_events = query_relay(
         &state,
         &[serde_json::json!({
             "kinds": [39000],
-            "#d": channel_ids,
-            "limit": channel_ids.len(),
+            "limit": 5000,
         })],
     )
     .await?;
 
-    let mut channels = Vec::with_capacity(meta_events.len());
+    // Merge: member channels (marked as member) + open channels (not yet joined).
+    let member_d_tags: std::collections::HashSet<String> = meta_events
+        .iter()
+        .filter_map(|ev| {
+            ev.tags.iter().find_map(|t| {
+                let s = t.as_slice();
+                if s.len() >= 2 && s[0] == "d" {
+                    Some(s[1].clone())
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    let mut channels = Vec::with_capacity(meta_events.len() + open_meta_events.len());
     for ev in &meta_events {
-        if let Ok(info) = nostr_convert::channel_info_from_event(ev, None) {
+        if let Ok(info) = nostr_convert::channel_info_from_event(ev, None, Some(true)) {
+            channels.push(info);
+        }
+    }
+    for ev in &open_meta_events {
+        // Skip channels already included from the member set.
+        let d_tag = ev.tags.iter().find_map(|t| {
+            let s = t.as_slice();
+            if s.len() >= 2 && s[0] == "d" {
+                Some(s[1].clone())
+            } else {
+                None
+            }
+        });
+        if let Some(ref d) = d_tag {
+            if member_d_tags.contains(d) {
+                continue;
+            }
+        }
+        if let Ok(info) = nostr_convert::channel_info_from_event(ev, None, Some(false)) {
             channels.push(info);
         }
     }
@@ -202,7 +248,7 @@ pub async fn create_channel(
 
     events
         .first()
-        .map(|ev| nostr_convert::channel_info_from_event(ev, None))
+        .map(|ev| nostr_convert::channel_info_from_event(ev, None, None))
         .transpose()?
         .ok_or_else(|| "channel created but metadata not yet available".to_string())
 }
