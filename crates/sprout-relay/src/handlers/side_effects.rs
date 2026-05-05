@@ -522,7 +522,35 @@ async fn emit_addressable_discovery_event(
     tags: Vec<Tag>,
     relay_pubkey_hex: &str,
 ) -> anyhow::Result<()> {
+    // Ensure the new event's created_at is strictly greater than any existing event
+    // of the same (kind, pubkey, channel_id). Without this, rapid successive updates
+    // (e.g. set topic then set purpose in the same second) can produce events with
+    // identical created_at, causing the second to be rejected by stale-write protection
+    // (NIP-16 tiebreaker: lower event ID wins, which is random).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let min_ts = {
+        let existing = state
+            .db
+            .query_events(&sprout_db::event::EventQuery {
+                kinds: Some(vec![kind as i32]),
+                channel_id: Some(channel_id),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_default();
+        existing
+            .first()
+            .map(|e| e.event.created_at.as_u64() + 1)
+            .unwrap_or(now)
+    };
+    let ts = now.max(min_ts);
+
     let event = EventBuilder::new(Kind::Custom(kind as u16), "", tags)
+        .custom_created_at(nostr::Timestamp::from(ts))
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
 

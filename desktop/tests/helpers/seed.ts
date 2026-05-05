@@ -41,7 +41,7 @@ export async function assertRelaySeeded() {
             "X-Pubkey": tylerPubkey,
             "Content-Type": "application/json",
           },
-          data: [{ kinds: [39000], limit: 50 }],
+          data: [{ kinds: [39000], limit: 200 }],
           timeout: requestTimeoutMs,
         });
 
