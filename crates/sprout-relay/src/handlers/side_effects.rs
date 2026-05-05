@@ -603,6 +603,12 @@ pub async fn emit_group_discovery_events(
         // Not a security boundary — access control is handled by channel-scoped storage.
         if channel.channel_type == "dm" {
             tags.push(Tag::parse(&["hidden"])?);
+            // Include participant pubkeys in kind:39000 for DMs so clients can
+            // resolve display names without a separate kind:39002 fetch.
+            for m in &members {
+                let pubkey_hex = hex::encode(&m.pubkey);
+                tags.push(Tag::parse(&["p", &pubkey_hex])?);
+            }
         }
         // Sprout channels always require explicit membership
         tags.push(Tag::parse(&["closed"])?);
