@@ -1,13 +1,7 @@
 import * as React from "react";
 import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "motion/react";
-import {
-  ALargeSmall,
-  ArrowUp,
-  AtSign,
-  Paperclip,
-  X,
-} from "lucide-react";
+import { ALargeSmall, ArrowUp, AtSign, Paperclip, X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
