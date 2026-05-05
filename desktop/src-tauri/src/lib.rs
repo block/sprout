@@ -7,6 +7,7 @@ mod media_proxy;
 mod migration;
 mod models;
 pub mod nostr_convert;
+mod prevent_sleep;
 mod relay;
 mod util;
 
@@ -565,6 +566,7 @@ pub fn run() {
             cancel_pairing,
             apply_workspace,
             get_active_workspace,
+            set_prevent_sleep_active,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -574,6 +576,7 @@ pub fn run() {
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
             shutdown_started.store(true, Ordering::SeqCst);
             if !shutdown_done.swap(true, Ordering::SeqCst) {
+                prevent_sleep::release(&app_handle.state::<AppState>().prevent_sleep);
                 if let Err(error) = shutdown_managed_agents(app_handle) {
                     eprintln!("sprout-desktop: failed to stop managed agents: {error}");
                 }
