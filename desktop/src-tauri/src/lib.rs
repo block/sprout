@@ -31,6 +31,7 @@ use std::sync::{
 };
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
+use url::Url;
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -151,9 +152,76 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Handle an incoming `sprout://` deep link URL.
+///
+/// Currently supports:
+/// - `sprout://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
+fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
+    let url = match Url::parse(url_str) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("sprout-desktop: invalid deep link URL {url_str:?}: {e}");
+            return;
+        }
+    };
+
+    if url.scheme() != "sprout" {
+        eprintln!("sprout-desktop: ignoring non-sprout deep link: {url_str}");
+        return;
+    }
+
+    match url.host_str() {
+        Some("connect") => {
+            let relay = url
+                .query_pairs()
+                .find(|(k, _)| k == "relay")
+                .map(|(_, v)| v.into_owned());
+            let Some(relay_url) = relay else {
+                eprintln!("sprout-desktop: connect deep link missing relay param: {url_str}");
+                return;
+            };
+            // Validate the relay URL is ws:// or wss://
+            match Url::parse(&relay_url) {
+                Ok(parsed) if parsed.scheme() == "ws" || parsed.scheme() == "wss" => {}
+                Ok(parsed) => {
+                    eprintln!(
+                        "sprout-desktop: rejecting non-websocket relay URL scheme {:?}: {relay_url}",
+                        parsed.scheme()
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("sprout-desktop: invalid relay URL {relay_url:?}: {e}");
+                    return;
+                }
+            }
+            let _ = app.emit("deep-link-connect", relay_url);
+        }
+        Some(action) => {
+            eprintln!("sprout-desktop: unknown deep link action: {action}");
+        }
+        None => {
+            eprintln!("sprout-desktop: deep link missing action: {url_str}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Focus the existing window when a duplicate instance launches.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+            // Forward any deep link URLs from the duplicate launch.
+            for arg in &argv {
+                if arg.starts_with("sprout://") {
+                    handle_deep_link_url(app, arg);
+                }
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -340,6 +408,20 @@ pub fn run() {
                 if let Err(e) = app.handle().global_shortcut().register(shortcut) {
                     eprintln!("sprout-desktop: failed to register PTT shortcut: {e}");
                 }
+            }
+
+            // Handle deep link URLs received while the app is running (macOS)
+            // and on cold start. The single-instance plugin handles forwarding
+            // from duplicate launches on Windows/Linux.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_deep_link_url(&dl_handle, url.as_str());
+                    }
+                });
             }
 
             // Keep launch-time agent restoration off the synchronous setup path
