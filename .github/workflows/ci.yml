@@ -167,8 +167,8 @@ jobs:
               cat /tmp/sprout-relay.log
               exit 1
             fi
-            status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/channels || true)
-            if [ "${status_code}" != "000" ]; then
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/_readiness || true)
+            if [ "${status_code}" = "200" ]; then
               exit 0
             fi
             sleep 1
