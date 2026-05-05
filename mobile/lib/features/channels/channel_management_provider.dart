@@ -23,13 +23,6 @@ class ChannelMember {
     this.displayName,
   });
 
-  factory ChannelMember.fromJson(Map<String, dynamic> json) => ChannelMember(
-    pubkey: json['pubkey'] as String,
-    role: json['role'] as String? ?? 'member',
-    joinedAt: DateTime.parse(json['joined_at'] as String),
-    displayName: json['display_name'] as String?,
-  );
-
   bool get isBot => role == 'bot';
   bool get isOwner => role == 'owner';
   bool get isElevated => role == 'owner' || role == 'admin';
@@ -57,17 +50,6 @@ class ChannelCanvas {
     required this.updatedAt,
     required this.authorPubkey,
   });
-
-  factory ChannelCanvas.fromJson(Map<String, dynamic> json) => ChannelCanvas(
-    content: json['content'] as String?,
-    updatedAt: json['updated_at'] != null
-        ? DateTime.fromMillisecondsSinceEpoch(
-            (json['updated_at'] as int) * 1000,
-            isUtc: true,
-          )
-        : null,
-    authorPubkey: json['author'] as String?,
-  );
 }
 
 @immutable
@@ -83,13 +65,6 @@ class DirectoryUser {
     this.avatarUrl,
     this.nip05Handle,
   });
-
-  factory DirectoryUser.fromJson(Map<String, dynamic> json) => DirectoryUser(
-    pubkey: json['pubkey'] as String,
-    displayName: json['display_name'] as String?,
-    avatarUrl: json['avatar_url'] as String?,
-    nip05Handle: json['nip05_handle'] as String?,
-  );
 
   String get label {
     final display = displayName?.trim();
@@ -113,6 +88,11 @@ class DirectoryUser {
 }
 
 final currentPubkeyProvider = Provider<String?>((ref) {
+  // Prefer the explicitly-derived pubkey from nsec — this is the signing
+  // identity used for events.
+  final myPk = ref.watch(myPubkeyProvider);
+  if (myPk != null) return myPk.toLowerCase();
+
   final profile = ref.watch(profileProvider).whenData((value) => value).value;
   final profilePubkey = profile?.pubkey.trim();
   if (profilePubkey != null && profilePubkey.isNotEmpty) {
@@ -128,53 +108,104 @@ final currentPubkeyProvider = Provider<String?>((ref) {
   return null;
 });
 
+/// Single channel's metadata via kind:39000.
 final channelDetailsProvider = FutureProvider.family<ChannelDetails, String>((
   ref,
   channelId,
 ) async {
-  final client = ref.watch(relayClientProvider);
-  final json =
-      await client.get('/api/channels/$channelId') as Map<String, dynamic>;
-  return ChannelDetails.fromJson(json);
+  final session = ref.watch(relaySessionProvider.notifier);
+  final events = await session.fetchHistory(
+    NostrFilter(
+      kinds: [39000],
+      tags: {
+        '#d': [channelId],
+      },
+      limit: 1,
+    ),
+  );
+  if (events.isEmpty) {
+    throw Exception('Channel not found: $channelId');
+  }
+  final event = events.first;
+  final data = ChannelData.fromEvent(event);
+  return ChannelDetails(
+    id: data.id,
+    name: data.name,
+    channelType: data.channelType,
+    visibility: data.visibility,
+    description: data.description,
+    topic: data.topic,
+    createdBy: event.pubkey,
+    createdAt: DateTime.fromMillisecondsSinceEpoch(
+      event.createdAt * 1000,
+      isUtc: true,
+    ),
+    memberCount: 0,
+  );
 });
 
+/// Channel members from kind:39002 NIP-29 members event.
 final channelMembersProvider =
     FutureProvider.family<List<ChannelMember>, String>((ref, channelId) async {
-      final client = ref.watch(relayClientProvider);
-      final json =
-          await client.get('/api/channels/$channelId/members')
-              as Map<String, dynamic>;
-      final members = json['members'] as List<dynamic>? ?? const [];
-      return members
-          .cast<Map<String, dynamic>>()
-          .map(ChannelMember.fromJson)
+      final session = ref.watch(relaySessionProvider.notifier);
+      final events = await session.fetchHistory(
+        NostrFilters.channelMembers(channelId),
+      );
+      if (events.isEmpty) return const [];
+      final event = events.first;
+      final joinedAt = DateTime.fromMillisecondsSinceEpoch(
+        event.createdAt * 1000,
+        isUtc: true,
+      );
+      return membersFromEvent(event)
+          .map(
+            (m) => ChannelMember(
+              pubkey: m.pubkey,
+              role: m.role,
+              joinedAt: joinedAt,
+            ),
+          )
           .toList();
     });
 
+/// Channel canvas (kind:40100 for the channel).
 final channelCanvasProvider = FutureProvider.family<ChannelCanvas, String>((
   ref,
   channelId,
 ) async {
-  final client = ref.watch(relayClientProvider);
-  final json =
-      await client.get('/api/channels/$channelId/canvas')
-          as Map<String, dynamic>;
-  return ChannelCanvas.fromJson(json);
+  final session = ref.watch(relaySessionProvider.notifier);
+  final events = await session.fetchHistory(NostrFilters.canvas(channelId));
+  if (events.isEmpty) {
+    return const ChannelCanvas(
+      content: null,
+      updatedAt: null,
+      authorPubkey: null,
+    );
+  }
+  final event = events.first;
+  return ChannelCanvas(
+    content: event.content,
+    updatedAt: DateTime.fromMillisecondsSinceEpoch(
+      event.createdAt * 1000,
+      isUtc: true,
+    ),
+    authorPubkey: event.pubkey,
+  );
 });
 
 class ChannelActions {
   final Ref _ref;
-  final RelayClient _client;
+  final RelaySessionNotifier _session;
   final SignedEventRelay _signedEventRelay;
   final String? _currentPubkey;
 
   ChannelActions({
     required Ref ref,
-    required RelayClient client,
+    required RelaySessionNotifier session,
     required SignedEventRelay signedEventRelay,
     required String? currentPubkey,
   }) : _ref = ref,
-       _client = client,
+       _session = session,
        _signedEventRelay = signedEventRelay,
        _currentPubkey = currentPubkey;
 
@@ -197,11 +228,19 @@ class ChannelActions {
     return _refreshChannelsAndRead(channelId);
   }
 
+  /// Open (or create) a DM channel with the given pubkeys.
+  ///
+  /// This submits a kind:41010 command event; the relay responds with an OK
+  /// message whose content carries `response:{...}` containing the new
+  /// `channel_id`.
   Future<Channel> openDm({required List<String> pubkeys}) async {
-    final json =
-        await _client.post('/api/dms', body: {'pubkeys': pubkeys})
-            as Map<String, dynamic>;
-    final channelId = json['channel_id'] as String?;
+    final result = await _signedEventRelay.submit(
+      kind: 41010,
+      content: '',
+      tags: pubkeys.map((pk) => ['p', pk]).toList(),
+    );
+    final response = parseCommandResponse(result.content);
+    final channelId = response?['channel_id'] as String?;
     if (channelId == null || channelId.isEmpty) {
       throw Exception('Relay did not return a DM channel id');
     }
@@ -244,22 +283,24 @@ class ChannelActions {
     _ref.invalidate(channelCanvasProvider(channelId));
   }
 
+  /// User search via NIP-50 over kind:0 profile events.
   Future<List<DirectoryUser>> searchUsers(String query, {int limit = 8}) async {
     final trimmed = query.trim();
-    if (trimmed.isEmpty) {
-      return const [];
-    }
+    if (trimmed.isEmpty) return const [];
 
-    final json =
-        await _client.get(
-              '/api/users/search',
-              queryParams: {'q': trimmed, 'limit': '$limit'},
-            )
-            as Map<String, dynamic>;
-    final users = json['users'] as List<dynamic>? ?? const [];
-    return users
-        .cast<Map<String, dynamic>>()
-        .map(DirectoryUser.fromJson)
+    final events = await _session.fetchHistory(
+      NostrFilter(kinds: [0], search: trimmed, limit: limit),
+    );
+    return events
+        .map((event) {
+          final data = ProfileData.fromEvent(event);
+          return DirectoryUser(
+            pubkey: data.pubkey,
+            displayName: data.displayName,
+            avatarUrl: data.avatarUrl,
+            nip05Handle: data.nip05,
+          );
+        })
         .where(
           (user) =>
               _currentPubkey == null ||
@@ -381,13 +422,16 @@ class ChannelActions {
 }
 
 final channelActionsProvider = Provider<ChannelActions>((ref) {
-  final client = ref.watch(relayClientProvider);
   final relayConfig = ref.watch(relayConfigProvider);
   final currentPubkey = ref.watch(currentPubkeyProvider);
+  final session = ref.read(relaySessionProvider.notifier);
   return ChannelActions(
     ref: ref,
-    client: client,
-    signedEventRelay: SignedEventRelay(client: client, nsec: relayConfig.nsec),
+    session: session,
+    signedEventRelay: SignedEventRelay(
+      session: session,
+      nsec: relayConfig.nsec,
+    ),
     currentPubkey: currentPubkey,
   );
 });

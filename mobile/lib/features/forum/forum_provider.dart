@@ -4,41 +4,56 @@ import '../../shared/relay/relay.dart';
 import '../channels/channel_management_provider.dart';
 import 'forum_models.dart';
 
-/// Fetches forum posts for a channel from the REST API.
+/// Fetches forum posts (kind:45001) for a channel from the relay.
 ///
-/// Posts are top-level kind-45001 events with thread summaries.
-/// Invalidate to refresh (e.g. after creating a new post).
+/// Posts are top-level events tagged `#h:<channelId>`. Invalidate to refresh
+/// (e.g. after creating a new post).
 final forumPostsProvider = FutureProvider.family<ForumPostsResponse, String>((
   ref,
   channelId,
 ) async {
-  final client = ref.watch(relayClientProvider);
-  final json =
-      await client.get(
-            '/api/channels/$channelId/messages',
-            queryParams: {'kinds': '${EventKind.forumPost}', 'limit': '50'},
-          )
-          as Map<String, dynamic>;
-  return ForumPostsResponse.fromJson(json);
+  final session = ref.watch(relaySessionProvider.notifier);
+  final events = await session.fetchHistory(
+    NostrFilters.forumPosts(channelId, limit: 50),
+  );
+  return ForumPostsResponse.fromEvents(events);
 });
 
-/// Fetches a forum thread (root post + replies) from the REST API.
+/// Fetches a forum thread (root post + replies) from the relay.
 final forumThreadProvider =
     FutureProvider.family<
       ForumThreadResponse,
       ({String channelId, String eventId})
     >((ref, args) async {
-      final client = ref.watch(relayClientProvider);
-      final json =
-          await client.get(
-                '/api/channels/${args.channelId}/threads/${args.eventId}',
-                queryParams: {'limit': '100'},
-              )
-              as Map<String, dynamic>;
-      return ForumThreadResponse.fromJson(json);
+      final session = ref.watch(relaySessionProvider.notifier);
+
+      final results = await Future.wait([
+        // Root event lookup by id.
+        session.fetchHistory(
+          NostrFilter(
+            kinds: const [9, 40002, 45001, 45003],
+            ids: [args.eventId],
+            limit: 1,
+          ),
+        ),
+        // Replies pointing at this root.
+        session.fetchHistory(
+          NostrFilters.forumThread(args.eventId, args.channelId),
+        ),
+      ]);
+
+      final rootEvents = results[0];
+      final replyEvents = results[1];
+      if (rootEvents.isEmpty) {
+        throw Exception('Forum thread not found: ${args.eventId}');
+      }
+      return ForumThreadResponse.fromEvents(
+        root: rootEvents.first,
+        replies: replyEvents,
+      );
     });
 
-/// Creates a new forum post (kind 45001).
+/// Creates a new forum post (kind:45001).
 Future<void> createForumPost(
   WidgetRef ref, {
   required String channelId,
@@ -47,8 +62,8 @@ Future<void> createForumPost(
   List<List<String>> mediaTags = const [],
 }) async {
   final config = ref.read(relayConfigProvider);
-  final client = ref.read(relayClientProvider);
-  final relay = SignedEventRelay(client: client, nsec: config.nsec);
+  final session = ref.read(relaySessionProvider.notifier);
+  final relay = SignedEventRelay(session: session, nsec: config.nsec);
 
   final selfPubkey = relay.pubkey?.toLowerCase();
   final seen = <String>{?selfPubkey};
@@ -69,7 +84,7 @@ Future<void> createForumPost(
   ref.invalidate(forumPostsProvider(channelId));
 }
 
-/// Creates a reply to a forum post (kind 45003).
+/// Creates a reply to a forum post (kind:45003).
 Future<void> createForumReply(
   WidgetRef ref, {
   required String channelId,
@@ -79,8 +94,8 @@ Future<void> createForumReply(
   List<List<String>> mediaTags = const [],
 }) async {
   final config = ref.read(relayConfigProvider);
-  final client = ref.read(relayClientProvider);
-  final relay = SignedEventRelay(client: client, nsec: config.nsec);
+  final session = ref.read(relaySessionProvider.notifier);
+  final relay = SignedEventRelay(session: session, nsec: config.nsec);
 
   final selfPubkey = relay.pubkey?.toLowerCase();
   final seen = <String>{?selfPubkey};

@@ -25,12 +25,11 @@ pub fn get_active_workspace(state: State<'_, AppState>) -> Result<ActiveWorkspac
 /// Apply a workspace's configuration to the backend session.
 ///
 /// Called by the frontend on app init (after reload) to configure the
-/// Tauri backend with the selected workspace's relay URL, keys, and token.
+/// Tauri backend with the selected workspace's relay URL and keys.
 #[tauri::command]
 pub fn apply_workspace(
     relay_url: String,
     nsec: Option<String>,
-    token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // ── Validate before mutating ──────────────────────────────────────────
@@ -50,11 +49,6 @@ pub fn apply_workspace(
     if let Some(keys) = parsed_keys {
         let mut keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
         *keys_guard = keys;
-    }
-
-    {
-        let mut token_guard = state.session_token.lock().map_err(|e| e.to_string())?;
-        *token_guard = token;
     }
 
     Ok(())

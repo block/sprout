@@ -408,7 +408,6 @@ pub fn build_managed_agent_summary(
         system_prompt: record.system_prompt.clone(),
         model: record.model.clone(),
         mcp_toolsets: record.mcp_toolsets.clone(),
-        has_api_token: record.api_token.is_some(),
         backend: record.backend.clone(),
         backend_agent_id: record.backend_agent_id.clone(),
         status,
@@ -555,17 +554,12 @@ pub fn spawn_agent_child(
     }
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");
+    command.env_remove("SPROUT_API_TOKEN");
 
     if let Some(ref auth_tag) = record.auth_tag {
         command.env("SPROUT_AUTH_TAG", auth_tag);
     } else {
         command.env_remove("SPROUT_AUTH_TAG");
-    }
-
-    if let Some(token) = &record.api_token {
-        command.env("SPROUT_API_TOKEN", token);
-    } else {
-        command.env_remove("SPROUT_API_TOKEN");
     }
 
     command.env("SPROUT_ACP_RELAY_OBSERVER", "true");

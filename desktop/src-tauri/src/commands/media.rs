@@ -171,20 +171,12 @@ async fn do_upload(
         "Nostr {}",
         URL_SAFE_NO_PAD.encode(auth_event.as_json().as_bytes())
     );
-    let mut req = state
+    let req = state
         .http_client
         .put(format!("{base_url}/media/upload"))
         .header("Authorization", &auth_header)
         .header("Content-Type", mime)
         .header("X-SHA-256", &sha256);
-
-    if let Some(ref token) = state.configured_api_token {
-        req = req.header("X-Auth-Token", token.as_str());
-    } else if let Ok(guard) = state.session_token.lock() {
-        if let Some(ref token) = *guard {
-            req = req.header("X-Auth-Token", token.as_str());
-        }
-    }
 
     let resp = req
         .body(body)

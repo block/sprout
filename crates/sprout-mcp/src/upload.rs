@@ -116,7 +116,6 @@ pub async fn upload_file(
     http: &reqwest::Client,
     keys: &Keys,
     relay_http_url: &str,
-    api_token: Option<&str>,
     server_domain: Option<&str>,
     file_path: &str,
 ) -> Result<BlobDescriptor, UploadError> {
@@ -224,18 +223,15 @@ pub async fn upload_file(
     };
 
     let url = format!("{}/media/upload", relay_http_url.trim_end_matches('/'));
-    let mut req = http
+    let resp = http
         .put(&url)
         .timeout(upload_timeout)
         .header("Authorization", &auth_header)
         .header("Content-Type", mime)
-        .header("X-SHA-256", &sha256);
-
-    if let Some(token) = api_token {
-        req = req.header("X-Auth-Token", token);
-    }
-
-    let resp = req.body(bytes).send().await?;
+        .header("X-SHA-256", &sha256)
+        .body(bytes)
+        .send()
+        .await?;
 
     // 9. Handle response
     let status = resp.status();

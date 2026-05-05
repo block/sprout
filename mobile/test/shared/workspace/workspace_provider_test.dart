@@ -38,7 +38,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Test',
         relayUrl: 'https://test.example.com',
-        token: 'tok',
       );
       await container.read(workspaceListProvider.notifier).addWorkspace(ws);
 
@@ -54,7 +53,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Test',
         relayUrl: 'https://test.example.com',
-        token: 'tok',
       );
       await container.read(workspaceListProvider.notifier).addWorkspace(ws);
       await container
@@ -72,7 +70,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Original',
         relayUrl: 'https://test.example.com',
-        token: 'tok',
       );
       await container.read(workspaceListProvider.notifier).addWorkspace(ws);
       await container
@@ -90,12 +87,10 @@ void main() {
       final ws1 = Workspace.create(
         name: 'One',
         relayUrl: 'https://one.example.com',
-        token: 'tok1',
       );
       final ws2 = Workspace.create(
         name: 'Two',
         relayUrl: 'https://two.example.com',
-        token: 'tok2',
       );
 
       final notifier = container.read(workspaceListProvider.notifier);
@@ -122,7 +117,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Test',
         relayUrl: 'https://test.example.com',
-        token: 'tok',
       );
       final notifier = container.read(workspaceListProvider.notifier);
       await notifier.addWorkspace(ws);
@@ -141,7 +135,6 @@ void main() {
       final ws = Workspace.create(
         name: 'Fallback',
         relayUrl: 'https://test.example.com',
-        token: 'tok',
       );
       final notifier = container.read(workspaceListProvider.notifier);
       await notifier.addWorkspace(ws);

@@ -22,7 +22,6 @@ use sprout_pubsub::PubSubManager;
 use sprout_search::SearchService;
 use sprout_workflow::WorkflowEngine;
 
-use crate::api::tokens::MintRateLimiter;
 use crate::audio::AudioRoomManager;
 use crate::config::Config;
 use crate::connection::{ConnectionSubscriptions, SLOW_CLIENT_GRACE_LIMIT};
@@ -191,12 +190,7 @@ pub struct AppState {
     pub workflow_engine: Arc<WorkflowEngine>,
     /// Relay signing keypair — used to sign system messages (kind 40099).
     pub relay_keypair: nostr::Keys,
-    /// Rate limiter for `POST /api/tokens` — 5 mints per pubkey per hour.
-    pub mint_rate_limiter: Arc<MintRateLimiter>,
-    /// Debounce cache for `last_used_at` token updates — avoids a DB write on every request.
-    /// Entries map token UUID → last time we wrote `last_used_at` to the DB.
-    /// Resets on restart (acceptable — `last_used_at` is informational, not security-critical).
-    pub last_used_cache: Arc<DashMap<Uuid, Instant>>,
+
     /// Recently-published event IDs for local-echo deduplication.
     /// Events fanned out in-process are added here; the Redis subscriber
     /// consumer skips them to avoid double delivery. Entries expire after
@@ -225,6 +219,10 @@ pub struct AppState {
     pub shutting_down: Arc<AtomicBool>,
     /// Process start time — used by `/_status` endpoint.
     pub started_at: Instant,
+    /// NIP-98 replay prevention: recently-seen event IDs.
+    /// 2× the ±60s tolerance window so entries outlive the acceptance window.
+    pub nip98_seen: Arc<moka::sync::Cache<[u8; 32], ()>>,
+
     /// Per-agent sliding-window rate limiter for observer frames (kind 24200).
     /// Key: agent pubkey bytes (32). Value: (count, window_start).
     /// 100 events/sec per agent — prevents relay/DB pressure from bursty telemetry.
@@ -334,8 +332,7 @@ impl AppState {
             git_repo_locks: Arc::new(DashMap::new()),
             workflow_engine,
             relay_keypair,
-            mint_rate_limiter: Arc::new(MintRateLimiter::new()),
-            last_used_cache: Arc::new(DashMap::new()),
+
             local_event_ids: Arc::new(
                 moka::sync::Cache::builder()
                     .max_capacity(10_000)
@@ -361,6 +358,12 @@ impl AppState {
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
+            nip98_seen: Arc::new(
+                moka::sync::Cache::builder()
+                    .max_capacity(10_000)
+                    .time_to_live(std::time::Duration::from_secs(120))
+                    .build(),
+            ),
             observer_rate_limiter: Arc::new(DashMap::new()),
             observer_owner_cache: Arc::new(
                 moka::sync::Cache::builder()

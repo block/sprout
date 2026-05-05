@@ -9,13 +9,13 @@
 //!
 //! `sprout-mcp` runs as a stdio MCP server. An agent host (e.g. Claude Desktop, Goose)
 //! launches it as a subprocess and communicates over JSON-RPC on stdin/stdout. The server
-//! maintains a persistent, authenticated WebSocket connection to a Sprout relay and a shared
-//! HTTP client for REST API calls.
+//! maintains a persistent, authenticated WebSocket connection to a Sprout relay. All reads
+//! use Nostr REQ/EOSE queries; all writes publish signed Nostr events.
 //!
 //! ```text
 //!  ┌─────────────┐  JSON-RPC (stdio)  ┌──────────────┐  NIP-42 WebSocket  ┌───────────────┐
 //!  │  Agent Host │ ◄─────────────────► │  sprout-mcp  │ ◄─────────────────► │ Sprout Relay  │
-//!  └─────────────┘                     └──────────────┘  REST (reqwest)     └───────────────┘
+//!  └─────────────┘                     └──────────────┘  HTTP (media only)  └───────────────┘
 //! ```
 //!
 //! ## Connecting to the Relay
@@ -26,7 +26,7 @@
 //! |----------------------|--------------------------|--------------------------------------------------|
 //! | `SPROUT_RELAY_URL`   | `ws://localhost:3000`    | WebSocket URL of the Sprout relay                |
 //! | `SPROUT_PRIVATE_KEY` | *(generated)*            | `nsec…` Nostr private key for the agent identity |
-//! | `SPROUT_API_TOKEN`   | *(none)*                 | Bearer token for REST auth (production mode)     |
+//! | `SPROUT_API_TOKEN`   | *(none)*                 | Auth token embedded in NIP-42 handshake          |
 //!
 //! If `SPROUT_PRIVATE_KEY` is absent a fresh ephemeral keypair is generated and its public key
 //! is printed to stderr. In production you should supply a stable key so the agent has a

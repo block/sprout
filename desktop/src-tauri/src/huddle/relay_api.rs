@@ -11,8 +11,6 @@
 //! ```
 
 use futures_util::{SinkExt, StreamExt};
-use reqwest::Method;
-use serde::Deserialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -22,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
-use crate::relay::{api_path, build_authed_request, send_json_request};
+use crate::relay::query_relay;
 
 /// Maximum number of agents that can be invited to a single huddle.
 pub(crate) const MAX_HUDDLE_AGENTS: usize = 20;
@@ -452,32 +450,44 @@ async fn audio_relay_pipeline(
 }
 
 /// Fetch channel members with roles from the relay. Returns (pubkey, role) tuples.
+///
+/// Queries kind:39002 (NIP-29 members) by `#d` channel id and extracts
+/// `["p", pubkey, relay_url?, role?]` tags from the most recent event.
 pub(crate) async fn fetch_channel_members_with_roles(
     channel_id: &str,
     state: &AppState,
 ) -> Result<Vec<(String, Option<String>)>, String> {
-    #[derive(Deserialize)]
-    struct Member {
-        pubkey: String,
-        role: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct MembersResponse {
-        members: Vec<Member>,
-    }
+    let filter = serde_json::json!({
+        "kinds": [39002],
+        "#d": [channel_id],
+        "limit": 1,
+    });
+    let events = query_relay(state, std::slice::from_ref(&filter))
+        .await
+        .map_err(|e| {
+            eprintln!("sprout-desktop: fetch channel members failed: {e}");
+            e
+        })?;
 
-    let path = api_path(&["channels", channel_id, "members"]);
-    let request = build_authed_request(&state.http_client, Method::GET, &path, state)?;
-    let resp: MembersResponse = send_json_request(request).await.map_err(|e| {
-        eprintln!("sprout-desktop: fetch channel members failed: {e}");
-        e
-    })?;
+    let Some(event) = events.first() else {
+        return Ok(Vec::new());
+    };
 
-    Ok(resp
-        .members
-        .into_iter()
-        .map(|m| (m.pubkey, m.role))
-        .collect())
+    let mut seen = std::collections::BTreeSet::new();
+    let mut members = Vec::new();
+    for tag in event.tags.iter() {
+        let slice = tag.as_slice();
+        if slice.first().map(String::as_str) != Some("p") {
+            continue;
+        }
+        let Some(pubkey) = slice.get(1) else { continue };
+        if pubkey.is_empty() || !seen.insert(pubkey.clone()) {
+            continue;
+        }
+        let role = slice.get(3).filter(|s| !s.is_empty()).cloned();
+        members.push((pubkey.clone(), role));
+    }
+    Ok(members)
 }
 
 /// Fetch channel members, optionally filtered by role (e.g., "bot" for agents).

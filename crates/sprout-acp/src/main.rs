@@ -53,247 +53,209 @@ fn is_subcommand(name: &str) -> bool {
 /// Timeout for the `sprout-acp models` subcommand (spawn + init + session/new).
 const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 
-// ── Owner cache ───────────────────────────────────────────────────────────────
+// ── Presence helper ───────────────────────────────────────────────────────────
 
-/// Lazy-resolving cache for the agent's owner pubkey.
+/// Publish a kind:20001 presence update event via the WebSocket connection.
 ///
-/// Replaces the bare `Option<String>` that previously lived in the event loop.
-/// On success, the owner pubkey is cached for the process lifetime (owner
-/// changes require a harness restart). On failure/miss, retries after 60s
-/// to avoid hammering the API.
-struct OwnerCache {
-    pubkey: Option<String>,
-    last_attempt: Option<std::time::Instant>,
+/// Ephemeral kinds (20000-29999) are rejected by the HTTP bridge, so presence
+/// updates must be routed through the WS path.
+///
+/// Content is a bare status string (`"online"`, `"away"`, `"offline"`) matching
+/// the desktop client's format. The relay stores this in Redis and synthesizes
+/// it back on presence queries.
+async fn publish_presence(
+    publisher: &relay::RelayEventPublisher,
+    keys: &nostr::Keys,
+    status: &str,
+) -> Result<(), relay::RelayError> {
+    use nostr::{EventBuilder, Kind};
+    use sprout_core::kind::KIND_PRESENCE_UPDATE;
+
+    let event = EventBuilder::new(Kind::Custom(KIND_PRESENCE_UPDATE as u16), status, [])
+        .sign_with_keys(keys)
+        .map_err(|e| relay::RelayError::Http(format!("presence sign error: {e}")))?;
+    publisher.publish_event(event).await?;
+    Ok(())
 }
 
-/// How long to cache a failed owner lookup before retrying.
-const OWNER_CACHE_TTL: Duration = Duration::from_secs(60);
+// ── Owner resolution ──────────────────────────────────────────────────────────
+
+/// Resolve the agent's owner pubkey at startup.
+///
+/// Priority:
+/// 1. `SPROUT_AUTH_TAG` env var — NIP-OA attestation signed by the owner.
+///    Verified against the agent's own pubkey to extract the owner pubkey.
+/// 2. `--agent-owner` CLI flag / `SPROUT_ACP_AGENT_OWNER` env var.
+fn resolve_agent_owner(config: &Config) -> Option<String> {
+    // Try SPROUT_AUTH_TAG first (NIP-OA attestation).
+    if let Ok(auth_tag) = std::env::var("SPROUT_AUTH_TAG") {
+        if !auth_tag.is_empty() {
+            let agent_pk = config.keys.public_key();
+            match sprout_sdk::nip_oa::verify_auth_tag(&auth_tag, &agent_pk) {
+                Ok(owner_pk) => {
+                    let owner_hex = owner_pk.to_hex().to_ascii_lowercase();
+                    tracing::info!("owner resolved from SPROUT_AUTH_TAG: {owner_hex}");
+                    return Some(owner_hex);
+                }
+                Err(e) => {
+                    tracing::warn!("SPROUT_AUTH_TAG verification failed: {e} — falling back");
+                }
+            }
+        }
+    }
+
+    // Fall back to --agent-owner config.
+    config.agent_owner.clone()
+}
+
+// ── Owner cache ───────────────────────────────────────────────────────────────
+
+/// Cache for the agent's owner pubkey.
+///
+/// Owner is now provided via `--agent-owner` config flag (no REST lookup).
+/// Cache for the agent's owner pubkey + sibling lookups.
+///
+/// Siblings are other agents whose NIP-OA auth tag proves the same owner.
+/// Lookup results are cached for the process lifetime (attestations are immutable).
+struct OwnerCache {
+    pubkey: Option<String>,
+    /// author_hex → is_sibling (true = same owner, false = not)
+    siblings: std::sync::Mutex<HashMap<String, bool>>,
+}
 
 impl OwnerCache {
     fn new(initial: Option<String>) -> Self {
-        let last_attempt = if initial.is_some() {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
         Self {
             pubkey: initial,
-            last_attempt,
+            siblings: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    /// Return the cached owner pubkey, or attempt a lazy resolution if stale.
-    async fn get_or_resolve(
-        &mut self,
-        rest_client: &relay::RestClient,
-        agent_pubkey_hex: &str,
-    ) -> Option<&str> {
-        if self.pubkey.is_some() {
-            return self.pubkey.as_deref();
-        }
-        let stale = self
-            .last_attempt
-            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
-            .unwrap_or(true);
-        if !stale {
-            return None;
-        }
-        self.last_attempt = Some(std::time::Instant::now());
-        let profile_url = format!("/api/users/{agent_pubkey_hex}/profile");
-        match rest_client.get_json(&profile_url).await {
-            Ok(v) => {
-                // Normalize to lowercase hex for consistent comparison with
-                // nostr PublicKey::to_hex() and validated allowlist entries.
-                self.pubkey = v
-                    .get("agent_owner_pubkey")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_ascii_lowercase());
-                if let Some(ref o) = self.pubkey {
-                    tracing::info!("lazy owner resolution succeeded: {o}");
-                }
-            }
-            Err(e) => {
-                tracing::warn!("lazy owner lookup failed: {e}");
-            }
-        }
+    /// Return the cached owner pubkey.
+    fn get(&self) -> Option<&str> {
         self.pubkey.as_deref()
     }
+
+    /// Check if author is a known sibling (cached result).
+    fn is_known_sibling(&self, author: &str) -> Option<bool> {
+        self.siblings.lock().ok()?.get(author).copied()
+    }
+
+    /// Cache a sibling lookup result.
+    fn cache_sibling(&self, author: String, is_sibling: bool) {
+        if let Ok(mut map) = self.siblings.lock() {
+            // Cap at 256 entries to prevent unbounded growth.
+            if map.len() >= 256 {
+                map.clear();
+            }
+            map.insert(author, is_sibling);
+        }
+    }
 }
 
-// ── Sibling cache ─────────────────────────────────────────────────────────────
-
-/// Result of looking up an author's owner via the REST API.
-#[derive(Debug, Clone)]
-enum SiblingLookup {
-    /// Profile resolved; contains the author's `agent_owner_pubkey` (if any),
-    /// normalized to lowercase hex.
-    Resolved(Option<String>),
-    /// REST call failed — treat as "not a sibling" (fail-closed).
-    Failed,
-}
-
-/// Cache of author → owner lookups for the sibling author gate.
+/// Check if `author` is the owner OR a sibling (same owner via NIP-OA).
 ///
-/// When `--respond-to=owner-only`, the harness accepts events from the owner
-/// AND from any pubkey whose `agent_owner_pubkey` matches the owner (siblings).
-/// This cache avoids hitting the REST API on every event from a known author.
-///
-/// TTL is derived at **read time**: a cached `Resolved(Some(owner))` that
-/// matches the expected owner uses `SIBLING_CACHE_HIT_TTL` (5 min); all other
-/// results use `SIBLING_CACHE_MISS_TTL` (1 min). This is correct even if the
-/// agent owner changes (it doesn't — `OwnerCache` is process-stable — but the
-/// design doesn't depend on that).
-struct SiblingCache {
-    /// author_hex → (lookup_result, resolved_at)
-    entries: HashMap<String, (SiblingLookup, std::time::Instant)>,
-}
-
-/// TTL for a cached sibling match (Resolved(Some(owner)) where owner == expected).
-const SIBLING_CACHE_HIT_TTL: Duration = Duration::from_secs(300);
-/// TTL for a cached miss/different-owner/failure.
-const SIBLING_CACHE_MISS_TTL: Duration = Duration::from_secs(60);
-/// Maximum entries before oldest-eviction.
-const SIBLING_CACHE_MAX_ENTRIES: usize = 256;
-
-impl SiblingCache {
-    fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-        }
-    }
-
-    /// Record a lookup result for `author_hex`. Pure cache mutation — no I/O.
-    ///
-    /// Normalizes any owner pubkey inside `Resolved(Some(_))` to lowercase hex
-    /// so callers of `check()` get consistent comparisons regardless of API
-    /// casing. Evicts the oldest entry when at capacity.
-    fn record(&mut self, author_hex: String, result: SiblingLookup) {
-        // Normalize before caching.
-        let normalized = match result {
-            SiblingLookup::Resolved(Some(owner)) => {
-                SiblingLookup::Resolved(Some(owner.to_ascii_lowercase()))
-            }
-            other => other,
-        };
-
-        if self.entries.len() >= SIBLING_CACHE_MAX_ENTRIES
-            && !self.entries.contains_key(&author_hex)
-        {
-            // Evict oldest entry by resolved_at.
-            if let Some(oldest_key) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, (_, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                self.entries.remove(&oldest_key);
-            }
-        }
-
-        self.entries
-            .insert(author_hex, (normalized, std::time::Instant::now()));
-    }
-
-    /// Check if a cached entry exists and is fresh for the given expected owner.
-    ///
-    /// Returns `Some(true)` if the author is a confirmed sibling (same owner),
-    /// `Some(false)` if confirmed non-sibling, or `None` if the cache entry is
-    /// missing or stale (caller should fetch).
-    fn check(&self, author_hex: &str, expected_owner_hex: &str) -> Option<bool> {
-        let (lookup, resolved_at) = self.entries.get(author_hex)?;
-
-        let is_match = matches!(
-            lookup,
-            SiblingLookup::Resolved(Some(ref o)) if o == expected_owner_hex
-        );
-
-        let ttl = if is_match {
-            SIBLING_CACHE_HIT_TTL
-        } else {
-            SIBLING_CACHE_MISS_TTL
-        };
-
-        if resolved_at.elapsed() >= ttl {
-            return None; // stale
-        }
-
-        Some(is_match)
-    }
-
-    /// Full lookup: check cache, fetch if needed, record result.
-    async fn is_sibling(
-        &mut self,
-        rest_client: &relay::RestClient,
-        author_hex: &str,
-        expected_owner_hex: &str,
-    ) -> bool {
-        if let Some(result) = self.check(author_hex, expected_owner_hex) {
-            return result;
-        }
-
-        let lookup = Self::fetch_owner(rest_client, author_hex).await;
-        // Note: fetch_owner() already lowercases, and record() normalizes too,
-        // so no additional to_ascii_lowercase() needed here.
-        let is_match = matches!(
-            &lookup,
-            SiblingLookup::Resolved(Some(ref o)) if o == expected_owner_hex
-        );
-        self.record(author_hex.to_owned(), lookup);
-        is_match
-    }
-
-    /// Fetch an author's owner from the REST API.
-    async fn fetch_owner(rest_client: &relay::RestClient, author_hex: &str) -> SiblingLookup {
-        let url = format!("/api/users/{author_hex}/profile");
-        match rest_client.get_json(&url).await {
-            Ok(v) => {
-                let owner = v
-                    .get("agent_owner_pubkey")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_ascii_lowercase());
-                tracing::debug!(
-                    author = author_hex,
-                    owner = ?owner,
-                    "sibling cache: resolved author owner"
-                );
-                SiblingLookup::Resolved(owner)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    author = author_hex,
-                    error = %e,
-                    "sibling cache: REST lookup failed — treating as non-sibling"
-                );
-                SiblingLookup::Failed
-            }
-        }
-    }
-}
-
-/// Check if `author` is the owner or a sibling (shares the same owner).
-///
-/// Used by the `OwnerOnly` author gate mode. The owner is the direct match;
-/// siblings are other pubkeys whose `agent_owner_pubkey` equals the owner.
+/// For unknown authors, queries their kind:0 profile to extract the NIP-OA
+/// auth tag and verify the owner matches. Result is cached.
 async fn is_owner_or_sibling(
     author: &str,
-    owner_cache: &mut OwnerCache,
-    sibling_cache: &mut SiblingCache,
+    owner_cache: &OwnerCache,
     rest_client: &relay::RestClient,
-    agent_pubkey_hex: &str,
 ) -> bool {
-    let owner = owner_cache
-        .get_or_resolve(rest_client, agent_pubkey_hex)
-        .await;
-    match owner {
-        Some(o) if author == o => true, // direct owner match
-        Some(o) => {
-            // Check if author is a sibling — another agent with the same owner.
-            // Need to copy `o` because `owner_cache` borrows are released.
-            let o = o.to_owned();
-            sibling_cache.is_sibling(rest_client, author, &o).await
-        }
-        None => false, // no owner resolved — fail closed
+    let my_owner = match owner_cache.get() {
+        Some(o) => o,
+        None => return false, // no owner configured — fail closed
+    };
+
+    // Direct owner check.
+    if author == my_owner {
+        return true;
     }
+
+    // Check sibling cache.
+    if let Some(cached) = owner_cache.is_known_sibling(author) {
+        return cached;
+    }
+
+    // Query the author's kind:0 profile to check for NIP-OA auth tag.
+    let is_sibling = check_sibling_via_profile(author, my_owner, rest_client).await;
+    owner_cache.cache_sibling(author.to_string(), is_sibling);
+    is_sibling
+}
+
+/// Query an author's kind:0 profile and check if their NIP-OA auth tag
+/// proves the same owner as us.
+async fn check_sibling_via_profile(
+    author: &str,
+    expected_owner: &str,
+    rest_client: &relay::RestClient,
+) -> bool {
+    let filter = nostr::Filter::new()
+        .kind(nostr::Kind::Metadata)
+        .author(match nostr::PublicKey::from_hex(author) {
+            Ok(pk) => pk,
+            Err(_) => return false,
+        })
+        .limit(1);
+
+    let resp = match tokio::time::timeout(Duration::from_millis(2000), rest_client.query(&[filter]))
+        .await
+    {
+        Ok(Ok(v)) => v,
+        _ => return false, // timeout or error — fail closed
+    };
+
+    // Look for an "auth" tag in the profile event.
+    let events = match resp.as_array() {
+        Some(arr) => arr,
+        None => return false,
+    };
+    let event = match events.first() {
+        Some(e) => e,
+        None => return false,
+    };
+    let tags = match event.get("tags").and_then(|t| t.as_array()) {
+        Some(t) => t,
+        None => return false,
+    };
+
+    // Find ["auth", owner_pk, conditions, sig] and verify the Schnorr signature.
+    // Don't trust the relay — verify ourselves.
+    let agent_pk = match nostr::PublicKey::from_hex(author) {
+        Ok(pk) => pk,
+        Err(_) => return false,
+    };
+
+    for tag in tags {
+        let parts = match tag.as_array() {
+            Some(p) if p.len() >= 4 => p,
+            _ => continue,
+        };
+        if parts[0].as_str() != Some("auth") {
+            continue;
+        }
+        let tag_owner = match parts[1].as_str() {
+            Some(o) => o,
+            None => continue,
+        };
+        // Only verify if the owner field matches ours.
+        if !tag_owner.eq_ignore_ascii_case(expected_owner) {
+            continue;
+        }
+        // Cryptographically verify the NIP-OA attestation signature.
+        let tag_json = serde_json::to_string(tag).unwrap_or_default();
+        match sprout_sdk::nip_oa::verify_auth_tag(&tag_json, &agent_pk) {
+            Ok(_) => {
+                tracing::debug!(author, expected_owner, "sibling verified via NIP-OA");
+                return true;
+            }
+            Err(e) => {
+                tracing::debug!(author, "NIP-OA auth tag verification failed: {e}");
+            }
+        }
+    }
+
+    false
 }
 
 fn spawn_relay_observer_publisher(
@@ -939,14 +901,9 @@ async fn tokio_main() -> Result<()> {
         .as_secs();
 
     let pubkey_hex = config.keys.public_key().to_hex();
-    let mut relay = HarnessRelay::connect(
-        &config.relay_url,
-        &config.keys,
-        config.api_token.as_deref(),
-        &pubkey_hex,
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
+    let mut relay = HarnessRelay::connect(&config.relay_url, &config.keys, &pubkey_hex)
+        .await
+        .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
 
     // Finding #22: tell the relay background task the watermark so it can use
     // `since = watermark - 5s` on the first REQ instead of `since=now`.
@@ -966,37 +923,22 @@ async fn tokio_main() -> Result<()> {
     tracing::info!("subscribed to membership notifications");
 
     // ── Step 2c: Set initial presence ─────────────────────────────────────────
-    let rest_client_for_presence = relay.rest_client();
+    let presence_publisher = relay.event_publisher();
+    let presence_keys = config.keys.clone();
     if config.presence_enabled {
-        match rest_client_for_presence
-            .put_json("/api/presence", &serde_json::json!({"status": "online"}))
-            .await
-        {
+        match publish_presence(&presence_publisher, &presence_keys, "online").await {
             Ok(_) => tracing::info!("presence set to online"),
             Err(e) => tracing::warn!("failed to set initial presence: {e}"),
         }
     }
 
-    // ── Step 2d: Query agent owner ──────────────────────────────────────────
-    // Owner lookup is used by !shutdown and the inbound author gate.
-    // Try at startup; OwnerCache retries lazily on cache miss.
-    let startup_owner: Option<String> = {
-        let profile_url = format!("/api/users/{pubkey_hex}/profile");
-        match rest_client_for_presence.get_json(&profile_url).await {
-            Ok(v) => v
-                .get("agent_owner_pubkey")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_ascii_lowercase()),
-            Err(e) => {
-                tracing::warn!("startup owner lookup failed (will retry lazily): {e}");
-                None
-            }
-        }
-    };
+    // ── Step 2d: Resolve agent owner ────────────────────────────────────────
+    // Priority: SPROUT_AUTH_TAG (NIP-OA attestation) → --agent-owner flag.
+    let startup_owner: Option<String> = resolve_agent_owner(&config);
     if let Some(ref owner) = startup_owner {
         tracing::info!("agent owner: {owner}");
     } else {
-        tracing::info!("no agent owner set at startup — will resolve lazily");
+        tracing::info!("no agent owner configured");
     }
     // Warn if owner-dependent mode but no owner resolved yet.
     if startup_owner.is_none() {
@@ -1004,7 +946,7 @@ async fn tokio_main() -> Result<()> {
             RespondTo::OwnerOnly => {
                 tracing::warn!(
                     "respond-to=owner-only but no owner is set — all events will be \
-                     dropped until owner is resolved. Set --respond-to=anyone to override."
+                     dropped. Set SPROUT_AUTH_TAG or --agent-owner, or use --respond-to=anyone."
                 );
             }
             RespondTo::Allowlist => {
@@ -1017,8 +959,7 @@ async fn tokio_main() -> Result<()> {
             _ => {} // anyone/nobody don't depend on owner
         }
     }
-    let mut owner_cache = OwnerCache::new(startup_owner);
-    let mut sibling_cache = SiblingCache::new();
+    let owner_cache = OwnerCache::new(startup_owner);
 
     let mut relay_observer_control_rx = None;
     let mut relay_observer_publisher_task = None;
@@ -1507,12 +1448,7 @@ async fn tokio_main() -> Result<()> {
                                         && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
                                 });
                             if is_shutdown {
-                                // Lazy owner resolution via OwnerCache — a relay
-                                // outage during startup doesn't permanently
-                                // disable remote shutdown.
-                                let owner = owner_cache
-                                    .get_or_resolve(&rest_client_for_presence, &pubkey_hex)
-                                    .await;
+                                let owner = owner_cache.get();
                                 if let Some(owner) = owner {
                                     if sprout_event.event.pubkey.to_hex() == *owner {
                                         tracing::info!(
@@ -1545,10 +1481,7 @@ async fn tokio_main() -> Result<()> {
                                         && t.as_slice().get(1).map(|s| s.as_str()) == Some(pubkey_hex.as_str())
                                 });
                             if is_cancel {
-                                let owner = owner_cache
-                                    .get_or_resolve(&rest_client_for_presence, &pubkey_hex)
-                                    .await;
-                                if let Some(owner) = owner {
+                                if let Some(owner) = owner_cache.get() {
                                     if sprout_event.event.pubkey.to_hex() == *owner {
                                         let fired = cancel_in_flight_task(&mut pool, sprout_event.channel_id, CancelMode::Stop);
                                         if !fired {
@@ -1581,22 +1514,10 @@ async fn tokio_main() -> Result<()> {
                                     RespondTo::Anyone => true,
                                     RespondTo::Nobody => false,
                                     RespondTo::OwnerOnly => {
-                                        is_owner_or_sibling(
-                                            &author,
-                                            &mut owner_cache,
-                                            &mut sibling_cache,
-                                            &rest_client_for_presence,
-                                            &pubkey_hex,
-                                        )
-                                        .await
+                                        is_owner_or_sibling(&author, &owner_cache, &ctx.rest_client).await
                                     }
                                     RespondTo::Allowlist => {
-                                        let owner = owner_cache
-                                            .get_or_resolve(
-                                                &rest_client_for_presence,
-                                                &pubkey_hex,
-                                            )
-                                            .await;
+                                        let owner = owner_cache.get();
                                         config.respond_to_allowlist.contains(&author)
                                             || owner == Some(author.as_str())
                                     }
@@ -1650,10 +1571,7 @@ async fn tokio_main() -> Result<()> {
                                     MultipleEventHandling::Queue => false,
                                     MultipleEventHandling::Interrupt => true,
                                     MultipleEventHandling::OwnerInterrupt => {
-                                        let owner = owner_cache
-                                            .get_or_resolve(&rest_client_for_presence, &pubkey_hex)
-                                            .await;
-                                        match owner {
+                                        match owner_cache.get() {
                                             Some(o) => author_hex == *o,
                                             None => false,
                                         }
@@ -1713,9 +1631,10 @@ async fn tokio_main() -> Result<()> {
                     if let Some(h) = presence_task.take() {
                         h.abort();
                     }
-                    let rc = rest_client_for_presence.clone();
+                    let pp = presence_publisher.clone();
+                    let pk = presence_keys.clone();
                     presence_task = Some(tokio::spawn(async move {
-                        if let Err(e) = rc.put_json("/api/presence", &serde_json::json!({"status": "online"})).await {
+                        if let Err(e) = publish_presence(&pp, &pk, "online").await {
                             tracing::warn!("presence heartbeat failed: {e}");
                         }
                     }));
@@ -1897,8 +1816,7 @@ async fn tokio_main() -> Result<()> {
     if config.presence_enabled {
         match tokio::time::timeout(
             Duration::from_secs(2),
-            rest_client_for_presence
-                .put_json("/api/presence", &serde_json::json!({"status": "offline"})),
+            publish_presence(&presence_publisher, &presence_keys, "offline"),
         )
         .await
         {
@@ -2642,12 +2560,6 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                         .expect("secret key bech32 encoding should never fail"),
                 },
             ];
-            if let Some(ref token) = config.api_token {
-                env.push(EnvVar {
-                    name: "SPROUT_API_TOKEN".into(),
-                    value: token.clone(),
-                });
-            }
             // Forward SPROUT_TOOLSETS so the MCP server enables the
             // same toolsets the operator configured for this harness.
             if let Ok(ts) = std::env::var("SPROUT_TOOLSETS") {
@@ -2682,75 +2594,19 @@ mod owner_cache_tests {
     #[test]
     fn new_with_some_caches_immediately() {
         let cache = OwnerCache::new(Some("abcd".into()));
-        assert_eq!(cache.pubkey.as_deref(), Some("abcd"));
-        assert!(cache.last_attempt.is_some());
+        assert_eq!(cache.get(), Some("abcd"));
     }
 
     #[test]
-    fn new_with_none_has_no_attempt() {
+    fn new_with_none_returns_none() {
         let cache = OwnerCache::new(None);
-        assert!(cache.pubkey.is_none());
-        assert!(cache.last_attempt.is_none());
+        assert!(cache.get().is_none());
     }
 
     #[test]
-    fn get_or_resolve_returns_cached_immediately() {
-        // When pubkey is already cached, get_or_resolve should return it
-        // without any API call. We can verify this by checking the return
-        // value without providing a real RestClient (the method short-circuits
-        // before using it).
+    fn get_returns_cached_value() {
         let cache = OwnerCache::new(Some("ab".repeat(32)));
-        // We can't call get_or_resolve without a RestClient in a sync test,
-        // but we can verify the cache state directly.
-        assert_eq!(cache.pubkey.as_deref(), Some("ab".repeat(32)).as_deref());
-    }
-
-    #[test]
-    fn success_cached_for_process_lifetime() {
-        // After a successful resolution, pubkey stays cached even if
-        // last_attempt is old. The early return `if self.pubkey.is_some()`
-        // means the TTL check is never reached.
-        let mut cache = OwnerCache::new(Some("ab".repeat(32)));
-        // Simulate time passing by backdating last_attempt
-        cache.last_attempt = Some(std::time::Instant::now() - Duration::from_secs(3600));
-        // pubkey is still cached — success is permanent
-        assert!(cache.pubkey.is_some());
-    }
-
-    #[test]
-    fn failure_respects_ttl() {
-        // After a failed lookup, last_attempt is set. A subsequent call
-        // within the TTL window should NOT retry (stale == false).
-        let mut cache = OwnerCache::new(None);
-        cache.last_attempt = Some(std::time::Instant::now());
-        // Within TTL: stale check returns false, so no retry
-        let stale = cache
-            .last_attempt
-            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
-            .unwrap_or(true);
-        assert!(!stale, "should not be stale within TTL");
-    }
-
-    #[test]
-    fn failure_retries_after_ttl() {
-        // After TTL expires, the cache should consider itself stale.
-        let mut cache = OwnerCache::new(None);
-        cache.last_attempt = Some(std::time::Instant::now() - Duration::from_secs(61));
-        let stale = cache
-            .last_attempt
-            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
-            .unwrap_or(true);
-        assert!(stale, "should be stale after TTL");
-    }
-
-    #[test]
-    fn no_attempt_is_always_stale() {
-        let cache = OwnerCache::new(None);
-        let stale = cache
-            .last_attempt
-            .map(|t| t.elapsed() >= OWNER_CACHE_TTL)
-            .unwrap_or(true);
-        assert!(stale, "no prior attempt should be considered stale");
+        assert_eq!(cache.get(), Some("ab".repeat(32)).as_deref());
     }
 }
 
@@ -2851,178 +2707,6 @@ mod observer_chunk_coalescer_tests {
 }
 
 #[cfg(test)]
-mod sibling_cache_tests {
-    use super::*;
-
-    const OWNER_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const OWNER_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const AUTHOR_1: &str = "1111111111111111111111111111111111111111111111111111111111111111";
-    const AUTHOR_2: &str = "2222222222222222222222222222222222222222222222222222222222222222";
-
-    #[test]
-    fn sibling_with_matching_owner_returns_true() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_A.into())),
-        );
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
-    }
-
-    #[test]
-    fn different_owner_returns_false() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_B.into())),
-        );
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
-    }
-
-    #[test]
-    fn no_owner_on_profile_returns_false() {
-        let mut cache = SiblingCache::new();
-        cache.record(AUTHOR_1.into(), SiblingLookup::Resolved(None));
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
-    }
-
-    #[test]
-    fn lookup_failure_returns_false() {
-        let mut cache = SiblingCache::new();
-        cache.record(AUTHOR_1.into(), SiblingLookup::Failed);
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
-    }
-
-    #[test]
-    fn unknown_author_returns_none() {
-        let cache = SiblingCache::new();
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), None);
-    }
-
-    #[test]
-    fn record_normalizes_to_lowercase() {
-        let mut cache = SiblingCache::new();
-        let mixed_case = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(mixed_case.into())),
-        );
-        // Should match lowercase expected owner.
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
-    }
-
-    #[test]
-    fn positive_ttl_holds_within_window() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_A.into())),
-        );
-        // Freshly inserted — should be within 5-minute TTL.
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
-    }
-
-    #[test]
-    fn positive_ttl_expires() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_A.into())),
-        );
-        // Backdate the entry past the hit TTL.
-        if let Some((_, ts)) = cache.entries.get_mut(AUTHOR_1) {
-            *ts = std::time::Instant::now() - SIBLING_CACHE_HIT_TTL - Duration::from_secs(1);
-        }
-        assert_eq!(
-            cache.check(AUTHOR_1, OWNER_A),
-            None,
-            "should be stale after hit TTL"
-        );
-    }
-
-    #[test]
-    fn negative_ttl_expires() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_B.into())),
-        );
-        // Backdate past the miss TTL.
-        if let Some((_, ts)) = cache.entries.get_mut(AUTHOR_1) {
-            *ts = std::time::Instant::now() - SIBLING_CACHE_MISS_TTL - Duration::from_secs(1);
-        }
-        assert_eq!(
-            cache.check(AUTHOR_1, OWNER_A),
-            None,
-            "should be stale after miss TTL"
-        );
-    }
-
-    #[test]
-    fn negative_ttl_holds_within_window() {
-        let mut cache = SiblingCache::new();
-        cache.record(AUTHOR_1.into(), SiblingLookup::Failed);
-        // Freshly inserted — should be within 1-minute TTL.
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
-    }
-
-    #[test]
-    fn eviction_when_at_capacity() {
-        let mut cache = SiblingCache::new();
-        // Fill to capacity with unique authors.
-        for i in 0..SIBLING_CACHE_MAX_ENTRIES {
-            let author = format!("{:064x}", i);
-            cache.record(author, SiblingLookup::Resolved(Some(OWNER_A.into())));
-        }
-        assert_eq!(cache.entries.len(), SIBLING_CACHE_MAX_ENTRIES);
-
-        // Insert one more — should evict the oldest and stay at capacity.
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_A.into())),
-        );
-        assert_eq!(cache.entries.len(), SIBLING_CACHE_MAX_ENTRIES);
-
-        // The new entry should be present.
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
-    }
-
-    #[test]
-    fn update_existing_entry_refreshes_timestamp() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_B.into())),
-        );
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(false));
-
-        // Update with new owner — should overwrite.
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_A.into())),
-        );
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
-    }
-
-    #[test]
-    fn multiple_authors_independent() {
-        let mut cache = SiblingCache::new();
-        cache.record(
-            AUTHOR_1.into(),
-            SiblingLookup::Resolved(Some(OWNER_A.into())),
-        );
-        cache.record(
-            AUTHOR_2.into(),
-            SiblingLookup::Resolved(Some(OWNER_B.into())),
-        );
-
-        assert_eq!(cache.check(AUTHOR_1, OWNER_A), Some(true));
-        assert_eq!(cache.check(AUTHOR_2, OWNER_A), Some(false));
-        assert_eq!(cache.check(AUTHOR_2, OWNER_B), Some(true));
-    }
-}
-
-#[cfg(test)]
 mod build_mcp_servers_tests {
     use super::*;
     use std::sync::Mutex;
@@ -3033,7 +2717,6 @@ mod build_mcp_servers_tests {
     fn test_config() -> Config {
         Config {
             keys: nostr::Keys::generate(),
-            api_token: None,
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
@@ -3063,6 +2746,7 @@ mod build_mcp_servers_tests {
             respond_to_allowlist: std::collections::HashSet::new(),
             persona_env_vars: vec![],
             relay_observer: false,
+            agent_owner: None,
         }
     }
 
@@ -3116,16 +2800,5 @@ mod build_mcp_servers_tests {
             !has_auth_tag,
             "empty SPROUT_AUTH_TAG should not be forwarded"
         );
-    }
-
-    #[test]
-    fn session_new_mcp_server_forwards_api_token_when_set() {
-        let mut config = test_config();
-        config.api_token = Some("tok_test_123".into());
-        let servers = build_mcp_servers(&config);
-        let server = &servers[0];
-        let token_env = server.env.iter().find(|e| e.name == "SPROUT_API_TOKEN");
-        assert!(token_env.is_some(), "SPROUT_API_TOKEN should be forwarded");
-        assert_eq!(token_env.unwrap().value, "tok_test_123");
     }
 }

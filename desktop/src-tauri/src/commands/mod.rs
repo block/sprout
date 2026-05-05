@@ -15,7 +15,6 @@ mod profile;
 mod relay_members;
 mod social;
 mod teams;
-pub mod tokens;
 mod workflows;
 mod workspace;
 
@@ -35,6 +34,5 @@ pub use profile::*;
 pub use relay_members::*;
 pub use social::*;
 pub use teams::*;
-pub use tokens::*;
 pub use workflows::*;
 pub use workspace::*;

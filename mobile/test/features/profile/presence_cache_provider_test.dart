@@ -1,57 +1,39 @@
-import 'dart:convert';
-
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart' as http_testing;
 import 'package:sprout_mobile/features/profile/presence_cache_provider.dart';
 import 'package:sprout_mobile/shared/relay/relay.dart';
 
+/// Tests for [PresenceCacheNotifier] in the pure-Nostr world.
+///
+/// The cache is now purely WS-driven: the notifier subscribes to kind:20001
+/// (presence updates) over the relay session and only mutates state for
+/// pubkeys that have been registered via [PresenceCacheNotifier.track].
+/// There is no longer a REST backstop — the previous test seeded state via
+/// a `GET /api/presence` call which has been removed.
 void main() {
   test('WS presence event updates cache for tracked pubkey', () async {
     final relaySession = _RecordingRelaySessionNotifier();
-    final container = _buildContainer(
-      relaySession: relaySession,
-      presenceJson: {'alice': 'online'},
-    );
+    final container = _buildContainer(relaySession: relaySession);
     addTearDown(container.dispose);
 
     // Initialize the notifier (triggers build → subscribes to WS).
     container.read(presenceCacheProvider);
     await _pumpEventQueue();
 
-    // Start tracking alice — triggers REST fetch.
+    // Track alice, then emit her initial 'online' status.
     container.read(presenceCacheProvider.notifier).track(['alice']);
-    await _pumpEventQueue();
-    // Wait for the batch timer (50ms) to flush.
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-
+    relaySession.emit(_presence('alice', 'online'));
     expect(container.read(presenceCacheProvider)['alice'], 'online');
 
     // Simulate a WS presence event: alice goes away.
-    relaySession.emit(
-      NostrEvent(
-        id: 'evt-1',
-        pubkey: 'alice',
-        createdAt: 1000,
-        kind: EventKind.presenceUpdate,
-        tags: const [],
-        content: 'away',
-        sig: 'sig',
-      ),
-    );
-
-    // Cache should update immediately via the WS handler.
+    relaySession.emit(_presence('alice', 'away'));
     expect(container.read(presenceCacheProvider)['alice'], 'away');
   });
 
   test('WS presence event ignores untracked pubkeys', () async {
     final relaySession = _RecordingRelaySessionNotifier();
-    final container = _buildContainer(
-      relaySession: relaySession,
-      presenceJson: {'alice': 'online'},
-    );
+    final container = _buildContainer(relaySession: relaySession);
     addTearDown(container.dispose);
 
     container.read(presenceCacheProvider);
@@ -59,21 +41,9 @@ void main() {
 
     // Track only alice.
     container.read(presenceCacheProvider.notifier).track(['alice']);
-    await _pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 100));
 
     // Emit event for bob (untracked).
-    relaySession.emit(
-      NostrEvent(
-        id: 'evt-2',
-        pubkey: 'bob',
-        createdAt: 1000,
-        kind: EventKind.presenceUpdate,
-        tags: const [],
-        content: 'online',
-        sig: 'sig',
-      ),
-    );
+    relaySession.emit(_presence('bob', 'online'));
 
     // Bob should NOT appear in the cache.
     expect(container.read(presenceCacheProvider).containsKey('bob'), isFalse);
@@ -81,69 +51,40 @@ void main() {
 
   test('WS presence event ignores invalid status values', () async {
     final relaySession = _RecordingRelaySessionNotifier();
-    final container = _buildContainer(
-      relaySession: relaySession,
-      presenceJson: {'alice': 'online'},
-    );
+    final container = _buildContainer(relaySession: relaySession);
     addTearDown(container.dispose);
 
     container.read(presenceCacheProvider);
     await _pumpEventQueue();
 
     container.read(presenceCacheProvider.notifier).track(['alice']);
-    await _pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-
+    relaySession.emit(_presence('alice', 'online'));
     expect(container.read(presenceCacheProvider)['alice'], 'online');
 
-    // Emit event with garbage status.
-    relaySession.emit(
-      NostrEvent(
-        id: 'evt-3',
-        pubkey: 'alice',
-        createdAt: 1000,
-        kind: EventKind.presenceUpdate,
-        tags: const [],
-        content: 'garbage-status',
-        sig: 'sig',
-      ),
-    );
+    // Emit event with garbage status — should be rejected.
+    relaySession.emit(_presence('alice', 'garbage-status'));
 
-    // Status should remain 'online' — the invalid value is rejected.
+    // Status should remain 'online'.
     expect(container.read(presenceCacheProvider)['alice'], 'online');
   });
 
   test('WS presence event skips no-op updates', () async {
     final relaySession = _RecordingRelaySessionNotifier();
-    var stateChangeCount = 0;
-    final container = _buildContainer(
-      relaySession: relaySession,
-      presenceJson: {'alice': 'online'},
-    );
+    final container = _buildContainer(relaySession: relaySession);
     addTearDown(container.dispose);
 
     container.read(presenceCacheProvider);
     await _pumpEventQueue();
 
     container.read(presenceCacheProvider.notifier).track(['alice']);
-    await _pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    relaySession.emit(_presence('alice', 'online'));
 
     // Listen for state changes after initial setup.
+    var stateChangeCount = 0;
     container.listen(presenceCacheProvider, (prev, next) => stateChangeCount++);
 
     // Emit event with same status as current.
-    relaySession.emit(
-      NostrEvent(
-        id: 'evt-4',
-        pubkey: 'alice',
-        createdAt: 1000,
-        kind: EventKind.presenceUpdate,
-        tags: const [],
-        content: 'online',
-        sig: 'sig',
-      ),
-    );
+    relaySession.emit(_presence('alice', 'online'));
 
     // No state change should occur — it's a no-op.
     expect(stateChangeCount, 0);
@@ -151,10 +92,7 @@ void main() {
 
   test('subscribes to kind:20001 with limit 0', () async {
     final relaySession = _RecordingRelaySessionNotifier();
-    final container = _buildContainer(
-      relaySession: relaySession,
-      presenceJson: {},
-    );
+    final container = _buildContainer(relaySession: relaySession);
     addTearDown(container.dispose);
 
     container.read(presenceCacheProvider);
@@ -170,10 +108,7 @@ void main() {
     // Regression test for the map key bug where `{...state, pubkey: status}`
     // used the literal string "pubkey" instead of the variable's value.
     final relaySession = _RecordingRelaySessionNotifier();
-    final container = _buildContainer(
-      relaySession: relaySession,
-      presenceJson: {'deadbeef': 'offline', 'cafebabe': 'offline'},
-    );
+    final container = _buildContainer(relaySession: relaySession);
     addTearDown(container.dispose);
 
     container.read(presenceCacheProvider);
@@ -183,21 +118,10 @@ void main() {
       'deadbeef',
       'cafebabe',
     ]);
-    await _pumpEventQueue();
-    await Future<void>.delayed(const Duration(milliseconds: 100));
 
-    // Set deadbeef online via WS.
-    relaySession.emit(
-      NostrEvent(
-        id: 'evt-5',
-        pubkey: 'deadbeef',
-        createdAt: 1000,
-        kind: EventKind.presenceUpdate,
-        tags: const [],
-        content: 'online',
-        sig: 'sig',
-      ),
-    );
+    // Seed cafebabe -> offline, then set deadbeef online.
+    relaySession.emit(_presence('cafebabe', 'offline'));
+    relaySession.emit(_presence('deadbeef', 'online'));
 
     final cache = container.read(presenceCacheProvider);
     // deadbeef should be online (the actual pubkey, not a literal "pubkey" key).
@@ -210,8 +134,18 @@ void main() {
 }
 
 // ---------------------------------------------------------------------------
-// Test helpers
+// Helpers
 // ---------------------------------------------------------------------------
+
+NostrEvent _presence(String pubkey, String status) => NostrEvent(
+  id: 'evt-$pubkey-$status',
+  pubkey: pubkey,
+  createdAt: 1000,
+  kind: EventKind.presenceUpdate,
+  tags: const [],
+  content: status,
+  sig: 'sig',
+);
 
 Future<void> _pumpEventQueue() async {
   await Future<void>.delayed(Duration.zero);
@@ -220,20 +154,10 @@ Future<void> _pumpEventQueue() async {
 
 ProviderContainer _buildContainer({
   required _RecordingRelaySessionNotifier relaySession,
-  required Map<String, String> presenceJson,
 }) {
-  final client = RelayClient(
-    baseUrl: 'http://localhost:3000',
-    httpClient: http_testing.MockClient((request) async {
-      expect(request.url.path, '/api/presence');
-      return http.Response(jsonEncode(presenceJson), 200);
-    }),
-  );
-
   return ProviderContainer(
     overrides: [
       appLifecycleProvider.overrideWith(() => _FakeAppLifecycleNotifier()),
-      relayClientProvider.overrideWithValue(client),
       relaySessionProvider.overrideWith(() => relaySession),
     ],
   );
@@ -260,6 +184,7 @@ class _RecordingRelaySessionNotifier extends RelaySessionNotifier {
     };
   }
 
+  /// Emit an event synchronously to all live subscribers.
   void emit(NostrEvent event) {
     for (final listener in List.of(_listeners)) {
       listener(event);

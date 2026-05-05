@@ -5,18 +5,7 @@ use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::validate_hex64;
 
-/// Each command module defines its own `require_keys!` macro.
-macro_rules! require_keys {
-    ($client:expr) => {
-        $client.keys().ok_or_else(|| {
-            CliError::Key(
-                "private key required for write operations (set SPROUT_PRIVATE_KEY)".into(),
-            )
-        })?
-    };
-}
-
-/// Per-module helper (same pattern as messages.rs).
+/// Per-module helper.
 fn parse_event_id(hex: &str) -> Result<EventId, CliError> {
     EventId::parse(hex).map_err(|e| CliError::Usage(format!("invalid event ID: {e}")))
 }
@@ -40,7 +29,7 @@ pub async fn cmd_publish_note(
         validate_hex64(r)?;
     }
 
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let reply_id = reply_to.map(parse_event_id).transpose()?;
 
     let builder = sprout_sdk::build_note(content, reply_id)
@@ -59,7 +48,7 @@ pub async fn cmd_set_contact_list(
     client: &SproutClient,
     contacts_json: &str,
 ) -> Result<(), CliError> {
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let entries: Vec<ContactEntry> = serde_json::from_str(contacts_json)
         .map_err(|e| CliError::Usage(format!("invalid contacts JSON: {e}")))?;
 
@@ -86,46 +75,51 @@ pub async fn cmd_set_contact_list(
     Ok(())
 }
 
+/// Get a single event by ID via POST /query.
 pub async fn cmd_get_event(client: &SproutClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
-    let path = format!("/api/events/{event_id}");
-    client.run_get(&path).await
+    let filter = serde_json::json!({
+        "ids": [event_id]
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
+/// Get user notes (kind:1) by author pubkey.
 pub async fn cmd_get_user_notes(
     client: &SproutClient,
     pubkey: &str,
     limit: Option<u32>,
     before: Option<i64>,
-    before_id: Option<&str>,
 ) -> Result<(), CliError> {
     validate_hex64(pubkey)?;
-    if let Some(bid) = before_id {
-        validate_hex64(bid)?;
-    }
-    if before_id.is_some() && before.is_none() {
-        return Err(CliError::Usage("before_id requires before".to_string()));
-    }
-    let mut path = format!("/api/users/{pubkey}/notes");
-    let mut params = vec![];
-    if let Some(l) = limit {
-        params.push(format!("limit={l}"));
-    }
+    let limit = limit.unwrap_or(50).min(100);
+
+    let mut filter = serde_json::json!({
+        "kinds": [1],
+        "authors": [pubkey],
+        "limit": limit
+    });
+
     if let Some(b) = before {
-        params.push(format!("before={b}"));
+        filter["until"] = serde_json::json!(b);
     }
-    if let Some(bid) = before_id {
-        params.push(format!("before_id={bid}"));
-    }
-    if !params.is_empty() {
-        path.push('?');
-        path.push_str(&params.join("&"));
-    }
-    client.run_get(&path).await
+
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
+/// Get a user's contact list (kind:3) by pubkey.
 pub async fn cmd_get_contact_list(client: &SproutClient, pubkey: &str) -> Result<(), CliError> {
     validate_hex64(pubkey)?;
-    let path = format!("/api/users/{pubkey}/contact-list");
-    client.run_get(&path).await
+    let filter = serde_json::json!({
+        "kinds": [3],
+        "authors": [pubkey],
+        "limit": 1
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }

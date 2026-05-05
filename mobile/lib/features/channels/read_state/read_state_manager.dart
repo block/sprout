@@ -433,14 +433,13 @@ class ReadStateManager {
   }
 
   bool _isPermanentReadStateRemoteError(Object error) {
-    if (error is! RelayException) {
-      return false;
-    }
-
-    final body = error.body.toLowerCase();
-    return (error.statusCode == 400 && body.contains('unknown event kind')) ||
-        (error.statusCode == 403 &&
-            (body.contains('missing users:write') ||
-                body.contains('insufficient scope')));
+    // Relay rejections come back as `Exception("<message>")` from the
+    // websocket OK handler. Pattern-match on the message text since we no
+    // longer have HTTP status codes.
+    final msg = error.toString().toLowerCase();
+    return msg.contains('unknown event kind') ||
+        msg.contains('missing users:write') ||
+        msg.contains('insufficient scope') ||
+        msg.contains('restricted: unknown');
   }
 }

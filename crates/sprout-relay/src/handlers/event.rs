@@ -132,6 +132,7 @@ pub(crate) async fn dispatch_persistent_event(
             .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("sprout:workflow"));
 
     if !sprout_core::kind::is_workflow_execution_kind(kind_u32)
+        && !sprout_core::kind::is_command_kind(kind_u32)
         && !is_relay_workflow_msg
         && kind_u32 != KIND_GIFT_WRAP
     {
@@ -337,15 +338,21 @@ async fn handle_ephemeral_event(
 
     // Special handling for presence events (kind:20001).
     if event_kind_u32(&event) == KIND_PRESENCE_UPDATE {
-        let status = event.content.to_string();
-        let status = if status.len() > 128 {
+        // Accept both bare strings ("online") and legacy JSON ({"status":"online"}).
+        let raw = event.content.to_string();
+        let status = if raw.starts_with('{') {
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|v| v.get("status")?.as_str().map(String::from))
+                .unwrap_or(raw)
+        } else if raw.len() > 128 {
             let mut end = 128;
-            while !status.is_char_boundary(end) {
+            while !raw.is_char_boundary(end) {
                 end -= 1;
             }
-            status[..end].to_string()
+            raw[..end].to_string()
         } else {
-            status
+            raw
         };
 
         if status == "offline" {

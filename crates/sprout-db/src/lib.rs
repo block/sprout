@@ -199,6 +199,14 @@ impl Db {
         sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
     }
 
+    /// Begin a database transaction for atomic multi-statement operations.
+    ///
+    /// Returns a `'static` transaction because `PgPool` is `Arc`-backed internally.
+    /// The transaction holds an owned pool handle, not a borrow.
+    pub async fn begin_transaction(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
+        self.pool.begin().await.map_err(Into::into)
+    }
+
     // ── Events ───────────────────────────────────────────────────────────────
 
     /// Inserts an event. Returns `(StoredEvent, was_inserted)` — `false` on duplicate.
@@ -219,6 +227,11 @@ impl Db {
     /// Queries events matching the given filter parameters.
     pub async fn query_events(&self, q: &EventQuery) -> Result<Vec<StoredEvent>> {
         event::query_events(&self.pool, q).await
+    }
+
+    /// Count events matching the given query (NIP-45 COUNT support).
+    pub async fn count_events(&self, q: &EventQuery) -> Result<i64> {
+        event::count_events(&self.pool, q).await
     }
 
     /// Fetch the latest replaceable event for a (kind, pubkey) pair.
@@ -1123,6 +1136,16 @@ impl Db {
     /// Delete a workflow and all its runs/approvals.
     pub async fn delete_workflow(&self, id: Uuid) -> Result<()> {
         workflow::delete_workflow(&self.pool, id).await
+    }
+
+    /// Find a workflow by owner pubkey and name. Used for NIP-09 a-tag deletion
+    /// where the d-tag is the workflow name (not UUID).
+    pub async fn find_workflow_by_owner_and_name(
+        &self,
+        owner_pubkey: &[u8],
+        name: &str,
+    ) -> Result<Option<workflow::WorkflowRecord>> {
+        workflow::find_by_owner_and_name(&self.pool, owner_pubkey, name).await
     }
 
     /// Create a new workflow run.

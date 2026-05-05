@@ -95,12 +95,6 @@ type RawSetPresenceResponse = {
   ttl_seconds: number;
 };
 
-type RawOpenDmResponse = {
-  channel_id: string;
-  created: boolean;
-  participants: string[];
-};
-
 type RawChannel = {
   id: string;
   name: string;
@@ -1945,27 +1939,27 @@ async function handleGetUserNotes(
     };
   }
 
-  const url = new URL(
-    `/api/users/${args.pubkey}/notes`,
-    getRelayHttpUrl(config),
-  );
-  if (args.limit !== undefined && args.limit !== null) {
-    url.searchParams.set("limit", String(args.limit));
-  }
+  // Query kind:1 notes for the user
+  const limit = args.limit ?? 50;
+  const filter: Record<string, unknown> = {
+    kinds: [1],
+    authors: [args.pubkey],
+    limit,
+  };
   if (args.before !== undefined && args.before !== null) {
-    url.searchParams.set("before", String(args.before));
+    filter.until = args.before;
   }
-  if (args.beforeId) {
-    url.searchParams.set("before_id", args.beforeId);
-  }
-
-  const response = await fetch(url, {
-    headers: {
-      "X-Pubkey": identity.pubkey,
-    },
-  });
-  await assertOk(response);
-  return response.json();
+  const events = await relayQuery(config, [filter]);
+  const notes = events.map((ev) => ({
+    id: ev.id,
+    pubkey: ev.pubkey,
+    content: ev.content,
+    created_at: ev.created_at,
+    kind: ev.kind,
+    tags: ev.tags,
+    sig: ev.sig,
+  }));
+  return { notes, next_cursor: null };
 }
 
 function createMockEvent(
@@ -2047,24 +2041,25 @@ async function relayJsonRequest<T>(
   return response.json() as Promise<T>;
 }
 
-async function relayEmptyRequest(
+/**
+ * Query the relay via POST /query (pure Nostr HTTP bridge).
+ * Returns an array of raw Nostr events matching the filters.
+ */
+async function relayQuery(
   config: E2eConfig | undefined,
-  path: string,
-  init: RequestInit = {},
-) {
+  filters: Array<Record<string, unknown>>,
+): Promise<RelayEvent[]> {
   const identity = getRelayIdentity(config);
-  const headers = new Headers(init.headers);
-
-  headers.set("X-Pubkey", identity.pubkey);
-  if (init.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const response = await fetch(`${getRelayHttpUrl(config)}${path}`, {
-    ...init,
-    headers,
+  const response = await fetch(`${getRelayHttpUrl(config)}/query`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Pubkey": identity.pubkey,
+    },
+    body: JSON.stringify(filters),
   });
   await assertOk(response);
+  return response.json() as Promise<RelayEvent[]>;
 }
 
 async function submitSignedEvent(
@@ -2073,7 +2068,7 @@ async function submitSignedEvent(
 ): Promise<{ event_id: string; accepted: boolean; message: string }> {
   const identity = getRelayIdentity(config);
   const signed = await signWithIdentity(identity, template);
-  return relayJsonRequest(config, "/api/events", {
+  return relayJsonRequest(config, "/events", {
     method: "POST",
     body: JSON.stringify(signed),
   });
@@ -2085,7 +2080,69 @@ async function handleGetChannels(config: E2eConfig | undefined) {
     return listMockChannels(config);
   }
 
-  return relayJsonRequest<RawChannel[]>(config, "/api/channels");
+  // Pure Nostr: query kind:39002 (membership) for our pubkey, extract channel
+  // UUIDs from d-tags, then query kind:39000 (metadata) for those channels.
+  const memberEvents = await relayQuery(config, [
+    { kinds: [39002], "#p": [identity.pubkey], limit: 1000 },
+  ]);
+
+  const channelIds = [
+    ...new Set(
+      memberEvents.flatMap((ev) =>
+        (ev.tags ?? [])
+          .filter((t: string[]) => t[0] === "d")
+          .map((t: string[]) => t[1]),
+      ),
+    ),
+  ];
+
+  // Also fetch ALL open channel metadata (for channel browser — shows joinable channels)
+  const allMetaEvents = await relayQuery(config, [
+    { kinds: [39000], limit: 200 },
+  ]);
+
+  // Merge: use all metadata events, mark membership
+  const memberSet = new Set(channelIds);
+  const metaEvents = allMetaEvents;
+
+  // Convert kind:39000 events to the RawChannel shape the frontend expects.
+  return metaEvents.map((ev) => {
+    const tags = (ev.tags ?? []) as string[][];
+    const getTag = (name: string) =>
+      tags.find((t) => t[0] === name)?.[1] ?? null;
+    const channelId = getTag("d") ?? "";
+    const channelType = getTag("t") ?? "stream";
+    const isPrivate = tags.some((t) => t[0] === "private");
+    const isArchived = tags.some((t) => t[0] === "archived" && t[1] === "true");
+
+    // Get participant pubkeys from the membership event for this channel
+    const memberEvent = memberEvents.find((me) =>
+      (me.tags ?? []).some((t: string[]) => t[0] === "d" && t[1] === channelId),
+    );
+    const pTags = memberEvent
+      ? ((memberEvent.tags ?? []) as string[][])
+          .filter((t) => t[0] === "p")
+          .map((t) => t[1])
+      : [];
+
+    return {
+      id: channelId,
+      name: getTag("name") ?? "",
+      description: getTag("about") ?? "",
+      channel_type: channelType as "stream" | "forum" | "dm",
+      visibility: (isPrivate ? "private" : "open") as "open" | "private",
+      topic: getTag("topic") ?? null,
+      purpose: getTag("purpose") ?? null,
+      member_count: pTags.length,
+      last_message_at: null,
+      archived_at: isArchived ? new Date().toISOString() : null,
+      participants: pTags,
+      participant_pubkeys: pTags,
+      ttl_seconds: getTag("ttl") ? Number(getTag("ttl")) : null,
+      ttl_deadline: getTag("ttl_deadline") ?? null,
+      is_member: memberSet.has(channelId),
+    };
+  });
 }
 
 async function handleGetProfile(config: E2eConfig | undefined) {
@@ -2106,7 +2163,27 @@ async function handleGetProfile(config: E2eConfig | undefined) {
     return cloneProfile(ensureMockProfile(config));
   }
 
-  return relayJsonRequest<RawProfile>(config, "/api/users/me/profile");
+  // Pure Nostr: query kind:0 (profile metadata) for our pubkey.
+  const events = await relayQuery(config, [
+    { kinds: [0], authors: [identity.pubkey], limit: 1 },
+  ]);
+  if (events.length === 0) {
+    return {
+      pubkey: identity.pubkey,
+      display_name: null,
+      about: null,
+      avatar_url: null,
+      nip05: null,
+    };
+  }
+  const content = JSON.parse(events[0].content ?? "{}");
+  return {
+    pubkey: identity.pubkey,
+    display_name: content.display_name ?? content.name ?? null,
+    about: content.about ?? null,
+    avatar_url: content.picture ?? null,
+    nip05: content.nip05 ?? null,
+  };
 }
 
 async function handleUpdateProfile(
@@ -2156,16 +2233,18 @@ async function handleUpdateProfile(
   }
 
   // Read-merge-write: fetch current profile, merge, sign kind:0.
-  const current = await relayJsonRequest<RawProfile>(
-    config,
-    "/api/users/me/profile",
-  );
+  const currentEvents = await relayQuery(config, [
+    { kinds: [0], authors: [identity.pubkey], limit: 1 },
+  ]);
+  const currentContent = currentEvents[0]
+    ? JSON.parse(currentEvents[0].content ?? "{}")
+    : {};
   const profileContent = JSON.stringify({
-    display_name: args.displayName ?? current.display_name ?? undefined,
-    name: current.display_name ?? undefined,
-    picture: args.avatarUrl ?? current.avatar_url ?? undefined,
-    about: args.about ?? current.about ?? undefined,
-    nip05: args.nip05Handle ?? current.nip05_handle ?? undefined,
+    display_name: args.displayName ?? currentContent.display_name ?? undefined,
+    name: currentContent.display_name ?? undefined,
+    picture: args.avatarUrl ?? currentContent.picture ?? undefined,
+    about: args.about ?? currentContent.about ?? undefined,
+    nip05: args.nip05Handle ?? currentContent.nip05 ?? undefined,
   });
   await submitSignedEvent(config, {
     kind: 0,
@@ -2173,7 +2252,15 @@ async function handleUpdateProfile(
     tags: [],
   });
 
-  return relayJsonRequest<RawProfile>(config, "/api/users/me/profile");
+  // Return the updated profile in RawProfile shape
+  const updated = JSON.parse(profileContent);
+  return {
+    pubkey: identity.pubkey,
+    display_name: updated.display_name ?? null,
+    about: updated.about ?? null,
+    avatar_url: updated.picture ?? null,
+    nip05: updated.nip05 ?? null,
+  };
 }
 
 async function handleGetUserProfile(
@@ -2193,10 +2280,27 @@ async function handleGetUserProfile(
     return cloneProfile(profile);
   }
 
-  const path = args.pubkey
-    ? `/api/users/${args.pubkey}/profile`
-    : "/api/users/me/profile";
-  return relayJsonRequest<RawProfile>(config, path);
+  const targetPubkey = args.pubkey ?? identity.pubkey;
+  const events = await relayQuery(config, [
+    { kinds: [0], authors: [targetPubkey], limit: 1 },
+  ]);
+  if (events.length === 0) {
+    return {
+      pubkey: targetPubkey,
+      display_name: null,
+      about: null,
+      avatar_url: null,
+      nip05: null,
+    };
+  }
+  const content = JSON.parse(events[0].content ?? "{}");
+  return {
+    pubkey: targetPubkey,
+    display_name: content.display_name ?? content.name ?? null,
+    about: content.about ?? null,
+    avatar_url: content.picture ?? null,
+    nip05: content.nip05 ?? null,
+  };
 }
 
 async function handleGetUsersBatch(
@@ -2232,12 +2336,23 @@ async function handleGetUsersBatch(
     };
   }
 
-  return relayJsonRequest<RawUsersBatchResponse>(config, "/api/users/batch", {
-    method: "POST",
-    body: JSON.stringify({
-      pubkeys: args.pubkeys,
-    }),
-  });
+  const events = await relayQuery(config, [
+    { kinds: [0], authors: args.pubkeys, limit: args.pubkeys.length },
+  ]);
+  const profiles: RawUsersBatchResponse["profiles"] = {};
+  const found = new Set<string>();
+  for (const ev of events) {
+    const pk = ev.pubkey?.toLowerCase() ?? "";
+    found.add(pk);
+    const content = JSON.parse(ev.content ?? "{}");
+    profiles[pk] = {
+      display_name: content.display_name ?? content.name ?? null,
+      avatar_url: content.picture ?? null,
+      nip05_handle: content.nip05 ?? null,
+    };
+  }
+  const missing = args.pubkeys.filter((p) => !found.has(p.toLowerCase()));
+  return { profiles, missing };
 }
 
 async function handleSearchUsers(
@@ -2284,13 +2399,21 @@ async function handleSearchUsers(
     } satisfies RawSearchUsersResponse;
   }
 
-  const searchParams = new URLSearchParams();
-  searchParams.set("q", args.query);
-  searchParams.set("limit", String(args.limit ?? 8));
-  return relayJsonRequest<RawSearchUsersResponse>(
-    config,
-    `/api/users/search?${searchParams.toString()}`,
-  );
+  // NIP-50 search on kind:0 profiles
+  const limit = args.limit ?? 8;
+  const events = await relayQuery(config, [
+    { kinds: [0], search: args.query, limit },
+  ]);
+  const users = events.map((ev) => {
+    const content = JSON.parse(ev.content ?? "{}");
+    return {
+      pubkey: ev.pubkey ?? "",
+      display_name: content.display_name ?? content.name ?? null,
+      avatar_url: content.picture ?? null,
+      nip05_handle: content.nip05 ?? null,
+    };
+  });
+  return { users };
 }
 
 async function handleGetPresence(
@@ -2313,12 +2436,24 @@ async function handleGetPresence(
     return {} satisfies RawPresenceLookup;
   }
 
-  const searchParams = new URLSearchParams();
-  searchParams.set("pubkeys", args.pubkeys.join(","));
-  return relayJsonRequest<RawPresenceLookup>(
-    config,
-    `/api/presence?${searchParams.toString()}`,
-  );
+  // Presence is ephemeral (kind:20001) — query via bridge which synthesizes from Redis.
+  const events = await relayQuery(config, [
+    { kinds: [20001], authors: args.pubkeys, limit: args.pubkeys.length },
+  ]);
+  const result: RawPresenceLookup = {};
+  for (const ev of events) {
+    // Synthesized presence events have ["p", subject_pubkey] tag
+    const pTag = ((ev.tags ?? []) as string[][]).find((t) => t[0] === "p");
+    const pk = pTag?.[1] ?? ev.pubkey ?? "";
+    result[pk.toLowerCase()] = (ev.content ?? "offline") as PresenceStatus;
+  }
+  // Fill missing pubkeys with "offline"
+  for (const pk of args.pubkeys) {
+    if (!result[pk.toLowerCase()]) {
+      result[pk.toLowerCase()] = "offline";
+    }
+  }
+  return result;
 }
 
 async function handleSetPresence(
@@ -2337,12 +2472,22 @@ async function handleSetPresence(
     } satisfies RawSetPresenceResponse;
   }
 
-  return relayJsonRequest<RawSetPresenceResponse>(config, "/api/presence", {
-    method: "PUT",
-    body: JSON.stringify({
-      status: args.status,
-    }),
-  });
+  // Presence is ephemeral kind:20001 — submit via POST /events.
+  // Note: the relay may reject this with "kind 20001 is only accepted via WebSocket"
+  // in which case we just return the expected shape (presence is best-effort in e2e).
+  try {
+    await submitSignedEvent(config, {
+      kind: 20001,
+      content: args.status,
+      tags: [],
+    });
+  } catch {
+    // Expected: ephemeral events may be WS-only
+  }
+  return {
+    status: args.status,
+    ttl_seconds: args.status === "offline" ? 0 : 90,
+  };
 }
 
 async function handleCreateChannel(
@@ -2405,16 +2550,34 @@ async function handleCreateChannel(
   }
   await submitSignedEvent(config, { kind: 9007, content: "", tags });
 
-  // Fetch the created channel to return the expected shape.
-  const channels = await relayJsonRequest<RawChannel[]>(
-    config,
-    "/api/channels",
-  );
-  const created = channels.find((ch) => ch.name === args.name);
-  if (!created) {
+  // Fetch the created channel via pure Nostr query.
+  // The relay emits kind:39000 as a side effect of kind:9007.
+  const metaEvents = await relayQuery(config, [
+    { kinds: [39000], "#d": [channelId], limit: 1 },
+  ]);
+  const ev = metaEvents[0];
+  if (!ev) {
     throw new Error(`Channel "${args.name}" not found after creation`);
   }
-  return created;
+  const evTags = (ev.tags ?? []) as string[][];
+  const getTag = (name: string) =>
+    evTags.find((t) => t[0] === name)?.[1] ?? null;
+  return {
+    id: channelId,
+    name: getTag("name") ?? args.name,
+    description: getTag("about") ?? args.description ?? null,
+    channel_type: args.channelType,
+    visibility: args.visibility,
+    topic: null,
+    purpose: null,
+    role: "owner",
+    archived_at: null,
+    ttl_seconds: args.ttlSeconds ?? null,
+    ttl_deadline: ttlDeadline,
+    created_at: ev.created_at
+      ? new Date(ev.created_at * 1000).toISOString()
+      : new Date().toISOString(),
+  };
 }
 
 async function handleOpenDm(
@@ -2473,21 +2636,41 @@ async function handleOpenDm(
     return toRawChannel(channel, config);
   }
 
-  const response = await relayJsonRequest<RawOpenDmResponse>(
-    config,
-    "/api/dms",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        pubkeys: normalizedPubkeys,
-      }),
-    },
-  );
+  // Submit kind:41010 (DM open) with p-tags for participants
+  const tags = normalizedPubkeys.map((pk) => ["p", pk]);
+  const result = await submitSignedEvent(config, {
+    kind: 41010,
+    content: "",
+    tags,
+  });
+  // Parse channel_id from response message
+  const respJson = JSON.parse(result.message.replace("response:", "") || "{}");
+  const channelId = respJson.channel_id ?? "";
 
-  return relayJsonRequest<RawChannel>(
-    config,
-    `/api/channels/${response.channel_id}`,
-  );
+  // Fetch channel metadata
+  const metaEvents = await relayQuery(config, [
+    { kinds: [39000], "#d": [channelId], limit: 1 },
+  ]);
+  const ev = metaEvents[0];
+  const evTags = (ev?.tags ?? []) as string[][];
+  const getTag = (name: string) =>
+    evTags.find((t) => t[0] === name)?.[1] ?? null;
+  return {
+    id: channelId,
+    name: getTag("name") ?? "DM",
+    description: null,
+    channel_type: "dm",
+    visibility: "private",
+    topic: null,
+    purpose: null,
+    role: "member",
+    archived_at: null,
+    ttl_seconds: null,
+    ttl_deadline: null,
+    created_at: ev?.created_at
+      ? new Date(ev.created_at * 1000).toISOString()
+      : new Date().toISOString(),
+  };
 }
 
 async function handleHideDm(
@@ -2507,8 +2690,11 @@ async function handleHideDm(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/dms/${args.channelId}/hide`, {
-    method: "POST",
+  // Submit kind:41012 (DM hide) with h-tag
+  await submitSignedEvent(config, {
+    kind: 41012,
+    content: "",
+    tags: [["h", args.channelId]],
   });
 }
 
@@ -2521,10 +2707,41 @@ async function handleGetChannelDetails(
     return toRawChannelDetail(getMockChannel(args.channelId), config);
   }
 
-  return relayJsonRequest<RawChannelDetail>(
-    config,
-    `/api/channels/${args.channelId}`,
+  const metaEvents = await relayQuery(config, [
+    { kinds: [39000], "#d": [args.channelId], limit: 1 },
+  ]);
+  const ev = metaEvents[0];
+  const evTags = (ev?.tags ?? []) as string[][];
+  const getTag = (name: string) =>
+    evTags.find((t) => t[0] === name)?.[1] ?? null;
+
+  // Get members for member_count
+  const memberEvents = await relayQuery(config, [
+    { kinds: [39002], "#d": [args.channelId], limit: 1 },
+  ]);
+  const memberTags = ((memberEvents[0]?.tags ?? []) as string[][]).filter(
+    (t) => t[0] === "p",
   );
+
+  return {
+    id: args.channelId,
+    name: getTag("name") ?? "",
+    description: getTag("about") ?? null,
+    channel_type: getTag("t") ?? "stream",
+    visibility: evTags.some((t) => t[0] === "private") ? "private" : "open",
+    topic: getTag("topic") ?? null,
+    purpose: getTag("purpose") ?? null,
+    member_count: memberTags.length,
+    role: "member",
+    archived_at: evTags.some((t) => t[0] === "archived" && t[1] === "true")
+      ? new Date().toISOString()
+      : null,
+    ttl_seconds: getTag("ttl") ? Number(getTag("ttl")) : null,
+    ttl_deadline: getTag("ttl_deadline") ?? null,
+    created_at: ev?.created_at
+      ? new Date(ev.created_at * 1000).toISOString()
+      : new Date().toISOString(),
+  };
 }
 
 async function handleGetChannelMembers(
@@ -2540,10 +2757,25 @@ async function handleGetChannelMembers(
     };
   }
 
-  return relayJsonRequest<RawChannelMembersResponse>(
-    config,
-    `/api/channels/${args.channelId}/members`,
+  const memberEvents = await relayQuery(config, [
+    { kinds: [39002], "#d": [args.channelId], limit: 1 },
+  ]);
+  const memberTags = ((memberEvents[0]?.tags ?? []) as string[][]).filter(
+    (t) => t[0] === "p",
   );
+  const members = memberTags.map((t) => ({
+    pubkey: t[1],
+    role: (t[3] ?? t[2] ?? "member") as
+      | "owner"
+      | "admin"
+      | "member"
+      | "guest"
+      | "bot",
+    display_name: null,
+    avatar_url: null,
+    joined_at: new Date().toISOString(),
+  }));
+  return { members, next_cursor: null };
 }
 
 async function handleUpdateChannel(
@@ -2576,10 +2808,31 @@ async function handleUpdateChannel(
   }
   await submitSignedEvent(config, { kind: 9002, content: "", tags });
 
-  return relayJsonRequest<RawChannelDetail>(
-    config,
-    `/api/channels/${args.channelId}`,
-  );
+  // Re-fetch updated metadata
+  const metaEvents = await relayQuery(config, [
+    { kinds: [39000], "#d": [args.channelId], limit: 1 },
+  ]);
+  const ev = metaEvents[0];
+  const evTags = (ev?.tags ?? []) as string[][];
+  const getTag = (name: string) =>
+    evTags.find((t) => t[0] === name)?.[1] ?? null;
+  return {
+    id: args.channelId,
+    name: getTag("name") ?? "",
+    description: getTag("about") ?? null,
+    channel_type: getTag("t") ?? "stream",
+    visibility: evTags.some((t) => t[0] === "private") ? "private" : "open",
+    topic: getTag("topic") ?? null,
+    purpose: getTag("purpose") ?? null,
+    member_count: 0,
+    role: "owner",
+    archived_at: null,
+    ttl_seconds: null,
+    ttl_deadline: null,
+    created_at: ev?.created_at
+      ? new Date(ev.created_at * 1000).toISOString()
+      : new Date().toISOString(),
+  };
 }
 
 async function handleSetChannelTopic(
@@ -3119,24 +3372,70 @@ async function handleGetFeed(
     };
   }
 
-  const url = new URL("/api/feed", getRelayHttpUrl(config));
-  if (args.since !== undefined) {
-    url.searchParams.set("since", String(args.since));
-  }
-  if (args.limit !== undefined) {
-    url.searchParams.set("limit", String(args.limit));
-  }
-  if (args.types) {
-    url.searchParams.set("types", args.types);
+  // Feed is composed of multiple queries: mentions (#p), activity, approvals.
+  // For e2e, return a minimal feed structure with mentions.
+  const limit = args.limit ?? 50;
+  const mentionEvents = await relayQuery(config, [
+    { kinds: [9, 40002, 45001, 45003], "#p": [identity.pubkey], limit },
+  ]);
+
+  // Look up channel names for feed items
+  const channelIdsInFeed = [
+    ...new Set(
+      mentionEvents
+        .map(
+          (ev) =>
+            ((ev.tags ?? []) as string[][]).find((t) => t[0] === "h")?.[1],
+        )
+        .filter(Boolean) as string[],
+    ),
+  ];
+  const channelNameMap = new Map<string, string>();
+  if (channelIdsInFeed.length > 0) {
+    const metaEvents = await relayQuery(config, [
+      {
+        kinds: [39000],
+        "#d": channelIdsInFeed,
+        limit: channelIdsInFeed.length,
+      },
+    ]);
+    for (const me of metaEvents) {
+      const d = ((me.tags ?? []) as string[][]).find((t) => t[0] === "d")?.[1];
+      const name = ((me.tags ?? []) as string[][]).find(
+        (t) => t[0] === "name",
+      )?.[1];
+      if (d && name) channelNameMap.set(d, name);
+    }
   }
 
-  const response = await fetch(url, {
-    headers: {
-      "X-Pubkey": identity.pubkey,
-    },
+  const items = mentionEvents.map((ev) => {
+    const chId =
+      ((ev.tags ?? []) as string[][]).find((t) => t[0] === "h")?.[1] ?? null;
+    return {
+      id: ev.id ?? "",
+      pubkey: ev.pubkey ?? "",
+      content: ev.content ?? "",
+      created_at: ev.created_at ?? 0,
+      kind: ev.kind ?? 9,
+      tags: (ev.tags ?? []) as string[][],
+      channel_id: chId,
+      channel_name: chId ? (channelNameMap.get(chId) ?? "") : "",
+      category: "mention" as const,
+    };
   });
-  await assertOk(response);
-  return response.json();
+  return {
+    feed: {
+      mentions: items,
+      needs_action: [],
+      activity: [],
+      agent_activity: [],
+    },
+    meta: {
+      since: Math.floor(Date.now() / 1000) - 7 * 86400,
+      total: items.length,
+      generated_at: Math.floor(Date.now() / 1000),
+    },
+  };
 }
 
 async function handleListTokens(
@@ -3149,7 +3448,8 @@ async function handleListTokens(
     };
   }
 
-  return relayJsonRequest<RawListTokensResponse>(config, "/api/tokens");
+  // Tokens are deleted in pure-nostr — return empty list
+  return { tokens: [] };
 }
 
 async function handleMintToken(
@@ -3189,15 +3489,10 @@ async function handleMintToken(
     return cloneMintedToken(token);
   }
 
-  return relayJsonRequest<RawMintTokenResponse>(config, "/api/tokens", {
-    method: "POST",
-    body: JSON.stringify({
-      name: args.name,
-      scopes: args.scopes,
-      channel_ids: args.channelIds,
-      expires_in_days: args.expiresInDays,
-    }),
-  });
+  // Tokens are deleted in pure-nostr — return error
+  throw new Error(
+    "Token minting is not available in pure-nostr mode. Auth uses keypairs directly.",
+  );
 }
 
 async function handleRevokeToken(
@@ -3215,9 +3510,7 @@ async function handleRevokeToken(
     return;
   }
 
-  await relayEmptyRequest(config, `/api/tokens/${args.tokenId}`, {
-    method: "DELETE",
-  });
+  // Tokens deleted in pure-nostr — no-op
 }
 
 async function handleRevokeAllTokens(
@@ -3242,9 +3535,8 @@ async function handleRevokeAllTokens(
     };
   }
 
-  return relayJsonRequest<RawRevokeAllTokensResponse>(config, "/api/tokens", {
-    method: "DELETE",
-  });
+  // Tokens deleted in pure-nostr — no-op
+  return { revoked_count: 0 };
 }
 
 async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
@@ -3889,19 +4181,25 @@ async function handleSearchMessages(
     };
   }
 
-  const url = new URL("/api/search", getRelayHttpUrl(config));
-  url.searchParams.set("q", args.q);
-  if (args.limit !== undefined) {
-    url.searchParams.set("limit", String(args.limit));
-  }
-
-  const response = await fetch(url, {
-    headers: {
-      "X-Pubkey": identity.pubkey,
-    },
-  });
-  await assertOk(response);
-  return response.json();
+  // NIP-50 search via POST /query
+  const limit = args.limit ?? 20;
+  const events = await relayQuery(config, [
+    { kinds: [9, 40002], search: args.q, limit },
+  ]);
+  const hits = events.map((ev) => ({
+    event_id: ev.id ?? "",
+    pubkey: ev.pubkey ?? "",
+    content: ev.content ?? "",
+    created_at: ev.created_at ?? 0,
+    kind: ev.kind ?? 9,
+    tags: ev.tags ?? [],
+    sig: ev.sig ?? "",
+    channel_id:
+      ((ev.tags ?? []) as string[][]).find((t) => t[0] === "h")?.[1] ?? null,
+    channel_name: null,
+    score: 1.0,
+  }));
+  return { hits, found: hits.length };
 }
 
 async function handleSendChannelMessage(
@@ -4096,16 +4394,12 @@ async function handleGetEvent(
     return JSON.stringify(event);
   }
 
-  const response = await fetch(
-    `${getRelayHttpUrl(config)}/api/events/${args.eventId}`,
-    {
-      headers: {
-        "X-Pubkey": identity.pubkey,
-      },
-    },
-  );
-  await assertOk(response);
-  return JSON.stringify(await response.json());
+  // Query single event by ID via POST /query
+  const events = await relayQuery(config, [{ ids: [args.eventId], limit: 1 }]);
+  if (events.length === 0) {
+    throw new Error(`Event not found: ${args.eventId}`);
+  }
+  return JSON.stringify(events[0]);
 }
 
 async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
@@ -4729,6 +5023,9 @@ export function maybeInstallE2eTauriMocks() {
           payload as { value: number }
         ).value;
         return;
+      case "plugin:event|listen":
+        // Tauri event system (pairing, huddle) — no-op in e2e, return unlisten fn ID
+        return Math.floor(Math.random() * 1_000_000);
       default:
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }

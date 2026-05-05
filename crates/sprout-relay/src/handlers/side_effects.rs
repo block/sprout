@@ -105,7 +105,23 @@ pub async fn validate_standard_deletion_event(
     let target_ids = extract_target_event_ids(event);
 
     if target_ids.is_empty() {
-        return Err(anyhow::anyhow!("missing e tag for target event"));
+        // a-tag deletion: verify author owns the addressable event
+        let a_tag = event
+            .tags
+            .iter()
+            .find(|t| t.kind().to_string() == "a")
+            .and_then(|t| t.content().map(|s| s.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("missing e or a tag for target"))?;
+        let parts: Vec<&str> = a_tag.splitn(3, ':').collect();
+        if parts.len() < 2 {
+            return Err(anyhow::anyhow!("invalid a-tag format"));
+        }
+        let target_pubkey_bytes =
+            hex::decode(parts[1]).map_err(|_| anyhow::anyhow!("invalid pubkey in a-tag"))?;
+        if target_pubkey_bytes != actor_bytes {
+            return Err(anyhow::anyhow!("must be event author"));
+        }
+        return Ok(());
     }
 
     for target_id in target_ids {
@@ -506,7 +522,35 @@ async fn emit_addressable_discovery_event(
     tags: Vec<Tag>,
     relay_pubkey_hex: &str,
 ) -> anyhow::Result<()> {
+    // Ensure the new event's created_at is strictly greater than any existing event
+    // of the same (kind, pubkey, channel_id). Without this, rapid successive updates
+    // (e.g. set topic then set purpose in the same second) can produce events with
+    // identical created_at, causing the second to be rejected by stale-write protection
+    // (NIP-16 tiebreaker: lower event ID wins, which is random).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let min_ts = {
+        let existing = state
+            .db
+            .query_events(&sprout_db::event::EventQuery {
+                kinds: Some(vec![kind as i32]),
+                channel_id: Some(channel_id),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_default();
+        existing
+            .first()
+            .map(|e| e.event.created_at.as_u64() + 1)
+            .unwrap_or(now)
+    };
+    let ts = now.max(min_ts);
+
     let event = EventBuilder::new(Kind::Custom(kind as u16), "", tags)
+        .custom_created_at(nostr::Timestamp::from(ts))
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
 
@@ -550,6 +594,10 @@ pub async fn emit_group_discovery_events(
         }
         if channel.visibility == "private" {
             tags.push(Tag::parse(&["private"])?);
+        } else {
+            // Explicit "public" tag complements NIP-29's absence-of-"private" convention,
+            // making channel visibility self-describing for clients.
+            tags.push(Tag::parse(&["public"])?);
         }
         // NIP-29 hidden tag: hint to clients not to show DMs in public group lists.
         // Not a security boundary — access control is handled by channel-scoped storage.
@@ -558,6 +606,30 @@ pub async fn emit_group_discovery_events(
         }
         // Sprout channels always require explicit membership
         tags.push(Tag::parse(&["closed"])?);
+        // Channel type tag so clients can distinguish stream/forum/dm without inference
+        tags.push(Tag::parse(&["t", &channel.channel_type])?);
+        // Optional topic / purpose for richer client UX
+        if let Some(ref topic) = channel.topic {
+            if !topic.is_empty() {
+                tags.push(Tag::parse(&["topic", topic])?);
+            }
+        }
+        if let Some(ref purpose) = channel.purpose {
+            if !purpose.is_empty() {
+                tags.push(Tag::parse(&["purpose", purpose])?);
+            }
+        }
+        // Archived state — clients use this to hide channels from the sidebar.
+        if channel.archived_at.is_some() {
+            tags.push(Tag::parse(&["archived", "true"])?);
+        }
+        // Ephemeral channel TTL — clients use this to show countdown timers.
+        if let Some(ttl) = channel.ttl_seconds {
+            tags.push(Tag::parse(&["ttl", &ttl.to_string()])?);
+        }
+        if let Some(ref deadline) = channel.ttl_deadline {
+            tags.push(Tag::parse(&["ttl_deadline", &deadline.to_rfc3339()])?);
+        }
         emit_addressable_discovery_event(
             state,
             channel_id,
@@ -593,7 +665,9 @@ pub async fn emit_group_discovery_events(
         let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
         for m in &members {
             let pubkey_hex = hex::encode(&m.pubkey);
-            tags.push(Tag::parse(&["p", &pubkey_hex])?);
+            // NIP-29 convention: ["p", pubkey, relay_url, role]. Empty relay_url
+            // because the canonical relay is implicit (this event is signed by it).
+            tags.push(Tag::parse(&["p", &pubkey_hex, "", &m.role])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -1245,13 +1319,81 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
 // handle_reaction() removed — kind:7 reaction dedup and DB writes are now
 // handled inline in ingest_event() before storage (see ingest.rs step 20a).
 
+/// Handle NIP-09 deletion via `a` tag (addressable/parameterized-replaceable events).
+/// Parses "kind:pubkey:d-tag" and deletes the corresponding DB record.
+async fn handle_a_tag_deletion(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
+    let a_value = event
+        .tags
+        .iter()
+        .find(|t| t.kind().to_string() == "a")
+        .and_then(|t| t.content().map(|s| s.to_string()))
+        .ok_or_else(|| anyhow::anyhow!("missing a tag for addressable deletion"))?;
+
+    let parts: Vec<&str> = a_value.splitn(3, ':').collect();
+    if parts.len() < 3 {
+        return Err(anyhow::anyhow!("invalid a-tag format: {a_value}"));
+    }
+    let kind_num: u32 = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid kind in a-tag"))?;
+    let pubkey_hex = parts[1];
+    let d_tag = parts[2];
+
+    match kind_num {
+        sprout_core::kind::KIND_WORKFLOW_DEF => {
+            // Try UUID first (workflow_id); fall back to name-based lookup.
+            if let Ok(wf_id) = uuid::Uuid::parse_str(d_tag) {
+                state
+                    .db
+                    .delete_workflow(wf_id)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to delete workflow {wf_id}: {e}"))?;
+                tracing::info!(workflow_id = %wf_id, "Workflow deleted via NIP-09 a-tag (UUID)");
+            } else {
+                // Name-based lookup
+                let owner_bytes = hex::decode(pubkey_hex).unwrap_or_default();
+                match state
+                    .db
+                    .find_workflow_by_owner_and_name(&owner_bytes, d_tag)
+                    .await
+                {
+                    Ok(Some(wf)) => {
+                        state.db.delete_workflow(wf.id).await.map_err(|e| {
+                            anyhow::anyhow!("failed to delete workflow {}: {e}", wf.id)
+                        })?;
+                        tracing::info!(workflow_id = %wf.id, name = d_tag, "Workflow deleted via NIP-09 a-tag (name)");
+                    }
+                    Ok(None) => {
+                        tracing::warn!(
+                            "NIP-09 a-tag deletion: no workflow '{d_tag}' found for owner"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("NIP-09 a-tag deletion: DB lookup failed: {e}");
+                    }
+                }
+            }
+        }
+        _ => {
+            tracing::debug!(
+                kind = kind_num,
+                d_tag = d_tag,
+                "NIP-09 a-tag deletion for unhandled kind — no side effect"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_standard_deletion_event(
     event: &Event,
     state: &Arc<AppState>,
 ) -> anyhow::Result<()> {
     let target_ids = extract_target_event_ids(event);
     if target_ids.is_empty() {
-        return Err(anyhow::anyhow!("missing e tag for target event"));
+        // NIP-09 a-tag deletion path for addressable events
+        return handle_a_tag_deletion(event, state).await;
     }
 
     for target_id in target_ids {
@@ -1658,7 +1800,7 @@ pub async fn publish_nip43_membership_list(state: &Arc<AppState>) -> anyhow::Res
 
     for member in &members {
         tags.push(
-            Tag::parse(&["member", &member.pubkey])
+            Tag::parse(&["member", &member.pubkey, &member.role])
                 .map_err(|e| anyhow::anyhow!("failed to build member tag: {e}"))?,
         );
     }
@@ -1754,4 +1896,55 @@ pub async fn publish_nip43_member_removed(
     target_pubkey_hex: &str,
 ) -> anyhow::Result<()> {
     publish_nip43_delta(state, 8001, target_pubkey_hex, "member-removed").await
+}
+
+/// Reconcile channels that exist in the DB but don't have kind:39000 events.
+///
+/// This handles the case where channels were created via direct SQL inserts
+/// (e.g. test seed scripts) rather than through the Nostr event pipeline.
+/// Emits kind:39000 (metadata) and kind:39002 (members) for each channel
+/// that is missing its discovery events.
+///
+/// Idempotent: checks for existing kind:39000 events before emitting.
+pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<()> {
+    use sprout_db::event::EventQuery;
+
+    let channels = state.db.list_channels(None).await?;
+    if channels.is_empty() {
+        return Ok(());
+    }
+
+    let mut reconciled = 0u32;
+    for channel in &channels {
+        // Check if kind:39000 event already exists for this channel.
+        let channel_id_str = channel.id.to_string();
+        let existing = state
+            .db
+            .query_events(&EventQuery {
+                kinds: Some(vec![39000]),
+                d_tag: Some(channel_id_str.clone()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_default();
+
+        if existing.is_empty() {
+            // No discovery event — emit one.
+            if let Err(e) = emit_group_discovery_events(state, channel.id).await {
+                tracing::debug!(
+                    channel_id = %channel.id,
+                    error = %e,
+                    "reconcile: failed to emit discovery events"
+                );
+            } else {
+                reconciled += 1;
+            }
+        }
+    }
+
+    if reconciled > 0 {
+        tracing::info!(count = reconciled, "reconciled channel discovery events");
+    }
+    Ok(())
 }

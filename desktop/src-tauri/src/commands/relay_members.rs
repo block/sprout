@@ -1,34 +1,62 @@
-use reqwest::Method;
 use tauri::State;
 
 use crate::{
     app_state::AppState,
-    events,
-    relay::{api_path, build_authed_request, send_json_request, submit_event},
+    events, nostr_convert,
+    relay::{query_relay, submit_event},
 };
 
 #[tauri::command]
 pub async fn list_relay_members(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let request = build_authed_request(
-        &state.http_client,
-        Method::GET,
-        &api_path(&["relay", "members"]),
+    // kind:13534 is a single replaceable event on the relay carrying all members.
+    let events = query_relay(
         &state,
-    )?;
-    send_json_request(request).await
+        &[serde_json::json!({
+            "kinds": [13534],
+            "limit": 1
+        })],
+    )
+    .await?;
+
+    Ok(events
+        .first()
+        .map(nostr_convert::relay_members_from_event)
+        .unwrap_or_else(|| serde_json::json!({ "members": [] })))
 }
 
 #[tauri::command]
 pub async fn get_my_relay_membership(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let request = build_authed_request(
-        &state.http_client,
-        Method::GET,
-        &api_path(&["relay", "members", "me"]),
+    let my_pubkey = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        keys.public_key().to_hex()
+    };
+
+    let events = query_relay(
         &state,
-    )?;
-    send_json_request(request).await
+        &[serde_json::json!({
+            "kinds": [13534],
+            "limit": 1
+        })],
+    )
+    .await?;
+
+    let Some(event) = events.first() else {
+        return Ok(serde_json::json!({ "member": null }));
+    };
+
+    let members_value = nostr_convert::relay_members_from_event(event);
+    let me = members_value
+        .get("members")
+        .and_then(|m| m.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|m| m.get("pubkey").and_then(|p| p.as_str()) == Some(my_pubkey.as_str()))
+                .cloned()
+        });
+
+    Ok(serde_json::json!({ "member": me }))
 }
 
 #[tauri::command]

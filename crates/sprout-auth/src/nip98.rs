@@ -291,36 +291,4 @@ mod tests {
         let result = verify_nip98_event(&json, loopback_url, TEST_METHOD, None);
         assert!(result.is_ok());
     }
-
-    #[test]
-    fn is_self_mintable_all_eight() {
-        use crate::scope::{is_self_mintable, Scope};
-        assert!(is_self_mintable(&Scope::MessagesRead));
-        assert!(is_self_mintable(&Scope::MessagesWrite));
-        assert!(is_self_mintable(&Scope::ChannelsRead));
-        assert!(is_self_mintable(&Scope::ChannelsWrite));
-        assert!(is_self_mintable(&Scope::UsersRead));
-        assert!(is_self_mintable(&Scope::UsersWrite));
-        assert!(is_self_mintable(&Scope::FilesRead));
-        assert!(is_self_mintable(&Scope::FilesWrite));
-    }
-
-    #[test]
-    fn is_self_mintable_admin_scopes_false() {
-        use crate::scope::{is_self_mintable, Scope};
-        assert!(!is_self_mintable(&Scope::AdminChannels));
-        assert!(!is_self_mintable(&Scope::AdminUsers));
-        assert!(!is_self_mintable(&Scope::JobsRead));
-        assert!(!is_self_mintable(&Scope::JobsWrite));
-        assert!(!is_self_mintable(&Scope::SubscriptionsRead));
-        assert!(!is_self_mintable(&Scope::SubscriptionsWrite));
-    }
-
-    #[test]
-    fn is_self_mintable_unknown_false() {
-        use crate::scope::{is_self_mintable, Scope};
-        assert!(!is_self_mintable(&Scope::Unknown(
-            "future:scope".to_string()
-        )));
-    }
 }
