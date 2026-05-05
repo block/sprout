@@ -38,6 +38,12 @@ reqwest = { workspace = true }
 # TLS crypto provider (required for wss:// connections)
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
+# Crypto
+sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = "0.22"
+infer = "0.19"
+
 # Utilities
 uuid = { workspace = true }
 tracing = { workspace = true }

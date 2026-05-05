@@ -7,8 +7,12 @@ abstract final class EventKind {
   static const deletion = 5;
   static const reaction = 7;
   static const streamMessage = 9;
+  static const presenceUpdate = 20001;
   static const typingIndicator = 20002;
   static const auth = 22242;
+  static const agentObserverFrame = 24200;
+  static const readState = 30078;
+  static const userStatus = 30315;
   static const streamMessageV2 = 40002;
   static const streamMessageEdit = 40003;
   static const streamMessageDiff = 40008;
@@ -16,12 +20,20 @@ abstract final class EventKind {
   static const forumPost = 45001;
   static const forumComment = 45003;
 
+  /// Event kinds that represent user-visible channel messages.
+  static const channelMessageEventKinds = [
+    streamMessage, // 9
+    streamMessageV2, // 40002
+    forumPost, // 45001
+    forumComment, // 45003
+  ];
+
   /// Event kinds that represent channel activity (messages, edits, reactions,
   /// deletions, system events). Matches the desktop's `CHANNEL_EVENT_KINDS`.
   static const channelEventKinds = [
     deletion, // 5
     reaction, // 7
-    streamMessage, // 9
+    ...channelMessageEventKinds,
     40001, // legacy pre-migration stream messages
     streamMessageEdit, // 40003
     streamMessageDiff, // 40008
@@ -133,6 +145,7 @@ class NostrEvent {
 @immutable
 class NostrFilter {
   final List<int> kinds;
+  final List<String>? authors;
   final int limit;
   final int? since;
   final int? until;
@@ -142,6 +155,7 @@ class NostrFilter {
 
   const NostrFilter({
     required this.kinds,
+    this.authors,
     this.limit = 100,
     this.since,
     this.until,
@@ -151,6 +165,7 @@ class NostrFilter {
   /// Return a copy with an updated `since` value.
   NostrFilter copyWithSince(int since) => NostrFilter(
     kinds: kinds,
+    authors: authors,
     limit: limit,
     since: since,
     until: until,
@@ -159,6 +174,7 @@ class NostrFilter {
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'kinds': kinds, 'limit': limit};
+    if (authors != null) json['authors'] = authors;
     if (since != null) json['since'] = since;
     if (until != null) json['until'] = until;
     for (final entry in tags.entries) {

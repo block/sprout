@@ -41,8 +41,8 @@ export function ManagedAgentSessionPanel({
   showRaw = true,
 }: ManagedAgentSessionPanelProps) {
   const { connectionState, errorMessage, events } = useObserverEvents(
-    agent.observerUrl,
     agent.status === "running",
+    agent.pubkey,
   );
   const scopedEvents = React.useMemo(
     () =>
@@ -72,7 +72,7 @@ export function ManagedAgentSessionPanel({
         <SessionHeader
           connectionState={connectionState}
           eventCount={scopedEvents.length}
-          hasObserver={Boolean(agent.observerUrl)}
+          hasObserver={agent.status === "running"}
           latestSessionId={latestSessionId}
         />
       ) : null}
@@ -83,7 +83,7 @@ export function ManagedAgentSessionPanel({
         emptyDescription={emptyDescription}
         errorMessage={errorMessage}
         events={scopedEvents}
-        hasObserver={Boolean(agent.observerUrl)}
+        hasObserver={agent.status === "running"}
         showRaw={showRaw}
         transcript={transcript}
       />

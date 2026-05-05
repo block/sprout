@@ -31,6 +31,7 @@ use std::sync::{
 };
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
+use url::Url;
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -151,9 +152,76 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Handle an incoming `sprout://` deep link URL.
+///
+/// Currently supports:
+/// - `sprout://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
+fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
+    let url = match Url::parse(url_str) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("sprout-desktop: invalid deep link URL {url_str:?}: {e}");
+            return;
+        }
+    };
+
+    if url.scheme() != "sprout" {
+        eprintln!("sprout-desktop: ignoring non-sprout deep link: {url_str}");
+        return;
+    }
+
+    match url.host_str() {
+        Some("connect") => {
+            let relay = url
+                .query_pairs()
+                .find(|(k, _)| k == "relay")
+                .map(|(_, v)| v.into_owned());
+            let Some(relay_url) = relay else {
+                eprintln!("sprout-desktop: connect deep link missing relay param: {url_str}");
+                return;
+            };
+            // Validate the relay URL is ws:// or wss://
+            match Url::parse(&relay_url) {
+                Ok(parsed) if parsed.scheme() == "ws" || parsed.scheme() == "wss" => {}
+                Ok(parsed) => {
+                    eprintln!(
+                        "sprout-desktop: rejecting non-websocket relay URL scheme {:?}: {relay_url}",
+                        parsed.scheme()
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("sprout-desktop: invalid relay URL {relay_url:?}: {e}");
+                    return;
+                }
+            }
+            let _ = app.emit("deep-link-connect", relay_url);
+        }
+        Some(action) => {
+            eprintln!("sprout-desktop: unknown deep link action: {action}");
+        }
+        None => {
+            eprintln!("sprout-desktop: deep link missing action: {url_str}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Focus the existing window when a duplicate instance launches.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+            // Forward any deep link URLs from the duplicate launch.
+            for arg in &argv {
+                if arg.starts_with("sprout://") {
+                    handle_deep_link_url(app, arg);
+                }
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -306,9 +374,10 @@ pub fn run() {
             // client so WARP tunnelling applies. The port is stored in AppState
             // and exposed to the frontend via the `get_media_proxy_port` command.
             let proxy_client = state.http_client.clone();
+            let proxy_base_url = relay::relay_api_base_url_with_override(&state);
             let proxy_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let port = media_proxy::spawn_media_proxy(proxy_client).await;
+                let port = media_proxy::spawn_media_proxy(proxy_client, proxy_base_url).await;
                 let state = proxy_handle.state::<AppState>();
                 state
                     .media_proxy_port
@@ -341,6 +410,20 @@ pub fn run() {
                 }
             }
 
+            // Handle deep link URLs received while the app is running (macOS)
+            // and on cold start. The single-instance plugin handles forwarding
+            // from duplicate launches on Windows/Linux.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_deep_link_url(&dl_handle, url.as_str());
+                    }
+                });
+            }
+
             // Keep launch-time agent restoration off the synchronous setup path
             // so the frontend can mount and reveal the window promptly.
             tauri::async_runtime::spawn_blocking(move || {
@@ -356,6 +439,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_identity,
             get_nsec,
+            import_identity,
             get_profile,
             update_profile,
             get_user_profile,
@@ -364,13 +448,18 @@ pub fn run() {
             search_users,
             get_presence,
             set_presence,
+            get_default_relay_url,
             get_relay_ws_url,
             get_relay_http_url,
             get_media_proxy_port,
             discover_acp_providers,
             discover_managed_agent_prereqs,
             sign_event,
+            decrypt_observer_event,
+            build_observer_control_event,
             create_auth_event,
+            nip44_encrypt_to_self,
+            nip44_decrypt_from_self,
             get_channels,
             create_channel,
             open_dm,
@@ -407,6 +496,11 @@ pub fn run() {
             mint_token,
             revoke_token,
             revoke_all_tokens,
+            list_relay_members,
+            get_my_relay_membership,
+            add_relay_member,
+            remove_relay_member,
+            change_relay_member_role,
             list_relay_agents,
             list_managed_agents,
             create_managed_agent,
@@ -473,6 +567,8 @@ pub fn run() {
             start_pairing,
             confirm_pairing_sas,
             cancel_pairing,
+            apply_workspace,
+            get_active_workspace,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

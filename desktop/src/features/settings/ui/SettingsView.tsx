@@ -2,6 +2,7 @@ import * as React from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { X } from "lucide-react";
 
+import { useMyRelayMembershipQuery } from "@/features/relay-members/hooks";
 import { cn } from "@/shared/lib/cn";
 import {
   renderSettingsSection,
@@ -76,6 +77,20 @@ export function SettingsView({
   onSetNeedsActionNotificationsEnabled,
   section,
 }: SettingsViewProps) {
+  const myMembershipQuery = useMyRelayMembershipQuery();
+  const visibleSections = React.useMemo(() => {
+    const membership = myMembershipQuery.data;
+    return settingsSections.filter((s) => {
+      if (s.value === "relay-members") {
+        return (
+          membership != null &&
+          (membership.role === "owner" || membership.role === "admin")
+        );
+      }
+      return true;
+    });
+  }, [myMembershipQuery.data]);
+
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -85,6 +100,12 @@ export function SettingsView({
   React.useEffect(() => {
     void getVersion().then(setAppVersion);
   }, []);
+
+  React.useEffect(() => {
+    if (!visibleSections.some((entry) => entry.value === section)) {
+      onSectionChange("profile");
+    }
+  }, [onSectionChange, section, visibleSections]);
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -117,7 +138,7 @@ export function SettingsView({
         aria-labelledby="settings-title"
         aria-modal="true"
         className={cn(
-          "relative mx-auto flex h-[min(600px,calc(100vh-8rem))] w-[calc(100%-4rem)] max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out",
+          "relative mx-auto flex h-[min(600px,calc(100vh-2rem))] w-[calc(100%-4rem)] max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out",
           isLoaded ? "opacity-100 scale-100" : "opacity-0 scale-95",
         )}
         data-testid="settings-view"
@@ -146,10 +167,10 @@ export function SettingsView({
           </button>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-1">
+        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
           <aside
             className={cn(
-              "flex flex-col border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out lg:border-b-0 lg:border-r",
+              "flex flex-col border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out md:border-b-0 md:border-r",
               isLoaded
                 ? "opacity-100 translate-x-0"
                 : "opacity-0 -translate-x-2",
@@ -157,9 +178,9 @@ export function SettingsView({
           >
             <nav
               aria-label="Settings sections"
-              className="flex gap-1 overflow-x-auto px-3 py-3 lg:flex-1 lg:flex-col lg:overflow-y-auto lg:pt-1"
+              className="flex gap-1 overflow-x-auto px-3 py-3 md:flex-1 md:flex-col md:overflow-y-auto md:pt-1"
             >
-              {settingsSections.map((entry) => (
+              {visibleSections.map((entry) => (
                 <SettingsSectionButton
                   active={entry.value === section}
                   isLoaded={isLoaded}
@@ -170,7 +191,7 @@ export function SettingsView({
               ))}
             </nav>
             {appVersion ? (
-              <p className="hidden px-3 pb-3 text-xs text-muted-foreground/60 lg:block">
+              <p className="hidden px-3 pb-3 text-xs text-muted-foreground/60 md:block">
                 v{appVersion}
               </p>
             ) : null}

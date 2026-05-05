@@ -1,12 +1,15 @@
 import * as React from "react";
 
+import {
+  ensureRelayObserverSubscription,
+  getAgentObserverSnapshot,
+  subscribeAgentObserverStore,
+} from "@/features/agents/observerRelayStore";
 import type { ConnectionState, ObserverEvent } from "./agentSessionTypes";
 
-const MAX_OBSERVER_EVENTS = 800;
-
 export function useObserverEvents(
-  observerUrl: string | null,
   enabled: boolean,
+  agentPubkey?: string | null,
 ) {
   const [events, setEvents] = React.useState<ObserverEvent[]>([]);
   const [connectionState, setConnectionState] =
@@ -17,49 +20,31 @@ export function useObserverEvents(
     setEvents([]);
     setErrorMessage(null);
 
-    if (!observerUrl || !enabled) {
+    if (!enabled) {
       setConnectionState("idle");
       return;
     }
 
-    setConnectionState("connecting");
-    const source = new EventSource(observerUrl);
+    if (!agentPubkey) {
+      setConnectionState("idle");
+      return;
+    }
 
-    source.onopen = () => {
-      setConnectionState("open");
-      setErrorMessage(null);
+    const syncSnapshot = () => {
+      const snapshot = getAgentObserverSnapshot(agentPubkey);
+      setConnectionState(snapshot.connectionState);
+      setErrorMessage(snapshot.errorMessage);
+      setEvents(snapshot.events);
     };
 
-    source.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data) as ObserverEvent;
-        setEvents((current) => {
-          const next = [...current, parsed];
-          return next.length > MAX_OBSERVER_EVENTS
-            ? next.slice(next.length - MAX_OBSERVER_EVENTS)
-            : next;
-        });
-      } catch (error) {
-        setErrorMessage(
-          error instanceof Error
-            ? `Observer event parse failed: ${error.message}`
-            : "Observer event parse failed.",
-        );
-      }
-    };
-
-    source.onerror = () => {
-      setConnectionState((current) =>
-        current === "open" ? "closed" : "error",
-      );
-      setErrorMessage("Observer stream is not available right now.");
-    };
+    syncSnapshot();
+    const unsubscribe = subscribeAgentObserverStore(syncSnapshot);
+    void ensureRelayObserverSubscription();
 
     return () => {
-      source.close();
-      setConnectionState("closed");
+      unsubscribe();
     };
-  }, [enabled, observerUrl]);
+  }, [agentPubkey, enabled]);
 
   return { connectionState, errorMessage, events };
 }

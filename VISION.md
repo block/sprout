@@ -1,10 +1,12 @@
-# 🌱 Sprout — A Unified Communications Platform
+# 🌱 Sprout — The relay is the workspace
 
 > An engineer is debugging a production incident at 2am. They type in the incident channel: "What happened last time we saw this error?"
 >
 > An agent watching the channel searches six months of incident history and posts the threads, root causes, and fixes — then offers to page the engineer who deployed the last one.
 
 The platform made it possible. The agent made it happen. Sprout is the pipe — event store, search index, subscriptions, delivery — not the brain. Humans and agents bring the intelligence. Sprout gives them a shared space to use it.
+
+One relay is your entire workspace. Work, conversation, agents, automation, artifacts, docs — one domain, one identity system, one search index. `myproject.com` in a browser shows your repos. `git clone repoa.myproject.com` works. Open the Sprout app and you're in the channels where the work happens. No GitHub. No Discord. No stitching five services together. The project lives in one place, and that place is yours. See [VISION_SOVEREIGN.md](VISION_SOVEREIGN.md) for the full picture.
 
 ---
 
@@ -125,6 +127,16 @@ Beyond chat: channels are workspaces.
 - **Media uploads** — paste, drop, or attach files. Stored via the [Blossom](https://github.com/hzrd149/blossom) protocol (BUD-01/BUD-02) on S3/MinIO. Thumbnails generated server-side.
 - **Message editing and deletion** — with confirmation. Soft-deleted events remain in the audit log.
 - **Typing indicators** — real-time. Agents broadcast them too.
+
+---
+
+## Code
+
+The relay hosts git repos. Smart HTTP — standard `git clone`, `git push`, nothing special. Your npub signs pushes. Same domain, same auth, same identity as everything else on the relay.
+
+Branches are channels. Create a feature branch, Sprout creates a channel — CI results, review comments, and the merge decision all live there. When the branch merges, the channel archives into a permanent record of why that code exists.
+
+See [VISION_PROJECTS.md](VISION_PROJECTS.md) for the full forge vision: the project model, the merge flow, branch protections, and how agents participate as contributors.
 
 ---
 

@@ -9,7 +9,9 @@ import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
+import 'channel.dart';
 import 'channel_management_provider.dart';
+import 'channels_provider.dart';
 import 'emoji_picker.dart';
 
 /// Rich compose bar with @mention autocomplete, emoji picker, and a markdown
@@ -65,6 +67,11 @@ class ComposeBar extends HookConsumerWidget {
     // Used to pass resolved pubkeys directly to onSend, avoiding regex.
     final mentionMap = useRef(<String, String>{});
 
+    // Channel autocomplete state ----------------------------------------------
+    final channelQuery = useState<String?>(null);
+    final channelStartIdx = useState(-1);
+    final channelsAsync = ref.watch(channelsProvider);
+
     final membersAsync = ref.watch(channelMembersProvider(channelId));
     final currentPubkey = ref.watch(currentPubkeyProvider);
     final userCache = ref.watch(userCacheProvider);
@@ -94,32 +101,41 @@ class ComposeBar extends HookConsumerWidget {
 
         if (!sel.isValid || !sel.isCollapsed) {
           mentionQuery.value = null;
+          channelQuery.value = null;
           return;
         }
         final cursor = sel.baseOffset;
         if (cursor < 1) {
           mentionQuery.value = null;
+          channelQuery.value = null;
           return;
         }
 
-        // Walk backward from cursor looking for a bare `@` at a word boundary.
-        int? atPos;
-        for (var i = cursor - 1; i >= 0; i--) {
-          final ch = text[i];
-          if (ch == '\n') break;
-          if (ch == '@') {
-            if (i == 0 || text[i - 1] == ' ' || text[i - 1] == '\n') {
-              atPos = i;
-            }
-            break;
-          }
-        }
+        // Walk backward from cursor looking for trigger characters.
+        // stopAtSpace: false — @mentions support multi-word display names.
+        final atPos = findTrigger(text, cursor, '@', stopAtSpace: false);
 
         if (atPos != null) {
           mentionQuery.value = text.substring(atPos + 1, cursor).toLowerCase();
           mentionStartIdx.value = atPos;
+          channelQuery.value = null;
         } else {
           mentionQuery.value = null;
+        }
+
+        // Channel autocomplete detection — only when no @mention is active.
+        if (mentionQuery.value == null) {
+          final hashPos = findTrigger(text, cursor, '#');
+          if (hashPos != null) {
+            channelQuery.value = text
+                .substring(hashPos + 1, cursor)
+                .toLowerCase();
+            channelStartIdx.value = hashPos;
+          } else {
+            channelQuery.value = null;
+          }
+        } else {
+          channelQuery.value = null;
         }
       }
 
@@ -135,58 +151,52 @@ class ComposeBar extends HookConsumerWidget {
       currentPubkey,
     );
 
+    // Filter channels against the query.
+    final channels = channelsAsync.asData?.value ?? <Channel>[];
+    final channelSuggestions = filterChannels(channels, channelQuery.value);
+
     // Insert a selected mention into the text field.
     void insertMention(ChannelMember member) {
       final name = member.displayName?.trim().isNotEmpty == true
           ? member.displayName!.trim()
           : member.pubkey.substring(0, 8);
-      final text = controller.text;
-      // Clamp indices to text bounds to guard against stale state.
-      final start = mentionStartIdx.value.clamp(0, text.length);
-      final cursor =
-          (controller.selection.isValid
-                  ? controller.selection.baseOffset
-                  : text.length)
-              .clamp(start, text.length);
-
-      final before = text.substring(0, start);
-      final after = text.substring(cursor);
-      final mention = '@$name ';
-
       // Track the resolved pubkey so we can pass it at send time.
       mentionMap.value[name] = member.pubkey;
 
-      controller.text = '$before$mention$after';
-      controller.selection = TextSelection.collapsed(
-        offset: start + mention.length,
+      final start = mentionStartIdx.value.clamp(0, controller.text.length);
+      spliceAndMoveCursor(
+        controller,
+        focusNode,
+        start: start,
+        replacement: '@$name ',
       );
       mentionQuery.value = null;
-      focusNode.requestFocus();
+    }
+
+    // Insert a selected channel into the text field.
+    void insertChannel(Channel channel) {
+      final start = channelStartIdx.value.clamp(0, controller.text.length);
+      spliceAndMoveCursor(
+        controller,
+        focusNode,
+        start: start,
+        replacement: '#${channel.name} ',
+      );
+      channelQuery.value = null;
     }
 
     // Insert `@` at the cursor to manually trigger mention mode.
-    void triggerMention() {
-      final text = controller.text;
-      final cursor = controller.selection.isValid
-          ? controller.selection.baseOffset
-          : text.length;
-      final needsSpace =
-          cursor > 0 && text[cursor - 1] != ' ' && text[cursor - 1] != '\n';
-      final insert = needsSpace ? ' @' : '@';
-      final before = text.substring(0, cursor);
-      final after = text.substring(cursor);
-      controller.text = '$before$insert$after';
-      controller.selection = TextSelection.collapsed(
-        offset: cursor + insert.length,
-      );
-      focusNode.requestFocus();
-    }
+    void triggerMention() => _insertTriggerAtCursor(controller, focusNode, '@');
+
+    // Insert `#` at the cursor to manually trigger channel mode.
+    void triggerChannel() => _insertTriggerAtCursor(controller, focusNode, '#');
 
     void clearComposer() {
       controller.clear();
       attachments.value = [];
       mentionMap.value.clear();
       mentionQuery.value = null;
+      channelQuery.value = null;
       showFormatting.value = false;
       uploadError.value = null;
       focusNode.requestFocus();
@@ -290,9 +300,19 @@ class ComposeBar extends HookConsumerWidget {
 
     // ----- Widget tree ----------------------------------------------------
 
+    final hasSuggestions =
+        suggestions.isNotEmpty || channelSuggestions.isNotEmpty;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Channel suggestions (above the compose chrome).
+        if (channelSuggestions.isNotEmpty)
+          _ChannelSuggestions(
+            suggestions: channelSuggestions,
+            onSelect: insertChannel,
+          ),
+
         // Mention suggestions (above the compose chrome).
         if (suggestions.isNotEmpty)
           _MentionSuggestions(
@@ -306,12 +326,12 @@ class ComposeBar extends HookConsumerWidget {
         Container(
           decoration: BoxDecoration(
             color: context.colors.surfaceContainerHighest,
-            borderRadius: suggestions.isEmpty
+            borderRadius: !hasSuggestions
                 ? const BorderRadius.vertical(
                     top: Radius.circular(Radii.dialog),
                   )
                 : BorderRadius.zero,
-            boxShadow: suggestions.isEmpty
+            boxShadow: !hasSuggestions
                 ? [
                     BoxShadow(
                       color: context.colors.shadow.withValues(alpha: 0.08),
@@ -437,6 +457,7 @@ class ComposeBar extends HookConsumerWidget {
                     icon: LucideIcons.atSign,
                     onTap: triggerMention,
                   ),
+                  _ComposeAction(icon: LucideIcons.hash, onTap: triggerChannel),
                   _ComposeAction(
                     icon: LucideIcons.aLargeSmall,
                     active: showFormatting.value,
@@ -463,6 +484,84 @@ class ComposeBar extends HookConsumerWidget {
 // ---------------------------------------------------------------------------
 
 const _typingThrottleMs = 3000;
+
+/// Walk backward from [cursor] looking for [trigger] (e.g. `@` or `#`) at a
+/// word boundary. Returns the index of the trigger character, or `null` if none
+/// is found.
+///
+/// When [stopAtSpace] is `true` the walk stops at both spaces and newlines —
+/// appropriate for `#channel` names which are kebab-case slugs without spaces.
+/// When `false`, only newlines stop the walk, allowing multi-word queries like
+/// `@Alice Smith` to match members with multi-word display names.
+@visibleForTesting
+int? findTrigger(
+  String text,
+  int cursor,
+  String trigger, {
+  bool stopAtSpace = true,
+}) {
+  for (var i = cursor - 1; i >= 0; i--) {
+    final ch = text[i];
+    if (ch == '\n') break;
+    if (stopAtSpace && ch == ' ') break;
+    if (ch == trigger) {
+      if (i == 0 || text[i - 1] == ' ' || text[i - 1] == '\n') {
+        return i;
+      }
+      break;
+    }
+  }
+  return null;
+}
+
+/// Replace the range `[start, cursor)` with [replacement] and move the cursor
+/// to the end of the replacement. Used by both mention and channel insertion.
+@visibleForTesting
+void spliceAndMoveCursor(
+  TextEditingController controller,
+  FocusNode focusNode, {
+  required int start,
+  required String replacement,
+}) {
+  final text = controller.text;
+  final cursor =
+      (controller.selection.isValid
+              ? controller.selection.baseOffset
+              : text.length)
+          .clamp(start, text.length);
+
+  final before = text.substring(0, start);
+  final after = text.substring(cursor);
+  controller.text = '$before$replacement$after';
+  controller.selection = TextSelection.collapsed(
+    offset: start + replacement.length,
+  );
+  focusNode.requestFocus();
+}
+
+/// Insert [trigger] (e.g. `@` or `#`) at the cursor position, prefixed with
+/// a space if needed for word separation. Used by `triggerMention` and
+/// `triggerChannel`.
+void _insertTriggerAtCursor(
+  TextEditingController controller,
+  FocusNode focusNode,
+  String trigger,
+) {
+  final text = controller.text;
+  final cursor = controller.selection.isValid
+      ? controller.selection.baseOffset
+      : text.length;
+  final needsSpace =
+      cursor > 0 && text[cursor - 1] != ' ' && text[cursor - 1] != '\n';
+  final insert = needsSpace ? ' $trigger' : trigger;
+  final before = text.substring(0, cursor);
+  final after = text.substring(cursor);
+  controller.text = '$before$insert$after';
+  controller.selection = TextSelection.collapsed(
+    offset: cursor + insert.length,
+  );
+  focusNode.requestFocus();
+}
 
 /// Send a typing indicator over the WebSocket (fire-and-forget).
 ///
@@ -602,9 +701,91 @@ class _MentionSuggestions extends StatelessWidget {
             ),
             title: Text(name, style: context.textTheme.bodyMedium),
             trailing: member.isBot
-                ? Icon(LucideIcons.bot, size: 14, color: context.colors.outline)
+                ? Icon(
+                    LucideIcons.bot,
+                    size: 14,
+                    color: context.colors.onSurfaceVariant,
+                  )
                 : null,
             onTap: () => onSelect(member),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Channel suggestions
+// ---------------------------------------------------------------------------
+
+@visibleForTesting
+List<Channel> filterChannels(List<Channel> channels, String? query) {
+  if (query == null) return const [];
+  final q = query.toLowerCase();
+  return channels
+      .where((c) => c.channelType != 'dm')
+      .where((c) {
+        if (q.isEmpty) return true;
+        return c.name.toLowerCase().contains(q);
+      })
+      .take(8)
+      .toList();
+}
+
+class _ChannelSuggestions extends StatelessWidget {
+  final List<Channel> suggestions;
+  final void Function(Channel) onSelect;
+
+  const _ChannelSuggestions({
+    required this.suggestions,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 240),
+      clipBehavior: Clip.hardEdge,
+      decoration: BoxDecoration(
+        color: context.colors.surfaceContainerHighest,
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(Radii.dialog),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: context.colors.shadow.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
+        itemCount: suggestions.length,
+        separatorBuilder: (_, _) => const SizedBox.shrink(),
+        itemBuilder: (context, index) {
+          final channel = suggestions[index];
+          return ListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            leading: Icon(
+              channel.isForum ? LucideIcons.messageSquare : LucideIcons.hash,
+              size: 18,
+              color: context.colors.onSurfaceVariant,
+            ),
+            title: Text(
+              '#${channel.name}',
+              style: context.textTheme.bodyMedium,
+            ),
+            trailing: Text(
+              channel.channelType,
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+            onTap: () => onSelect(channel),
           );
         },
       ),

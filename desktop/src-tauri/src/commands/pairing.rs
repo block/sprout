@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 use crate::app_state::AppState;
-use crate::relay::{relay_api_base_url, relay_ws_url};
+use crate::relay::{relay_api_base_url_with_override, relay_ws_url_with_override};
 
 use super::tokens::{mint_token_internal_with_auth_mode, MintTokenAuthMode};
 
@@ -68,6 +68,7 @@ const MOBILE_SCOPES: &[&str] = &[
     "channels:read",
     "channels:write",
     "users:read",
+    "users:write",
     "files:read",
     "files:write",
 ];
@@ -118,10 +119,21 @@ pub async fn start_pairing(
         (nsec, pubkey)
     };
 
-    let ws_url = relay_ws_url();
-    let http_url = relay_api_base_url();
+    let ws_url = relay_ws_url_with_override(&state);
+    let http_url = relay_api_base_url_with_override(&state);
 
-    let (session, qr_payload) = PairingSession::new_source(ws_url.clone());
+    // Detect NIP-43: if the relay requires auth, the target device should
+    // connect to the /pair sidecar instead of the main relay.
+    let qr_relay_url = if probe_relay_requires_auth(&ws_url).await {
+        let mut url = url::Url::parse(&ws_url).map_err(|e| format!("invalid relay URL: {e}"))?;
+        let path = url.path().trim_end_matches('/').to_string();
+        url.set_path(&format!("{path}/pair"));
+        url.to_string()
+    } else {
+        ws_url.clone()
+    };
+
+    let (session, qr_payload) = PairingSession::new_source(qr_relay_url);
     let qr_uri = encode_qr(&qr_payload);
 
     let payload_json = serde_json::json!({
@@ -444,6 +456,49 @@ fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr_compat::Event> {
     serde_json::from_value(arr[2].clone()).ok()
 }
 
+/// Check the relay's NIP-11 information document to determine if auth is
+/// required (indicating NIP-43 access control). Returns `true` if the relay
+/// advertises `limitation.auth_required: true`, `false` otherwise.
+///
+/// Converts the WebSocket URL to HTTP(S) and fetches `GET /` with
+/// `Accept: application/nostr+json` per NIP-11.
+async fn probe_relay_requires_auth(relay_url: &str) -> bool {
+    // Convert ws(s):// to http(s):// for the NIP-11 fetch.
+    let http_url = if let Some(rest) = relay_url.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = relay_url.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else {
+        return false;
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+
+    let resp = match client
+        .get(&http_url)
+        .header("Accept", "application/nostr+json")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return false, // can't reach relay — assume open
+    };
+
+    let json: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    // Check limitation.auth_required per NIP-11.
+    json.get("limitation")
+        .and_then(|l| l.get("auth_required"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 fn parse_auth_challenge(text: &str) -> Option<String> {
     let arr: serde_json::Value = serde_json::from_str(text).ok()?;
     let arr = arr.as_array()?;
@@ -491,6 +546,11 @@ mod tests {
     #[test]
     fn mobile_pairing_token_includes_file_write_scope() {
         assert!(MOBILE_SCOPES.contains(&"files:write"));
+    }
+
+    #[test]
+    fn mobile_pairing_token_includes_users_write_scope() {
+        assert!(MOBILE_SCOPES.contains(&"users:write"));
     }
 
     #[test]

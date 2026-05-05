@@ -187,12 +187,8 @@ export function ChannelBrowserDialog({
   }
 
   function handleSelect(channel: Channel) {
-    if (channel.isMember) {
-      onOpenChange(false);
-      onSelectChannel(channel.id);
-    } else {
-      void handleJoin(channel.id);
-    }
+    onOpenChange(false);
+    onSelectChannel(channel.id);
   }
 
   const selectedItem = allItems[selectedIndex];
@@ -280,7 +276,7 @@ export function ChannelBrowserDialog({
                       {notJoined.length} {entityLabel}
                       {notJoined.length !== 1 ? "s" : ""} to join
                     </span>
-                    <span>Enter to join</span>
+                    <span>Enter to view</span>
                   </div>
                   <div className="space-y-2">
                     {notJoined.map((channel) => {

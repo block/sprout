@@ -71,6 +71,16 @@ if (typeof window !== "undefined") {
 }
 
 /**
+ * Reset module-level caches so the next render re-fetches the proxy port
+ * and relay origin for the new workspace.
+ */
+export function resetMediaCaches(): void {
+  cachedPort = null;
+  portPromise = null;
+  cachedRelayOrigin = null;
+}
+
+/**
  * If `url` is a Blossom media URL hosted on the Sprout relay, rewrite it
  * to go through the localhost streaming proxy. External Blossom URLs and
  * non-Blossom URLs are returned unchanged.

@@ -1975,11 +1975,12 @@ function createMockEvent(
   content: string,
   tags: string[][],
   pubkey = DEFAULT_MOCK_IDENTITY.pubkey,
+  createdAt = Math.floor(Date.now() / 1000),
 ): RelayEvent {
   return {
     id: crypto.randomUUID().replace(/-/g, ""),
     pubkey,
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: createdAt,
     kind,
     tags,
     content,
@@ -1992,6 +1993,7 @@ async function signWithIdentity(
   template: {
     kind: number;
     content: string;
+    createdAt?: number;
     tags: string[][];
   },
 ) {
@@ -2002,7 +2004,7 @@ async function signWithIdentity(
       kind: template.kind,
       content: template.content,
       tags: template.tags,
-      created_at: Math.floor(Date.now() / 1000),
+      created_at: template.createdAt ?? Math.floor(Date.now() / 1000),
     },
     secretKey,
   );
@@ -4357,6 +4359,10 @@ export function maybeInstallE2eTauriMocks() {
         }
 
         return DEFAULT_MOCK_IDENTITY;
+      case "get_nsec":
+        return "nsec1mock000000000000000000000000000000000000000000000000000000";
+      case "apply_workspace":
+        return;
       case "get_profile":
         return handleGetProfile(activeConfig);
       case "update_profile":
@@ -4397,6 +4403,8 @@ export function maybeInstallE2eTauriMocks() {
           activeConfig,
         );
       case "get_relay_ws_url":
+        return getRelayWsUrl(activeConfig);
+      case "get_default_relay_url":
         return getRelayWsUrl(activeConfig);
       case "get_relay_http_url":
         return getRelayHttpUrl(activeConfig);
@@ -4625,6 +4633,7 @@ export function maybeInstallE2eTauriMocks() {
             await signWithIdentity(identity, {
               kind: (payload as { kind: number }).kind,
               content: (payload as { content: string }).content,
+              createdAt: (payload as { createdAt?: number }).createdAt,
               tags: (payload as { tags: string[][] }).tags,
             }),
           );
@@ -4635,6 +4644,8 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { kind: number }).kind,
             (payload as { content: string }).content,
             (payload as { tags: string[][] }).tags,
+            DEFAULT_MOCK_IDENTITY.pubkey,
+            (payload as { createdAt?: number }).createdAt,
           ),
         );
       case "create_auth_event":

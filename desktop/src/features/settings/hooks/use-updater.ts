@@ -13,7 +13,14 @@ export type UpdateStatus =
   | { state: "ready" }
   | { state: "error"; message: string };
 
-const TOAST_ID = "update-available";
+const BACKGROUND_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
+  "checking",
+  "available",
+  "downloading",
+  "installing",
+  "ready",
+]);
 
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -26,11 +33,27 @@ function isUpdaterUnavailable(message: string): boolean {
   );
 }
 
+function canRunBackgroundCheck(status: UpdateStatus): boolean {
+  return !BACKGROUND_BLOCKED_STATES.has(status.state);
+}
+
 export function useUpdater() {
-  const [status, setStatus] = useState<UpdateStatus>({ state: "idle" });
+  const [status, setStatusState] = useState<UpdateStatus>({ state: "idle" });
+  const statusRef = useRef<UpdateStatus>({ state: "idle" });
   const updateRef = useRef<Update | null>(null);
+  const checkInFlightRef = useRef(false);
+  const downloadInFlightRef = useRef(false);
+  const manualResultRequestedRef = useRef(false);
+
+  const setStatus = useCallback((nextStatus: UpdateStatus) => {
+    statusRef.current = nextStatus;
+    setStatusState(nextStatus);
+  }, []);
 
   const closeUpdate = useCallback(async () => {
+    if (downloadInFlightRef.current) {
+      return;
+    }
     const current = updateRef.current;
     if (current) {
       updateRef.current = null;
@@ -39,13 +62,17 @@ export function useUpdater() {
   }, []);
 
   const downloadAndInstall = useCallback(async () => {
+    if (downloadInFlightRef.current) {
+      return;
+    }
+
+    downloadInFlightRef.current = true;
     try {
       const update = updateRef.current;
       if (!update) {
         return;
       }
 
-      toast.dismiss(TOAST_ID);
       setStatus({ state: "downloading" });
 
       await update.downloadAndInstall((event) => {
@@ -56,41 +83,83 @@ export function useUpdater() {
 
       updateRef.current = null;
       setStatus({ state: "ready" });
+      toast("Update ready", {
+        description: "Restart when you're ready to apply the update.",
+        duration: 8000,
+      });
     } catch (err) {
       setStatus({ state: "error", message: toErrorMessage(err) });
+    } finally {
+      downloadInFlightRef.current = false;
     }
-  }, []);
+  }, [setStatus]);
 
-  const checkForUpdate = useCallback(async () => {
-    try {
-      await closeUpdate();
-      setStatus({ state: "checking" });
-      const update = await check();
-
-      if (update) {
-        updateRef.current = update;
-        setStatus({ state: "available", version: update.version });
-        toast("Update Available", {
-          id: TOAST_ID,
-          description: `Version ${update.version} is ready to download.`,
-          duration: Infinity,
-          action: {
-            label: "Download & install",
-            onClick: () => downloadAndInstall(),
-          },
-        });
-      } else {
-        setStatus({ state: "up-to-date" });
-      }
-    } catch (err) {
-      const message = toErrorMessage(err);
-      if (isUpdaterUnavailable(message)) {
-        setStatus({ state: "idle" });
+  const runUpdateCheck = useCallback(
+    async ({ background }: { background: boolean }) => {
+      if (checkInFlightRef.current) {
+        if (!background) {
+          manualResultRequestedRef.current = true;
+          setStatus({ state: "checking" });
+        }
         return;
       }
-      setStatus({ state: "error", message });
-    }
-  }, [closeUpdate, downloadAndInstall]);
+
+      if (background && !canRunBackgroundCheck(statusRef.current)) {
+        return;
+      }
+
+      checkInFlightRef.current = true;
+      manualResultRequestedRef.current = false;
+
+      try {
+        await closeUpdate();
+
+        if (!background) {
+          setStatus({ state: "checking" });
+        }
+
+        const update = await check();
+        const shouldShowQuietResult =
+          !background || manualResultRequestedRef.current;
+
+        if (update) {
+          updateRef.current = update;
+          setStatus({ state: "available", version: update.version });
+          // Start download automatically — user sees "restart" when done
+          void downloadAndInstall();
+        } else if (shouldShowQuietResult) {
+          setStatus({ state: "up-to-date" });
+        }
+      } catch (err) {
+        const message = toErrorMessage(err);
+        const shouldShowQuietResult =
+          !background || manualResultRequestedRef.current;
+
+        if (isUpdaterUnavailable(message)) {
+          if (shouldShowQuietResult) {
+            setStatus({ state: "idle" });
+          }
+          return;
+        }
+
+        if (shouldShowQuietResult) {
+          setStatus({ state: "error", message });
+        }
+      } finally {
+        manualResultRequestedRef.current = false;
+        checkInFlightRef.current = false;
+      }
+    },
+    [closeUpdate, downloadAndInstall, setStatus],
+  );
+
+  const checkForUpdate = useCallback(async () => {
+    await runUpdateCheck({ background: false });
+  }, [runUpdateCheck]);
+
+  const checkForUpdateInBackground = useCallback(async () => {
+    await runUpdateCheck({ background: true });
+  }, [runUpdateCheck]);
 
   const handleRelaunch = useCallback(async () => {
     try {
@@ -98,14 +167,20 @@ export function useUpdater() {
     } catch (err) {
       setStatus({ state: "error", message: toErrorMessage(err) });
     }
-  }, []);
+  }, [setStatus]);
 
   useEffect(() => {
-    checkForUpdate();
+    void checkForUpdateInBackground();
+
+    const intervalId = window.setInterval(() => {
+      void checkForUpdateInBackground();
+    }, BACKGROUND_UPDATE_CHECK_INTERVAL_MS);
+
     return () => {
+      window.clearInterval(intervalId);
       closeUpdate();
     };
-  }, [checkForUpdate, closeUpdate]);
+  }, [checkForUpdateInBackground, closeUpdate]);
 
   return {
     status,

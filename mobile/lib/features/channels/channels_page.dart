@@ -22,12 +22,25 @@ import 'channel.dart';
 import 'channel_detail_page.dart';
 import 'channel_management_provider.dart';
 import 'channels_provider.dart';
+import 'read_state/deferred_read_state_update.dart';
+import 'read_state/read_state_provider.dart';
+import 'read_state/read_state_time.dart';
 
 enum _QuickAction { createChannel, createForum, newDm }
 
 /// Height of the [_ConnectionBanner]: vertical padding (Grid.quarter + 2) × 2
 /// plus the ~16px row content (12px spinner / labelSmall text).
 const double _kBannerHeight = 24.0;
+
+bool _isUnread(Channel channel, ReadStateState readState) {
+  final lastMessageAt = dateTimeToUnixSeconds(channel.lastMessageAt);
+  if (lastMessageAt == null) {
+    return false;
+  }
+
+  final readAt = readState.effectiveTimestamp(channel.id);
+  return readAt == null || lastMessageAt > readAt;
+}
 
 class ChannelsPage extends HookConsumerWidget {
   const ChannelsPage({super.key});
@@ -172,6 +185,7 @@ class _ChannelsBody extends StatelessWidget {
       return Stack(
         children: [
           RefreshIndicator(
+            edgeOffset: barHeight,
             onRefresh: onRefresh,
             child: CustomScrollView(
               slivers: [
@@ -227,6 +241,7 @@ class _SliverChannelsList extends HookConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final readState = ref.watch(readStateProvider);
     final visibleChannels = channels
         .where((channel) => channel.isMember && !channel.isArchived)
         .toList();
@@ -243,6 +258,50 @@ class _SliverChannelsList extends HookConsumerWidget {
     final channelsExpanded = useState(true);
     final forumsExpanded = useState(true);
     final dmsExpanded = useState(true);
+    final initialSeedComplete = useState(false);
+    final seededPubkey = useRef<String?>(null);
+    final seedCompleteForPubkey =
+        seededPubkey.value == readState.pubkey && initialSeedComplete.value;
+
+    useEffect(() {
+      if (!readState.isReady) {
+        return null;
+      }
+
+      return deferReadStateUpdate(context, () {
+        if (seededPubkey.value != readState.pubkey) {
+          seededPubkey.value = readState.pubkey;
+          initialSeedComplete.value = false;
+        }
+
+        if (initialSeedComplete.value) {
+          return;
+        }
+
+        final notifier = ref.read(readStateProvider.notifier);
+        for (final channel in visibleChannels) {
+          if (readState.effectiveTimestamp(channel.id) != null) {
+            continue;
+          }
+
+          final lastMessageAt = dateTimeToUnixSeconds(channel.lastMessageAt);
+          if (lastMessageAt != null) {
+            notifier.seedContextRead(channel.id, lastMessageAt);
+          }
+        }
+        initialSeedComplete.value = true;
+      });
+    }, [readState.isReady, readState.pubkey, visibleChannels]);
+
+    final unreadChannelIds = readState.isReady
+        ? {
+            for (final channel in visibleChannels)
+              if ((seedCompleteForPubkey ||
+                      readState.effectiveTimestamp(channel.id) != null) &&
+                  _isUnread(channel, readState))
+                channel.id,
+          }
+        : const <String>{};
 
     return SliverPadding(
       padding: const EdgeInsets.only(top: Grid.xxs, bottom: 80),
@@ -257,6 +316,7 @@ class _SliverChannelsList extends HookConsumerWidget {
               expanded: channelsExpanded.value,
               onToggle: () => channelsExpanded.value = !channelsExpanded.value,
               channels: streamChannels,
+              unreadChannelIds: unreadChannelIds,
               currentPubkey: currentPubkey,
               emptyLabel: 'No stream channels yet',
               onSelectChannel: onSelectChannel,
@@ -267,6 +327,7 @@ class _SliverChannelsList extends HookConsumerWidget {
               expanded: forumsExpanded.value,
               onToggle: () => forumsExpanded.value = !forumsExpanded.value,
               channels: forumChannels,
+              unreadChannelIds: unreadChannelIds,
               currentPubkey: currentPubkey,
               emptyLabel: 'No forums yet',
               onSelectChannel: onSelectChannel,
@@ -277,6 +338,7 @@ class _SliverChannelsList extends HookConsumerWidget {
               expanded: dmsExpanded.value,
               onToggle: () => dmsExpanded.value = !dmsExpanded.value,
               channels: dmChannels,
+              unreadChannelIds: unreadChannelIds,
               currentPubkey: currentPubkey,
               emptyLabel: 'No direct messages yet',
               onSelectChannel: onSelectChannel,
@@ -294,6 +356,7 @@ class _ChannelSection extends StatelessWidget {
   final bool expanded;
   final VoidCallback onToggle;
   final List<Channel> channels;
+  final Set<String> unreadChannelIds;
   final String? currentPubkey;
   final String emptyLabel;
   final Future<void> Function(Channel channel) onSelectChannel;
@@ -304,6 +367,7 @@ class _ChannelSection extends StatelessWidget {
     required this.expanded,
     required this.onToggle,
     required this.channels,
+    required this.unreadChannelIds,
     required this.currentPubkey,
     required this.emptyLabel,
     required this.onSelectChannel,
@@ -332,7 +396,7 @@ class _ChannelSection extends StatelessWidget {
               child: Text(
                 emptyLabel,
                 style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.outline,
+                  color: context.colors.onSurfaceVariant,
                 ),
               ),
             )
@@ -340,6 +404,7 @@ class _ChannelSection extends StatelessWidget {
             for (final channel in channels)
               _ChannelTile(
                 channel: channel,
+                isUnread: unreadChannelIds.contains(channel.id),
                 currentPubkey: currentPubkey,
                 onTap: () => onSelectChannel(channel),
               ),
@@ -363,7 +428,7 @@ class _EmptyState extends StatelessWidget {
             Icon(
               LucideIcons.messagesSquare,
               size: Grid.xl,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
             const SizedBox(height: Grid.xs),
             Text(
@@ -406,12 +471,12 @@ class _SectionHeader extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(icon, size: 14, color: context.colors.outline),
+            Icon(icon, size: 14, color: context.colors.onSurfaceVariant),
             const SizedBox(width: Grid.half),
             Text(
               label.toUpperCase(),
               style: context.textTheme.labelSmall?.copyWith(
-                color: context.colors.outline,
+                color: context.colors.onSurfaceVariant,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.8,
               ),
@@ -420,7 +485,7 @@ class _SectionHeader extends StatelessWidget {
             Icon(
               expanded ? LucideIcons.chevronDown : LucideIcons.chevronRight,
               size: 14,
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ],
         ),
@@ -431,11 +496,13 @@ class _SectionHeader extends StatelessWidget {
 
 class _ChannelTile extends ConsumerWidget {
   final Channel channel;
+  final bool isUnread;
   final String? currentPubkey;
   final VoidCallback onTap;
 
   const _ChannelTile({
     required this.channel,
+    required this.isUnread,
     required this.currentPubkey,
     required this.onTap,
   });
@@ -464,7 +531,7 @@ class _ChannelTile extends ConsumerWidget {
                 size: 18,
                 color: hasActivity
                     ? context.colors.onSurface
-                    : context.colors.outline,
+                    : context.colors.onSurfaceVariant,
               ),
             const SizedBox(width: Grid.xxs),
             Expanded(
@@ -476,14 +543,29 @@ class _ChannelTile extends ConsumerWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: context.textTheme.bodyMedium?.copyWith(
-                      color: hasActivity
+                      color: isUnread
+                          ? context.colors.onSurface
+                          : hasActivity
                           ? context.colors.onSurface
                           : context.colors.onSurfaceVariant,
+                      fontWeight: isUnread ? FontWeight.w700 : null,
                     ),
                   ),
                 ],
               ),
             ),
+            if (isUnread) ...[
+              const SizedBox(width: Grid.xxs),
+              Container(
+                key: Key('channel-unread-${channel.id}'),
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: context.colors.primary,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
             if (!channel.isMember && !channel.isDm)
               Padding(
                 padding: const EdgeInsets.only(right: Grid.xxs),

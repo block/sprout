@@ -27,7 +27,9 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 atomic-write-file = "0.3"
 dirs = "6"
 tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-window-state = "2"
 tauri-plugin-websocket = "2"
 tauri-plugin-dialog = "2"
@@ -42,13 +44,14 @@ futures-util = "0.3"
 opus = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-nostr = "0.37"
+nostr = { version = "0.37", features = ["nip44"] }
 nostr-compat = { package = "nostr", version = "0.36" }
 zeroize = "1"
 reqwest = { version = "0.13", features = ["json", "query", "stream"] }
 url = "2"
 sprout-core = { path = "../../crates/sprout-core" }
 sprout-persona = { path = "../../crates/sprout-persona" }
+sprout-sdk = { path = "../../crates/sprout-sdk" }
 base64 = "0.22"
 sha2 = "0.11"
 tar = "0.4"

@@ -6,12 +6,14 @@ class UserProfile {
   final String? displayName;
   final String? avatarUrl;
   final String? about;
+  final String? nip05Handle;
 
   const UserProfile({
     required this.pubkey,
     this.displayName,
     this.avatarUrl,
     this.about,
+    this.nip05Handle,
   });
 
   factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
@@ -19,6 +21,7 @@ class UserProfile {
     displayName: json['display_name'] as String?,
     avatarUrl: json['avatar_url'] as String?,
     about: json['about'] as String?,
+    nip05Handle: json['nip05_handle'] as String?,
   );
 
   /// Short label: display name, or first 8 chars of pubkey.

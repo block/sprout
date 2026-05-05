@@ -55,6 +55,9 @@ enum Cmd {
         broadcast: bool,
         #[arg(long = "mention")]
         mentions: Vec<String>,
+        /// Attach file(s) — uploads and includes as imeta tags
+        #[arg(long = "file")]
+        files: Vec<String>,
     },
     /// Send a diff/code-review message
     SendDiffMessage {
@@ -138,6 +141,13 @@ enum Cmd {
         /// Vote direction: "up" or "down"
         #[arg(long)]
         direction: String,
+    },
+
+    /// Upload a file to the relay (returns BlobDescriptor JSON)
+    UploadFile {
+        /// Path to the file to upload
+        #[arg(long)]
+        file: String,
     },
 
     // ---- Channels ----------------------------------------------------------
@@ -565,15 +575,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             reply_to,
             broadcast,
             mentions,
+            files,
         } => {
             commands::messages::cmd_send_message(
                 &client,
-                &channel,
-                &content,
-                kind,
-                reply_to.as_deref(),
-                broadcast,
-                &mentions,
+                commands::messages::SendMessageParams {
+                    channel_id: channel,
+                    content,
+                    kind,
+                    reply_to,
+                    broadcast,
+                    mentions,
+                    files,
+                },
             )
             .await
         }
@@ -655,6 +669,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Cmd::VoteOnPost { event, direction } => {
             commands::messages::cmd_vote_on_post(&client, &event, &direction).await
+        }
+        Cmd::UploadFile { file } => {
+            let desc = client.upload_file(&file).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&desc).map_err(|e| CliError::Other(e.to_string()))?
+            );
+            Ok(())
         }
 
         // ---- Channels ------------------------------------------------------
@@ -893,10 +915,10 @@ mod tests {
         assert!(super::parse_bool_flag("--approved", "").is_err());
     }
 
-    /// Parity: the CLI exposes exactly the expected 54 commands.
+    /// Parity: the CLI exposes exactly the expected 55 commands.
     /// If a command is added or removed, this test forces a conscious update.
     #[test]
-    fn command_inventory_is_54() {
+    fn command_inventory_is_55() {
         let expected: Vec<&str> = vec![
             "add-channel-member",
             "add-dm-member",
@@ -951,6 +973,7 @@ mod tests {
             "unarchive-channel",
             "update-channel",
             "update-workflow",
+            "upload-file",
             "vote-on-post",
         ];
 
@@ -964,8 +987,8 @@ mod tests {
 
         assert_eq!(
             actual.len(),
-            54,
-            "Expected 54 commands, got {}. Actual: {:?}",
+            55,
+            "Expected 55 commands, got {}. Actual: {:?}",
             actual.len(),
             actual
         );

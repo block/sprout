@@ -26,6 +26,7 @@ import {
 import { Badge } from "@/shared/ui/badge";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MIN_QUERY_LENGTH = 2;
 
@@ -343,9 +344,17 @@ export function SearchDialog({
                             <Badge variant="secondary">
                               {describeSearchHit(hit)}
                             </Badge>
-                            <p className="text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <UserAvatar
+                                avatarUrl={
+                                  resultProfiles?.[hit.pubkey.toLowerCase()]
+                                    ?.avatarUrl ?? null
+                                }
+                                displayName={authorLabel}
+                                size="xs"
+                              />
                               {authorLabel}
-                            </p>
+                            </span>
                             <p className="ml-auto whitespace-nowrap text-xs text-muted-foreground">
                               {formatRelativeTime(hit.createdAt)}
                             </p>

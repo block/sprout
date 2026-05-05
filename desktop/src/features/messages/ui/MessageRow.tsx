@@ -2,6 +2,7 @@ import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
+import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
@@ -50,10 +51,13 @@ export const MessageRow = React.memo(
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
-    const [reactionErrorMessage, setReactionErrorMessage] = React.useState<
-      string | null
-    >(null);
-    const [reactionPending, setReactionPending] = React.useState(false);
+    const {
+      reactions,
+      canToggle: canToggleReactions,
+      pending: reactionPending,
+      errorMessage: reactionErrorMessage,
+      select: handleReactionSelect,
+    } = useReactionHandler(message, onToggleReaction);
     const mentionNames = React.useMemo(
       () => resolveMentionNames(message.tags, profiles),
       [profiles, message.tags],
@@ -120,45 +124,6 @@ export const MessageRow = React.memo(
       }
     };
 
-    const reactions = [...(message.reactions ?? [])].sort((left, right) => {
-      if (left.count !== right.count) {
-        return right.count - left.count;
-      }
-
-      return left.emoji.localeCompare(right.emoji);
-    });
-    const canToggleReactions = Boolean(onToggleReaction && !message.pending);
-
-    const handleReactionSelect = React.useCallback(
-      async (emoji: string) => {
-        if (!onToggleReaction || reactionPending) {
-          return;
-        }
-
-        const remove = reactions.some(
-          (reaction) =>
-            reaction.emoji === emoji && reaction.reactedByCurrentUser,
-        );
-
-        setReactionErrorMessage(null);
-        setReactionPending(true);
-
-        try {
-          await onToggleReaction(message, emoji, remove);
-        } catch (error) {
-          const nextMessage =
-            error instanceof Error
-              ? error.message
-              : "Failed to update the reaction.";
-          setReactionErrorMessage(nextMessage);
-          throw error;
-        } finally {
-          setReactionPending(false);
-        }
-      },
-      [message, onToggleReaction, reactionPending, reactions],
-    );
-
     const isThreadReplyLayout = layoutVariant === "thread-reply";
     const guideBleedPx = isThreadReplyLayout ? 4 : 0;
     const avatarSizeClass = isThreadReplyLayout
@@ -168,29 +133,7 @@ export const MessageRow = React.memo(
       ? "rounded-md"
       : "rounded-xl";
 
-    const avatarNode = message.pubkey ? (
-      <UserProfilePopover
-        pubkey={message.pubkey}
-        role={message.role}
-        botIdenticonValue={message.author}
-      >
-        <button
-          className={cn(
-            "shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            avatarButtonRadiusClass,
-          )}
-          type="button"
-        >
-          <UserAvatar
-            accent={message.accent}
-            avatarUrl={message.avatarUrl ?? null}
-            className={avatarSizeClass}
-            displayName={message.author}
-            testId="message-avatar"
-          />
-        </button>
-      </UserProfilePopover>
-    ) : (
+    const avatarNode = (
       <UserAvatar
         accent={message.accent}
         avatarUrl={message.avatarUrl ?? null}
@@ -201,18 +144,9 @@ export const MessageRow = React.memo(
     );
 
     const authorNode = message.pubkey ? (
-      <UserProfilePopover
-        pubkey={message.pubkey}
-        role={message.role}
-        botIdenticonValue={message.author}
-      >
-        <button
-          className="truncate rounded text-sm font-semibold tracking-tight hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          type="button"
-        >
-          {message.author}
-        </button>
-      </UserProfilePopover>
+      <span className="truncate text-sm font-semibold tracking-tight hover:underline">
+        {message.author}
+      </span>
     ) : (
       <h3 className="truncate text-sm font-semibold tracking-tight">
         {message.author}
@@ -264,9 +198,7 @@ export const MessageRow = React.memo(
           canToggle={canToggleReactions}
           pending={reactionPending}
           onSelect={(emoji) => {
-            void handleReactionSelect(emoji).catch(() => {
-              return;
-            });
+            void handleReactionSelect(emoji);
           }}
         />
         {reactionErrorMessage ? (
@@ -333,10 +265,30 @@ export const MessageRow = React.memo(
           {isThreadReplyLayout ? (
             <>
               <div className="flex min-w-0 items-start gap-1.5">
-                <div className="flex shrink-0 items-start">{avatarNode}</div>
+                {message.pubkey ? (
+                  <UserProfilePopover
+                    pubkey={message.pubkey}
+                    role={message.role}
+                    botIdenticonValue={message.author}
+                  >
+                    <button
+                      className="flex shrink-0 items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      type="button"
+                    >
+                      {avatarNode}
+                      {authorNode}
+                    </button>
+                  </UserProfilePopover>
+                ) : (
+                  <>
+                    <div className="flex shrink-0 items-start">
+                      {avatarNode}
+                    </div>
+                    {authorNode}
+                  </>
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                    {authorNode}
                     {message.personaDisplayName &&
                     message.personaDisplayName !== message.author ? (
                       <span className="text-xs text-muted-foreground">
@@ -353,10 +305,43 @@ export const MessageRow = React.memo(
             </>
           ) : (
             <>
-              <div className="flex shrink-0 items-start">{avatarNode}</div>
+              {message.pubkey ? (
+                <UserProfilePopover
+                  pubkey={message.pubkey}
+                  role={message.role}
+                  botIdenticonValue={message.author}
+                >
+                  <button
+                    className={cn(
+                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      avatarButtonRadiusClass,
+                    )}
+                    type="button"
+                  >
+                    {avatarNode}
+                  </button>
+                </UserProfilePopover>
+              ) : (
+                <div className="flex shrink-0 items-start">{avatarNode}</div>
+              )}
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                  {authorNode}
+                  {message.pubkey ? (
+                    <UserProfilePopover
+                      pubkey={message.pubkey}
+                      role={message.role}
+                      botIdenticonValue={message.author}
+                    >
+                      <button
+                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        type="button"
+                      >
+                        {authorNode}
+                      </button>
+                    </UserProfilePopover>
+                  ) : (
+                    authorNode
+                  )}
                   {message.personaDisplayName &&
                   message.personaDisplayName !== message.author ? (
                     <span className="text-xs text-muted-foreground">

@@ -1,12 +1,15 @@
 import * as React from "react";
+import { Hash, LogIn } from "lucide-react";
 
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
+import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { BotActivityBar } from "@/features/channels/ui/BotActivityBar";
+import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -61,18 +64,22 @@ type ChannelPaneProps = {
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
+  isJoining?: boolean;
   isSending: boolean;
   isTimelineLoading: boolean;
   messages: TimelineMessage[];
   onCancelEdit?: () => void;
   onCancelThreadReply: () => void;
   onCloseAgentSession: () => void;
+  onCloseProfilePanel: () => void;
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
   onExpandThreadReplies: (message: TimelineMessage) => void;
+  onJoinChannel?: () => Promise<void>;
   onOpenAgentSession: (pubkey: string) => void;
+  onOpenDm?: (pubkeys: string[]) => void;
   onOpenThread: (message: TimelineMessage) => void;
   onSelectThreadReplyTarget: (message: TimelineMessage) => void;
   onSendMessage: (
@@ -97,6 +104,7 @@ type ChannelPaneProps = {
   profiles?: UserProfileLookup;
   openThreadHeadId: string | null;
   openAgentSessionPubkey: string | null;
+  profilePanelPubkey?: string | null;
   threadHeadMessage: TimelineMessage | null;
   threadMessages: MainTimelineEntry[];
   threadTypingPubkeys: string[];
@@ -117,18 +125,22 @@ export const ChannelPane = React.memo(function ChannelPane({
   fetchOlder,
   hasOlderMessages,
   isFetchingOlder,
+  isJoining = false,
   isSending,
   isTimelineLoading,
   messages,
   onCancelEdit,
   onCancelThreadReply,
   onCloseAgentSession,
+  onCloseProfilePanel,
   onCloseThread,
   onDelete,
   onEdit,
   onEditSave,
   onExpandThreadReplies,
+  onJoinChannel,
   onOpenAgentSession,
+  onOpenDm,
   onOpenThread,
   onSelectThreadReplyTarget,
   onSendMessage,
@@ -140,6 +152,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   profiles,
   openThreadHeadId,
   openAgentSessionPubkey,
+  profilePanelPubkey,
   targetMessageId,
   threadHeadMessage,
   threadMessages,
@@ -205,6 +218,12 @@ export const ChannelPane = React.memo(function ChannelPane({
   const canResetThreadPanelWidth =
     threadPanelWidthPx !== THREAD_PANEL_DEFAULT_WIDTH_PX;
 
+  const isNonMemberView =
+    activeChannel !== null &&
+    !activeChannel.isMember &&
+    activeChannel.visibility === "open" &&
+    !activeChannel.archivedAt;
+
   const isComposerDisabled =
     !activeChannel?.isMember ||
     activeChannel.archivedAt !== null ||
@@ -268,27 +287,54 @@ export const ChannelPane = React.memo(function ChannelPane({
           searchQuery={channelFind.query}
           targetMessageId={targetMessageId}
         />
-        <MessageComposer
-          channelId={activeChannel?.id ?? null}
-          channelName={activeChannel?.name ?? "channel"}
-          disabled={isComposerDisabled}
-          editTarget={editTarget}
-          isSending={isSending}
-          onCancelEdit={onCancelEdit}
-          onEditSave={onEditSave}
-          onSend={onSendMessage}
-          placeholder={
-            activeChannel?.archivedAt
-              ? "Archived channels are read-only."
-              : activeChannel && !activeChannel.isMember
-                ? "Join this channel to message."
+        {isNonMemberView ? (
+          <div
+            data-testid="join-banner"
+            className="flex items-center gap-3 border-t border-border/80 bg-card/50 px-4 py-3"
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-sm text-muted-foreground">
+              <Hash className="h-4 w-4 shrink-0" />
+              <span className="truncate">
+                Viewing{" "}
+                <span className="font-medium text-foreground">
+                  #{activeChannel?.name}
+                </span>
+              </span>
+            </div>
+            <Button
+              disabled={isJoining}
+              onClick={() => {
+                void onJoinChannel?.();
+              }}
+              size="sm"
+              variant="default"
+            >
+              <LogIn className="mr-1.5 h-3.5 w-3.5" />
+              {isJoining ? "Joining..." : "Join to participate"}
+            </Button>
+          </div>
+        ) : (
+          <MessageComposer
+            channelId={activeChannel?.id ?? null}
+            channelName={activeChannel?.name ?? "channel"}
+            disabled={isComposerDisabled}
+            editTarget={editTarget}
+            isSending={isSending}
+            onCancelEdit={onCancelEdit}
+            onEditSave={onEditSave}
+            onSend={onSendMessage}
+            profiles={profiles}
+            placeholder={
+              activeChannel?.archivedAt
+                ? "Archived channels are read-only."
                 : activeChannel?.channelType === "forum"
                   ? "Forum posting is not wired in this pass."
                   : activeChannel
                     ? `Message #${activeChannel.name}`
                     : "Select a channel"
-          }
-        />
+            }
+          />
+        )}
         <div className="relative bg-background">
           <TypingIndicatorRow
             channel={activeChannel}
@@ -314,10 +360,14 @@ export const ChannelPane = React.memo(function ChannelPane({
           channelName={activeChannel?.name ?? "channel"}
           currentPubkey={currentPubkey}
           disabled={isComposerDisabled}
+          editTarget={editTarget}
           isSending={isSending}
+          onCancelEdit={onCancelEdit}
           onCancelReply={onCancelThreadReply}
           onClose={onCloseThread}
           onDelete={onDelete}
+          onEdit={onEdit}
+          onEditSave={onEditSave}
           onExpandReplies={onExpandThreadReplies}
           onSelectReplyTarget={onSelectThreadReplyTarget}
           onSend={onSendThreadReply}
@@ -340,9 +390,24 @@ export const ChannelPane = React.memo(function ChannelPane({
           agent={selectedAgent}
           canResetWidth={canResetThreadPanelWidth}
           channel={activeChannel}
+          isWorking={botTypingPubkeys.some(
+            (pubkey) =>
+              pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
+          )}
           onClose={onCloseAgentSession}
           onResetWidth={handleThreadPanelWidthReset}
           onResizeStart={handleThreadPanelResizeStart}
+          widthPx={threadPanelWidthPx}
+        />
+      ) : profilePanelPubkey ? (
+        <UserProfilePanel
+          canResetWidth={canResetThreadPanelWidth}
+          currentPubkey={currentPubkey}
+          onClose={onCloseProfilePanel}
+          onOpenDm={onOpenDm}
+          onResetWidth={handleThreadPanelWidthReset}
+          onResizeStart={handleThreadPanelResizeStart}
+          pubkey={profilePanelPubkey}
           widthPx={threadPanelWidthPx}
         />
       ) : null}

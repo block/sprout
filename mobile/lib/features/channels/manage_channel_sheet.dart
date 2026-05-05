@@ -290,7 +290,7 @@ class _ContextCard extends StatelessWidget {
           Text(
             label,
             style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
           ),

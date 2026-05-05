@@ -159,29 +159,55 @@ pub async fn cmd_search(
 // Write commands — signed events
 // ---------------------------------------------------------------------------
 
-pub async fn cmd_send_message(
-    client: &SproutClient,
-    channel_id: &str,
-    content: &str,
-    _kind: Option<u16>,
-    reply_to: Option<&str>,
-    broadcast: bool,
-    mentions: &[String],
-) -> Result<(), CliError> {
-    validate_uuid(channel_id)?;
-    validate_content_size(content)?;
-    if let Some(r) = reply_to {
+pub struct SendMessageParams {
+    pub channel_id: String,
+    pub content: String,
+    #[allow(dead_code)] // reserved for future kind routing
+    pub kind: Option<u16>,
+    pub reply_to: Option<String>,
+    pub broadcast: bool,
+    pub mentions: Vec<String>,
+    pub files: Vec<String>,
+}
+
+pub async fn cmd_send_message(client: &SproutClient, p: SendMessageParams) -> Result<(), CliError> {
+    validate_uuid(&p.channel_id)?;
+    validate_content_size(&p.content)?;
+    if let Some(ref r) = p.reply_to {
         validate_hex64(r)?;
     }
-    for m in mentions {
+    for m in &p.mentions {
         validate_hex64(m)?;
     }
 
     let keys = require_keys!(client);
-    let channel_uuid = parse_uuid(channel_id)?;
+    let channel_uuid = parse_uuid(&p.channel_id)?;
+
+    // Upload files and build imeta tags
+    let mut media_tags: Vec<Vec<String>> = Vec::new();
+    let mut media_content = String::new();
+    for file_path in &p.files {
+        let desc = client
+            .upload_file(file_path)
+            .await
+            .map_err(|e| CliError::Other(format!("upload failed for {file_path}: {e}")))?;
+        media_tags.push(crate::client::build_imeta_tag(&desc));
+        if desc.mime_type.starts_with("video/") {
+            media_content.push_str("\n![video](");
+        } else {
+            media_content.push_str("\n![image](");
+        }
+        media_content.push_str(&desc.url);
+        media_content.push(')');
+    }
+    let final_content = if media_content.is_empty() {
+        p.content.clone()
+    } else {
+        format!("{}{media_content}", p.content)
+    };
 
     // Build thread ref if replying
-    let thread_ref = if let Some(r) = reply_to {
+    let thread_ref = if let Some(ref r) = p.reply_to {
         let eid = parse_event_id(r)?;
         Some(ThreadRef {
             root_event_id: eid,
@@ -192,18 +218,18 @@ pub async fn cmd_send_message(
     };
 
     // Normalize explicit mentions, then merge auto-resolved up to SDK cap of 50.
-    let mut merged: Vec<String> = normalize_mention_pubkeys(mentions, "");
-    let auto_resolved = resolve_content_mentions(client, channel_id, content).await;
+    let mut merged: Vec<String> = normalize_mention_pubkeys(&p.mentions, "");
+    let auto_resolved = resolve_content_mentions(client, &p.channel_id, &final_content).await;
     merge_mentions(&mut merged, &auto_resolved, 50);
     let mention_refs: Vec<&str> = merged.iter().map(|s| s.as_str()).collect();
 
     let builder = sprout_sdk::build_message(
         channel_uuid,
-        content,
+        &final_content,
         thread_ref.as_ref(),
         &mention_refs,
-        broadcast,
-        &[],
+        p.broadcast,
+        &media_tags,
     )
     .map_err(|e| CliError::Other(format!("build_message failed: {e}")))?;
 

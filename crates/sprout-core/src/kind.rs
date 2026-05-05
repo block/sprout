@@ -25,6 +25,15 @@ pub const KIND_FILE_METADATA: u32 = 1063;
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); author-owned, not channel-scoped.
 pub const KIND_LONG_FORM: u32 = 30023;
+/// NIP-38: User status (general, music, or custom d-tag).
+/// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
+/// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
+pub const KIND_USER_STATUS: u32 = 30315;
+/// NIP-78 / NIP-RS: Per-client read state blob for cross-device read position sync.
+/// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
+/// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
+/// Content is NIP-44 encrypted to the user's own keypair.
+pub const KIND_READ_STATE: u32 = 30078;
 /// NIP-42 auth event — never stored (carries bearer tokens).
 pub const KIND_AUTH: u32 = 22242;
 
@@ -48,7 +57,25 @@ pub const KIND_NIP29_JOIN_REQUEST: u32 = 9021;
 /// NIP-29: Request to leave a group.
 pub const KIND_NIP29_LEAVE_REQUEST: u32 = 9022;
 
-// System / admin (9031–9999)
+// NIP-43 relay membership admin commands
+/// NIP-43: Add a pubkey to the relay member list.
+pub const RELAY_ADMIN_ADD_MEMBER: u32 = 9030;
+/// NIP-43: Remove a pubkey from the relay member list.
+pub const RELAY_ADMIN_REMOVE_MEMBER: u32 = 9031;
+/// NIP-43: Change the role of an existing relay member.
+pub const RELAY_ADMIN_CHANGE_ROLE: u32 = 9032;
+
+// NIP-43 relay membership announcement events (relay-signed)
+/// NIP-43: Relay membership list snapshot (relay-signed, replaceable by convention).
+pub const KIND_NIP43_MEMBERSHIP_LIST: u32 = 13534;
+/// NIP-43: Member added announcement (relay-signed).
+pub const KIND_NIP43_MEMBER_ADDED: u32 = 8000;
+/// NIP-43: Member removed announcement (relay-signed).
+pub const KIND_NIP43_MEMBER_REMOVED: u32 = 8001;
+/// NIP-43: User leave request (user-signed, ephemeral).
+pub const KIND_NIP43_LEAVE_REQUEST: u32 = 28936;
+
+// System / admin (9100–9999)
 /// V1 used kind:9001 — moved here due to NIP-29 conflict.
 pub const KIND_SYSTEM_TIMER_FIRED: u32 = 9100;
 /// V1 used kind:9010 — moved here for NIP-29 range safety.
@@ -83,6 +110,8 @@ pub const KIND_PRESENCE_UPDATE: u32 = 20001;
 pub const KIND_PAIRING: u32 = 24134;
 /// Ephemeral: typing indicator for a channel.
 pub const KIND_TYPING_INDICATOR: u32 = 20002;
+/// Ephemeral: owner-scoped encrypted agent observer telemetry and control frame.
+pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
@@ -228,6 +257,28 @@ pub const KIND_HUDDLE_GUIDELINES: u32 = 48106;
 /// Internal kind for media upload audit entries. Not a relay event kind.
 pub const KIND_MEDIA_UPLOAD: u32 = 49001;
 
+// ── NIP-34: Git repository events ────────────────────────────────────────────
+/// NIP-34: Repository announcement (parameterized replaceable, d-tag = repo-id).
+pub const KIND_GIT_REPO_ANNOUNCEMENT: u32 = 30617;
+/// NIP-34: Repository state — current branch/tag refs (parameterized replaceable, d-tag = repo-id).
+pub const KIND_GIT_REPO_STATE: u32 = 30618;
+/// NIP-34: Patch (git format-patch output).
+pub const KIND_GIT_PATCH: u32 = 1617;
+/// NIP-34: Pull request.
+pub const KIND_GIT_PULL_REQUEST: u32 = 1618;
+/// NIP-34: Pull request update (tip commit change).
+pub const KIND_GIT_PR_UPDATE: u32 = 1619;
+/// NIP-34: Issue.
+pub const KIND_GIT_ISSUE: u32 = 1621;
+/// NIP-34: Status — Open.
+pub const KIND_GIT_STATUS_OPEN: u32 = 1630;
+/// NIP-34: Status — Applied / Merged.
+pub const KIND_GIT_STATUS_MERGED: u32 = 1631;
+/// NIP-34: Status — Closed.
+pub const KIND_GIT_STATUS_CLOSED: u32 = 1632;
+/// NIP-34: Status — Draft.
+pub const KIND_GIT_STATUS_DRAFT: u32 = 1633;
+
 /// All registered kind constants — used for duplicate detection and iteration.
 pub const ALL_KINDS: &[u32] = &[
     KIND_PROFILE,
@@ -247,6 +298,13 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP29_CREATE_INVITE,
     KIND_NIP29_JOIN_REQUEST,
     KIND_NIP29_LEAVE_REQUEST,
+    RELAY_ADMIN_ADD_MEMBER,
+    RELAY_ADMIN_REMOVE_MEMBER,
+    RELAY_ADMIN_CHANGE_ROLE,
+    KIND_NIP43_MEMBERSHIP_LIST,
+    KIND_NIP43_MEMBER_ADDED,
+    KIND_NIP43_MEMBER_REMOVED,
+    KIND_NIP43_LEAVE_REQUEST,
     KIND_SYSTEM_TIMER_FIRED,
     KIND_SYSTEM_SLASH_COMMAND,
     KIND_SYSTEM_FLAG,
@@ -257,6 +315,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
     KIND_PAIRING,
+    KIND_AGENT_OBSERVER_FRAME,
     KIND_STREAM_MESSAGE,
     KIND_STREAM_MESSAGE_V2,
     KIND_STREAM_MESSAGE_EDIT,
@@ -286,6 +345,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_LONG_FORM,
+    KIND_USER_STATUS,
+    KIND_READ_STATE,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
     KIND_FORUM_COMMENT,
@@ -313,7 +374,18 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_HUDDLE_ENDED,
     KIND_HUDDLE_TRACK_PUBLISHED,
     KIND_HUDDLE_RECORDING_AVAILABLE,
+    KIND_HUDDLE_GUIDELINES,
     KIND_MEDIA_UPLOAD,
+    KIND_GIT_REPO_ANNOUNCEMENT,
+    KIND_GIT_REPO_STATE,
+    KIND_GIT_PATCH,
+    KIND_GIT_PULL_REQUEST,
+    KIND_GIT_PR_UPDATE,
+    KIND_GIT_ISSUE,
+    KIND_GIT_STATUS_OPEN,
+    KIND_GIT_STATUS_MERGED,
+    KIND_GIT_STATUS_CLOSED,
+    KIND_GIT_STATUS_DRAFT,
 ];
 
 /// Returns `true` if `kind` is in the ephemeral range (20000–29999).
@@ -341,6 +413,14 @@ pub const fn is_workflow_execution_kind(kind: u32) -> bool {
     kind >= KIND_WORKFLOW_TRIGGERED && kind <= KIND_WORKFLOW_APPROVAL_DENIED
 }
 
+/// Returns `true` if `kind` is a NIP-43 relay membership admin command (9030–9032).
+pub const fn is_relay_admin_kind(kind: u32) -> bool {
+    matches!(
+        kind,
+        RELAY_ADMIN_ADD_MEMBER | RELAY_ADMIN_REMOVE_MEMBER | RELAY_ADMIN_CHANGE_ROLE
+    )
+}
+
 /// Extract the kind from a nostr Event as u32.
 /// NIP-01 specifies kind as an unsigned integer; u32 covers the full range.
 pub fn event_kind_u32(event: &nostr::Event) -> u32 {
@@ -352,6 +432,16 @@ pub fn event_kind_u32(event: &nostr::Event) -> u32 {
 pub fn event_kind_i32(event: &nostr::Event) -> i32 {
     event.kind.as_u16() as i32
 }
+
+// Compile-time: NIP-34 parameterized replaceable kinds are in the correct range.
+const _: () = assert!(
+    KIND_GIT_REPO_ANNOUNCEMENT >= PARAM_REPLACEABLE_KIND_MIN
+        && KIND_GIT_REPO_ANNOUNCEMENT <= PARAM_REPLACEABLE_KIND_MAX
+);
+const _: () = assert!(
+    KIND_GIT_REPO_STATE >= PARAM_REPLACEABLE_KIND_MIN
+        && KIND_GIT_REPO_STATE <= PARAM_REPLACEABLE_KIND_MAX
+);
 
 // Compile-time: all Sprout kind constants fit in nostr's u16-backed Kind.
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);

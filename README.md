@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="sprout.png" alt="Sprout" width="200">
+  <img src="docs/assets/sprout-icon.png" alt="Sprout" width="200">
 </p>
 
 # sprout
@@ -10,6 +10,52 @@ Sprout is a self-hosted WebSocket relay implementing a subset of the Nostr proto
 structured channels, per-channel canvases, full-text search, and an MCP server so AI agents can
 participate in conversations natively. Authentication is NIP-42 + bearer token; all writes are
 append-only and audited.
+
+## Quick Start
+
+Three steps to get the full stack running locally.
+
+**Prerequisites:** Docker, and either [Hermit](https://cashapp.github.io/hermit/) (recommended) or Rust 1.88+, Node.js 24+, pnpm 10+, and [`just`](https://github.com/casey/just) installed manually.
+
+**1. Activate the pinned toolchain**
+
+```bash
+. ./bin/activate-hermit
+```
+
+Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
+
+**2. Configure and set up the dev environment**
+
+```bash
+cp .env.example .env
+just setup
+just build
+```
+
+`just setup` does the heavy lifting:
+- Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
+- Waits for core services (Postgres, Redis, Typesense) to be healthy
+- Runs database migrations
+- Installs desktop dependencies (`pnpm install`)
+
+Then run `just build` once to compile the Rust workspace so binaries like `sprout-acp` and `sprout-mcp-server` are available when you start connecting agents.
+
+**3. Start the relay and desktop app**
+
+```bash
+# Terminal 1 — relay
+just relay
+
+# Terminal 2 — desktop app
+just dev
+```
+
+The relay listens on `ws://localhost:3000`. The desktop app opens automatically.
+
+That's it — you're running Sprout locally.
+
+---
 
 ## Why Sprout
 
@@ -121,52 +167,6 @@ append-only and audited.
 | `sprout-admin` | CLI for minting API tokens and listing active credentials |
 | `sprout-test-client` | Integration test client and E2E test suite — relay, REST API, tokens, MCP, media, media extended, Nostr interop, and workflows |
 
-## Quick Start
-
-Three steps to get the full stack running locally.
-
-**Prerequisites:** Docker, and either [Hermit](https://cashapp.github.io/hermit/) (recommended) or Rust 1.88+, Node.js 24+, pnpm 10+, and [`just`](https://github.com/casey/just) installed manually.
-
-**1. Activate the pinned toolchain**
-
-```bash
-. ./bin/activate-hermit
-```
-
-Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
-
-**2. Configure and set up the dev environment**
-
-```bash
-cp .env.example .env
-just setup
-just build
-```
-
-`just setup` does the heavy lifting:
-- Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
-- Waits for core services (Postgres, Redis, Typesense) to be healthy
-- Runs database migrations
-- Installs desktop dependencies (`pnpm install`)
-
-Then run `just build` once to compile the Rust workspace so binaries like `sprout-acp` and `sprout-mcp-server` are available when you start connecting agents.
-
-**3. Start the relay and desktop app**
-
-```bash
-# Terminal 1 — relay
-just relay
-
-# Terminal 2 — desktop app
-just dev
-```
-
-The relay listens on `ws://localhost:3000`. The desktop app opens automatically.
-
-That's it — you're running Sprout locally.
-
----
-
 ## Going Further
 
 ### Mint an API token
@@ -210,7 +210,7 @@ client configuration.
 just desktop-dev
 ```
 
-This starts only the web frontend at `http://localhost:1420` — useful for UI development without rebuilding the Tauri shell. Use `just dev` (from Quick Start) for the full desktop app.
+This starts only the web frontend on the worktree-specific Vite port printed by the command. Use `just dev` (from Quick Start) for the full Tauri desktop app.
 
 ## Configuration
 

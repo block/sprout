@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:nostr/nostr.dart' as nostr;
+import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../shared/auth/auth.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
+import '../profile/set_status_sheet.dart';
+import '../profile/user_status_provider.dart';
 import 'theme_picker_page.dart';
 
 class SettingsPage extends HookConsumerWidget {
@@ -19,6 +23,8 @@ class SettingsPage extends HookConsumerWidget {
     final config = ref.watch(relayConfigProvider);
     final selectedAccent = ref.watch(accentProvider);
     final selectedScheme = ref.watch(schemeProvider);
+    final packageInfoFuture = useMemoized(() => PackageInfo.fromPlatform());
+    final packageInfo = useFuture(packageInfoFuture);
 
     return FrostedScaffold(
       appBar: const FrostedAppBar(title: Text('Settings')),
@@ -100,6 +106,11 @@ class SettingsPage extends HookConsumerWidget {
 
           const SizedBox(height: Grid.sm),
 
+          // Status
+          _StatusSection(),
+
+          const SizedBox(height: Grid.sm),
+
           // Appearance
           Text('Appearance', style: context.textTheme.titleMedium),
           const SizedBox(height: Grid.twelve),
@@ -153,6 +164,17 @@ class SettingsPage extends HookConsumerWidget {
                 ),
             ],
           ),
+          if (packageInfo.hasData) ...[
+            const SizedBox(height: Grid.sm),
+            Center(
+              child: Text(
+                'v${packageInfo.data!.version}',
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant.withValues(alpha: 0.6),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -187,6 +209,55 @@ class SettingsPage extends HookConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _StatusSection extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final statusAsync = ref.watch(userStatusProvider);
+    final status = statusAsync.asData?.value;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Status', style: context.textTheme.titleMedium),
+        const SizedBox(height: Grid.twelve),
+        ListTile(
+          leading: Text(
+            status != null && status.emoji.isNotEmpty
+                ? status.emoji
+                : '\u{1F4AC}',
+            style: const TextStyle(fontSize: 20),
+          ),
+          title: Text(
+            status != null && !status.isEmpty
+                ? status.text.isNotEmpty
+                      ? status.text
+                      : status.emoji
+                : 'Set a status',
+            style: status != null && !status.isEmpty
+                ? null
+                : context.textTheme.bodyMedium?.copyWith(
+                    color: context.colors.onSurfaceVariant,
+                  ),
+          ),
+          subtitle: status != null && !status.isEmpty
+              ? Text(
+                  'Tap to update',
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.colors.onSurfaceVariant,
+                  ),
+                )
+              : null,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Radii.md),
+            side: BorderSide(color: context.colors.outlineVariant),
+          ),
+          onTap: () => showSetStatusSheet(context, currentStatus: status),
+        ),
+      ],
     );
   }
 }

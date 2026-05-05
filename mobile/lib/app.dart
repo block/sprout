@@ -5,6 +5,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'features/home/home_page.dart';
 import 'features/pairing/pairing_page.dart';
+import 'features/channels/agent_activity/observer_subscription.dart';
+import 'features/profile/user_status_cache_provider.dart';
 import 'shared/auth/auth.dart';
 import 'shared/relay/relay.dart';
 import 'shared/theme/theme.dart';
@@ -30,7 +32,9 @@ class App extends HookConsumerWidget {
     // authenticated. These providers connect and manage the websocket.
     if (authState.value?.status == AuthStatus.authenticated) {
       ref.watch(relaySessionProvider);
+      ref.watch(observerRelayProvider);
       ref.watch(appLifecycleProvider);
+      ref.watch(userStatusCacheProvider);
     }
 
     return MaterialApp(
@@ -101,7 +105,7 @@ class _OfflineScreen extends ConsumerWidget {
                 onPressed: () => ref.read(authProvider.notifier).signOut(),
                 child: Text(
                   'Remove workspace and re-pair',
-                  style: TextStyle(color: context.colors.outline),
+                  style: TextStyle(color: context.colors.onSurfaceVariant),
                 ),
               ),
             ],

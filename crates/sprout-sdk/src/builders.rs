@@ -4,6 +4,13 @@
 //! The caller signs: `builder.sign_with_keys(&keys)?`.
 
 use nostr::{EventBuilder, Kind, Tag};
+use sprout_core::{
+    kind::KIND_AGENT_OBSERVER_FRAME,
+    observer::{
+        content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
+        OBSERVER_FRAME_TELEMETRY,
+    },
+};
 use uuid::Uuid;
 
 use crate::{ChannelKind, DiffMeta, MemberRole, SdkError, ThreadRef, Visibility, VoteDirection};
@@ -33,6 +40,15 @@ fn check_hex_len(s: &str, min_len: usize, field: &str) -> Result<(), SdkError> {
         )));
     }
     Ok(())
+}
+
+fn check_pubkey_hex(s: &str, field: &str) -> Result<String, SdkError> {
+    if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(SdkError::InvalidInput(format!(
+            "{field} must be a 64-character hex pubkey"
+        )));
+    }
+    Ok(s.to_ascii_lowercase())
 }
 
 /// Emit NIP-10 e-tags for a `ThreadRef`.
@@ -103,6 +119,45 @@ pub fn build_message(
     }
     imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content, tags))
+}
+
+// ── Builder: build_agent_observer_frame ─────────────────────────────────────
+
+/// Build an encrypted agent observer frame (kind 24200).
+///
+/// `recipient_pubkey` is the cleartext `p` tag used by the relay for owner-only
+/// routing. `agent_pubkey` identifies the managed agent whose observer stream
+/// this frame belongs to. `encrypted_content` must be NIP-44 v2 ciphertext.
+pub fn build_agent_observer_frame(
+    recipient_pubkey: &str,
+    agent_pubkey: &str,
+    frame: &str,
+    encrypted_content: &str,
+) -> Result<EventBuilder, SdkError> {
+    if frame != OBSERVER_FRAME_TELEMETRY && frame != OBSERVER_FRAME_CONTROL {
+        return Err(SdkError::InvalidInput(format!(
+            "observer frame must be {OBSERVER_FRAME_TELEMETRY:?} or {OBSERVER_FRAME_CONTROL:?}"
+        )));
+    }
+    if !content_looks_like_nip44(encrypted_content) {
+        return Err(SdkError::InvalidInput(
+            "observer frame content must be NIP-44 v2 ciphertext".into(),
+        ));
+    }
+
+    let recipient_pubkey = check_pubkey_hex(recipient_pubkey, "recipient_pubkey")?;
+    let agent_pubkey = check_pubkey_hex(agent_pubkey, "agent_pubkey")?;
+    let tags = vec![
+        tag(&["p", &recipient_pubkey])?,
+        tag(&[OBSERVER_AGENT_TAG, &agent_pubkey])?,
+        tag(&[OBSERVER_FRAME_TAG, frame])?,
+    ];
+
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
+        encrypted_content,
+        tags,
+    ))
 }
 
 // ── Builder 2: build_forum_post ───────────────────────────────────────────────
@@ -747,6 +802,50 @@ mod tests {
         assert_eq!(ev.kind.as_u16(), 9);
         assert_eq!(ev.content, "hello");
         assert!(has_tag(&ev, "h", &cid.to_string()));
+    }
+
+    #[test]
+    fn agent_observer_frame_happy_path() {
+        let sender = keys();
+        let recipient = keys();
+        let agent = keys();
+        let encrypted = sprout_core::observer::encrypt_observer_payload(
+            &sender,
+            &recipient.public_key(),
+            &serde_json::json!({"type": "acp_read"}),
+        )
+        .unwrap();
+        let ev = sign(
+            build_agent_observer_frame(
+                &recipient.public_key().to_hex(),
+                &agent.public_key().to_hex(),
+                OBSERVER_FRAME_TELEMETRY,
+                &encrypted,
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(ev.kind.as_u16(), KIND_AGENT_OBSERVER_FRAME as u16);
+        assert_eq!(ev.content, encrypted);
+        assert!(has_tag(&ev, "p", &recipient.public_key().to_hex()));
+        assert!(has_tag(
+            &ev,
+            OBSERVER_AGENT_TAG,
+            &agent.public_key().to_hex()
+        ));
+        assert!(has_tag(&ev, OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY));
+    }
+
+    #[test]
+    fn agent_observer_frame_rejects_plaintext_content() {
+        let err = build_agent_observer_frame(
+            &"a".repeat(64),
+            &"b".repeat(64),
+            OBSERVER_FRAME_TELEMETRY,
+            "not encrypted",
+        )
+        .unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
     }
 
     #[test]

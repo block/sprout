@@ -1,4 +1,4 @@
-import { Download, RefreshCw } from "lucide-react";
+import { Download, Loader2, RefreshCw } from "lucide-react";
 
 import { Button } from "@/shared/ui/button";
 
@@ -11,23 +11,47 @@ const indicatorButtonClass =
 const iconClass = "h-3.5 w-3.5";
 
 const variants: Record<
-  "available" | "ready",
-  { Icon: typeof Download; label: string; badgeColor: string }
+  "available" | "downloading" | "installing" | "ready",
+  {
+    Icon: typeof Download;
+    label: string;
+    badgeColor: string;
+    iconClass: string;
+  }
 > = {
   available: {
     Icon: Download,
     label: "Update available",
     badgeColor: "bg-primary",
+    iconClass: iconClass,
+  },
+  downloading: {
+    Icon: Loader2,
+    label: "Downloading update\u2026",
+    badgeColor: "bg-primary",
+    iconClass: `${iconClass} animate-spin`,
+  },
+  installing: {
+    Icon: Loader2,
+    label: "Installing update\u2026",
+    badgeColor: "bg-primary",
+    iconClass: `${iconClass} animate-spin`,
   },
   ready: {
     Icon: RefreshCw,
     label: "Restart to update",
     badgeColor: "bg-emerald-500",
+    iconClass: iconClass,
   },
 };
 
 function getVariant(state: UpdateStatus["state"]) {
-  if (state === "available" || state === "ready") {
+  if (
+    state === "available" ||
+    state === "downloading" ||
+    state === "installing" ||
+    state === "ready"
+  ) {
     return variants[state];
   }
   return null;
@@ -45,7 +69,7 @@ export function UpdateIndicator({
     return null;
   }
 
-  const { Icon, label, badgeColor } = variant;
+  const { Icon, label, badgeColor, iconClass: variantIconClass } = variant;
 
   return (
     <Button
@@ -55,7 +79,7 @@ export function UpdateIndicator({
       size="sm"
       variant="ghost"
     >
-      <Icon className={iconClass} />
+      <Icon className={variantIconClass} />
       {label}
       <span
         className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ${badgeColor} animate-pulse`}

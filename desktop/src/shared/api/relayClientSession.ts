@@ -11,6 +11,7 @@ import {
   HOME_MENTION_EVENT_KINDS,
   KIND_STREAM_MESSAGE,
   KIND_TYPING_INDICATOR,
+  KIND_USER_STATUS,
 } from "@/shared/constants/kinds";
 import {
   getTextPayload,
@@ -30,23 +31,79 @@ export class RelayClient {
   private wsId: number | null = null;
   private relayUrl: string | null = null;
   private connectPromise: Promise<void> | null = null;
-  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimeout: number | null = null;
   private reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
   private keepAliveRequested = false;
   private authRequest: {
     pendingEventId: string;
     resolve: () => void;
     reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
+    timeout: number;
   } | null = null;
   private subscriptions = new Map<string, RelaySubscription>();
   private pendingEvents = new Map<string, PendingEvent>();
   private eventBuffer: Array<{ subId: string; event: RelayEvent }> = [];
-  private flushTimeout: ReturnType<typeof setTimeout> | null = null;
+  private flushTimeout: number | null = null;
   private reconnectListeners = new Set<() => void>();
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
   private onMessageChannel: Channel<unknown> | null = null;
+
+  /**
+   * Cleanly tear down the connection without scheduling a reconnect.
+   * Used during workspace switches to reset the singleton before the
+   * new workspace applies.
+   */
+  disconnect() {
+    const error = new Error("Relay disconnected for workspace switch.");
+
+    if (this.reconnectTimeout) {
+      window.clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.keepAliveRequested = false;
+    this.relayUrl = null;
+    this.hasConnectedOnce = false;
+    this.notifyReconnectListeners = false;
+
+    if (this.wsId !== null) {
+      void invoke("plugin:websocket|disconnect", { id: this.wsId }).catch(
+        () => {},
+      );
+      this.wsId = null;
+    }
+
+    this.connectPromise = null;
+
+    if (this.authRequest) {
+      window.clearTimeout(this.authRequest.timeout);
+      this.authRequest.reject(error);
+      this.authRequest = null;
+    }
+
+    for (const [subId, sub] of this.subscriptions) {
+      if (sub.mode === "history") {
+        window.clearTimeout(sub.timeout);
+        sub.reject(error);
+      }
+      this.subscriptions.delete(subId);
+    }
+
+    for (const [eventId, pending] of this.pendingEvents) {
+      window.clearTimeout(pending.timeout);
+      pending.reject(error);
+      this.pendingEvents.delete(eventId);
+    }
+
+    if (this.flushTimeout !== null) {
+      window.clearTimeout(this.flushTimeout);
+      this.flushTimeout = null;
+    }
+    this.eventBuffer = [];
+    this.reconnectListeners.clear();
+    this.onMessageChannel = null;
+    this.reconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+  }
 
   async fetchChannelHistory(channelId: string, limit = 50) {
     return this.fetchHistory(this.buildChannelFilter(channelId, limit));
@@ -58,6 +115,10 @@ export class RelayClient {
     limit = 50,
   ) {
     return this.fetchHistory(this.buildChannelFilter(channelId, limit, before));
+  }
+
+  async fetchEvents(filter: RelaySubscriptionFilter): Promise<RelayEvent[]> {
+    return this.fetchHistory(filter);
   }
 
   private async fetchHistory(filter: RelaySubscriptionFilter) {
@@ -221,8 +282,44 @@ export class RelayClient {
     );
   }
 
+  /** Subscribe to kind:20001 presence events (live only, no backfill). */
+  async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
+    return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
+  }
+
+  async publishUserStatus(text: string, emoji: string): Promise<void> {
+    await this.ensureConnected();
+    const tags: string[][] = [["d", "general"]];
+    if (emoji) tags.push(["emoji", emoji]);
+    const event = await signRelayEvent({
+      kind: KIND_USER_STATUS,
+      content: text,
+      tags,
+    });
+    await this.publishEvent(
+      event,
+      "Timed out publishing user status",
+      "Failed to publish user status",
+    );
+  }
+
+  /** Subscribe to kind:30315 user status events (live only, no backfill). */
+  async subscribeToUserStatusUpdates(onEvent: (event: RelayEvent) => void) {
+    return this.subscribe(
+      { kinds: [KIND_USER_STATUS], "#d": ["general"], limit: 0 },
+      onEvent,
+    );
+  }
+
   async subscribeToAllStreamMessages(onEvent: (event: RelayEvent) => void) {
     return this.subscribe(this.buildGlobalStreamFilter(50), onEvent);
+  }
+
+  async subscribeLive(
+    filter: RelaySubscriptionFilter,
+    onEvent: (event: RelayEvent) => void,
+  ) {
+    return this.subscribe(filter, onEvent);
   }
 
   async subscribeToChannelMentionEvents(
@@ -460,7 +557,7 @@ export class RelayClient {
     await this.sendRaw(["CLOSE", subId]);
   }
 
-  private publishEvent(
+  publishEvent(
     event: RelayEvent,
     timeoutMessage: string,
     sendErrorMessage: string,

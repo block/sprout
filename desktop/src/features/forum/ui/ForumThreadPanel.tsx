@@ -5,6 +5,7 @@ import {
   resolveUserLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { ForumThreadResponse, ThreadReply } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -74,14 +75,21 @@ function ReplyRow({
   return (
     <div className="group px-4 py-3" data-forum-event-id={reply.eventId}>
       <div className="flex items-center gap-2">
-        <UserAvatar
-          avatarUrl={replyAvatarUrl}
-          displayName={replyAuthorLabel}
-          size="sm"
-        />
-        <span className="text-sm font-medium text-foreground">
-          {replyAuthorLabel}
-        </span>
+        <UserProfilePopover pubkey={reply.pubkey}>
+          <button
+            className="flex items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            type="button"
+          >
+            <UserAvatar
+              avatarUrl={replyAvatarUrl}
+              displayName={replyAuthorLabel}
+              size="sm"
+            />
+            <span className="text-sm font-medium text-foreground hover:underline">
+              {replyAuthorLabel}
+            </span>
+          </button>
+        </UserProfilePopover>
         <span className="text-xs text-muted-foreground">
           {formatRelativeTime(reply.createdAt)}
         </span>
@@ -208,18 +216,23 @@ export function ForumThreadPanel({
           data-forum-event-id={post.eventId}
         >
           <div className="flex items-center gap-2">
-            <UserAvatar
-              avatarUrl={postAvatarUrl}
-              displayName={postAuthorLabel}
-            />
-            <div>
-              <span className="text-sm font-semibold text-foreground">
-                {postAuthorLabel}
-              </span>
-              <span className="ml-2 text-xs text-muted-foreground">
-                {formatRelativeTime(post.createdAt)}
-              </span>
-            </div>
+            <UserProfilePopover pubkey={post.pubkey}>
+              <button
+                className="flex items-center gap-2 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                type="button"
+              >
+                <UserAvatar
+                  avatarUrl={postAvatarUrl}
+                  displayName={postAuthorLabel}
+                />
+                <span className="text-sm font-semibold text-foreground hover:underline">
+                  {postAuthorLabel}
+                </span>
+              </button>
+            </UserProfilePopover>
+            <span className="text-xs text-muted-foreground">
+              {formatRelativeTime(post.createdAt)}
+            </span>
 
             {canDeletePost && onDeletePost ? (
               <DeleteActionMenu

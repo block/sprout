@@ -3,12 +3,14 @@ import {
   useLiveChannelUpdates,
   type UseLiveChannelUpdatesOptions,
 } from "@/features/channels/useLiveChannelUpdates";
+import { useReadState } from "@/features/channels/readState/useReadState";
+import type { RelayClient } from "@/shared/api/relayClientSession";
 import type { Channel } from "@/shared/api/types";
 
-const CHANNEL_READ_STATE_STORAGE_KEY = "sprout.channel-read-state.v1";
-
-type ChannelReadState = Record<string, string | null>;
-type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions;
+type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions & {
+  pubkey?: string;
+  relayClient?: RelayClient;
+};
 
 function parseTimestamp(value: string | null | undefined) {
   if (!value) {
@@ -19,51 +21,9 @@ function parseTimestamp(value: string | null | undefined) {
   return Number.isNaN(timestamp) ? null : timestamp;
 }
 
-function normalizeTimestamp(value: string | null | undefined) {
-  const timestamp = parseTimestamp(value);
-  return timestamp === null ? null : new Date(timestamp).toISOString();
-}
-
-function isNewerTimestamp(
-  candidate: string | null | undefined,
-  current: string | null | undefined,
-) {
-  const candidateTimestamp = parseTimestamp(candidate);
-  if (candidateTimestamp === null) {
-    return false;
-  }
-
-  const currentTimestamp = parseTimestamp(current);
-  return currentTimestamp === null || candidateTimestamp > currentTimestamp;
-}
-
-function readStoredChannelReadState(): ChannelReadState {
-  if (typeof window === "undefined") {
-    return {};
-  }
-
-  const rawState = window.localStorage.getItem(CHANNEL_READ_STATE_STORAGE_KEY);
-  if (!rawState) {
-    return {};
-  }
-
-  try {
-    const parsed = JSON.parse(rawState);
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-
-    return Object.fromEntries(
-      Object.entries(parsed).map(([channelId, value]) => [
-        channelId,
-        typeof value === "string" || value === null
-          ? normalizeTimestamp(value)
-          : null,
-      ]),
-    );
-  } catch {
-    return {};
-  }
+function toUnixSeconds(isoOrMs: string | null | undefined): number | null {
+  const ms = parseTimestamp(isoOrMs);
+  return ms === null ? null : Math.floor(ms / 1_000);
 }
 
 export function useUnreadChannels(
@@ -72,116 +32,102 @@ export function useUnreadChannels(
   activeReadAt?: string | null,
   options: UseUnreadChannelsOptions = {},
 ) {
-  const [lastReadByChannel, setLastReadByChannel] =
-    React.useState<ChannelReadState>(readStoredChannelReadState);
-  const hasInitializedChannelsRef = React.useRef(false);
+  const { pubkey, relayClient, ...liveUpdateOptions } = options;
   const activeChannelId = activeChannel?.id ?? null;
   const activeChannelLastMessageAt = activeChannel?.lastMessageAt ?? null;
+
   // Let callers pass `null` to intentionally suppress the optimistic
   // channel-metadata fallback until a real timeline position is known.
   const effectiveActiveReadAt =
     activeReadAt === undefined ? activeChannelLastMessageAt : activeReadAt;
 
+  const {
+    getEffectiveTimestamp,
+    isReady: isReadStateReady,
+    markContextRead,
+    readStateVersion,
+    seedContextRead,
+  } = useReadState(pubkey, relayClient);
+
+  // Track whether channels have been initialized (for first-load seeding)
+  const hasInitializedChannelsRef = React.useRef(false);
+
   const markChannelRead = React.useCallback(
     (channelId: string, readAt: string | null | undefined) => {
-      const normalizedReadAt = normalizeTimestamp(readAt);
-
-      setLastReadByChannel((current) => {
-        const previousReadAt = current[channelId] ?? null;
-
-        if (normalizedReadAt === null) {
-          if (channelId in current) {
-            return current;
-          }
-
-          return {
-            ...current,
-            [channelId]: null,
-          };
-        }
-
-        if (!isNewerTimestamp(normalizedReadAt, previousReadAt)) {
-          return current;
-        }
-
-        return {
-          ...current,
-          [channelId]: normalizedReadAt,
-        };
-      });
+      const unixSeconds = toUnixSeconds(readAt);
+      if (unixSeconds === null) return;
+      markContextRead(channelId, unixSeconds);
     },
-    [],
+    [markContextRead],
   );
 
+  // Seed new channels so they don't flash as unread on first load.
+  // For channels the user hasn't read yet, initialize read-at to the
+  // channel's current lastMessageAt so they appear as "read."
   React.useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    if (!isReadStateReady) return;
+    if (channels.length === 0) return;
 
-    window.localStorage.setItem(
-      CHANNEL_READ_STATE_STORAGE_KEY,
-      JSON.stringify(lastReadByChannel),
-    );
-  }, [lastReadByChannel]);
+    for (const channel of channels) {
+      const existing = getEffectiveTimestamp(channel.id);
+      if (existing !== null) continue;
 
-  React.useEffect(() => {
-    if (channels.length === 0) {
-      return;
-    }
+      // Only seed on first initialization, not when new channels appear later
+      if (hasInitializedChannelsRef.current) continue;
 
-    setLastReadByChannel((current) => {
-      const knownChannelIds = new Set(channels.map((channel) => channel.id));
-      const nextReadState: ChannelReadState = {};
-      let didChange = false;
-
-      for (const channel of channels) {
-        if (channel.id in current) {
-          nextReadState[channel.id] = current[channel.id] ?? null;
-          continue;
-        }
-
-        nextReadState[channel.id] = hasInitializedChannelsRef.current
-          ? null
-          : normalizeTimestamp(channel.lastMessageAt);
-        didChange = true;
+      const lastMsgUnix = toUnixSeconds(channel.lastMessageAt);
+      if (lastMsgUnix !== null) {
+        seedContextRead(channel.id, lastMsgUnix);
       }
-
-      for (const channelId of Object.keys(current)) {
-        if (!knownChannelIds.has(channelId)) {
-          didChange = true;
-        }
-      }
-
-      return didChange ? nextReadState : current;
-    });
+    }
 
     hasInitializedChannelsRef.current = true;
-  }, [channels]);
+  }, [channels, getEffectiveTimestamp, isReadStateReady, seedContextRead]);
 
+  // Mark the active channel as read when it changes or new messages arrive
   React.useEffect(() => {
-    if (!activeChannelId) {
-      return;
+    if (!isReadStateReady) return;
+    if (!activeChannelId) return;
+    markChannelRead(activeChannelId, effectiveActiveReadAt);
+  }, [
+    activeChannelId,
+    effectiveActiveReadAt,
+    isReadStateReady,
+    markChannelRead,
+  ]);
+
+  // Keep live channel updates (drives channel.lastMessageAt cache updates)
+  useLiveChannelUpdates(channels, activeChannelId, liveUpdateOptions);
+
+  // Compute unread channel IDs by comparing channel.lastMessageAt against
+  // the NIP-RS effective timestamp.
+  // readStateVersion is intentionally included to force recomputation when
+  // cross-device state arrives (getEffectiveTimestamp is referentially stable).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion is an intentional invalidation signal
+  const unreadChannelIds = React.useMemo(() => {
+    if (!isReadStateReady) {
+      return new Set<string>();
     }
 
-    markChannelRead(activeChannelId, effectiveActiveReadAt);
-  }, [activeChannelId, effectiveActiveReadAt, markChannelRead]);
-  useLiveChannelUpdates(channels, activeChannelId, options);
+    return new Set(
+      channels
+        .filter((channel) => channel.id !== activeChannelId)
+        .filter((channel) => {
+          const lastMsgUnix = toUnixSeconds(channel.lastMessageAt);
+          if (lastMsgUnix === null) return false;
 
-  const unreadChannelIds = React.useMemo(
-    () =>
-      new Set(
-        channels
-          .filter((channel) => channel.id !== activeChannelId)
-          .filter((channel) =>
-            isNewerTimestamp(
-              channel.lastMessageAt,
-              lastReadByChannel[channel.id],
-            ),
-          )
-          .map((channel) => channel.id),
-      ),
-    [activeChannelId, channels, lastReadByChannel],
-  );
+          const readAt = getEffectiveTimestamp(channel.id);
+          return readAt === null || lastMsgUnix > readAt;
+        })
+        .map((channel) => channel.id),
+    );
+  }, [
+    activeChannelId,
+    channels,
+    getEffectiveTimestamp,
+    isReadStateReady,
+    readStateVersion,
+  ]);
 
   return {
     unreadChannelIds,

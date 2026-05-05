@@ -1,10 +1,16 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useQueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { useLayoutEffect } from "react";
+import { useCallback, useEffect, useLayoutEffect } from "react";
 
 import { router } from "@/app/router";
+import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
+import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
+import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
+import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
+import { listenForDeepLinks } from "@/shared/deep-link";
 
 function AppLoadingGate() {
   return (
@@ -24,11 +30,7 @@ function AppLoadingGate() {
   );
 }
 
-export function App() {
-  useLayoutEffect(() => {
-    void getCurrentWindow().show();
-  }, []);
-
+function AppReady() {
   const onboarding = useAppOnboardingState();
 
   if (onboarding.stage === "onboarding") {
@@ -47,4 +49,62 @@ export function App() {
   }
 
   return <RouterProvider router={router} />;
+}
+
+export function App() {
+  useLayoutEffect(() => {
+    void getCurrentWindow().show();
+  }, []);
+
+  const queryClient = useQueryClient();
+  const { activeWorkspace, reinitKey, addWorkspace, switchWorkspace } =
+    useWorkspaces();
+
+  useEffect(() => {
+    const unlisten = listenForDeepLinks({ addWorkspace, switchWorkspace });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [addWorkspace, switchWorkspace]);
+  const workspace = useWorkspaceInit(activeWorkspace);
+
+  // Composite key: changes when workspace ID changes OR when
+  // the active workspace's config is updated (relayUrl/token).
+  const workspaceKey = `${activeWorkspace?.id ?? "none"}-${reinitKey}`;
+
+  // Clear stale React Query cache synchronously when workspace changes.
+  // useLayoutEffect fires before child useEffect hooks, preventing stale
+  // data from being served to the new workspace's components.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: workspaceKey drives the re-run intentionally
+  useLayoutEffect(() => {
+    queryClient.clear();
+  }, [workspaceKey, queryClient]);
+
+  const handleSetupComplete = useCallback(() => {
+    // Force a full reload so useWorkspaces re-initializes from localStorage.
+    // This only runs once — during first-run setup when no workspace existed.
+    window.location.reload();
+  }, []);
+
+  // Show welcome setup for first-run users with no workspaces
+  if (workspace.needsSetup) {
+    return (
+      <WelcomeSetup
+        defaultRelayUrl={workspace.defaultRelayUrl}
+        onComplete={handleSetupComplete}
+      />
+    );
+  }
+
+  // Wait for workspace config to be applied to the backend before
+  // rendering anything that connects to the relay.
+  if (!workspace.isReady) {
+    return <AppLoadingGate />;
+  }
+
+  return (
+    <UpdaterProvider>
+      <AppReady key={workspaceKey} />
+    </UpdaterProvider>
+  );
 }

@@ -6,7 +6,7 @@ use crate::{
     models::{ListTokensResponse, MintTokenBody, MintTokenResponse, RevokeAllTokensResponse},
     relay::{
         api_path, build_authed_request, build_nip98_auth_header, build_token_management_request,
-        relay_api_base_url, send_empty_request, send_json_request,
+        relay_api_base_url_with_override, send_empty_request, send_json_request,
     },
 };
 
@@ -45,7 +45,11 @@ fn build_mint_token_request(
         );
     }
 
-    let url = format!("{}{}", relay_api_base_url(), "/api/tokens");
+    let url = format!(
+        "{}{}",
+        relay_api_base_url_with_override(state),
+        "/api/tokens"
+    );
     let body_bytes =
         serde_json::to_vec(body).map_err(|error| format!("serialize failed: {error}"))?;
     let auth_header = build_nip98_auth_header(&Method::POST, &url, &body_bytes, state)?;

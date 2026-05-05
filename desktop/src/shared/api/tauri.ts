@@ -20,6 +20,8 @@ import type {
   ManagedAgent,
   ManagedAgentBackend,
   RelayAgent,
+  RelayMember,
+  RelayMemberRole,
   PresenceLookup,
   PresenceStatus,
   Profile,
@@ -295,6 +297,17 @@ type RawManagedAgentPrereqs = {
   mcp: RawCommandAvailability;
 };
 
+type RawRelayMember = {
+  pubkey: string;
+  role: string;
+  added_by: string | null;
+  created_at: string;
+};
+
+type RawListRelayMembersResponse = {
+  members: RawRelayMember[];
+};
+
 type RawCanvasResponse = {
   content: string | null;
   updated_at: number | null;
@@ -457,6 +470,11 @@ export async function getNsec(): Promise<string> {
   return invokeTauri<string>("get_nsec");
 }
 
+export async function importIdentity(nsec: string): Promise<Identity> {
+  const raw = await invokeTauri<RawIdentity>("import_identity", { nsec });
+  return { pubkey: raw.pubkey, displayName: raw.display_name };
+}
+
 export async function getProfile(): Promise<Profile> {
   const profile = await invokeTauri<RawProfile>("get_profile");
   return fromRawProfile(profile);
@@ -527,6 +545,10 @@ export async function setPresence(
     status: response.status,
     ttlSeconds: response.ttl_seconds,
   };
+}
+
+export function getDefaultRelayUrl(): Promise<string> {
+  return invokeTauri<string>("get_default_relay_url");
 }
 
 export function getRelayWsUrl(): Promise<string> {
@@ -792,6 +814,7 @@ export async function removeReaction(
 export async function signRelayEvent(input: {
   kind: number;
   content: string;
+  createdAt?: number;
   tags: string[][];
 }): Promise<RelayEvent> {
   const eventJson = await invokeTauri<string>("sign_event", input);
@@ -919,6 +942,59 @@ export async function revokeAllTokens(): Promise<{ revokedCount: number }> {
     "revoke_all_tokens",
   );
   return { revokedCount: response.revoked_count };
+}
+
+// ── Relay Members ────────────────────────────────────────────────────────────
+
+function fromRawRelayMember(raw: RawRelayMember): RelayMember {
+  return {
+    pubkey: raw.pubkey,
+    role: raw.role as RelayMemberRole,
+    addedBy: raw.added_by,
+    createdAt: raw.created_at,
+  };
+}
+
+export async function listRelayMembers(): Promise<RelayMember[]> {
+  const response =
+    await invokeTauri<RawListRelayMembersResponse>("list_relay_members");
+  return response.members.map(fromRawRelayMember);
+}
+
+export async function getMyRelayMembership(): Promise<RelayMember | null> {
+  try {
+    const raw = await invokeTauri<RawRelayMember>("get_my_relay_membership");
+    return fromRawRelayMember(raw);
+  } catch (error) {
+    // "relay returned 404 Not Found" = not a relay member — return null so
+    // the UI hides the Members tab. Re-throw real errors (network, auth, 500)
+    // so React Query surfaces them.
+    if (
+      error instanceof Error &&
+      error.message.startsWith("relay returned 404")
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function addRelayMember(
+  targetPubkey: string,
+  role: string,
+): Promise<void> {
+  await invokeTauri("add_relay_member", { targetPubkey, role });
+}
+
+export async function removeRelayMember(targetPubkey: string): Promise<void> {
+  await invokeTauri("remove_relay_member", { targetPubkey });
+}
+
+export async function changeRelayMemberRole(
+  targetPubkey: string,
+  newRole: string,
+): Promise<void> {
+  await invokeTauri("change_relay_member_role", { targetPubkey, newRole });
 }
 
 export async function listRelayAgents(): Promise<RelayAgent[]> {
@@ -1095,6 +1171,18 @@ export async function probeBackendProvider(
   });
 }
 
+// ── NIP-44 encrypt-to-self ───────────────────────────────────────────────────
+
+export async function nip44EncryptToSelf(plaintext: string): Promise<string> {
+  return invokeTauri<string>("nip44_encrypt_to_self", { plaintext });
+}
+
+export async function nip44DecryptFromSelf(
+  ciphertext: string,
+): Promise<string> {
+  return invokeTauri<string>("nip44_decrypt_from_self", { ciphertext });
+}
+
 // ── NIP-AB device pairing ───────────────────────────────────────────────────
 
 export async function startPairing(): Promise<string> {
@@ -1107,4 +1195,16 @@ export async function confirmPairingSas(): Promise<void> {
 
 export async function cancelPairing(): Promise<void> {
   await invokeTauri("cancel_pairing");
+}
+
+export async function applyWorkspace(
+  relayUrl: string,
+  nsec?: string,
+  token?: string,
+): Promise<void> {
+  await invokeTauri("apply_workspace", {
+    relayUrl,
+    nsec: nsec ?? null,
+    token: token ?? null,
+  });
 }

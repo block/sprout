@@ -54,7 +54,7 @@ pub struct TaskMeta {
     pub recoverable_batch: Option<FlushBatch>,
     /// Cancel signal for the in-flight prompt task.
     /// `None` for heartbeat tasks (not cancellable) and after signal is consumed.
-    pub cancel_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    pub cancel_tx: Option<tokio::sync::oneshot::Sender<CancelMode>>,
 }
 
 /// Agent-level model capabilities. Populated on first session creation.
@@ -152,6 +152,15 @@ pub struct PromptResult {
 pub enum PromptSource {
     Channel(Uuid),
     Heartbeat,
+}
+
+/// How an in-flight channel turn should be cancelled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CancelMode {
+    /// Stop the current turn and drop its triggering batch.
+    Stop,
+    /// Stop the current turn and requeue its triggering batch for a merged re-prompt.
+    Interrupt,
 }
 
 /// Outcome of a prompt task.
@@ -597,7 +606,7 @@ pub async fn run_prompt_task(
     prompt_text: Option<String>,
     ctx: Arc<PromptContext>,
     result_tx: mpsc::UnboundedSender<PromptResult>,
-    cancel_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    cancel_rx: Option<tokio::sync::oneshot::Receiver<CancelMode>>,
 ) {
     // ── Determine source and resolve/create session ───────────────────────
 
@@ -921,51 +930,75 @@ pub async fn run_prompt_task(
                     ctx.idle_timeout,
                     ctx.max_turn_duration,
                 ) => result,
-                _ = rx => {
+                mode = rx => {
+                    let cancel_mode = mode.unwrap_or(CancelMode::Stop);
                     // Cancel signal received. Guard against Race 1: the turn may
                     // have completed naturally just as cancel fired.
                     if agent.acp.has_in_flight_prompt() {
                         // Prompt is genuinely in-flight — cancel it.
-                        match agent.acp.cancel_with_cleanup(&session_id, ctx.idle_timeout).await {
+                        match agent
+                            .acp
+                            .cancel_with_cleanup_grace(
+                                &session_id,
+                                std::time::Duration::from_secs(5),
+                            )
+                            .await
+                        {
                             Ok(stop_reason) => {
                                 log_stop_reason(&source, &stop_reason);
                                 agent.state.invalidate(&source);
+                                let retry_batch = match cancel_mode {
+                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    CancelMode::Stop => None,
+                                };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
                                     source,
                                     outcome: PromptOutcome::Cancelled,
-                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                    batch: retry_batch,
                                 });
                                 return;
                             }
                             Err(AcpError::AgentExited) => {
                                 agent.state.invalidate_all();
+                                let retry_batch = match cancel_mode {
+                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    CancelMode::Stop => None,
+                                };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
                                     source,
                                     outcome: PromptOutcome::AgentExited,
-                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                    batch: retry_batch,
                                 });
                                 return;
                             }
                             Err(AcpError::IdleTimeout(_) | AcpError::HardTimeout) => {
                                 // Cancel drain timed out — agent state uncertain.
                                 agent.state.invalidate(&source);
+                                let retry_batch = match cancel_mode {
+                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    CancelMode::Stop => None,
+                                };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
                                     source,
                                     outcome: PromptOutcome::Timeout,
-                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                    batch: retry_batch,
                                 });
                                 return;
                             }
                             Err(e) => {
                                 agent.state.invalidate(&source);
+                                let retry_batch = match cancel_mode {
+                                    CancelMode::Interrupt => requeue_batch_if_queue(&ctx, batch),
+                                    CancelMode::Stop => None,
+                                };
                                 let _ = result_tx.send(PromptResult {
                                     agent,
                                     source,
                                     outcome: PromptOutcome::Error(e),
-                                    batch: requeue_batch_if_queue(&ctx, batch),
+                                    batch: retry_batch,
                                 });
                                 return;
                             }

@@ -10,6 +10,7 @@ import '../channels/channel.dart';
 import '../channels/channel_detail_page.dart';
 import '../channels/channel_management_provider.dart';
 import '../channels/channels_provider.dart';
+import '../channels/small_avatar.dart';
 import '../channels/date_formatters.dart';
 import '../forum/forum_thread_page.dart';
 import '../profile/profile_provider.dart';
@@ -335,6 +336,7 @@ class _MessagesSection extends ConsumerWidget {
           _MessageTile(
             hit: hit,
             authorProfile: profiles[hit.pubkey.toLowerCase()],
+            userCache: profiles,
             channel: channels.where((c) => c.id == hit.channelId).firstOrNull,
             currentPubkey: currentPubkey,
           ),
@@ -346,12 +348,14 @@ class _MessagesSection extends ConsumerWidget {
 class _MessageTile extends StatelessWidget {
   final SearchHit hit;
   final UserProfile? authorProfile;
+  final Map<String, UserProfile> userCache;
   final Channel? channel;
   final String? currentPubkey;
 
   const _MessageTile({
     required this.hit,
     required this.authorProfile,
+    required this.userCache,
     required this.channel,
     required this.currentPubkey,
   });
@@ -362,6 +366,7 @@ class _MessageTile extends StatelessWidget {
     final timeAgo = relativeTime(hit.createdAt);
 
     return ListTile(
+      leading: SmallAvatar(pubkey: hit.pubkey, userCache: userCache),
       title: Row(
         children: [
           Expanded(
@@ -404,7 +409,7 @@ class _MessageTile extends StatelessWidget {
           Text(
             timeAgo,
             style: context.textTheme.labelSmall?.copyWith(
-              color: context.colors.outline,
+              color: context.colors.onSurfaceVariant,
             ),
           ),
         ],
@@ -450,7 +455,7 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         label.toUpperCase(),
         style: context.textTheme.labelSmall?.copyWith(
-          color: context.colors.outline,
+          color: context.colors.onSurfaceVariant,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.8,
         ),

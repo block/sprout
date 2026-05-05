@@ -11,6 +11,7 @@ import 'package:sprout_mobile/features/channels/channel_management_provider.dart
 import 'package:sprout_mobile/features/channels/channel_messages_provider.dart';
 import 'package:sprout_mobile/features/channels/channel_typing_provider.dart';
 import 'package:sprout_mobile/features/channels/channels_provider.dart';
+import 'package:sprout_mobile/features/channels/read_state/read_state_provider.dart';
 import 'package:sprout_mobile/features/profile/profile_provider.dart';
 import 'package:sprout_mobile/features/profile/user_cache_provider.dart';
 import 'package:sprout_mobile/features/profile/user_profile.dart';
@@ -120,15 +121,19 @@ Widget _buildTestable({
   List<NavigatorObserver> navigatorObservers = const [],
   Future<List<ChannelMember>> Function()? loadMembers,
   ChannelActions Function(Ref ref)? createChannelActions,
+  ReadStateNotifier? readStateNotifier,
+  _FakeMessagesNotifier? messagesNotifier,
 }) {
   final resolvedChannel = channel ?? _testChannel;
   final fakeChannelsNotifier =
       channelsNotifier ?? _FakeChannelsNotifier(channels ?? [resolvedChannel]);
+  final fakeMessagesNotifier =
+      messagesNotifier ?? _FakeMessagesNotifier(messages);
   return ProviderScope(
     overrides: [
       channelMessagesProvider(
         _channelId,
-      ).overrideWith(() => _FakeMessagesNotifier(messages)),
+      ).overrideWith(() => fakeMessagesNotifier),
       channelTypingProvider(
         _channelId,
       ).overrideWith(() => _FakeTypingNotifier(typing)),
@@ -150,6 +155,8 @@ Widget _buildTestable({
       ),
       if (createChannelActions != null)
         channelActionsProvider.overrideWith(createChannelActions),
+      if (readStateNotifier != null)
+        readStateProvider.overrideWith(() => readStateNotifier),
       // Stub the relay client provider so preloadMembers doesn't crash.
       relayClientProvider.overrideWithValue(
         RelayClient(baseUrl: 'http://localhost:3000'),
@@ -180,6 +187,43 @@ Finder findRichText(String text) {
 
 void main() {
   group('ChannelDetailPage', () {
+    testWidgets('defers read-state mark until after build', (tester) async {
+      final readState = _SynchronousReadStateNotifier(
+        const ReadStateState(
+          isReady: true,
+          pubkey: 'self',
+          contexts: {},
+          version: 0,
+        ),
+      );
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: [
+            _textMsg(
+              id: 'msg1',
+              pubkey: 'alice',
+              content: 'First',
+              createdAt: 1100,
+            ),
+            _textMsg(
+              id: 'msg2',
+              pubkey: 'alice',
+              content: 'Latest',
+              createdAt: 1200,
+            ),
+          ],
+          readStateNotifier: readState,
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      await tester.pump();
+
+      expect(readState.markedContexts, {_channelId: 1200});
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('shows forum posts view for forum channels', (tester) async {
       final forumChannel = Channel(
         id: _channelId,
@@ -378,6 +422,63 @@ void main() {
       expect(findRichText('Hey Alice!'), findsOneWidget);
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Bob'), findsOneWidget);
+    });
+
+    testWidgets('can jump back to latest when newer messages are offscreen', (
+      tester,
+    ) async {
+      final initialMessages = [
+        for (var i = 0; i < 40; i++)
+          _textMsg(
+            id: 'msg$i',
+            pubkey: 'alice',
+            content: 'Message $i',
+            createdAt: 1000 + i,
+          ),
+      ];
+      final messagesNotifier = _FakeMessagesNotifier(initialMessages);
+
+      await tester.pumpWidget(
+        _buildTestable(
+          messages: const [],
+          messagesNotifier: messagesNotifier,
+          users: const {
+            'alice': UserProfile(pubkey: 'alice', displayName: 'Alice'),
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final listView = tester.widget<ListView>(
+        find.byKey(const ValueKey('channel-message-list')),
+      );
+      final controller = listView.controller!;
+      expect(controller.position.maxScrollExtent, greaterThan(0));
+
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('channel-jump-to-latest')),
+        findsOneWidget,
+      );
+
+      messagesNotifier.setMessages([
+        ...initialMessages,
+        _textMsg(
+          id: 'newest',
+          pubkey: 'alice',
+          content: 'Newest live update',
+          createdAt: 2000,
+        ),
+      ]);
+      await tester.pump();
+
+      expect(findRichText('Newest live update'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('channel-jump-to-latest')));
+      await tester.pumpAndSettle();
+
+      expect(controller.position.pixels, lessThanOrEqualTo(1));
+      expect(findRichText('Newest live update'), findsOneWidget);
     });
 
     testWidgets('groups consecutive messages from same author', (tester) async {
@@ -903,7 +1004,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('general'), findsOneWidget);
-      expect(find.byIcon(LucideIcons.hash), findsOneWidget);
+      // The hash icon appears in the app bar and in the compose bar toolbar.
+      expect(find.byIcon(LucideIcons.hash), findsAtLeastNWidgets(1));
     });
 
     testWidgets('shows lock icon for private channel', (tester) async {
@@ -1055,11 +1157,22 @@ void main() {
 // ---------------------------------------------------------------------------
 
 class _FakeMessagesNotifier extends ChannelMessagesNotifier {
-  final List<NostrEvent> _messages;
+  List<NostrEvent> _messages;
   _FakeMessagesNotifier(this._messages) : super(_channelId);
 
   @override
   AsyncValue<List<NostrEvent>> build() => AsyncData(_messages);
+
+  @override
+  bool get reachedOldest => true;
+
+  @override
+  Future<bool> fetchOlder() async => false;
+
+  void setMessages(List<NostrEvent> messages) {
+    _messages = messages;
+    state = AsyncData(messages);
+  }
 }
 
 class _ErrorMessagesNotifier extends ChannelMessagesNotifier {
@@ -1076,6 +1189,22 @@ class _FakeTypingNotifier extends ChannelTypingNotifier {
 
   @override
   List<TypingEntry> build() => _entries;
+}
+
+class _SynchronousReadStateNotifier extends ReadStateNotifier {
+  final ReadStateState _initialState;
+  final Map<String, int> markedContexts = {};
+
+  _SynchronousReadStateNotifier(this._initialState);
+
+  @override
+  ReadStateState build() => _initialState;
+
+  @override
+  void markContextRead(String contextId, int unixTimestamp) {
+    markedContexts[contextId] = unixTimestamp;
+    state = state.copyWithContext(contextId, unixTimestamp);
+  }
 }
 
 class _FakeProfileNotifier extends ProfileNotifier {

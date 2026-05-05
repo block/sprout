@@ -140,6 +140,14 @@ export type PresenceStatus = "online" | "away" | "offline";
 
 export type PresenceLookup = Record<string, PresenceStatus>;
 
+export type UserStatus = {
+  text: string;
+  emoji: string;
+  updatedAt: number;
+};
+
+export type UserStatusLookup = Record<string, UserStatus | null>;
+
 export type SetPresenceResult = {
   status: PresenceStatus;
   ttlSeconds: number;
@@ -227,6 +235,17 @@ export type SearchHit = {
 export type SearchMessagesResponse = {
   hits: SearchHit[];
   found: number;
+};
+
+// ── Relay Members ────────────────────────────────────────────────────────────
+
+export type RelayMemberRole = "owner" | "admin" | "member";
+
+export type RelayMember = {
+  pubkey: string;
+  role: RelayMemberRole;
+  addedBy: string | null;
+  createdAt: string;
 };
 
 export type TokenScope =
@@ -372,6 +391,10 @@ export type MintManagedAgentTokenResponse = {
 export type ManagedAgentLog = {
   content: string;
   logPath: string;
+};
+
+export type CancelManagedAgentTurnResult = {
+  status: "sent" | "no_active_turn";
 };
 
 export type AcpProvider = {

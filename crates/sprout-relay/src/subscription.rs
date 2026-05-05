@@ -1,9 +1,9 @@
-//! Subscription registry with (channel, kind) index for O(1) fan-out.
+//! Subscription registry with active WebSocket indexes for targeted fan-out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use dashmap::DashMap;
-use nostr::{Filter, Kind};
+use nostr::{Alphabet, Filter, Kind, SingleLetterTag};
 use uuid::Uuid;
 
 use sprout_core::{filter::filters_match, StoredEvent};
@@ -24,7 +24,13 @@ pub struct IndexKey {
     pub kind: Kind,
 }
 
-/// Thread-safe registry of active subscriptions with a (channel, kind) index for O(1) fan-out.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct GlobalPKindIndexKey {
+    kind: Kind,
+    p: String,
+}
+
+/// Thread-safe registry of active subscriptions with targeted in-memory fan-out indexes.
 #[derive(Debug, Default)]
 pub struct SubscriptionRegistry {
     /// Maps conn_id → sub_id → (filters, channel_id).
@@ -35,6 +41,8 @@ pub struct SubscriptionRegistry {
     channel_wildcard_index: DashMap<Uuid, Vec<(ConnId, SubId)>>,
     /// Global subscriptions indexed by kind — avoids O(all_subs) scan for global events.
     global_kind_index: DashMap<Kind, Vec<(ConnId, SubId)>>,
+    /// Global subscriptions indexed by both kind and `#p` recipient.
+    global_p_kind_index: DashMap<GlobalPKindIndexKey, Vec<(ConnId, SubId)>>,
     /// Global subscriptions with no kind filter — wildcard, receives all global events.
     global_wildcard_index: DashMap<(), Vec<(ConnId, SubId)>>,
 }
@@ -91,21 +99,32 @@ impl SubscriptionRegistry {
                 }
             }
         } else {
-            // Global subscription — index by kind for sub-linear fan-out.
-            match extract_kinds_from_filters(&filters) {
-                None => {
-                    self.global_wildcard_index
-                        .entry(())
+            // Global subscription. Fully p-constrained filters can use the
+            // narrower (kind, #p) index; broader filters stay on the generic
+            // kind/wildcard indexes.
+            if let Some(keys) = extract_global_p_kind_index_keys(&filters) {
+                for key in keys {
+                    self.global_p_kind_index
+                        .entry(key)
                         .or_default()
                         .push((conn_id, sub_id.clone()));
                 }
-                Some(kinds) if kinds.is_empty() => {}
-                Some(kinds) => {
-                    for kind in kinds {
-                        self.global_kind_index
-                            .entry(kind)
+            } else {
+                match extract_kinds_from_filters(&filters) {
+                    None => {
+                        self.global_wildcard_index
+                            .entry(())
                             .or_default()
                             .push((conn_id, sub_id.clone()));
+                    }
+                    Some(kinds) if kinds.is_empty() => {}
+                    Some(kinds) => {
+                        for kind in kinds {
+                            self.global_kind_index
+                                .entry(kind)
+                                .or_default()
+                                .push((conn_id, sub_id.clone()));
+                        }
                     }
                 }
             }
@@ -158,6 +177,7 @@ impl SubscriptionRegistry {
     /// Return all (conn_id, sub_id) pairs whose filters match the given event.
     pub fn fan_out(&self, event: &StoredEvent) -> Vec<(ConnId, SubId)> {
         let mut results = Vec::new();
+        let mut seen = HashSet::new();
 
         if let Some(channel_id) = event.channel_id {
             let key = IndexKey {
@@ -166,52 +186,39 @@ impl SubscriptionRegistry {
             };
             if let Some(candidates) = self.channel_kind_index.get(&key) {
                 for (conn_id, sub_id) in candidates.iter() {
-                    if let Some(conn_subs) = self.subs.get(conn_id) {
-                        if let Some((filters, _)) = conn_subs.get(sub_id.as_str()) {
-                            if filters_match(filters, event) {
-                                results.push((*conn_id, sub_id.clone()));
-                            }
-                        }
-                    }
+                    self.push_match(*conn_id, sub_id, event, &mut results, &mut seen);
                 }
             }
             // Also check wildcard (channel-only, kindless) index
             if let Some(wildcards) = self.channel_wildcard_index.get(&channel_id) {
                 for (conn_id, sub_id) in wildcards.iter() {
-                    if let Some(conn_subs) = self.subs.get(conn_id) {
-                        if let Some((filters, _)) = conn_subs.get(sub_id.as_str()) {
-                            if filters_match(filters, event) {
-                                results.push((*conn_id, sub_id.clone()));
-                            }
-                        }
-                    }
+                    self.push_match(*conn_id, sub_id, event, &mut results, &mut seen);
                 }
             }
         } else {
             // Global event (channel_id = None) — use global indexes for sub-linear fan-out.
             // Channel-scoped subscriptions are never in these indexes, preserving the
             // scoping invariant without an explicit skip check.
+            for p in event_p_tag_values(event) {
+                let key = GlobalPKindIndexKey {
+                    kind: event.event.kind,
+                    p,
+                };
+                if let Some(candidates) = self.global_p_kind_index.get(&key) {
+                    for (conn_id, sub_id) in candidates.iter() {
+                        self.push_match(*conn_id, sub_id, event, &mut results, &mut seen);
+                    }
+                }
+            }
             if let Some(candidates) = self.global_kind_index.get(&event.event.kind) {
                 for (conn_id, sub_id) in candidates.iter() {
-                    if let Some(conn_subs) = self.subs.get(conn_id) {
-                        if let Some((filters, _)) = conn_subs.get(sub_id.as_str()) {
-                            if filters_match(filters, event) {
-                                results.push((*conn_id, sub_id.clone()));
-                            }
-                        }
-                    }
+                    self.push_match(*conn_id, sub_id, event, &mut results, &mut seen);
                 }
             }
             // Also check global wildcard (kindless global subs).
             if let Some(wildcards) = self.global_wildcard_index.get(&()) {
                 for (conn_id, sub_id) in wildcards.iter() {
-                    if let Some(conn_subs) = self.subs.get(conn_id) {
-                        if let Some((filters, _)) = conn_subs.get(sub_id.as_str()) {
-                            if filters_match(filters, event) {
-                                results.push((*conn_id, sub_id.clone()));
-                            }
-                        }
-                    }
+                    self.push_match(*conn_id, sub_id, event, &mut results, &mut seen);
                 }
             }
         }
@@ -241,6 +248,26 @@ impl SubscriptionRegistry {
     /// Return the total number of connections with at least one active subscription.
     pub fn total_connections(&self) -> usize {
         self.subs.len()
+    }
+
+    fn push_match(
+        &self,
+        conn_id: ConnId,
+        sub_id: &str,
+        event: &StoredEvent,
+        results: &mut Vec<(ConnId, SubId)>,
+        seen: &mut HashSet<(ConnId, SubId)>,
+    ) {
+        if let Some(conn_subs) = self.subs.get(&conn_id) {
+            if let Some((filters, _)) = conn_subs.get(sub_id) {
+                if filters_match(filters, event) {
+                    let entry = (conn_id, sub_id.to_string());
+                    if seen.insert(entry.clone()) {
+                        results.push(entry);
+                    }
+                }
+            }
+        }
     }
 
     /// Removes a subscription from the channel_kind_index (or channel_wildcard_index) using
@@ -290,25 +317,37 @@ impl SubscriptionRegistry {
                 }
             }
         } else {
-            // Global subscription — remove from global indexes.
-            match extract_kinds_from_filters(filters) {
-                None => {
-                    if let Some(mut entries) = self.global_wildcard_index.get_mut(&()) {
+            // Global subscription — remove from the same global index chosen at registration.
+            if let Some(keys) = extract_global_p_kind_index_keys(filters) {
+                for key in keys {
+                    if let Some(mut entries) = self.global_p_kind_index.get_mut(&key) {
                         entries.retain(|(cid, sid)| !(*cid == conn_id && sid == sub_id));
                         if entries.is_empty() {
                             drop(entries);
-                            self.global_wildcard_index.remove(&());
+                            self.global_p_kind_index.remove(&key);
                         }
                     }
                 }
-                Some(kinds) if kinds.is_empty() => {}
-                Some(kinds) => {
-                    for kind in kinds {
-                        if let Some(mut entries) = self.global_kind_index.get_mut(&kind) {
+            } else {
+                match extract_kinds_from_filters(filters) {
+                    None => {
+                        if let Some(mut entries) = self.global_wildcard_index.get_mut(&()) {
                             entries.retain(|(cid, sid)| !(*cid == conn_id && sid == sub_id));
                             if entries.is_empty() {
                                 drop(entries);
-                                self.global_kind_index.remove(&kind);
+                                self.global_wildcard_index.remove(&());
+                            }
+                        }
+                    }
+                    Some(kinds) if kinds.is_empty() => {}
+                    Some(kinds) => {
+                        for kind in kinds {
+                            if let Some(mut entries) = self.global_kind_index.get_mut(&kind) {
+                                entries.retain(|(cid, sid)| !(*cid == conn_id && sid == sub_id));
+                                if entries.is_empty() {
+                                    drop(entries);
+                                    self.global_kind_index.remove(&kind);
+                                }
                             }
                         }
                     }
@@ -316,6 +355,59 @@ impl SubscriptionRegistry {
             }
         }
     }
+}
+
+fn p_tag() -> SingleLetterTag {
+    SingleLetterTag::lowercase(Alphabet::P)
+}
+
+fn extract_global_p_kind_index_keys(filters: &[Filter]) -> Option<Vec<GlobalPKindIndexKey>> {
+    let mut seen = HashSet::new();
+    let mut keys = Vec::new();
+    let p_tag = p_tag();
+
+    for filter in filters {
+        let kinds = filter.kinds.as_ref()?;
+        if kinds.is_empty() {
+            continue;
+        }
+
+        let p_values = filter.generic_tags.get(&p_tag)?;
+        if p_values.is_empty() {
+            return None;
+        }
+
+        for kind in kinds {
+            for p in p_values {
+                let key = GlobalPKindIndexKey {
+                    kind: *kind,
+                    p: p.clone(),
+                };
+                if seen.insert(key.clone()) {
+                    keys.push(key);
+                }
+            }
+        }
+    }
+
+    Some(keys)
+}
+
+fn event_p_tag_values(event: &StoredEvent) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut values = Vec::new();
+    for tag in event.event.tags.iter() {
+        if tag.kind().to_string() != "p" {
+            continue;
+        }
+        if let Some(value) = tag.content() {
+            let value = value.to_string();
+            if seen.insert(value.clone()) {
+                values.push(value);
+            }
+        }
+    }
+    values
 }
 
 /// Returns the union of all `kinds` across filters, or `None` if any filter
@@ -351,12 +443,20 @@ fn extract_kinds_from_filters(filters: &[Filter]) -> Option<Vec<Kind>> {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use nostr::{EventBuilder, Keys, Kind};
+    use nostr::{EventBuilder, Keys, Kind, Tag};
     use sprout_core::StoredEvent;
 
     fn make_stored_event(kind: Kind, channel_id: Option<Uuid>) -> StoredEvent {
         let keys = Keys::generate();
         let event = EventBuilder::new(kind, "test", [])
+            .sign_with_keys(&keys)
+            .expect("sign");
+        StoredEvent::with_received_at(event, Utc::now(), channel_id, true)
+    }
+
+    fn make_stored_event_with_p(kind: Kind, p: &str, channel_id: Option<Uuid>) -> StoredEvent {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(kind, "test", [Tag::parse(&["p", p]).expect("valid p tag")])
             .sign_with_keys(&keys)
             .expect("sign");
         StoredEvent::with_received_at(event, Utc::now(), channel_id, true)
@@ -860,6 +960,60 @@ mod tests {
         // Unrelated kind matches nobody.
         let event_custom = make_stored_event(Kind::Custom(9999), None);
         assert!(registry.fan_out(&event_custom).is_empty());
+    }
+
+    #[test]
+    fn test_global_p_kind_index_fan_out_targets_matching_p() {
+        let registry = SubscriptionRegistry::new();
+        let conn_a = Uuid::new_v4();
+        let conn_b = Uuid::new_v4();
+        let kind = Kind::Custom(sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
+        let p_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let p_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        registry.register(
+            conn_a,
+            "observer_a".to_string(),
+            vec![Filter::new().kind(kind).custom_tag(p_tag(), [p_a])],
+            None,
+        );
+        registry.register(
+            conn_b,
+            "observer_b".to_string(),
+            vec![Filter::new().kind(kind).custom_tag(p_tag(), [p_b])],
+            None,
+        );
+
+        assert!(
+            registry.global_kind_index.get(&kind).is_none(),
+            "fully p-constrained global subscriptions should use the p-kind index"
+        );
+
+        let event = make_stored_event_with_p(kind, p_a, None);
+        let matches = registry.fan_out(&event);
+        assert_eq!(matches, vec![(conn_a, "observer_a".to_string())]);
+    }
+
+    #[test]
+    fn test_global_p_kind_index_removal_cleanup() {
+        let registry = SubscriptionRegistry::new();
+        let conn_id = Uuid::new_v4();
+        let kind = Kind::Custom(sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
+        let p = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let filter = Filter::new().kind(kind).custom_tag(p_tag(), [p]);
+        let key = GlobalPKindIndexKey {
+            kind,
+            p: p.to_string(),
+        };
+
+        registry.register(conn_id, "observer".to_string(), vec![filter], None);
+        assert!(registry.global_p_kind_index.get(&key).is_some());
+
+        registry.remove_subscription(conn_id, "observer");
+        assert!(registry.global_p_kind_index.get(&key).is_none());
+
+        let event = make_stored_event_with_p(kind, p, None);
+        assert!(registry.fan_out(&event).is_empty());
     }
 
     #[test]

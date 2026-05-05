@@ -4,9 +4,9 @@ use tauri::AppHandle;
 
 use crate::{
     managed_agents::{
-        allocate_observer_endpoint, append_log_marker, login_shell_path, managed_agent_log_path,
-        missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
+        append_log_marker, login_shell_path, managed_agent_log_path, missing_command_message,
+        normalize_agent_args, open_log_file, resolve_command, ManagedAgentProcess,
+        ManagedAgentRecord, ManagedAgentSummary,
     },
     util::now_iso,
 };
@@ -483,6 +483,7 @@ pub fn spawn_agent_child(
     if let Some(ref path) = augmented_path {
         command.env("PATH", path);
     }
+    command.env("RUST_LOG", child_rust_log_filter());
     command.env("SPROUT_PRIVATE_KEY", &record.private_key_nsec);
     command.env("SPROUT_RELAY_URL", &record.relay_url);
     command.env("SPROUT_ACP_AGENT_COMMAND", &resolved_agent_command);
@@ -554,10 +555,16 @@ pub fn spawn_agent_child(
     if let Some(toolsets) = &record.mcp_toolsets {
         command.env("SPROUT_TOOLSETS", toolsets);
     } else {
-        command.env_remove("SPROUT_TOOLSETS");
+        command.env("SPROUT_TOOLSETS", "default,media");
     }
     command.env_remove("SPROUT_ACP_PRIVATE_KEY");
     command.env_remove("SPROUT_ACP_API_TOKEN");
+
+    if let Some(ref auth_tag) = record.auth_tag {
+        command.env("SPROUT_AUTH_TAG", auth_tag);
+    } else {
+        command.env_remove("SPROUT_AUTH_TAG");
+    }
 
     if let Some(token) = &record.api_token {
         command.env("SPROUT_API_TOKEN", token);
@@ -565,9 +572,41 @@ pub fn spawn_agent_child(
         command.env_remove("SPROUT_API_TOKEN");
     }
 
-    let observer = allocate_observer_endpoint()?;
-    command.env("SPROUT_ACP_OBSERVER_ADDR", &observer.addr);
-    command.env("SPROUT_ACP_OBSERVER_TOKEN", &observer.token);
+    command.env("SPROUT_ACP_RELAY_OBSERVER", "true");
+
+    // ── Git credential helper for Sprout relay ──────────────────────────
+    //
+    // Agents need to clone/push repos hosted on the Sprout relay's git
+    // server, which authenticates via NIP-98. The `git-credential-nostr`
+    // binary signs auth events using the agent's nostr key.
+    //
+    // We configure git via GIT_CONFIG_COUNT env vars (ephemeral, no
+    // filesystem writes) scoped to the relay's git URL so we don't
+    // interfere with other remotes (e.g. GitHub).
+    //
+    // NOSTR_PRIVATE_KEY mirrors SPROUT_PRIVATE_KEY — keep in sync.
+    if let Some(cred_helper) = resolve_command("git-credential-nostr", Some(app)) {
+        let relay_http_url = crate::relay::relay_http_base_url(&record.relay_url);
+
+        command.env("NOSTR_PRIVATE_KEY", &record.private_key_nsec);
+        command.env("GIT_TERMINAL_PROMPT", "0");
+        command.env("GIT_CONFIG_COUNT", "2");
+        command.env(
+            "GIT_CONFIG_KEY_0",
+            format!("credential.{relay_http_url}/git.helper"),
+        );
+        command.env("GIT_CONFIG_VALUE_0", cred_helper.display().to_string());
+        command.env(
+            "GIT_CONFIG_KEY_1",
+            format!("credential.{relay_http_url}/git.useHttpPath"),
+        );
+        command.env("GIT_CONFIG_VALUE_1", "true");
+    } else {
+        eprintln!(
+            "sprout-desktop: git-credential-nostr not found — agent {} will not have automatic Sprout git auth",
+            record.name,
+        );
+    }
 
     // Spawn the harness in its own process group so we can kill the entire
     // tree (harness + MCP servers + agent subprocesses) on shutdown.
@@ -587,7 +626,15 @@ pub fn spawn_agent_child(
 
     let _ = super::write_agent_pid_file(app, &record.pubkey, child.id());
 
-    Ok((child, log_path, Some(observer.url)))
+    Ok((child, log_path, None))
+}
+
+fn child_rust_log_filter() -> String {
+    match std::env::var("RUST_LOG") {
+        Ok(existing) if existing.contains("sprout_acp") => existing,
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing},sprout_acp=info"),
+        _ => "sprout_acp=info".to_string(),
+    }
 }
 
 pub fn start_managed_agent_process(
