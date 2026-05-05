@@ -110,11 +110,46 @@ pub async fn get_channel_members(
     )
     .await?;
 
-    events
+    let mut response = events
         .first()
         .map(nostr_convert::channel_members_from_event)
         .transpose()?
-        .ok_or_else(|| "channel members not found".to_string())
+        .ok_or_else(|| "channel members not found".to_string())?;
+
+    // Batch-fetch kind:0 profiles to populate display names.
+    let pubkeys: Vec<String> = response.members.iter().map(|m| m.pubkey.clone()).collect();
+    if !pubkeys.is_empty() {
+        let profile_events = query_relay(
+            &state,
+            &[serde_json::json!({
+                "kinds": [0],
+                "authors": pubkeys,
+                "limit": pubkeys.len()
+            })],
+        )
+        .await
+        .unwrap_or_default();
+
+        // Build pubkey → display_name map from kind:0 events
+        let mut name_map = std::collections::HashMap::new();
+        for ev in &profile_events {
+            let pk = ev.pubkey.to_hex();
+            if let Ok(profile) = nostr_convert::profile_info_from_event(ev) {
+                if let Some(name) = profile.display_name {
+                    name_map.insert(pk, name);
+                }
+            }
+        }
+
+        // Populate display_name on each member
+        for member in &mut response.members {
+            if member.display_name.is_none() {
+                member.display_name = name_map.get(&member.pubkey).cloned();
+            }
+        }
+    }
+
+    Ok(response)
 }
 
 // ── Writes (signed events) ──────────────────────────────────────────────────

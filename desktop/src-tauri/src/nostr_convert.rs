@@ -312,23 +312,23 @@ pub fn users_batch_from_events(
 }
 
 /// Convert kind:0 events (e.g. from a NIP-50 search) to [`SearchUsersResponse`].
+/// Convert a single kind:0 event to a [`UserSearchResultInfo`].
+pub fn user_search_result_from_event(ev: &Event) -> UserSearchResultInfo {
+    let v: Value = serde_json::from_str(&ev.content).unwrap_or(Value::Null);
+    UserSearchResultInfo {
+        pubkey: ev.pubkey.to_hex(),
+        display_name: v
+            .get("display_name")
+            .and_then(Value::as_str)
+            .or_else(|| v.get("name").and_then(Value::as_str))
+            .map(str::to_string),
+        avatar_url: v.get("picture").and_then(Value::as_str).map(str::to_string),
+        nip05_handle: v.get("nip05").and_then(Value::as_str).map(str::to_string),
+    }
+}
+
 pub fn search_users_from_events(events: &[Event]) -> SearchUsersResponse {
-    let users = events
-        .iter()
-        .map(|ev| {
-            let v: Value = serde_json::from_str(&ev.content).unwrap_or(Value::Null);
-            UserSearchResultInfo {
-                pubkey: ev.pubkey.to_hex(),
-                display_name: v
-                    .get("display_name")
-                    .and_then(Value::as_str)
-                    .or_else(|| v.get("name").and_then(Value::as_str))
-                    .map(str::to_string),
-                avatar_url: v.get("picture").and_then(Value::as_str).map(str::to_string),
-                nip05_handle: v.get("nip05").and_then(Value::as_str).map(str::to_string),
-            }
-        })
-        .collect();
+    let users = events.iter().map(user_search_result_from_event).collect();
     SearchUsersResponse { users }
 }
 
