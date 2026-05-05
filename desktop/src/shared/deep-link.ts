@@ -10,6 +10,7 @@ import {
 export interface DeepLinkDeps {
   addWorkspace: (workspace: Workspace) => string;
   switchWorkspace: (id: string) => void;
+  reconnectWorkspace: () => void;
 }
 
 /**
@@ -30,6 +31,9 @@ export function listenForDeepLinks(deps: DeepLinkDeps): Promise<UnlistenFn> {
       addedAt: new Date().toISOString(),
     });
     deps.switchWorkspace(id);
+    // If addWorkspace returned the already-active workspace (same relay URL),
+    // switchWorkspace is a no-op — force re-init so the connection refreshes.
+    deps.reconnectWorkspace();
     toast.success(`Connected to ${name}`);
   });
 }

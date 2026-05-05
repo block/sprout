@@ -25,6 +25,8 @@ export type UseWorkspacesReturn = {
   addWorkspace: (workspace: Workspace) => string;
   removeWorkspace: (id: string) => void;
   switchWorkspace: (id: string) => void;
+  /** Force the active workspace to re-init (e.g. after a deep-link reconnect). */
+  reconnectWorkspace: () => void;
   updateWorkspace: (
     id: string,
     updates: Partial<Pick<Workspace, "name" | "relayUrl" | "token" | "pubkey">>,
@@ -117,14 +119,16 @@ function useWorkspacesInternal(): UseWorkspacesReturn {
 
   const switchWorkspace = useCallback(
     (id: string) => {
-      if (id === activeId) {
-        return;
-      }
+      if (id === activeId) return;
       saveActiveWorkspaceId(id);
       setActiveId(id);
     },
     [activeId],
   );
+
+  const reconnectWorkspace = useCallback(() => {
+    setReinitKey((k) => k + 1);
+  }, []);
 
   const updateWorkspace = useCallback(
     (
@@ -164,6 +168,7 @@ function useWorkspacesInternal(): UseWorkspacesReturn {
     addWorkspace,
     removeWorkspace,
     switchWorkspace,
+    reconnectWorkspace,
     updateWorkspace,
   };
 }
