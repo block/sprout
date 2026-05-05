@@ -519,42 +519,77 @@ pub fn build_contact_list(
     Ok(EventBuilder::new(Kind::ContactList, "").tags(tags))
 }
 
-// ── Transport ────────────────────────────────────────────────────────────────
-
-/// Post a pre-signed event to the relay.
+/// Kind 41010 — open (or surface) a DM channel with the given participants.
 ///
-/// Standalone helper for async tasks that don't have access to `&AppState`.
-/// The caller pre-captures `http_client`, `api_token`, `pubkey_hex`, and
-/// `relay_base_url` at spawn time and passes them here.
-///
-/// Returns `Err` on transport failure OR non-2xx HTTP status.
-pub async fn post_event_raw(
-    http_client: &reqwest::Client,
-    api_token: Option<&str>,
-    pubkey_hex: &str,
-    event_json: String,
-    relay_base_url: &str,
-) -> Result<(), String> {
-    let url = format!("{relay_base_url}/api/events");
-    let req = match api_token {
-        Some(token) => http_client
-            .post(&url)
-            .header("Authorization", format!("Bearer {token}")),
-        None => http_client.post(&url).header("X-Pubkey", pubkey_hex),
-    };
-    let response = req
-        .header("Content-Type", "application/json")
-        .body(event_json)
-        .send()
-        .await
-        .map_err(|e| format!("event POST failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "event POST HTTP {}: {}",
-            response.status().as_u16(),
-            response.status().canonical_reason().unwrap_or("unknown"),
-        ));
+/// Each pubkey is added as a `p` tag. The relay derives the canonical
+/// channel id and replies via OK message with `response:{channel_id}`.
+pub fn build_dm_open(pubkeys: &[String]) -> Result<EventBuilder, String> {
+    if pubkeys.is_empty() {
+        return Err("dm_open requires at least one pubkey".into());
     }
-    Ok(())
+    let mut tags: Vec<Tag> = Vec::with_capacity(pubkeys.len());
+    for pk in pubkeys {
+        check_pubkey(pk)?;
+        tags.push(tag(vec!["p", &pk.to_ascii_lowercase()])?);
+    }
+    Ok(EventBuilder::new(Kind::Custom(41010), "").tags(tags))
 }
+
+/// Kind 41012 — hide a DM channel from the user's listing.
+pub fn build_dm_hide(channel_id: &str) -> Result<EventBuilder, String> {
+    let tags = vec![tag(vec!["h", channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(41012), "").tags(tags))
+}
+
+/// Kind 20001 — ephemeral presence broadcast (`online` / `away` / `offline`).
+pub fn build_presence(status: &str) -> Result<EventBuilder, String> {
+    match status {
+        "online" | "away" | "offline" => {}
+        other => return Err(format!("invalid presence status: {other}")),
+    };
+    Ok(EventBuilder::new(Kind::Custom(20001), status.to_string()))
+}
+
+/// Kind 30620 — replaceable workflow definition.
+///
+/// The `d` tag carries the workflow id; `h` tag carries the channel id; the
+/// content is the YAML definition. Same (pubkey, d) replaces the prior version.
+pub fn build_workflow_definition(
+    workflow_id: &str,
+    channel_id: &str,
+    yaml_definition: &str,
+) -> Result<EventBuilder, String> {
+    check_content(yaml_definition)?;
+    let tags = vec![tag(vec!["d", workflow_id])?, tag(vec!["h", channel_id])?];
+    Ok(EventBuilder::new(Kind::Custom(30620), yaml_definition.to_string()).tags(tags))
+}
+
+/// Kind 5 — NIP-09 deletion targeting a kind:30620 workflow definition.
+pub fn build_workflow_delete(
+    workflow_id: &str,
+    owner_pubkey_hex: &str,
+) -> Result<EventBuilder, String> {
+    let coord = format!("30620:{owner_pubkey_hex}:{workflow_id}");
+    let tags = vec![tag(vec!["a", &coord])?];
+    Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
+}
+
+/// Kind 46020 — trigger a workflow run by id.
+pub fn build_workflow_trigger(workflow_id: &str) -> Result<EventBuilder, String> {
+    let tags = vec![tag(vec!["d", workflow_id])?];
+    Ok(EventBuilder::new(Kind::Custom(46020), "").tags(tags))
+}
+
+/// Kind 46030 — grant an approval token (with optional note).
+pub fn build_approval_grant(token: &str, note: Option<&str>) -> Result<EventBuilder, String> {
+    let tags = vec![tag(vec!["t", token])?];
+    Ok(EventBuilder::new(Kind::Custom(46030), note.unwrap_or("")).tags(tags))
+}
+
+/// Kind 46031 — deny an approval token (with optional note).
+pub fn build_approval_deny(token: &str, note: Option<&str>) -> Result<EventBuilder, String> {
+    let tags = vec![tag(vec!["t", token])?];
+    Ok(EventBuilder::new(Kind::Custom(46031), note.unwrap_or("")).tags(tags))
+}
+
+// ── Transport ────────────────────────────────────────────────────────────────

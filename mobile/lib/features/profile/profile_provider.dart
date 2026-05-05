@@ -2,29 +2,36 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
-import 'package:nostr/nostr.dart' as nostr;
 
 import '../../shared/relay/relay.dart';
 import 'user_profile.dart';
 
+/// The current user's profile (kind:0 metadata) loaded over the relay
+/// WebSocket. Returns null when no nsec is configured or when the user has
+/// not yet published a profile.
 class ProfileNotifier extends AsyncNotifier<UserProfile?> {
   @override
   Future<UserProfile?> build() {
-    ref.watch(relayClientProvider);
+    ref.watch(relayConfigProvider);
+    ref.watch(relaySessionProvider);
     return _fetch();
   }
 
   Future<UserProfile?> _fetch() async {
-    final client = ref.read(relayClientProvider);
-    try {
-      final json =
-          await client.get('/api/users/me/profile') as Map<String, dynamic>;
-      return UserProfile.fromJson(json);
-    } on RelayException catch (e) {
-      // 404 means user has no profile yet — not an error.
-      if (e.statusCode == 404) return null;
-      rethrow;
-    }
+    final myPk = ref.read(myPubkeyProvider);
+    if (myPk == null) return null;
+
+    final session = ref.read(relaySessionProvider.notifier);
+    final events = await session.fetchHistory(NostrFilters.profile(myPk));
+    if (events.isEmpty) return null;
+    final data = ProfileData.fromEvent(events.first);
+    return UserProfile(
+      pubkey: data.pubkey,
+      displayName: data.displayName,
+      avatarUrl: data.avatarUrl,
+      about: data.about,
+      nip05Handle: data.nip05,
+    );
   }
 
   Future<void> refresh() async {
@@ -38,9 +45,8 @@ final profileProvider = AsyncNotifierProvider<ProfileNotifier, UserProfile?>(
 
 /// Presence status for the current user.
 ///
-/// Sends a heartbeat every 60s while the app is active. Prefers WebSocket
-/// (kind:20001) which triggers fan-out to other subscribers for real-time
-/// updates. Falls back to REST POST if WS is unavailable. Watches
+/// Sends a heartbeat every 60s while the app is active by publishing a
+/// kind:20001 presence event over the relay WebSocket. Watches
 /// [appLifecycleProvider] to send "away" when backgrounded.
 class PresenceNotifier extends AsyncNotifier<String> {
   static const _heartbeatInterval = Duration(seconds: 60);
@@ -49,7 +55,7 @@ class PresenceNotifier extends AsyncNotifier<String> {
 
   @override
   Future<String> build() {
-    ref.watch(relayClientProvider);
+    ref.watch(relaySessionProvider);
     ref.watch(profileProvider);
 
     final lifecycle = ref.watch(appLifecycleProvider);
@@ -69,7 +75,9 @@ class PresenceNotifier extends AsyncNotifier<String> {
       return _setPresence('away');
     }
 
-    return _fetch();
+    // Default: we don't know. Reflect the most recent state we set, or
+    // 'offline' if never set.
+    return Future.value('offline');
   }
 
   void _startHeartbeat() {
@@ -79,64 +87,31 @@ class PresenceNotifier extends AsyncNotifier<String> {
     });
   }
 
-  /// Set presence, preferring WebSocket (triggers fan-out to subscribers).
-  /// Falls back to REST POST if WS is unavailable.
+  /// Publish a kind:20001 presence event. Returns the requested status
+  /// optimistically — failures are silently absorbed and the next heartbeat
+  /// will retry.
   Future<String> _setPresence(String status) async {
-    // Try WS first — triggers fan-out to other subscribers so they see the
-    // change immediately. Matches desktop's useSetPresenceMutation pattern.
     final sessionState = ref.read(relaySessionProvider);
-    if (sessionState.status == SessionStatus.connected) {
-      try {
-        final config = ref.read(relayConfigProvider);
-        final nsec = config.nsec;
-        if (nsec != null && nsec.isNotEmpty) {
-          final privkeyHex = nostr.Nip19.decodePrivkey(nsec);
-          if (privkeyHex.isNotEmpty) {
-            final event = nostr.Event.from(
-              kind: EventKind.presenceUpdate,
-              content: status,
-              tags: [],
-              privkey: privkeyHex,
-              verify: false,
-            );
-            final session = ref.read(relaySessionProvider.notifier);
-            await session.publish(
-              NostrEvent.fromJson(Map<String, dynamic>.from(event.toJson())),
-            );
-            return status;
-          }
-        }
-      } catch (_) {
-        // Fall through to REST.
-      }
-    }
-
-    // REST fallback — no WS fan-out, other clients rely on backstop polling.
-    final client = ref.read(relayClientProvider);
+    if (sessionState.status != SessionStatus.connected) return status;
+    final config = ref.read(relayConfigProvider);
+    final relay = SignedEventRelay(
+      session: ref.read(relaySessionProvider.notifier),
+      nsec: config.nsec,
+    );
     try {
-      await client.post('/api/presence', body: {'status': status});
+      await relay.submit(
+        kind: EventKind.presenceUpdate,
+        content: status,
+        tags: const [],
+      );
     } catch (_) {
-      // Optimistically report the requested status even if the POST fails —
-      // the heartbeat will retry on the next tick.
+      // Heartbeat will retry.
     }
     return status;
   }
 
-  Future<String> _fetch() async {
-    final profile = ref.read(profileProvider).whenData((v) => v).value;
-    if (profile == null) return 'offline';
-    final client = ref.read(relayClientProvider);
-    final json =
-        await client.get(
-              '/api/presence',
-              queryParams: {'pubkeys': profile.pubkey},
-            )
-            as Map<String, dynamic>;
-    return (json[profile.pubkey] as String?) ?? 'offline';
-  }
-
   Future<void> refresh() async {
-    state = await AsyncValue.guard(_fetch);
+    // No-op: presence is driven by heartbeats and lifecycle, not pulled.
   }
 }
 

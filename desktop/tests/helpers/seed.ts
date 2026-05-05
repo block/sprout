@@ -32,23 +32,32 @@ export async function assertRelaySeeded() {
   try {
     while (Date.now() < deadline) {
       try {
-        const response = await context.get(`${relayBaseUrl}/api/channels`, {
+        // The setup script inserts test data directly into the DB tables.
+        // The relay reconciles these at startup by emitting kind:39000/39002
+        // events. Query kind:39000 (channel metadata) via the HTTP bridge
+        // and check for the expected "general" channel.
+        const response = await context.post(`${relayBaseUrl}/query`, {
           headers: {
             "X-Pubkey": tylerPubkey,
+            "Content-Type": "application/json",
           },
+          data: [{ kinds: [39000], limit: 200 }],
           timeout: requestTimeoutMs,
         });
 
         if (!response.ok()) {
-          lastFailure = `HTTP ${response.status()} from /api/channels`;
+          lastFailure = `HTTP ${response.status()} from POST /query`;
         } else {
-          const channels = (await response.json()) as Array<{ name: string }>;
-          if (channels.some((channel) => channel.name === "general")) {
+          const events = (await response.json()) as Array<{
+            tags: string[][];
+          }>;
+          const hasGeneral = events.some((event) =>
+            event.tags.some((tag) => tag[0] === "name" && tag[1] === "general"),
+          );
+          if (hasGeneral) {
             return;
           }
-
-          lastFailure =
-            'seed data missing expected "general" channel from scripts/setup-desktop-test-data.sh';
+          lastFailure = `seed data: got ${events.length} channels but no "general" — relay may still be reconciling`;
         }
       } catch (error) {
         lastFailure =

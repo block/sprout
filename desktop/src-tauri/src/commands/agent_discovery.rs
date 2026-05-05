@@ -1,4 +1,3 @@
-use reqwest::Method;
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -8,7 +7,8 @@ use crate::{
         DiscoverManagedAgentPrereqsRequest, ManagedAgentPrereqsInfo, RelayAgentInfo,
         DEFAULT_ACP_COMMAND, DEFAULT_MCP_COMMAND,
     },
-    relay::{build_authed_request, send_json_request},
+    nostr_convert,
+    relay::query_relay,
 };
 
 #[tauri::command]
@@ -42,6 +42,21 @@ pub fn discover_managed_agent_prereqs(
 
 #[tauri::command]
 pub async fn list_relay_agents(state: State<'_, AppState>) -> Result<Vec<RelayAgentInfo>, String> {
-    let request = build_authed_request(&state.http_client, Method::GET, "/api/agents", &state)?;
-    send_json_request(request).await
+    // Query kind:10100 agent profile events from the relay.
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [10100],
+        })],
+    )
+    .await?;
+
+    // The convert helper returns `{"agents": [...]}`. Extract and re-deserialize
+    // into the strongly-typed `Vec<RelayAgentInfo>` the frontend expects.
+    let value = nostr_convert::agents_from_events(&events);
+    let agents = value
+        .get("agents")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    serde_json::from_value(agents).map_err(|e| format!("agent parse failed: {e}"))
 }

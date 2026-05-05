@@ -6,6 +6,7 @@ mod managed_agents;
 mod media_proxy;
 mod migration;
 mod models;
+pub mod nostr_convert;
 mod relay;
 mod util;
 
@@ -410,10 +411,6 @@ pub fn run() {
             upload_media,
             pick_and_upload_media,
             upload_media_bytes,
-            list_tokens,
-            mint_token,
-            revoke_token,
-            revoke_all_tokens,
             list_relay_members,
             get_my_relay_membership,
             add_relay_member,
@@ -426,7 +423,6 @@ pub fn run() {
             stop_managed_agent,
             set_managed_agent_start_on_app_launch,
             delete_managed_agent,
-            mint_managed_agent_token,
             get_managed_agent_log,
             get_agent_models,
             update_managed_agent,
@@ -509,7 +505,7 @@ pub fn run() {
 mod tests {
     use serde_json::json;
 
-    use crate::{models::ChannelInfo, util::percent_encode};
+    use crate::models::ChannelInfo;
 
     #[test]
     fn channel_info_defaults_is_member_for_legacy_payloads() {
@@ -530,19 +526,5 @@ mod tests {
         .expect("legacy payload should deserialize");
 
         assert!(channel.is_member);
-    }
-
-    #[test]
-    fn percent_encode_leaves_unreserved_chars() {
-        assert_eq!(
-            percent_encode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"),
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
-        );
-    }
-
-    #[test]
-    fn percent_encode_escapes_unicode_and_reserved_chars() {
-        assert_eq!(percent_encode("👍"), "%F0%9F%91%8D");
-        assert_eq!(percent_encode("a/b?c"), "a%2Fb%3Fc");
     }
 }

@@ -67,14 +67,21 @@ enum PersistResult {
 }
 
 /// Persist a command event inside a transaction. Returns the OPEN transaction
-/// so the caller can execute mutations atomically before committing.
+/// as an idempotency guard — if the event was already stored, `Duplicate` is
+/// returned and the handler skips execution.
 ///
 /// If the event is a duplicate (ON CONFLICT DO NOTHING), the transaction is
 /// rolled back and `PersistResult::Duplicate` is returned — no mutations needed.
 ///
-/// INVARIANT: The caller MUST commit the returned transaction after successful
-/// mutations. If the mutation fails, the transaction rolls back automatically
-/// on drop, ensuring the event is never stored without its side effects.
+/// NOTE: Domain mutations (open_dm, create_workflow, etc.) execute on the
+/// connection pool, NOT inside this transaction. The pattern is idempotent but
+/// not strictly atomic: if a mutation succeeds but commit fails, the mutation
+/// persists without the event record. On retry, the event INSERT succeeds
+/// (no conflict), and the mutation re-executes — which is safe for idempotent
+/// operations (open_dm, hide_dm, update_approval) but may create duplicates
+/// for non-idempotent ones (create_workflow). This is acceptable for the
+/// current command set where create_workflow uses a client-generated d-tag
+/// as the natural dedup key.
 async fn persist_command_event(
     state: &Arc<AppState>,
     event: &Event,
@@ -329,11 +336,13 @@ async fn handle_dm_open(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "channel_id": channel.id.to_string(),
-            "created": was_created,
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "channel_id": channel.id.to_string(),
+                "created": was_created,
+            })
+        ),
     })
 }
 
@@ -456,10 +465,12 @@ async fn handle_dm_add_member(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "channel_id": new_channel.id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "channel_id": new_channel.id.to_string(),
+            })
+        ),
     })
 }
 
@@ -623,7 +634,7 @@ async fn handle_workflow_def(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: resp.to_string(),
+        message: format!("response:{}", resp),
     })
 }
 
@@ -748,10 +759,12 @@ async fn handle_workflow_trigger(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "run_id": run_id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "run_id": run_id.to_string(),
+            })
+        ),
     })
 }
 
@@ -887,11 +900,13 @@ async fn handle_approval_grant(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "status": "granted",
-            "run_id": run_id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "status": "granted",
+                "run_id": run_id.to_string(),
+            })
+        ),
     })
 }
 
@@ -1018,11 +1033,13 @@ async fn handle_approval_deny(
     Ok(IngestResult {
         event_id: event.id.to_hex(),
         accepted: true,
-        message: serde_json::json!({
-            "status": "denied",
-            "run_id": run_id.to_string(),
-        })
-        .to_string(),
+        message: format!(
+            "response:{}",
+            serde_json::json!({
+                "status": "denied",
+                "run_id": run_id.to_string(),
+            })
+        ),
     })
 }
 

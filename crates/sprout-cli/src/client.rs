@@ -97,6 +97,9 @@ fn sign_nip98(
     let mut tags = vec![
         Tag::parse(&["u", url]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
         Tag::parse(&["method", method]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        // Nonce prevents replay rejection for rapid-fire requests with identical bodies.
+        Tag::parse(&["nonce", &uuid::Uuid::new_v4().to_string()])
+            .map_err(|e| CliError::Other(format!("tag error: {e}")))?,
     ];
     if let Some(b) = body {
         let hash = hex::encode(Sha256::digest(b));

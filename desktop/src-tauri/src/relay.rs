@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 use nostr_compat;
 
 use crate::app_state::AppState;
-use crate::util::percent_encode;
 
 const DEFAULT_RELAY_WS_URL: &str = "ws://localhost:3000";
 
@@ -77,66 +76,125 @@ pub fn relay_api_base_url() -> String {
     relay_http_base_url(&relay_ws_url())
 }
 
-/// Build a relay API path from untrusted path segments by percent-encoding each segment.
-pub fn api_path(segments: &[&str]) -> String {
-    let mut path = String::from("/api");
-    for segment in segments {
-        path.push('/');
-        path.push_str(&percent_encode(segment));
-    }
-    path
-}
+// ── NIP-98 HTTP auth ────────────────────────────────────────────────────────
 
-fn validate_api_path(path: &str) -> Result<(), String> {
-    let path_only = path
-        .split_once('?')
-        .map(|(prefix, _)| prefix)
-        .unwrap_or(path);
-
-    if !path_only.starts_with('/') {
-        return Err("API paths must start with '/'".to_string());
-    }
-
-    if path_only
-        .split('/')
-        .any(|segment| matches!(segment, "." | ".."))
-    {
-        return Err("API path contains unsafe traversal segments".to_string());
-    }
-
-    Ok(())
-}
-
-pub fn build_authed_request(
-    client: &reqwest::Client,
-    method: Method,
-    path: &str,
+pub fn build_nip98_auth_header(
+    method: &Method,
+    url: &str,
+    body: &[u8],
     state: &AppState,
-) -> Result<reqwest::RequestBuilder, String> {
-    validate_api_path(path)?;
-    let url = format!("{}{}", relay_api_base_url_with_override(state), path);
-    let request = client.request(method, url);
-
-    if let Some(token) = state.configured_api_token.as_deref() {
-        return Ok(request.header("Authorization", format!("Bearer {token}")));
-    }
-
-    if let Some(token) = session_api_token(state)? {
-        return Ok(request.header("Authorization", format!("Bearer {token}")));
-    }
-
-    let pubkey_hex = auth_pubkey_header(state)?;
-    Ok(request.header("X-Pubkey", pubkey_hex))
-}
-
-pub fn auth_pubkey_header(state: &AppState) -> Result<String, String> {
+) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|error| error.to_string())?;
-    Ok(keys.public_key().to_hex())
+    build_nip98_auth_header_for_keys(&keys, method, url, body)
 }
 
-fn token_supports_scope(scopes: &[String], required_scope: &str) -> bool {
-    scopes.iter().any(|scope| scope == required_scope)
+pub fn build_nip98_auth_header_for_keys(
+    keys: &Keys,
+    method: &Method,
+    url: &str,
+    body: &[u8],
+) -> Result<String, String> {
+    let payload_hash = hex::encode(Sha256::digest(body));
+
+    // Nonce ensures unique event IDs even for identical requests in the same second.
+    // Without this, rapid-fire calls (e.g. query → submit → re-query) with the same
+    // body produce identical NIP-98 event hashes and trigger relay replay detection.
+    let nonce_hex = uuid::Uuid::new_v4().to_string();
+
+    let tags = vec![
+        Tag::parse(vec!["u", url]).map_err(|error| format!("url tag failed: {error}"))?,
+        Tag::parse(vec!["method", method.as_str()])
+            .map_err(|error| format!("method tag failed: {error}"))?,
+        Tag::parse(vec!["payload", &payload_hash])
+            .map_err(|error| format!("payload tag failed: {error}"))?,
+        Tag::parse(vec!["nonce", &nonce_hex])
+            .map_err(|error| format!("nonce tag failed: {error}"))?,
+    ];
+
+    let event = EventBuilder::new(Kind::HttpAuth, "")
+        .tags(tags)
+        .sign_with_keys(keys)
+        .map_err(|error| format!("sign failed: {error}"))?;
+
+    Ok(format!(
+        "Nostr {}",
+        BASE64.encode(event.as_json().as_bytes())
+    ))
 }
+
+// ── Error handling ──────────────────────────────────────────────────────────
+
+pub async fn relay_error_message(response: reqwest::Response) -> String {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
+            return format!("relay returned {status}: {message}");
+        }
+
+        if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+            return format!("relay returned {status}: {error}");
+        }
+    }
+
+    format!("relay returned {status}: {body}")
+}
+
+// ── HTTP bridge: POST /query ────────────────────────────────────────────────
+
+/// Execute a one-shot query via the relay's HTTP bridge (`POST /query`).
+///
+/// Filters are serialized as a JSON array. The request is authenticated with
+/// a NIP-98 event signed by the user's keys. Returns the deserialized array of
+/// events.
+pub async fn query_relay(
+    state: &AppState,
+    filters: &[serde_json::Value],
+) -> Result<Vec<nostr::Event>, String> {
+    let url = format!("{}/query", relay_api_base_url_with_override(state));
+    let body_bytes =
+        serde_json::to_vec(filters).map_err(|e| format!("filter serialization failed: {e}"))?;
+    let auth = build_nip98_auth_header(&Method::POST, &url, &body_bytes, state)?;
+
+    let response = state
+        .http_client
+        .post(&url)
+        .header("Authorization", auth)
+        .header("Content-Type", "application/json")
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(relay_error_message(response).await);
+    }
+
+    response
+        .json::<Vec<nostr::Event>>()
+        .await
+        .map_err(|e| format!("failed to parse query response: {e}"))
+}
+
+// ── Command response parsing ────────────────────────────────────────────────
+
+/// Parse a command-event OK message of the form `"response:<json>"`.
+///
+/// Sprout's command kinds (e.g. 41010, 30620, 46020) acknowledge writes via
+/// relay OK messages whose payload is a `response:`-prefixed JSON document.
+/// This helper strips the prefix and deserializes the remainder as `T`.
+pub fn parse_command_response<T: DeserializeOwned>(message: &str) -> Result<T, String> {
+    // Try the spec format first: "response:{...}".
+    if let Some(json) = message.strip_prefix("response:") {
+        return serde_json::from_str(json).map_err(|e| format!("response parse failed: {e}"));
+    }
+    // Fallback: raw JSON (backward compat for relays that omit the prefix).
+    serde_json::from_str(message)
+        .map_err(|e| format!("expected 'response:' prefix or valid JSON, got: {message} ({e})"))
+}
+
+// ── Profile event builder ───────────────────────────────────────────────────
 
 /// Build a signed kind:0 profile event, optionally injecting a verified NIP-OA auth tag.
 ///
@@ -179,12 +237,16 @@ fn build_profile_event(
         .map_err(|e| format!("failed to sign profile event: {e}"))
 }
 
+// ── Managed-agent profile sync ──────────────────────────────────────────────
+
+/// Sync a managed agent's kind:0 profile event to the relay using NIP-98 auth.
+///
+/// The agent signs its own profile event and the NIP-98 HTTP-auth event, so no
+/// API token is required.
 pub async fn sync_managed_agent_profile(
     state: &AppState,
     relay_url: &str,
     agent_keys: &nostr::Keys,
-    api_token: Option<&str>,
-    token_scopes: &[String],
     display_name: &str,
     avatar_url: Option<&str>,
     auth_tag: Option<&str>, // NIP-OA auth tag JSON
@@ -192,179 +254,138 @@ pub async fn sync_managed_agent_profile(
     // Build a signed kind:0 profile event (with optional NIP-OA auth tag).
     let event = build_profile_event(agent_keys, display_name, avatar_url, auth_tag)?;
     let event_json = event.as_json();
+    let body_bytes = event_json.into_bytes();
 
-    // POST to the relay's /api/events endpoint.
-    let url = format!("{}/api/events", relay_http_base_url(relay_url));
-    let use_bearer_token = api_token.is_some() && token_supports_scope(token_scopes, "users:write");
-    let mut request = state.http_client.post(&url);
+    let url = format!("{}/events", relay_http_base_url(relay_url));
+    let auth = build_nip98_auth_header_for_keys(agent_keys, &Method::POST, &url, &body_bytes)?;
 
-    if let Some(token) = api_token.filter(|_| use_bearer_token) {
-        request = request.header("Authorization", format!("Bearer {token}"));
-    } else {
-        request = request.header("X-Pubkey", agent_keys.public_key().to_hex());
-    }
-
-    request = request
+    let response = state
+        .http_client
+        .post(&url)
+        .header("Authorization", auth)
         .header("Content-Type", "application/json")
-        .body(event_json);
-
-    let response = request
+        .body(body_bytes)
         .send()
         .await
         .map_err(|e| format!("request failed: {e}"))?;
 
     if !response.status().is_success() {
         let msg = relay_error_message(response).await;
-        return Err(if api_token.is_some() && !use_bearer_token {
-            format!(
-                "Created the agent, but could not sync its profile metadata. The minted token does not include `users:write`, and the relay rejected dev-mode pubkey auth: {msg}"
-            )
-        } else if api_token.is_some() {
-            format!("Created the agent, but could not sync its profile metadata: {msg}")
-        } else {
-            format!(
-                "Created the agent, but could not sync its profile metadata without a token: {msg}"
-            )
-        });
+        return Err(format!(
+            "Created the agent, but could not sync its profile metadata: {msg}"
+        ));
     }
 
     Ok(())
 }
 
-fn session_api_token(state: &AppState) -> Result<Option<String>, String> {
-    let token = state
-        .session_token
-        .lock()
-        .map_err(|error| error.to_string())?;
-    Ok(token.clone())
+// ── Signed-event submission ─────────────────────────────────────────────────
+
+/// Response from `POST /events`.
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct SubmitEventResponse {
+    pub event_id: String,
+    pub accepted: bool,
+    pub message: String,
 }
 
-pub fn build_token_management_request(
-    client: &reqwest::Client,
-    method: Method,
-    path: &str,
+/// Build an `EventBuilder` from the events module, sign it with the user's keys,
+/// and POST the signed event to `/events` with NIP-98 auth.
+pub async fn submit_event(
+    builder: nostr::EventBuilder,
     state: &AppState,
-) -> Result<reqwest::RequestBuilder, String> {
-    validate_api_path(path)?;
-    let url = format!("{}{}", relay_api_base_url_with_override(state), path);
-    let request = client.request(method, url);
+) -> Result<SubmitEventResponse, String> {
+    // All synchronous work (signing) must complete before any .await
+    // so the MutexGuard is dropped and the future remains Send.
+    let url = format!("{}/events", relay_api_base_url_with_override(state));
+    let (auth_header, body_bytes) = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        let event = builder
+            .sign_with_keys(&keys)
+            .map_err(|e| format!("failed to sign event: {e}"))?;
+        let body = event.as_json().into_bytes();
+        let auth = build_nip98_auth_header_for_keys(&keys, &Method::POST, &url, &body)?;
+        (auth, body)
+    }; // keys lock dropped here
 
-    if let Some(token) = state.configured_api_token.as_deref() {
-        return Ok(request.header("Authorization", format!("Bearer {token}")));
-    }
-
-    if let Some(token) = session_api_token(state)? {
-        return Ok(request.header("Authorization", format!("Bearer {token}")));
-    }
-
-    let pubkey_hex = auth_pubkey_header(state)?;
-    Ok(request.header("X-Pubkey", pubkey_hex))
-}
-
-pub fn build_nip98_auth_header(
-    method: &Method,
-    url: &str,
-    body: &[u8],
-    state: &AppState,
-) -> Result<String, String> {
-    let keys = state.keys.lock().map_err(|error| error.to_string())?;
-    build_nip98_auth_header_for_keys(&keys, method, url, body)
-}
-
-pub fn build_nip98_auth_header_for_keys(
-    keys: &Keys,
-    method: &Method,
-    url: &str,
-    body: &[u8],
-) -> Result<String, String> {
-    let payload_hash = hex::encode(Sha256::digest(body));
-    let tags = vec![
-        Tag::parse(vec!["u", url]).map_err(|error| format!("url tag failed: {error}"))?,
-        Tag::parse(vec!["method", method.as_str()])
-            .map_err(|error| format!("method tag failed: {error}"))?,
-        Tag::parse(vec!["payload", &payload_hash])
-            .map_err(|error| format!("payload tag failed: {error}"))?,
-    ];
-
-    let event = EventBuilder::new(Kind::HttpAuth, "")
-        .tags(tags)
-        .sign_with_keys(keys)
-        .map_err(|error| format!("sign failed: {error}"))?;
-
-    Ok(format!(
-        "Nostr {}",
-        BASE64.encode(event.as_json().as_bytes())
-    ))
-}
-
-pub async fn relay_error_message(response: reqwest::Response) -> String {
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-            return format!("relay returned {status}: {message}");
-        }
-
-        if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
-            return format!("relay returned {status}: {error}");
-        }
-    }
-
-    format!("relay returned {status}: {body}")
-}
-
-pub async fn send_json_request<T>(request: reqwest::RequestBuilder) -> Result<T, String>
-where
-    T: DeserializeOwned,
-{
-    let response = request
+    let response = state
+        .http_client
+        .post(&url)
+        .header("Authorization", auth_header)
+        .header("Content-Type", "application/json")
+        .body(body_bytes)
         .send()
         .await
-        .map_err(|error| format!("request failed: {error}"))?;
+        .map_err(|e| format!("request failed: {e}"))?;
 
     if !response.status().is_success() {
         return Err(relay_error_message(response).await);
     }
 
-    response
-        .json::<T>()
+    let result: SubmitEventResponse = response
+        .json()
         .await
-        .map_err(|error| format!("parse failed: {error}"))
-}
+        .map_err(|e| format!("failed to parse response: {e}"))?;
 
-pub async fn send_empty_request(request: reqwest::RequestBuilder) -> Result<(), String> {
-    let response = request
-        .send()
-        .await
-        .map_err(|error| format!("request failed: {error}"))?;
-
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
+    if !result.accepted {
+        return Err(format!("relay rejected event: {}", result.message));
     }
 
-    Ok(())
+    Ok(result)
 }
+
+// ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::{api_path, build_profile_event, validate_api_path};
+    use super::{build_profile_event, parse_command_response};
+    use serde::Deserialize;
 
-    #[test]
-    fn api_path_encodes_path_segments() {
-        let path = api_path(&["tokens", "../../etc/passwd"]);
-        assert_eq!(path, "/api/tokens/..%2F..%2Fetc%2Fpasswd");
+    // ── parse_command_response ───────────────────────────────────────────────
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct ChannelCreated {
+        channel_id: String,
     }
 
     #[test]
-    fn validate_api_path_rejects_traversal_segments() {
-        assert!(validate_api_path("/api/tokens/../admin").is_err());
-        assert!(validate_api_path("/api/tokens/./admin").is_err());
+    fn parse_command_response_decodes_typed_payload() {
+        let msg = r#"response:{"channel_id":"abc123"}"#;
+        let parsed: ChannelCreated = parse_command_response(msg).expect("should parse");
+        assert_eq!(
+            parsed,
+            ChannelCreated {
+                channel_id: "abc123".to_string()
+            }
+        );
     }
 
     #[test]
-    fn validate_api_path_allows_encoded_segments() {
-        assert!(validate_api_path("/api/tokens/..%2Fadmin").is_ok());
+    fn parse_command_response_accepts_raw_json_fallback() {
+        // Backward-compat: relays that emit raw JSON (no prefix) still work.
+        let msg = r#"{"channel_id":"abc"}"#;
+        let parsed: ChannelCreated = parse_command_response(msg).expect("fallback parse");
+        assert_eq!(
+            parsed,
+            ChannelCreated {
+                channel_id: "abc".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_command_response_rejects_invalid_prefixed_json() {
+        let msg = "response:not-json";
+        let result: Result<ChannelCreated, _> = parse_command_response(msg);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("response parse failed"));
+    }
+
+    #[test]
+    fn parse_command_response_rejects_garbage() {
+        let msg = "totally not json or response";
+        let result: Result<ChannelCreated, _> = parse_command_response(msg);
+        assert!(result.is_err());
     }
 
     // ── build_profile_event ──────────────────────────────────────────────────
@@ -432,72 +453,4 @@ mod tests {
             "error message should mention verification failure"
         );
     }
-}
-
-// ── Signed-event submission ──────────────────────────────────────────────────
-
-/// Response from `POST /api/events`.
-#[derive(Debug, Deserialize, serde::Serialize)]
-pub struct SubmitEventResponse {
-    pub event_id: String,
-    pub accepted: bool,
-    pub message: String,
-}
-
-/// Build an `EventBuilder` from the events module, sign it with the user's keys,
-/// and POST the signed event to `/api/events`.
-pub async fn submit_event(
-    builder: nostr::EventBuilder,
-    state: &AppState,
-) -> Result<SubmitEventResponse, String> {
-    // All synchronous work (signing) must complete before any .await
-    // so the MutexGuard is dropped and the future remains Send.
-    let (event_json, auth_header) = {
-        let keys = state.keys.lock().map_err(|e| e.to_string())?;
-        let event = builder
-            .sign_with_keys(&keys)
-            .map_err(|e| format!("failed to sign event: {e}"))?;
-        let json = event.as_json();
-        let auth = if let Some(token) = state.configured_api_token.as_deref() {
-            format!("Bearer {token}")
-        } else if let Some(token) = session_api_token(state)? {
-            format!("Bearer {token}")
-        } else {
-            format!("X-Pubkey {}", keys.public_key().to_hex())
-        };
-        (json, auth)
-    }; // keys lock dropped here
-
-    let url = format!("{}/api/events", relay_api_base_url_with_override(state));
-    let request = if auth_header.starts_with("Bearer ") {
-        state
-            .http_client
-            .post(&url)
-            .header("Authorization", &auth_header)
-    } else {
-        let pubkey = auth_header.strip_prefix("X-Pubkey ").unwrap_or("");
-        state.http_client.post(&url).header("X-Pubkey", pubkey)
-    }
-    .header("Content-Type", "application/json")
-    .body(event_json);
-
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(relay_error_message(response).await);
-    }
-
-    let result: SubmitEventResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse response: {e}"))?;
-
-    if !result.accepted {
-        return Err(format!("relay rejected event: {}", result.message));
-    }
-
-    Ok(result)
 }

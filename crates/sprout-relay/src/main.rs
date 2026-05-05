@@ -227,6 +227,33 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Emit kind:39000/39002 discovery events for channels that exist in the DB
+    // but don't have corresponding events (e.g. seeded via direct SQL inserts).
+    // Only runs when SPROUT_RECONCILE_CHANNELS=true (dev/CI environments).
+    // Production relays create channels through the event pipeline and don't need this.
+    if std::env::var("SPROUT_RECONCILE_CHANNELS").is_ok() {
+        let reconcile_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            // Try immediately, then retry every 5s for up to 2 minutes.
+            // Handles CI pattern: relay starts → seed script inserts data → reconciliation.
+            for attempt in 0..24u32 {
+                if attempt > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                match sprout_relay::handlers::side_effects::reconcile_channel_events(
+                    &reconcile_state,
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::debug!(error = %e, "channel reconciliation attempt failed");
+                    }
+                }
+            }
+        });
+    }
+
     // Wire the action sink — must happen after AppState (which creates
     // sub_registry, conn_manager) and before the cron loop starts.
     let action_sink = Arc::new(sprout_relay::workflow_sink::RelayActionSink::new(&state));

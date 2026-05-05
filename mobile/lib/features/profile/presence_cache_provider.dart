@@ -5,34 +5,22 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
 
-/// In-memory cache of other users' presence, fetched in batches.
+/// In-memory cache of other users' presence.
 ///
-/// Subscribes to kind:20001 presence events over WebSocket for real-time
-/// updates. Falls back to a 60-second REST poll as a backstop for REST-only
-/// writers (ACP agents) and TTL expiry (crashed clients — Redis expires after
-/// 90s, no WS event emitted).
+/// Subscribes to kind:20001 presence events over the relay WebSocket for
+/// real-time updates. There is no longer a REST backstop — agents that
+/// publish presence purely over WS are fine, and TTL expiry will be handled
+/// by the relay-side `presence:true` filter extension when that lands.
 class PresenceCacheNotifier extends Notifier<Map<String, String>> {
-  // Backstop poll: catches REST-only writers and TTL expiry.
-  // WS events handle the fast path. Matches desktop's 60s interval.
-  static const _refreshInterval = Duration(seconds: 60);
-
   final Set<String> _tracked = {};
-  final Set<String> _pending = {};
-  Timer? _batchTimer;
-  Timer? _refreshTimer;
   void Function()? _presenceUnsub;
   int _subscriptionVersion = 0;
 
   @override
   Map<String, String> build() {
-    ref.watch(relayClientProvider);
     final sessionState = ref.watch(relaySessionProvider);
 
     ref.onDispose(() {
-      _batchTimer?.cancel();
-      _batchTimer = null;
-      _refreshTimer?.cancel();
-      _refreshTimer = null;
       _presenceUnsub?.call();
       _presenceUnsub = null;
     });
@@ -44,31 +32,20 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
     return {};
   }
 
-  /// Track presence for [pubkeys]. Fetches immediately if not cached,
-  /// and includes them in periodic refreshes.
+  /// Track presence for [pubkeys].
+  ///
+  /// Currently a no-op for the actual fetch — we rely on live kind:20001
+  /// events. The tracked set is still used to filter incoming events so the
+  /// cache doesn't grow unbounded.
   void track(List<String> pubkeys) {
     final normalized = pubkeys.map((pk) => pk.toLowerCase()).toList();
-    final uncached = normalized
-        .where((pk) => !state.containsKey(pk) && !_pending.contains(pk))
-        .toList();
-
     _tracked.addAll(normalized);
-    _ensureRefreshTimer();
-
-    if (uncached.isEmpty) return;
-    _pending.addAll(uncached);
-    _batchTimer ??= Timer(const Duration(milliseconds: 50), _flushPending);
-  }
-
-  void _ensureRefreshTimer() {
-    _refreshTimer ??= Timer.periodic(_refreshInterval, (_) => _refreshAll());
+    // TODO(presence): once the relay supports a `presence:true` filter
+    // extension, issue a one-shot fetch here for the latest known state per
+    // pubkey. Until then, presence is "online whenever they publish".
   }
 
   /// Subscribe to kind:20001 presence events over WebSocket.
-  ///
-  /// On each event, updates the in-memory cache for that pubkey without
-  /// triggering a REST refetch. Matches the desktop's
-  /// `usePresenceSubscription()` pattern.
   Future<void> _subscribePresenceUpdates() async {
     _presenceUnsub?.call();
     _presenceUnsub = null;
@@ -92,13 +69,11 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
       debugPrint(
         '[PresenceCacheNotifier] presence subscription failed: $error',
       );
-      // Backstop polling handles this case.
     }
   }
 
   void _handlePresenceEvent(NostrEvent event) {
     final pubkey = event.pubkey.toLowerCase();
-    // Only update pubkeys we're tracking to avoid unbounded cache growth.
     if (!_tracked.contains(pubkey)) return;
     final status = event.content;
     if (status != 'online' && status != 'away' && status != 'offline') return;
@@ -106,40 +81,6 @@ class PresenceCacheNotifier extends Notifier<Map<String, String>> {
     final updated = Map<String, String>.from(state);
     updated[pubkey] = status;
     state = updated;
-  }
-
-  Future<void> _refreshAll() async {
-    if (_tracked.isEmpty) return;
-    await _fetchPresence(_tracked.toList());
-  }
-
-  Future<void> _flushPending() async {
-    _batchTimer = null;
-    if (_pending.isEmpty) return;
-
-    final pubkeys = _pending.toList();
-    _pending.clear();
-    await _fetchPresence(pubkeys);
-  }
-
-  Future<void> _fetchPresence(List<String> pubkeys) async {
-    try {
-      final client = ref.read(relayClientProvider);
-      final json =
-          await client.get(
-                '/api/presence',
-                queryParams: {'pubkeys': pubkeys.join(',')},
-              )
-              as Map<String, dynamic>;
-
-      final updated = Map<String, String>.from(state);
-      for (final pk in pubkeys) {
-        updated[pk] = (json[pk] as String?) ?? 'offline';
-      }
-      state = updated;
-    } catch (_) {
-      // Silently fail — default to offline.
-    }
   }
 }
 

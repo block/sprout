@@ -641,7 +641,7 @@ final mediaUploadServiceProvider = Provider<MediaUploadService>((ref) {
   final picker = ImagePicker();
   final service = MediaUploadService(
     baseUrl: config.baseUrl,
-    apiToken: config.apiToken,
+    apiToken: null,
     nsec: config.nsec,
     pickGalleryImage: () => picker.pickImage(
       source: ImageSource.gallery,
