@@ -591,6 +591,17 @@ pub async fn emit_group_discovery_events(
                 tags.push(Tag::parse(&["purpose", purpose])?);
             }
         }
+        // Archived state — clients use this to hide channels from the sidebar.
+        if channel.archived_at.is_some() {
+            tags.push(Tag::parse(&["archived", "true"])?);
+        }
+        // Ephemeral channel TTL — clients use this to show countdown timers.
+        if let Some(ttl) = channel.ttl_seconds {
+            tags.push(Tag::parse(&["ttl", &ttl.to_string()])?);
+        }
+        if let Some(ref deadline) = channel.ttl_deadline {
+            tags.push(Tag::parse(&["ttl_deadline", &deadline.to_rfc3339()])?);
+        }
         emit_addressable_discovery_event(
             state,
             channel_id,

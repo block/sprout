@@ -107,6 +107,19 @@ pub fn channel_info_from_event(
         (0, None)
     };
 
+    // If the relay emits ["archived", "true"], surface it as a timestamp placeholder
+    // so the frontend knows the channel is archived. The exact timestamp isn't available
+    // from the tag alone, so we use the event's created_at as a proxy.
+    let archived_at = if first_tag_value(event, "archived") == Some("true") {
+        Some(timestamp_to_iso(event.created_at.as_u64()))
+    } else {
+        None
+    };
+
+    // Ephemeral channel TTL — relay emits ["ttl", "<seconds>"] and ["ttl_deadline", "<iso>"].
+    let ttl_seconds = first_tag_value(event, "ttl").and_then(|v| v.parse::<i32>().ok());
+    let ttl_deadline = first_tag_value(event, "ttl_deadline").map(str::to_string);
+
     Ok(ChannelInfo {
         id,
         name,
@@ -117,12 +130,12 @@ pub fn channel_info_from_event(
         purpose,
         member_count,
         last_message_at,
-        archived_at: None,
+        archived_at,
         participants,
         participant_pubkeys,
         is_member: true,
-        ttl_seconds: None,
-        ttl_deadline: None,
+        ttl_seconds,
+        ttl_deadline,
     })
 }
 
@@ -157,6 +170,12 @@ pub fn channel_detail_from_event(event: &Event) -> Result<ChannelDetailInfo, Str
 
     let created_at_iso = timestamp_to_iso(event.created_at.as_u64());
 
+    let archived_at = if first_tag_value(event, "archived") == Some("true") {
+        Some(timestamp_to_iso(event.created_at.as_u64()))
+    } else {
+        None
+    };
+
     Ok(ChannelDetailInfo {
         id,
         name,
@@ -172,13 +191,13 @@ pub fn channel_detail_from_event(event: &Event) -> Result<ChannelDetailInfo, Str
         created_by: event.pubkey.to_hex(),
         created_at: created_at_iso.clone(),
         updated_at: created_at_iso,
-        archived_at: None,
+        archived_at,
         member_count: 0,
         topic_required: false,
         max_members: None,
         nip29_group_id: None,
-        ttl_seconds: None,
-        ttl_deadline: None,
+        ttl_seconds: first_tag_value(event, "ttl").and_then(|v| v.parse::<i32>().ok()),
+        ttl_deadline: first_tag_value(event, "ttl_deadline").map(str::to_string),
     })
 }
 
