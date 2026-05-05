@@ -84,8 +84,40 @@ class MessageContent extends StatelessWidget {
     }
     final processed = buffer.toString();
 
+    // Replace spaces with non-breaking spaces inside known mention names
+    // so the gpt_markdown combined regex can match multi-word names
+    // even when caseSensitive is not preserved.
+    // Skip content inside backticks to avoid altering inline code.
+    final mentionParts = processed.split('`');
+    final mentionBuf = StringBuffer();
+    for (var i = 0; i < mentionParts.length; i++) {
+      if (i.isOdd) {
+        mentionBuf.write('`${mentionParts[i]}`');
+      } else {
+        var segment = mentionParts[i];
+        for (final name in mentionNames.values) {
+          if (name.contains(' ')) {
+            final nbspName = name.replaceAll(' ', '\u00A0');
+            segment = segment.replaceAllMapped(
+              RegExp('@${RegExp.escape(name)}', caseSensitive: false),
+              (m) => '@$nbspName',
+            );
+          }
+        }
+        mentionBuf.write(segment);
+      }
+    }
+    final mentionProcessed = mentionBuf.toString();
+
+    // Ensure channel links at the very start of content don't get
+    // swallowed by markdown processing.
+    var finalContent = mentionProcessed;
+    if (RegExp(r'^#[A-Za-z0-9_]').hasMatch(finalContent)) {
+      finalContent = '\u200B$finalContent';
+    }
+
     return GptMarkdown(
-      processed,
+      finalContent,
       style: style,
       followLinkColor: false,
       linkBuilder: (context, linkText, url, linkStyle) =>
@@ -416,7 +448,7 @@ class _MentionMd extends InlineMd {
   late final RegExp _exp = _buildPrefixPattern(
     prefix: '@',
     knownNames: _mentionAliases(mentionNames.values),
-    genericTokenPattern: r'[A-Za-z0-9_][A-Za-z0-9_-]*',
+    genericTokenPattern: r'[A-Za-z0-9_][A-Za-z0-9_\u00A0-]*',
   );
 
   _MentionMd({required this.mentionNames});
@@ -435,7 +467,7 @@ class _MentionMd extends InlineMd {
       return TextSpan(text: text, style: config.style);
     }
 
-    final name = raw.substring(1).toLowerCase();
+    final name = raw.substring(1).replaceAll('\u00A0', ' ').toLowerCase();
     String? displayName;
     for (final entry in mentionNames.entries) {
       final entryName = entry.value.toLowerCase();

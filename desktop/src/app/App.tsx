@@ -57,15 +57,24 @@ export function App() {
   }, []);
 
   const queryClient = useQueryClient();
-  const { activeWorkspace, reinitKey, addWorkspace, switchWorkspace } =
-    useWorkspaces();
+  const {
+    activeWorkspace,
+    reinitKey,
+    addWorkspace,
+    switchWorkspace,
+    reconnectWorkspace,
+  } = useWorkspaces();
 
   useEffect(() => {
-    const unlisten = listenForDeepLinks({ addWorkspace, switchWorkspace });
+    const unlisten = listenForDeepLinks({
+      addWorkspace,
+      switchWorkspace,
+      reconnectWorkspace,
+    });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [addWorkspace, switchWorkspace]);
+  }, [addWorkspace, switchWorkspace, reconnectWorkspace]);
   const workspace = useWorkspaceInit(activeWorkspace);
 
   // Composite key: changes when workspace ID changes OR when
