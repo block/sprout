@@ -123,6 +123,24 @@ class ChannelsPage extends HookConsumerWidget {
       }
     }
 
+    // Defer the error view to absorb transient AsyncError frames caused by
+    // the relay session cancelling in-flight history fetches on disconnect/
+    // reconnect (relay_session.dart `_cancelAllHistory`). If the error clears
+    // (channels populate or the next _fetch succeeds) within the grace
+    // window, we never render the error UI.
+    final showError = useState(false);
+    final hasError = channelsAsync.hasError && channels == null;
+    useEffect(() {
+      if (!hasError) {
+        showError.value = false;
+        return null;
+      }
+      final timer = Timer(const Duration(seconds: 2), () {
+        showError.value = true;
+      });
+      return timer.cancel;
+    }, [hasError]);
+
     return FrostedScaffold(
       appBar: FrostedAppBar(
         leading: _WorkspaceIndicator(
@@ -151,6 +169,7 @@ class ChannelsPage extends HookConsumerWidget {
       body: _ChannelsBody(
         channels: channels,
         channelsAsync: channelsAsync,
+        showError: showError.value,
         sessionStatus: sessionState.status,
         currentPubkey: currentPubkey,
         onRefresh: () => ref.read(channelsProvider.notifier).refresh(),
@@ -163,6 +182,7 @@ class ChannelsPage extends HookConsumerWidget {
 class _ChannelsBody extends StatelessWidget {
   final List<Channel>? channels;
   final AsyncValue<List<Channel>> channelsAsync;
+  final bool showError;
   final SessionStatus sessionStatus;
   final String? currentPubkey;
   final Future<void> Function() onRefresh;
@@ -171,6 +191,7 @@ class _ChannelsBody extends StatelessWidget {
   const _ChannelsBody({
     required this.channels,
     required this.channelsAsync,
+    required this.showError,
     required this.sessionStatus,
     required this.currentPubkey,
     required this.onRefresh,
@@ -214,7 +235,11 @@ class _ChannelsBody extends StatelessWidget {
       );
     }
 
-    if (channelsAsync.hasError) {
+    // The error view is gated on a grace timer in the parent — see the
+    // useEffect in ChannelsPage. While the grace window is in flight we fall
+    // through to the connection banner so transient relay-cancellation errors
+    // don't flash the error UI.
+    if (showError && channelsAsync.hasError) {
       return Padding(
         padding: EdgeInsets.only(top: barHeight),
         child: _ErrorView(error: channelsAsync.error!, onRetry: onRefresh),
@@ -223,7 +248,11 @@ class _ChannelsBody extends StatelessWidget {
 
     return Padding(
       padding: EdgeInsets.only(top: barHeight),
-      child: const _ConnectionBanner(status: SessionStatus.connecting),
+      child: _ConnectionBanner(
+        status: sessionStatus == SessionStatus.connected
+            ? SessionStatus.connecting
+            : sessionStatus,
+      ),
     );
   }
 }
