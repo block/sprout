@@ -1,9 +1,8 @@
-import { ExternalLink, Users } from "lucide-react";
+import { Users } from "lucide-react";
 import { useMemo } from "react";
 
-import { relayWsUrl } from "@/shared/lib/relay-url";
-import { Button } from "@/shared/ui/button";
 import type { Repo } from "../use-repos";
+import { ConnectButton } from "./ConnectButton";
 
 const MAX_AVATARS = 20;
 
@@ -30,8 +29,6 @@ function PubkeyAvatar({ pubkey }: { pubkey: string }) {
 }
 
 export function OrgSidebar({ repos }: { repos: Repo[] }) {
-  const deepLink = `sprout://connect?relay=${encodeURIComponent(relayWsUrl())}`;
-
   const uniquePubkeys = useMemo(() => {
     const set = new Set<string>();
     for (const repo of repos) {
@@ -49,12 +46,7 @@ export function OrgSidebar({ repos }: { repos: Repo[] }) {
   return (
     <div className="space-y-6">
       {/* Connect to Relay */}
-      <Button asChild className="w-full">
-        <a href={deepLink}>
-          <ExternalLink className="h-4 w-4" />
-          Connect to Relay
-        </a>
-      </Button>
+      <ConnectButton className="w-full" />
 
       {/* People section */}
       {uniquePubkeys.length > 0 && (
@@ -69,12 +61,9 @@ export function OrgSidebar({ repos }: { repos: Repo[] }) {
             ))}
           </div>
           {overflowCount > 0 && (
-            <button
-              type="button"
-              className="mt-2 text-xs text-muted-foreground hover:text-foreground"
-            >
-              View all {uniquePubkeys.length} people
-            </button>
+            <span className="mt-2 block text-xs text-muted-foreground">
+              {uniquePubkeys.length} people
+            </span>
           )}
         </div>
       )}

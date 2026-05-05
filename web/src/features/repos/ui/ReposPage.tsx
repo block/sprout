@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Input } from "@/shared/ui/input";
 import { useRepos } from "../use-repos";
+import { ConnectButton } from "./ConnectButton";
 import { OrgSidebar } from "./OrgSidebar";
 import { RepoListItem } from "./RepoListItem";
 
@@ -40,6 +41,7 @@ function EmptyState({ hasSearch }: { hasSearch: boolean }) {
           ? "Try adjusting your search term."
           : "Repositories published to this relay will appear here. Push a git repo using the Sprout desktop app to get started."}
       </p>
+      {!hasSearch && <ConnectButton className="mt-6" />}
     </div>
   );
 }
@@ -120,6 +122,11 @@ export function ReposPage() {
     <div className="mx-auto flex w-full max-w-7xl gap-8 px-4 py-8">
       {/* Main content */}
       <div className="min-w-0 flex-1">
+        {/* Mobile-only connect button */}
+        <div className="mb-4 lg:hidden">
+          <ConnectButton className="w-full" />
+        </div>
+
         <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">
           <BookMarked className="h-5 w-5" /> Repositories
         </h2>
@@ -135,6 +142,7 @@ export function ReposPage() {
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as SortOrder)}
+            aria-label="Sort repositories"
             className="rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="newest">Newest</option>
