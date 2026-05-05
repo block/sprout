@@ -74,7 +74,7 @@ impl RelayInfo {
                 max_message_length: Some(MAX_FRAME_BYTES as u64),
                 max_subscriptions: Some(1024),
                 max_filters: Some(10),
-                max_limit: Some(500),
+                max_limit: Some(10_000),
                 max_subid_length: Some(256),
                 min_pow_difficulty: None,
                 auth_required: config.require_auth_token,
