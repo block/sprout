@@ -257,11 +257,30 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
       className="group/message rounded-lg px-2 py-1"
       data-testid="system-message-row"
     >
-      <div className="flex items-center gap-2.5">
+      <div className="grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5">
         <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-muted">
           <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
         </div>
-        <p className="text-xs text-muted-foreground">{description}</p>
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">{description}</p>
+          <div className="pl-6">
+            <MessageReactions
+              messageId={message.id}
+              reactions={reactions}
+              canToggle={canToggleReactions}
+              pending={reactionPending}
+              className="mt-0.5 pt-0.5"
+              onSelect={(emoji) => {
+                void handleReactionSelect(emoji);
+              }}
+            />
+            {reactionErrorMessage ? (
+              <p className="mt-1.5 text-xs text-destructive">
+                {reactionErrorMessage}
+              </p>
+            ) : null}
+          </div>
+        </div>
         <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground/60">
           <div className="relative">
             <div className="absolute right-0 top-1/2 -translate-y-1/2">
@@ -344,20 +363,6 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
           <MessageTimestamp createdAt={message.createdAt} time={message.time} />
         </div>
       </div>
-      <MessageReactions
-        messageId={message.id}
-        reactions={reactions}
-        canToggle={canToggleReactions}
-        pending={reactionPending}
-        onSelect={(emoji) => {
-          void handleReactionSelect(emoji);
-        }}
-      />
-      {reactionErrorMessage ? (
-        <p className="mt-1.5 text-xs text-destructive">
-          {reactionErrorMessage}
-        </p>
-      ) : null}
     </div>
   );
 });
