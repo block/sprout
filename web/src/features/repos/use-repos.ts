@@ -9,6 +9,7 @@ export interface Repo {
   cloneUrls: string[];
   webUrl: string | null;
   owner: string;
+  contributors: string[];
   createdAt: number;
 }
 
@@ -28,7 +29,8 @@ function eventToRepo(event: NostrEvent): Repo {
   const description = getTag(event, "description") || event.content || "";
   const cloneUrls = getAllTags(event, "clone");
   const webUrl = getTag(event, "web") ?? null;
-  const owner = getAllTags(event, "p")[0] ?? event.pubkey;
+  const contributors = getAllTags(event, "p");
+  const owner = event.pubkey;
 
   return {
     id: d,
@@ -37,6 +39,7 @@ function eventToRepo(event: NostrEvent): Repo {
     cloneUrls,
     webUrl,
     owner,
+    contributors,
     createdAt: event.created_at,
   };
 }
