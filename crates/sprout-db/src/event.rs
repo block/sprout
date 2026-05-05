@@ -58,6 +58,10 @@ pub struct EventQuery {
     /// Restrict results to events in any of these channels (multi-channel `IN` pushdown).
     /// Used by NIP-45 COUNT to enforce channel access without fetching all rows.
     pub channel_ids: Option<Vec<uuid::Uuid>>,
+    /// Override the default limit clamp (1000). Used by COUNT fallback path
+    /// which needs to fetch all matching events for post-filter counting.
+    /// When None, the default clamp of 1000 applies.
+    pub max_limit: Option<i64>,
 }
 
 /// Maximum length for a `d_tag` value (bytes). NIP-33 d-tags are short identifiers;
@@ -179,7 +183,8 @@ pub async fn query_events(pool: &PgPool, q: &EventQuery) -> Result<Vec<StoredEve
         return Ok(vec![]);
     }
 
-    let limit_val = q.limit.unwrap_or(100).min(1000);
+    let clamp = q.max_limit.unwrap_or(1000);
+    let limit_val = q.limit.unwrap_or(100).min(clamp);
     let offset_val = q.offset.unwrap_or(0);
 
     let mut qb: QueryBuilder<sqlx::Postgres> = if let Some(ref p_hex) = q.p_tag_hex {

@@ -75,9 +75,9 @@ pub async fn cmd_list_channel_members(
 
 pub async fn cmd_get_canvas(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    // Canvas is a replaceable event kind:30023 with #h tag
+    // Canvas is kind:40100 with #h tag
     let filter = serde_json::json!({
-        "kinds": [30023],
+        "kinds": [40100],
         "#h": [channel_id]
     });
     let resp = client.query(&filter).await?;

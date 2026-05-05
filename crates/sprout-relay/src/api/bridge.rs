@@ -319,7 +319,8 @@ pub async fn count_events(
             } else {
                 // Fallback: query + post-filter for non-pushable constraints.
                 let mut q = query;
-                q.limit = Some(10_000);
+                q.limit = Some(100_000);
+                q.max_limit = Some(100_000);
                 match state.db.query_events(&q).await {
                     Ok(stored_events) => {
                         for se in stored_events {
@@ -352,7 +353,8 @@ pub async fn count_events(
                 }
             } else {
                 // Fallback: query with high limit + post-filter for correctness.
-                query.limit = Some(10_000);
+                query.limit = Some(100_000);
+                query.max_limit = Some(100_000);
                 match state.db.query_events(&query).await {
                     Ok(stored_events) => {
                         for se in stored_events {
