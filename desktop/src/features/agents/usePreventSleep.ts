@@ -56,7 +56,10 @@ function usePreventSleepInternal() {
     [agents],
   );
 
-  const active = enabled && hasRunningAgents;
+  // Listen for 4-hour expiry
+  const [expired, setExpired] = React.useState(false);
+
+  const active = enabled && hasRunningAgents && !expired;
 
   const setEnabled = React.useCallback((value: boolean) => {
     writePreference(value);
@@ -67,9 +70,6 @@ function usePreventSleepInternal() {
   React.useEffect(() => {
     void setPreventSleepActive(active);
   }, [active]);
-
-  // Listen for 4-hour expiry
-  const [expired, setExpired] = React.useState(false);
   React.useEffect(() => {
     const unlisten = listen("prevent-sleep-expired", () => {
       setExpired(true);
