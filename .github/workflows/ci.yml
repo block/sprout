@@ -160,6 +160,7 @@ jobs:
             RELAY_URL=ws://localhost:3000 \
             SPROUT_BIND_ADDR=0.0.0.0:3000 \
             SPROUT_REQUIRE_AUTH_TOKEN=false \
+            SPROUT_RECONCILE_CHANNELS=true \
             ./target/ci/sprout-relay > /tmp/sprout-relay.log 2>&1 &
           echo $! > /tmp/sprout-relay.pid
           for attempt in $(seq 1 60); do
