@@ -110,8 +110,7 @@ async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
     let db = connect_db().await?;
 
     // Resolve relay signing key: arg > env > ephemeral
-    let relay_keys = match relay_key_arg
-        .or_else(|| std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok())
+    let relay_keys = match relay_key_arg.or_else(|| std::env::var("SPROUT_RELAY_PRIVATE_KEY").ok())
     {
         Some(key_hex) => {
             Keys::parse(&key_hex).map_err(|e| anyhow::anyhow!("invalid relay key: {e}"))?
