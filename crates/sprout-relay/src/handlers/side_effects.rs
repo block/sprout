@@ -1869,3 +1869,54 @@ pub async fn publish_nip43_member_removed(
 ) -> anyhow::Result<()> {
     publish_nip43_delta(state, 8001, target_pubkey_hex, "member-removed").await
 }
+
+/// Reconcile channels that exist in the DB but don't have kind:39000 events.
+///
+/// This handles the case where channels were created via direct SQL inserts
+/// (e.g. test seed scripts) rather than through the Nostr event pipeline.
+/// Emits kind:39000 (metadata) and kind:39002 (members) for each channel
+/// that is missing its discovery events.
+///
+/// Idempotent: checks for existing kind:39000 events before emitting.
+pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<()> {
+    use sprout_db::event::EventQuery;
+
+    let channels = state.db.list_channels(None).await?;
+    if channels.is_empty() {
+        return Ok(());
+    }
+
+    let mut reconciled = 0u32;
+    for channel in &channels {
+        // Check if kind:39000 event already exists for this channel.
+        let channel_id_str = channel.id.to_string();
+        let existing = state
+            .db
+            .query_events(&EventQuery {
+                kinds: Some(vec![39000]),
+                d_tag: Some(channel_id_str.clone()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_or_default();
+
+        if existing.is_empty() {
+            // No discovery event — emit one.
+            if let Err(e) = emit_group_discovery_events(state, channel.id).await {
+                tracing::debug!(
+                    channel_id = %channel.id,
+                    error = %e,
+                    "reconcile: failed to emit discovery events"
+                );
+            } else {
+                reconciled += 1;
+            }
+        }
+    }
+
+    if reconciled > 0 {
+        tracing::info!(count = reconciled, "reconciled channel discovery events");
+    }
+    Ok(())
+}

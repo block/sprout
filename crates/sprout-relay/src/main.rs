@@ -227,6 +227,21 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Emit kind:39000/39002 discovery events for channels that exist in the DB
+    // but don't have corresponding events (e.g. seeded via direct SQL inserts).
+    // Idempotent — skips channels that already have events.
+    {
+        let reconcile_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(e) =
+                sprout_relay::handlers::side_effects::reconcile_channel_events(&reconcile_state)
+                    .await
+            {
+                tracing::warn!(error = %e, "channel event reconciliation failed (non-fatal)");
+            }
+        });
+    }
+
     // Wire the action sink — must happen after AppState (which creates
     // sub_registry, conn_manager) and before the cron loop starts.
     let action_sink = Arc::new(sprout_relay::workflow_sink::RelayActionSink::new(&state));
