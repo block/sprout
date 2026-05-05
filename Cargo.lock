@@ -3645,6 +3645,7 @@ dependencies = [
  "nostr",
  "serde_json",
  "sprout-auth",
+ "sprout-core",
  "sprout-db",
  "tokio",
 ]
