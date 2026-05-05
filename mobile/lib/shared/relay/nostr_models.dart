@@ -246,6 +246,8 @@ class ChannelData {
   final String description;
   final String? topic;
   final List<String> participantPubkeys;
+  final int? ttlSeconds;
+  final DateTime? ttlDeadline;
 
   const ChannelData({
     required this.id,
@@ -255,6 +257,8 @@ class ChannelData {
     required this.description,
     this.topic,
     this.participantPubkeys = const [],
+    this.ttlSeconds,
+    this.ttlDeadline,
   });
 
   factory ChannelData.fromEvent(NostrEvent event) {
@@ -280,6 +284,12 @@ class ChannelData {
       for (final t in event.tags)
         if (t.length >= 2 && t[0] == 'p') t[1],
     ];
+    final ttlRaw = event.getTagValue('ttl');
+    final ttlSeconds = ttlRaw != null ? int.tryParse(ttlRaw) : null;
+    final ttlDeadlineRaw = event.getTagValue('ttl_deadline');
+    final ttlDeadline = ttlDeadlineRaw != null
+        ? DateTime.tryParse(ttlDeadlineRaw)
+        : null;
     return ChannelData(
       id: id,
       name: name,
@@ -288,6 +298,8 @@ class ChannelData {
       description: description,
       topic: topic,
       participantPubkeys: participants,
+      ttlSeconds: ttlSeconds,
+      ttlDeadline: ttlDeadline,
     );
   }
 }

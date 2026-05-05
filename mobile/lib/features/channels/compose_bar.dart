@@ -76,6 +76,17 @@ class ComposeBar extends HookConsumerWidget {
     final currentPubkey = ref.watch(currentPubkeyProvider);
     final userCache = ref.watch(userCacheProvider);
 
+    // Preload profiles for channel members so @mention suggestions show names.
+    useEffect(() {
+      final memberList = membersAsync.asData?.value ?? <ChannelMember>[];
+      if (memberList.isNotEmpty) {
+        ref
+            .read(userCacheProvider.notifier)
+            .preload(memberList.map((m) => m.pubkey).toList());
+      }
+      return null;
+    }, [membersAsync.asData?.value.length]);
+
     // Typing indicator broadcast — throttled to one event per 3 seconds.
     final lastTypingSentMs = useRef(0);
 
@@ -149,6 +160,7 @@ class ComposeBar extends HookConsumerWidget {
       members,
       mentionQuery.value,
       currentPubkey,
+      userCache,
     );
 
     // Filter channels against the query.
@@ -157,9 +169,10 @@ class ComposeBar extends HookConsumerWidget {
 
     // Insert a selected mention into the text field.
     void insertMention(ChannelMember member) {
-      final name = member.displayName?.trim().isNotEmpty == true
-          ? member.displayName!.trim()
-          : member.pubkey.substring(0, 8);
+      final cached = ref.read(userCacheProvider)[member.pubkey.toLowerCase()];
+      final name = cached?.displayName?.trim().isNotEmpty == true
+          ? cached!.displayName!.trim()
+          : '${member.pubkey.substring(0, 8)}\u2026';
       // Track the resolved pubkey so we can pass it at send time.
       mentionMap.value[name] = member.pubkey;
 
@@ -616,6 +629,7 @@ List<ChannelMember> _filterMembers(
   List<ChannelMember> members,
   String? query,
   String? currentPubkey,
+  Map<String, UserProfile> userCache,
 ) {
   if (query == null) return const [];
   final q = query.toLowerCase();
@@ -627,7 +641,9 @@ List<ChannelMember> _filterMembers(
       )
       .where((m) {
         if (q.isEmpty) return true;
-        final name = (m.displayName ?? '').toLowerCase();
+        final profile = userCache[m.pubkey.toLowerCase()];
+        final name = (profile?.displayName ?? m.displayName ?? '')
+            .toLowerCase();
         final firstName = name.split(RegExp(r'\s+')).first;
         return name.startsWith(q) ||
             firstName.startsWith(q) ||
@@ -675,11 +691,16 @@ class _MentionSuggestions extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox.shrink(),
         itemBuilder: (context, index) {
           final member = suggestions[index];
-          final name = member.labelFor(currentPubkey);
           final profile = userCache[member.pubkey.toLowerCase()];
+          final name = profile?.displayName?.trim().isNotEmpty == true
+              ? profile!.displayName!.trim()
+              : member.labelFor(currentPubkey);
           final avatarUrl = profile?.avatarUrl;
-          final initial = (member.displayName ?? member.pubkey)[0]
-              .toUpperCase();
+          final initial =
+              (profile?.displayName?.trim().isNotEmpty == true
+                      ? profile!.displayName!.trim()
+                      : member.pubkey)[0]
+                  .toUpperCase();
 
           return ListTile(
             dense: true,

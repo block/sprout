@@ -222,7 +222,11 @@ class _MemberTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final label = member.labelFor(currentPubkey);
+    final label = isSelf
+        ? 'You'
+        : (profile?.displayName?.trim().isNotEmpty == true
+              ? profile!.displayName!.trim()
+              : member.labelFor(currentPubkey));
     final initial = label.substring(0, 1).toUpperCase();
     final showManagementActions = canManage && !isSelf && !member.isOwner;
     final showMenu = showManagementActions || onViewActivity != null;
@@ -288,7 +292,11 @@ class _MemberTile extends ConsumerWidget {
     WidgetRef ref, {
     required bool showManagementActions,
   }) {
-    final label = member.labelFor(currentPubkey);
+    final label = isSelf
+        ? 'You'
+        : (profile?.displayName?.trim().isNotEmpty == true
+              ? profile!.displayName!.trim()
+              : member.labelFor(currentPubkey));
     final canChangeRole = showManagementActions && !member.isBot;
     showModalBottomSheet<void>(
       context: context,
