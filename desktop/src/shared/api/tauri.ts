@@ -1206,3 +1206,6 @@ export async function applyWorkspace(
     token: token ?? null,
   });
 }
+
+export const setPreventSleepActive = (active: boolean) =>
+  invokeTauri("set_prevent_sleep_active", { active });
