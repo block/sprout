@@ -146,7 +146,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   }
 
   return dayGroups.map((group) => (
-    <section className="flex flex-col gap-2" key={group.key}>
+    <section className="flex flex-col gap-2.5" key={group.key}>
       <DayDivider label={group.label} />
       {group.elements}
     </section>

@@ -262,18 +262,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           currentPubkey={currentPubkey}
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
-          inlineFooter={
-            hasBotActivity ? (
-              <div className="flex justify-start pl-[3.125rem]">
-                <BotActivityBar
-                  agents={agentSessionAgents}
-                  onOpenAgentSession={onOpenAgentSession}
-                  openAgentSessionPubkey={openAgentSessionPubkey}
-                  typingBotPubkeys={botTypingPubkeys}
-                />
-              </div>
-            ) : null
-          }
           isFetchingOlder={isFetchingOlder}
           personaLookup={personaLookup}
           profiles={profiles}
@@ -309,6 +297,18 @@ export const ChannelPane = React.memo(function ChannelPane({
               profiles={profiles}
               typingPubkeys={typingPubkeys}
             />
+          </div>
+        ) : null}
+        {hasBotActivity ? (
+          <div className="relative z-10 bg-background px-4 pb-2 sm:px-6">
+            <div className="mx-auto flex w-full max-w-4xl justify-start pl-[3.125rem]">
+              <BotActivityBar
+                agents={agentSessionAgents}
+                onOpenAgentSession={onOpenAgentSession}
+                openAgentSessionPubkey={openAgentSessionPubkey}
+                typingBotPubkeys={botTypingPubkeys}
+              />
+            </div>
           </div>
         ) : null}
         {isNonMemberView ? (

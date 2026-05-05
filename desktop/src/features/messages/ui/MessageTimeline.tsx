@@ -15,7 +15,6 @@ import { useTimelineScrollManager } from "./useTimelineScrollManager";
 type MessageTimelineProps = {
   channelId?: string | null;
   messages: TimelineMessage[];
-  inlineFooter?: React.ReactNode;
   isLoading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
@@ -48,7 +47,6 @@ type MessageTimelineProps = {
 export const MessageTimeline = React.memo(function MessageTimeline({
   channelId,
   messages,
-  inlineFooter,
   isLoading = false,
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
@@ -190,7 +188,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                   searchMatchingMessageIds={searchMatchingMessageIds}
                   searchQuery={searchQuery}
                 />
-                {inlineFooter}
               </>
             ) : null}
 
