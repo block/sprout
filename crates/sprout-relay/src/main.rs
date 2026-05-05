@@ -183,10 +183,24 @@ async fn main() -> anyhow::Result<()> {
     let relay_keypair = if let Some(hex) = &config.relay_private_key {
         nostr::Keys::parse(hex)
             .map_err(|e| anyhow::anyhow!("invalid SPROUT_RELAY_PRIVATE_KEY: {e}"))?
-    } else {
-        let keys = nostr::Keys::generate();
-        tracing::info!("Generated relay keypair: {}", keys.public_key().to_hex());
+    } else if !config.require_auth_token {
+        // Dev mode: use a deterministic keypair so addressable events (kind:39000/39001/39002)
+        // replace correctly across restarts. Without this, each restart generates a new pubkey
+        // and replace_addressable_event inserts duplicates instead of replacing.
+        const DEV_RELAY_PRIVKEY: &str =
+            "0000000000000000000000000000000000000000000000000000000000000001";
+        let keys = nostr::Keys::parse(DEV_RELAY_PRIVKEY).expect("hardcoded dev key is valid");
+        tracing::warn!(
+            pubkey = %keys.public_key().to_hex(),
+            "Using hardcoded dev relay keypair (SPROUT_REQUIRE_AUTH_TOKEN=false). \
+             Set SPROUT_RELAY_PRIVATE_KEY for production."
+        );
         keys
+    } else {
+        panic!(
+            "SPROUT_RELAY_PRIVATE_KEY must be set when SPROUT_REQUIRE_AUTH_TOKEN=true. \
+             A stable relay identity is required for production."
+        );
     };
 
     config

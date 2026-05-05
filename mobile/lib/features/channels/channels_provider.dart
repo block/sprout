@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
+import '../../shared/utils/string_utils.dart';
 import 'channel.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
@@ -75,10 +76,59 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       NostrFilters.channelMetadata(channelIds),
     );
 
-    final channels = <Channel>[];
+    // Dedupe by `d` tag (channel id) — kind:39000 is parameterized-replaceable,
+    // so logically there's exactly one current event per id, but stale revisions
+    // from before the relay's d_tag backfill can linger. Keep the highest
+    // `created_at` per id so the latest channel_type / name wins.
+    final latestMetaPerId = <String, NostrEvent>{};
     for (final event in metas) {
       if (event.kind != 39000) continue;
-      channels.add(_channelFromMeta(event, isMember: true));
+      final id = event.getTagValue('d');
+      if (id == null) continue;
+      final existing = latestMetaPerId[id];
+      if (existing == null || event.createdAt > existing.createdAt) {
+        latestMetaPerId[id] = event;
+      }
+    }
+    final dedupedMetas = latestMetaPerId.values;
+
+    // Resolve DM participant display names. Relay stores DM channels with
+    // literal name="DM"; pure-Nostr architecture pushes name resolution to
+    // the client, so collect non-self participant pubkeys across all DM
+    // metas and batch-fetch their kind:0 profiles in one round-trip.
+    final dmParticipants = <String>{};
+    final myPkLower = myPk.toLowerCase();
+    for (final event in dedupedMetas) {
+      final data = ChannelData.fromEvent(event);
+      if (data.channelType != 'dm') continue;
+      for (final pk in data.participantPubkeys) {
+        final lower = pk.toLowerCase();
+        if (lower != myPkLower) dmParticipants.add(lower);
+      }
+    }
+
+    final displayNames = <String, String>{};
+    if (dmParticipants.isNotEmpty) {
+      final profileEvents = await session.fetchHistory(
+        NostrFilters.profilesBatch(dmParticipants.toList()),
+      );
+      for (final event in profileEvents) {
+        if (event.kind != 0) continue;
+        final profile = ProfileData.fromEvent(event);
+        final label = profile.displayName?.trim().isNotEmpty == true
+            ? profile.displayName!.trim()
+            : profile.nip05?.trim().isNotEmpty == true
+            ? profile.nip05!.trim()
+            : shortPubkey(profile.pubkey);
+        displayNames[profile.pubkey.toLowerCase()] = label;
+      }
+    }
+
+    final channels = <Channel>[];
+    for (final event in dedupedMetas) {
+      channels.add(
+        _channelFromMeta(event, isMember: true, displayNames: displayNames),
+      );
     }
 
     channels.sort((left, right) {
@@ -86,7 +136,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
           (_channelTypeOrder[left.channelType] ?? 99) -
           (_channelTypeOrder[right.channelType] ?? 99);
       if (typeOrder != 0) return typeOrder;
-      return left.name.compareTo(right.name);
+      // Case-insensitive to match desktop's `localeCompare` ordering.
+      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
     });
 
     if (subscribeLive) {
@@ -96,8 +147,22 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   }
 
   /// Build a [Channel] from a kind:39000 metadata event.
-  Channel _channelFromMeta(NostrEvent event, {required bool isMember}) {
+  ///
+  /// [displayNames] maps lowercase participant pubkey → resolved label and is
+  /// used to populate [Channel.participants] for DMs so [Channel.displayLabel]
+  /// can render real names instead of the relay-canonical "DM" name.
+  Channel _channelFromMeta(
+    NostrEvent event, {
+    required bool isMember,
+    Map<String, String> displayNames = const {},
+  }) {
     final data = ChannelData.fromEvent(event);
+    final participants = data.channelType == 'dm'
+        ? [
+            for (final pk in data.participantPubkeys)
+              displayNames[pk.toLowerCase()] ?? shortPubkey(pk),
+          ]
+        : const <String>[];
     return Channel(
       id: data.id,
       name: data.name,
@@ -112,7 +177,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       ),
       memberCount: 0,
       lastMessageAt: null,
-      participants: const [],
+      participants: participants,
       participantPubkeys: data.participantPubkeys,
       isMember: isMember,
     );
