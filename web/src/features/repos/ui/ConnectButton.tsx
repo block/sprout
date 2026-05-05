@@ -10,7 +10,7 @@ export function ConnectButton({ className }: { className?: string }) {
     <Button asChild className={className}>
       <a href={deepLink}>
         <ExternalLink className="h-4 w-4" />
-        Connect to Relay
+        Open in Sprout
       </a>
     </Button>
   );
