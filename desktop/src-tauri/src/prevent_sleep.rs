@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 #[derive(Default)]
 pub struct PreventSleepState {
     assertion_id: Option<u32>,
-    timer_abort: Option<tokio::task::AbortHandle>,
+    timer_handle: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 // ── macOS implementation ────────────────────────────────────────────────────
@@ -111,12 +111,12 @@ pub fn acquire(
     if guard.assertion_id.is_some() {
         let handle = app_handle.clone();
         let timer_state = Arc::clone(state);
-        let timer_task = tokio::spawn(async move {
+        let timer_task = tauri::async_runtime::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(CAP_SECONDS)).await;
             release(&timer_state);
             let _ = handle.emit("prevent-sleep-expired", ());
         });
-        guard.timer_abort = Some(timer_task.abort_handle());
+        guard.timer_handle = Some(timer_task);
     }
 
     Ok(())
@@ -129,8 +129,8 @@ pub fn release(state: &Arc<Mutex<PreventSleepState>>) {
         Err(_) => return,
     };
 
-    if let Some(abort) = guard.timer_abort.take() {
-        abort.abort();
+    if let Some(handle) = guard.timer_handle.take() {
+        handle.abort();
     }
 
     #[cfg(target_os = "macos")]
