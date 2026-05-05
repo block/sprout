@@ -1,6 +1,5 @@
 target/
 desktop/
-web/
 .git/
 .scratch/
 *.md

@@ -14,6 +14,7 @@ use axum::{
 use serde_json::json;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use crate::api;
@@ -76,10 +77,49 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     // Merge — each sub-router carries its own body limit.
     // Metrics → Trace → CORS applied once over the combined router.
-    api_router
+    let mut merged = api_router
         .merge(media_router)
         .merge(git_router)
-        .merge(git_policy_router)
+        .merge(git_policy_router);
+
+    // When SPROUT_WEB_DIR is set, serve the SPA as a fallback for unmatched routes.
+    if let Some(ref web_dir) = state.config.web_dir {
+        let index_path = web_dir.join("index.html");
+        let spa_fallback = ServeDir::new(web_dir).not_found_service(tower::service_fn(
+            move |req: axum::extract::Request| {
+                let index = index_path.clone();
+                async move {
+                    let path = req.uri().path();
+                    // Reserved API prefixes must 404 normally, not serve index.html.
+                    let reserved = path.starts_with("/api/")
+                        || path.starts_with("/media/")
+                        || path.starts_with("/git/")
+                        || path.starts_with("/internal/")
+                        || path.starts_with("/.well-known/")
+                        || path.starts_with("/huddle/")
+                        || path == "/health"
+                        || path == "/_liveness"
+                        || path == "/_readiness"
+                        || path == "/_status"
+                        || path == "/info";
+                    // Files with extensions (e.g. /assets/missing.js) should 404.
+                    let has_ext = path.rsplit('/').next().is_some_and(|seg| seg.contains('.'));
+                    if reserved || has_ext {
+                        Ok(StatusCode::NOT_FOUND.into_response())
+                    } else {
+                        // SPA client-side route → serve index.html
+                        match tokio::fs::read(&index).await {
+                            Ok(body) => Ok(axum::response::Html(body).into_response()),
+                            Err(_) => Ok(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                        }
+                    }
+                }
+            },
+        ));
+        merged = merged.fallback_service(spa_fallback);
+    }
+
+    merged
         .layer(middleware::from_fn(track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.cors_origins))
@@ -129,6 +169,16 @@ async fn nip11_or_ws_handler(
             .on_upgrade(move |socket| handle_connection(socket, state, addr))
             .into_response(),
         Err(_) => {
+            // Browser requesting HTML and web UI is configured → serve SPA.
+            if let Some(ref dir) = state.config.web_dir {
+                if accept.contains("text/html") {
+                    let index = dir.join("index.html");
+                    if let Ok(body) = tokio::fs::read(&index).await {
+                        return axum::response::Html(body).into_response();
+                    }
+                }
+            }
+            // Not a WS request and not asking for nostr+json — serve NIP-11 as fallback.
             let info = RelayInfo::from_config(&state.config, relay_pubkey.as_deref());
             Json(info).into_response()
         }

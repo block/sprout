@@ -150,6 +150,14 @@ test-integration:
 relay:
     cargo run -p sprout-relay
 
+# Start the relay with the built web UI served from it
+relay-web:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -d node_modules ]] || pnpm install
+    pnpm -C web build
+    SPROUT_WEB_DIR=./web/dist cargo run -p sprout-relay
+
 # Start the relay server in release mode
 relay-release:
     cargo run -p sprout-relay --release
