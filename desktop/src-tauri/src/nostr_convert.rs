@@ -58,6 +58,7 @@ fn tags_named<'a>(event: &'a Event, name: &'a str) -> impl Iterator<Item = &'a [
 pub fn channel_info_from_event(
     event: &Event,
     summary: Option<&Event>,
+    is_member: Option<bool>,
 ) -> Result<ChannelInfo, String> {
     let id = first_tag_value(event, "d")
         .ok_or_else(|| "kind:39000 missing required `d` tag".to_string())?
@@ -133,7 +134,7 @@ pub fn channel_info_from_event(
         archived_at,
         participants,
         participant_pubkeys,
-        is_member: true,
+        is_member: is_member.unwrap_or(true),
         ttl_seconds,
         ttl_deadline,
     })
@@ -547,7 +548,7 @@ mod tests {
                 vec!["public"],
             ],
         );
-        let info = channel_info_from_event(&e, None).unwrap();
+        let info = channel_info_from_event(&e, None, None).unwrap();
         assert_eq!(info.id, "chan-uuid-1");
         assert_eq!(info.name, "general");
         assert_eq!(info.description, "main channel");
@@ -570,7 +571,7 @@ mod tests {
                 vec!["private"],
             ],
         );
-        let info = channel_info_from_event(&e, None).unwrap();
+        let info = channel_info_from_event(&e, None, None).unwrap();
         assert_eq!(info.visibility, "private");
         assert_eq!(info.channel_type, "forum");
     }
@@ -583,7 +584,7 @@ mod tests {
             "",
             vec![vec!["d", "u"], vec!["name", "n"], vec!["t", "forum"]],
         );
-        let info = channel_info_from_event(&e, None).unwrap();
+        let info = channel_info_from_event(&e, None, None).unwrap();
         assert_eq!(info.visibility, "open");
     }
 
@@ -595,7 +596,7 @@ mod tests {
             "",
             vec![vec!["d", "u"], vec!["name", "n"], vec!["hidden"]],
         );
-        let info = channel_info_from_event(&e, None).unwrap();
+        let info = channel_info_from_event(&e, None, None).unwrap();
         assert_eq!(info.channel_type, "dm");
     }
 
@@ -607,7 +608,7 @@ mod tests {
             r#"{"member_count": 7, "last_message_at": "2026-01-01T00:00:00Z"}"#,
             vec![vec!["d", "u"]],
         );
-        let info = channel_info_from_event(&chan, Some(&summary)).unwrap();
+        let info = channel_info_from_event(&chan, Some(&summary), None).unwrap();
         assert_eq!(info.member_count, 7);
         assert_eq!(
             info.last_message_at.as_deref(),
@@ -618,7 +619,7 @@ mod tests {
     #[test]
     fn channel_info_missing_d_errors() {
         let e = ev(39000, "", vec![vec!["name", "n"]]);
-        assert!(channel_info_from_event(&e, None).is_err());
+        assert!(channel_info_from_event(&e, None, None).is_err());
     }
 
     #[test]

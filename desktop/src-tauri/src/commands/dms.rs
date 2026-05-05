@@ -39,7 +39,7 @@ pub async fn open_dm(
 
     metadata
         .first()
-        .map(|ev| nostr_convert::channel_info_from_event(ev, None))
+        .map(|ev| nostr_convert::channel_info_from_event(ev, None, None))
         .transpose()?
         .ok_or_else(|| "DM channel created but metadata not yet available".to_string())
 }
