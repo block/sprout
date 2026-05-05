@@ -29,7 +29,6 @@ class WorkspaceListNotifier extends AsyncNotifier<List<Workspace>> {
     if (existingIndex >= 0) {
       final existing = current[existingIndex];
       final updated = existing.copyWith(
-        token: workspace.token,
         pubkey: workspace.pubkey,
         nsec: workspace.nsec,
       );

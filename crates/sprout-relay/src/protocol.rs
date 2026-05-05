@@ -25,6 +25,13 @@ pub enum ClientMessage {
     },
     /// A CLOSE message cancelling an active subscription.
     Close(String),
+    /// A COUNT message requesting aggregate counts (NIP-45).
+    Count {
+        /// The client-assigned subscription identifier.
+        sub_id: String,
+        /// The filters to count against.
+        filters: Vec<Filter>,
+    },
     /// An AUTH message responding to a NIP-42 challenge.
     Auth(Event),
 }
@@ -98,6 +105,44 @@ impl ClientMessage {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(ClientMessage::Req { sub_id, filters })
             }
+            "COUNT" => {
+                if arr.len() < 2 {
+                    return Err(RelayError::InvalidMessage(
+                        "COUNT requires sub_id".to_string(),
+                    ));
+                }
+                let sub_id = arr[1]
+                    .as_str()
+                    .ok_or_else(|| {
+                        RelayError::InvalidMessage("COUNT sub_id must be a string".to_string())
+                    })?
+                    .to_string();
+                if sub_id.is_empty() {
+                    return Err(RelayError::InvalidMessage(
+                        "COUNT sub_id must not be empty".to_string(),
+                    ));
+                }
+                if sub_id.len() > MAX_SUB_ID_LENGTH {
+                    return Err(RelayError::InvalidMessage(format!(
+                        "COUNT sub_id exceeds maximum length of {MAX_SUB_ID_LENGTH} bytes"
+                    )));
+                }
+                let filter_values = &arr[2..];
+                if filter_values.len() > MAX_FILTERS_PER_REQ {
+                    return Err(RelayError::InvalidMessage(format!(
+                        "COUNT contains {} filters, maximum is {MAX_FILTERS_PER_REQ}",
+                        filter_values.len()
+                    )));
+                }
+                let filters: Vec<Filter> = filter_values
+                    .iter()
+                    .map(|v| {
+                        serde_json::from_value(v.clone())
+                            .map_err(|e| RelayError::InvalidMessage(format!("invalid filter: {e}")))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(ClientMessage::Count { sub_id, filters })
+            }
             "CLOSE" => {
                 if arr.len() < 2 {
                     return Err(RelayError::InvalidMessage(
@@ -163,6 +208,11 @@ impl RelayMessage {
     /// Format a CLOSED message indicating a subscription was terminated by the relay.
     pub fn closed(sub_id: &str, message: &str) -> String {
         serde_json::json!(["CLOSED", sub_id, message]).to_string()
+    }
+
+    /// Format a COUNT response (NIP-45).
+    pub fn count(sub_id: &str, count: u64) -> String {
+        serde_json::json!(["COUNT", sub_id, {"count": count}]).to_string()
     }
 }
 

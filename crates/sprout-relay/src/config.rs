@@ -106,6 +106,12 @@ pub struct Config {
     /// HMAC secret for git pre-receive hook callbacks.
     /// Used to authenticate internal policy endpoint requests.
     pub git_hook_hmac_secret: String,
+
+    // ── Web UI serving ────────────────────────────────────────────────────────
+    /// Optional path to the web UI `dist/` directory.
+    /// When set, the relay serves the SPA from this directory for browser requests.
+    /// When unset, no static file serving happens (relay behaves as before).
+    pub web_dir: Option<std::path::PathBuf>,
 }
 
 impl Config {
@@ -182,18 +188,7 @@ impl Config {
                 }
             });
 
-        let mut auth = sprout_auth::AuthConfig::default();
-        auth.okta.require_token = require_auth_token;
-
-        if let Ok(issuer) = std::env::var("OKTA_ISSUER") {
-            auth.okta.issuer = issuer;
-        }
-        if let Ok(audience) = std::env::var("OKTA_AUDIENCE") {
-            auth.okta.audience = audience;
-        }
-        if let Ok(jwks_uri) = std::env::var("OKTA_JWKS_URI") {
-            auth.okta.jwks_uri = jwks_uri;
-        }
+        let auth = sprout_auth::AuthConfig::default();
 
         if !require_auth_token {
             warn!(
@@ -305,6 +300,26 @@ impl Config {
                 let secret: [u8; 32] = rand::random();
                 hex::encode(secret)
             });
+        // Web UI static file serving
+        let web_dir = std::env::var("SPROUT_WEB_DIR")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from);
+
+        if let Some(ref dir) = web_dir {
+            if !dir.join("index.html").is_file() {
+                return Err(ConfigError::InvalidValue(format!(
+                    "SPROUT_WEB_DIR={} does not contain index.html",
+                    dir.display()
+                )));
+            }
+            tracing::info!(
+                "SPROUT_WEB_DIR={} — serving web UI from relay",
+                dir.display()
+            );
+        }
+
         // Reject explicitly-configured secrets that are too short.
         // The auto-generated fallback is always 64 hex chars (32 bytes), so this
         // only fires when someone sets SPROUT_GIT_HOOK_HMAC_SECRET to a weak value.
@@ -343,6 +358,7 @@ impl Config {
             git_max_repos_per_pubkey,
             git_max_concurrent_ops,
             git_hook_hmac_secret,
+            web_dir,
         })
     }
 }

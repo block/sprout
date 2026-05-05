@@ -247,7 +247,6 @@ pub(crate) fn spawn_transcription_task(
         Ok(k) => k.clone(),
         Err(_) => return,
     };
-    let configured_api_token = state.configured_api_token.clone();
     let relay_base_url = crate::relay::relay_api_base_url_with_override(state);
 
     tauri::async_runtime::spawn(async move {
@@ -285,20 +284,40 @@ pub(crate) fn spawn_transcription_task(
                     continue;
                 }
             };
-            let event_json = event.as_json();
-            let api_token_ref = configured_api_token.as_deref();
-            let pubkey_hex = keys.public_key().to_hex();
+            let body_bytes = event.as_json().into_bytes();
+            let url = format!("{relay_base_url}/events");
+            let auth_header = match crate::relay::build_nip98_auth_header_for_keys(
+                &keys,
+                &reqwest::Method::POST,
+                &url,
+                &body_bytes,
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("sprout-desktop: STT NIP-98 auth: {e}");
+                    continue;
+                }
+            };
 
-            if let Err(e) = crate::events::post_event_raw(
-                &http_client,
-                api_token_ref,
-                &pubkey_hex,
-                event_json,
-                &relay_base_url,
-            )
-            .await
-            {
-                eprintln!("sprout-desktop: STT kind:9 post failed: {e}");
+            let response = http_client
+                .post(&url)
+                .header("Authorization", auth_header)
+                .header("Content-Type", "application/json")
+                .body(body_bytes)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) if resp.status().is_success() => {}
+                Ok(resp) => {
+                    eprintln!(
+                        "sprout-desktop: STT kind:9 post failed: HTTP {}",
+                        resp.status()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("sprout-desktop: STT kind:9 post failed: {e}");
+                }
             }
         }
     });

@@ -4,10 +4,21 @@ import 'package:flutter/widgets.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
+import '../../shared/utils/string_utils.dart';
 import 'channel.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
+/// Loads the user's channel list from the relay over WebSocket.
+///
+/// Two-step query:
+///   1. Fetch kind:39002 membership events tagged `#p:<my-pubkey>` to find
+///      the channel ids I'm a member of.
+///   2. Fetch the corresponding kind:39000 channel metadata events.
+///
+/// Live updates are layered on top via per-channel subscriptions on the
+/// `#h` tag for any of the visible channel event kinds — incoming events
+/// bump `lastMessageAt` for that channel.
 class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   static const _backstopInterval = Duration(seconds: 60);
 
@@ -17,8 +28,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
   @override
   Future<List<Channel>> build() {
-    ref.watch(relayClientProvider);
     final sessionState = ref.watch(relaySessionProvider);
+    ref.watch(relayConfigProvider);
 
     // Re-fetch when the app returns to foreground so channels created on
     // another device while mobile was backgrounded appear immediately.
@@ -38,37 +49,143 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       _clearLiveSubscriptions();
     }
 
-    // Initial fetch via HTTP (reliable, paginated).
     return _fetch(
       subscribeLive: sessionState.status == SessionStatus.connected,
     );
   }
 
   Future<List<Channel>> _fetch({bool subscribeLive = false}) async {
-    final client = ref.read(relayClientProvider);
-    final json = await client.get('/api/channels') as List<dynamic>;
-    final channels = json
-        .cast<Map<String, dynamic>>()
-        .map(Channel.fromJson)
+    final myPk = ref.read(myPubkeyProvider);
+    if (myPk == null) return const [];
+
+    final session = ref.read(relaySessionProvider.notifier);
+
+    // Step 1: find the channels I'm a member of via kind:39002.
+    final memberships = await session.fetchHistory(
+      NostrFilters.myChannels(myPk),
+    );
+    final channelIds = memberships
+        .map((e) => e.getTagValue('d'))
+        .whereType<String>()
+        .toSet()
         .toList();
+    if (channelIds.isEmpty) return const [];
+
+    // Step 2: pull channel metadata in one batched filter.
+    final metas = await session.fetchHistory(
+      NostrFilters.channelMetadata(channelIds),
+    );
+
+    // Dedupe by `d` tag (channel id) — kind:39000 is parameterized-replaceable,
+    // so logically there's exactly one current event per id, but stale revisions
+    // from before the relay's d_tag backfill can linger. Keep the highest
+    // `created_at` per id so the latest channel_type / name wins.
+    final latestMetaPerId = <String, NostrEvent>{};
+    for (final event in metas) {
+      if (event.kind != 39000) continue;
+      final id = event.getTagValue('d');
+      if (id == null) continue;
+      final existing = latestMetaPerId[id];
+      if (existing == null || event.createdAt > existing.createdAt) {
+        latestMetaPerId[id] = event;
+      }
+    }
+    final dedupedMetas = latestMetaPerId.values;
+
+    // Resolve DM participant display names. Relay stores DM channels with
+    // literal name="DM"; pure-Nostr architecture pushes name resolution to
+    // the client, so collect non-self participant pubkeys across all DM
+    // metas and batch-fetch their kind:0 profiles in one round-trip.
+    final dmParticipants = <String>{};
+    final myPkLower = myPk.toLowerCase();
+    for (final event in dedupedMetas) {
+      final data = ChannelData.fromEvent(event);
+      if (data.channelType != 'dm') continue;
+      for (final pk in data.participantPubkeys) {
+        final lower = pk.toLowerCase();
+        if (lower != myPkLower) dmParticipants.add(lower);
+      }
+    }
+
+    final displayNames = <String, String>{};
+    if (dmParticipants.isNotEmpty) {
+      final profileEvents = await session.fetchHistory(
+        NostrFilters.profilesBatch(dmParticipants.toList()),
+      );
+      for (final event in profileEvents) {
+        if (event.kind != 0) continue;
+        final profile = ProfileData.fromEvent(event);
+        final label = profile.displayName?.trim().isNotEmpty == true
+            ? profile.displayName!.trim()
+            : profile.nip05?.trim().isNotEmpty == true
+            ? profile.nip05!.trim()
+            : shortPubkey(profile.pubkey);
+        displayNames[profile.pubkey.toLowerCase()] = label;
+      }
+    }
+
+    final channels = <Channel>[];
+    for (final event in dedupedMetas) {
+      channels.add(
+        _channelFromMeta(event, isMember: true, displayNames: displayNames),
+      );
+    }
+
     channels.sort((left, right) {
       final typeOrder =
           (_channelTypeOrder[left.channelType] ?? 99) -
           (_channelTypeOrder[right.channelType] ?? 99);
-      if (typeOrder != 0) {
-        return typeOrder;
-      }
-      return left.name.compareTo(right.name);
+      if (typeOrder != 0) return typeOrder;
+      // Case-insensitive to match desktop's `localeCompare` ordering.
+      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
     });
+
     if (subscribeLive) {
       await _subscribeLive(channels);
     }
     return channels;
   }
 
+  /// Build a [Channel] from a kind:39000 metadata event.
+  ///
+  /// [displayNames] maps lowercase participant pubkey → resolved label and is
+  /// used to populate [Channel.participants] for DMs so [Channel.displayLabel]
+  /// can render real names instead of the relay-canonical "DM" name.
+  Channel _channelFromMeta(
+    NostrEvent event, {
+    required bool isMember,
+    Map<String, String> displayNames = const {},
+  }) {
+    final data = ChannelData.fromEvent(event);
+    final participants = data.channelType == 'dm'
+        ? [
+            for (final pk in data.participantPubkeys)
+              displayNames[pk.toLowerCase()] ?? shortPubkey(pk),
+          ]
+        : const <String>[];
+    return Channel(
+      id: data.id,
+      name: data.name,
+      channelType: data.channelType,
+      visibility: data.visibility,
+      description: data.description,
+      topic: data.topic,
+      createdBy: event.pubkey,
+      createdAt: DateTime.fromMillisecondsSinceEpoch(
+        event.createdAt * 1000,
+        isUtc: true,
+      ),
+      memberCount: 0,
+      lastMessageAt: null,
+      participants: participants,
+      participantPubkeys: data.participantPubkeys,
+      isMember: isMember,
+    );
+  }
+
   /// Subscribe per-channel to live events (requires `#h` tag for relay
-  /// channel-scoped fan-out). Also starts a 60s REST backstop timer to
-  /// detect newly created channels that we don't yet have subscriptions for.
+  /// channel-scoped fan-out). Also starts a 60s WS backstop poll to detect
+  /// newly created channels we don't yet have subscriptions for.
   Future<void> _subscribeLive(List<Channel> channels) async {
     _clearLiveSubscriptions();
     final subscriptionVersion = _subscriptionVersion;
@@ -114,10 +231,6 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     _unsubscribers.addAll(subscriptions.whereType<void Function()>());
 
-    // Start a lightweight REST backstop so newly created channels (which we
-    // don't have a WS subscription for) get picked up within 60s.
-    // Uses _backstopRefresh instead of refresh() to preserve existing state
-    // on transient REST failures (avoids AsyncError overwriting good data).
     _backstopTimer?.cancel();
     _backstopTimer = Timer.periodic(
       _backstopInterval,
@@ -136,7 +249,6 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         refresh();
         return channels;
       }
-      // Update lastMessageAt for the affected channel.
       final updated = List<Channel>.of(channels);
       final channel = updated[idx];
       final eventTime = DateTime.fromMillisecondsSinceEpoch(
@@ -151,10 +263,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     });
   }
 
-  /// Backstop refresh that preserves existing state on transient REST failure.
-  ///
-  /// Unlike [refresh], this won't overwrite state with [AsyncError] if the
-  /// network request fails — keeping WS live-event handling functional.
+  /// Backstop refresh that preserves existing state on transient failure.
   Future<void> _backstopRefresh() async {
     try {
       final sessionState = ref.read(relaySessionProvider);
@@ -164,7 +273,6 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       state = AsyncData(channels);
     } catch (error) {
       debugPrint('[ChannelsNotifier] backstop refresh failed: $error');
-      // Keep current state — WS events continue working.
     }
   }
 

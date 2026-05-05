@@ -26,6 +26,9 @@ playwright-report/
 test-results/
 blob-report/
 
+# Node modules (pnpm workspace hoists to root)
+node_modules/
+
 # Root npm lockfiles are accidental; desktop uses pnpm in /desktop.
 /package-lock.json
 
@@ -39,4 +42,4 @@ typesense-data/
 # Hermit (toolchain manager cache)
 .hermit/
 doc/
-repos/
+/repos/

@@ -169,13 +169,6 @@ pub fn import_identity(
     let pubkey = keys.public_key();
     *state.keys.lock().map_err(|e| e.to_string())? = keys;
 
-    // Clear any session token: it was minted for the previous pubkey and
-    // would be invalid (or worse, identify us as the previous pubkey) for
-    // any subsequent relay requests.
-    if let Ok(mut token) = state.session_token.lock() {
-        *token = None;
-    }
-
     let pubkey_hex = pubkey.to_hex();
     let bech32 = pubkey
         .to_bech32()
@@ -202,33 +195,12 @@ pub fn create_auth_event(
 ) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|error| error.to_string())?;
 
-    let mut tags = vec![
+    let tags = vec![
         Tag::parse(vec!["relay", &relay_url])
             .map_err(|error| format!("relay tag failed: {error}"))?,
         Tag::parse(vec!["challenge", &challenge])
             .map_err(|error| format!("challenge tag failed: {error}"))?,
     ];
-
-    // Use configured API token first, then fall back to session token
-    // (set by workspace apply).
-    let auth_token = state
-        .configured_api_token
-        .as_deref()
-        .map(String::from)
-        .or_else(|| {
-            state
-                .session_token
-                .lock()
-                .ok()
-                .and_then(|guard| guard.clone())
-        });
-
-    if let Some(token) = auth_token {
-        tags.push(
-            Tag::parse(vec!["auth_token", &token])
-                .map_err(|error| format!("auth token tag failed: {error}"))?,
-        );
-    }
 
     let event = EventBuilder::new(Kind::Custom(22242), "")
         .tags(tags)

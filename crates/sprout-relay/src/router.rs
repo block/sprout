@@ -8,16 +8,16 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware,
     response::{IntoResponse, Json},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Router,
 };
 use serde_json::json;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use crate::api;
-use crate::api::tokens;
 use crate::audio;
 use crate::connection::handle_connection;
 use crate::metrics::track_metrics;
@@ -26,16 +26,10 @@ use crate::state::AppState;
 
 /// Build the axum [`Router`] with all relay routes, middleware, and CORS configuration.
 ///
-/// Uses a dual sub-router pattern so media routes can carry a 50 MB body limit
-/// while all other routes remain capped at 1 MB.  Each sub-router attaches its
-/// own `RequestBodyLimitLayer` before merging; the outer layer adds tracing and
-/// CORS once over the combined router.
+/// Pure Nostr protocol: WebSocket (NIP-01), HTTP bridge (NIP-98), media (Blossom),
+/// git (smart HTTP), NIP-05, and health probes.
 pub fn build_router(state: Arc<AppState>) -> Router {
     // ── Media routes: body limit covers both images and video ────────────────
-    // Transport cap is the larger of image and video limits. Video uploads stream
-    // to disk (never fully buffered); images collect to bytes within this limit.
-    // Per-MIME app-level limits (GIF: 10 MB) are enforced in sprout-media
-    // validation after MIME detection.
     let media_body_limit = state
         .config
         .media
@@ -58,129 +52,74 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     // ── All other routes: 1 MB body limit ────────────────────────────────────
     let api_router = Router::new()
+        // WebSocket + NIP-11
         .route("/", get(nip11_or_ws_handler))
         .route("/info", get(relay_info_handler))
         .route("/.well-known/nostr.json", get(api::nip05::nostr_nip05))
-        // Health endpoints remain on the app router for backward compat (local dev).
-        // In CAKE, probes hit the dedicated health port (8080) instead.
+        // Health endpoints
         .route("/health", get(health_handler))
         .route("/_liveness", get(liveness_handler))
         .route("/_readiness", get(readiness_handler))
-        // Token self-service routes
-        .route(
-            "/api/tokens",
-            post(tokens::post_tokens)
-                .get(tokens::get_tokens)
-                .delete(tokens::delete_all_tokens),
-        )
-        .route("/api/tokens/{id}", delete(tokens::delete_token))
-        .route("/api/channels", get(api::channels_handler))
-        .route("/api/events", post(api::events::submit_event))
-        .route("/api/events/{id}", get(api::get_event))
-        .route("/api/search", get(api::search_handler))
-        .route("/api/agents", get(api::agents_handler))
-        .route(
-            "/api/presence",
-            get(api::presence_handler).put(api::set_presence_handler),
-        )
-        // Workflow routes
-        .route(
-            "/api/channels/{channel_id}/workflows",
-            get(api::list_channel_workflows).post(api::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}",
-            get(api::get_workflow)
-                .put(api::update_workflow)
-                .delete(api::delete_workflow),
-        )
-        .route("/api/workflows/{id}/runs", get(api::list_workflow_runs))
-        .route(
-            "/api/workflows/{id}/runs/{run_id}/approvals",
-            get(api::list_run_approvals),
-        )
-        .route("/api/workflows/{id}/trigger", post(api::trigger_workflow))
-        .route("/api/workflows/{id}/webhook", post(api::workflow_webhook))
-        .route("/api/approvals/{token}/grant", post(api::grant_approval))
-        .route("/api/approvals/{token}/deny", post(api::deny_approval))
-        .route(
-            "/api/approvals/by-hash/{hash}/grant",
-            post(api::grant_approval_by_hash),
-        )
-        .route(
-            "/api/approvals/by-hash/{hash}/deny",
-            post(api::deny_approval_by_hash),
-        )
+        // Nostr HTTP bridge (NIP-98 auth)
+        .route("/events", post(api::bridge::submit_event))
+        .route("/query", post(api::bridge::query_events))
+        .route("/count", post(api::bridge::count_events))
+        // Webhook trigger (secret-authenticated, no NIP-98)
+        .route("/hooks/{id}", post(api::bridge::workflow_webhook))
         // Huddle audio WebSocket route
         .route(
             "/huddle/{channel_id}/audio",
             get(audio::handler::ws_audio_handler),
         )
-        // Relay membership routes (NIP-43)
-        .route(
-            "/api/relay/members",
-            get(api::relay_members::list_relay_members),
-        )
-        .route(
-            "/api/relay/members/me",
-            get(api::relay_members::get_my_relay_membership),
-        )
-        // Membership routes
-        .route("/api/channels/{channel_id}/members", get(api::list_members))
-        // Channel detail + metadata routes
-        .route("/api/channels/{channel_id}", get(api::get_channel_handler))
-        // Canvas routes
-        .route("/api/channels/{channel_id}/canvas", get(api::get_canvas))
-        // Message + thread routes
-        .route(
-            "/api/channels/{channel_id}/messages",
-            get(api::list_messages),
-        )
-        .route(
-            "/api/channels/{channel_id}/threads/{event_id}",
-            get(api::get_thread),
-        )
-        // DM routes
-        .route(
-            "/api/dms",
-            get(api::list_dms_handler).post(api::open_dm_handler),
-        )
-        .route(
-            "/api/dms/{channel_id}/members",
-            post(api::add_dm_member_handler),
-        )
-        .route("/api/dms/{channel_id}/hide", post(api::hide_dm_handler))
-        // Reaction routes
-        .route(
-            "/api/messages/{event_id}/reactions",
-            get(api::list_reactions_handler),
-        )
-        // User profile routes
-        .route("/api/users/me/profile", get(api::get_profile))
-        .route(
-            "/api/users/me/channel-add-policy",
-            put(api::put_channel_add_policy),
-        )
-        .route("/api/users/search", get(api::search_users))
-        .route("/api/users/{pubkey}/profile", get(api::get_user_profile))
-        .route("/api/users/{pubkey}/notes", get(api::get_user_notes))
-        .route(
-            "/api/users/{pubkey}/contact-list",
-            get(api::get_contact_list),
-        )
-        .route("/api/users/batch", post(api::get_users_batch))
-        // Feed route
-        .route("/api/feed", get(api::feed_handler))
         // Reject request bodies larger than 1 MB to prevent resource exhaustion.
         .layer(RequestBodyLimitLayer::new(1024 * 1024))
         .with_state(state.clone());
 
     // Merge — each sub-router carries its own body limit.
     // Metrics → Trace → CORS applied once over the combined router.
-    api_router
+    let mut merged = api_router
         .merge(media_router)
         .merge(git_router)
-        .merge(git_policy_router)
+        .merge(git_policy_router);
+
+    // When SPROUT_WEB_DIR is set, serve the SPA as a fallback for unmatched routes.
+    if let Some(ref web_dir) = state.config.web_dir {
+        let index_path = web_dir.join("index.html");
+        let spa_fallback = ServeDir::new(web_dir).not_found_service(tower::service_fn(
+            move |req: axum::extract::Request| {
+                let index = index_path.clone();
+                async move {
+                    let path = req.uri().path();
+                    // Reserved API prefixes must 404 normally, not serve index.html.
+                    let reserved = path.starts_with("/api/")
+                        || path.starts_with("/media/")
+                        || path.starts_with("/git/")
+                        || path.starts_with("/internal/")
+                        || path.starts_with("/.well-known/")
+                        || path.starts_with("/huddle/")
+                        || path == "/health"
+                        || path == "/_liveness"
+                        || path == "/_readiness"
+                        || path == "/_status"
+                        || path == "/info";
+                    // Files with extensions (e.g. /assets/missing.js) should 404.
+                    let has_ext = path.rsplit('/').next().is_some_and(|seg| seg.contains('.'));
+                    if reserved || has_ext {
+                        Ok(StatusCode::NOT_FOUND.into_response())
+                    } else {
+                        // SPA client-side route → serve index.html
+                        match tokio::fs::read(&index).await {
+                            Ok(body) => Ok(axum::response::Html(body).into_response()),
+                            Err(_) => Ok(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                        }
+                    }
+                }
+            },
+        ));
+        merged = merged.fallback_service(spa_fallback);
+    }
+
+    merged
         .layer(middleware::from_fn(track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.cors_origins))
@@ -189,7 +128,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 /// Build the health-only router for K8s probes (port 8080 in CAKE).
 ///
 /// No metrics middleware, no auth, no CORS, no body limit.
-/// Separate from the app router so probes bypass Istio and don't pollute metrics.
 pub fn build_health_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/_liveness", get(liveness_handler))
@@ -199,20 +137,11 @@ pub fn build_health_router(state: Arc<AppState>) -> Router {
 }
 
 /// Content-negotiated: NIP-11 JSON for plain HTTP, WebSocket upgrade otherwise.
-///
-/// Uses `axum::extract::Request` to manually attempt WS upgrade, so non-WS
-/// requests aren't rejected by the extractor.
-///
-/// `ConnectInfo` is read from request extensions rather than as an extractor —
-/// UDS connections have no `SocketAddr`, so the extractor would panic.
-/// TCP connections populate it via `into_make_service_with_connect_info`; UDS
-/// connections fall back to `0.0.0.0:0`.
 async fn nip11_or_ws_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     req: axum::extract::Request,
 ) -> impl IntoResponse {
-    // Read peer address from extensions (set by TCP serve; absent for UDS).
     let addr = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
@@ -224,7 +153,6 @@ async fn nip11_or_ws_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    // Only advertise NIP-11 `self` when a stable relay key is configured.
     let relay_pubkey = if state.config.relay_private_key.is_some() {
         Some(state.relay_keypair.public_key().to_hex())
     } else {
@@ -241,6 +169,15 @@ async fn nip11_or_ws_handler(
             .on_upgrade(move |socket| handle_connection(socket, state, addr))
             .into_response(),
         Err(_) => {
+            // Browser requesting HTML and web UI is configured → serve SPA.
+            if let Some(ref dir) = state.config.web_dir {
+                if accept.contains("text/html") {
+                    let index = dir.join("index.html");
+                    if let Ok(body) = tokio::fs::read(&index).await {
+                        return axum::response::Html(body).into_response();
+                    }
+                }
+            }
             // Not a WS request and not asking for nostr+json — serve NIP-11 as fallback.
             let info = RelayInfo::from_config(&state.config, relay_pubkey.as_deref());
             Json(info).into_response()
@@ -257,13 +194,9 @@ async fn liveness_handler() -> impl IntoResponse {
 }
 
 /// Readiness probe — checks shutdown flag, Postgres, and Redis connectivity.
-///
-/// Returns 503 immediately during graceful shutdown (SIGTERM received).
-/// Otherwise returns 200 when both backends are reachable, or 503 with details.
 async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use std::time::Duration;
 
-    // CAKE: readiness must return 503 after graceful shutdown begins.
     if state.shutting_down.load(Ordering::Relaxed) {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -294,7 +227,7 @@ async fn readiness_handler(State(state): State<Arc<AppState>>) -> impl IntoRespo
     }
 }
 
-/// Status endpoint — service name, version, uptime. Optional per CAKE contract.
+/// Status endpoint — service name, version, uptime.
 async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime_secs = state.started_at.elapsed().as_secs();
     Json(json!({
@@ -305,10 +238,6 @@ async fn status_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 /// Build a CORS layer from the configured origins list.
-///
-/// If `cors_origins` is empty (dev default), returns a permissive layer.
-/// Otherwise, parses each entry as an `http::HeaderValue` and restricts
-/// `Allow-Origin` to that exact set.
 fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
     if cors_origins.is_empty() {
         return CorsLayer::permissive();
@@ -325,7 +254,6 @@ fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
              refusing to fall back to permissive CORS. Fix the origins or unset \
              the variable for development mode."
         );
-        // Deny all cross-origin requests rather than silently allowing all.
         return CorsLayer::new();
     }
 

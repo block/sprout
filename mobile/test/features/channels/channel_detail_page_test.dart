@@ -1243,9 +1243,9 @@ class _FakeChannelActions extends ChannelActions {
   _FakeChannelActions(Ref ref, {this.onJoinChannel})
     : super(
         ref: ref,
-        client: RelayClient(baseUrl: 'http://localhost:3000'),
+        session: ref.read(relaySessionProvider.notifier),
         signedEventRelay: SignedEventRelay(
-          client: RelayClient(baseUrl: 'http://localhost:3000'),
+          session: ref.read(relaySessionProvider.notifier),
           nsec: null,
         ),
         currentPubkey: 'self',

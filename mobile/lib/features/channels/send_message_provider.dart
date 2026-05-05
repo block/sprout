@@ -1,23 +1,24 @@
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../shared/relay/relay.dart';
+import '../channels/channel_management_provider.dart';
 import '../profile/user_cache_provider.dart';
 import '../profile/user_profile.dart';
 
-/// Sends messages via the relay HTTP API. The event is signed on the client
-/// with the user's nsec, then POSTed as a full signed Nostr event — matching
-/// what the desktop does via `submit_event`.
+/// Sends messages by signing an event with the user's nsec and publishing it
+/// over the relay's NIP-42-authenticated WebSocket session.
 class SendMessage {
   final SignedEventRelay _signedEventRelay;
-  final RelayClient _relayClient;
+  final Future<List<ChannelMember>> Function(String channelId) _fetchMembers;
   final Map<String, UserProfile> Function() _readUserCache;
 
   SendMessage({
     required SignedEventRelay signedEventRelay,
-    required RelayClient relayClient,
+    required Future<List<ChannelMember>> Function(String channelId)
+    fetchMembers,
     required Map<String, UserProfile> Function() readUserCache,
   }) : _signedEventRelay = signedEventRelay,
-       _relayClient = relayClient,
+       _fetchMembers = fetchMembers,
        _readUserCache = readUserCache;
 
   /// Send a text message to a channel.
@@ -80,14 +81,8 @@ class SendMessage {
     // Try to get channel member pubkeys for scoped resolution.
     Set<String>? memberPubkeys;
     try {
-      final json =
-          await _relayClient.get('/api/channels/$channelId/members')
-              as Map<String, dynamic>;
-      final members = json['members'] as List<dynamic>? ?? [];
-      memberPubkeys = {
-        for (final m in members)
-          ((m as Map<String, dynamic>)['pubkey'] as String).toLowerCase(),
-      };
+      final members = await _fetchMembers(channelId);
+      memberPubkeys = {for (final m in members) m.pubkey.toLowerCase()};
     } catch (_) {
       // Non-fatal — fall through to unscoped cache lookup.
     }
@@ -145,10 +140,11 @@ final sendMessageProvider = Provider<SendMessage>((ref) {
   final config = ref.watch(relayConfigProvider);
   return SendMessage(
     signedEventRelay: SignedEventRelay(
-      client: ref.watch(relayClientProvider),
+      session: ref.read(relaySessionProvider.notifier),
       nsec: config.nsec,
     ),
-    relayClient: ref.watch(relayClientProvider),
+    fetchMembers: (channelId) =>
+        ref.read(channelMembersProvider(channelId).future),
     readUserCache: () => ref.read(userCacheProvider),
   );
 });

@@ -31,6 +31,7 @@ class UserProfileSheet extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final pk = pubkey.toLowerCase();
+    final currentPubkey = ref.watch(currentPubkeyProvider);
 
     // Watch cached profile, presence, and user status.
     final profile =
@@ -41,14 +42,15 @@ class UserProfileSheet extends HookConsumerWidget {
     final statusCache = ref.watch(userStatusCacheProvider);
     final userStatus = statusCache[pk];
 
-    // Fetch about from the individual profile endpoint.
+    // Fetch about from the user's kind:0 profile event.
     final aboutFuture = useMemoized(
       () => ref
-          .read(relayClientProvider)
-          .get('/api/users/$pk/profile')
-          .then(
-            (json) => (json as Map<String, dynamic>)['about'] as String? ?? '',
-          )
+          .read(relaySessionProvider.notifier)
+          .fetchHistory(NostrFilters.profile(pk))
+          .then((events) {
+            if (events.isEmpty) return '';
+            return ProfileData.fromEvent(events.first).about ?? '';
+          })
           .catchError((_) => ''),
       [pk],
     );
@@ -207,40 +209,42 @@ class UserProfileSheet extends HookConsumerWidget {
 
                 const SizedBox(height: Grid.xs),
 
-                // Action button — Message
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      Navigator.of(context).pop();
-                      try {
-                        final channel = await ref
-                            .read(channelActionsProvider)
-                            .openDm(pubkeys: [pk]);
-                        if (!context.mounted) return;
-                        await Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => ChannelDetailPage(channel: channel),
-                          ),
-                        );
-                      } catch (_) {
-                        // Silently fail — user tapped but DM open failed.
-                      }
-                    },
-                    icon: const Icon(LucideIcons.messageSquare, size: 18),
-                    label: const Text('Message'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        vertical: Grid.twelve,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(Radii.lg),
+                // Action button — Message (hidden on own profile)
+                if (pk != currentPubkey) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        try {
+                          final channel = await ref
+                              .read(channelActionsProvider)
+                              .openDm(pubkeys: [pk]);
+                          if (!context.mounted) return;
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  ChannelDetailPage(channel: channel),
+                            ),
+                          );
+                        } catch (_) {
+                          // Silently fail — user tapped but DM open failed.
+                        }
+                      },
+                      icon: const Icon(LucideIcons.messageSquare, size: 18),
+                      label: const Text('Message'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: Grid.twelve,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(Radii.lg),
+                        ),
                       ),
                     ),
                   ),
-                ),
-
-                const SizedBox(height: Grid.xxs),
+                  const SizedBox(height: Grid.xxs),
+                ],
               ],
             ),
           ),

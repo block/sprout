@@ -58,13 +58,13 @@ fmt-check:
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Install desktop JS dependencies
+# Install JS dependencies (pnpm workspace — installs all packages from root)
 desktop-install:
-    cd {{desktop_dir}} && pnpm install
+    pnpm install
 
-# Install desktop JS dependencies reproducibly for CI
+# Install JS dependencies reproducibly for CI (pnpm workspace)
 desktop-install-ci:
-    cd {{desktop_dir}} && pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile
 
 # Run desktop lint and format checks
 desktop-check:
@@ -109,7 +109,8 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
-    cd {{desktop_dir}} && pnpm install && pnpm tauri build --target {{target}}
+    pnpm install
+    cd {{desktop_dir}} && pnpm tauri build --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-tauri-fmt-check desktop-build desktop-tauri-check
@@ -149,6 +150,14 @@ test-integration:
 relay:
     cargo run -p sprout-relay
 
+# Start the relay with the built web UI served from it
+relay-web:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -d node_modules ]] || pnpm install
+    pnpm -C web build
+    SPROUT_WEB_DIR=./web/dist cargo run -p sprout-relay
+
 # Start the relay server in release mode
 relay-release:
     cargo run -p sprout-relay --release
@@ -175,9 +184,7 @@ dev *ARGS: _ensure-sidecar-stubs
 staging *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
-    cd {{desktop_dir}}
     pnpm install
-    cd ..
     cargo build --release -p sprout-acp -p sprout-mcp
     cd {{desktop_dir}}
     source ../scripts/instance-env.sh
@@ -205,9 +212,7 @@ desktop-app *ARGS:
 web:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd {{web_dir}}
     [[ -d node_modules ]] || pnpm install
-    cd ..
     source scripts/instance-env.sh
     export VITE_PORT=$((SPROUT_VITE_PORT + 100))
     export VITE_RELAY_URL="${SPROUT_RELAY_URL}"
@@ -215,13 +220,13 @@ web:
     cd {{web_dir}}
     pnpm exec vite --port "${VITE_PORT}" --strictPort
 
-# Install web JS dependencies
+# Install web JS dependencies (pnpm workspace — installs all packages from root)
 web-install:
-    cd {{web_dir}} && pnpm install
+    pnpm install
 
-# Install web JS dependencies reproducibly for CI
+# Install web JS dependencies reproducibly for CI (pnpm workspace)
 web-install-ci:
-    cd {{web_dir}} && pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile
 
 # Run web lint and format checks
 web-check:

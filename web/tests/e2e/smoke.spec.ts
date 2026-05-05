@@ -5,9 +5,7 @@ test("home page loads with Sprout heading", async ({ page }) => {
   await expect(page.locator("header")).toContainText("Sprout");
 });
 
-test("relay URL is visible", async ({ page }) => {
+test("home page shows repositories section", async ({ page }) => {
   await page.goto("/");
-  const relayUrl = page.getByTestId("relay-url");
-  await expect(relayUrl).toBeVisible();
-  await expect(relayUrl).toContainText("ws://");
+  await expect(page.getByText("Repositories")).toBeVisible();
 });

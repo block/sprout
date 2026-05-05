@@ -90,8 +90,8 @@ class SearchNotifier extends Notifier<SearchState> {
 
   @override
   SearchState build() {
-    // Watch relayClientProvider so search state resets on workspace switch.
-    ref.watch(relayClientProvider);
+    // Watch relayConfig so search state resets on workspace switch.
+    ref.watch(relayConfigProvider);
     ref.onDispose(() {
       _debounce?.cancel();
     });
@@ -126,17 +126,37 @@ class SearchNotifier extends Notifier<SearchState> {
 
   Future<void> _searchMessages(String query) async {
     try {
-      final client = ref.read(relayClientProvider);
-      final json =
-          await client.get(
-                '/api/search',
-                queryParams: {'q': query, 'limit': '20'},
-              )
-              as Map<String, dynamic>;
+      final session = ref.read(relaySessionProvider.notifier);
+      final events = await session.fetchHistory(
+        NostrFilter(
+          kinds: const [9, 40002, 45001, 45003],
+          search: query,
+          limit: 20,
+        ),
+      );
 
-      final hits = (json['hits'] as List<dynamic>? ?? [])
-          .cast<Map<String, dynamic>>()
-          .map(SearchHit.fromJson)
+      // Channel-name lookup from the cached channels list — not all hits
+      // will have a known channel (e.g. ones we're not a member of).
+      final channelsById = {
+        for (final c in ref.read(channelsProvider).value ?? const <Channel>[])
+          c.id: c.name,
+      };
+
+      final hits = events
+          .map(
+            (e) => SearchHit(
+              eventId: e.id,
+              content: e.content,
+              kind: e.kind,
+              pubkey: e.pubkey,
+              channelId: e.channelId,
+              channelName: e.channelId != null
+                  ? channelsById[e.channelId!]
+                  : null,
+              createdAt: e.createdAt,
+              score: 0.0,
+            ),
+          )
           .toList();
 
       if (state.query != query) return;

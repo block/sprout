@@ -184,18 +184,10 @@ pub async fn update_managed_agent(
             let agent_keys = Keys::parse(&record.private_key_nsec)
                 .map_err(|e| format!("failed to parse agent keys: {e}"))?;
             let relay_url = record.relay_url.clone();
-            let api_token = record.api_token.clone();
             let display_name = record.name.clone();
             let avatar_url = managed_agent_avatar_url(&record.agent_command);
             let auth_tag = record.auth_tag.clone();
-            Some((
-                agent_keys,
-                relay_url,
-                api_token,
-                display_name,
-                avatar_url,
-                auth_tag,
-            ))
+            Some((agent_keys, relay_url, display_name, avatar_url, auth_tag))
         } else {
             None
         };
@@ -206,15 +198,11 @@ pub async fn update_managed_agent(
 
     // Phase 2: relay profile sync (async, best-effort, outside lock)
     let profile_sync_error =
-        if let Some((agent_keys, relay_url, api_token, display_name, avatar_url, auth_tag)) =
-            sync_params
-        {
+        if let Some((agent_keys, relay_url, display_name, avatar_url, auth_tag)) = sync_params {
             match sync_managed_agent_profile(
                 &state,
                 &relay_url,
                 &agent_keys,
-                api_token.as_deref(),
-                &[],
                 &display_name,
                 avatar_url.as_deref(),
                 auth_tag.as_deref(),

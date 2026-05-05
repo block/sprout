@@ -143,7 +143,13 @@ void main() {
         overrides: [channelsProvider.overrideWith(() => _ErrorNotifier())],
       ),
     );
-    await tester.pumpAndSettle();
+    // The error view is gated on a grace timer in ChannelsPage to absorb
+    // transient AsyncError frames during relay reconnect. Pump once to mount
+    // and schedule the timer, advance the fake clock past the grace window,
+    // then pump again to flush the setState the timer triggered.
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
 
     expect(find.text('Could not load channels'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);

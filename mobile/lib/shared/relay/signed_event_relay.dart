@@ -1,17 +1,18 @@
-import 'dart:convert';
-
 import 'package:nostr/nostr.dart' as nostr;
 
-import 'relay_client.dart';
+import 'nostr_models.dart';
+import 'relay_session.dart';
 
-/// Signs and submits Nostr events through the relay HTTP API.
+/// Signs and submits Nostr events through the relay WebSocket connection.
 class SignedEventRelay {
-  final RelayClient _client;
+  final RelaySessionNotifier _session;
   final String? _nsec;
 
-  SignedEventRelay({required RelayClient client, required String? nsec})
-    : _client = client,
-      _nsec = nsec;
+  SignedEventRelay({
+    required RelaySessionNotifier session,
+    required String? nsec,
+  }) : _session = session,
+       _nsec = nsec;
 
   /// The hex pubkey derived from the signing key, or null if no key.
   String? get pubkey {
@@ -22,7 +23,10 @@ class SignedEventRelay {
     return nostr.Keychain(privkeyHex).public;
   }
 
-  Future<void> submit({
+  /// Sign and submit an event. Returns the relay's OK response as a [NostrEvent]
+  /// whose `content` field contains the OK message (e.g. `"response:{...}"`
+  /// for command kinds).
+  Future<NostrEvent> submit({
     required int kind,
     required String content,
     required List<List<String>> tags,
@@ -47,13 +51,7 @@ class SignedEventRelay {
       verify: false,
     );
 
-    final response = await _client.postRaw(
-      '/api/events',
-      body: jsonEncode(event.toJson()),
-    );
-    final payload = jsonDecode(response) as Map<String, dynamic>;
-    if (payload['accepted'] != true) {
-      throw Exception(payload['message'] ?? 'Event rejected by relay');
-    }
+    final nostrEvent = NostrEvent.fromJson(event.toJson());
+    return _session.publish(nostrEvent);
   }
 }

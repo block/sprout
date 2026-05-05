@@ -1,20 +1,26 @@
 use crate::client::SproutClient;
 use crate::error::CliError;
-use crate::validate::percent_encode;
 
+/// Get activity feed — query events mentioning our pubkey (via p-tag).
 pub async fn cmd_get_feed(
     client: &SproutClient,
     since: Option<i64>,
     limit: Option<u32>,
-    types: Option<&str>,
+    _types: Option<&str>,
 ) -> Result<(), CliError> {
+    let my_pk = client.keys().public_key().to_hex();
     let limit = limit.unwrap_or(20).min(50);
-    let mut path = format!("/api/feed?limit={}", limit);
+
+    let mut filter = serde_json::json!({
+        "#p": [my_pk],
+        "limit": limit
+    });
+
     if let Some(s) = since {
-        path.push_str(&format!("&since={s}"));
+        filter["since"] = serde_json::json!(s);
     }
-    if let Some(t) = types {
-        path.push_str(&format!("&types={}", percent_encode(t)));
-    }
-    client.run_get(&path).await
+
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }

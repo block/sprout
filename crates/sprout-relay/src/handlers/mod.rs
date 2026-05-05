@@ -2,11 +2,19 @@
 pub mod auth;
 /// Subscription close (CLOSE) handler.
 pub mod close;
+/// Command executor — transactional processing for command kinds.
+pub mod command_executor;
+/// NIP-45 COUNT handler.
+pub mod count;
+/// EVENT handler — WS dispatcher → ingest pipeline → fan-out.
 pub mod event;
+/// imeta tag validation helpers.
+pub mod imeta;
 /// Transport-neutral event ingestion pipeline.
 pub mod ingest;
 /// NIP-43 relay membership admin command handler (kinds 9030–9032).
 pub mod relay_admin;
+/// REQ handler — subscribe, deliver historical events, then EOSE.
 pub mod req;
 /// NIP-29 and NIP-25 side-effect handlers.
 pub mod side_effects;

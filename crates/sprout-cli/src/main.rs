@@ -4,8 +4,9 @@ mod error;
 mod validate;
 
 use clap::{Parser, Subcommand};
-use client::{Auth, SproutClient};
+use client::SproutClient;
 use error::CliError;
+use nostr::Keys;
 
 // ---------------------------------------------------------------------------
 // Top-level CLI
@@ -21,14 +22,9 @@ struct Cli {
     )]
     relay: String,
 
-    #[arg(long, env = "SPROUT_API_TOKEN")]
-    token: Option<String>,
-
-    #[arg(long, env = "SPROUT_PRIVATE_KEY", hide = true)]
+    /// Nostr private key (hex or nsec). This is the CLI's identity.
+    #[arg(long, env = "SPROUT_PRIVATE_KEY")]
     private_key: Option<String>,
-
-    #[arg(long, env = "SPROUT_PUBKEY")]
-    pubkey: Option<String>,
 
     #[command(subcommand)]
     command: Cmd,
@@ -114,8 +110,6 @@ enum Cmd {
         depth_limit: Option<u32>,
         #[arg(long)]
         limit: Option<u32>,
-        #[arg(long)]
-        cursor: Option<String>,
     },
     /// Search messages
     Search {
@@ -281,8 +275,6 @@ enum Cmd {
     /// List DM conversations
     ListDms {
         #[arg(long)]
-        cursor: Option<String>,
-        #[arg(long)]
         limit: Option<u32>,
     },
     /// Open a DM with one or more users (1–8 pubkeys)
@@ -324,11 +316,6 @@ enum Cmd {
     SetPresence {
         #[arg(long)]
         status: String,
-    },
-    /// Set who can add you to channels
-    SetChannelAddPolicy {
-        #[arg(long)]
-        policy: String,
     },
 
     // ---- Workflows ---------------------------------------------------------
@@ -375,6 +362,7 @@ enum Cmd {
     },
     /// Approve or deny a workflow approval step
     ApproveStep {
+        /// The approval token UUID (from the approval request)
         #[arg(long)]
         token: String,
         /// Whether to approve: "true" or "false"
@@ -394,19 +382,6 @@ enum Cmd {
         #[arg(long)]
         types: Option<String>,
     },
-
-    // ---- Auth & Tokens -----------------------------------------------------
-    /// Mint a long-lived API token (prints token to stdout)
-    Auth,
-    /// List your API tokens
-    ListTokens,
-    /// Delete an API token by ID
-    DeleteToken {
-        #[arg(long)]
-        id: String,
-    },
-    /// Delete all your API tokens
-    DeleteAllTokens,
 
     // Social
     /// Publish a short text note (kind:1) to the global feed.
@@ -446,14 +421,8 @@ enum Cmd {
         #[arg(long)]
         limit: Option<u32>,
         /// Unix timestamp cursor — return notes created before this time.
-        /// Use with --before-id for stable composite cursor pagination.
         #[arg(long)]
         before: Option<i64>,
-        /// Hex event ID cursor for composite keyset pagination. Use together with
-        /// --before to avoid skipping same-second events. Pass the before_id value
-        /// from the previous page's next_cursor response.
-        #[arg(long)]
-        before_id: Option<String>,
     },
 
     /// Get a user's contact/follow list (kind:3) by hex pubkey.
@@ -527,12 +496,6 @@ fn parse_bool_flag(flag_name: &str, value: &str) -> Result<bool, CliError> {
 async fn run(cli: Cli) -> Result<(), CliError> {
     let relay_url = client::normalize_relay_url(&cli.relay);
 
-    // Auth command is special — runs before SproutClient creation.
-    // Passes --private-key flag; cmd_auth falls back to SPROUT_PRIVATE_KEY env var.
-    if let Cmd::Auth = &cli.command {
-        return commands::auth::cmd_auth(&relay_url, cli.private_key.as_deref()).await;
-    }
-
     // Pack commands are local-only — no relay connection needed.
     if let Cmd::Pack(ref sub) = cli.command {
         return match sub {
@@ -541,30 +504,15 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         };
     }
 
-    // Auth resolution: token > private_key (auto-mint) > pubkey > error
-    //
-    // When SPROUT_PRIVATE_KEY is set, auto_mint_token returns (token, keys).
-    // The keys are retained on the client for signing write operations.
-    let (auth, retained_keys) = if let Some(token) = cli.token {
-        (Auth::Bearer(token), None)
-    } else if let Some(key) = cli.private_key {
-        let (minted, keys) = client::auto_mint_token(&relay_url, &key).await?;
-        (Auth::Bearer(minted), Some(keys))
-    } else if let Some(pk) = cli.pubkey {
-        (Auth::DevMode(pk), None)
-    } else {
-        return Err(CliError::Auth(
-            "Set SPROUT_API_TOKEN, SPROUT_PRIVATE_KEY, or SPROUT_PUBKEY".into(),
-        ));
-    };
+    // Auth: private key is required for all relay operations.
+    // The keypair IS the identity — no tokens, no other auth.
+    let private_key_str = cli.private_key.ok_or_else(|| {
+        CliError::Auth("SPROUT_PRIVATE_KEY is required (use --private-key or set env var)".into())
+    })?;
+    let keys = Keys::parse(&private_key_str)
+        .map_err(|e| CliError::Key(format!("invalid SPROUT_PRIVATE_KEY: {e}")))?;
 
-    let client = {
-        let c = SproutClient::new(relay_url, auth)?;
-        match retained_keys {
-            Some(k) => c.with_keys(k),
-            None => c,
-        }
-    };
+    let client = SproutClient::new(relay_url, keys)?;
 
     match cli.command {
         // ---- Messages ------------------------------------------------------
@@ -649,17 +597,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             event,
             depth_limit,
             limit,
-            cursor,
         } => {
-            commands::messages::cmd_get_thread(
-                &client,
-                &channel,
-                &event,
-                depth_limit,
-                limit,
-                cursor.as_deref(),
-            )
-            .await
+            commands::messages::cmd_get_thread(&client, &channel, &event, depth_limit, limit).await
         }
         Cmd::Search { query, limit } => {
             commands::messages::cmd_search(&client, &query, limit).await
@@ -765,9 +704,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
 
         // ---- DMs -----------------------------------------------------------
-        Cmd::ListDms { cursor, limit } => {
-            commands::dms::cmd_list_dms(&client, cursor.as_deref(), limit).await
-        }
+        Cmd::ListDms { limit } => commands::dms::cmd_list_dms(&client, limit).await,
         Cmd::OpenDm { pubkeys } => commands::dms::cmd_open_dm(&client, &pubkeys).await,
         Cmd::AddDmMember { channel, pubkey } => {
             commands::dms::cmd_add_dm_member(&client, &channel, &pubkey).await
@@ -792,9 +729,6 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Cmd::GetPresence { pubkeys } => commands::users::cmd_get_presence(&client, &pubkeys).await,
         Cmd::SetPresence { status } => commands::users::cmd_set_presence(&client, &status).await,
-        Cmd::SetChannelAddPolicy { policy } => {
-            commands::users::cmd_set_channel_add_policy(&client, &policy).await
-        }
 
         // ---- Workflows -----------------------------------------------------
         Cmd::ListWorkflows { channel } => {
@@ -846,29 +780,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             pubkey,
             limit,
             before,
-            before_id,
-        } => {
-            commands::social::cmd_get_user_notes(
-                &client,
-                &pubkey,
-                limit,
-                before,
-                before_id.as_deref(),
-            )
-            .await
-        }
+        } => commands::social::cmd_get_user_notes(&client, &pubkey, limit, before).await,
         Cmd::GetContactList { pubkey } => {
             commands::social::cmd_get_contact_list(&client, &pubkey).await
         }
 
         // ---- Pack (local) --------------------------------------------------
         Cmd::Pack(_) => unreachable!("handled above"),
-
-        // ---- Auth & Tokens -------------------------------------------------
-        Cmd::Auth => unreachable!("handled above"),
-        Cmd::ListTokens => commands::auth::cmd_list_tokens(&client).await,
-        Cmd::DeleteToken { id } => commands::auth::cmd_delete_token(&client, &id).await,
-        Cmd::DeleteAllTokens => commands::auth::cmd_delete_all_tokens(&client).await,
     }
 }
 
@@ -915,23 +833,22 @@ mod tests {
         assert!(super::parse_bool_flag("--approved", "").is_err());
     }
 
-    /// Parity: the CLI exposes exactly the expected 55 commands.
-    /// If a command is added or removed, this test forces a conscious update.
+    /// Parity: the CLI exposes exactly the expected 47 commands.
+    /// Token commands removed (auth, list-tokens, delete-token, delete-all-tokens).
+    /// SetChannelAddPolicy removed (relay-side policy now).
+    /// Cursor removed from get-thread, list-dms. before_id removed from get-user-notes.
     #[test]
-    fn command_inventory_is_55() {
+    fn command_inventory_is_47() {
         let expected: Vec<&str> = vec![
             "add-channel-member",
             "add-dm-member",
             "add-reaction",
             "approve-step",
             "archive-channel",
-            "auth",
             "create-channel",
             "create-workflow",
-            "delete-all-tokens",
             "delete-channel",
             "delete-message",
-            "delete-token",
             "delete-workflow",
             "edit-message",
             "get-canvas",
@@ -952,7 +869,6 @@ mod tests {
             "list-channel-members",
             "list-channels",
             "list-dms",
-            "list-tokens",
             "list-workflows",
             "open-dm",
             "pack",
@@ -963,7 +879,6 @@ mod tests {
             "send-diff-message",
             "send-message",
             "set-canvas",
-            "set-channel-add-policy",
             "set-channel-purpose",
             "set-channel-topic",
             "set-contact-list",
@@ -987,8 +902,9 @@ mod tests {
 
         assert_eq!(
             actual.len(),
-            55,
-            "Expected 55 commands, got {}. Actual: {:?}",
+            expected.len(),
+            "Expected {} commands, got {}. Actual: {:?}",
+            expected.len(),
             actual.len(),
             actual
         );

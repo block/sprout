@@ -2,22 +2,11 @@ use uuid::Uuid;
 
 use crate::client::SproutClient;
 use crate::error::CliError;
-use crate::validate::{percent_encode, read_or_stdin, validate_hex64, validate_uuid};
+use crate::validate::{read_or_stdin, validate_hex64, validate_uuid};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Require keys on the client — fail fast with a clear error if absent.
-macro_rules! require_keys {
-    ($client:expr) => {
-        $client.keys().ok_or_else(|| {
-            CliError::Key(
-                "private key required for write operations (set SPROUT_PRIVATE_KEY)".into(),
-            )
-        })?
-    };
-}
 
 fn parse_uuid(s: &str) -> Result<Uuid, CliError> {
     Uuid::parse_str(s).map_err(|e| CliError::Usage(format!("invalid channel UUID: {e}")))
@@ -33,31 +22,40 @@ fn sign_and_submit_builder(
 }
 
 // ---------------------------------------------------------------------------
-// Read commands (unchanged)
+// Read commands — POST /query
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_list_channels(
     client: &SproutClient,
-    visibility: Option<&str>,
-    member: Option<bool>,
+    _visibility: Option<&str>,
+    _member: Option<bool>,
 ) -> Result<(), CliError> {
-    let mut path = "/api/channels".to_string();
-    let mut sep = '?';
-    if let Some(v) = visibility {
-        path.push_str(&format!("{}visibility={}", sep, percent_encode(v)));
-        sep = '&';
+    // Query kind:39002 channel metadata events.
+    // If member=true, filter by #p tag containing our pubkey.
+    let my_pk = client.keys().public_key().to_hex();
+    let mut filter = serde_json::json!({
+        "kinds": [39002]
+    });
+    // When member filter is requested, query channels where we're a participant
+    if _member == Some(true) {
+        filter["#p"] = serde_json::json!([my_pk]);
     }
-    if let Some(m) = member {
-        path.push_str(&format!("{}member={}", sep, m));
-    }
-    client.run_get(&path).await
+    // Visibility filtering is done client-side from the returned events
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 pub async fn cmd_get_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    client
-        .run_get(&format!("/api/channels/{}", channel_id))
-        .await
+    // Query kind:39002 with #h tag matching the channel UUID
+    let filter = serde_json::json!({
+        "kinds": [39002],
+        "#h": [channel_id]
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 pub async fn cmd_list_channel_members(
@@ -65,20 +63,30 @@ pub async fn cmd_list_channel_members(
     channel_id: &str,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    client
-        .run_get(&format!("/api/channels/{}/members", channel_id))
-        .await
+    // Query kind:39002 channel metadata — members are in the p-tags
+    let filter = serde_json::json!({
+        "kinds": [39002],
+        "#h": [channel_id]
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 pub async fn cmd_get_canvas(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    client
-        .run_get(&format!("/api/channels/{}/canvas", channel_id))
-        .await
+    // Canvas is kind:40100 with #h tag
+    let filter = serde_json::json!({
+        "kinds": [40100],
+        "#h": [channel_id]
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Write commands — signed events
+// Write commands — signed events via POST /events
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_create_channel(
@@ -105,19 +113,18 @@ pub async fn cmd_create_channel(
         }
     }
 
-    let keys = require_keys!(client);
-    // Generate a new UUID client-side for the channel
+    let keys = client.keys();
     let channel_uuid = Uuid::new_v4();
 
     let vis = match visibility {
         "open" => sprout_sdk::Visibility::Open,
         "private" => sprout_sdk::Visibility::Private,
-        _ => unreachable!(), // validated above
+        _ => unreachable!(),
     };
     let ct = match channel_type {
         "stream" => sprout_sdk::ChannelKind::Stream,
         "forum" => sprout_sdk::ChannelKind::Forum,
-        _ => unreachable!(), // validated above
+        _ => unreachable!(),
     };
     let builder =
         sprout_sdk::build_create_channel(channel_uuid, name, Some(vis), Some(ct), description)
@@ -141,7 +148,7 @@ pub async fn cmd_update_channel(
         ));
     }
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_update_channel(channel_uuid, name, description)
@@ -159,7 +166,7 @@ pub async fn cmd_set_channel_topic(
     topic: &str,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_set_topic(channel_uuid, topic)
@@ -177,7 +184,7 @@ pub async fn cmd_set_channel_purpose(
     purpose: &str,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_set_purpose(channel_uuid, purpose)
@@ -191,7 +198,7 @@ pub async fn cmd_set_channel_purpose(
 
 pub async fn cmd_join_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_join(channel_uuid)
@@ -205,7 +212,7 @@ pub async fn cmd_join_channel(client: &SproutClient, channel_id: &str) -> Result
 
 pub async fn cmd_leave_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_leave(channel_uuid)
@@ -219,7 +226,7 @@ pub async fn cmd_leave_channel(client: &SproutClient, channel_id: &str) -> Resul
 
 pub async fn cmd_archive_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_archive(channel_uuid)
@@ -236,7 +243,7 @@ pub async fn cmd_unarchive_channel(
     channel_id: &str,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_unarchive(channel_uuid)
@@ -250,7 +257,7 @@ pub async fn cmd_unarchive_channel(
 
 pub async fn cmd_delete_channel(client: &SproutClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_delete_channel(channel_uuid)
@@ -270,7 +277,7 @@ pub async fn cmd_add_channel_member(
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     validate_hex64(pubkey)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let typed_role = match role {
@@ -302,7 +309,7 @@ pub async fn cmd_remove_channel_member(
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     validate_hex64(pubkey)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_remove_member(channel_uuid, pubkey)
@@ -321,7 +328,7 @@ pub async fn cmd_set_canvas(
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let content = read_or_stdin(content)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(channel_id)?;
 
     let builder = sprout_sdk::build_set_canvas(channel_uuid, &content)

@@ -6,6 +6,7 @@ mod managed_agents;
 mod media_proxy;
 mod migration;
 mod models;
+pub mod nostr_convert;
 mod relay;
 mod util;
 
@@ -31,6 +32,7 @@ use std::sync::{
 };
 use tauri::{Emitter, Manager, RunEvent};
 use tauri_plugin_window_state::StateFlags;
+use url::Url;
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -151,9 +153,76 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Handle an incoming `sprout://` deep link URL.
+///
+/// Currently supports:
+/// - `sprout://connect?relay=<ws(s)://...>` — emits `deep-link-connect` to the frontend
+fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
+    let url = match Url::parse(url_str) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("sprout-desktop: invalid deep link URL {url_str:?}: {e}");
+            return;
+        }
+    };
+
+    if url.scheme() != "sprout" {
+        eprintln!("sprout-desktop: ignoring non-sprout deep link: {url_str}");
+        return;
+    }
+
+    match url.host_str() {
+        Some("connect") => {
+            let relay = url
+                .query_pairs()
+                .find(|(k, _)| k == "relay")
+                .map(|(_, v)| v.into_owned());
+            let Some(relay_url) = relay else {
+                eprintln!("sprout-desktop: connect deep link missing relay param: {url_str}");
+                return;
+            };
+            // Validate the relay URL is ws:// or wss://
+            match Url::parse(&relay_url) {
+                Ok(parsed) if parsed.scheme() == "ws" || parsed.scheme() == "wss" => {}
+                Ok(parsed) => {
+                    eprintln!(
+                        "sprout-desktop: rejecting non-websocket relay URL scheme {:?}: {relay_url}",
+                        parsed.scheme()
+                    );
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("sprout-desktop: invalid relay URL {relay_url:?}: {e}");
+                    return;
+                }
+            }
+            let _ = app.emit("deep-link-connect", relay_url);
+        }
+        Some(action) => {
+            eprintln!("sprout-desktop: unknown deep link action: {action}");
+        }
+        None => {
+            eprintln!("sprout-desktop: deep link missing action: {url_str}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            // Focus the existing window when a duplicate instance launches.
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+            // Forward any deep link URLs from the duplicate launch.
+            for arg in &argv {
+                if arg.starts_with("sprout://") {
+                    handle_deep_link_url(app, arg);
+                }
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -342,6 +411,20 @@ pub fn run() {
                 }
             }
 
+            // Handle deep link URLs received while the app is running (macOS)
+            // and on cold start. The single-instance plugin handles forwarding
+            // from duplicate launches on Windows/Linux.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let dl_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        handle_deep_link_url(&dl_handle, url.as_str());
+                    }
+                });
+            }
+
             // Keep launch-time agent restoration off the synchronous setup path
             // so the frontend can mount and reveal the window promptly.
             tauri::async_runtime::spawn_blocking(move || {
@@ -410,10 +493,6 @@ pub fn run() {
             upload_media,
             pick_and_upload_media,
             upload_media_bytes,
-            list_tokens,
-            mint_token,
-            revoke_token,
-            revoke_all_tokens,
             list_relay_members,
             get_my_relay_membership,
             add_relay_member,
@@ -426,7 +505,6 @@ pub fn run() {
             stop_managed_agent,
             set_managed_agent_start_on_app_launch,
             delete_managed_agent,
-            mint_managed_agent_token,
             get_managed_agent_log,
             get_agent_models,
             update_managed_agent,
@@ -509,7 +587,7 @@ pub fn run() {
 mod tests {
     use serde_json::json;
 
-    use crate::{models::ChannelInfo, util::percent_encode};
+    use crate::models::ChannelInfo;
 
     #[test]
     fn channel_info_defaults_is_member_for_legacy_payloads() {
@@ -530,19 +608,5 @@ mod tests {
         .expect("legacy payload should deserialize");
 
         assert!(channel.is_member);
-    }
-
-    #[test]
-    fn percent_encode_leaves_unreserved_chars() {
-        assert_eq!(
-            percent_encode("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"),
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
-        );
-    }
-
-    #[test]
-    fn percent_encode_escapes_unicode_and_reserved_chars() {
-        assert_eq!(percent_encode("👍"), "%F0%9F%91%8D");
-        assert_eq!(percent_encode("a/b?c"), "a%2Fb%3Fc");
     }
 }

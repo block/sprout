@@ -36,6 +36,11 @@
   "plugins": {
     "updater": {
       "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["sprout"]
+      }
     }
   },
   "bundle": {

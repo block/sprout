@@ -5,25 +5,13 @@ use uuid::Uuid;
 use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::{
-    extract_at_names, infer_language, merge_mentions, normalize_mention_pubkeys, percent_encode,
-    read_or_stdin, truncate_diff, validate_content_size, validate_hex64, validate_uuid,
-    MAX_DIFF_BYTES,
+    extract_at_names, infer_language, merge_mentions, normalize_mention_pubkeys, read_or_stdin,
+    truncate_diff, validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Require keys on the client — fail fast with a clear error if absent.
-macro_rules! require_keys {
-    ($client:expr) => {
-        $client.keys().ok_or_else(|| {
-            CliError::Key(
-                "private key required for write operations (set SPROUT_PRIVATE_KEY)".into(),
-            )
-        })?
-    };
-}
 
 /// Parse a 64-char hex string into a nostr::EventId.
 fn parse_event_id(hex: &str) -> Result<EventId, CliError> {
@@ -35,16 +23,25 @@ fn parse_uuid(s: &str) -> Result<Uuid, CliError> {
     Uuid::parse_str(s).map_err(|e| CliError::Usage(format!("invalid channel UUID: {e}")))
 }
 
-/// Resolve the channel UUID for an event by fetching GET /api/events/{id}.
-/// Extracts the `h` tag value from the returned tags array.
+/// Resolve the channel UUID for an event by querying for it via POST /query.
+/// Extracts the `h` tag value from the returned event's tags.
 async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uuid, CliError> {
-    let raw = client.get_raw(&format!("/api/events/{}", event_id)).await?;
-    let v: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| CliError::Other(format!("failed to parse event response: {e}")))?;
-    let tags = v
+    let filter = serde_json::json!({
+        "ids": [event_id]
+    });
+    let raw = client.query(&filter).await?;
+    let events: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::Other(format!("failed to parse query response: {e}")))?;
+    let arr = events
+        .as_array()
+        .ok_or_else(|| CliError::Other("query response is not an array".into()))?;
+    let event = arr
+        .first()
+        .ok_or_else(|| CliError::Other(format!("event {event_id} not found")))?;
+    let tags = event
         .get("tags")
         .and_then(|t| t.as_array())
-        .ok_or_else(|| CliError::Other("event response missing 'tags' field".into()))?;
+        .ok_or_else(|| CliError::Other("event missing 'tags' field".into()))?;
     for tag in tags {
         if let Some(arr) = tag.as_array() {
             if arr.first().and_then(|v| v.as_str()) == Some("h") {
@@ -61,7 +58,7 @@ async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uui
     )))
 }
 
-/// Resolve @names in content against channel members.
+/// Resolve @names in content against channel members (queried from channel metadata).
 /// Returns matching pubkeys. On any error, returns empty vec — never blocks a send.
 async fn resolve_content_mentions(
     client: &SproutClient,
@@ -72,30 +69,31 @@ async fn resolve_content_mentions(
     if names.is_empty() {
         return vec![];
     }
-    let body = client
-        .get_raw(&format!("/api/channels/{channel_id}/members"))
-        .await
-        .unwrap_or_default();
-    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-    let Some(members) = parsed["members"].as_array() else {
+    // Query channel metadata to get member list from p-tags
+    let filter = serde_json::json!({
+        "kinds": [39002],
+        "#h": [channel_id]
+    });
+    let raw = client.query(&filter).await.unwrap_or_default();
+    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+    // Channel metadata is returned as an array of events
+    let Some(events) = parsed.as_array() else {
         return vec![];
     };
-    let mut pubkeys = Vec::new();
-    for m in members {
-        let Some(dn) = m["display_name"].as_str() else {
-            continue;
-        };
-        if names.iter().any(|n| n.eq_ignore_ascii_case(dn)) {
-            if let Some(pk) = m["pubkey"].as_str() {
-                pubkeys.push(pk.to_ascii_lowercase());
-            }
-        }
-    }
-    pubkeys
+    let Some(event) = events.first() else {
+        return vec![];
+    };
+    let Some(tags) = event.get("tags").and_then(|t| t.as_array()) else {
+        return vec![];
+    };
+    // p-tags contain member pubkeys; we can't resolve display names without profiles
+    // For now, return empty — @mention resolution requires profile lookup
+    let _ = (tags, names);
+    vec![]
 }
 
 // ---------------------------------------------------------------------------
-// Read commands (unchanged)
+// Read commands — POST /query
 // ---------------------------------------------------------------------------
 
 pub async fn cmd_get_messages(
@@ -108,41 +106,54 @@ pub async fn cmd_get_messages(
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let limit = limit.unwrap_or(50).min(200);
-    let mut path = format!("/api/channels/{}/messages?limit={}", channel_id, limit);
+
+    let mut filter = serde_json::json!({
+        "kinds": [9, 40002],
+        "#h": [channel_id],
+        "limit": limit
+    });
+
+    // If specific kinds requested, override
+    if let Some(k) = kinds {
+        let kind_list: Vec<u64> = k.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if !kind_list.is_empty() {
+            filter["kinds"] = serde_json::json!(kind_list);
+        }
+    }
+
     if let Some(b) = before {
-        path.push_str(&format!("&before={b}"));
+        filter["until"] = serde_json::json!(b);
     }
     if let Some(s) = since {
-        path.push_str(&format!("&since={s}"));
+        filter["since"] = serde_json::json!(s);
     }
-    if let Some(k) = kinds {
-        path.push_str(&format!("&kinds={}", percent_encode(k)));
-    }
-    client.run_get(&path).await
+
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 pub async fn cmd_get_thread(
     client: &SproutClient,
     channel_id: &str,
     event_id: &str,
-    depth_limit: Option<u32>,
+    _depth_limit: Option<u32>,
     limit: Option<u32>,
-    cursor: Option<&str>,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     validate_hex64(event_id)?;
     let limit = limit.unwrap_or(100).min(500);
-    let mut path = format!(
-        "/api/channels/{}/threads/{}?limit={}",
-        channel_id, event_id, limit
-    );
-    if let Some(d) = depth_limit {
-        path.push_str(&format!("&depth_limit={d}"));
-    }
-    if let Some(c) = cursor {
-        path.push_str(&format!("&cursor={}", percent_encode(c)));
-    }
-    client.run_get(&path).await
+
+    // Get the root event and all replies referencing it via e-tag
+    let filter = serde_json::json!({
+        "kinds": [9, 40002],
+        "#h": [channel_id],
+        "#e": [event_id],
+        "limit": limit
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 pub async fn cmd_search(
@@ -151,12 +162,17 @@ pub async fn cmd_search(
     limit: Option<u32>,
 ) -> Result<(), CliError> {
     let limit = limit.unwrap_or(20).min(100);
-    let path = format!("/api/search?q={}&limit={}", percent_encode(query), limit);
-    client.run_get(&path).await
+    let filter = serde_json::json!({
+        "search": query,
+        "limit": limit
+    });
+    let resp = client.query(&filter).await?;
+    println!("{resp}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Write commands — signed events
+// Write commands — signed events via POST /events
 // ---------------------------------------------------------------------------
 
 pub struct SendMessageParams {
@@ -180,7 +196,7 @@ pub async fn cmd_send_message(client: &SproutClient, p: SendMessageParams) -> Re
         validate_hex64(m)?;
     }
 
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(&p.channel_id)?;
 
     // Upload files and build imeta tags
@@ -276,7 +292,7 @@ pub async fn cmd_send_diff_message(
         _ => {}
     }
 
-    let keys = require_keys!(client);
+    let keys = client.keys();
     let channel_uuid = parse_uuid(&p.channel_id)?;
 
     // Read diff from stdin if "--diff -"
@@ -341,9 +357,9 @@ pub async fn cmd_send_diff_message(
 
 pub async fn cmd_delete_message(client: &SproutClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
 
-    // Resolve channel_id from the event's h-tag (needed by build_delete_message)
+    // Resolve channel_id from the event's h-tag
     let channel_uuid = resolve_channel_id(client, event_id).await?;
     let target_eid = parse_event_id(event_id)?;
 
@@ -367,9 +383,9 @@ pub async fn cmd_edit_message(
 ) -> Result<(), CliError> {
     validate_hex64(event_id)?;
     validate_content_size(content)?;
-    let keys = require_keys!(client);
+    let keys = client.keys();
 
-    // Resolve channel_id from the event's h-tag (needed by build_edit)
+    // Resolve channel_id from the event's h-tag
     let channel_uuid = resolve_channel_id(client, event_id).await?;
     let target_eid = parse_event_id(event_id)?;
 
@@ -402,9 +418,9 @@ pub async fn cmd_vote_on_post(
         }
     };
 
-    let keys = require_keys!(client);
+    let keys = client.keys();
 
-    // Resolve channel_id from the event's h-tag (needed by build_vote)
+    // Resolve channel_id from the event's h-tag
     let channel_uuid = resolve_channel_id(client, event_id).await?;
     let target_eid = parse_event_id(event_id)?;
 

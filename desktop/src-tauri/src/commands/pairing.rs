@@ -17,8 +17,6 @@ use zeroize::Zeroizing;
 use crate::app_state::AppState;
 use crate::relay::{relay_api_base_url_with_override, relay_ws_url_with_override};
 
-use super::tokens::{mint_token_internal_with_auth_mode, MintTokenAuthMode};
-
 #[derive(Serialize, Clone)]
 struct PairingSasPayload {
     sas: String,
@@ -62,30 +60,11 @@ impl PairingHandle {
     }
 }
 
-const MOBILE_SCOPES: &[&str] = &[
-    "messages:read",
-    "messages:write",
-    "channels:read",
-    "channels:write",
-    "users:read",
-    "users:write",
-    "files:read",
-    "files:write",
-];
-const EXPIRES_IN_DAYS: u32 = 90;
-
-fn mobile_pairing_mint_auth_mode(state: &AppState) -> MintTokenAuthMode {
-    if state.configured_api_token.is_some() {
-        MintTokenAuthMode::BootstrapNip98
-    } else {
-        MintTokenAuthMode::Auto
-    }
-}
-
 /// Start a NIP-AB pairing session as the source device.
 ///
-/// Mints a token, creates a `PairingSession`, connects to the relay,
-/// and returns the `nostrpair://` QR URI for the frontend to display.
+/// Creates a `PairingSession`, connects to the relay, and returns the
+/// `nostrpair://` QR URI for the frontend to display. The mobile peer will
+/// receive the desktop's nsec (NIP-OA auth — no token minting needed).
 #[tauri::command]
 pub async fn start_pairing(
     app: AppHandle,
@@ -96,18 +75,6 @@ pub async fn start_pairing(
         token.cancel();
     }
     pairing.clear();
-
-    let scopes: Vec<String> = MOBILE_SCOPES.iter().map(|s| s.to_string()).collect();
-    let token_name = format!("mobile-pairing-{}", chrono::Utc::now().timestamp());
-    let mint_result = mint_token_internal_with_auth_mode(
-        &state,
-        &token_name,
-        &scopes,
-        None,
-        Some(EXPIRES_IN_DAYS),
-        mobile_pairing_mint_auth_mode(&state),
-    )
-    .await?;
 
     let (nsec, pubkey_hex) = {
         let keys = state.keys.lock().map_err(|e| e.to_string())?;
@@ -138,7 +105,6 @@ pub async fn start_pairing(
 
     let payload_json = serde_json::json!({
         "relayUrl": http_url,
-        "token": mint_result.token,
         "pubkey": pubkey_hex,
         "nsec": nsec,
     });
@@ -535,43 +501,4 @@ where
     })
     .await
     .map_err(|_| "timeout waiting for EOSE".to_string())?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::MOBILE_SCOPES;
-    use super::*;
-    use crate::app_state::build_app_state;
-
-    #[test]
-    fn mobile_pairing_token_includes_file_write_scope() {
-        assert!(MOBILE_SCOPES.contains(&"files:write"));
-    }
-
-    #[test]
-    fn mobile_pairing_token_includes_users_write_scope() {
-        assert!(MOBILE_SCOPES.contains(&"users:write"));
-    }
-
-    #[test]
-    fn mobile_pairing_uses_bootstrap_mint_when_configured_token_is_present() {
-        let mut state = build_app_state();
-        state.configured_api_token = Some("desktop-token".to_string());
-
-        assert_eq!(
-            mobile_pairing_mint_auth_mode(&state),
-            MintTokenAuthMode::BootstrapNip98
-        );
-    }
-
-    #[test]
-    fn mobile_pairing_keeps_auto_mint_without_configured_token() {
-        let mut state = build_app_state();
-        state.configured_api_token = None;
-
-        assert_eq!(
-            mobile_pairing_mint_auth_mode(&state),
-            MintTokenAuthMode::Auto
-        );
-    }
 }

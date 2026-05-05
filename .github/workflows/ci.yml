@@ -6,6 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
 jobs:
   rust-lint:
@@ -77,8 +78,26 @@ jobs:
             wget
       - name: Install desktop dependencies
         run: just desktop-install-ci
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(cd desktop && node -e "console.log(require('@playwright/test/package.json').version)")" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - name: Install Playwright Chromium
-        run: cd desktop && pnpm exec playwright install --with-deps chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd desktop && pnpm exec playwright install chromium
+      - name: Install Playwright system dependencies
+        run: cd desktop && pnpm exec playwright install-deps chromium
+      - name: Save Playwright browser cache
+        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name == 'push'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - name: Desktop lint and format
         run: just desktop-check
       - name: Desktop build
@@ -115,8 +134,26 @@ jobs:
             desktop/src-tauri
       - name: Install desktop dependencies
         run: just desktop-install-ci
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(cd desktop && node -e "console.log(require('@playwright/test/package.json').version)")" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - name: Install Playwright Chromium
-        run: cd desktop && pnpm exec playwright install --with-deps chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd desktop && pnpm exec playwright install chromium
+      - name: Install Playwright system dependencies
+        run: cd desktop && pnpm exec playwright install-deps chromium
+      - name: Save Playwright browser cache
+        if: steps.playwright-cache.outputs.cache-hit != 'true' && github.event_name == 'push'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - name: Desktop build
         run: just desktop-build
       - name: Start integration services
@@ -160,6 +197,7 @@ jobs:
             RELAY_URL=ws://localhost:3000 \
             SPROUT_BIND_ADDR=0.0.0.0:3000 \
             SPROUT_REQUIRE_AUTH_TOKEN=false \
+            SPROUT_RECONCILE_CHANNELS=true \
             ./target/ci/sprout-relay > /tmp/sprout-relay.log 2>&1 &
           echo $! > /tmp/sprout-relay.pid
           for attempt in $(seq 1 60); do
@@ -167,8 +205,8 @@ jobs:
               cat /tmp/sprout-relay.log
               exit 1
             fi
-            status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/api/channels || true)
-            if [ "${status_code}" != "000" ]; then
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/_readiness || true)
+            if [ "${status_code}" = "200" ]; then
               exit 0
             fi
             sleep 1
@@ -189,6 +227,22 @@ jobs:
             desktop/test-results
             /tmp/sprout-relay.log
           if-no-files-found: ignore
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Web lint and format
+        run: just web-check
+      - name: Web build
+        run: just web-build
 
   mobile:
     name: Mobile

@@ -23,31 +23,6 @@ pub enum AuthError {
     #[error("auth event timestamp outside ±60s window")]
     EventExpired,
 
-    /// JWT validation failed (bad signature, expired, wrong issuer/audience, missing claim, etc.).
-    ///
-    /// The inner string provides diagnostics for server logs. Do **not** forward
-    /// this detail to unauthenticated WebSocket clients.
-    #[error("invalid JWT: {0}")]
-    InvalidJwt(String),
-
-    /// The API token hash does not match, or the token has expired.
-    #[error("api token invalid or expired")]
-    TokenInvalid,
-
-    /// The API token was found in the database but has been revoked.
-    ///
-    /// Distinct from [`TokenInvalid`] so the relay can return `401 token_revoked`
-    /// rather than the generic `invalid_token` error code.
-    #[error("api token has been revoked")]
-    TokenRevoked,
-
-    /// The API token was found in the database but has passed its expiry timestamp.
-    ///
-    /// Distinct from [`TokenInvalid`] so the relay can return `401 token_expired`
-    /// rather than the generic `invalid_token` error code.
-    #[error("api token has expired")]
-    TokenExpired,
-
     /// NIP-98 HTTP Auth event (kind:27235) failed verification.
     ///
     /// The inner string describes the specific failure (signature, timestamp, URL, etc.)
@@ -55,7 +30,7 @@ pub enum AuthError {
     #[error("NIP-98 HTTP Auth verification failed: {0}")]
     Nip98Invalid(String),
 
-    /// The pubkey in the NIP-42 event does not match the identity in the JWT or API token.
+    /// The pubkey in the auth event does not match the expected identity.
     #[error("pubkey mismatch: event pubkey does not match authenticated identity")]
     PubkeyMismatch,
 
@@ -71,12 +46,6 @@ pub enum AuthError {
     /// The authenticated user is not a member of the requested channel.
     #[error("channel access denied")]
     ChannelAccessDenied,
-
-    /// The JWKS endpoint returned an error or an unparseable response.
-    ///
-    /// The inner string provides diagnostics for server logs.
-    #[error("jwks fetch error: {0}")]
-    JwksFetchError(String),
 
     /// An unexpected internal error occurred (e.g. a `spawn_blocking` panic).
     #[error("internal auth error: {0}")]

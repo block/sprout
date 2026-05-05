@@ -55,7 +55,6 @@ class ReadStateNotifier extends Notifier<ReadStateState> {
     _isInitialized = false;
 
     final relayConfig = ref.watch(relayConfigProvider);
-    final relayClient = ref.watch(relayClientProvider);
     final sessionState = ref.watch(relaySessionProvider);
     final activeWorkspace = ref.watch(activeWorkspaceProvider).value;
 
@@ -64,7 +63,10 @@ class ReadStateNotifier extends Notifier<ReadStateState> {
       return const ReadStateState.inert();
     }
 
-    final signedRelay = SignedEventRelay(client: relayClient, nsec: nsec);
+    final signedRelay = SignedEventRelay(
+      session: ref.read(relaySessionProvider.notifier),
+      nsec: nsec,
+    );
     final pubkey =
         _normalizePubkey(activeWorkspace?.pubkey) ??
         _safeDerivedPubkey(signedRelay);

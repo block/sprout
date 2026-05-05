@@ -6,13 +6,16 @@ import '../../shared/relay/relay.dart';
 import 'user_profile.dart';
 
 /// In-memory cache of user profiles, fetched in batches from the relay.
+///
+/// Lookups requested via [get] or [preload] are coalesced into a single
+/// kind:0 batch query (NIP-01 `authors` filter) every 50ms.
 class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
   final Set<String> _pending = {};
   Timer? _batchTimer;
 
   @override
   Map<String, UserProfile> build() {
-    ref.watch(relayClientProvider);
+    ref.watch(relayConfigProvider);
     ref.onDispose(() {
       _batchTimer?.cancel();
       _batchTimer = null;
@@ -23,9 +26,9 @@ class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
   /// Request a profile for [pubkey]. Returns immediately from cache if
   /// available, otherwise schedules a batch fetch.
   UserProfile? get(String pubkey) {
-    final cached = state[pubkey];
+    final cached = state[pubkey.toLowerCase()];
     if (cached != null) return cached;
-    _scheduleFetch(pubkey);
+    _scheduleFetch(pubkey.toLowerCase());
     return null;
   }
 
@@ -41,10 +44,8 @@ class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
   }
 
   void _scheduleFetch(String pubkey) {
-    if (_pending.contains(pubkey)) return;
+    if (state.containsKey(pubkey) || _pending.contains(pubkey)) return;
     _pending.add(pubkey);
-
-    // Batch: wait 50ms to collect multiple lookups into one request.
     _batchTimer ??= Timer(const Duration(milliseconds: 50), _flushPending);
   }
 
@@ -56,21 +57,21 @@ class UserCacheNotifier extends Notifier<Map<String, UserProfile>> {
     _pending.clear();
 
     try {
-      final client = ref.read(relayClientProvider);
-      final json =
-          await client.post('/api/users/batch', body: {'pubkeys': pubkeys})
-              as Map<String, dynamic>;
+      final session = ref.read(relaySessionProvider.notifier);
+      final events = await session.fetchHistory(
+        NostrFilters.profilesBatch(pubkeys),
+      );
 
-      final profiles = json['profiles'] as Map<String, dynamic>? ?? {};
       final updated = Map<String, UserProfile>.from(state);
-
-      for (final entry in profiles.entries) {
-        final data = entry.value as Map<String, dynamic>;
-        updated[entry.key.toLowerCase()] = UserProfile(
-          pubkey: entry.key.toLowerCase(),
-          displayName: data['display_name'] as String?,
-          avatarUrl: data['avatar_url'] as String?,
-          nip05Handle: data['nip05_handle'] as String?,
+      for (final event in events) {
+        final data = ProfileData.fromEvent(event);
+        final pk = data.pubkey.toLowerCase();
+        updated[pk] = UserProfile(
+          pubkey: pk,
+          displayName: data.displayName,
+          avatarUrl: data.avatarUrl,
+          about: data.about,
+          nip05Handle: data.nip05,
         );
       }
 

@@ -1,6 +1,8 @@
-//! API token scopes.
+//! Authorization scopes.
 //!
-//! Stored as `TEXT[]` in the database so new scopes don't require migrations.
+//! Scopes control what operations an authenticated connection may perform.
+//! In pure Nostr mode, all NIP-42 authenticated connections receive the full
+//! scope set; per-channel access is enforced by NIP-29 membership checks.
 
 use std::fmt;
 use std::str::FromStr;
@@ -166,45 +168,6 @@ impl FromStr for Scope {
             other => Self::Unknown(other.to_string()),
         })
     }
-}
-
-/// Scopes that can be self-minted via `POST /api/tokens`.
-///
-/// Admin-only scopes (`AdminChannels`, `AdminUsers`, `JobsRead`, `JobsWrite`,
-/// `SubscriptionsRead`, `SubscriptionsWrite`) are intentionally excluded — they require
-/// `sprout-admin mint-token`.
-///
-/// `UsersWrite` is included because it guards self-profile endpoints
-/// (`PUT /api/users/me/profile`, `PUT /api/users/me/channel-add-policy`)
-/// and contact list (kind:3) publishing.
-pub const SELF_MINTABLE_SCOPES: &[Scope] = &[
-    Scope::MessagesRead,
-    Scope::MessagesWrite,
-    Scope::ChannelsRead,
-    Scope::ChannelsWrite,
-    Scope::UsersRead,
-    Scope::UsersWrite,
-    Scope::FilesRead,
-    Scope::FilesWrite,
-];
-
-/// Returns `true` if the given scope may be requested via `POST /api/tokens`.
-///
-/// Admin-only scopes and `Scope::Unknown` always return `false`.
-/// Unknown scope strings are rejected at mint time rather than silently accepted —
-/// a client sending an unrecognised scope string likely has a bug.
-pub fn is_self_mintable(scope: &Scope) -> bool {
-    matches!(
-        scope,
-        Scope::MessagesRead
-            | Scope::MessagesWrite
-            | Scope::ChannelsRead
-            | Scope::ChannelsWrite
-            | Scope::UsersRead
-            | Scope::UsersWrite
-            | Scope::FilesRead
-            | Scope::FilesWrite
-    )
 }
 
 /// Parse a slice of scope strings into `Vec<Scope>`.
