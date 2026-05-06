@@ -1017,6 +1017,7 @@ Default kind is 9 (stream message)."
                     &self.client.relay_http_url(),
                     self.client.server_domain().as_deref(),
                     path,
+                    self.client.auth_tag_json().as_deref(),
                 )
                 .await
                 {
@@ -3113,6 +3114,7 @@ on send_message to upload and attach in one step."
             &self.client.relay_http_url(),
             self.client.server_domain().as_deref(),
             &p.file_path,
+            self.client.auth_tag_json().as_deref(),
         )
         .await
         {
