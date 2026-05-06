@@ -121,6 +121,7 @@ export function UserProfilePopover({
       clearHoverTimer();
       if (openProfilePanel) {
         event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
         openProfilePanel(pubkey);
       }
@@ -143,6 +144,7 @@ export function UserProfilePopover({
           onKeyDown={(e) => {
             if ((e.key === "Enter" || e.key === " ") && openProfilePanel) {
               e.preventDefault();
+              e.stopPropagation();
               clearHoverTimer();
               setOpen(false);
               openProfilePanel(pubkey);
@@ -158,6 +160,7 @@ export function UserProfilePopover({
       <PopoverContent
         align="start"
         className="w-80"
+        data-testid="user-profile-popover"
         onMouseEnter={handleContentMouseEnter}
         onMouseLeave={handleMouseLeave}
         side="top"

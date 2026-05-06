@@ -99,6 +99,14 @@ export function ChatHeader({
             </div>
           ) : null}
         </div>
+        {trimmedDescription ? (
+          <p
+            className="truncate text-sm text-muted-foreground"
+            data-testid="chat-description"
+          >
+            {trimmedDescription}
+          </p>
+        ) : null}
       </div>
 
       {actions ? <div className="shrink-0">{actions}</div> : null}
