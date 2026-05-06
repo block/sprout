@@ -114,9 +114,7 @@ impl Config {
         const MIN_HISTORY_BYTES: usize = 4096;
         const MIN_LINE_BYTES: usize = 1024;
         const MIN_TIMEOUT: Duration = Duration::from_secs(1);
-        if self.max_rounds < 1 {
-            return Err("config: SPROUT_AGENT_MAX_ROUNDS must be >= 1".into());
-        }
+
         if self.max_output_tokens < 1 {
             return Err("config: SPROUT_AGENT_MAX_OUTPUT_TOKENS must be >= 1".into());
         }

@@ -50,7 +50,12 @@ impl RunCtx<'_> {
         }
         self.history.push(HistoryItem::User(user_text));
 
-        for _ in 0..self.cfg.max_rounds {
+        let mut round = 0u32;
+        loop {
+            if self.cfg.max_rounds > 0 && round >= self.cfg.max_rounds {
+                return Ok(StopReason::MaxTurnRequests);
+            }
+            round = round.saturating_add(1);
             if *self.cancel.borrow() {
                 return Ok(StopReason::Cancelled);
             }
@@ -111,7 +116,6 @@ impl RunCtx<'_> {
                 return Ok(stop);
             }
         }
-        Ok(StopReason::MaxTurnRequests)
     }
 
     /// Returns true if a handoff was performed (history was reset to a
