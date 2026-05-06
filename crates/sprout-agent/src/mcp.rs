@@ -78,9 +78,13 @@ impl McpRegistry {
         };
 
         let init_timeout = cfg.mcp_init_timeout;
+        let mut seen_names = HashSet::new();
         for s in servers {
             if !valid_name(&s.name) {
                 return Err(AgentError::Mcp(format!("invalid server name: {}", s.name)));
+            }
+            if !seen_names.insert(s.name.clone()) {
+                return Err(AgentError::Mcp(format!("duplicate server name: {}", s.name)));
             }
             let mut cmd = Command::new(&s.command);
             cmd.args(&s.args);
