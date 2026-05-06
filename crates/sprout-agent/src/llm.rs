@@ -263,6 +263,10 @@ fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, Age
     })
 }
 
+/// Hard cap on LLM response body size. A buggy or malicious endpoint cannot
+/// be allowed to OOM the agent before parsing.
+const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
@@ -292,10 +296,32 @@ where
                 resp.text().await.unwrap_or_default()
             )));
         }
-        return resp
-            .json()
-            .await
-            .map_err(|e| AgentError::Llm(format!("json: {e}")));
+        // Reject up-front if Content-Length advertises an oversized body.
+        if let Some(len) = resp.content_length() {
+            if len as usize > MAX_LLM_RESPONSE_BYTES {
+                return Err(AgentError::Llm(format!(
+                    "response too large: {len} > {MAX_LLM_RESPONSE_BYTES}"
+                )));
+            }
+        }
+        // Bounded read: stream chunks until the cap, then bail.
+        let mut buf: Vec<u8> = Vec::new();
+        let mut stream = resp;
+        loop {
+            match stream.chunk().await {
+                Ok(Some(chunk)) => {
+                    if buf.len() + chunk.len() > MAX_LLM_RESPONSE_BYTES {
+                        return Err(AgentError::Llm(format!(
+                            "response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                        )));
+                    }
+                    buf.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(AgentError::Llm(format!("read: {e}"))),
+            }
+        }
+        return serde_json::from_slice(&buf).map_err(|e| AgentError::Llm(format!("json: {e}")));
     }
     Err(AgentError::Llm("exhausted retries".into()))
 }

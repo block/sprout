@@ -135,7 +135,7 @@ impl McpRegistry {
             .await
             .map_err(|e| AgentError::Mcp(format!("call {qname}: {e}")))?;
 
-        let text = collapse_content(&res.content);
+        let text = collapse_content(&res.content, max_bytes);
         Ok(ToolResult {
             provider_id: provider_id.to_owned(),
             text: clamp(text, max_bytes),
@@ -153,16 +153,33 @@ fn valid_name(s: &str) -> bool {
 }
 
 /// Flatten MCP content blocks into a single text blob. Binary content is elided
-/// with a marker so the model knows it existed.
-fn collapse_content(blocks: &[rmcp::model::Content]) -> String {
+/// with a marker so the model knows it existed. Stops appending once `max_bytes`
+/// is reached so a huge resource blob is never serialized in full before being
+/// truncated. Final clamping is still done by the caller.
+fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String {
     use rmcp::model::RawContent;
     let mut out = String::new();
     for c in blocks {
+        if out.len() >= max_bytes {
+            break;
+        }
         if !out.is_empty() {
             out.push('\n');
         }
         match &c.raw {
-            RawContent::Text(t) => out.push_str(&t.text),
+            RawContent::Text(t) => {
+                let remaining = max_bytes.saturating_sub(out.len());
+                if t.text.len() <= remaining {
+                    out.push_str(&t.text);
+                } else {
+                    // UTF-8 safe truncation.
+                    let mut cut = remaining;
+                    while cut > 0 && !t.text.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    out.push_str(&t.text[..cut]);
+                }
+            }
             RawContent::Image(i) => {
                 out.push_str(&format!(
                     "[image elided: {}, {} bytes]",
@@ -178,8 +195,10 @@ fn collapse_content(blocks: &[rmcp::model::Content]) -> String {
                 ));
             }
             RawContent::ResourceLink(r) => out.push_str(&format!("[resource: {}]", r.uri)),
-            RawContent::Resource(r) => {
-                out.push_str(&serde_json::to_string(r).unwrap_or_default());
+            RawContent::Resource(_) => {
+                // Resources can be huge (entire files). Elide rather than
+                // serialize the whole blob just to truncate it.
+                out.push_str("[resource elided]");
             }
         }
     }

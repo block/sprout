@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 
-use crate::agent::{PermissionOutcome, Wire, WireMsg};
+use crate::agent::{PendingMap, PermissionOutcome, Wire, WireMsg};
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
 use crate::types::{
@@ -34,8 +34,8 @@ struct App {
     cfg: Config,
     llm: Arc<Llm>,
     state: Mutex<Option<Session>>,
-    pending: Mutex<HashMap<i64, oneshot::Sender<PermissionOutcome>>>,
-    next_id: Mutex<i64>,
+    pending: PendingMap,
+    next_id: Arc<Mutex<i64>>,
 }
 
 struct Session {
@@ -60,8 +60,8 @@ async fn main() {
         cfg,
         llm,
         state: Mutex::new(None),
-        pending: Mutex::new(HashMap::new()),
-        next_id: Mutex::new(1_000_000),
+        pending: Arc::new(Mutex::new(HashMap::new())),
+        next_id: Arc::new(Mutex::new(1_000_000)),
     });
 
     let (wire_tx, wire_rx) = mpsc::channel::<WireMsg>(64);
@@ -132,44 +132,73 @@ async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
 }
 
 async fn handle_message(app: &Arc<App>, msg: Value, wire: &Wire) {
+    let has_id = msg.get("id").is_some();
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
+    let has_params = msg.get("params").is_some();
 
-    // Response to one of OUR outbound requests (permission)?
-    if method.is_none() {
-        if let Some(idnum) = id.as_ref().and_then(Value::as_i64) {
-            if let Some(tx) = app.pending.lock().await.remove(&idnum) {
-                let _ = tx.send(parse_permission(&msg));
-            }
-        }
-        return;
-    }
-
-    let method = method.unwrap();
-    let params = msg.get("params").cloned().unwrap_or(Value::Null);
-    let id = id.unwrap_or(Value::Null);
-
-    match method.as_str() {
-        "initialize" => send(wire, jrpc_ok(id, json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "agentCapabilities": {
-                "loadSession": false,
-                "promptCapabilities": { "image": false, "audio": false, "embeddedContext": false },
-                "mcpCapabilities": { "http": false, "sse": false },
-            },
-            "agentInfo": { "name": "sprout-agent", "version": env!("CARGO_PKG_VERSION") },
-        }))).await,
-        "session/new" => handle_session_new(app, id, params, wire).await,
-        "session/prompt" => spawn_prompt(app.clone(), id, params, wire.clone()),
-        "session/cancel" => {
-            // Notification — no response.
-            if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
-                if let Some(s) = app.state.lock().await.as_ref() {
-                    if s.id == p.session_id { let _ = s.cancel_tx.send(true); }
+    match (method, has_id) {
+        // Response to one of OUR outbound requests (permission reply).
+        (None, true) => {
+            if let Some(idnum) = id.as_ref().and_then(Value::as_i64) {
+                if let Some(tx) = app.pending.lock().await.remove(&idnum) {
+                    let _ = tx.send(parse_permission(&msg));
                 }
             }
         }
-        _ => send(wire, jrpc_err(id, -32601, &format!("method not found: {method}"))).await,
+        // Malformed: neither method nor id.
+        (None, false) => {
+            eprintln!("sprout-agent: malformed message (no method, no id)");
+        }
+        // Notification: method without id. Never respond.
+        (Some(method), false) => {
+            if method == "session/cancel" {
+                let params = msg.get("params").cloned().unwrap_or(Value::Null);
+                if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
+                    if let Some(s) = app.state.lock().await.as_ref() {
+                        if s.id == p.session_id {
+                            let _ = s.cancel_tx.send(true);
+                        }
+                    }
+                }
+            }
+            // Other notifications: ignored silently per JSON-RPC.
+        }
+        // Request: method + id. Dispatch and respond.
+        (Some(method), true) => {
+            let id = id.unwrap_or(Value::Null);
+            let params = msg.get("params").cloned().unwrap_or(Value::Null);
+            // Methods that require params: -32600 if missing rather than silently coercing to null.
+            let needs_params = matches!(method.as_str(), "session/new" | "session/prompt");
+            if needs_params && !has_params {
+                return send(wire, jrpc_err(id, -32600, "missing params")).await;
+            }
+            match method.as_str() {
+                "initialize" => send(wire, jrpc_ok(id, json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "agentCapabilities": {
+                        "loadSession": false,
+                        "promptCapabilities": { "image": false, "audio": false, "embeddedContext": false },
+                        "mcpCapabilities": { "http": false, "sse": false },
+                    },
+                    "agentInfo": { "name": "sprout-agent", "version": env!("CARGO_PKG_VERSION") },
+                }))).await,
+                "session/new" => handle_session_new(app, id, params, wire).await,
+                "session/prompt" => spawn_prompt(app.clone(), id, params, wire.clone()),
+                // session/cancel is a notification; if a client sends it as a request we still ack.
+                "session/cancel" => {
+                    if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
+                        if let Some(s) = app.state.lock().await.as_ref() {
+                            if s.id == p.session_id {
+                                let _ = s.cancel_tx.send(true);
+                            }
+                        }
+                    }
+                    send(wire, jrpc_ok(id, Value::Null)).await;
+                }
+                _ => send(wire, jrpc_err(id, -32601, &format!("method not found: {method}"))).await,
+            }
+        }
     }
 }
 
@@ -232,6 +261,8 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
                 &wire,
                 &app.llm,
                 &mcp,
+                &app.pending,
+                &app.next_id,
                 &mut hist,
                 p.prompt,
             )
@@ -251,24 +282,15 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
 
 // ─── Writer ─────────────────────────────────────────────────────────────────
 
-async fn writer_task(mut rx: mpsc::Receiver<WireMsg>, app: Arc<App>) {
+async fn writer_task(mut rx: mpsc::Receiver<WireMsg>, _app: Arc<App>) {
     let mut stdout = tokio::io::stdout();
     while let Some(msg) = rx.recv().await {
         let to_write = match msg {
             WireMsg::Notify(v) => v,
-            WireMsg::Permission { params, reply } => {
-                let id = {
-                    let mut n = app.next_id.lock().await;
-                    let v = *n;
-                    *n += 1;
-                    v
-                };
-                app.pending.lock().await.insert(id, reply);
-                json!({
-                    "jsonrpc": "2.0", "id": id,
-                    "method": "session/request_permission", "params": params,
-                })
-            }
+            WireMsg::Permission { id, params } => json!({
+                "jsonrpc": "2.0", "id": id,
+                "method": "session/request_permission", "params": params,
+            }),
         };
         let mut s = match serde_json::to_string(&to_write) {
             Ok(s) => s,

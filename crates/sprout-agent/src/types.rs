@@ -280,16 +280,27 @@ pub fn nonempty(s: String, field: &str) -> Result<String, AgentError> {
     }
 }
 
-/// Truncate text to `max` bytes (utf-8 safe), appending a marker.
+/// Truncate text to `max` bytes (utf-8 safe). Always returns `<= max` bytes.
+/// Appends a marker when there's room; otherwise just truncates.
 pub fn clamp(mut s: String, max: usize) -> String {
     if s.len() <= max {
         return s;
     }
-    let mut cut = max.saturating_sub(32);
+    const MARKER: &str = "\n[truncated]";
+    if max < MARKER.len() {
+        // No room for the marker — truncate to max on a char boundary.
+        let mut cut = max;
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        s.truncate(cut);
+        return s;
+    }
+    let mut cut = max - MARKER.len();
     while cut > 0 && !s.is_char_boundary(cut) {
         cut -= 1;
     }
     s.truncate(cut);
-    s.push_str("\n[truncated]");
+    s.push_str(MARKER);
     s
 }

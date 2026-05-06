@@ -6,8 +6,11 @@
 //! Cancellation: every long-running await is wrapped in `tokio::select!`
 //! against a per-prompt `watch::Receiver<bool>`.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde_json::{json, Value};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{oneshot, watch, Mutex};
 
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
@@ -18,12 +21,13 @@ use crate::types::{
 /// Single ordered channel from the agent loop to the writer task.
 pub type Wire = tokio::sync::mpsc::Sender<WireMsg>;
 
+pub type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<PermissionOutcome>>>>;
+
 pub enum WireMsg {
     Notify(Value),
-    Permission {
-        params: Value,
-        reply: oneshot::Sender<PermissionOutcome>,
-    },
+    /// A permission request that has already been registered in `pending`
+    /// under `id`; writer just formats and writes it.
+    Permission { id: i64, params: Value },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,6 +45,8 @@ pub async fn run_prompt(
     wire: &Wire,
     llm: &Llm,
     mcp: &McpRegistry,
+    pending: &PendingMap,
+    next_id: &Arc<Mutex<i64>>,
     history: &mut Vec<HistoryItem>,
     prompt: Vec<ContentBlock>,
 ) -> Result<StopReason, AgentError> {
@@ -64,14 +70,18 @@ pub async fn run_prompt(
             r = llm.complete(cfg, history, mcp.tools()) => r?,
         };
 
+        // Tool calls *are* the output: only record assistant turns that
+        // actually contain tool calls. An empty assistant entry produces
+        // `{"role":"assistant","content":null}` on the next prompt, which
+        // many OpenAI-compatible APIs reject.
+        if response.tool_calls.is_empty() {
+            return Ok(map_stop(response.stop));
+        }
+
         history.push(HistoryItem::Assistant {
             text: String::new(),
             tool_calls: response.tool_calls.clone(),
         });
-
-        if response.tool_calls.is_empty() {
-            return Ok(map_stop(response.stop));
-        }
 
         for call in response.tool_calls {
             if *cancel.borrow() {
@@ -103,14 +113,32 @@ pub async fn run_prompt(
             )
             .await;
 
-            // 2) request_permission
+            // 2) request_permission. Allocate the id and register pending
+            // BEFORE handing off to the writer, so cancellation can clean up.
+            let perm_id = {
+                let mut n = next_id.lock().await;
+                let v = *n;
+                *n += 1;
+                v
+            };
+            let (tx, rx) = oneshot::channel();
+            pending.lock().await.insert(perm_id, tx);
             let outcome = tokio::select! {
                 biased;
-                _ = cancel.changed() => PermissionOutcome::Cancelled,
-                o = request_permission(wire, sid, &call) => o,
+                _ = cancel.changed() => {
+                    // Remove our pending entry so it doesn't leak.
+                    pending.lock().await.remove(&perm_id);
+                    PermissionOutcome::Cancelled
+                }
+                o = request_permission(wire, sid, perm_id, &call, rx) => o,
             };
             match outcome {
-                PermissionOutcome::Cancelled => return Ok(StopReason::Cancelled),
+                PermissionOutcome::Cancelled => {
+                    // Tool call was already announced as pending — emit a
+                    // terminal failed/cancelled update before bailing.
+                    emit_failed(wire, sid, &call, "cancelled").await;
+                    return Ok(StopReason::Cancelled);
+                }
                 PermissionOutcome::Deny => {
                     emit_failed(wire, sid, &call, "permission denied").await;
                     history.push(synthetic_error(&call, "permission denied".into()));
@@ -136,7 +164,10 @@ pub async fn run_prompt(
             // 4) MCP call (timeout + cancel)
             let result = tokio::select! {
                 biased;
-                _ = cancel.changed() => return Ok(StopReason::Cancelled),
+                _ = cancel.changed() => {
+                    emit_failed(wire, sid, &call, "cancelled").await;
+                    return Ok(StopReason::Cancelled);
+                }
                 r = tokio::time::timeout(
                     cfg.tool_timeout,
                     mcp.call(&call.name, &call.provider_id, &call.arguments, cfg.max_tool_result_bytes),
@@ -221,8 +252,13 @@ async fn emit_failed(wire: &Wire, sid: &str, call: &ToolCall, err: &str) {
     .await;
 }
 
-async fn request_permission(wire: &Wire, sid: &str, call: &ToolCall) -> PermissionOutcome {
-    let (tx, rx) = oneshot::channel();
+async fn request_permission(
+    wire: &Wire,
+    sid: &str,
+    id: i64,
+    call: &ToolCall,
+    rx: oneshot::Receiver<PermissionOutcome>,
+) -> PermissionOutcome {
     let params = json!({
         "sessionId": sid,
         "toolCall": {
@@ -237,7 +273,7 @@ async fn request_permission(wire: &Wire, sid: &str, call: &ToolCall) -> Permissi
         ],
     });
     if wire
-        .send(WireMsg::Permission { params, reply: tx })
+        .send(WireMsg::Permission { id, params })
         .await
         .is_err()
     {
