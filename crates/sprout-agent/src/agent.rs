@@ -477,8 +477,10 @@ fn clamp_bytes(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_owned();
     }
-    let ellipsis = "…".len();
-    let target = max_bytes.saturating_sub(ellipsis);
+    if max_bytes < 4 {
+        return s[..max_bytes.min(s.len())].to_owned();
+    }
+    let target = max_bytes - "…".len();
     let mut cut = target;
     while cut > 0 && !s.is_char_boundary(cut) {
         cut -= 1;
