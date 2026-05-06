@@ -199,9 +199,20 @@ pub async fn run_prompt(
             .await;
 
             // 4) MCP call (timeout + cancel)
+            //
+            // Three failure modes all poison the server. Once an in-flight
+            // tools/call is interrupted (cancel) or comes back broken
+            // (transport error, timeout), we cannot trust the server to
+            // be in a clean state — it may still be executing the call
+            // with side effects, or its protocol stream may be desynced.
+            // Killing the group + poisoning fails subsequent calls fast
+            // instead of compounding errors against a corrupted peer.
             let result = tokio::select! {
                 biased;
                 _ = cancel.changed() => {
+                    if let Some(server) = mcp.server_of(&call.name) {
+                        mcp.poison(server, "cancelled during tool call");
+                    }
                     emit_failed(wire, sid, call, "cancelled").await;
                     fill_cancelled(history, &calls[idx..]);
                     return Ok(StopReason::Cancelled);
@@ -213,17 +224,19 @@ pub async fn run_prompt(
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => {
                         let m = e.to_string();
+                        // Transport/protocol error: the rmcp connection is
+                        // likely dead or desynced. Poison so the next call
+                        // to this server fails fast instead of hanging on
+                        // a broken pipe.
+                        if let Some(server) = mcp.server_of(&call.name) {
+                            mcp.poison(server, &format!("transport error: {m}"));
+                        }
                         emit_failed(wire, sid, call, &m).await;
                         history.push(synthetic_error(call, m));
                         idx += 1;
                         continue;
                     }
                     Err(_) => {
-                        // Kill and poison the MCP server: the in-flight
-                        // request is abandoned but the child may still be
-                        // doing work with side effects. Subsequent calls
-                        // to that server fail fast instead of pretending
-                        // it's healthy.
                         if let Some(server) = mcp.server_of(&call.name) {
                             mcp.poison(server, "tool timeout");
                         }

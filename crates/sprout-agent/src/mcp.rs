@@ -51,10 +51,48 @@ struct Entry {
     client: Arc<Client>,
 }
 
+/// RAII handle to an MCP child's process group.
+///
+/// Spawning sets `setpgid(0, 0)` so the child's PGID == its PID.
+/// Dropping this handle SIGKILLs the entire group (child + grandchildren),
+/// making cleanup unconditional regardless of the code path that reached it
+/// — early validation failure, registry drop on session end, panic, etc.
+///
+/// Explicit kills (timeout, init failure) call [`McpProcess::kill`] which
+/// fires immediately and disarms the Drop so we don't double-kill.
+struct McpProcess {
+    name: String,
+    /// `None` after an explicit `kill` — disarms `Drop`.
+    pgid: Option<u32>,
+}
+
+impl McpProcess {
+    fn new(name: String, pgid: Option<u32>) -> Self {
+        Self { name, pgid }
+    }
+
+    /// Explicitly SIGKILL the group now and disarm `Drop`. Idempotent.
+    fn kill(&mut self, stage: &str) {
+        if let Some(p) = self.pgid.take() {
+            killpg(p, &self.name, stage);
+        }
+    }
+}
+
+impl Drop for McpProcess {
+    fn drop(&mut self) {
+        if let Some(p) = self.pgid.take() {
+            killpg(p, &self.name, "drop");
+        }
+    }
+}
+
 /// One spawned MCP child server.
 struct Server {
     name: String,
-    pid: Option<u32>,
+    /// `Option` so `poison()` can take ownership and explicitly kill.
+    /// After an explicit kill, the slot is `None` and `Drop` won't re-fire.
+    process: Mutex<Option<McpProcess>>,
     _client: Arc<Client>, // kept alive for session lifetime
 }
 
@@ -138,19 +176,22 @@ impl McpRegistry {
 
             let transport = TokioChildProcess::new(cmd)
                 .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
-            // Capture the child pid so a stuck server can be force-killed
-            // explicitly on timeout, rather than relying on transport-Drop
-            // alone. Drop is best-effort; SIGKILL is decisive.
-            let child_pid = transport.id();
+            // Capture the child pid so the entire process group can be
+            // SIGKILLed (transport Drop only kills the direct child). The
+            // McpProcess RAII handle ensures killpg fires unconditionally
+            // — explicit on timeout/poison, automatic on registry drop or
+            // any early-return failure path below.
+            let mut process = McpProcess::new(s.name.clone(), transport.id());
+
             let client: Client = match tokio::time::timeout(init_timeout, ().serve(transport)).await
             {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
-                    force_kill(child_pid, &s.name, "init");
+                    process.kill("init");
                     return Err(AgentError::Mcp(format!("init {}: {e}", s.name)));
                 }
                 Err(_) => {
-                    force_kill(child_pid, &s.name, "init");
+                    process.kill("init");
                     return Err(AgentError::Mcp(format!(
                         "init {}: timeout after {}s",
                         s.name,
@@ -159,6 +200,17 @@ impl McpRegistry {
                 }
             };
             let client = Arc::new(client);
+
+            // Push the Server NOW so the McpProcess is owned by the registry.
+            // Any post-spawn validation failure below returns Err, the
+            // registry is dropped, and McpProcess::Drop SIGKILLs the group.
+            // (Without this, the validation-failure paths below would have
+            // had to plumb explicit kills for each early return.)
+            reg.servers.push(Server {
+                name: s.name.clone(),
+                process: Mutex::new(Some(process)),
+                _client: client.clone(),
+            });
 
             // NOTE: MCP tool listing is deserialized fully before caps are
             // applied. This is acceptable because MCP servers are trusted
@@ -169,11 +221,9 @@ impl McpRegistry {
                 match tokio::time::timeout(init_timeout, client.peer().list_all_tools()).await {
                     Ok(Ok(t)) => t,
                     Ok(Err(e)) => {
-                        force_kill(child_pid, &s.name, "list_tools");
                         return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name)));
                     }
                     Err(_) => {
-                        force_kill(child_pid, &s.name, "list_tools");
                         return Err(AgentError::Mcp(format!(
                             "list_tools {}: timeout after {}s",
                             s.name,
@@ -212,11 +262,6 @@ impl McpRegistry {
                     },
                 );
             }
-            reg.servers.push(Server {
-                name: s.name.clone(),
-                pid: child_pid,
-                _client: client,
-            });
         }
         Ok(reg)
     }
@@ -236,12 +281,13 @@ impl McpRegistry {
         if !newly_poisoned {
             return;
         }
-        let pid = self
-            .servers
-            .iter()
-            .find(|s| s.name == server_name)
-            .and_then(|s| s.pid);
-        force_kill(pid, server_name, reason);
+        if let Some(server) = self.servers.iter().find(|s| s.name == server_name) {
+            // Take ownership of the McpProcess and explicitly SIGKILL the
+            // group. After this, the slot is None and Drop won't re-fire.
+            if let Some(mut proc) = server.process.lock().expect("mcp process mutex").take() {
+                proc.kill(reason);
+            }
+        }
         eprintln!("sprout-agent: MCP server '{server_name}' killed after {reason}");
     }
 
@@ -337,30 +383,29 @@ fn cap_schema(qname: &str, schema: Value) -> Value {
     Value::Object(Map::new())
 }
 
-/// Send SIGKILL to a stuck MCP child *and its entire process group* by
-/// pid. We spawned the child with `setpgid(0, 0)`, so its PID equals its
-/// PGID; `killpg` walks the whole tree (grandchildren included) so a
-/// misbehaving MCP server cannot leak background work past timeout.
+/// Send SIGKILL to an MCP child *and its entire process group*. We spawned
+/// the child with `setpgid(0, 0)`, so its PID equals its PGID; `killpg`
+/// walks the whole tree (grandchildren included) so a misbehaving MCP
+/// server cannot leak background work past timeout.
 ///
 /// The transport's Drop impl already best-effort kills the direct child,
 /// but it spawns a tokio task and may race the process exiting. Group
 /// SIGKILL here is decisive, synchronous, and tree-scoped.
 #[cfg(unix)]
-fn force_kill(pid: Option<u32>, name: &str, stage: &str) {
-    if let Some(p) = pid {
-        // SAFETY: killpg(2) on a PGID we just established via pre_exec
-        // setpgid(0,0). ESRCH on an already-exited group is fine.
-        let rc = unsafe { libc::killpg(p as libc::pid_t, libc::SIGKILL) };
-        eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={p} rc={rc}");
-    }
+fn killpg(pgid: u32, name: &str, stage: &str) {
+    // SAFETY: killpg(2) on a PGID we just established via pre_exec
+    // setpgid(0,0). ESRCH on an already-exited group is fine.
+    let rc = unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+    eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={pgid} rc={rc}");
 }
 #[cfg(not(unix))]
-fn force_kill(pid: Option<u32>, name: &str, stage: &str) {
+fn killpg(pgid: u32, name: &str, stage: &str) {
     // Process-group killing is Unix-only; on other platforms we rely on
     // the transport Drop to terminate the direct child. Grandchildren may
     // be orphaned — acceptable since sprout-agent ships behind sprout-acp
     // on Unix hosts.
-    eprintln!("sprout-agent: relying on Drop to kill MCP {name} ({stage}) pid={pid:?}");
+    let _ = pgid;
+    eprintln!("sprout-agent: relying on Drop to kill MCP {name} ({stage})");
 }
 
 /// OpenAI function-name constraints: ^[a-zA-Z0-9_-]{1,64}$
