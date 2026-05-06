@@ -7,6 +7,11 @@
 //!   FAKE_MCP_HANG_TOOLS=1    — never reply to `tools/list` (list timeout)
 //!   FAKE_MCP_TOOL_COUNT=N    — return N tools (default: 1)
 //!   FAKE_MCP_HUGE_DESC=1     — every tool description is 100 KB
+//!   FAKE_MCP_DESC_SIZE=N     — every tool description is N bytes (overrides HUGE_DESC)
+//!   FAKE_MCP_TOOL_DELAY=N    — `tools/call` sleeps N seconds before replying
+//!                              (use a large value, e.g. 999, to simulate hang)
+//!   FAKE_MCP_PID_FILE=path   — write the child PID to `path` on startup
+//!                              (for tests that want to verify the child died)
 
 use std::io::{BufRead, Write};
 
@@ -17,6 +22,13 @@ fn env_flag(k: &str) -> bool {
 }
 
 fn env_usize(k: &str, default: usize) -> usize {
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(k: &str, default: u64) -> u64 {
     std::env::var(k)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -38,12 +50,7 @@ fn hang_forever() -> ! {
     }
 }
 
-fn make_tools(count: usize, huge_desc: bool) -> Vec<Value> {
-    let desc = if huge_desc {
-        "x".repeat(100_000)
-    } else {
-        "fake tool".to_owned()
-    };
+fn make_tools(count: usize, desc: &str) -> Vec<Value> {
     (0..count)
         .map(|i| {
             json!({
@@ -56,10 +63,27 @@ fn make_tools(count: usize, huge_desc: bool) -> Vec<Value> {
 }
 
 fn main() {
+    // Optional: write our own PID so a test can later check the process is gone.
+    if let Ok(path) = std::env::var("FAKE_MCP_PID_FILE") {
+        let pid = std::process::id().to_string();
+        let _ = std::fs::write(&path, pid);
+    }
+
     let hang_init = env_flag("FAKE_MCP_HANG_INIT");
     let hang_tools = env_flag("FAKE_MCP_HANG_TOOLS");
     let tool_count = env_usize("FAKE_MCP_TOOL_COUNT", 1);
-    let huge_desc = env_flag("FAKE_MCP_HUGE_DESC");
+    // FAKE_MCP_DESC_SIZE wins over FAKE_MCP_HUGE_DESC when set.
+    let desc: String = if let Some(n) = std::env::var("FAKE_MCP_DESC_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        "x".repeat(n)
+    } else if env_flag("FAKE_MCP_HUGE_DESC") {
+        "x".repeat(100_000)
+    } else {
+        "fake tool".to_owned()
+    };
+    let tool_delay_secs = env_u64("FAKE_MCP_TOOL_DELAY", 0);
 
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
@@ -98,7 +122,19 @@ fn main() {
                 if hang_tools {
                     hang_forever();
                 }
-                write_response(id, json!({ "tools": make_tools(tool_count, huge_desc) }));
+                write_response(id, json!({ "tools": make_tools(tool_count, &desc) }));
+            }
+            "tools/call" => {
+                if tool_delay_secs > 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(tool_delay_secs));
+                }
+                write_response(
+                    id,
+                    json!({
+                        "content": [{ "type": "text", "text": "ok" }],
+                        "isError": false,
+                    }),
+                );
             }
             _ => {
                 // Unknown method: respond with an error so rmcp doesn't hang.

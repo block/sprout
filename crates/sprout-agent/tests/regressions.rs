@@ -490,3 +490,347 @@ async fn empty_assistant_serializes_as_empty_string() {
     );
     h.shutdown().await;
 }
+
+// ─── Helpers for tests that drive real MCP tool calls ──────────────────────
+
+/// Auto-reply to any incoming `session/request_permission` from the agent
+/// with `allow`. Returns when `pred` matches an incoming message; permission
+/// requests are answered transparently in the meantime.
+async fn recv_until_allow_perms<F: FnMut(&Value) -> bool>(h: &mut Harness, mut pred: F) -> Value {
+    loop {
+        let v = h.recv().await;
+        if v.get("method") == Some(&json!("session/request_permission")) {
+            let id = v["id"].clone();
+            h.write(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "outcome": { "outcome": "selected", "optionId": "allow" } },
+            }))
+            .await;
+            continue;
+        }
+        if pred(&v) {
+            return v;
+        }
+    }
+}
+
+fn openai_n_tool_calls(n: usize) -> Value {
+    let calls: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({
+                "id": format!("c{i}"),
+                "type": "function",
+                "function": { "name": "many__tool_0", "arguments": "{}" },
+            })
+        })
+        .collect();
+    json!({
+        "id": "cc-n", "object": "chat.completion", "model": "fake-model",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": null, "tool_calls": calls },
+            "finish_reason": "tool_calls",
+        }],
+    })
+}
+
+// ─── New round-8 regression tests ──────────────────────────────────────────
+
+/// History budget evicts old turns: after many prompts, the LLM request
+/// body stays below a sane bound. Round 7 fix; round 8 test.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn history_budget_evicts_old_turns() {
+    // Force a small history budget so eviction kicks in fast.
+    // 12 prompts × ~5KB each would blow the cap; we expect the captured
+    // request body to stay under ~30KB (cap + one overflow turn).
+    let responses: Vec<Value> = (0..12).map(|_| openai_text(&"y".repeat(2000))).collect();
+    let llm = spawn_capturing_llm(responses).await;
+    let mut h = Harness::spawn_with_env(
+        &llm.url,
+        &[("ACP_SEED_MAX_HISTORY_BYTES", "8192")], // 8 KB
+    )
+    .await;
+    let sid = init_session(&mut h, json!([])).await;
+
+    for i in 0..12 {
+        let user = "x".repeat(2000);
+        let p = h
+            .send(
+                "session/prompt",
+                json!({"sessionId": sid, "prompt": [{"type":"text","text": format!("{i}:{user}")}]}),
+            )
+            .await;
+        let _ = h.recv_until(|v| v["id"] == json!(p)).await;
+    }
+
+    let captured = llm.captured.lock().await;
+    assert_eq!(captured.len(), 12);
+    // The first request has only one turn; the last must show eviction.
+    let last = &captured[captured.len() - 1];
+    let body_bytes = serde_json::to_vec(last).unwrap().len();
+    // Cap is 8KB; the newest turn alone is ~4KB. The whole request body
+    // (system prompt + last user + tools + a bit) must stay well under
+    // the unbounded ~12 × 4KB = 48KB.
+    assert!(
+        body_bytes < 30_000,
+        "history not evicted: request body is {body_bytes} bytes"
+    );
+    let msgs = last["messages"].as_array().unwrap();
+    // We must NEVER drop the latest user prompt.
+    assert!(
+        msgs.iter()
+            .any(|m| m["role"] == "user" && m["content"].as_str().unwrap_or("").starts_with("11:")),
+        "newest user turn missing"
+    );
+    h.shutdown().await;
+}
+
+/// Per-turn tool-call cap: an LLM that returns 100 tool_calls in one
+/// response must only have 64 (MAX_TOOL_CALLS_PER_TURN) executed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_turn_tool_call_cap_enforced() {
+    let llm = spawn_capturing_llm(vec![
+        openai_n_tool_calls(100),
+        openai_text("done"),
+    ])
+    .await;
+    let mut h = Harness::spawn(&llm.url).await;
+
+    let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let _ = h.recv().await;
+    h.send(
+        "session/new",
+        json!({
+            "cwd": "/tmp",
+            "mcpServers": [{
+                "name": "many",
+                "command": fake_mcp,
+                "args": [],
+                "env": [{ "name": "FAKE_MCP_TOOL_COUNT", "value": "1" }],
+            }],
+        }),
+    )
+    .await;
+    let r = h
+        .recv_until(|v| v.get("result").is_some() || v.get("error").is_some())
+        .await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+
+    let p = h
+        .send(
+            "session/prompt",
+            json!({"sessionId": sid, "prompt": [{"type":"text","text":"go"}]}),
+        )
+        .await;
+
+    // Count distinct tool_call (pending) notifications until final response.
+    let mut tool_call_ids = std::collections::HashSet::new();
+    loop {
+        let v = h.recv().await;
+        if v.get("method") == Some(&json!("session/request_permission")) {
+            let id = v["id"].clone();
+            h.write(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "outcome": { "outcome": "selected", "optionId": "allow" } },
+            }))
+            .await;
+            continue;
+        }
+        if v.get("method") == Some(&json!("session/update"))
+            && v["params"]["update"]["sessionUpdate"] == "tool_call"
+        {
+            if let Some(id) = v["params"]["update"]["toolCallId"].as_str() {
+                tool_call_ids.insert(id.to_owned());
+            }
+            continue;
+        }
+        if v["id"] == json!(p) {
+            break;
+        }
+    }
+    // MAX_TOOL_CALLS_PER_TURN = 64.
+    assert_eq!(
+        tool_call_ids.len(),
+        64,
+        "expected 64 tool_calls, got {}",
+        tool_call_ids.len()
+    );
+    h.shutdown().await;
+}
+
+/// Description clamping: a 5000-byte description from MCP must be
+/// truncated to ≤ 1024 bytes in the LLM request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn description_clamping_enforced() {
+    let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
+    let mut h = Harness::spawn(&llm.url).await;
+
+    let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let _ = h.recv().await;
+    h.send(
+        "session/new",
+        json!({
+            "cwd": "/tmp",
+            "mcpServers": [{
+                "name": "big",
+                "command": fake_mcp,
+                "args": [],
+                "env": [
+                    { "name": "FAKE_MCP_TOOL_COUNT", "value": "1" },
+                    { "name": "FAKE_MCP_DESC_SIZE", "value": "5000" },
+                ],
+            }],
+        }),
+    )
+    .await;
+    let r = h
+        .recv_until(|v| v.get("result").is_some() || v.get("error").is_some())
+        .await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+
+    let p = h
+        .send(
+            "session/prompt",
+            json!({"sessionId": sid, "prompt": [{"type":"text","text":"go"}]}),
+        )
+        .await;
+    let _ = h.recv_until(|v| v["id"] == json!(p)).await;
+
+    let captured = llm.captured.lock().await;
+    let tools = captured[0]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 1);
+    let desc = tools[0]["function"]["description"].as_str().unwrap_or("");
+    assert!(
+        desc.len() <= 1024,
+        "description not clamped: {} bytes (expected ≤ 1024)",
+        desc.len()
+    );
+    // Sanity: the original was 5000 bytes, so we did clamp something.
+    assert!(
+        desc.len() < 5000,
+        "description not actually truncated: {} bytes",
+        desc.len()
+    );
+    h.shutdown().await;
+}
+
+/// On tool timeout, the MCP child process is force-killed (not just
+/// orphaned). Verified by reading the PID written by fake-mcp on startup
+/// and checking the process is gone after the timeout fires.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn child_killed_on_tool_timeout() {
+    let llm = spawn_capturing_llm(vec![
+        openai_tool_call("c1", "slow__tool_0", json!({})),
+        openai_text("after"),
+    ])
+    .await;
+
+    let pid_file = std::env::temp_dir().join(format!(
+        "sprout-fake-mcp-{}.pid",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&pid_file);
+
+    let mut h = Harness::spawn_with_env(
+        &llm.url,
+        &[("ACP_SEED_TOOL_TIMEOUT_SECS", "2")],
+    )
+    .await;
+
+    let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let _ = h.recv().await;
+    h.send(
+        "session/new",
+        json!({
+            "cwd": "/tmp",
+            "mcpServers": [{
+                "name": "slow",
+                "command": fake_mcp,
+                "args": [],
+                "env": [
+                    { "name": "FAKE_MCP_TOOL_COUNT", "value": "1" },
+                    { "name": "FAKE_MCP_TOOL_DELAY", "value": "999" },
+                    { "name": "FAKE_MCP_PID_FILE", "value": pid_file.to_str().unwrap() },
+                ],
+            }],
+        }),
+    )
+    .await;
+    let r = h
+        .recv_until(|v| v.get("result").is_some() || v.get("error").is_some())
+        .await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+
+    // Read the child PID written by fake-mcp.
+    let pid: i32 = {
+        // The pid file is written synchronously at startup; rmcp's init
+        // handshake guarantees the child is up by the time session/new
+        // returns Ok. A short retry covers fs flush.
+        let mut last = String::new();
+        for _ in 0..50 {
+            if let Ok(s) = std::fs::read_to_string(&pid_file) {
+                if !s.trim().is_empty() {
+                    last = s;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        last.trim().parse().expect("read pid file")
+    };
+
+    // Drive the prompt: tool call → permission allow → MCP hangs → timeout.
+    let p = h
+        .send(
+            "session/prompt",
+            json!({"sessionId": sid, "prompt": [{"type":"text","text":"go"}]}),
+        )
+        .await;
+
+    // Wait for the tool_call_update with status=failed (the timeout signal).
+    let _failed = recv_until_allow_perms(&mut h, |v| {
+        v.get("method") == Some(&json!("session/update"))
+            && v["params"]["update"]["sessionUpdate"] == "tool_call_update"
+            && v["params"]["update"]["status"] == "failed"
+    })
+    .await;
+
+    // Wait for the final response so the loop unwinds cleanly.
+    let _ = recv_until_allow_perms(&mut h, |v| v["id"] == json!(p)).await;
+
+    // Give the kill a moment to actually reap.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // SIGKILL (signal 0 = liveness probe). ESRCH means dead.
+    // SAFETY: pid was just spawned by us; kill(pid, 0) is harmless.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    assert_eq!(
+        rc, -1,
+        "child {pid} still alive after tool timeout (kill(0) returned {rc})"
+    );
+    let errno = std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(0);
+    assert_eq!(errno, libc::ESRCH, "expected ESRCH, got errno {errno}");
+
+    let _ = std::fs::remove_file(&pid_file);
+    h.shutdown().await;
+}

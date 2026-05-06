@@ -219,6 +219,14 @@ pub async fn run_prompt(
                         continue;
                     }
                     Err(_) => {
+                        // Kill and poison the MCP server: the in-flight
+                        // request is abandoned but the child may still be
+                        // doing work with side effects. Subsequent calls
+                        // to that server fail fast instead of pretending
+                        // it's healthy.
+                        if let Some(server) = mcp.server_of(&call.name) {
+                            mcp.poison(server, "tool timeout");
+                        }
                         emit_failed(wire, sid, call, "tool timeout").await;
                         history.push(synthetic_error(call, "tool timeout".into()));
                         idx += 1;

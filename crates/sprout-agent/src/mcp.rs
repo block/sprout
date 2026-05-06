@@ -4,8 +4,8 @@
 //! function-name constraints (a-zA-Z0-9_-, ≤64) and reject duplicates so the
 //! LLM sees a flat, well-formed namespace.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rmcp::model::CallToolRequestParams;
@@ -44,14 +44,27 @@ pub const MAX_MCP_SERVERS: usize = 16;
 type Client = RunningService<RoleClient, ()>;
 
 struct Entry {
+    /// MCP server name (the prefix of the qualified tool name).
+    server: String,
+    /// Bare tool name as the MCP server knows it.
     tool: String,
     client: Arc<Client>,
+}
+
+/// One spawned MCP child server.
+struct Server {
+    name: String,
+    pid: Option<u32>,
+    _client: Arc<Client>, // kept alive for session lifetime
 }
 
 pub struct McpRegistry {
     by_qname: HashMap<String, Entry>,
     defs: Vec<ToolDef>,
-    _clients: Vec<Arc<Client>>, // kept alive for session lifetime
+    servers: Vec<Server>,
+    /// MCP servers that have been killed (e.g. after a tool timeout).
+    /// Calls to tools on these servers fail immediately.
+    poisoned: Mutex<HashSet<String>>,
 }
 
 /// Env vars passed through to MCP children unconditionally. Everything else
@@ -75,7 +88,8 @@ impl McpRegistry {
         let mut reg = Self {
             by_qname: HashMap::new(),
             defs: Vec::new(),
-            _clients: Vec::new(),
+            servers: Vec::new(),
+            poisoned: Mutex::new(HashSet::new()),
         };
 
         let init_timeout = mcp_init_timeout();
@@ -128,6 +142,11 @@ impl McpRegistry {
             };
             let client = Arc::new(client);
 
+            // NOTE: MCP tool listing is deserialized fully before caps are
+            // applied. This is acceptable because MCP servers are trusted
+            // (configured by the harness operator). For untrusted MCP
+            // servers, add a response size limit to the rmcp transport
+            // layer.
             let tools =
                 match tokio::time::timeout(init_timeout, client.peer().list_all_tools()).await {
                     Ok(Ok(t)) => t,
@@ -169,14 +188,55 @@ impl McpRegistry {
                 reg.by_qname.insert(
                     qname,
                     Entry {
+                        server: s.name.clone(),
                         tool: bare,
                         client: client.clone(),
                     },
                 );
             }
-            reg._clients.push(client);
+            reg.servers.push(Server {
+                name: s.name.clone(),
+                pid: child_pid,
+                _client: client,
+            });
         }
         Ok(reg)
+    }
+
+    /// Mark `server_name` as poisoned and SIGKILL its child. Subsequent
+    /// `call()`s to any tool on that server fail immediately. Idempotent.
+    ///
+    /// Used after a tool timeout: the in-flight MCP request is abandoned
+    /// by the agent, but the child may still be doing work with side
+    /// effects. Killing it stops accumulation; poisoning prevents the LLM
+    /// from being told the server is healthy on the next call.
+    pub fn poison(&self, server_name: &str, reason: &str) {
+        let newly_poisoned = {
+            let mut p = self.poisoned.lock().expect("poisoned mutex");
+            p.insert(server_name.to_owned())
+        };
+        if !newly_poisoned {
+            return;
+        }
+        let pid = self
+            .servers
+            .iter()
+            .find(|s| s.name == server_name)
+            .and_then(|s| s.pid);
+        force_kill(pid, server_name, reason);
+        eprintln!("sprout-agent: MCP server '{server_name}' killed after {reason}");
+    }
+
+    fn is_poisoned(&self, server_name: &str) -> bool {
+        self.poisoned
+            .lock()
+            .expect("poisoned mutex")
+            .contains(server_name)
+    }
+
+    /// Look up the MCP server name owning `qname`, if any.
+    pub fn server_of(&self, qname: &str) -> Option<&str> {
+        self.by_qname.get(qname).map(|e| e.server.as_str())
     }
 
     pub fn tools(&self) -> &[ToolDef] {
@@ -199,6 +259,13 @@ impl McpRegistry {
             .by_qname
             .get(qname)
             .ok_or_else(|| AgentError::Mcp(format!("unknown tool {qname}")))?;
+
+        if self.is_poisoned(&entry.server) {
+            return Err(AgentError::Mcp(format!(
+                "server unavailable after timeout: {}",
+                entry.server
+            )));
+        }
 
         let arg_obj: Option<Map<String, Value>> = match arguments {
             Value::Object(m) => Some(m.clone()),
