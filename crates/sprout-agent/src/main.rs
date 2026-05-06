@@ -1,26 +1,13 @@
 //! sprout-agent — minimal ACP agent over stdio.
 //!
-//! Architecture (one ASCII diagram, one sentence per component):
+//!   stdin → reader → App ─► writer → stdout
+//!                       │
+//!                       └► run_prompt → LLM + MCP
 //!
-//!   ┌────────┐  lines  ┌─────────┐  events  ┌────────┐  bytes  ┌────────┐
-//!   │ stdin  │────────►│ reader  │─────────►│ writer │────────►│ stdout │
-//!   └────────┘         └─────┬───┘   ▲      └────────┘         └────────┘
-//!                            │       │ permission replies
-//!                       dispatch     │
-//!                            ▼       │
-//!                       ┌────────────┴┐    spawn       ┌─────────┐
-//!                       │ agent loop  │───────────────►│  MCP    │
-//!                       └─────┬───────┘                └─────────┘
-//!                             │ HTTP POST
-//!                             ▼
-//!                          ┌─────┐
-//!                          │ LLM │
-//!                          └─────┘
-//!
-//! `reader` reads NDJSON requests, `writer` is the sole owner of stdout
-//! (single-consumer mpsc), `dispatch` maps method names to handlers. The
-//! agent loop runs in its own task while the reader continues to listen
-//! for `session/cancel`.
+//! Reader reads bounded NDJSON. Writer is the SOLE owner of stdout and
+//! serializes a single channel of messages: notifications, permission
+//! requests, and final responses. The agent loop runs on a tokio task; the
+//! reader keeps listening for `session/cancel` and permission replies.
 
 mod agent;
 mod llm;
@@ -28,402 +15,311 @@ mod mcp;
 mod types;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
-use crate::agent::{AcpEvent, AcpOut, PermissionOutcome, Session};
+use crate::agent::{PermissionOutcome, Wire, WireMsg};
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
 use crate::types::{
-    AgentError, Config, HistoryItem, InitializeParams, SessionCancelParams, SessionNewParams,
-    SessionPromptParams,
+    Config, HistoryItem, SessionCancelParams, SessionNewParams, SessionPromptParams,
 };
 
 const PROTOCOL_VERSION: u32 = 1;
 
-/// Pending permission requests, keyed by outbound JSON-RPC id.
-type PermissionMap = Arc<Mutex<HashMap<i64, oneshot::Sender<PermissionOutcome>>>>;
-
-struct State {
+struct App {
     cfg: Config,
     llm: Arc<Llm>,
-    mcp: Arc<Mutex<Option<McpRegistry>>>,
-    session: Arc<Mutex<Option<Session>>>,
+    state: Mutex<Option<Session>>,
+    pending: Mutex<HashMap<i64, oneshot::Sender<PermissionOutcome>>>,
+    next_id: Mutex<i64>,
+}
+
+struct Session {
+    id: String,
+    mcp: Arc<McpRegistry>,
     history: Arc<Mutex<Vec<HistoryItem>>>,
-    /// True while a session/prompt is in flight.
-    prompt_busy: Arc<AtomicBool>,
-    /// Outbound permission requests awaiting reply from the client.
-    pending_permissions: PermissionMap,
-    /// Monotonic id for outbound requests (permissions).
-    next_outbound_id: Arc<Mutex<i64>>,
+    cancel_tx: watch::Sender<bool>,
+    busy: bool,
+}
+
+fn die(msg: String) -> ! {
+    eprintln!("sprout-agent: {msg}");
+    std::process::exit(2);
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let cfg = match Config::from_env() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("sprout-agent: config error: {e}");
-            std::process::exit(2);
-        }
-    };
-    if let Err(e) = cfg.validate() {
-        eprintln!("sprout-agent: {e}");
-        std::process::exit(2);
-    }
-
-    let llm = match Llm::new(&cfg) {
-        Ok(l) => Arc::new(l),
-        Err(e) => {
-            eprintln!("sprout-agent: {e}");
-            std::process::exit(2);
-        }
-    };
-
-    // Outbound channel: agent loop → writer task. The writer is the SOLE
-    // owner of stdout, so two tasks can't interleave bytes on a line.
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<AcpEvent>(64);
-    // Final response sink: dispatcher → writer task (responses to client requests).
-    let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<Value>(64);
-
-    let state = Arc::new(State {
+    let cfg = Config::from_env().unwrap_or_else(|e| die(format!("config: {e}")));
+    let llm = Arc::new(Llm::new(&cfg).unwrap_or_else(|e| die(e.to_string())));
+    let max_line = cfg.max_line_bytes;
+    let app = Arc::new(App {
         cfg,
         llm,
-        mcp: Arc::new(Mutex::new(None)),
-        session: Arc::new(Mutex::new(None)),
-        history: Arc::new(Mutex::new(Vec::new())),
-        prompt_busy: Arc::new(AtomicBool::new(false)),
-        pending_permissions: Arc::new(Mutex::new(HashMap::new())),
-        next_outbound_id: Arc::new(Mutex::new(1_000_000)),
+        state: Mutex::new(None),
+        pending: Mutex::new(HashMap::new()),
+        next_id: Mutex::new(1_000_000),
     });
 
-    // ── Writer task ─────────────────────────────────────────────────────
-    let pending_for_writer = state.pending_permissions.clone();
-    let next_id_for_writer = state.next_outbound_id.clone();
-    let writer = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
-        loop {
-            tokio::select! {
-                Some(resp) = resp_rx.recv() => {
-                    write_line(&mut stdout, &resp).await;
-                }
-                Some(ev) = out_rx.recv() => {
-                    match ev {
-                        AcpEvent::Update { session_id, update } => {
-                            let msg = json!({
-                                "jsonrpc": "2.0",
-                                "method": "session/update",
-                                "params": {
-                                    "sessionId": session_id,
-                                    "update": update,
-                                },
-                            });
-                            write_line(&mut stdout, &msg).await;
-                        }
-                        AcpEvent::Permission { session_id, tool_call, reply } => {
-                            let id = {
-                                let mut n = next_id_for_writer.lock().await;
-                                let v = *n;
-                                *n += 1;
-                                v
-                            };
-                            pending_for_writer.lock().await.insert(id, reply);
-                            let msg = json!({
-                                "jsonrpc": "2.0",
-                                "id": id,
-                                "method": "session/request_permission",
-                                "params": {
-                                    "sessionId": session_id,
-                                    "toolCall": tool_call,
-                                    "options": [
-                                        { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
-                                        { "optionId": "deny",  "name": "Deny",  "kind": "reject_once" },
-                                    ],
-                                },
-                            });
-                            write_line(&mut stdout, &msg).await;
-                        }
-                    }
-                }
-                else => break,
-            }
-        }
-    });
+    let (wire_tx, wire_rx) = mpsc::channel::<WireMsg>(64);
+    let writer = tokio::spawn(writer_task(wire_rx, app.clone()));
 
-    // ── Reader / dispatcher ─────────────────────────────────────────────
-    let stdin = tokio::io::stdin();
-    let mut lines = BufReader::new(stdin).lines();
-
-    while let Ok(Some(line)) = lines.next_line().await {
-        if line.len() > state.cfg.max_line_bytes {
-            eprintln!(
-                "sprout-agent: line exceeds max ({} bytes), aborting",
-                line.len()
-            );
-            break;
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-        let msg: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let resp = json!({
-                    "jsonrpc": "2.0",
-                    "id": Value::Null,
-                    "error": { "code": -32700, "message": format!("parse error: {e}") },
-                });
-                let _ = resp_tx.send(resp).await;
-                continue;
-            }
-        };
-        handle_message(&state, msg, out_tx.clone(), resp_tx.clone()).await;
+    let stdin = BufReader::new(tokio::io::stdin());
+    if let Err(e) = reader_loop(stdin, app, wire_tx, max_line).await {
+        eprintln!("sprout-agent: reader: {e}");
     }
-
-    // EOF: shut down. Drop senders so writer exits.
-    drop(out_tx);
-    drop(resp_tx);
     let _ = writer.await;
 }
 
-async fn handle_message(
-    state: &Arc<State>,
-    msg: Value,
-    out_tx: AcpOut,
-    resp_tx: tokio::sync::mpsc::Sender<Value>,
-) {
+// ─── Reader ─────────────────────────────────────────────────────────────────
+
+async fn reader_loop<R: tokio::io::AsyncBufRead + Unpin>(
+    mut stdin: R,
+    app: Arc<App>,
+    wire: Wire,
+    max_line: usize,
+) -> std::io::Result<()> {
+    loop {
+        match read_bounded_line(&mut stdin, max_line).await? {
+            None => return Ok(()),
+            Some(line) if line.trim().is_empty() => continue,
+            Some(line) => match serde_json::from_str::<Value>(&line) {
+                Ok(msg) => handle_message(&app, msg, &wire).await,
+                Err(e) => send(&wire, jrpc_err(Value::Null, -32700, &format!("parse: {e}"))).await,
+            },
+        }
+    }
+}
+
+/// Read one `\n`-terminated line, rejecting BEFORE allocation grows past `max`.
+async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
+    stdin: &mut R,
+    max: usize,
+) -> std::io::Result<Option<String>> {
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let chunk = stdin.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok(if buf.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&buf).into_owned())
+            });
+        }
+        let take = chunk
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(chunk.len(), |i| i + 1);
+        if buf.len().saturating_add(take) > max {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("line exceeds max ({max} bytes)"),
+            ));
+        }
+        buf.extend_from_slice(&chunk[..take]);
+        stdin.consume(take);
+        if buf.ends_with(b"\n") {
+            buf.pop();
+            if buf.ends_with(b"\r") {
+                buf.pop();
+            }
+            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+        }
+    }
+}
+
+async fn handle_message(app: &Arc<App>, msg: Value, wire: &Wire) {
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
 
-    // Response to one of our outbound requests (permission)?
-    if method.is_none() && id.is_some() {
+    // Response to one of OUR outbound requests (permission)?
+    if method.is_none() {
         if let Some(idnum) = id.as_ref().and_then(Value::as_i64) {
-            let waker = state.pending_permissions.lock().await.remove(&idnum);
-            if let Some(tx) = waker {
-                let outcome = parse_permission_outcome(&msg);
-                let _ = tx.send(outcome);
-                return;
+            if let Some(tx) = app.pending.lock().await.remove(&idnum) {
+                let _ = tx.send(parse_permission(&msg));
             }
         }
-        eprintln!("sprout-agent: unsolicited response: {msg}");
         return;
     }
 
-    let method = match method {
-        Some(m) => m,
-        None => {
-            send_error(&resp_tx, id, -32600, "missing method").await;
-            return;
-        }
-    };
+    let method = method.unwrap();
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let id = id.unwrap_or(Value::Null);
 
     match method.as_str() {
-        "initialize" => {
-            let _: InitializeParams = serde_json::from_value(params).unwrap_or(InitializeParams {
-                protocol_version: None,
-                client_capabilities: None,
-            });
-            let result = json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "agentCapabilities": {
-                    "loadSession": false,
-                    "promptCapabilities": {
-                        "image": false, "audio": false, "embeddedContext": false,
-                    },
-                    "mcpCapabilities": { "http": false, "sse": false },
-                },
-                "agentInfo": {
-                    "name": "sprout-agent",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-            });
-            send_result(&resp_tx, id, result).await;
-        }
-
-        "session/new" => {
-            let p: SessionNewParams = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => {
-                    send_error(&resp_tx, id, -32602, &format!("session/new: {e}")).await;
-                    return;
-                }
-            };
-            if state.session.lock().await.is_some() {
-                send_error(&resp_tx, id, -32602, "session already exists").await;
-                return;
-            }
-            let registry = match McpRegistry::spawn_all(&p.mcp_servers).await {
-                Ok(r) => r,
-                Err(e) => {
-                    send_error(&resp_tx, id, e.json_rpc_code(), &e.to_string()).await;
-                    return;
-                }
-            };
-            let session_id = format!("ses_{}", random_hex());
-            *state.mcp.lock().await = Some(registry);
-            *state.session.lock().await = Some(Session {
-                id: session_id.clone(),
-                cancelled: Arc::new(AtomicBool::new(false)),
-            });
-            send_result(&resp_tx, id, json!({ "sessionId": session_id })).await;
-        }
-
-        "session/prompt" => {
-            let p: SessionPromptParams = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(e) => {
-                    send_error(&resp_tx, id, -32602, &format!("session/prompt: {e}")).await;
-                    return;
-                }
-            };
-            if state.prompt_busy.swap(true, Ordering::AcqRel) {
-                send_error(&resp_tx, id, -32602, "prompt already in flight").await;
-                return;
-            }
-            let state2 = state.clone();
-            let resp_tx2 = resp_tx.clone();
-            let out_tx2 = out_tx.clone();
-            tokio::spawn(async move {
-                let result = run_prompt_task(&state2, p, out_tx2).await;
-                state2.prompt_busy.store(false, Ordering::Release);
-                match result {
-                    Ok(stop) => {
-                        send_result(&resp_tx2, id, json!({ "stopReason": stop.as_wire() })).await;
-                    }
-                    Err(e) => {
-                        send_error(&resp_tx2, id, e.json_rpc_code(), &e.to_string()).await;
-                    }
-                }
-            });
-        }
-
+        "initialize" => send(wire, jrpc_ok(id, json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "agentCapabilities": {
+                "loadSession": false,
+                "promptCapabilities": { "image": false, "audio": false, "embeddedContext": false },
+                "mcpCapabilities": { "http": false, "sse": false },
+            },
+            "agentInfo": { "name": "sprout-agent", "version": env!("CARGO_PKG_VERSION") },
+        }))).await,
+        "session/new" => handle_session_new(app, id, params, wire).await,
+        "session/prompt" => spawn_prompt(app.clone(), id, params, wire.clone()),
         "session/cancel" => {
             // Notification — no response.
-            let p: SessionCancelParams = match serde_json::from_value(params) {
-                Ok(p) => p,
-                Err(_) => return,
-            };
-            let sess = state.session.lock().await;
-            if let Some(s) = sess.as_ref() {
-                if s.id == p.session_id {
-                    s.cancelled.store(true, Ordering::Release);
+            if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
+                if let Some(s) = app.state.lock().await.as_ref() {
+                    if s.id == p.session_id { let _ = s.cancel_tx.send(true); }
                 }
             }
         }
-
-        _ => {
-            if id.is_some() {
-                send_error(&resp_tx, id, -32601, &format!("method not found: {method}")).await;
-            }
-        }
+        _ => send(wire, jrpc_err(id, -32601, &format!("method not found: {method}"))).await,
     }
 }
 
-async fn run_prompt_task(
-    state: &Arc<State>,
-    p: SessionPromptParams,
-    out_tx: AcpOut,
-) -> Result<crate::types::StopReason, AgentError> {
-    let session = {
-        let g = state.session.lock().await;
-        g.as_ref()
-            .filter(|s| s.id == p.session_id)
-            .map(|s| Session {
-                id: s.id.clone(),
-                cancelled: s.cancelled.clone(),
-            })
-            .ok_or_else(|| {
-                AgentError::InvalidParams(format!("unknown session: {}", p.session_id))
-            })?
+async fn handle_session_new(app: &Arc<App>, id: Value, params: Value, wire: &Wire) {
+    let p: SessionNewParams = match serde_json::from_value(params) {
+        Ok(p) => p,
+        Err(e) => return send(wire, jrpc_err(id, -32602, &format!("session/new: {e}"))).await,
     };
-    // Reset cancel flag for this turn.
-    session.cancelled.store(false, Ordering::Release);
-
-    let mcp_guard = state.mcp.lock().await;
-    let mcp = mcp_guard
-        .as_ref()
-        .ok_or_else(|| AgentError::Internal("mcp registry missing".into()))?;
-    let mut history = state.history.lock().await;
-
-    agent::run_prompt(
-        &state.cfg,
-        &session,
-        &out_tx,
-        &state.llm,
+    let mut st = app.state.lock().await;
+    if st.is_some() {
+        return send(wire, jrpc_err(id, -32602, "session already exists")).await;
+    }
+    let mcp = match McpRegistry::spawn_all(&p.mcp_servers).await {
+        Ok(m) => Arc::new(m),
+        Err(e) => return send(wire, jrpc_err(id, e.json_rpc_code(), &e.to_string())).await,
+    };
+    let session_id = format!("ses_{}", session_token());
+    let (cancel_tx, _) = watch::channel(false);
+    *st = Some(Session {
+        id: session_id.clone(),
         mcp,
-        &mut history,
-        p.prompt,
-    )
-    .await
+        history: Arc::new(Mutex::new(Vec::new())),
+        cancel_tx,
+        busy: false,
+    });
+    send(wire, jrpc_ok(id, json!({ "sessionId": session_id }))).await;
 }
 
-fn parse_permission_outcome(msg: &Value) -> PermissionOutcome {
-    let outcome = msg
+fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
+    tokio::spawn(async move {
+        let p: SessionPromptParams = match serde_json::from_value(params) {
+            Ok(p) => p,
+            Err(e) => {
+                return send(&wire, jrpc_err(id, -32602, &format!("session/prompt: {e}"))).await
+            }
+        };
+
+        // Lift everything we need from the session under one lock and mark busy.
+        let (sid, mcp, history, mut cancel_rx) = {
+            let mut st = app.state.lock().await;
+            let s = match st.as_mut() {
+                Some(s) if s.id == p.session_id => s,
+                _ => return send(&wire, jrpc_err(id, -32602, "unknown session")).await,
+            };
+            if s.busy {
+                return send(&wire, jrpc_err(id, -32602, "prompt already in flight")).await;
+            }
+            s.busy = true;
+            let (tx, rx) = watch::channel(false);
+            s.cancel_tx = tx;
+            (s.id.clone(), s.mcp.clone(), s.history.clone(), rx)
+        };
+
+        let result = {
+            let mut hist = history.lock().await;
+            agent::run_prompt(
+                &app.cfg,
+                &sid,
+                &mut cancel_rx,
+                &wire,
+                &app.llm,
+                &mcp,
+                &mut hist,
+                p.prompt,
+            )
+            .await
+        };
+
+        if let Some(s) = app.state.lock().await.as_mut() {
+            s.busy = false;
+        }
+
+        match result {
+            Ok(stop) => send(&wire, jrpc_ok(id, json!({ "stopReason": stop.as_wire() }))).await,
+            Err(e) => send(&wire, jrpc_err(id, e.json_rpc_code(), &e.to_string())).await,
+        }
+    });
+}
+
+// ─── Writer ─────────────────────────────────────────────────────────────────
+
+async fn writer_task(mut rx: mpsc::Receiver<WireMsg>, app: Arc<App>) {
+    let mut stdout = tokio::io::stdout();
+    while let Some(msg) = rx.recv().await {
+        let to_write = match msg {
+            WireMsg::Notify(v) => v,
+            WireMsg::Permission { params, reply } => {
+                let id = {
+                    let mut n = app.next_id.lock().await;
+                    let v = *n;
+                    *n += 1;
+                    v
+                };
+                app.pending.lock().await.insert(id, reply);
+                json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "method": "session/request_permission", "params": params,
+                })
+            }
+        };
+        let mut s = match serde_json::to_string(&to_write) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("sprout-agent: serialize: {e}");
+                continue;
+            }
+        };
+        s.push('\n');
+        if stdout.write_all(s.as_bytes()).await.is_err() {
+            return;
+        }
+        let _ = stdout.flush().await;
+    }
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+async fn send(wire: &Wire, msg: Value) {
+    let _ = wire.send(WireMsg::Notify(msg)).await;
+}
+
+fn jrpc_ok(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+fn jrpc_err(id: Value, code: i32, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+fn parse_permission(msg: &Value) -> PermissionOutcome {
+    let o = msg
         .get("result")
         .and_then(|r| r.get("outcome"))
         .cloned()
         .unwrap_or(Value::Null);
-    match outcome.get("outcome").and_then(Value::as_str) {
-        Some("selected") => match outcome.get("optionId").and_then(Value::as_str) {
-            Some("allow") => PermissionOutcome::Allow,
-            _ => PermissionOutcome::Deny,
-        },
-        Some("cancelled") => PermissionOutcome::Cancelled,
+    match (
+        o.get("outcome").and_then(Value::as_str),
+        o.get("optionId").and_then(Value::as_str),
+    ) {
+        (Some("selected"), Some("allow")) => PermissionOutcome::Allow,
+        (Some("cancelled"), _) => PermissionOutcome::Cancelled,
         _ => PermissionOutcome::Deny,
     }
 }
 
-async fn send_result(tx: &tokio::sync::mpsc::Sender<Value>, id: Option<Value>, result: Value) {
-    let resp = json!({
-        "jsonrpc": "2.0",
-        "id": id.unwrap_or(Value::Null),
-        "result": result,
-    });
-    let _ = tx.send(resp).await;
-}
-
-async fn send_error(
-    tx: &tokio::sync::mpsc::Sender<Value>,
-    id: Option<Value>,
-    code: i32,
-    message: &str,
-) {
-    let resp = json!({
-        "jsonrpc": "2.0",
-        "id": id.unwrap_or(Value::Null),
-        "error": { "code": code, "message": message },
-    });
-    let _ = tx.send(resp).await;
-}
-
-async fn write_line(stdout: &mut tokio::io::Stdout, msg: &Value) {
-    let mut s = match serde_json::to_string(msg) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("sprout-agent: serialize error: {e}");
-            return;
-        }
-    };
-    s.push('\n');
-    if let Err(e) = stdout.write_all(s.as_bytes()).await {
-        eprintln!("sprout-agent: stdout write error: {e}");
-        return;
-    }
-    let _ = stdout.flush().await;
-}
-
-fn random_hex() -> String {
+fn session_token() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let n = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    // Mix in the address of a stack local for a tiny bit of entropy.
     let local = 0u8;
     let addr = &local as *const u8 as usize as u128;
     format!("{:016x}{:016x}", n as u64, addr as u64)

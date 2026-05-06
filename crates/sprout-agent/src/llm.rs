@@ -1,15 +1,12 @@
-//! LLM client. Provider enum, two arms. Non-streaming. One HTTP POST per round.
-//!
-//! ┌──────────────┐                ┌──────────────┐
-//! │ Provider enum│ ─ complete() ─►│ HTTP POST    │ ─►  LlmResponse
-//! └──────────────┘                └──────────────┘
+//! LLM client. Two providers (Anthropic, OpenAI-compat). Non-streaming.
+//! One HTTP POST per round.
 
 use reqwest::Client;
 use serde_json::{json, Value};
 
 use crate::types::{
-    AgentError, Config, HistoryItem, LlmResponse, McpContent, ProviderKind, ProviderStop, ToolCall,
-    ToolDef, ToolResult,
+    nonempty, AgentError, Config, HistoryItem, LlmResponse, Provider, ProviderStop, ToolCall,
+    ToolDef,
 };
 
 pub struct Llm {
@@ -20,10 +17,9 @@ impl Llm {
     pub fn new(cfg: &Config) -> Result<Self, AgentError> {
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
-            .pool_idle_timeout(std::time::Duration::from_secs(60))
             .timeout(cfg.llm_timeout)
             .build()
-            .map_err(|e| AgentError::Llm(format!("http client: {e}")))?;
+            .map_err(|e| AgentError::Llm(format!("http: {e}")))?;
         Ok(Self { http })
     }
 
@@ -34,214 +30,125 @@ impl Llm {
         tools: &[ToolDef],
     ) -> Result<LlmResponse, AgentError> {
         match cfg.provider {
-            ProviderKind::Anthropic => anthropic_complete(&self.http, cfg, history, tools).await,
-            ProviderKind::OpenAi => openai_complete(&self.http, cfg, history, tools).await,
+            Provider::Anthropic => {
+                let body = anthropic_body(cfg, history, tools);
+                let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
+                let v = post(&self.http, &url, &body, |r| {
+                    r.header("x-api-key", &cfg.api_key)
+                        .header("anthropic-version", &cfg.anthropic_api_version)
+                        .header("content-type", "application/json")
+                })
+                .await?;
+                parse_anthropic(v)
+            }
+            Provider::OpenAi => {
+                let body = openai_body(cfg, history, tools);
+                let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+                let v = post(&self.http, &url, &body, |r| {
+                    r.bearer_auth(&cfg.api_key)
+                        .header("content-type", "application/json")
+                })
+                .await?;
+                parse_openai(v)
+            }
         }
     }
 }
 
 // ─── Anthropic ──────────────────────────────────────────────────────────────
 
-async fn anthropic_complete(
-    http: &Client,
-    cfg: &Config,
-    history: &[HistoryItem],
-    tools: &[ToolDef],
-) -> Result<LlmResponse, AgentError> {
-    let key = cfg
-        .anthropic_api_key
-        .as_deref()
-        .ok_or_else(|| AgentError::LlmAuth("ANTHROPIC_API_KEY missing".into()))?;
-    let model = cfg
-        .anthropic_model
-        .as_deref()
-        .ok_or_else(|| AgentError::Llm("ANTHROPIC_MODEL missing".into()))?;
-
-    let messages = anthropic_messages(history);
-    let tools_json: Vec<Value> = tools
-        .iter()
-        .map(|t| {
-            json!({
-                "name": t.name,
-                "description": t.description.clone().unwrap_or_default(),
-                "input_schema": t.input_schema,
-            })
-        })
-        .collect();
-
-    let body = json!({
-        "model": model,
-        "max_tokens": cfg.max_output_tokens,
-        "system": cfg.system_prompt,
-        "tools": tools_json,
-        "messages": messages,
-    });
-
-    let url = format!(
-        "{}/v1/messages",
-        cfg.anthropic_base_url.trim_end_matches('/')
-    );
-    let v = post_with_retry(http, &url, &body, |req| {
-        req.header("x-api-key", key)
-            .header("anthropic-version", &cfg.anthropic_api_version)
-            .header("content-type", "application/json")
-    })
-    .await?;
-
-    parse_anthropic(v)
-}
-
-fn anthropic_messages(history: &[HistoryItem]) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
-    let mut pending_tool_results: Vec<Value> = Vec::new();
-
-    let flush_tool_results = |out: &mut Vec<Value>, pending: &mut Vec<Value>| {
-        if !pending.is_empty() {
-            out.push(json!({
-                "role": "user",
-                "content": std::mem::take(pending),
-            }));
+fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
+    let mut messages: Vec<Value> = Vec::new();
+    let mut pending: Vec<Value> = Vec::new();
+    let flush = |out: &mut Vec<Value>, p: &mut Vec<Value>| {
+        if !p.is_empty() {
+            out.push(json!({ "role": "user", "content": std::mem::take(p) }));
         }
     };
-
     for item in history {
         match item {
-            HistoryItem::User { text } => {
-                flush_tool_results(&mut out, &mut pending_tool_results);
-                out.push(json!({
+            HistoryItem::User(text) => {
+                flush(&mut messages, &mut pending);
+                messages.push(json!({
                     "role": "user",
                     "content": [{ "type": "text", "text": text }],
                 }));
             }
             HistoryItem::Assistant { text, tool_calls } => {
-                flush_tool_results(&mut out, &mut pending_tool_results);
+                flush(&mut messages, &mut pending);
                 let mut content: Vec<Value> = Vec::new();
                 if !text.is_empty() {
                     content.push(json!({ "type": "text", "text": text }));
                 }
                 for c in tool_calls {
                     content.push(json!({
-                        "type": "tool_use",
-                        "id": c.provider_id,
-                        "name": c.name,
-                        "input": c.arguments,
+                        "type": "tool_use", "id": c.provider_id,
+                        "name": c.name, "input": c.arguments,
                     }));
                 }
-                out.push(json!({ "role": "assistant", "content": content }));
+                messages.push(json!({ "role": "assistant", "content": content }));
             }
-            HistoryItem::ToolResult(r) => {
-                pending_tool_results.push(json!({
-                    "type": "tool_result",
-                    "tool_use_id": r.provider_id,
-                    "content": anthropic_tool_result_content(r),
-                    "is_error": r.is_error,
-                }));
-            }
+            HistoryItem::ToolResult(r) => pending.push(json!({
+                "type": "tool_result",
+                "tool_use_id": r.provider_id,
+                "content": [{ "type": "text", "text": r.text }],
+                "is_error": r.is_error,
+            })),
         }
     }
-    flush_tool_results(&mut out, &mut pending_tool_results);
-    out
-}
+    flush(&mut messages, &mut pending);
 
-fn anthropic_tool_result_content(r: &ToolResult) -> Vec<Value> {
-    r.content
+    let tools_json: Vec<Value> = tools
         .iter()
-        .map(|c| match c {
-            McpContent::Text { text } => json!({ "type": "text", "text": text }),
-            McpContent::Image { data, mime_type } => json!({
-                "type": "image",
-                "source": { "type": "base64", "media_type": mime_type, "data": data },
-            }),
-            McpContent::Audio { mime_type, data } => json!({
-                "type": "text",
-                "text": format!("[audio elided: {mime_type}, {} bytes]", data.len()),
-            }),
-            McpContent::ResourceLink { uri } => json!({
-                "type": "text", "text": format!("[resource: {uri}]"),
-            }),
-            McpContent::Other(v) => json!({
-                "type": "text",
-                "text": serde_json::to_string(v).unwrap_or_default(),
-            }),
+        .map(|t| {
+            json!({
+                "name": t.name, "description": t.description, "input_schema": t.input_schema,
+            })
         })
-        .collect()
+        .collect();
+
+    json!({
+        "model": cfg.model,
+        "max_tokens": cfg.max_output_tokens,
+        "system": cfg.system_prompt,
+        "tools": tools_json,
+        "messages": messages,
+    })
 }
 
 fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
-    let stop_reason = match v.get("stop_reason").and_then(Value::as_str) {
+    let stop = match v.get("stop_reason").and_then(Value::as_str) {
         Some("end_turn") => ProviderStop::EndTurn,
         Some("tool_use") => ProviderStop::ToolUse,
         Some("max_tokens") => ProviderStop::MaxTokens,
         Some("refusal") => ProviderStop::Refusal,
         _ => ProviderStop::Other,
     };
-
-    let mut text = String::new();
     let mut tool_calls = Vec::new();
-
     if let Some(blocks) = v.get("content").and_then(Value::as_array) {
         for b in blocks {
-            match b.get("type").and_then(Value::as_str) {
-                Some("text") => {
-                    if let Some(t) = b.get("text").and_then(Value::as_str) {
-                        text.push_str(t);
-                    }
-                }
-                Some("tool_use") => {
-                    let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
-                    let name = b
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned();
-                    let input = b
-                        .get("input")
-                        .cloned()
-                        .unwrap_or(Value::Object(Default::default()));
-                    tool_calls.push(ToolCall {
-                        provider_id: id,
-                        name,
-                        arguments: input,
-                    });
-                }
-                _ => {}
+            if b.get("type").and_then(Value::as_str) == Some("tool_use") {
+                let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                let name = b
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned();
+                let args = b.get("input").cloned().unwrap_or(Value::Null);
+                tool_calls.push(make_tool_call(id, name, args)?);
             }
         }
     }
-
-    Ok(LlmResponse {
-        text,
-        tool_calls,
-        stop_reason,
-    })
+    Ok(LlmResponse { tool_calls, stop })
 }
 
-// ─── OpenAI-compatible ──────────────────────────────────────────────────────
+// ─── OpenAI-compat ──────────────────────────────────────────────────────────
 
-async fn openai_complete(
-    http: &Client,
-    cfg: &Config,
-    history: &[HistoryItem],
-    tools: &[ToolDef],
-) -> Result<LlmResponse, AgentError> {
-    let key = cfg
-        .openai_api_key
-        .as_deref()
-        .ok_or_else(|| AgentError::LlmAuth("OPENAI_COMPAT_API_KEY missing".into()))?;
-    let model = cfg
-        .openai_model
-        .as_deref()
-        .ok_or_else(|| AgentError::Llm("OPENAI_COMPAT_MODEL missing".into()))?;
-
-    let mut messages: Vec<Value> = vec![json!({
-        "role": "system",
-        "content": cfg.system_prompt,
-    })];
+fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
+    let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": cfg.system_prompt })];
     for item in history {
         match item {
-            HistoryItem::User { text } => messages.push(json!({
-                "role": "user", "content": text,
-            })),
+            HistoryItem::User(text) => messages.push(json!({ "role": "user", "content": text })),
             HistoryItem::Assistant { text, tool_calls } => {
                 let mut msg = serde_json::Map::new();
                 msg.insert("role".into(), json!("assistant"));
@@ -258,11 +165,11 @@ async fn openai_complete(
                         .iter()
                         .map(|c| {
                             json!({
-                                "id": c.provider_id,
-                                "type": "function",
+                                "id": c.provider_id, "type": "function",
                                 "function": {
                                     "name": c.name,
-                                    "arguments": serde_json::to_string(&c.arguments).unwrap_or("{}".into()),
+                                    "arguments": serde_json::to_string(&c.arguments)
+                                        .unwrap_or_else(|_| "{}".into()),
                                 },
                             })
                         })
@@ -271,68 +178,27 @@ async fn openai_complete(
                 }
                 messages.push(Value::Object(msg));
             }
-            HistoryItem::ToolResult(r) => {
-                let envelope = json!({
-                    "content": r.content.iter().map(|c| match c {
-                        McpContent::Text { text } => json!({ "type": "text", "text": text }),
-                        McpContent::Image { mime_type, data } => json!({
-                            "type": "text",
-                            "text": format!("[image elided: {mime_type}, {} bytes]", data.len()),
-                        }),
-                        McpContent::Audio { mime_type, data } => json!({
-                            "type": "text",
-                            "text": format!("[audio elided: {mime_type}, {} bytes]", data.len()),
-                        }),
-                        McpContent::ResourceLink { uri } => json!({
-                            "type": "text", "text": format!("[resource: {uri}]"),
-                        }),
-                        McpContent::Other(v) => json!({ "type": "text", "text": serde_json::to_string(v).unwrap_or_default() }),
-                    }).collect::<Vec<_>>(),
-                    "isError": r.is_error,
-                });
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": r.provider_id,
-                    "content": serde_json::to_string(&envelope).unwrap_or_default(),
-                }));
-            }
+            HistoryItem::ToolResult(r) => messages.push(json!({
+                "role": "tool", "tool_call_id": r.provider_id, "content": r.text,
+            })),
         }
     }
-
     let tools_json: Vec<Value> = tools
         .iter()
         .map(|t| {
             json!({
                 "type": "function",
                 "function": {
-                    "name": t.name,
-                    "description": t.description.clone().unwrap_or_default(),
-                    "parameters": t.input_schema,
+                    "name": t.name, "description": t.description, "parameters": t.input_schema,
                 },
             })
         })
         .collect();
-
-    let body = json!({
-        "model": model,
-        "stream": false,
+    json!({
+        "model": cfg.model, "stream": false,
         "max_tokens": cfg.max_output_tokens,
-        "messages": messages,
-        "tools": tools_json,
-        "tool_choice": "auto",
-    });
-
-    let url = format!(
-        "{}/chat/completions",
-        cfg.openai_base_url.trim_end_matches('/')
-    );
-    let v = post_with_retry(http, &url, &body, |req| {
-        req.bearer_auth(key)
-            .header("content-type", "application/json")
+        "messages": messages, "tools": tools_json, "tool_choice": "auto",
     })
-    .await?;
-
-    parse_openai(v)
 }
 
 fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
@@ -340,25 +206,17 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|a| a.first())
-        .ok_or_else(|| AgentError::Llm("openai response missing choices".into()))?;
-
-    let stop_reason = match choice.get("finish_reason").and_then(Value::as_str) {
+        .ok_or_else(|| AgentError::Llm("response missing choices".into()))?;
+    let stop = match choice.get("finish_reason").and_then(Value::as_str) {
         Some("stop") => ProviderStop::EndTurn,
         Some("tool_calls") => ProviderStop::ToolUse,
         Some("length") => ProviderStop::MaxTokens,
         Some("content_filter") => ProviderStop::Refusal,
         _ => ProviderStop::Other,
     };
-
     let msg = choice
         .get("message")
         .ok_or_else(|| AgentError::Llm("missing message".into()))?;
-    let text = msg
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
-
     let mut tool_calls = Vec::new();
     if let Some(arr) = msg.get("tool_calls").and_then(Value::as_array) {
         for tc in arr {
@@ -375,69 +233,69 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_owned();
-            let raw_args = f.get("arguments").and_then(Value::as_str).unwrap_or("{}");
-            let args: Value =
-                serde_json::from_str(raw_args).unwrap_or(Value::Object(Default::default()));
-            tool_calls.push(ToolCall {
-                provider_id: id,
-                name,
-                arguments: args,
-            });
+            let raw = f.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+            let args: Value = serde_json::from_str(raw)
+                .map_err(|e| AgentError::Llm(format!("tool_call.arguments not valid JSON: {e}")))?;
+            tool_calls.push(make_tool_call(id, name, args)?);
         }
     }
+    Ok(LlmResponse { tool_calls, stop })
+}
 
-    Ok(LlmResponse {
-        text,
-        tool_calls,
-        stop_reason,
+// ─── Shared helpers ─────────────────────────────────────────────────────────
+
+fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, AgentError> {
+    let provider_id = nonempty(id, "tool_call.id")?;
+    let name = nonempty(name, "tool_call.name")?;
+    let arguments = match args {
+        Value::Object(_) => args,
+        Value::Null => Value::Object(Default::default()),
+        _ => {
+            return Err(AgentError::Llm(
+                "tool_call arguments must be a JSON object".into(),
+            ))
+        }
+    };
+    Ok(ToolCall {
+        provider_id,
+        name,
+        arguments,
     })
 }
 
-// ─── Shared HTTP ────────────────────────────────────────────────────────────
-
-async fn post_with_retry<F>(
-    http: &Client,
-    url: &str,
-    body: &Value,
-    apply_headers: F,
-) -> Result<Value, AgentError>
+async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
     for attempt in 0..2u32 {
-        let req = apply_headers(http.post(url).json(body));
-        let resp = match req.send().await {
+        let resp = match apply(http.post(url).json(body)).send().await {
             Ok(r) => r,
             Err(e) => {
                 if attempt == 0 && (e.is_timeout() || e.is_connect()) {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     continue;
                 }
-                return Err(AgentError::LlmHttp(e.to_string()));
+                return Err(AgentError::Llm(format!("transport: {e}")));
             }
         };
         let status = resp.status();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AgentError::LlmAuth(body));
+        if status == 401 || status == 403 {
+            return Err(AgentError::LlmAuth(resp.text().await.unwrap_or_default()));
         }
-        if status.is_server_error() || status.as_u16() == 429 {
-            if attempt == 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                continue;
-            }
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AgentError::LlmHttp(format!("{status}: {body}")));
+        if (status.is_server_error() || status == 429) && attempt == 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            continue;
         }
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(AgentError::Llm(format!("{status}: {body}")));
+            return Err(AgentError::Llm(format!(
+                "{status}: {}",
+                resp.text().await.unwrap_or_default()
+            )));
         }
-        let v: Value = resp
+        return resp
             .json()
             .await
-            .map_err(|e| AgentError::Llm(format!("json: {e}")))?;
-        return Ok(v);
+            .map_err(|e| AgentError::Llm(format!("json: {e}")));
     }
-    Err(AgentError::LlmHttp("exhausted retries".into()))
+    Err(AgentError::Llm("exhausted retries".into()))
 }
