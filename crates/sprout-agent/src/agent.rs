@@ -27,7 +27,10 @@ pub enum WireMsg {
     Notify(Value),
     /// A permission request that has already been registered in `pending`
     /// under `id`; writer just formats and writes it.
-    Permission { id: i64, params: Value },
+    Permission {
+        id: i64,
+        params: Value,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,13 +128,15 @@ pub async fn run_prompt(
             pending.lock().await.insert(perm_id, tx);
             let outcome = tokio::select! {
                 biased;
-                _ = cancel.changed() => {
-                    // Remove our pending entry so it doesn't leak.
-                    pending.lock().await.remove(&perm_id);
-                    PermissionOutcome::Cancelled
-                }
+                _ = cancel.changed() => PermissionOutcome::Cancelled,
                 o = request_permission(wire, sid, perm_id, &call, rx) => o,
             };
+            // Always remove the pending entry on any non-Allow/Deny exit
+            // (cancel, wire send failure, dropped oneshot). Double-remove is a
+            // no-op; this guarantees no leak regardless of which path fired.
+            if outcome == PermissionOutcome::Cancelled {
+                pending.lock().await.remove(&perm_id);
+            }
             match outcome {
                 PermissionOutcome::Cancelled => {
                     // Tool call was already announced as pending — emit a
@@ -272,11 +277,7 @@ async fn request_permission(
             { "optionId": "deny",  "name": "Deny",  "kind": "reject_once" },
         ],
     });
-    if wire
-        .send(WireMsg::Permission { id, params })
-        .await
-        .is_err()
-    {
+    if wire.send(WireMsg::Permission { id, params }).await.is_err() {
         return PermissionOutcome::Cancelled;
     }
     rx.await.unwrap_or(PermissionOutcome::Cancelled)

@@ -152,9 +152,26 @@ fn valid_name(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Append `s` to `out`, but only up to `max - out.len()` bytes (UTF-8 safe).
+fn push_bounded(out: &mut String, s: &str, max: usize) {
+    let remaining = max.saturating_sub(out.len());
+    if remaining == 0 {
+        return;
+    }
+    if s.len() <= remaining {
+        out.push_str(s);
+    } else {
+        let mut cut = remaining;
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.push_str(&s[..cut]);
+    }
+}
+
 /// Flatten MCP content blocks into a single text blob. Binary content is elided
-/// with a marker so the model knows it existed. Stops appending once `max_bytes`
-/// is reached so a huge resource blob is never serialized in full before being
+/// with a marker so the model knows it existed. Every append is bounded by
+/// `max_bytes` so a huge resource blob is never serialized in full before being
 /// truncated. Final clamping is still done by the caller.
 fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String {
     use rmcp::model::RawContent;
@@ -164,41 +181,27 @@ fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String
             break;
         }
         if !out.is_empty() {
-            out.push('\n');
+            push_bounded(&mut out, "\n", max_bytes);
         }
         match &c.raw {
-            RawContent::Text(t) => {
-                let remaining = max_bytes.saturating_sub(out.len());
-                if t.text.len() <= remaining {
-                    out.push_str(&t.text);
-                } else {
-                    // UTF-8 safe truncation.
-                    let mut cut = remaining;
-                    while cut > 0 && !t.text.is_char_boundary(cut) {
-                        cut -= 1;
-                    }
-                    out.push_str(&t.text[..cut]);
-                }
+            RawContent::Text(t) => push_bounded(&mut out, &t.text, max_bytes),
+            RawContent::Image(i) => push_bounded(
+                &mut out,
+                &format!("[image elided: {}, {} bytes]", i.mime_type, i.data.len()),
+                max_bytes,
+            ),
+            RawContent::Audio(a) => push_bounded(
+                &mut out,
+                &format!("[audio elided: {}, {} bytes]", a.mime_type, a.data.len()),
+                max_bytes,
+            ),
+            RawContent::ResourceLink(r) => {
+                push_bounded(&mut out, &format!("[resource: {}]", r.uri), max_bytes)
             }
-            RawContent::Image(i) => {
-                out.push_str(&format!(
-                    "[image elided: {}, {} bytes]",
-                    i.mime_type,
-                    i.data.len()
-                ));
-            }
-            RawContent::Audio(a) => {
-                out.push_str(&format!(
-                    "[audio elided: {}, {} bytes]",
-                    a.mime_type,
-                    a.data.len()
-                ));
-            }
-            RawContent::ResourceLink(r) => out.push_str(&format!("[resource: {}]", r.uri)),
             RawContent::Resource(_) => {
                 // Resources can be huge (entire files). Elide rather than
                 // serialize the whole blob just to truncate it.
-                out.push_str("[resource elided]");
+                push_bounded(&mut out, "[resource elided]", max_bytes);
             }
         }
     }

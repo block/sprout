@@ -24,9 +24,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use crate::agent::{PendingMap, PermissionOutcome, Wire, WireMsg};
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
-use crate::types::{
-    Config, HistoryItem, SessionCancelParams, SessionNewParams, SessionPromptParams,
-};
+use crate::types::{Config, SessionCancelParams, SessionNewParams, SessionPromptParams};
 
 const PROTOCOL_VERSION: u32 = 1;
 
@@ -41,7 +39,8 @@ struct App {
 struct Session {
     id: String,
     mcp: Arc<McpRegistry>,
-    history: Arc<Mutex<Vec<HistoryItem>>>,
+    /// Owned by the in-flight prompt task. `None` between prompts.
+    history: Option<Vec<crate::types::HistoryItem>>,
     cancel_tx: watch::Sender<bool>,
     busy: bool,
 }
@@ -103,11 +102,16 @@ async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
     loop {
         let chunk = stdin.fill_buf().await?;
         if chunk.is_empty() {
-            return Ok(if buf.is_empty() {
-                None
-            } else {
-                Some(String::from_utf8_lossy(&buf).into_owned())
-            });
+            // EOF. A partially-buffered, unterminated frame is NOT a valid
+            // message — treat it as a connection close. ACP frames must be
+            // newline-terminated.
+            if !buf.is_empty() {
+                eprintln!(
+                    "sprout-agent: dropping unterminated partial frame at EOF ({} bytes)",
+                    buf.len()
+                );
+            }
+            return Ok(None);
         }
         let take = chunk
             .iter()
@@ -207,8 +211,8 @@ async fn handle_session_new(app: &Arc<App>, id: Value, params: Value, wire: &Wir
         Ok(p) => p,
         Err(e) => return send(wire, jrpc_err(id, -32602, &format!("session/new: {e}"))).await,
     };
-    let mut st = app.state.lock().await;
-    if st.is_some() {
+    // Don't hold app.state across MCP child spawning. We re-check after.
+    if app.state.lock().await.is_some() {
         return send(wire, jrpc_err(id, -32602, "session already exists")).await;
     }
     let mcp = match McpRegistry::spawn_all(&p.mcp_servers).await {
@@ -217,10 +221,14 @@ async fn handle_session_new(app: &Arc<App>, id: Value, params: Value, wire: &Wir
     };
     let session_id = format!("ses_{}", session_token());
     let (cancel_tx, _) = watch::channel(false);
+    let mut st = app.state.lock().await;
+    if st.is_some() {
+        return send(wire, jrpc_err(id, -32602, "session already exists")).await;
+    }
     *st = Some(Session {
         id: session_id.clone(),
         mcp,
-        history: Arc::new(Mutex::new(Vec::new())),
+        history: Some(Vec::new()),
         cancel_tx,
         busy: false,
     });
@@ -236,8 +244,9 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
             }
         };
 
-        // Lift everything we need from the session under one lock and mark busy.
-        let (sid, mcp, history, mut cancel_rx) = {
+        // Lift everything we need from the session under one lock, take
+        // ownership of history (moving it out of the session), and mark busy.
+        let (sid, mcp, mut history, mut cancel_rx) = {
             let mut st = app.state.lock().await;
             let s = match st.as_mut() {
                 Some(s) if s.id == p.session_id => s,
@@ -249,28 +258,28 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
             s.busy = true;
             let (tx, rx) = watch::channel(false);
             s.cancel_tx = tx;
-            (s.id.clone(), s.mcp.clone(), s.history.clone(), rx)
+            // history is `Some` whenever a session exists and no prompt is in flight.
+            let hist = s.history.take().unwrap_or_default();
+            (s.id.clone(), s.mcp.clone(), hist, rx)
         };
 
-        let result = {
-            let mut hist = history.lock().await;
-            agent::run_prompt(
-                &app.cfg,
-                &sid,
-                &mut cancel_rx,
-                &wire,
-                &app.llm,
-                &mcp,
-                &app.pending,
-                &app.next_id,
-                &mut hist,
-                p.prompt,
-            )
-            .await
-        };
+        let result = agent::run_prompt(
+            &app.cfg,
+            &sid,
+            &mut cancel_rx,
+            &wire,
+            &app.llm,
+            &mcp,
+            &app.pending,
+            &app.next_id,
+            &mut history,
+            p.prompt,
+        )
+        .await;
 
         if let Some(s) = app.state.lock().await.as_mut() {
             s.busy = false;
+            s.history = Some(history);
         }
 
         match result {
@@ -336,13 +345,19 @@ fn parse_permission(msg: &Value) -> PermissionOutcome {
     }
 }
 
+/// 16 hex chars (8 bytes) from `/dev/urandom`, falling back to nanos^pid.
 fn session_token() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let local = 0u8;
-    let addr = &local as *const u8 as usize as u128;
-    format!("{:016x}{:016x}", n as u64, addr as u64)
+    use std::io::Read;
+    let mut b = [0u8; 8];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .is_err()
+    {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        b = (nanos ^ ((std::process::id() as u64) << 32)).to_le_bytes();
+    }
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
