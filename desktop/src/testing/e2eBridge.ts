@@ -56,6 +56,13 @@ type RawMockTokenSeed = {
   token?: string;
 };
 
+type RawRelayMember = {
+  pubkey: string;
+  role: "owner" | "admin" | "member";
+  added_by: string | null;
+  created_at: string;
+};
+
 type RawProfile = {
   pubkey: string;
   display_name: string | null;
@@ -407,6 +414,55 @@ type MockSocket = {
   subscriptions: Map<string, string>;
 };
 
+function createMockRelayMembershipEvent(): RelayEvent {
+  return createMockEvent(
+    13534,
+    "",
+    mockRelayMembers.map((member) => ["member", member.pubkey, member.role]),
+    "f".repeat(64),
+  );
+}
+
+function updateMockRelayMembershipFromAdminEvent(event: RelayEvent): boolean {
+  const targetPubkey = event.tags
+    .find((tag) => tag[0] === "p")?.[1]
+    ?.toLowerCase();
+  if (!targetPubkey) return false;
+
+  if (event.kind === 9030) {
+    const role = event.tags.find((tag) => tag[0] === "role")?.[1] ?? "member";
+    if (role !== "admin" && role !== "member") return false;
+    if (mockRelayMembers.some((member) => member.pubkey === targetPubkey)) {
+      return true;
+    }
+    mockRelayMembers.push({
+      pubkey: targetPubkey,
+      role,
+      added_by: event.pubkey,
+      created_at: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  if (event.kind === 9031) {
+    mockRelayMembers = mockRelayMembers.filter(
+      (member) => member.pubkey !== targetPubkey,
+    );
+    return true;
+  }
+
+  if (event.kind === 9032) {
+    const role = event.tags.find((tag) => tag[0] === "role")?.[1];
+    if (role !== "admin" && role !== "member") return false;
+    mockRelayMembers = mockRelayMembers.map((member) =>
+      member.pubkey === targetPubkey ? { ...member, role } : member,
+    );
+    return true;
+  }
+
+  return false;
+}
+
 declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
@@ -693,6 +749,30 @@ function toMockToken(seed: RawMockTokenSeed): MockToken {
 function resetMockTokens(config: E2eConfig | undefined) {
   mockTokens = (config?.mock?.seededTokens ?? []).map(toMockToken);
   mockMintTokenError = config?.mock?.mintTokenError ?? null;
+}
+
+function resetMockRelayMembers(config: E2eConfig | undefined) {
+  const pubkey = getMockMemberPubkey(config);
+  mockRelayMembers = [
+    {
+      pubkey,
+      role: "owner",
+      added_by: null,
+      created_at: isoMinutesAgo(120),
+    },
+    {
+      pubkey: ALICE_PUBKEY,
+      role: "admin",
+      added_by: pubkey,
+      created_at: isoMinutesAgo(90),
+    },
+    {
+      pubkey: BOB_PUBKEY,
+      role: "member",
+      added_by: pubkey,
+      created_at: isoMinutesAgo(60),
+    },
+  ];
 }
 
 function resetMockManagedAgents() {
@@ -1076,6 +1156,7 @@ const mockChannels: MockChannel[] = [
 ];
 
 const mockMessages = new Map<string, RelayEvent[]>();
+let mockRelayMembers: RawRelayMember[] = [];
 const mockSockets = new Map<number, MockSocket>();
 const realSockets = new Map<number, WebSocket>();
 let mockTokens: MockToken[] = [];
@@ -4524,7 +4605,17 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const filter = rest[1] as { "#h"?: string[] };
+    const filter = rest[1] as { "#h"?: string[]; kinds?: number[] };
+    if (filter.kinds?.includes(13534)) {
+      sendWsText(socket.handler, [
+        "EVENT",
+        subId,
+        createMockRelayMembershipEvent(),
+      ]);
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+
     const channelId = filter["#h"]?.[0];
     if (!channelId) {
       sendWsText(socket.handler, ["EOSE", subId]);
@@ -4543,6 +4634,18 @@ function sendToMockSocket(args: {
 
   if (type === "EVENT") {
     const event = rest[0] as RelayEvent;
+
+    if ([9030, 9031, 9032].includes(event.kind)) {
+      const accepted = updateMockRelayMembershipFromAdminEvent(event);
+      sendWsText(socket.handler, [
+        "OK",
+        event.id,
+        accepted,
+        accepted ? "" : "Invalid relay admin event.",
+      ]);
+      return;
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId) {
       sendWsText(socket.handler, [
@@ -4581,6 +4684,7 @@ export function maybeInstallE2eTauriMocks() {
   }
 
   resetMockTokens(config);
+  resetMockRelayMembers(config);
   resetMockManagedAgents();
   resetMockPersonas();
   resetMockTeams();

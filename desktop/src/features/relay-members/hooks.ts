@@ -6,7 +6,7 @@ import {
   getMyRelayMembership,
   listRelayMembers,
   removeRelayMember,
-} from "@/shared/api/tauri";
+} from "@/shared/api/relayMembers";
 import type { RelayMember } from "@/shared/api/types";
 
 export const relayMembersQueryKey = ["relayMembers"] as const;

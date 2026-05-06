@@ -8,10 +8,10 @@ import {
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import {
   getIdentity,
-  getMyRelayMembership,
   importIdentity as tauriImportIdentity,
   uploadMediaBytes,
 } from "@/shared/api/tauri";
+import { getMyRelayMembership } from "@/shared/api/relayMembers";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
 import { relayClient } from "@/shared/api/relayClient";
@@ -30,8 +30,7 @@ import type {
 /**
  * Check whether the relay denies access due to membership gating.
  *
- * Uses the `/api/relay/members/me` endpoint which bypasses the membership
- * middleware — it returns null (404) when authenticated but not a member.
+ * Uses the standard relay message path to read the NIP-43 membership snapshot.
  *
  * Returns `true` if denied, `false` if the user is a member (or if the
  * relay doesn't enforce membership / isn't reachable).
