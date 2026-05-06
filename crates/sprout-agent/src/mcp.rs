@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
 
 const SEP: &str = "__";
-const MAX_NAME_LEN: usize = 64;
+const MAX_NAME_LEN: usize = 128;
 const MAX_TOOLS_PER_SESSION: usize = 128;
 const MAX_DESCRIPTION_BYTES: usize = 1024;
 const MAX_SCHEMA_BYTES: usize = 4096;
@@ -45,7 +45,12 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        if let Some(p) = self.pgid.get_mut().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(p) = self
+            .pgid
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             killpg(p, &self.name, "drop");
         }
     }
@@ -84,7 +89,10 @@ impl McpRegistry {
                 return Err(AgentError::Mcp(format!("invalid server name: {}", s.name)));
             }
             if !seen_names.insert(s.name.clone()) {
-                return Err(AgentError::Mcp(format!("duplicate server name: {}", s.name)));
+                return Err(AgentError::Mcp(format!(
+                    "duplicate server name: {}",
+                    s.name
+                )));
             }
             let mut cmd = Command::new(&s.command);
             cmd.args(&s.args);
@@ -278,7 +286,10 @@ fn killpg(pgid: u32, name: &str, stage: &str) {
     use nix::sys::signal::{killpg as nix_killpg, Signal};
     use nix::unistd::Pid;
     let result = nix_killpg(Pid::from_raw(pgid as i32), Signal::SIGKILL);
-    eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={pgid} ok={}", result.is_ok());
+    eprintln!(
+        "sprout-agent: killpg MCP {name} ({stage}) pgid={pgid} ok={}",
+        result.is_ok()
+    );
 }
 #[cfg(not(unix))]
 fn killpg(_pgid: u32, name: &str, stage: &str) {

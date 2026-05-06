@@ -814,10 +814,7 @@ async fn child_killed_on_tool_timeout() {
     use nix::sys::signal::kill as nix_kill;
     use nix::unistd::Pid;
     let probe = nix_kill(Pid::from_raw(pid as i32), None);
-    assert!(
-        probe.is_err(),
-        "child {pid} still alive after tool timeout"
-    );
+    assert!(probe.is_err(), "child {pid} still alive after tool timeout");
 
     let _ = std::fs::remove_file(&pid_file);
     h.shutdown().await;

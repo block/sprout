@@ -149,7 +149,11 @@ struct CappedSink {
 
 impl CappedSink {
     fn new() -> Self {
-        Self { bytes: 0, lines: 0, capped: false }
+        Self {
+            bytes: 0,
+            lines: 0,
+            capped: false,
+        }
     }
     fn writeln(&mut self, s: &str) {
         if self.capped {
@@ -170,7 +174,10 @@ impl CappedSink {
 fn fallback(args: Vec<String>) -> i32 {
     let opts = match parse(args) {
         Ok(o) => o,
-        Err(e) => { eprintln!("rg (fallback): {e}"); return 2; }
+        Err(e) => {
+            eprintln!("rg (fallback): {e}");
+            return 2;
+        }
     };
     let mut sink = CappedSink::new();
     let mut found = false;
@@ -178,26 +185,48 @@ fn fallback(args: Vec<String>) -> i32 {
 
     if opts.files_only {
         for root in &opts.paths {
-            walk(root, &opts, &mut |p| { sink.writeln(&p.display().to_string()); found = true; });
-            if sink.capped { break; }
+            walk(root, &opts, &mut |p| {
+                sink.writeln(&p.display().to_string());
+                found = true;
+            });
+            if sink.capped {
+                break;
+            }
         }
         return if found { 0 } else { 1 };
     }
 
     let pattern = match &opts.pattern {
         Some(p) => p.clone(),
-        None => { eprintln!("rg (fallback): missing PATTERN"); return 2; }
+        None => {
+            eprintln!("rg (fallback): missing PATTERN");
+            return 2;
+        }
     };
-    let needle = if opts.ignore_case { pattern.to_lowercase() } else { pattern };
+    let needle = if opts.ignore_case {
+        pattern.to_lowercase()
+    } else {
+        pattern
+    };
 
     for root in &opts.paths {
         walk(root, &opts, &mut |path| {
-            if sink.capped { return; }
-            if scan_file(path, &needle, &opts, &mut sink, &mut printed) { found = true; }
+            if sink.capped {
+                return;
+            }
+            if scan_file(path, &needle, &opts, &mut sink, &mut printed) {
+                found = true;
+            }
         });
-        if sink.capped { break; }
+        if sink.capped {
+            break;
+        }
     }
-    if found { 0 } else { 1 }
+    if found {
+        0
+    } else {
+        1
+    }
 }
 
 /// Stream a single file line-by-line. Buffers a ring of preceding lines for
@@ -214,14 +243,20 @@ fn scan_file(
         Err(_) => return false,
     };
     let cap = opts.context;
-    let mut ring: std::collections::VecDeque<String> = std::collections::VecDeque::with_capacity(cap);
+    let mut ring: std::collections::VecDeque<String> =
+        std::collections::VecDeque::with_capacity(cap);
     let mut tail = 0usize;
     let mut last: Option<usize> = None;
     let mut found = false;
 
     for (idx, line) in BufReader::new(file).lines().enumerate() {
-        if sink.capped { return found; }
-        let line = match line { Ok(l) => l, Err(_) => return found };
+        if sink.capped {
+            return found;
+        }
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => return found,
+        };
         let is_match = if opts.ignore_case {
             line.to_lowercase().contains(needle)
         } else {
@@ -256,7 +291,9 @@ fn scan_file(
         }
 
         if cap > 0 {
-            if ring.len() == cap { ring.pop_front(); }
+            if ring.len() == cap {
+                ring.pop_front();
+            }
             ring.push_back(line);
         }
     }
@@ -363,8 +400,7 @@ mod tests {
 
     #[test]
     fn parse_basic_pattern_and_path() {
-        let opts =
-            parse(vec!["-n".into(), "needle".into(), "src".into()]).expect("parse");
+        let opts = parse(vec!["-n".into(), "needle".into(), "src".into()]).expect("parse");
         assert!(opts.line_numbers);
         assert_eq!(opts.pattern.as_deref(), Some("needle"));
         assert_eq!(opts.paths, vec![PathBuf::from("src")]);
@@ -411,11 +447,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let f = dir.path().join("a.txt");
         std::fs::write(&f, "alpha\nNEEDLE\nbeta\n").expect("write");
-        let opts = parse(vec!["NEEDLE".into(), f.display().to_string()])
-            .expect("parse");
+        let opts = parse(vec!["NEEDLE".into(), f.display().to_string()]).expect("parse");
         let mut sink = CappedSink::new();
-        let mut printed: std::collections::HashSet<PathBuf> =
-            std::collections::HashSet::new();
+        let mut printed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         let found = scan_file(&f, "NEEDLE", &opts, &mut sink, &mut printed);
         assert!(found, "expected NEEDLE to be found");
     }

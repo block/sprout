@@ -305,17 +305,39 @@ async fn read_error_body(mut resp: reqwest::Response) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+const MAX_RETRIES: u32 = 3;
+const BASE_BACKOFF_MS: u64 = 500;
+const MAX_BACKOFF_MS: u64 = 8_000;
+
+/// Exponential backoff with jitter. Prevents thundering herd when multiple
+/// agents hit the same LLM endpoint concurrently.
+async fn backoff_with_jitter(attempt: u32) {
+    let base = BASE_BACKOFF_MS
+        .saturating_mul(1u64 << attempt)
+        .min(MAX_BACKOFF_MS);
+    // Simple jitter: random value in [base/2, base]. Uses getrandom to avoid
+    // pulling in a full RNG crate.
+    let mut buf = [0u8; 8];
+    let jitter_range = base / 2;
+    let delay = if jitter_range > 0 && getrandom::getrandom(&mut buf).is_ok() {
+        let r = u64::from_le_bytes(buf) % jitter_range;
+        base - jitter_range + r
+    } else {
+        base
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+}
+
 async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
-    let backoff = || tokio::time::sleep(std::time::Duration::from_secs(1));
-    for attempt in 0..2u32 {
+    for attempt in 0..MAX_RETRIES {
         let resp = match apply(http.post(url).json(body)).send().await {
             Ok(r) => r,
             Err(e) => {
-                if attempt == 0 && (e.is_timeout() || e.is_connect()) {
-                    backoff().await;
+                if attempt + 1 < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
+                    backoff_with_jitter(attempt).await;
                     continue;
                 }
                 return Err(AgentError::Llm(format!("transport: {e}")));
@@ -325,8 +347,8 @@ where
         if status == 401 || status == 403 {
             return Err(AgentError::LlmAuth(read_error_body(resp).await));
         }
-        if (status.is_server_error() || status == 429) && attempt == 0 {
-            backoff().await;
+        if (status.is_server_error() || status == 429) && attempt + 1 < MAX_RETRIES {
+            backoff_with_jitter(attempt).await;
             continue;
         }
         if !status.is_success() {

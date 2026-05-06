@@ -226,7 +226,12 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
                         }
                     }
                 }
-                (CapturedStream::default(), CapturedStream::default(), None, true)
+                (
+                    CapturedStream::default(),
+                    CapturedStream::default(),
+                    None,
+                    true,
+                )
             }
         };
 
@@ -318,8 +323,6 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R) -> CapturedStream {
     out
 }
 
-
-
 fn finalize_stream(
     state: &SharedState,
     call_id: u64,
@@ -361,7 +364,10 @@ fn finalize_stream(
     let tail = lossy(buf[tail_aligned..].to_vec());
 
     let cap_note = if capped {
-        format!(" (capture capped at {} bytes; further output discarded)", CAPTURE_CAP)
+        format!(
+            " (capture capped at {} bytes; further output discarded)",
+            CAPTURE_CAP
+        )
     } else {
         String::new()
     };

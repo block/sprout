@@ -226,9 +226,7 @@ impl RunCtx<'_> {
             dropped += 1;
         }
         if dropped > 0 {
-            eprintln!(
-                "sprout-agent: agent: handoff prompt cap, dropped {dropped} oldest snippets"
-            );
+            eprintln!("sprout-agent: agent: handoff prompt cap, dropped {dropped} oldest snippets");
         }
 
         let mut out =
@@ -509,7 +507,10 @@ fn truncate_history(history: &mut Vec<HistoryItem>, max_bytes: usize) {
         if end >= history.len() {
             break;
         }
-        let dropped: usize = history[..end].iter().map(HistoryItem::estimated_bytes).sum();
+        let dropped: usize = history[..end]
+            .iter()
+            .map(HistoryItem::estimated_bytes)
+            .sum();
         history.drain(..end);
         total = total.saturating_sub(dropped);
     }
