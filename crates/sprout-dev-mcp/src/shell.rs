@@ -14,6 +14,7 @@ use tokio::process::Command;
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
+const MAX_COMMAND_BYTES: usize = 1_000_000; // 1MB command cap
 const CAPTURE_CAP: usize = 10 * 1024 * 1024; // 10MB hard cap per stream
 const MAX_BYTES: usize = 50 * 1024;
 const MAX_LINES: usize = 2000;
@@ -118,6 +119,12 @@ pub struct ShellParams {
 }
 
 pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, ErrorData> {
+    if p.command.len() > MAX_COMMAND_BYTES {
+        return Err(ErrorData::invalid_params(
+            format!("command exceeds {MAX_COMMAND_BYTES} byte limit"),
+            None,
+        ));
+    }
     let timeout_ms = p
         .timeout_ms
         .unwrap_or(DEFAULT_TIMEOUT_MS)
@@ -185,8 +192,16 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
     let mut notes: Vec<String> = Vec::new();
     let (stdout_cap, stderr_cap, status, timed_out) =
         match tokio::time::timeout(timeout, wait).await {
-            Ok((o, e, Ok(s))) => (o, e, Some(s), false),
+            Ok((o, e, Ok(s))) => {
+                if let Some(pid) = pid {
+                    kill_process_group(pid as i32);
+                }
+                (o, e, Some(s), false)
+            }
             Ok((o, e, Err(err))) => {
+                if let Some(pid) = pid {
+                    kill_process_group(pid as i32);
+                }
                 notes.push(format!("child wait failed: {err}"));
                 (o, e, None, false)
             }
