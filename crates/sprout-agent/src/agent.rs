@@ -336,12 +336,15 @@ impl RunCtx<'_> {
             return PermissionOutcome::Cancelled;
         }
         let mut cancel = self.cancel.clone();
+        // A non-responsive client must not wedge the session forever.
+        // Bound the wait by tool_timeout and treat expiry as Deny.
         let outcome = tokio::select! {
             biased;
             _ = cancel.changed() => PermissionOutcome::Cancelled,
+            _ = tokio::time::sleep(self.cfg.tool_timeout) => PermissionOutcome::Deny,
             o = rx => o.unwrap_or(PermissionOutcome::Cancelled),
         };
-        if outcome == PermissionOutcome::Cancelled {
+        if outcome != PermissionOutcome::Allow {
             self.pending.lock().await.remove(&perm_id);
         }
         outcome

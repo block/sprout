@@ -69,7 +69,6 @@ fn build_bootstrap(cwd: &Path) -> String {
          \n\
          Tools:\n\
          - shell(command, workdir?, timeout_ms?): run a bash command. Output is tail-truncated to ~8KB; captured output (first 10MB per stream) goes to an artifact file. timeout_ms capped at 600000.\n\
-         - todo(content?): replace the TODO when content is given; read it when omitted.\n\
          - str_replace(path, old_str, new_str, workdir?): atomic find-and-replace within the workspace. `old_str` must occur exactly once. Returns a unified diff.\n\
          \n\
          On PATH inside shell:\n\
@@ -180,12 +179,14 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
     };
 
     let timeout = Duration::from_millis(timeout_ms);
+    // Drain stdout/stderr concurrently with wait(). If we waited first, a
+    // child that writes >64KB (the OS pipe buffer) would block on its own
+    // write and wait() would never return — every such call would time out.
     let wait = async {
-        let status = child.wait().await;
+        let (out, err, status) = tokio::join!(read_stdout, read_stderr, child.wait());
         if let Some(pid) = pid {
             kill_process_group(pid as i32);
         }
-        let (out, err) = tokio::join!(read_stdout, read_stderr);
         (out, err, status)
     };
 

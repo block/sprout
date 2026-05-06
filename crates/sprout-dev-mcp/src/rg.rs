@@ -6,6 +6,12 @@ use std::process::Command;
 /// agents see consistent limits regardless of which `rg` actually ran.
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_OUTPUT_LINES: usize = 2000;
+/// Hard cap on `-C <n>`: a user-supplied huge value would otherwise feed
+/// straight into `VecDeque::with_capacity(n)` and OOM the process.
+const MAX_CONTEXT: usize = 100;
+/// Recursion guard for `walk`. Even with the symlink-skip below, deeply
+/// nested trees are bounded so a pathological input can't pin a CPU.
+const MAX_WALK_DEPTH: usize = 50;
 
 pub fn run(args: Vec<String>) -> i32 {
     if let Some(code) = try_system_rg(&args) {
@@ -105,7 +111,8 @@ fn parse(args: Vec<String>) -> Result<RgArgs, String> {
             "-l" | "--files-with-matches" => out.list_files_with_matches = true,
             "-C" | "--context" => {
                 let n = iter.next().ok_or("missing value for -C")?;
-                out.context = n.parse().map_err(|_| format!("bad -C value: {n}"))?;
+                let parsed: usize = n.parse().map_err(|_| format!("bad -C value: {n}"))?;
+                out.context = parsed.min(MAX_CONTEXT);
             }
             "-g" | "--glob" => {
                 out.glob = Some(iter.next().ok_or("missing value for -g")?);
@@ -272,8 +279,12 @@ fn walk(root: &Path, opts: &RgArgs, on_file: &mut dyn FnMut(&Path)) {
         }
         return;
     }
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    // Each stack entry carries its depth. We refuse to descend past
+    // MAX_WALK_DEPTH and skip symlinked directories outright — a symlink
+    // that points back into the tree (or into `/`) would otherwise loop
+    // forever, since `Path::is_dir` follows symlinks.
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(_) => continue,
@@ -287,12 +298,22 @@ fn walk(root: &Path, opts: &RgArgs, on_file: &mut dyn FnMut(&Path)) {
             if name.starts_with('.') {
                 continue;
             }
-            if path.is_dir() {
+            // file_type() does NOT follow symlinks — exactly what we want.
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
                 if matches!(name, "target" | "node_modules" | "dist" | "build") {
                     continue;
                 }
-                stack.push(path);
-            } else if accept(&path, opts) {
+                if depth < MAX_WALK_DEPTH {
+                    stack.push((path, depth + 1));
+                }
+            } else if ft.is_file() && accept(&path, opts) {
                 on_file(&path);
             }
         }

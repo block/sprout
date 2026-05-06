@@ -84,7 +84,7 @@ impl Config {
             (_, Some(p)) => std::fs::read_to_string(&p).map_err(|e| format!("config: read {p}: {e}"))?,
             _ => DEFAULT_SYSTEM_PROMPT.to_owned(),
         };
-        Ok(Config {
+        let cfg = Config {
             provider,
             system_prompt,
             api_key,
@@ -102,7 +102,44 @@ impl Config {
             max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
             max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
-        })
+        };
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Reject zero/near-zero values that would render the agent useless or
+    /// thrash the LLM. Floors are conservative — they catch obvious misuse
+    /// (`MAX_ROUNDS=0`) without forbidding tight test configs.
+    fn validate(&self) -> Result<(), String> {
+        const MIN_HISTORY_BYTES: usize = 4096;
+        const MIN_LINE_BYTES: usize = 1024;
+        const MIN_TIMEOUT: Duration = Duration::from_secs(1);
+        if self.max_rounds < 1 {
+            return Err("config: SPROUT_AGENT_MAX_ROUNDS must be >= 1".into());
+        }
+        if self.max_output_tokens < 1 {
+            return Err("config: SPROUT_AGENT_MAX_OUTPUT_TOKENS must be >= 1".into());
+        }
+        if self.max_history_bytes < MIN_HISTORY_BYTES {
+            return Err(format!(
+                "config: SPROUT_AGENT_MAX_HISTORY_BYTES must be >= {MIN_HISTORY_BYTES}"
+            ));
+        }
+        if self.max_line_bytes < MIN_LINE_BYTES {
+            return Err(format!(
+                "config: SPROUT_AGENT_MAX_LINE_BYTES must be >= {MIN_LINE_BYTES}"
+            ));
+        }
+        if self.llm_timeout < MIN_TIMEOUT {
+            return Err("config: SPROUT_AGENT_LLM_TIMEOUT_SECS must be >= 1".into());
+        }
+        if self.tool_timeout < MIN_TIMEOUT {
+            return Err("config: SPROUT_AGENT_TOOL_TIMEOUT_SECS must be >= 1".into());
+        }
+        if self.mcp_init_timeout < MIN_TIMEOUT {
+            return Err("config: SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS must be >= 1".into());
+        }
+        Ok(())
     }
 }
 
