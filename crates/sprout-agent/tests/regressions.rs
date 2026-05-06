@@ -834,3 +834,127 @@ async fn child_killed_on_tool_timeout() {
     let _ = std::fs::remove_file(&pid_file);
     h.shutdown().await;
 }
+
+/// On tool timeout, the MCP child *and any grandchildren it spawned* must
+/// die. We spawn each MCP server in its own process group and SIGKILL the
+/// group on timeout; this test verifies the tree-scoped kill by having the
+/// fake MCP fork a `sleep 999` grandchild on tool/call before hanging.
+/// Without process-group killing, the grandchild would be orphaned to PID 1
+/// and outlive the timeout.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grandchild_killed_on_tool_timeout() {
+    let llm = spawn_capturing_llm(vec![
+        openai_tool_call("c1", "slow__tool_0", json!({})),
+        openai_text("after"),
+    ])
+    .await;
+
+    let grandchild_pid_file = std::env::temp_dir().join(format!(
+        "sprout-fake-mcp-grandchild-{}.pid",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&grandchild_pid_file);
+
+    let mut h = Harness::spawn_with_env(
+        &llm.url,
+        &[("ACP_SEED_TOOL_TIMEOUT_SECS", "2")],
+    )
+    .await;
+
+    let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let _ = h.recv().await;
+    h.send(
+        "session/new",
+        json!({
+            "cwd": "/tmp",
+            "mcpServers": [{
+                "name": "slow",
+                "command": fake_mcp,
+                "args": [],
+                "env": [
+                    { "name": "FAKE_MCP_TOOL_COUNT", "value": "1" },
+                    { "name": "FAKE_MCP_TOOL_DELAY", "value": "999" },
+                    { "name": "FAKE_MCP_SPAWN_GRANDCHILD", "value": "1" },
+                    {
+                        "name": "FAKE_MCP_GRANDCHILD_PID_FILE",
+                        "value": grandchild_pid_file.to_str().unwrap(),
+                    },
+                ],
+            }],
+        }),
+    )
+    .await;
+    let r = h
+        .recv_until(|v| v.get("result").is_some() || v.get("error").is_some())
+        .await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+
+    // Drive the prompt: tool call → permission allow → MCP forks sleep 999
+    // → MCP hangs → tool timeout fires → process group SIGKILLed.
+    let p = h
+        .send(
+            "session/prompt",
+            json!({"sessionId": sid, "prompt": [{"type":"text","text":"go"}]}),
+        )
+        .await;
+
+    // Wait for tool_call_update with status=failed (the timeout signal).
+    let _failed = recv_until_allow_perms(&mut h, |v| {
+        v.get("method") == Some(&json!("session/update"))
+            && v["params"]["update"]["sessionUpdate"] == "tool_call_update"
+            && v["params"]["update"]["status"] == "failed"
+    })
+    .await;
+
+    // Wait for the final response so the loop unwinds cleanly.
+    let _ = recv_until_allow_perms(&mut h, |v| v["id"] == json!(p)).await;
+
+    // Read the grandchild PID written by fake-mcp during tools/call.
+    let grandchild_pid: i32 = {
+        let mut last = String::new();
+        for _ in 0..50 {
+            if let Ok(s) = std::fs::read_to_string(&grandchild_pid_file) {
+                if !s.trim().is_empty() {
+                    last = s;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        last.trim()
+            .parse()
+            .expect("read grandchild pid file (was the tool/call dispatched?)")
+    };
+
+    // Give the kill a moment to actually reap. The grandchild is reparented
+    // to PID 1 once its parent dies, so a tiny delay covers signal delivery.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // SAFETY: kill(pid, 0) is a liveness probe — sends no signal.
+    let rc = unsafe { libc::kill(grandchild_pid as libc::pid_t, 0) };
+    if rc == 0 {
+        // Still alive — clean up before failing so we don't leak `sleep 999`.
+        unsafe { libc::kill(grandchild_pid as libc::pid_t, libc::SIGKILL) };
+        panic!(
+            "grandchild {grandchild_pid} still alive after tool timeout; \
+             process-group kill did not reach the whole tree"
+        );
+    }
+    let errno = std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(0);
+    assert_eq!(
+        errno,
+        libc::ESRCH,
+        "expected ESRCH for dead grandchild, got errno {errno}"
+    );
+
+    let _ = std::fs::remove_file(&grandchild_pid_file);
+    h.shutdown().await;
+}

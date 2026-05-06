@@ -299,6 +299,32 @@ fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, Age
 /// be allowed to OOM the agent before parsing.
 const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
+/// Cap on how much of an error body we read into memory before formatting
+/// it into an `AgentError`. A hostile/buggy upstream could otherwise feed
+/// us megabytes of "error message" while we sit blocking on `text()`.
+const MAX_LLM_ERROR_BODY_BYTES: usize = 4 * 1024;
+
+/// Read at most `MAX_LLM_ERROR_BODY_BYTES` of an error response body.
+/// Streaming chunks lets us bail out early without buffering an unbounded
+/// body. Lossy UTF-8 decode is fine here — this string is for humans.
+async fn read_error_body(mut resp: reqwest::Response) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    while buf.len() < MAX_LLM_ERROR_BODY_BYTES {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let need = MAX_LLM_ERROR_BODY_BYTES - buf.len();
+                let take = chunk.len().min(need);
+                buf.extend_from_slice(&chunk[..take]);
+                if take < chunk.len() {
+                    break;
+                }
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
@@ -316,7 +342,7 @@ where
         };
         let status = resp.status();
         if status == 401 || status == 403 {
-            return Err(AgentError::LlmAuth(resp.text().await.unwrap_or_default()));
+            return Err(AgentError::LlmAuth(read_error_body(resp).await));
         }
         if (status.is_server_error() || status == 429) && attempt == 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -325,7 +351,7 @@ where
         if !status.is_success() {
             return Err(AgentError::Llm(format!(
                 "{status}: {}",
-                resp.text().await.unwrap_or_default()
+                read_error_body(resp).await
             )));
         }
         // Reject up-front if Content-Length advertises an oversized body.

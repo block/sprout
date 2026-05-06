@@ -118,6 +118,24 @@ impl McpRegistry {
             }
             cmd.stderr(std::process::Stdio::inherit());
 
+            // Put the child in its own process group so we can SIGKILL the
+            // entire tree (child + grandchildren) on timeout. Without this,
+            // grandchildren spawned by the MCP server are orphaned to PID 1
+            // when we kill the direct child. Unix-only; on other platforms
+            // we fall back to plain kill (best-effort).
+            #[cfg(unix)]
+            unsafe {
+                cmd.pre_exec(|| {
+                    // setpgid(0, 0) makes this process the leader of a new
+                    // process group whose PGID == its PID. Returning Ok lets
+                    // exec proceed; an Err would abort the spawn.
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+
             let transport = TokioChildProcess::new(cmd)
                 .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
             // Capture the child pid so a stuck server can be force-killed
@@ -319,20 +337,29 @@ fn cap_schema(qname: &str, schema: Value) -> Value {
     Value::Object(Map::new())
 }
 
-/// Send SIGKILL to a stuck MCP child by pid. The transport's Drop impl
-/// already best-effort kills, but it spawns a tokio task and may race the
-/// process exiting. SIGKILL here is decisive and synchronous.
+/// Send SIGKILL to a stuck MCP child *and its entire process group* by
+/// pid. We spawned the child with `setpgid(0, 0)`, so its PID equals its
+/// PGID; `killpg` walks the whole tree (grandchildren included) so a
+/// misbehaving MCP server cannot leak background work past timeout.
+///
+/// The transport's Drop impl already best-effort kills the direct child,
+/// but it spawns a tokio task and may race the process exiting. Group
+/// SIGKILL here is decisive, synchronous, and tree-scoped.
 #[cfg(unix)]
 fn force_kill(pid: Option<u32>, name: &str, stage: &str) {
     if let Some(p) = pid {
-        // SAFETY: kill(2) with SIGKILL on a pid we just spawned. ESRCH on
-        // an already-exited child is fine.
-        let rc = unsafe { libc::kill(p as libc::pid_t, libc::SIGKILL) };
-        eprintln!("sprout-agent: kill MCP {name} ({stage}) pid={p} rc={rc}");
+        // SAFETY: killpg(2) on a PGID we just established via pre_exec
+        // setpgid(0,0). ESRCH on an already-exited group is fine.
+        let rc = unsafe { libc::killpg(p as libc::pid_t, libc::SIGKILL) };
+        eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={p} rc={rc}");
     }
 }
 #[cfg(not(unix))]
 fn force_kill(pid: Option<u32>, name: &str, stage: &str) {
+    // Process-group killing is Unix-only; on other platforms we rely on
+    // the transport Drop to terminate the direct child. Grandchildren may
+    // be orphaned — acceptable since sprout-agent ships behind sprout-acp
+    // on Unix hosts.
     eprintln!("sprout-agent: relying on Drop to kill MCP {name} ({stage}) pid={pid:?}");
 }
 

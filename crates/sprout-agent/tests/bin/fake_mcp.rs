@@ -12,6 +12,14 @@
 //!                              (use a large value, e.g. 999, to simulate hang)
 //!   FAKE_MCP_PID_FILE=path   — write the child PID to `path` on startup
 //!                              (for tests that want to verify the child died)
+//!   FAKE_MCP_SPAWN_GRANDCHILD=1
+//!                            — on `tools/call`, spawn a `sleep 999`
+//!                              grandchild before hanging. Its PID is
+//!                              written to FAKE_MCP_GRANDCHILD_PID_FILE
+//!                              so a test can verify the entire process
+//!                              tree dies on timeout.
+//!   FAKE_MCP_GRANDCHILD_PID_FILE=path
+//!                            — path to write the grandchild PID to.
 
 use std::io::{BufRead, Write};
 
@@ -125,6 +133,19 @@ fn main() {
                 write_response(id, json!({ "tools": make_tools(tool_count, &desc) }));
             }
             "tools/call" => {
+                // Optionally spawn a long-sleeping grandchild so the test
+                // can verify process-group killing reaches the whole tree.
+                if env_flag("FAKE_MCP_SPAWN_GRANDCHILD") {
+                    let child = std::process::Command::new("sleep")
+                        .arg("999")
+                        .spawn()
+                        .expect("spawn grandchild");
+                    if let Ok(path) = std::env::var("FAKE_MCP_GRANDCHILD_PID_FILE") {
+                        let _ = std::fs::write(&path, child.id().to_string());
+                    }
+                    // Don't reap; let it run until the parent group is killed.
+                    std::mem::forget(child);
+                }
                 if tool_delay_secs > 0 {
                     std::thread::sleep(std::time::Duration::from_secs(tool_delay_secs));
                 }
