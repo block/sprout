@@ -51,6 +51,57 @@ impl Llm {
             }
         }
     }
+
+    /// Single tool-less completion with a caller-supplied system prompt and
+    /// output-token cap. Used for internal context handoff. Returns the raw
+    /// text body of the assistant's reply.
+    pub async fn summarize(
+        &self,
+        cfg: &Config,
+        system_prompt: &str,
+        user_prompt: &str,
+        max_output_tokens: u32,
+    ) -> Result<String, AgentError> {
+        match cfg.provider {
+            Provider::Anthropic => {
+                let body = json!({
+                    "model": cfg.model,
+                    "max_tokens": max_output_tokens,
+                    "system": system_prompt,
+                    "messages": [{
+                        "role": "user",
+                        "content": [{ "type": "text", "text": user_prompt }],
+                    }],
+                });
+                let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
+                let v = post(&self.http, &url, &body, |r| {
+                    r.header("x-api-key", &cfg.api_key)
+                        .header("anthropic-version", &cfg.anthropic_api_version)
+                        .header("content-type", "application/json")
+                })
+                .await?;
+                Ok(parse_anthropic(v)?.text)
+            }
+            Provider::OpenAi => {
+                let body = json!({
+                    "model": cfg.model,
+                    "stream": false,
+                    "max_tokens": max_output_tokens,
+                    "messages": [
+                        { "role": "system", "content": system_prompt },
+                        { "role": "user", "content": user_prompt },
+                    ],
+                });
+                let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+                let v = post(&self.http, &url, &body, |r| {
+                    r.bearer_auth(&cfg.api_key)
+                        .header("content-type", "application/json")
+                })
+                .await?;
+                Ok(parse_openai(v)?.text)
+            }
+        }
+    }
 }
 
 fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {

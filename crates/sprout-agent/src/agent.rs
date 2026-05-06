@@ -4,7 +4,10 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::{oneshot, watch, Mutex};
 
-use crate::config::{Config, MAX_PROMPT_BYTES, MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_RESULT_BYTES};
+use crate::config::{
+    Config, HANDOFF_MAX_OUTPUT_TOKENS, HANDOFF_TAIL_ITEMS, HANDOFF_THRESHOLD, MAX_PROMPT_BYTES,
+    MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_RESULT_BYTES,
+};
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
 use crate::types::{
@@ -25,6 +28,12 @@ pub struct RunCtx<'a> {
     pub next_id: &'a Arc<Mutex<i64>>,
     pub cancel: &'a mut watch::Receiver<bool>,
     pub history: &'a mut Vec<HistoryItem>,
+    /// First user prompt verbatim. Set on the first invocation of `run` and
+    /// preserved across context handoffs so the agent never loses sight of
+    /// the original task.
+    pub original_task: &'a mut Option<String>,
+    /// Number of internal handoffs performed this session.
+    pub handoff_count: &'a mut usize,
 }
 
 impl RunCtx<'_> {
@@ -35,13 +44,21 @@ impl RunCtx<'_> {
                 "prompt: exceeds {MAX_PROMPT_BYTES} bytes"
             )));
         }
+        if self.original_task.is_none() {
+            *self.original_task = Some(user_text.clone());
+        }
         self.history.push(HistoryItem::User(user_text));
 
         for _ in 0..self.cfg.max_rounds {
             if *self.cancel.borrow() {
                 return Ok(StopReason::Cancelled);
             }
-            truncate_history(self.history, self.cfg.max_history_bytes);
+            // Try internal handoff first; if it ran, history is already a
+            // single fresh-summary message and we skip truncation. If it was
+            // skipped or failed, fall back to the existing truncation path.
+            if !self.maybe_handoff().await {
+                truncate_history(self.history, self.cfg.max_history_bytes);
+            }
 
             let response = tokio::select! {
                 biased;
@@ -94,6 +111,93 @@ impl RunCtx<'_> {
             }
         }
         Ok(StopReason::MaxTurnRequests)
+    }
+
+    /// Returns true if a handoff was performed (history was reset to a
+    /// summary). Returns false if not needed, capped, or the summary call
+    /// failed — in which case the caller should fall back to truncation.
+    async fn maybe_handoff(&mut self) -> bool {
+        if !self.should_handoff() {
+            return false;
+        }
+        if *self.handoff_count >= self.cfg.max_handoffs {
+            eprintln!(
+                "sprout-agent: agent: handoff cap reached ({}); using truncation",
+                self.cfg.max_handoffs
+            );
+            return false;
+        }
+        let prompt = self.build_handoff_prompt();
+        let summary = tokio::select! {
+            biased;
+            _ = self.cancel.changed() => return false,
+            r = self.llm.summarize(
+                self.cfg,
+                HANDOFF_SYSTEM_PROMPT,
+                &prompt,
+                HANDOFF_MAX_OUTPUT_TOKENS,
+            ) => match r {
+                Ok(s) if !s.trim().is_empty() => s,
+                Ok(_) => {
+                    eprintln!("sprout-agent: agent: handoff returned empty summary; truncating");
+                    return false;
+                }
+                Err(e) => {
+                    eprintln!("sprout-agent: agent: handoff failed: {e}; truncating");
+                    return false;
+                }
+            },
+        };
+        let prior = self.history.len();
+        self.history.clear();
+        self.history.push(HistoryItem::User(summary));
+        *self.handoff_count += 1;
+        eprintln!(
+            "sprout-agent: agent: handoff #{} (history {prior} -> 1 item)",
+            *self.handoff_count
+        );
+        true
+    }
+
+    fn should_handoff(&self) -> bool {
+        let usage: usize = self.history.iter().map(HistoryItem::estimated_bytes).sum();
+        let threshold = (self.cfg.max_history_bytes as f64 * HANDOFF_THRESHOLD) as usize;
+        usage > threshold
+    }
+
+    fn build_handoff_prompt(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "[Internal handoff #{} — context reset]\n\n",
+            *self.handoff_count + 1
+        ));
+        out.push_str("# Original Task\n");
+        out.push_str(self.original_task.as_deref().unwrap_or("(unknown)"));
+        out.push_str("\n\n# Available Tools\n");
+        let names: Vec<&str> = self
+            .mcp
+            .tools()
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        if names.is_empty() {
+            out.push_str("(none)\n");
+        } else {
+            out.push_str(&names.join(", "));
+            out.push('\n');
+        }
+        out.push_str("\n# Recent History (most recent last)\n");
+        let start = self.history.len().saturating_sub(HANDOFF_TAIL_ITEMS);
+        for item in &self.history[start..] {
+            push_history_snippet(&mut out, item);
+        }
+        out.push_str(
+            "\n# Instructions\n\
+             Produce a context handoff summary covering: (1) original task, \
+             (2) what was accomplished, (3) key decisions, (4) what remains, \
+             (5) one concrete next step. Be concise but thorough. Plain text.\n",
+        );
+        out
     }
 
     async fn execute_calls(
@@ -290,28 +394,51 @@ fn fill_cancelled(history: &mut Vec<HistoryItem>, remaining: &[ToolCall]) {
     }
 }
 
-fn item_bytes(item: &HistoryItem) -> usize {
+const HANDOFF_SYSTEM_PROMPT: &str = "You are generating a context handoff summary for the next \
+turn of an autonomous agent. Be concise but thorough. Cover: what the original task was, what \
+you accomplished, key decisions made, what remains, and one concrete next step. Output plain \
+text only — no tool calls, no JSON. Stay under 8192 tokens.";
+
+const HANDOFF_SNIPPET_BYTES: usize = 2048;
+
+fn push_history_snippet(out: &mut String, item: &HistoryItem) {
     match item {
-        HistoryItem::User(s) => s.len(),
-        HistoryItem::Assistant { text, tool_calls } => {
-            text.len()
-                + tool_calls
-                    .iter()
-                    .map(|c| {
-                        c.provider_id.len()
-                            + c.name.len()
-                            + serde_json::to_vec(&c.arguments)
-                                .map(|b| b.len())
-                                .unwrap_or(0)
-                    })
-                    .sum::<usize>()
+        HistoryItem::User(s) => {
+            out.push_str("[user] ");
+            out.push_str(&clamp_for_snippet(s));
+            out.push('\n');
         }
-        HistoryItem::ToolResult(r) => r.provider_id.len() + r.text.len(),
+        HistoryItem::Assistant { text, tool_calls } => {
+            out.push_str("[assistant] ");
+            if !text.is_empty() {
+                out.push_str(&clamp_for_snippet(text));
+            }
+            for c in tool_calls {
+                out.push_str(&format!(" tool:{}", c.name));
+            }
+            out.push('\n');
+        }
+        HistoryItem::ToolResult(r) => {
+            out.push_str(if r.is_error { "[tool_err] " } else { "[tool] " });
+            out.push_str(&clamp_for_snippet(&r.text));
+            out.push('\n');
+        }
     }
 }
 
+fn clamp_for_snippet(s: &str) -> String {
+    if s.len() <= HANDOFF_SNIPPET_BYTES {
+        return s.to_owned();
+    }
+    let mut cut = HANDOFF_SNIPPET_BYTES;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}…", &s[..cut])
+}
+
 fn truncate_history(history: &mut Vec<HistoryItem>, max_bytes: usize) {
-    let mut total: usize = history.iter().map(item_bytes).sum();
+    let mut total: usize = history.iter().map(HistoryItem::estimated_bytes).sum();
     if total <= max_bytes {
         return;
     }
@@ -324,7 +451,7 @@ fn truncate_history(history: &mut Vec<HistoryItem>, max_bytes: usize) {
         if end >= history.len() {
             break;
         }
-        let dropped: usize = history[..end].iter().map(item_bytes).sum();
+        let dropped: usize = history[..end].iter().map(HistoryItem::estimated_bytes).sum();
         history.drain(..end);
         total = total.saturating_sub(dropped);
     }

@@ -11,6 +11,30 @@ pub enum HistoryItem {
     ToolResult(ToolResult),
 }
 
+impl HistoryItem {
+    /// Rough byte estimate for context-window accounting. Not exact — counts
+    /// text plus a serialized form of tool-call args. Intentionally cheap.
+    pub fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::User(s) => s.len(),
+            Self::Assistant { text, tool_calls } => {
+                text.len()
+                    + tool_calls
+                        .iter()
+                        .map(|c| {
+                            c.provider_id.len()
+                                + c.name.len()
+                                + serde_json::to_vec(&c.arguments)
+                                    .map(|b| b.len())
+                                    .unwrap_or(0)
+                        })
+                        .sum::<usize>()
+            }
+            Self::ToolResult(r) => r.provider_id.len() + r.text.len(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub provider_id: String,

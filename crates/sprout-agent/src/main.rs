@@ -37,6 +37,12 @@ struct Session {
     history: Vec<HistoryItem>,
     cancel_tx: watch::Sender<bool>,
     busy: bool,
+    /// First user prompt verbatim. Stored on the first `run()` and never
+    /// changed — handoff summaries reference it so the agent never loses
+    /// sight of the task it was originally given.
+    original_task: Option<String>,
+    /// Number of internal context handoffs performed in this session.
+    handoff_count: usize,
 }
 
 fn die(msg: String) -> ! {
@@ -211,6 +217,8 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         history: Vec::new(),
         cancel_tx,
         busy: false,
+        original_task: None,
+        handoff_count: 0,
     });
     wire::send(wire_tx, wire::ok(id, json!({ "sessionId": session_id }))).await;
 }
@@ -242,18 +250,19 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         Ok(p) => p,
         Err(m) => return reject(&wire_tx, id, INVALID_PARAMS, &m).await,
     };
-    let (sid, mcp, mut history, mut cancel_rx) = match acquire_session(&app, &p.session_id).await {
-        Ok(v) => v,
-        Err(reason) => {
-            return reject(
-                &wire_tx,
-                id,
-                INVALID_PARAMS,
-                &format!("session/prompt: {reason}"),
-            )
-            .await
-        }
-    };
+    let (sid, mcp, mut history, mut original_task, mut handoff_count, mut cancel_rx) =
+        match acquire_session(&app, &p.session_id).await {
+            Ok(v) => v,
+            Err(reason) => {
+                return reject(
+                    &wire_tx,
+                    id,
+                    INVALID_PARAMS,
+                    &format!("session/prompt: {reason}"),
+                )
+                .await
+            }
+        };
     let mut ctx = RunCtx {
         cfg: &app.cfg,
         session_id: &sid,
@@ -264,11 +273,15 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         next_id: &app.next_id,
         cancel: &mut cancel_rx,
         history: &mut history,
+        original_task: &mut original_task,
+        handoff_count: &mut handoff_count,
     };
     let result = ctx.run(p.prompt).await;
     if let Some(s) = app.state.lock().await.as_mut() {
         s.busy = false;
         s.history = history;
+        s.original_task = original_task;
+        s.handoff_count = handoff_count;
     }
     match result {
         Ok(stop) => {
@@ -290,6 +303,8 @@ async fn acquire_session(
         String,
         Arc<McpRegistry>,
         Vec<HistoryItem>,
+        Option<String>,
+        usize,
         watch::Receiver<bool>,
     ),
     &'static str,
@@ -309,6 +324,8 @@ async fn acquire_session(
         s.id.clone(),
         s.mcp.clone(),
         std::mem::take(&mut s.history),
+        s.original_task.take(),
+        s.handoff_count,
         rx,
     ))
 }

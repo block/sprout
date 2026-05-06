@@ -6,6 +6,16 @@ pub const MAX_PROMPT_BYTES: usize = 1024 * 1024;
 pub const MAX_TOOL_RESULT_BYTES: usize = 256 * 1024;
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 64;
 
+/// Trigger an internal handoff once history exceeds this fraction of
+/// `max_history_bytes`. Hardcoded — leaves headroom for the summary call.
+pub const HANDOFF_THRESHOLD: f64 = 0.75;
+
+/// Output token budget for the handoff summary LLM call.
+pub const HANDOFF_MAX_OUTPUT_TOKENS: u32 = 8192;
+
+/// Number of trailing history items to include in the handoff prompt.
+pub const HANDOFF_TAIL_ITEMS: usize = 5;
+
 const DEFAULT_SYSTEM_PROMPT: &str =
     "You are sprout-agent. Use the provided tools to act. Tool calls are your only output.";
 
@@ -26,6 +36,7 @@ pub struct Config {
     pub mcp_init_timeout: Duration,
     pub max_line_bytes: usize,
     pub max_history_bytes: usize,
+    pub max_handoffs: usize,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -75,6 +86,7 @@ impl Config {
             )?),
             max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
+            max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
         })
     }
 }

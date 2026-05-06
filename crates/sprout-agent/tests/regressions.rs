@@ -548,7 +548,10 @@ async fn history_budget_evicts_old_turns() {
     let llm = spawn_capturing_llm(responses).await;
     let mut h = Harness::spawn_with_env(
         &llm.url,
-        &[("SPROUT_AGENT_MAX_HISTORY_BYTES", "8192")], // 8 KB
+        &[
+            ("SPROUT_AGENT_MAX_HISTORY_BYTES", "8192"), // 8 KB
+            ("SPROUT_AGENT_MAX_HANDOFFS", "0"),         // exercise truncation, not handoff
+        ],
     )
     .await;
     let sid = init_session(&mut h, json!([])).await;
