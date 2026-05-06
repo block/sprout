@@ -144,7 +144,7 @@ pub fn permission_request(sid: &str, call_id: &str, name: &str, raw_input: &Valu
         "toolCall": {
             "toolCallId": call_id,
             "title": name,
-            "kind": "mcp",
+            "kind": "other",
             "rawInput": raw_input,
         },
         "options": [

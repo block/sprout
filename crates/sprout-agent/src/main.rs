@@ -147,18 +147,7 @@ async fn initialize(id: Value, params: Value, wire_tx: &WireSender) {
         Ok(p) => p,
         Err(m) => return reject(wire_tx, id, INVALID_PARAMS, &m).await,
     };
-    if p.protocol_version != PROTOCOL_VERSION {
-        return reject(
-            wire_tx,
-            id,
-            INVALID_PARAMS,
-            &format!(
-                "initialize: protocolVersion {} unsupported (require {PROTOCOL_VERSION})",
-                p.protocol_version
-            ),
-        )
-        .await;
-    }
+    let _ = p.protocol_version;
     wire::send(
         wire_tx,
         wire::ok(

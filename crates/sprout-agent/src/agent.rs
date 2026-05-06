@@ -140,7 +140,7 @@ impl RunCtx<'_> {
                     "sessionUpdate": "tool_call",
                     "toolCallId": call.provider_id,
                     "title": call.name,
-                    "kind": "mcp",
+                    "kind": "other",
                     "status": "pending",
                     "rawInput": call.arguments,
                 }),

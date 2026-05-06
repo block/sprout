@@ -296,11 +296,7 @@ async fn test_initialize_version_check() {
         )
         .await;
     let resp = h.recv_for_id(id).await;
-    assert_eq!(resp["error"]["code"], -32602);
-    assert!(resp["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("protocolVersion 99 unsupported"));
+    assert_eq!(resp["result"]["protocolVersion"], 1);
 
     let id2 = h
         .send(
