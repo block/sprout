@@ -83,7 +83,6 @@ impl StopReason {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionNewParams {
-    #[allow(dead_code)]
     #[serde(default)]
     pub cwd: String,
     #[serde(default)]

@@ -73,29 +73,41 @@ pub async fn run_prompt(
             r = llm.complete(cfg, history, mcp.tools()) => r?,
         };
 
-        // Tool calls *are* the output: only record assistant turns that
-        // actually contain tool calls. An empty assistant entry produces
-        // `{"role":"assistant","content":null}` on the next prompt, which
-        // many OpenAI-compatible APIs reject.
+        // No tool calls ⇒ end_turn. Record the assistant turn (with empty
+        // tool_calls) so history stays valid for any future prompt — a
+        // dangling User with no following Assistant breaks multi-turn
+        // conversations.
         if response.tool_calls.is_empty() {
+            history.push(HistoryItem::Assistant {
+                text: String::new(),
+                tool_calls: Vec::new(),
+            });
             return Ok(map_stop(response.stop));
         }
 
+        let calls = response.tool_calls.clone();
         history.push(HistoryItem::Assistant {
             text: String::new(),
-            tool_calls: response.tool_calls.clone(),
+            tool_calls: calls.clone(),
         });
 
-        for call in response.tool_calls {
+        // On cancellation we MUST flush a synthetic tool_result for every
+        // tool_call that didn't get one — otherwise the next LLM call sees
+        // an assistant tool_use without a matching tool_result and 400s.
+        let mut idx = 0usize;
+        while idx < calls.len() {
+            let call = &calls[idx];
             if *cancel.borrow() {
+                fill_cancelled(history, &calls[idx..]);
                 return Ok(StopReason::Cancelled);
             }
 
             // Validate BEFORE asking permission.
             if !mcp.has(&call.name) {
                 let err = format!("unknown tool: {}", call.name);
-                emit_failed(wire, sid, &call, &err).await;
-                history.push(synthetic_error(&call, err));
+                emit_failed(wire, sid, call, &err).await;
+                history.push(synthetic_error(call, err));
+                idx += 1;
                 continue;
             }
 
@@ -129,7 +141,7 @@ pub async fn run_prompt(
             let outcome = tokio::select! {
                 biased;
                 _ = cancel.changed() => PermissionOutcome::Cancelled,
-                o = request_permission(wire, sid, perm_id, &call, rx) => o,
+                o = request_permission(wire, sid, perm_id, call, rx) => o,
             };
             // Always remove the pending entry on any non-Allow/Deny exit
             // (cancel, wire send failure, dropped oneshot). Double-remove is a
@@ -141,12 +153,14 @@ pub async fn run_prompt(
                 PermissionOutcome::Cancelled => {
                     // Tool call was already announced as pending — emit a
                     // terminal failed/cancelled update before bailing.
-                    emit_failed(wire, sid, &call, "cancelled").await;
+                    emit_failed(wire, sid, call, "cancelled").await;
+                    fill_cancelled(history, &calls[idx..]);
                     return Ok(StopReason::Cancelled);
                 }
                 PermissionOutcome::Deny => {
-                    emit_failed(wire, sid, &call, "permission denied").await;
-                    history.push(synthetic_error(&call, "permission denied".into()));
+                    emit_failed(wire, sid, call, "permission denied").await;
+                    history.push(synthetic_error(call, "permission denied".into()));
+                    idx += 1;
                     continue;
                 }
                 PermissionOutcome::Allow => {}
@@ -170,7 +184,8 @@ pub async fn run_prompt(
             let result = tokio::select! {
                 biased;
                 _ = cancel.changed() => {
-                    emit_failed(wire, sid, &call, "cancelled").await;
+                    emit_failed(wire, sid, call, "cancelled").await;
+                    fill_cancelled(history, &calls[idx..]);
                     return Ok(StopReason::Cancelled);
                 }
                 r = tokio::time::timeout(
@@ -180,13 +195,15 @@ pub async fn run_prompt(
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => {
                         let m = e.to_string();
-                        emit_failed(wire, sid, &call, &m).await;
-                        history.push(synthetic_error(&call, m));
+                        emit_failed(wire, sid, call, &m).await;
+                        history.push(synthetic_error(call, m));
+                        idx += 1;
                         continue;
                     }
                     Err(_) => {
-                        emit_failed(wire, sid, &call, "tool timeout").await;
-                        history.push(synthetic_error(&call, "tool timeout".into()));
+                        emit_failed(wire, sid, call, "tool timeout").await;
+                        history.push(synthetic_error(call, "tool timeout".into()));
+                        idx += 1;
                         continue;
                     }
                 },
@@ -201,6 +218,7 @@ pub async fn run_prompt(
                 "rawOutput": { "isError": result.is_error },
             }))).await;
             history.push(HistoryItem::ToolResult(result));
+            idx += 1;
         }
     }
 
@@ -227,6 +245,16 @@ fn synthetic_error(call: &ToolCall, msg: String) -> HistoryItem {
         text: msg,
         is_error: true,
     })
+}
+
+/// On cancellation, every tool_call in the just-pushed assistant turn must
+/// have a matching tool_result in history — otherwise the next LLM call
+/// fails (Anthropic 400, OpenAI silent coercion). Append a synthetic
+/// "cancelled" result for every call we didn't get to.
+fn fill_cancelled(history: &mut Vec<HistoryItem>, remaining: &[ToolCall]) {
+    for call in remaining {
+        history.push(synthetic_error(call, "cancelled".into()));
+    }
 }
 
 fn update(sid: &str, update: Value) -> Value {

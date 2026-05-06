@@ -38,6 +38,8 @@ struct App {
 
 struct Session {
     id: String,
+    #[allow(dead_code)]
+    cwd: String,
     mcp: Arc<McpRegistry>,
     /// Owned by the in-flight prompt task. `None` between prompts.
     history: Option<Vec<crate::types::HistoryItem>>,
@@ -215,7 +217,12 @@ async fn handle_session_new(app: &Arc<App>, id: Value, params: Value, wire: &Wir
     if app.state.lock().await.is_some() {
         return send(wire, jrpc_err(id, -32602, "session already exists")).await;
     }
-    let mcp = match McpRegistry::spawn_all(&p.mcp_servers).await {
+    let cwd_opt = if p.cwd.is_empty() {
+        None
+    } else {
+        Some(p.cwd.as_str())
+    };
+    let mcp = match McpRegistry::spawn_all(&p.mcp_servers, cwd_opt).await {
         Ok(m) => Arc::new(m),
         Err(e) => return send(wire, jrpc_err(id, e.json_rpc_code(), &e.to_string())).await,
     };
@@ -227,6 +234,7 @@ async fn handle_session_new(app: &Arc<App>, id: Value, params: Value, wire: &Wir
     }
     *st = Some(Session {
         id: session_id.clone(),
+        cwd: p.cwd,
         mcp,
         history: Some(Vec::new()),
         cancel_tx,

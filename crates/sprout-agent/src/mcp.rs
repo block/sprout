@@ -32,9 +32,18 @@ pub struct McpRegistry {
     _clients: Vec<Arc<Client>>, // kept alive for session lifetime
 }
 
+/// Env vars passed through to MCP children unconditionally. Everything else
+/// — including LLM API keys — is scrubbed so an untrusted MCP server cannot
+/// exfiltrate them.
+const PASSTHROUGH_ENV: &[&str] = &["PATH", "HOME", "TERM", "LANG", "LC_ALL", "TMPDIR"];
+
 impl McpRegistry {
     /// Spawn all servers, list their tools. All-or-nothing: any failure aborts.
-    pub async fn spawn_all(servers: &[McpServerStdio]) -> Result<Self, AgentError> {
+    /// `cwd` is the session working directory; each child inherits it.
+    pub async fn spawn_all(
+        servers: &[McpServerStdio],
+        cwd: Option<&str>,
+    ) -> Result<Self, AgentError> {
         let mut reg = Self {
             by_qname: HashMap::new(),
             defs: Vec::new(),
@@ -47,8 +56,22 @@ impl McpRegistry {
             }
             let mut cmd = Command::new(&s.command);
             cmd.args(&s.args);
+            // Scrub: no parent env leaks (e.g. ANTHROPIC_API_KEY) to the
+            // MCP child. Whitelist a tiny set of essentials, then layer on
+            // whatever the caller explicitly listed in `env`.
+            cmd.env_clear();
+            for k in PASSTHROUGH_ENV {
+                if let Ok(v) = std::env::var(k) {
+                    cmd.env(k, v);
+                }
+            }
             for kv in &s.env {
                 cmd.env(&kv.name, &kv.value);
+            }
+            if let Some(dir) = cwd {
+                if !dir.is_empty() {
+                    cmd.current_dir(dir);
+                }
             }
             cmd.stderr(std::process::Stdio::inherit());
 
@@ -169,6 +192,20 @@ fn push_bounded(out: &mut String, s: &str, max: usize) {
     }
 }
 
+/// Pre-truncate UTF-8 strings before formatting them into markers, so a 10MB
+/// uri/mime never gets allocated in full only to be clipped by `push_bounded`.
+const MARKER_FIELD_MAX: usize = 256;
+fn short(s: &str) -> &str {
+    if s.len() <= MARKER_FIELD_MAX {
+        return s;
+    }
+    let mut cut = MARKER_FIELD_MAX;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
+}
+
 /// Flatten MCP content blocks into a single text blob. Binary content is elided
 /// with a marker so the model knows it existed. Every append is bounded by
 /// `max_bytes` so a huge resource blob is never serialized in full before being
@@ -187,17 +224,27 @@ fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String
             RawContent::Text(t) => push_bounded(&mut out, &t.text, max_bytes),
             RawContent::Image(i) => push_bounded(
                 &mut out,
-                &format!("[image elided: {}, {} bytes]", i.mime_type, i.data.len()),
+                &format!(
+                    "[image elided: {}, {} bytes]",
+                    short(&i.mime_type),
+                    i.data.len()
+                ),
                 max_bytes,
             ),
             RawContent::Audio(a) => push_bounded(
                 &mut out,
-                &format!("[audio elided: {}, {} bytes]", a.mime_type, a.data.len()),
+                &format!(
+                    "[audio elided: {}, {} bytes]",
+                    short(&a.mime_type),
+                    a.data.len()
+                ),
                 max_bytes,
             ),
-            RawContent::ResourceLink(r) => {
-                push_bounded(&mut out, &format!("[resource: {}]", r.uri), max_bytes)
-            }
+            RawContent::ResourceLink(r) => push_bounded(
+                &mut out,
+                &format!("[resource: {}]", short(&r.uri)),
+                max_bytes,
+            ),
             RawContent::Resource(_) => {
                 // Resources can be huge (entire files). Elide rather than
                 // serialize the whole blob just to truncate it.
