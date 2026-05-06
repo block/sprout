@@ -49,6 +49,20 @@ impl RunCtx<'_> {
                 r = self.llm.complete(self.cfg, self.history, self.mcp.tools()) => r?,
             };
 
+            if !response.text.is_empty() {
+                wire::send(
+                    self.wire,
+                    wire::session_update(
+                        self.session_id,
+                        json!({
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": { "type": "text", "text": &response.text }
+                        }),
+                    ),
+                )
+                .await;
+            }
+
             if response.tool_calls.is_empty() {
                 if response.stop == ProviderStop::ToolUse {
                     return Err(AgentError::Llm(
