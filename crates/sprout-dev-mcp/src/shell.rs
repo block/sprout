@@ -28,7 +28,6 @@ pub struct SharedState {
     pub session_dir: TempDir,
     pub bootstrap_instructions: String,
     pub artifacts: Mutex<VecDeque<PathBuf>>,
-    pub todo_path: PathBuf,
     next_call_id: Mutex<u64>,
 }
 
@@ -37,7 +36,6 @@ impl SharedState {
         let session_dir = tempfile::Builder::new()
             .prefix("sprout-dev-mcp-session-")
             .tempdir()?;
-        let todo_path = session_dir.path().join("todo.md");
         let bootstrap_instructions = build_bootstrap(&cwd);
         Ok(Self {
             cwd,
@@ -45,7 +43,6 @@ impl SharedState {
             session_dir,
             bootstrap_instructions,
             artifacts: Mutex::new(VecDeque::with_capacity(ARTIFACT_RING_SIZE)),
-            todo_path,
             next_call_id: Mutex::new(0),
         })
     }

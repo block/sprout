@@ -12,7 +12,6 @@ mod rg;
 mod shell;
 mod shim;
 mod str_replace;
-mod todo;
 
 #[derive(Clone)]
 struct DevMcp {
@@ -38,14 +37,6 @@ impl DevMcp {
         Parameters(p): Parameters<shell::ShellParams>,
     ) -> Result<CallToolResult, ErrorData> {
         shell::run(&self.state, p).await
-    }
-
-    #[tool(
-        name = "todo",
-        description = "Read or replace the TODO list. Pass `content` to replace; omit to read. Persistent across the MCP session."
-    )]
-    async fn todo(&self, Parameters(p): Parameters<todo::TodoParams>) -> Result<String, ErrorData> {
-        todo::run(&self.state, p)
     }
 
     #[tool(
