@@ -35,6 +35,10 @@ pub struct ToolResult {
 
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
+    /// Assistant text content. Empty when the model returned only tool calls.
+    /// Preserved in history so the next turn doesn't serialize as
+    /// `content: null`/`[]`, which is invalid for both providers.
+    pub text: String,
     pub tool_calls: Vec<ToolCall>,
     pub stop: ProviderStop,
 }

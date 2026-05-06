@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService};
@@ -18,6 +19,14 @@ use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
 
 const SEP: &str = "__";
 const MAX_NAME_LEN: usize = 64;
+/// Hard cap on initialization handshake / tool listing per MCP server. A
+/// stuck child must not freeze the whole agent.
+const MCP_INIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Caps on tool metadata sent to the LLM. Protects against malicious or
+/// buggy MCP servers that ship enormous descriptions/schemas.
+const MAX_TOOLS_PER_SESSION: usize = 128;
+const MAX_DESCRIPTION_CHARS: usize = 1024;
+const MAX_SCHEMA_BYTES: usize = 4096;
 
 type Client = RunningService<RoleClient, ()>;
 
@@ -77,19 +86,40 @@ impl McpRegistry {
 
             let transport = TokioChildProcess::new(cmd)
                 .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
-            let client: Client = ()
-                .serve(transport)
-                .await
-                .map_err(|e| AgentError::Mcp(format!("init {}: {e}", s.name)))?;
+            let client: Client =
+                match tokio::time::timeout(MCP_INIT_TIMEOUT, ().serve(transport)).await {
+                    Ok(Ok(c)) => c,
+                    Ok(Err(e)) => return Err(AgentError::Mcp(format!("init {}: {e}", s.name))),
+                    Err(_) => {
+                        return Err(AgentError::Mcp(format!(
+                            "init {}: timeout after {}s",
+                            s.name,
+                            MCP_INIT_TIMEOUT.as_secs()
+                        )))
+                    }
+                };
             let client = Arc::new(client);
 
-            let tools = client
-                .peer()
-                .list_all_tools()
+            let tools = match tokio::time::timeout(MCP_INIT_TIMEOUT, client.peer().list_all_tools())
                 .await
-                .map_err(|e| AgentError::Mcp(format!("list_tools {}: {e}", s.name)))?;
+            {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name))),
+                Err(_) => {
+                    return Err(AgentError::Mcp(format!(
+                        "list_tools {}: timeout after {}s",
+                        s.name,
+                        MCP_INIT_TIMEOUT.as_secs()
+                    )))
+                }
+            };
 
             for t in tools {
+                if reg.defs.len() >= MAX_TOOLS_PER_SESSION {
+                    return Err(AgentError::Mcp(format!(
+                        "too many tools (>{MAX_TOOLS_PER_SESSION})"
+                    )));
+                }
                 let bare = t.name.to_string();
                 let qname = format!("{}{SEP}{}", s.name, bare);
                 if !valid_name(&qname) {
@@ -98,10 +128,12 @@ impl McpRegistry {
                 if reg.by_qname.contains_key(&qname) {
                     return Err(AgentError::Mcp(format!("duplicate tool: {qname}")));
                 }
+                let description = cap_description(t.description.as_deref().unwrap_or(""));
+                let input_schema = cap_schema(&qname, Value::Object((*t.input_schema).clone()));
                 reg.defs.push(ToolDef {
                     name: qname.clone(),
-                    description: t.description.as_deref().unwrap_or("").to_owned(),
-                    input_schema: Value::Object((*t.input_schema).clone()),
+                    description,
+                    input_schema,
                 });
                 reg.by_qname.insert(
                     qname,
@@ -165,6 +197,31 @@ impl McpRegistry {
             is_error: res.is_error.unwrap_or(false),
         })
     }
+}
+
+/// Truncate description to `MAX_DESCRIPTION_CHARS` characters (UTF-8 safe),
+/// appending a marker when over.
+fn cap_description(desc: &str) -> String {
+    if desc.chars().count() <= MAX_DESCRIPTION_CHARS {
+        return desc.to_owned();
+    }
+    const MARKER: &str = "…[truncated]";
+    let kept: String = desc.chars().take(MAX_DESCRIPTION_CHARS).collect();
+    format!("{kept}{MARKER}")
+}
+
+/// Reject schemas whose serialized form exceeds `MAX_SCHEMA_BYTES`. The LLM
+/// gets an empty object instead — a bad schema is preferable to one that
+/// blows up the request body.
+fn cap_schema(qname: &str, schema: Value) -> Value {
+    let size = serde_json::to_vec(&schema).map(|b| b.len()).unwrap_or(0);
+    if size <= MAX_SCHEMA_BYTES {
+        return schema;
+    }
+    eprintln!(
+        "sprout-agent: tool {qname} schema is {size} bytes (>{MAX_SCHEMA_BYTES}); replacing with empty object",
+    );
+    Value::Object(Map::new())
 }
 
 /// OpenAI function-name constraints: ^[a-zA-Z0-9_-]{1,64}$

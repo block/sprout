@@ -86,6 +86,12 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
                         "name": c.name, "input": c.arguments,
                     }));
                 }
+                // Anthropic rejects empty `content` arrays. If the model
+                // returned nothing (no text, no tool calls), emit a single
+                // empty text block so history stays valid.
+                if content.is_empty() {
+                    content.push(json!({ "type": "text", "text": "" }));
+                }
                 messages.push(json!({ "role": "assistant", "content": content }));
             }
             HistoryItem::ToolResult(r) => pending.push(json!({
@@ -125,21 +131,34 @@ fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
         _ => ProviderStop::Other,
     };
     let mut tool_calls = Vec::new();
+    let mut text = String::new();
     if let Some(blocks) = v.get("content").and_then(Value::as_array) {
         for b in blocks {
-            if b.get("type").and_then(Value::as_str) == Some("tool_use") {
-                let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
-                let name = b
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                let args = b.get("input").cloned().unwrap_or(Value::Null);
-                tool_calls.push(make_tool_call(id, name, args)?);
+            match b.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(t) = b.get("text").and_then(Value::as_str) {
+                        text.push_str(t);
+                    }
+                }
+                Some("tool_use") => {
+                    let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                    let name = b
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let args = b.get("input").cloned().unwrap_or(Value::Null);
+                    tool_calls.push(make_tool_call(id, name, args)?);
+                }
+                _ => {}
             }
         }
     }
-    Ok(LlmResponse { tool_calls, stop })
+    Ok(LlmResponse {
+        text,
+        tool_calls,
+        stop,
+    })
 }
 
 // ─── OpenAI-compat ──────────────────────────────────────────────────────────
@@ -217,6 +236,13 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
     let msg = choice
         .get("message")
         .ok_or_else(|| AgentError::Llm("missing message".into()))?;
+    // OpenAI-compat: `content` is a string, null, or (rarely) an array of
+    // parts. Treat anything non-string as no text.
+    let text = msg
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
     let mut tool_calls = Vec::new();
     if let Some(arr) = msg.get("tool_calls").and_then(Value::as_array) {
         for tc in arr {
@@ -239,7 +265,11 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
             tool_calls.push(make_tool_call(id, name, args)?);
         }
     }
-    Ok(LlmResponse { tool_calls, stop })
+    Ok(LlmResponse {
+        text,
+        tool_calls,
+        stop,
+    })
 }
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────

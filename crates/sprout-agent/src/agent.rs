@@ -73,13 +73,13 @@ pub async fn run_prompt(
             r = llm.complete(cfg, history, mcp.tools()) => r?,
         };
 
-        // No tool calls ⇒ end_turn. Record the assistant turn (with empty
-        // tool_calls) so history stays valid for any future prompt — a
-        // dangling User with no following Assistant breaks multi-turn
-        // conversations.
+        // No tool calls ⇒ end_turn. Record the assistant turn (with the
+        // model's text and empty tool_calls) so history stays valid for any
+        // future prompt — a dangling User with no following Assistant breaks
+        // multi-turn conversations, and dropping the text loses context.
         if response.tool_calls.is_empty() {
             history.push(HistoryItem::Assistant {
-                text: String::new(),
+                text: response.text,
                 tool_calls: Vec::new(),
             });
             return Ok(map_stop(response.stop));
@@ -87,7 +87,7 @@ pub async fn run_prompt(
 
         let calls = response.tool_calls.clone();
         history.push(HistoryItem::Assistant {
-            text: String::new(),
+            text: response.text,
             tool_calls: calls.clone(),
         });
 
