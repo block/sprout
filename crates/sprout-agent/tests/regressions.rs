@@ -99,14 +99,14 @@ impl Harness {
     async fn spawn_with_env(base_url: &str, extra: &[(&str, &str)]) -> Self {
         let bin = env!("CARGO_BIN_EXE_sprout-agent");
         let mut cmd = tokio::process::Command::new(bin);
-        cmd.env("ACP_SEED_PROVIDER", "openai")
+        cmd.env("SPROUT_AGENT_PROVIDER", "openai")
             .env("OPENAI_COMPAT_API_KEY", "test")
             .env("OPENAI_COMPAT_MODEL", "fake-model")
             .env("OPENAI_COMPAT_BASE_URL", base_url)
-            .env("ACP_SEED_LLM_TIMEOUT_SECS", "5")
-            .env("ACP_SEED_TOOL_TIMEOUT_SECS", "5")
-            .env("ACP_SEED_MAX_ROUNDS", "8")
-            .env("ACP_SEED_MCP_INIT_TIMEOUT_SECS", "2");
+            .env("SPROUT_AGENT_LLM_TIMEOUT_SECS", "5")
+            .env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "5")
+            .env("SPROUT_AGENT_MAX_ROUNDS", "8")
+            .env("SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS", "2");
         for (k, v) in extra {
             cmd.env(k, v);
         }
@@ -548,7 +548,7 @@ async fn history_budget_evicts_old_turns() {
     let llm = spawn_capturing_llm(responses).await;
     let mut h = Harness::spawn_with_env(
         &llm.url,
-        &[("ACP_SEED_MAX_HISTORY_BYTES", "8192")], // 8 KB
+        &[("SPROUT_AGENT_MAX_HISTORY_BYTES", "8192")], // 8 KB
     )
     .await;
     let sid = init_session(&mut h, json!([])).await;
@@ -746,7 +746,7 @@ async fn child_killed_on_tool_timeout() {
 
     let mut h = Harness::spawn_with_env(
         &llm.url,
-        &[("ACP_SEED_TOOL_TIMEOUT_SECS", "2")],
+        &[("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "2")],
     )
     .await;
 
@@ -858,7 +858,7 @@ async fn grandchild_killed_on_tool_timeout() {
 
     let mut h = Harness::spawn_with_env(
         &llm.url,
-        &[("ACP_SEED_TOOL_TIMEOUT_SECS", "2")],
+        &[("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "2")],
     )
     .await;
 

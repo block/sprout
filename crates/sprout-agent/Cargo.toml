@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Minimal, unbreakable ACP-compliant agent. 1400 LOC. Non-streaming. Tool-calls-as-output."
+readme = "README.md"
+keywords = ["acp", "agent", "llm", "mcp", "minimal"]
+categories = ["command-line-utilities", "web-programming"]
 
 [[bin]]
 name = "sprout-agent"
@@ -22,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process"] }
+getrandom = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

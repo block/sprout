@@ -9,6 +9,7 @@ use rmcp::ServiceExt;
 use serde_json::{Map, Value};
 use tokio::process::Command;
 
+use crate::config::Config;
 use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
 
 const SEP: &str = "__";
@@ -20,15 +21,6 @@ const MARKER_FIELD_MAX: usize = 256;
 pub const MAX_MCP_SERVERS: usize = 16;
 
 const PASSTHROUGH_ENV: &[&str] = &["PATH", "HOME", "TERM", "LANG", "LC_ALL", "TMPDIR"];
-
-fn mcp_init_timeout() -> Duration {
-    Duration::from_secs(
-        std::env::var("ACP_SEED_MCP_INIT_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(30),
-    )
-}
 
 type Client = RunningService<RoleClient, ()>;
 
@@ -68,8 +60,9 @@ pub struct McpRegistry {
 
 impl McpRegistry {
     pub async fn spawn_all(
+        cfg: &Config,
         servers: &[McpServerStdio],
-        cwd: Option<&str>,
+        cwd: &str,
     ) -> Result<Self, AgentError> {
         if servers.len() > MAX_MCP_SERVERS {
             return Err(AgentError::Mcp(format!(
@@ -84,7 +77,7 @@ impl McpRegistry {
             poisoned: Mutex::new(HashSet::new()),
         };
 
-        let init_timeout = mcp_init_timeout();
+        let init_timeout = cfg.mcp_init_timeout;
         for s in servers {
             if !valid_name(&s.name) {
                 return Err(AgentError::Mcp(format!("invalid server name: {}", s.name)));
@@ -100,9 +93,7 @@ impl McpRegistry {
             for kv in &s.env {
                 cmd.env(&kv.name, &kv.value);
             }
-            if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
-                cmd.current_dir(dir);
-            }
+            cmd.current_dir(cwd);
             cmd.stderr(std::process::Stdio::inherit());
 
             #[cfg(unix)]

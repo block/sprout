@@ -1,9 +1,8 @@
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use crate::types::{
-    AgentError, Config, HistoryItem, LlmResponse, Provider, ProviderStop, ToolCall, ToolDef,
-};
+use crate::config::{Config, Provider};
+use crate::types::{AgentError, HistoryItem, LlmResponse, ProviderStop, ToolCall, ToolDef};
 
 const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LLM_ERROR_BODY_BYTES: usize = 4 * 1024;
