@@ -83,10 +83,6 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
 
 /// Resolve `path` against `root` and ensure the result is contained within `root`.
 ///
-/// Both the canonicalized root and the canonicalized parent directory of the
-/// target are compared with `starts_with`. We canonicalize the parent (not the
-/// target) because the target may not exist yet — but for str_replace it must
-/// already exist, and the parent always does.
 fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String> {
     let raw = Path::new(path);
     let candidate: PathBuf = if raw.is_absolute() {
@@ -98,14 +94,8 @@ fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String> {
     let root_canon = std::fs::canonicalize(root)
         .map_err(|e| format!("workdir not accessible: {} ({e})", root.display()))?;
 
-    // Canonicalize the parent so symlinks anywhere in the chain resolve.
-    let parent = candidate.parent().unwrap_or(Path::new("."));
-    let parent_canon = std::fs::canonicalize(parent)
-        .map_err(|e| format!("path parent not accessible: {} ({e})", parent.display()))?;
-    let file_name = candidate
-        .file_name()
-        .ok_or_else(|| format!("invalid path (no file name): {}", candidate.display()))?;
-    let resolved = parent_canon.join(file_name);
+    let resolved = std::fs::canonicalize(&candidate)
+        .map_err(|e| format!("path not accessible: {} ({e})", candidate.display()))?;
 
     if !resolved.starts_with(&root_canon) {
         return Err(format!(
