@@ -37,7 +37,7 @@ struct Server {
 
 impl Server {
     fn kill_group(&self, stage: &str) {
-        if let Some(p) = self.pgid.lock().expect("pgid mutex").take() {
+        if let Some(p) = self.pgid.lock().unwrap_or_else(|e| e.into_inner()).take() {
             killpg(p, &self.name, stage);
         }
     }
@@ -45,7 +45,7 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        if let Some(p) = self.pgid.get_mut().expect("pgid mutex").take() {
+        if let Some(p) = self.pgid.get_mut().unwrap_or_else(|e| e.into_inner()).take() {
             killpg(p, &self.name, "drop");
         }
     }
@@ -180,7 +180,7 @@ impl McpRegistry {
         let newly = self
             .poisoned
             .lock()
-            .expect("poisoned mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(server_name.to_owned());
         if !newly {
             return;
@@ -194,7 +194,7 @@ impl McpRegistry {
     fn is_poisoned(&self, server_name: &str) -> bool {
         self.poisoned
             .lock()
-            .expect("poisoned mutex")
+            .unwrap_or_else(|e| e.into_inner())
             .contains(server_name)
     }
 
