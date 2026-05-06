@@ -29,7 +29,8 @@ rmcp = { version = "1", default-features = false, features = ["client", "transpo
 getrandom = "0.2"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time", "net"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "process"] }

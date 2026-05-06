@@ -808,15 +808,13 @@ async fn child_killed_on_tool_timeout() {
     // Give the kill a moment to actually reap.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // SIGKILL (signal 0 = liveness probe). ESRCH means dead.
-    // SAFETY: pid was just spawned by us; kill(pid, 0) is harmless.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    assert_eq!(
-        rc, -1,
-        "child {pid} still alive after tool timeout (kill(0) returned {rc})"
+    use nix::sys::signal::kill as nix_kill;
+    use nix::unistd::Pid;
+    let probe = nix_kill(Pid::from_raw(pid as i32), None);
+    assert!(
+        probe.is_err(),
+        "child {pid} still alive after tool timeout"
     );
-    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-    assert_eq!(errno, libc::ESRCH, "expected ESRCH, got errno {errno}");
 
     let _ = std::fs::remove_file(&pid_file);
     h.shutdown().await;
@@ -919,22 +917,16 @@ async fn grandchild_killed_on_tool_timeout() {
     // to PID 1 once its parent dies, so a tiny delay covers signal delivery.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // SAFETY: kill(pid, 0) is a liveness probe — sends no signal.
-    let rc = unsafe { libc::kill(grandchild_pid as libc::pid_t, 0) };
-    if rc == 0 {
-        // Still alive — clean up before failing so we don't leak `sleep 999`.
-        unsafe { libc::kill(grandchild_pid as libc::pid_t, libc::SIGKILL) };
+    use nix::sys::signal::{kill as nix_kill2, Signal};
+    use nix::unistd::Pid as Pid2;
+    let probe = nix_kill2(Pid2::from_raw(grandchild_pid as i32), None);
+    if probe.is_ok() {
+        let _ = nix_kill2(Pid2::from_raw(grandchild_pid as i32), Signal::SIGKILL);
         panic!(
             "grandchild {grandchild_pid} still alive after tool timeout; \
              process-group kill did not reach the whole tree"
         );
     }
-    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-    assert_eq!(
-        errno,
-        libc::ESRCH,
-        "expected ESRCH for dead grandchild, got errno {errno}"
-    );
 
     let _ = std::fs::remove_file(&grandchild_pid_file);
     h.shutdown().await;

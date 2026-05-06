@@ -97,14 +97,7 @@ impl McpRegistry {
             cmd.stderr(std::process::Stdio::inherit());
 
             #[cfg(unix)]
-            unsafe {
-                cmd.pre_exec(|| {
-                    if libc::setpgid(0, 0) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
+            cmd.process_group(0);
 
             let transport = TokioChildProcess::new(cmd)
                 .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
@@ -278,8 +271,10 @@ fn cap_schema(qname: &str, schema: Value) -> Value {
 
 #[cfg(unix)]
 fn killpg(pgid: u32, name: &str, stage: &str) {
-    let rc = unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
-    eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={pgid} rc={rc}");
+    use nix::sys::signal::{killpg as nix_killpg, Signal};
+    use nix::unistd::Pid;
+    let result = nix_killpg(Pid::from_raw(pgid as i32), Signal::SIGKILL);
+    eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={pgid} ok={}", result.is_ok());
 }
 #[cfg(not(unix))]
 fn killpg(_pgid: u32, name: &str, stage: &str) {
