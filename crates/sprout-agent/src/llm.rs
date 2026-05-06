@@ -171,14 +171,18 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
             HistoryItem::Assistant { text, tool_calls } => {
                 let mut msg = serde_json::Map::new();
                 msg.insert("role".into(), json!("assistant"));
-                msg.insert(
-                    "content".into(),
-                    if text.is_empty() {
-                        Value::Null
-                    } else {
-                        json!(text)
-                    },
-                );
+                // OpenAI accepts `content: null` only when `tool_calls` is
+                // present. For a plain assistant message with no tool calls
+                // and no text (rare empty/refusal/compat response), emit
+                // an empty string instead — some providers reject `null`.
+                let content = if !text.is_empty() {
+                    json!(text)
+                } else if tool_calls.is_empty() {
+                    json!("")
+                } else {
+                    Value::Null
+                };
+                msg.insert("content".into(), content);
                 if !tool_calls.is_empty() {
                     let calls: Vec<Value> = tool_calls
                         .iter()

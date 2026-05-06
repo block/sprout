@@ -3686,6 +3686,7 @@ dependencies = [
 name = "sprout-agent"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "reqwest 0.13.2",
  "rmcp",
  "serde",

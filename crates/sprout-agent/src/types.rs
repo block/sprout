@@ -193,6 +193,7 @@ pub struct Config {
     pub max_line_bytes: usize,
     pub max_prompt_bytes: usize,
     pub max_tool_result_bytes: usize,
+    pub max_history_bytes: usize,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -258,6 +259,7 @@ impl Config {
             max_line_bytes: parse_env("ACP_SEED_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_prompt_bytes: parse_env("ACP_SEED_MAX_PROMPT_BYTES", 1024 * 1024)?,
             max_tool_result_bytes: parse_env("ACP_SEED_MAX_TOOL_RESULT_BYTES", 256 * 1024)?,
+            max_history_bytes: parse_env("ACP_SEED_MAX_HISTORY_BYTES", 1024 * 1024)?,
             anthropic_api_version: env("ANTHROPIC_API_VERSION")
                 .unwrap_or_else(|| "2023-06-01".into()),
         })

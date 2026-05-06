@@ -10,12 +10,21 @@ repository.workspace = true
 name = "sprout-agent"
 path = "src/main.rs"
 
+# Test-only fake MCP server. Built unconditionally because cargo can't gate
+# bins on `cfg(test)`, but it's tiny and only used by integration tests.
+[[bin]]
+name = "fake-mcp"
+path = "tests/bin/fake_mcp.rs"
+
 [dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time", "net"] }

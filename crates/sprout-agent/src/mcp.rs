@@ -19,14 +19,27 @@ use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
 
 const SEP: &str = "__";
 const MAX_NAME_LEN: usize = 64;
-/// Hard cap on initialization handshake / tool listing per MCP server. A
-/// stuck child must not freeze the whole agent.
-const MCP_INIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default cap on initialization handshake / tool listing per MCP server.
+/// A stuck child must not freeze the whole agent. Tests override via
+/// `ACP_SEED_MCP_INIT_TIMEOUT_SECS`.
+const MCP_INIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(30);
+
+fn mcp_init_timeout() -> Duration {
+    std::env::var("ACP_SEED_MCP_INIT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(MCP_INIT_TIMEOUT_DEFAULT)
+}
 /// Caps on tool metadata sent to the LLM. Protects against malicious or
-/// buggy MCP servers that ship enormous descriptions/schemas.
+/// buggy MCP servers that ship enormous descriptions/schemas. All caps are
+/// in bytes so they are tight on the wire regardless of UTF-8 width.
 const MAX_TOOLS_PER_SESSION: usize = 128;
-const MAX_DESCRIPTION_CHARS: usize = 1024;
+const MAX_DESCRIPTION_BYTES: usize = 1024;
 const MAX_SCHEMA_BYTES: usize = 4096;
+/// Cap on number of MCP servers per session. Sixteen is a generous upper
+/// bound for any reasonable agent setup; it bounds child spawn pressure.
+pub const MAX_MCP_SERVERS: usize = 16;
 
 type Client = RunningService<RoleClient, ()>;
 
@@ -53,12 +66,19 @@ impl McpRegistry {
         servers: &[McpServerStdio],
         cwd: Option<&str>,
     ) -> Result<Self, AgentError> {
+        if servers.len() > MAX_MCP_SERVERS {
+            return Err(AgentError::Mcp(format!(
+                "too many MCP servers: {} > {MAX_MCP_SERVERS}",
+                servers.len()
+            )));
+        }
         let mut reg = Self {
             by_qname: HashMap::new(),
             defs: Vec::new(),
             _clients: Vec::new(),
         };
 
+        let init_timeout = mcp_init_timeout();
         for s in servers {
             if !valid_name(&s.name) {
                 return Err(AgentError::Mcp(format!("invalid server name: {}", s.name)));
@@ -86,33 +106,44 @@ impl McpRegistry {
 
             let transport = TokioChildProcess::new(cmd)
                 .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
-            let client: Client =
-                match tokio::time::timeout(MCP_INIT_TIMEOUT, ().serve(transport)).await {
-                    Ok(Ok(c)) => c,
-                    Ok(Err(e)) => return Err(AgentError::Mcp(format!("init {}: {e}", s.name))),
-                    Err(_) => {
-                        return Err(AgentError::Mcp(format!(
-                            "init {}: timeout after {}s",
-                            s.name,
-                            MCP_INIT_TIMEOUT.as_secs()
-                        )))
-                    }
-                };
-            let client = Arc::new(client);
-
-            let tools = match tokio::time::timeout(MCP_INIT_TIMEOUT, client.peer().list_all_tools())
-                .await
+            // Capture the child pid so a stuck server can be force-killed
+            // explicitly on timeout, rather than relying on transport-Drop
+            // alone. Drop is best-effort; SIGKILL is decisive.
+            let child_pid = transport.id();
+            let client: Client = match tokio::time::timeout(init_timeout, ().serve(transport)).await
             {
-                Ok(Ok(t)) => t,
-                Ok(Err(e)) => return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name))),
+                Ok(Ok(c)) => c,
+                Ok(Err(e)) => {
+                    force_kill(child_pid, &s.name, "init");
+                    return Err(AgentError::Mcp(format!("init {}: {e}", s.name)));
+                }
                 Err(_) => {
+                    force_kill(child_pid, &s.name, "init");
                     return Err(AgentError::Mcp(format!(
-                        "list_tools {}: timeout after {}s",
+                        "init {}: timeout after {}s",
                         s.name,
-                        MCP_INIT_TIMEOUT.as_secs()
-                    )))
+                        init_timeout.as_secs()
+                    )));
                 }
             };
+            let client = Arc::new(client);
+
+            let tools =
+                match tokio::time::timeout(init_timeout, client.peer().list_all_tools()).await {
+                    Ok(Ok(t)) => t,
+                    Ok(Err(e)) => {
+                        force_kill(child_pid, &s.name, "list_tools");
+                        return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name)));
+                    }
+                    Err(_) => {
+                        force_kill(child_pid, &s.name, "list_tools");
+                        return Err(AgentError::Mcp(format!(
+                            "list_tools {}: timeout after {}s",
+                            s.name,
+                            init_timeout.as_secs()
+                        )));
+                    }
+                };
 
             for t in tools {
                 if reg.defs.len() >= MAX_TOOLS_PER_SESSION {
@@ -199,15 +230,12 @@ impl McpRegistry {
     }
 }
 
-/// Truncate description to `MAX_DESCRIPTION_CHARS` characters (UTF-8 safe),
-/// appending a marker when over.
+/// Truncate description to `MAX_DESCRIPTION_BYTES` (UTF-8 safe). Output
+/// is GUARANTEED to be ≤ `MAX_DESCRIPTION_BYTES` bytes; the marker is
+/// included WITHIN the cap (not appended past it). If the marker would not
+/// fit, we drop it and just truncate.
 fn cap_description(desc: &str) -> String {
-    if desc.chars().count() <= MAX_DESCRIPTION_CHARS {
-        return desc.to_owned();
-    }
-    const MARKER: &str = "…[truncated]";
-    let kept: String = desc.chars().take(MAX_DESCRIPTION_CHARS).collect();
-    format!("{kept}{MARKER}")
+    clamp(desc.to_owned(), MAX_DESCRIPTION_BYTES)
 }
 
 /// Reject schemas whose serialized form exceeds `MAX_SCHEMA_BYTES`. The LLM
@@ -222,6 +250,23 @@ fn cap_schema(qname: &str, schema: Value) -> Value {
         "sprout-agent: tool {qname} schema is {size} bytes (>{MAX_SCHEMA_BYTES}); replacing with empty object",
     );
     Value::Object(Map::new())
+}
+
+/// Send SIGKILL to a stuck MCP child by pid. The transport's Drop impl
+/// already best-effort kills, but it spawns a tokio task and may race the
+/// process exiting. SIGKILL here is decisive and synchronous.
+#[cfg(unix)]
+fn force_kill(pid: Option<u32>, name: &str, stage: &str) {
+    if let Some(p) = pid {
+        // SAFETY: kill(2) with SIGKILL on a pid we just spawned. ESRCH on
+        // an already-exited child is fine.
+        let rc = unsafe { libc::kill(p as libc::pid_t, libc::SIGKILL) };
+        eprintln!("sprout-agent: kill MCP {name} ({stage}) pid={p} rc={rc}");
+    }
+}
+#[cfg(not(unix))]
+fn force_kill(pid: Option<u32>, name: &str, stage: &str) {
+    eprintln!("sprout-agent: relying on Drop to kill MCP {name} ({stage}) pid={pid:?}");
 }
 
 /// OpenAI function-name constraints: ^[a-zA-Z0-9_-]{1,64}$

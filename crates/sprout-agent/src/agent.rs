@@ -18,6 +18,11 @@ use crate::types::{
     AgentError, Config, ContentBlock, HistoryItem, ProviderStop, StopReason, ToolCall, ToolResult,
 };
 
+/// Hard cap on tool calls accepted from a single LLM response. A misbehaving
+/// model that returns thousands of tool_calls cannot be allowed to drive
+/// thousands of MCP calls per turn.
+const MAX_TOOL_CALLS_PER_TURN: usize = 64;
+
 /// Single ordered channel from the agent loop to the writer task.
 pub type Wire = tokio::sync::mpsc::Sender<WireMsg>;
 
@@ -67,6 +72,10 @@ pub async fn run_prompt(
             return Ok(StopReason::Cancelled);
         }
 
+        // Trim oldest non-system items if history exceeds the byte budget.
+        // Cheap, crude, effective: keeps sessions from growing unboundedly.
+        truncate_history(history, cfg.max_history_bytes);
+
         let response = tokio::select! {
             biased;
             _ = cancel.changed() => return Ok(StopReason::Cancelled),
@@ -85,7 +94,16 @@ pub async fn run_prompt(
             return Ok(map_stop(response.stop));
         }
 
-        let calls = response.tool_calls.clone();
+        // Cap tool calls per turn. A misbehaving model that demands hundreds
+        // of calls cannot stampede the loop.
+        let mut calls = response.tool_calls.clone();
+        if calls.len() > MAX_TOOL_CALLS_PER_TURN {
+            eprintln!(
+                "sprout-agent: capping tool_calls {} -> {MAX_TOOL_CALLS_PER_TURN}",
+                calls.len()
+            );
+            calls.truncate(MAX_TOOL_CALLS_PER_TURN);
+        }
         history.push(HistoryItem::Assistant {
             text: response.text,
             tool_calls: calls.clone(),
@@ -254,6 +272,64 @@ fn synthetic_error(call: &ToolCall, msg: String) -> HistoryItem {
 fn fill_cancelled(history: &mut Vec<HistoryItem>, remaining: &[ToolCall]) {
     for call in remaining {
         history.push(synthetic_error(call, "cancelled".into()));
+    }
+}
+
+/// Approximate in-memory byte size of a history item. We don't need
+/// wire-accurate; we just want a cheap monotone estimate.
+fn item_bytes(item: &HistoryItem) -> usize {
+    match item {
+        HistoryItem::User(s) => s.len(),
+        HistoryItem::Assistant { text, tool_calls } => {
+            text.len()
+                + tool_calls
+                    .iter()
+                    .map(|c| {
+                        c.provider_id.len()
+                            + c.name.len()
+                            + serde_json::to_vec(&c.arguments)
+                                .map(|b| b.len())
+                                .unwrap_or(0)
+                    })
+                    .sum::<usize>()
+        }
+        HistoryItem::ToolResult(r) => r.provider_id.len() + r.text.len(),
+    }
+}
+
+/// Drop oldest items until history fits within `max_bytes`. We must keep
+/// history VALID — never strand a tool_result without its assistant turn,
+/// or vice versa — so we drop in conversation pairs:
+///   `User → (Assistant → ToolResult*)+` blocks.
+/// Conservative implementation: drop one User-rooted block at a time from
+/// the front. If after dropping all blocks history still exceeds the cap,
+/// stop (the latest turn alone is over-budget; the LLM will reject it).
+fn truncate_history(history: &mut Vec<HistoryItem>, max_bytes: usize) {
+    let mut total: usize = history.iter().map(item_bytes).sum();
+    if total <= max_bytes {
+        return;
+    }
+    let original_len = history.len();
+    while total > max_bytes && !history.is_empty() {
+        // Find the next User boundary after index 0; drop [0..boundary).
+        let mut end = 1usize;
+        while end < history.len() && !matches!(history[end], HistoryItem::User(_)) {
+            end += 1;
+        }
+        if end >= history.len() {
+            // Only the active turn remains; can't drop more without breaking
+            // tool_use/tool_result pairing.
+            break;
+        }
+        let dropped: usize = history[..end].iter().map(item_bytes).sum();
+        history.drain(..end);
+        total = total.saturating_sub(dropped);
+    }
+    if history.len() < original_len {
+        eprintln!(
+            "sprout-agent: history truncated {original_len} -> {} items ({total} bytes)",
+            history.len()
+        );
     }
 }
 
