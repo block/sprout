@@ -72,7 +72,7 @@ const overrides = new Map([
   ["src-tauri/src/relay.rs", 510], // +4 lines for NIP-OA auth tag injection in profile sync (build_profile_event) + verification test
   ["src-tauri/src/commands/pairing.rs", 600], // NIP-AB pairing actor: 3 Tauri commands + background WS task + NIP-42 auth + NIP-43 probe + event parsing helpers
   ["src-tauri/src/lib.rs", 715], // +4 lines for PairingHandle managed state + 3 pairing command registrations
-  ["src/shared/api/tauri.ts", 1210], // pairing command wrappers + applyWorkspace + NIP-44 encrypt/decrypt wrappers + observer_url field + relay member API functions (list/get/add/remove/change-role)
+  ["src/shared/api/tauri.ts", 1212], // pairing command wrappers + applyWorkspace + NIP-44 encrypt/decrypt wrappers + observer_url field + relay member API functions (list/get/add/remove/change-role) + prevent sleep
 ]);
 
 async function walkFiles(directory) {

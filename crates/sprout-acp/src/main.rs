@@ -901,9 +901,17 @@ async fn tokio_main() -> Result<()> {
         .as_secs();
 
     let pubkey_hex = config.keys.public_key().to_hex();
-    let mut relay = HarnessRelay::connect(&config.relay_url, &config.keys, &pubkey_hex)
-        .await
-        .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
+
+    // Parse SPROUT_AUTH_TAG into a nostr::Tag for NIP-OA relay membership delegation.
+    let relay_auth_tag: Option<nostr::Tag> = std::env::var("SPROUT_AUTH_TAG")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| sprout_sdk::nip_oa::parse_auth_tag(&s).ok());
+
+    let mut relay =
+        HarnessRelay::connect(&config.relay_url, &config.keys, &pubkey_hex, relay_auth_tag)
+            .await
+            .map_err(|e| anyhow::anyhow!("relay connect error: {e}"))?;
 
     // Finding #22: tell the relay background task the watermark so it can use
     // `since = watermark - 5s` on the first REQ instead of `since=now`.

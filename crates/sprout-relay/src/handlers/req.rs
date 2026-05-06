@@ -20,7 +20,7 @@ use crate::connection::{AuthState, ConnectionState};
 use crate::protocol::RelayMessage;
 use crate::state::AppState;
 
-const MAX_HISTORICAL_LIMIT: i64 = 500;
+const MAX_HISTORICAL_LIMIT: i64 = 10_000;
 const MAX_SUBSCRIPTIONS: usize = 1024;
 const P_GATED_KINDS: [u32; 4] = [
     KIND_AGENT_OBSERVER_FRAME,

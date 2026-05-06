@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::Write,
-    sync::{atomic::AtomicU16, Mutex},
+    sync::{atomic::AtomicU16, Arc, Mutex},
 };
 
 use nostr::{Keys, ToBech32};
@@ -30,6 +30,8 @@ pub struct AppState {
     pub audio_output_device: Mutex<Option<String>>,
     /// Port of the localhost media streaming proxy (set during setup).
     pub media_proxy_port: AtomicU16,
+    /// IOKit power assertion state — prevents idle sleep while agents run.
+    pub prevent_sleep: Arc<Mutex<crate::prevent_sleep::PreventSleepState>>,
 }
 
 pub fn build_app_state() -> AppState {
@@ -71,6 +73,9 @@ pub fn build_app_state() -> AppState {
         app_handle: Mutex::new(None),
         audio_output_device: Mutex::new(None),
         media_proxy_port: AtomicU16::new(0),
+        prevent_sleep: Arc::new(Mutex::new(
+            crate::prevent_sleep::PreventSleepState::default(),
+        )),
     }
 }
 

@@ -44,13 +44,16 @@ pub mod relay_members {
     /// - If enabled → checks `relay_members` table for the pubkey.
     /// - If not a direct member and NIP-OA is enabled → verifies the `auth_tag_header`
     ///   to check if the agent's owner is a relay member.
+    ///
+    /// Returns `Ok(None)` for direct members, `Ok(Some(owner_pubkey))` when
+    /// access was granted via NIP-OA owner delegation.
     pub async fn enforce_relay_membership(
         state: &AppState,
         pubkey_bytes: &[u8],
         auth_tag_header: Option<&str>,
-    ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    ) -> Result<Option<nostr::PublicKey>, (StatusCode, Json<serde_json::Value>)> {
         if !state.config.require_relay_membership {
-            return Ok(());
+            return Ok(None);
         }
 
         let pubkey_hex = hex::encode(pubkey_bytes);
@@ -60,7 +63,7 @@ pub mod relay_members {
         })?;
 
         if is_member {
-            return Ok(());
+            return Ok(None);
         }
 
         // NIP-OA fallback: check if agent's owner is a relay member.
@@ -86,7 +89,7 @@ pub mod relay_members {
                                 owner = %owner_hex,
                                 "NIP-OA membership granted via owner"
                             );
-                            return Ok(());
+                            return Ok(Some(owner_pubkey));
                         }
                     }
                     Err(e) => {

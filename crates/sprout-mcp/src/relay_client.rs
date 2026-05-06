@@ -221,6 +221,7 @@ async fn do_connect(
     relay_url: &str,
     keys: &Keys,
     api_token: Option<&str>,
+    auth_tag: Option<&Tag>,
 ) -> Result<WsStream, RelayClientError> {
     let parsed = relay_url
         .parse::<url::Url>()
@@ -236,7 +237,7 @@ async fn do_connect(
     // Wait for AUTH challenge (5s timeout).
     let challenge = wait_for_auth_challenge(&mut ws, Duration::from_secs(5)).await?;
 
-    let auth_event = build_auth_event(&challenge, relay_url, keys, api_token)?;
+    let auth_event = build_auth_event(&challenge, relay_url, keys, api_token, auth_tag)?;
     let event_id = auth_event.id.to_hex();
     debug!("sending AUTH event {event_id}");
     let auth_msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
@@ -318,24 +319,41 @@ async fn wait_for_ok(
 }
 
 /// Build a NIP-42 AUTH event for the given challenge.
+///
+/// If `auth_tag` is provided (NIP-OA owner attestation), it is included in the
+/// AUTH event so the relay can use it for membership delegation fallback.
 #[allow(clippy::result_large_err)]
 fn build_auth_event(
     challenge: &str,
     relay_url: &str,
     keys: &Keys,
     api_token: Option<&str>,
+    auth_tag: Option<&Tag>,
 ) -> Result<Event, RelayClientError> {
     let relay_nostr_url: Url = relay_url
         .parse()
         .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
     if let Some(token) = api_token {
-        let tags = vec![
+        let mut tags = vec![
             Tag::parse(&["relay", relay_url])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
             Tag::parse(&["challenge", challenge])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
             Tag::parse(&["auth_token", token])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+        ];
+        if let Some(t) = auth_tag {
+            tags.push(t.clone());
+        }
+        Ok(EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?)
+    } else if let Some(t) = auth_tag {
+        // Cannot use EventBuilder::auth() shortcut — it doesn't accept extra tags.
+        let tags = vec![
+            Tag::parse(&["relay", relay_url])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+            Tag::parse(&["challenge", challenge])
+                .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
+            t.clone(),
         ];
         Ok(EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?)
     } else {
@@ -353,9 +371,10 @@ async fn send_auth_response(
     relay_url: &str,
     keys: &Keys,
     api_token: Option<&str>,
+    auth_tag: Option<&Tag>,
 ) {
     let result: Result<(), RelayClientError> = async {
-        let auth_event = build_auth_event(challenge, relay_url, keys, api_token)?;
+        let auth_event = build_auth_event(challenge, relay_url, keys, api_token, auth_tag)?;
         let msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
         ws.send(Message::Text(msg.into())).await?;
         debug!("sent AUTH response for mid-session challenge");
@@ -377,6 +396,7 @@ async fn handle_ws_message(
     keys: &Keys,
     relay_url: &str,
     api_token: Option<&str>,
+    auth_tag: Option<&Tag>,
 ) -> bool {
     match msg {
         Message::Text(text) => {
@@ -429,7 +449,7 @@ async fn handle_ws_message(
                 }
                 RelayMessage::Auth { challenge } => {
                     debug!("received mid-session AUTH challenge — re-authenticating");
-                    send_auth_response(ws, &challenge, relay_url, keys, api_token).await;
+                    send_auth_response(ws, &challenge, relay_url, keys, api_token, auth_tag).await;
                 }
             }
             true
@@ -463,13 +483,14 @@ async fn do_reconnect(
     keys: &Keys,
     relay_url: &str,
     api_token: Option<&str>,
+    auth_tag: Option<&Tag>,
 ) -> bool {
     warn!("relay connection lost — reconnecting…");
     state.cancel_pending();
 
     let mut delay = Duration::from_secs(1);
     loop {
-        match do_connect(relay_url, keys, api_token).await {
+        match do_connect(relay_url, keys, api_token, auth_tag).await {
             Ok(new_ws) => {
                 tracing::info!("reconnected to relay at {relay_url}");
                 *ws = new_ws;
@@ -544,6 +565,7 @@ async fn run_background_task(
     keys: Keys,
     relay_url: String,
     api_token: Option<String>,
+    auth_tag: Option<Tag>,
 ) {
     let mut state = BgState::new();
     // Ticker for expiring timed-out pending operations (~1s granularity).
@@ -557,14 +579,14 @@ async fn run_background_task(
                 let needs_reconnect = match raw {
                     Some(Ok(msg)) => {
                         !handle_ws_message(
-                            msg, &mut ws, &mut state, &keys, &relay_url, api_token.as_deref(),
+                            msg, &mut ws, &mut state, &keys, &relay_url, api_token.as_deref(), auth_tag.as_ref(),
                         ).await
                     }
                     Some(Err(e)) => { warn!("WebSocket error: {e}"); true }
                     None => { debug!("WebSocket stream ended"); true }
                 };
                 if needs_reconnect
-                    && !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await
+                    && !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref(), auth_tag.as_ref()).await
                 {
                     return; // Shutdown received during reconnect
                 }
@@ -581,7 +603,7 @@ async fn run_background_task(
                         };
                         if let Err(e) = ws.send(Message::Text(msg.into())).await {
                             let _ = reply.send(Err(RelayClientError::WebSocket(e)));
-                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref(), auth_tag.as_ref()).await {
                                 return;
                             }
                             continue;
@@ -611,7 +633,7 @@ async fn run_background_task(
                         };
                         if let Err(e) = ws.send(Message::Text(text.into())).await {
                             let _ = reply.send(Err(RelayClientError::WebSocket(e)));
-                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref(), auth_tag.as_ref()).await {
                                 return;
                             }
                             continue;
@@ -636,7 +658,7 @@ async fn run_background_task(
                         };
                         if let Err(e) = ws.send(Message::Text(msg.into())).await {
                             let _ = reply.send(Err(RelayClientError::WebSocket(e)));
-                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref()).await {
+                            if !do_reconnect(&mut ws, &mut state, &mut cmd_rx, &keys, &relay_url, api_token.as_deref(), auth_tag.as_ref()).await {
                                 return;
                             }
                             continue;
@@ -715,16 +737,17 @@ impl RelayClient {
         api_token: Option<&str>,
         auth_tag: Option<nostr::Tag>,
     ) -> Result<Self, RelayClientError> {
-        let ws = do_connect(relay_url, keys, api_token).await?;
+        let ws = do_connect(relay_url, keys, api_token, auth_tag.as_ref()).await?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel(CMD_CHANNEL_CAPACITY);
 
         let bg_keys = keys.clone();
         let bg_relay_url = relay_url.to_string();
         let bg_api_token = api_token.map(|t| t.to_string());
+        let bg_auth_tag = auth_tag.clone();
 
         let handle = tokio::spawn(async move {
-            run_background_task(ws, cmd_rx, bg_keys, bg_relay_url, bg_api_token).await;
+            run_background_task(ws, cmd_rx, bg_keys, bg_relay_url, bg_api_token, bg_auth_tag).await;
         });
 
         Ok(Self {
@@ -800,6 +823,15 @@ impl RelayClient {
     /// Returns a reference to the Nostr signing keys.
     pub fn keys(&self) -> &nostr::Keys {
         &self.keys
+    }
+
+    /// Returns the NIP-OA auth tag JSON string for use in HTTP `x-auth-tag` headers.
+    ///
+    /// Returns `None` if no auth tag is configured (direct-member agents).
+    pub fn auth_tag_json(&self) -> Option<String> {
+        self.auth_tag
+            .as_ref()
+            .and_then(|t| serde_json::to_string(t.as_slice()).ok())
     }
 
     /// Returns the relay's server authority (host or host:port) for BUD-11 server tags.

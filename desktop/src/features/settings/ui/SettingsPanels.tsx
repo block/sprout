@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from "react";
 import {
   BellRing,
+  Bot,
   Check,
   Download,
   Keyboard,
@@ -28,12 +29,14 @@ import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
+import { PreventSleepSettingsCard } from "./PreventSleepSettingsCard";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
 import { UpdateChecker } from "../UpdateChecker";
 
 export type SettingsSection =
   | "profile"
   | "notifications"
+  | "agents"
   | "appearance"
   | "shortcuts"
   | "tokens"
@@ -73,6 +76,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "notifications",
     label: "Notifications",
     icon: BellRing,
+  },
+  {
+    value: "agents",
+    label: "Agents",
+    icon: Bot,
   },
   {
     value: "appearance",
@@ -256,6 +264,8 @@ export function renderSettingsSection(
           }
         />
       );
+    case "agents":
+      return <PreventSleepSettingsCard />;
     case "appearance":
       return <ThemeSettingsCard />;
     case "shortcuts":

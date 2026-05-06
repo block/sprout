@@ -56,7 +56,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
   Future<List<Channel>> _fetch({bool subscribeLive = false}) async {
     final myPk = ref.read(myPubkeyProvider);
-    if (myPk == null) return const [];
+    if (myPk == null) throw StateError('No signing identity available');
 
     final session = ref.read(relaySessionProvider.notifier);
 
@@ -126,9 +126,14 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     final channels = <Channel>[];
     for (final event in dedupedMetas) {
-      channels.add(
-        _channelFromMeta(event, isMember: true, displayNames: displayNames),
+      final channel = _channelFromMeta(
+        event,
+        isMember: true,
+        displayNames: displayNames,
       );
+      if (!channel.isEphemeral) {
+        channels.add(channel);
+      }
     }
 
     channels.sort((left, right) {
@@ -180,6 +185,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       participants: participants,
       participantPubkeys: data.participantPubkeys,
       isMember: isMember,
+      ttlSeconds: data.ttlSeconds,
+      ttlDeadline: data.ttlDeadline,
     );
   }
 
