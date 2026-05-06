@@ -56,7 +56,7 @@ function getInitialThreadPanelWidth(): number {
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
-  activityAgents: BotActivityAgent[];
+  activityAgents?: BotActivityAgent[];
   agentSessionAgents: ManagedAgent[];
   botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
@@ -122,8 +122,8 @@ type ChannelPaneProps = {
 
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
-  activityAgents,
   agentSessionAgents,
+  activityAgents = agentSessionAgents,
   botTypingEntries,
   channelFind,
   currentPubkey,
