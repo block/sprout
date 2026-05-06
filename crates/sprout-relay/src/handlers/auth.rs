@@ -77,7 +77,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
         .verify_auth_event(event, &challenge, &relay_url)
         .await
     {
-        Ok(auth_ctx) => {
+        Ok(mut auth_ctx) => {
             let pubkey = auth_ctx.pubkey;
 
             // Pubkey allowlist gate — only for pubkey-only auth.
@@ -107,24 +107,93 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             }
 
             // Relay membership gate — uses the shared helper with NIP-OA fallback.
-            if crate::api::relay_members::enforce_relay_membership(
+            let nip_oa_owner = match crate::api::relay_members::enforce_relay_membership(
                 &state,
                 &pubkey.serialize(),
                 auth_tag_json.as_deref(),
             )
             .await
-            .is_err()
             {
-                warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "not a relay member");
-                metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
-                    .increment(1);
-                *conn.auth_state.write().await = AuthState::Failed;
-                conn.send(RelayMessage::ok(
-                    &event_id_hex,
-                    false,
-                    "restricted: not a relay member",
-                ));
-                return;
+                Ok(owner) => owner,
+                Err(_) => {
+                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "not a relay member");
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
+                        .increment(1);
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "restricted: not a relay member",
+                    ));
+                    return;
+                }
+            };
+
+            // Stash NIP-OA owner on the auth context (session-scoped) only if
+            // the DB confirms this owner relationship (first-write-wins).
+            if let Some(owner) = nip_oa_owner {
+                // Ensure both agent and owner have users rows (BYO agents may not,
+                // and agent_owner_pubkey has a FK constraint to users.pubkey).
+                if let Err(e) = state.db.ensure_user(&pubkey.serialize()).await {
+                    warn!(conn_id = %conn_id, error = %e, "ensure_user(agent) failed during NIP-OA backfill");
+                }
+                if let Err(e) = state.db.ensure_user(&owner.serialize()).await {
+                    warn!(conn_id = %conn_id, error = %e, "ensure_user(owner) failed during NIP-OA backfill");
+                }
+
+                // Idempotent backfill: record agent→owner in DB so cross-connection
+                // features (observer frames, channel policy) work for BYO agents.
+                // Returns Ok(true) if written, Ok(false) if already owned by someone else.
+                match state
+                    .db
+                    .set_agent_owner(&pubkey.serialize(), &owner.serialize())
+                    .await
+                {
+                    Ok(true) => {
+                        // Successfully materialized — this owner is authoritative.
+                        auth_ctx.agent_owner_pubkey = Some(owner);
+                        // Pre-warm the observer cache to avoid stale negatives.
+                        let cache_key = (pubkey.serialize().to_vec(), owner.serialize().to_vec());
+                        state.observer_owner_cache.insert(cache_key, true);
+                    }
+                    Ok(false) => {
+                        // Agent already owned by someone else. Verify if this
+                        // owner matches the existing DB record before trusting it.
+                        match state
+                            .db
+                            .is_agent_owner(&pubkey.serialize(), &owner.serialize())
+                            .await
+                        {
+                            Ok(true) => {
+                                auth_ctx.agent_owner_pubkey = Some(owner);
+                            }
+                            Ok(false) => {
+                                debug!(
+                                    conn_id = %conn_id,
+                                    agent = %pubkey.to_hex(),
+                                    nip_oa_owner = %owner.to_hex(),
+                                    "NIP-OA owner differs from DB owner — session will not get owner fast-path"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    conn_id = %conn_id,
+                                    error = %e,
+                                    "is_agent_owner check failed after set_agent_owner conflict"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            conn_id = %conn_id,
+                            agent = %pubkey.to_hex(),
+                            owner = %owner.to_hex(),
+                            error = %e,
+                            "failed to backfill agent_owner_pubkey"
+                        );
+                    }
+                }
             }
 
             info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
