@@ -13,7 +13,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 
-import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 
 type UserProfilePopoverProps = {
@@ -135,7 +135,7 @@ export function UserProfilePopover({
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>
+      <PopoverAnchor asChild>
         {/* biome-ignore lint/a11y/useSemanticElements: wrapper div for hover/click behavior */}
         <div
           role="button"
@@ -156,7 +156,7 @@ export function UserProfilePopover({
         >
           {children}
         </div>
-      </PopoverTrigger>
+      </PopoverAnchor>
       <PopoverContent
         align="start"
         className="w-80"
