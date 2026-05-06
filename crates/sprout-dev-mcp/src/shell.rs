@@ -184,24 +184,19 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
 
     let timeout = Duration::from_millis(timeout_ms);
     let wait = async {
-        let (out, err) = tokio::join!(read_stdout, read_stderr);
         let status = child.wait().await;
+        if let Some(pid) = pid {
+            kill_process_group(pid as i32);
+        }
+        let (out, err) = tokio::join!(read_stdout, read_stderr);
         (out, err, status)
     };
 
     let mut notes: Vec<String> = Vec::new();
     let (stdout_cap, stderr_cap, status, timed_out) =
         match tokio::time::timeout(timeout, wait).await {
-            Ok((o, e, Ok(s))) => {
-                if let Some(pid) = pid {
-                    kill_process_group(pid as i32);
-                }
-                (o, e, Some(s), false)
-            }
+            Ok((o, e, Ok(s))) => (o, e, Some(s), false),
             Ok((o, e, Err(err))) => {
-                if let Some(pid) = pid {
-                    kill_process_group(pid as i32);
-                }
                 notes.push(format!("child wait failed: {err}"));
                 (o, e, None, false)
             }
