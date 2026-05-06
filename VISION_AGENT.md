@@ -2,9 +2,7 @@
 
 ## The Problem
 
-General-purpose coding agents are tens of thousands of lines of code. They have plugin systems, recipe systems, multiple transport modes, session persistence, auto-compaction, configuration management, and extension architectures. They work. They are also impossible to hold in your head.
-
-When something goes wrong, you cannot reason about it. When you want to change behavior, you are fighting abstractions three layers deep. When you want to run ten agents in parallel, you are paying for that entire surface area per instance.
+A coding agent should be small enough to hold in your head. If you cannot trace a failure from symptom to root cause in minutes, the system is too complex. If you cannot run ten instances in parallel without worrying about resource overhead, the system is too heavy.
 
 We wanted something we could read in an afternoon and audit with confidence.
 
@@ -16,7 +14,7 @@ Two binaries. Two protocols. Zero coupling.
 
 **sprout-dev-mcp** (~1,100 LOC) is an MCP server. It gives any agent a shell and a file editor. Ephemeral processes with process-group kill on every exit path. Bounded output. Workspace-sandboxed file edits. It works with any agent or client that speaks MCP.
 
-Together they are ~3,200 lines of Rust that replace a general-purpose agent for headless autonomous coding work.
+Together they are ~3,200 lines of Rust purpose-built for headless autonomous coding work.
 
 ## Why We Built Our Own
 
