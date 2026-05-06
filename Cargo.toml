@@ -9,6 +9,7 @@ members = [
     "crates/sprout-audit",
     "crates/sprout-mcp",
     "crates/sprout-acp",
+    "crates/sprout-agent",
     "crates/sprout-proxy",
     "crates/sprout-test-client",
     "crates/sprout-admin",
