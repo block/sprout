@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 pub struct Shim {
-    #[allow(dead_code)]
-    pub dir: TempDir,
+    /// Drop guard: removes the temp dir when Shim is dropped.
+    _dir: TempDir,
     pub path_env: String,
 }
 
@@ -26,7 +26,10 @@ impl Shim {
         }
         let path_env = new_path.to_string_lossy().into_owned();
 
-        Ok(Self { dir, path_env })
+        Ok(Self {
+            _dir: dir,
+            path_env,
+        })
     }
 }
 

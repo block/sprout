@@ -1,4 +1,5 @@
 use crate::shim::Shim;
+use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -69,7 +70,7 @@ fn build_bootstrap(cwd: &Path) -> String {
          Detected stack: {}\n\
          \n\
          Tools:\n\
-         - shell(command, workdir?, timeout_ms?): run a bash command. Output is tail-truncated to ~8KB; full output (up to 10MB) goes to an artifact file. timeout_ms capped at 600000.\n\
+         - shell(command, workdir?, timeout_ms?): run a bash command. Output is tail-truncated to ~8KB; captured output (first 10MB per stream) goes to an artifact file. timeout_ms capped at 600000.\n\
          - todo(content?): replace the TODO when content is given; read it when omitted.\n\
          - str_replace(path, old_str, new_str, workdir?): atomic find-and-replace within the workspace. `old_str` must occur exactly once. Returns a unified diff.\n\
          \n\
@@ -116,7 +117,7 @@ pub struct ShellParams {
     pub timeout_ms: Option<u64>,
 }
 
-pub async fn run(state: &SharedState, p: ShellParams) -> Result<String, ErrorData> {
+pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, ErrorData> {
     let timeout_ms = p
         .timeout_ms
         .unwrap_or(DEFAULT_TIMEOUT_MS)
@@ -151,18 +152,9 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<String, ErrorDat
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return Ok(json_response(ShellResult {
-                exit_code: -1,
-                stdout: String::new(),
-                stderr: format!("failed to spawn bash: {e}\n"),
-                timed_out: false,
-                duration_ms: started.elapsed().as_millis() as u64,
-                stdout_truncated: false,
-                stderr_truncated: false,
-                stdout_artifact: None,
-                stderr_artifact: None,
-                notes: Vec::new(),
-            }));
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "failed to spawn bash: {e}"
+            ))]));
         }
     };
 
@@ -190,10 +182,14 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<String, ErrorDat
         (out, err, status)
     };
 
+    let mut notes: Vec<String> = Vec::new();
     let (stdout_cap, stderr_cap, status, timed_out) =
         match tokio::time::timeout(timeout, wait).await {
             Ok((o, e, Ok(s))) => (o, e, Some(s), false),
-            Ok((o, e, Err(_))) => (o, e, None, false),
+            Ok((o, e, Err(err))) => {
+                notes.push(format!("child wait failed: {err}"));
+                (o, e, None, false)
+            }
             Err(_) => {
                 if let Some(pid) = pid {
                     kill_process_group(pid as i32);
@@ -205,14 +201,21 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<String, ErrorDat
                         Ok(Some(_)) => break,
                         Ok(None) if Instant::now() >= deadline => {
                             // Last-ditch: force-kill via tokio so kill_on_drop can clean up.
-                            let _ = child.start_kill();
-                            let _ = child.wait().await;
+                            if let Err(err) = child.start_kill() {
+                                notes.push(format!("force-kill failed: {err}"));
+                            }
+                            if let Err(err) = child.wait().await {
+                                notes.push(format!("post-kill wait failed: {err}"));
+                            }
                             break;
                         }
                         Ok(None) => {
                             tokio::time::sleep(Duration::from_millis(20)).await;
                         }
-                        Err(_) => break,
+                        Err(err) => {
+                            notes.push(format!("try_wait failed: {err}"));
+                            break;
+                        }
                     }
                 }
                 (CapturedStream::default(), CapturedStream::default(), None, true)
@@ -226,24 +229,25 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<String, ErrorDat
         .unwrap_or(if timed_out { 124 } else { -1 });
 
     let id = state.next_id();
-    let mut notes: Vec<String> = Vec::new();
     let (stdout_text, stdout_truncated, stdout_artifact) =
         finalize_stream(state, id, "stdout", stdout_cap, &mut notes);
     let (stderr_text, stderr_truncated, stderr_artifact) =
         finalize_stream(state, id, "stderr", stderr_cap, &mut notes);
 
-    Ok(json_response(ShellResult {
-        exit_code,
-        stdout: stdout_text,
-        stderr: stderr_text,
-        timed_out,
-        duration_ms,
-        stdout_truncated,
-        stderr_truncated,
-        stdout_artifact,
-        stderr_artifact,
-        notes,
-    }))
+    let body = serde_json::json!({
+        "exit_code": exit_code,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+        "timed_out": timed_out,
+        "duration_ms": duration_ms,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+        "stdout_artifact": stdout_artifact,
+        "stderr_artifact": stderr_artifact,
+        "notes": notes,
+    });
+    let text = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into());
+    Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
 #[cfg(unix)]
@@ -306,34 +310,7 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R) -> CapturedStream {
     out
 }
 
-struct ShellResult {
-    exit_code: i32,
-    stdout: String,
-    stderr: String,
-    timed_out: bool,
-    duration_ms: u64,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
-    stdout_artifact: Option<String>,
-    stderr_artifact: Option<String>,
-    notes: Vec<String>,
-}
 
-fn json_response(r: ShellResult) -> String {
-    let v = serde_json::json!({
-        "exit_code": r.exit_code,
-        "stdout": r.stdout,
-        "stderr": r.stderr,
-        "timed_out": r.timed_out,
-        "duration_ms": r.duration_ms,
-        "stdout_truncated": r.stdout_truncated,
-        "stderr_truncated": r.stderr_truncated,
-        "stdout_artifact": r.stdout_artifact,
-        "stderr_artifact": r.stderr_artifact,
-        "notes": r.notes,
-    });
-    serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())
-}
 
 fn finalize_stream(
     state: &SharedState,
@@ -381,7 +358,7 @@ fn finalize_stream(
         String::new()
     };
     let artifact_suffix = match &artifact_str {
-        Some(p) => format!("; full output at {p}"),
+        Some(p) => format!("; captured output (first 10MB) at {p}"),
         None => "; artifact unavailable".into(),
     };
     let notice = format!(
@@ -419,5 +396,85 @@ fn rotate_artifacts(state: &SharedState, new_path: PathBuf) {
         if let Some(old) = ring.pop_front() {
             let _ = std::fs::remove_file(old);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shim::Shim;
+    use serde_json::Value;
+    use tempfile::tempdir;
+
+    fn make_state(cwd: &std::path::Path) -> SharedState {
+        let shim = Shim::install().expect("shim install");
+        SharedState::new(cwd.to_path_buf(), shim).expect("state new")
+    }
+
+    /// Pull the JSON body out of a CallToolResult so tests can assert on fields.
+    fn body(r: rmcp::model::CallToolResult) -> Value {
+        let text = match r.content.first().and_then(|c| c.as_text()) {
+            Some(t) => t.text.clone(),
+            None => panic!("no text content"),
+        };
+        serde_json::from_str(&text).expect("json")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn basic_echo() {
+        let dir = tempdir().expect("tempdir");
+        let state = make_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "echo hello".into(),
+                workdir: None,
+                timeout_ms: Some(5_000),
+            },
+        )
+        .await
+        .expect("ok");
+        let v = body(r);
+        assert_eq!(v["exit_code"], 0);
+        assert_eq!(v["stdout"], "hello\n");
+        assert_eq!(v["timed_out"], false);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn timeout_fires() {
+        let dir = tempdir().expect("tempdir");
+        let state = make_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "sleep 999".into(),
+                workdir: None,
+                timeout_ms: Some(150),
+            },
+        )
+        .await
+        .expect("ok");
+        let v = body(r);
+        assert_eq!(v["timed_out"], true);
+        assert_eq!(v["exit_code"], 124);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workdir_is_honored() {
+        let dir = tempdir().expect("tempdir");
+        let state = make_state(dir.path());
+        let r = run(
+            &state,
+            ShellParams {
+                command: "pwd".into(),
+                workdir: Some("/tmp".into()),
+                timeout_ms: Some(5_000),
+            },
+        )
+        .await
+        .expect("ok");
+        let v = body(r);
+        let stdout = v["stdout"].as_str().unwrap_or("");
+        assert!(stdout.contains("/tmp"), "stdout: {stdout}");
     }
 }

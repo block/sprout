@@ -1,6 +1,6 @@
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
     transport::stdio,
     ErrorData, ServerHandler, ServiceExt,
@@ -36,7 +36,7 @@ impl DevMcp {
     async fn shell(
         &self,
         Parameters(p): Parameters<shell::ShellParams>,
-    ) -> Result<String, ErrorData> {
+    ) -> Result<CallToolResult, ErrorData> {
         shell::run(&self.state, p).await
     }
 
