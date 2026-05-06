@@ -31,13 +31,13 @@ impl DevMcp {
 
     #[tool(
         name = "shell",
-        description = "Run a bash command. Ephemeral process per call. Output is captured and truncated tail-heavy to ~8KB; full output is saved to an artifact file when truncated. `rg` is on PATH (use it instead of grep)."
+        description = "Run a bash command. Ephemeral process per call. Output capture is hard-capped at 10MB per stream and shown tail-heavy (~8KB to the LLM); full captured output is saved to an artifact file when truncated. timeout_ms is capped at 600000. `rg` is on PATH (use it instead of grep)."
     )]
     async fn shell(
         &self,
         Parameters(p): Parameters<shell::ShellParams>,
     ) -> Result<String, ErrorData> {
-        Ok(shell::run(&self.state, p).await)
+        shell::run(&self.state, p).await
     }
 
     #[tool(
@@ -45,18 +45,18 @@ impl DevMcp {
         description = "Read or replace the TODO list. Pass `content` to replace; omit to read. Persistent across the MCP session."
     )]
     async fn todo(&self, Parameters(p): Parameters<todo::TodoParams>) -> Result<String, ErrorData> {
-        Ok(todo::run(&self.state, p))
+        todo::run(&self.state, p)
     }
 
     #[tool(
         name = "str_replace",
-        description = "Atomic find-and-replace in a file. `old_str` must occur exactly once. Returns a unified diff. Prefer this over sed/awk."
+        description = "Atomic find-and-replace in a file within the workspace. `old_str` must occur exactly once. Returns a unified diff. Path is rejected if it resolves outside the workdir. Prefer this over sed/awk."
     )]
     async fn str_replace(
         &self,
         Parameters(p): Parameters<str_replace::StrReplaceParams>,
     ) -> Result<String, ErrorData> {
-        Ok(str_replace::run(p))
+        str_replace::run(&self.state, p)
     }
 }
 
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cwd = std::env::current_dir()?;
     let shim = shim::Shim::install()?;
-    let state = Arc::new(shell::SharedState::new(cwd, shim));
+    let state = Arc::new(shell::SharedState::new(cwd, shim)?);
 
     let service = DevMcp::new(state).serve(stdio()).await?;
     service.waiting().await?;

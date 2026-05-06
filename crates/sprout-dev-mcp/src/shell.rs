@@ -1,4 +1,5 @@
 use crate::shim::Shim;
+use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::VecDeque;
@@ -7,14 +8,17 @@ use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+const MAX_TIMEOUT_MS: u64 = 600_000;
+const CAPTURE_CAP: usize = 10 * 1024 * 1024; // 10MB hard cap per stream
 const MAX_BYTES: usize = 50 * 1024;
 const MAX_LINES: usize = 2000;
 const TAIL_BYTES: usize = 8 * 1024;
 const ARTIFACT_RING_SIZE: usize = 8;
+const READ_CHUNK: usize = 16 * 1024;
 
 pub struct SharedState {
     pub cwd: PathBuf,
@@ -27,14 +31,13 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    pub fn new(cwd: PathBuf, shim: Shim) -> Self {
+    pub fn new(cwd: PathBuf, shim: Shim) -> std::io::Result<Self> {
         let session_dir = tempfile::Builder::new()
             .prefix("sprout-dev-mcp-session-")
-            .tempdir()
-            .expect("create session tempdir");
+            .tempdir()?;
         let todo_path = session_dir.path().join("todo.md");
         let bootstrap_instructions = build_bootstrap(&cwd);
-        Self {
+        Ok(Self {
             cwd,
             shim,
             session_dir,
@@ -42,11 +45,16 @@ impl SharedState {
             artifacts: Mutex::new(VecDeque::with_capacity(ARTIFACT_RING_SIZE)),
             todo_path,
             next_call_id: Mutex::new(0),
-        }
+        })
     }
 
     fn next_id(&self) -> u64 {
-        let mut g = self.next_call_id.lock().expect("poisoned");
+        // Mutex<u64> can only be poisoned if a panic occurred while held;
+        // recover gracefully by reading the value past the poison.
+        let mut g = match self.next_call_id.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
         *g += 1;
         *g
     }
@@ -61,12 +69,12 @@ fn build_bootstrap(cwd: &Path) -> String {
          Detected stack: {}\n\
          \n\
          Tools:\n\
-         - shell(command, workdir?, timeout_ms?): run a bash command. Output is tail-truncated to ~8KB; full output goes to an artifact file.\n\
+         - shell(command, workdir?, timeout_ms?): run a bash command. Output is tail-truncated to ~8KB; full output (up to 10MB) goes to an artifact file. timeout_ms capped at 600000.\n\
          - todo(content?): replace the TODO when content is given; read it when omitted.\n\
-         - str_replace(path, old_str, new_str, workdir?): atomic find-and-replace. `old_str` must occur exactly once. Returns a unified diff.\n\
+         - str_replace(path, old_str, new_str, workdir?): atomic find-and-replace within the workspace. `old_str` must occur exactly once. Returns a unified diff.\n\
          \n\
          On PATH inside shell:\n\
-         - rg: ripgrep-compatible search. Flags: -n, -i, -l, -g <glob>, -C <n>, --files. Falls back to a built-in implementation if system ripgrep is missing.\n\
+         - rg: prefers system ripgrep when available. Built-in fallback supports literal text search only (no regex) with flags -n, -i, -l, -g <glob>, -C <n>, --files.\n\
          \n\
          Conventions: prefer str_replace over sed/awk for edits. Use `rg` instead of grep -r. Pass `workdir` per call rather than `cd`.\n",
         cwd.display(),
@@ -108,8 +116,11 @@ pub struct ShellParams {
     pub timeout_ms: Option<u64>,
 }
 
-pub async fn run(state: &SharedState, p: ShellParams) -> String {
-    let timeout_ms = p.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+pub async fn run(state: &SharedState, p: ShellParams) -> Result<String, ErrorData> {
+    let timeout_ms = p
+        .timeout_ms
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .min(MAX_TIMEOUT_MS);
     let workdir: PathBuf = p
         .workdir
         .as_deref()
@@ -117,20 +128,13 @@ pub async fn run(state: &SharedState, p: ShellParams) -> String {
         .unwrap_or_else(|| state.cwd.clone());
 
     if !workdir.is_dir() {
-        return json_response(ShellResult {
-            exit_code: -1,
-            stdout: String::new(),
-            stderr: format!(
-                "workdir does not exist or is not a directory: {}\n",
+        return Err(ErrorData::invalid_params(
+            format!(
+                "workdir does not exist or is not a directory: {}",
                 workdir.display()
             ),
-            timed_out: false,
-            duration_ms: 0,
-            stdout_truncated: false,
-            stderr_truncated: false,
-            stdout_artifact: None,
-            stderr_artifact: None,
-        });
+            None,
+        ));
     }
 
     let mut cmd = Command::new("bash");
@@ -147,7 +151,7 @@ pub async fn run(state: &SharedState, p: ShellParams) -> String {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return json_response(ShellResult {
+            return Ok(json_response(ShellResult {
                 exit_code: -1,
                 stdout: String::new(),
                 stderr: format!("failed to spawn bash: {e}\n"),
@@ -157,35 +161,63 @@ pub async fn run(state: &SharedState, p: ShellParams) -> String {
                 stderr_truncated: false,
                 stdout_artifact: None,
                 stderr_artifact: None,
-            });
+                notes: Vec::new(),
+            }));
         }
     };
 
     let pid = child.id();
-    let mut stdout_pipe = child.stdout.take().expect("piped");
-    let mut stderr_pipe = child.stderr.take().expect("piped");
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
 
-    let mut stdout_buf = Vec::new();
-    let mut stderr_buf = Vec::new();
-    let read_stdout = stdout_pipe.read_to_end(&mut stdout_buf);
-    let read_stderr = stderr_pipe.read_to_end(&mut stderr_buf);
-
-    let wait_fut = async {
-        let _ = tokio::join!(read_stdout, read_stderr);
-        child.wait().await
+    let read_stdout = async move {
+        match stdout_pipe {
+            Some(p) => read_capped(p).await,
+            None => CapturedStream::default(),
+        }
+    };
+    let read_stderr = async move {
+        match stderr_pipe {
+            Some(p) => read_capped(p).await,
+            None => CapturedStream::default(),
+        }
     };
 
     let timeout = Duration::from_millis(timeout_ms);
-    let (status, timed_out) = match tokio::time::timeout(timeout, wait_fut).await {
-        Ok(Ok(s)) => (Some(s), false),
-        Ok(Err(_)) => (None, false),
-        Err(_) => {
-            if let Some(pid) = pid {
-                kill_process_group(pid as i32);
-            }
-            (None, true)
-        }
+    let wait = async {
+        let (out, err) = tokio::join!(read_stdout, read_stderr);
+        let status = child.wait().await;
+        (out, err, status)
     };
+
+    let (stdout_cap, stderr_cap, status, timed_out) =
+        match tokio::time::timeout(timeout, wait).await {
+            Ok((o, e, Ok(s))) => (o, e, Some(s), false),
+            Ok((o, e, Err(_))) => (o, e, None, false),
+            Err(_) => {
+                if let Some(pid) = pid {
+                    kill_process_group(pid as i32);
+                }
+                // Reap the child so it doesn't become a zombie.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) if Instant::now() >= deadline => {
+                            // Last-ditch: force-kill via tokio so kill_on_drop can clean up.
+                            let _ = child.start_kill();
+                            let _ = child.wait().await;
+                            break;
+                        }
+                        Ok(None) => {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                (CapturedStream::default(), CapturedStream::default(), None, true)
+            }
+        };
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let exit_code = status
@@ -194,12 +226,13 @@ pub async fn run(state: &SharedState, p: ShellParams) -> String {
         .unwrap_or(if timed_out { 124 } else { -1 });
 
     let id = state.next_id();
+    let mut notes: Vec<String> = Vec::new();
     let (stdout_text, stdout_truncated, stdout_artifact) =
-        finalize_stream(state, id, "stdout", stdout_buf);
+        finalize_stream(state, id, "stdout", stdout_cap, &mut notes);
     let (stderr_text, stderr_truncated, stderr_artifact) =
-        finalize_stream(state, id, "stderr", stderr_buf);
+        finalize_stream(state, id, "stderr", stderr_cap, &mut notes);
 
-    json_response(ShellResult {
+    Ok(json_response(ShellResult {
         exit_code,
         stdout: stdout_text,
         stderr: stderr_text,
@@ -209,7 +242,8 @@ pub async fn run(state: &SharedState, p: ShellParams) -> String {
         stderr_truncated,
         stdout_artifact,
         stderr_artifact,
-    })
+        notes,
+    }))
 }
 
 #[cfg(unix)]
@@ -233,6 +267,45 @@ fn kill_process_group(pid: i32) {
 #[cfg(not(unix))]
 fn kill_process_group(_pid: i32) {}
 
+#[derive(Default)]
+struct CapturedStream {
+    /// Bytes captured up to CAPTURE_CAP.
+    bytes: Vec<u8>,
+    /// Total bytes the process produced (may exceed bytes.len() if capped).
+    total_bytes: usize,
+    /// Whether we hit CAPTURE_CAP and stopped reading.
+    capped: bool,
+}
+
+async fn read_capped<R: AsyncRead + Unpin>(mut r: R) -> CapturedStream {
+    let mut out = CapturedStream::default();
+    let mut chunk = vec![0u8; READ_CHUNK];
+    loop {
+        match r.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(n) => {
+                out.total_bytes = out.total_bytes.saturating_add(n);
+                if !out.capped {
+                    let remaining = CAPTURE_CAP.saturating_sub(out.bytes.len());
+                    if remaining == 0 {
+                        out.capped = true;
+                    } else {
+                        let take = n.min(remaining);
+                        out.bytes.extend_from_slice(&chunk[..take]);
+                        if out.bytes.len() >= CAPTURE_CAP {
+                            out.capped = true;
+                        }
+                    }
+                }
+                // If capped, keep draining to let the child make progress,
+                // but discard the data.
+            }
+            Err(_) => break,
+        }
+    }
+    out
+}
+
 struct ShellResult {
     exit_code: i32,
     stdout: String,
@@ -243,6 +316,7 @@ struct ShellResult {
     stderr_truncated: bool,
     stdout_artifact: Option<String>,
     stderr_artifact: Option<String>,
+    notes: Vec<String>,
 }
 
 fn json_response(r: ShellResult) -> String {
@@ -256,6 +330,7 @@ fn json_response(r: ShellResult) -> String {
         "stderr_truncated": r.stderr_truncated,
         "stdout_artifact": r.stdout_artifact,
         "stderr_artifact": r.stderr_artifact,
+        "notes": r.notes,
     });
     serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())
 }
@@ -264,11 +339,17 @@ fn finalize_stream(
     state: &SharedState,
     call_id: u64,
     label: &str,
-    buf: Vec<u8>,
+    cap: CapturedStream,
+    notes: &mut Vec<String>,
 ) -> (String, bool, Option<String>) {
-    let raw_len = buf.len();
+    let CapturedStream {
+        bytes: buf,
+        total_bytes,
+        capped,
+    } = cap;
+    let captured_len = buf.len();
     let line_count = buf.iter().filter(|b| **b == b'\n').count();
-    let needs_truncate = raw_len > MAX_BYTES || line_count > MAX_LINES;
+    let needs_truncate = capped || captured_len > MAX_BYTES || line_count > MAX_LINES;
 
     if !needs_truncate {
         return (lossy(buf), false, None);
@@ -276,28 +357,44 @@ fn finalize_stream(
 
     let artifact_path = crate::shim::artifact_dir(state.session_dir.path())
         .join(format!("{call_id:06}.{label}.txt"));
-    let _ = std::fs::write(&artifact_path, &buf);
-    rotate_artifacts(state, artifact_path.clone());
+    let artifact_str = match std::fs::write(&artifact_path, &buf) {
+        Ok(()) => {
+            rotate_artifacts(state, artifact_path.clone());
+            Some(artifact_path.to_string_lossy().into_owned())
+        }
+        Err(e) => {
+            notes.push(format!(
+                "{label}: artifact write failed ({}): {e}",
+                artifact_path.display()
+            ));
+            None
+        }
+    };
 
-    let tail_start = raw_len.saturating_sub(TAIL_BYTES);
+    let tail_start = captured_len.saturating_sub(TAIL_BYTES);
     let tail_aligned = align_to_char_boundary(&buf, tail_start);
     let tail = lossy(buf[tail_aligned..].to_vec());
 
+    let cap_note = if capped {
+        format!(" (capture capped at {} bytes; further output discarded)", CAPTURE_CAP)
+    } else {
+        String::new()
+    };
+    let artifact_suffix = match &artifact_str {
+        Some(p) => format!("; full output at {p}"),
+        None => "; artifact unavailable".into(),
+    };
     let notice = format!(
-        "[truncated: showing last {} bytes; {} bytes / {} lines total; full output at {}]\n",
+        "[truncated: showing last {} bytes; {} bytes captured / {} lines / {} bytes total{cap_note}{artifact_suffix}]\n",
         tail.len(),
-        raw_len,
+        captured_len,
         line_count,
-        artifact_path.display(),
+        total_bytes,
     );
     let mut out = String::with_capacity(notice.len() + tail.len());
     out.push_str(&notice);
     out.push_str(&tail);
-    (
-        out,
-        true,
-        Some(artifact_path.to_string_lossy().into_owned()),
-    )
+    (out, true, artifact_str)
 }
 
 fn align_to_char_boundary(buf: &[u8], start: usize) -> usize {
@@ -313,7 +410,10 @@ fn lossy(buf: Vec<u8>) -> String {
 }
 
 fn rotate_artifacts(state: &SharedState, new_path: PathBuf) {
-    let mut ring = state.artifacts.lock().expect("poisoned");
+    let mut ring = match state.artifacts.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
     ring.push_back(new_path);
     while ring.len() > ARTIFACT_RING_SIZE {
         if let Some(old) = ring.pop_front() {

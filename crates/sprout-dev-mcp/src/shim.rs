@@ -16,10 +16,7 @@ impl Shim {
 
         let self_exe = std::env::current_exe()?;
         let rg_link = dir.path().join("rg");
-
-        if std::fs::hard_link(&self_exe, &rg_link).is_err() {
-            symlink(&self_exe, &rg_link)?;
-        }
+        symlink(&self_exe, &rg_link)?;
 
         let original = std::env::var_os("PATH").unwrap_or_default();
         let mut new_path = std::ffi::OsString::from(dir.path());

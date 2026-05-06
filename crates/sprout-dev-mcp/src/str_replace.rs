@@ -1,3 +1,5 @@
+use crate::shell::SharedState;
+use rmcp::ErrorData;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use similar::{DiffTag, TextDiff};
@@ -13,16 +15,32 @@ pub struct StrReplaceParams {
     pub workdir: Option<String>,
 }
 
-pub fn run(p: StrReplaceParams) -> String {
-    let target = resolve_path(&p.path, p.workdir.as_deref());
-    let content = match std::fs::read_to_string(&target) {
-        Ok(c) => c,
-        Err(e) => return format!("Error: cannot read {}: {e}", target.display()),
+pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData> {
+    if p.old_str.is_empty() {
+        return Err(ErrorData::invalid_params(
+            "old_str must not be empty".to_string(),
+            None,
+        ));
+    }
+
+    let workspace_root = match p.workdir.as_deref() {
+        Some(w) => PathBuf::from(w),
+        None => state.cwd.clone(),
+    };
+    let target = match resolve_within(&workspace_root, &p.path) {
+        Ok(t) => t,
+        Err(e) => return Err(ErrorData::invalid_params(e, None)),
     };
 
-    if p.old_str.is_empty() {
-        return "Error: old_str must not be empty".into();
-    }
+    let content = match std::fs::read_to_string(&target) {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(ErrorData::internal_error(
+                format!("cannot read {}: {e}", target.display()),
+                None,
+            ));
+        }
+    };
 
     let occurrences = find_occurrences(&content, &p.old_str);
     match occurrences.len() {
@@ -30,36 +48,73 @@ pub fn run(p: StrReplaceParams) -> String {
             let hint = nearest_line_hint(&content, &p.old_str)
                 .map(|h| format!("\n{h}"))
                 .unwrap_or_default();
-            format!(
-                "Error: old_str not found in {}.\nold_str (truncated): {:?}{hint}",
-                target.display(),
-                truncate(&p.old_str, 80)
-            )
+            Err(ErrorData::invalid_params(
+                format!(
+                    "old_str not found in {}.\nold_str (truncated): {:?}{hint}",
+                    target.display(),
+                    truncate(&p.old_str, 80)
+                ),
+                None,
+            ))
         }
         1 => {
             let new_content = content.replacen(&p.old_str, &p.new_str, 1);
             if let Err(e) = atomic_write(&target, &new_content) {
-                return format!("Error: failed to write {}: {e}", target.display());
+                return Err(ErrorData::internal_error(
+                    format!("failed to write {}: {e}", target.display()),
+                    None,
+                ));
             }
             let diff = unified_diff(&content, &new_content, &target);
-            format!("Replaced 1 occurrence in {}.\n\n{diff}", target.display())
+            Ok(format!(
+                "Replaced 1 occurrence in {}.\n\n{diff}",
+                target.display()
+            ))
         }
-        n => format!(
-            "Error: old_str matched {n} locations in {}; provide more surrounding context to make the match unique.",
-            target.display()
-        ),
+        n => Err(ErrorData::invalid_params(
+            format!(
+                "old_str matched {n} locations in {}; provide more surrounding context to make the match unique.",
+                target.display()
+            ),
+            None,
+        )),
     }
 }
 
-fn resolve_path(path: &str, workdir: Option<&str>) -> PathBuf {
-    let p = Path::new(path);
-    if p.is_absolute() {
-        return p.to_path_buf();
+/// Resolve `path` against `root` and ensure the result is contained within `root`.
+///
+/// Both the canonicalized root and the canonicalized parent directory of the
+/// target are compared with `starts_with`. We canonicalize the parent (not the
+/// target) because the target may not exist yet — but for str_replace it must
+/// already exist, and the parent always does.
+fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let raw = Path::new(path);
+    let candidate: PathBuf = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        root.join(raw)
+    };
+
+    let root_canon = std::fs::canonicalize(root)
+        .map_err(|e| format!("workdir not accessible: {} ({e})", root.display()))?;
+
+    // Canonicalize the parent so symlinks anywhere in the chain resolve.
+    let parent = candidate.parent().unwrap_or(Path::new("."));
+    let parent_canon = std::fs::canonicalize(parent)
+        .map_err(|e| format!("path parent not accessible: {} ({e})", parent.display()))?;
+    let file_name = candidate
+        .file_name()
+        .ok_or_else(|| format!("invalid path (no file name): {}", candidate.display()))?;
+    let resolved = parent_canon.join(file_name);
+
+    if !resolved.starts_with(&root_canon) {
+        return Err(format!(
+            "path escapes workspace: {} not within {}",
+            resolved.display(),
+            root_canon.display()
+        ));
     }
-    match workdir {
-        Some(w) => Path::new(w).join(p),
-        None => p.to_path_buf(),
-    }
+    Ok(resolved)
 }
 
 fn find_occurrences(text: &str, pattern: &str) -> Vec<usize> {
@@ -83,10 +138,20 @@ fn find_occurrences(text: &str, pattern: &str) -> Vec<usize> {
 
 fn atomic_write(target: &Path, content: &str) -> std::io::Result<()> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    // Capture original permissions (if the file exists) so the atomic rename
+    // doesn't drop the original file's mode.
+    let original_perms = std::fs::metadata(target).ok().map(|m| m.permissions());
+
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
     tmp.write_all(content.as_bytes())?;
     tmp.flush()?;
-    tmp.persist(target).map(|_| ()).map_err(|e| e.error)
+    tmp.persist(target).map_err(|e| e.error)?;
+
+    if let Some(perms) = original_perms {
+        // Best-effort: if restoring perms fails, the file is still written.
+        let _ = std::fs::set_permissions(target, perms);
+    }
+    Ok(())
 }
 
 fn unified_diff(old: &str, new: &str, path: &Path) -> String {
