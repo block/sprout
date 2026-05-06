@@ -5,7 +5,8 @@ use serde_json::json;
 use tokio::sync::{oneshot, watch, Mutex};
 
 use crate::config::{
-    Config, HANDOFF_MAX_OUTPUT_TOKENS, HANDOFF_TAIL_ITEMS, HANDOFF_THRESHOLD, MAX_PROMPT_BYTES,
+    Config, HANDOFF_MAX_OUTPUT_TOKENS, HANDOFF_MAX_TOOL_NAMES, HANDOFF_ORIGINAL_TASK_MAX_BYTES,
+    HANDOFF_PROMPT_MAX_BYTES, HANDOFF_TAIL_ITEMS, HANDOFF_THRESHOLD, MAX_PROMPT_BYTES,
     MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_RESULT_BYTES,
 };
 use crate::llm::Llm;
@@ -150,7 +151,8 @@ impl RunCtx<'_> {
         };
         let prior = self.history.len();
         self.history.clear();
-        self.history.push(HistoryItem::User(summary));
+        self.history
+            .push(HistoryItem::User(format!("[Context Handoff]\n{summary}")));
         *self.handoff_count += 1;
         eprintln!(
             "sprout-agent: agent: handoff #{} (history {prior} -> 1 item)",
@@ -166,37 +168,76 @@ impl RunCtx<'_> {
     }
 
     fn build_handoff_prompt(&self) -> String {
-        let mut out = String::new();
-        out.push_str(&format!(
+        // Header + original task + tools list. Original task is clamped to a
+        // hard cap so a 1MB initial prompt can't dominate the summary call.
+        let mut head = String::new();
+        head.push_str(&format!(
             "[Internal handoff #{} — context reset]\n\n",
             *self.handoff_count + 1
         ));
-        out.push_str("# Original Task\n");
-        out.push_str(self.original_task.as_deref().unwrap_or("(unknown)"));
-        out.push_str("\n\n# Available Tools\n");
-        let names: Vec<&str> = self
-            .mcp
-            .tools()
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
-        if names.is_empty() {
-            out.push_str("(none)\n");
+        head.push_str("# Original Task\n");
+        let task = self.original_task.as_deref().unwrap_or("(unknown)");
+        head.push_str(&clamp_bytes(task, HANDOFF_ORIGINAL_TASK_MAX_BYTES));
+        head.push_str("\n\n# Available Tools\n");
+        let all_tools = self.mcp.tools();
+        let total = all_tools.len();
+        if total == 0 {
+            head.push_str("(none)\n");
         } else {
-            out.push_str(&names.join(", "));
-            out.push('\n');
+            let shown = total.min(HANDOFF_MAX_TOOL_NAMES);
+            let names: Vec<&str> = all_tools[..shown].iter().map(|t| t.name.as_str()).collect();
+            head.push_str(&names.join(", "));
+            if shown < total {
+                head.push_str(&format!(", … (+{} more)", total - shown));
+            }
+            head.push('\n');
         }
-        out.push_str("\n# Recent History (most recent last)\n");
-        let start = self.history.len().saturating_sub(HANDOFF_TAIL_ITEMS);
-        for item in &self.history[start..] {
-            push_history_snippet(&mut out, item);
-        }
-        out.push_str(
-            "\n# Instructions\n\
+
+        // Assemble snippets for the trailing history window, then drop oldest
+        // snippets until the whole prompt fits HANDOFF_PROMPT_MAX_BYTES. The
+        // head and tail (instructions) are always preserved.
+        let tail = "\n# Instructions\n\
              Produce a context handoff summary covering: (1) original task, \
              (2) what was accomplished, (3) key decisions, (4) what remains, \
-             (5) one concrete next step. Be concise but thorough. Plain text.\n",
-        );
+             (5) one concrete next step. Be concise but thorough. Plain text.\n";
+        let history_header = "\n# Recent History (most recent last)\n";
+
+        let start = self.history.len().saturating_sub(HANDOFF_TAIL_ITEMS);
+        let mut snippets: Vec<String> = self.history[start..]
+            .iter()
+            .map(|item| {
+                let mut s = String::new();
+                push_history_snippet(&mut s, item);
+                s
+            })
+            .collect();
+
+        let fixed = head.len() + history_header.len() + tail.len();
+        let mut snippets_bytes: usize = snippets.iter().map(String::len).sum();
+        let mut dropped = 0usize;
+        while fixed + snippets_bytes > HANDOFF_PROMPT_MAX_BYTES && !snippets.is_empty() {
+            // Drop oldest snippet first (front of vec).
+            let removed = snippets.remove(0);
+            snippets_bytes -= removed.len();
+            dropped += 1;
+        }
+        if dropped > 0 {
+            eprintln!(
+                "sprout-agent: agent: handoff prompt cap, dropped {dropped} oldest snippets"
+            );
+        }
+
+        let mut out =
+            String::with_capacity(fixed + snippets_bytes + if dropped > 0 { 32 } else { 0 });
+        out.push_str(&head);
+        out.push_str(history_header);
+        if dropped > 0 {
+            out.push_str(&format!("(… {dropped} older items omitted)\n"));
+        }
+        for s in &snippets {
+            out.push_str(s);
+        }
+        out.push_str(tail);
         out
     }
 
@@ -427,10 +468,16 @@ fn push_history_snippet(out: &mut String, item: &HistoryItem) {
 }
 
 fn clamp_for_snippet(s: &str) -> String {
-    if s.len() <= HANDOFF_SNIPPET_BYTES {
+    clamp_bytes(s, HANDOFF_SNIPPET_BYTES)
+}
+
+/// Truncate `s` to at most `max_bytes`, snapping back to a UTF-8 char
+/// boundary, and append an ellipsis if truncated.
+fn clamp_bytes(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
         return s.to_owned();
     }
-    let mut cut = HANDOFF_SNIPPET_BYTES;
+    let mut cut = max_bytes;
     while cut > 0 && !s.is_char_boundary(cut) {
         cut -= 1;
     }

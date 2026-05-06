@@ -16,6 +16,21 @@ pub const HANDOFF_MAX_OUTPUT_TOKENS: u32 = 8192;
 /// Number of trailing history items to include in the handoff prompt.
 pub const HANDOFF_TAIL_ITEMS: usize = 5;
 
+/// Cap on the original task text included in the handoff prompt. The full
+/// original prompt may be up to MAX_PROMPT_BYTES (1MB); we only need enough
+/// to remind the summarizer of the goal.
+pub const HANDOFF_ORIGINAL_TASK_MAX_BYTES: usize = 16 * 1024;
+
+/// Hard cap on the assembled handoff prompt sent to the summarizer. If the
+/// prompt would exceed this, history snippets are dropped (oldest first) —
+/// the original task is never truncated past HANDOFF_ORIGINAL_TASK_MAX_BYTES.
+pub const HANDOFF_PROMPT_MAX_BYTES: usize = 32 * 1024;
+
+/// Cap on the number of tool names listed in the handoff prompt. With a
+/// sprawling MCP registry (100+ tools), listing them all is wasteful and
+/// adds nothing the summarizer can act on.
+pub const HANDOFF_MAX_TOOL_NAMES: usize = 20;
+
 const DEFAULT_SYSTEM_PROMPT: &str =
     "You are sprout-agent. Use the provided tools to act. Tool calls are your only output.";
 
