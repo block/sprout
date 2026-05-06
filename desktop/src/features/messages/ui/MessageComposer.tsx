@@ -58,6 +58,7 @@ type MessageComposerProps = {
     id: string;
   } | null;
   showTopBorder?: boolean;
+  toolbarExtraActions?: React.ReactNode;
   typingParentEventId?: string | null;
   typingRootEventId?: string | null;
 };
@@ -77,6 +78,7 @@ export function MessageComposer({
   profiles,
   replyTarget = null,
   showTopBorder = false,
+  toolbarExtraActions,
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
@@ -663,6 +665,7 @@ export function MessageComposer({
           <MessageComposerToolbar
             composerDisabled={disabled}
             editor={richText.editor}
+            extraActions={toolbarExtraActions}
             formattingDisabled={disabled}
             isEmojiPickerOpen={isEmojiPickerOpen}
             isFormattingOpen={isFormattingOpen}

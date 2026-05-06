@@ -9,7 +9,10 @@ import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping"
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
-import { BotActivityBar } from "@/features/channels/ui/BotActivityBar";
+import {
+  BotActivityComposerAction,
+  type BotActivityAgent,
+} from "@/features/channels/ui/BotActivityBar";
 import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
@@ -51,47 +54,9 @@ function getInitialThreadPanelWidth(): number {
   }
 }
 
-function messageMentionsPubkey(message: TimelineMessage, pubkey: string) {
-  const normalizedPubkey = pubkey.toLowerCase();
-  if (message.pubkey?.toLowerCase() === normalizedPubkey) {
-    return false;
-  }
-
-  return (
-    message.tags?.some(
-      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === normalizedPubkey,
-    ) ?? false
-  );
-}
-
-function findLatestMentionedMessageId(
-  messages: TimelineMessage[],
-  pubkey: string,
-) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message && messageMentionsPubkey(message, pubkey)) {
-      return message.id;
-    }
-  }
-
-  return null;
-}
-
-function addPubkey(
-  map: Map<string, string[]>,
-  messageId: string,
-  pubkey: string,
-) {
-  const current = map.get(messageId) ?? [];
-  if (!current.some((value) => value.toLowerCase() === pubkey.toLowerCase())) {
-    current.push(pubkey);
-  }
-  map.set(messageId, current);
-}
-
 type ChannelPaneProps = {
   activeChannel: Channel | null;
+  activityAgents: BotActivityAgent[];
   agentSessionAgents: ManagedAgent[];
   botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
@@ -157,6 +122,7 @@ type ChannelPaneProps = {
 
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
+  activityAgents,
   agentSessionAgents,
   botTypingEntries,
   channelFind,
@@ -270,53 +236,19 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel.channelType === "forum" ||
     isSending;
   const hasTypingActivity = typingPubkeys.length > 0;
-  const { messageActivityFooters, unanchoredBotTypingPubkeys } =
-    React.useMemo(() => {
-      const botPubkeysByMessageId = new Map<string, string[]>();
-      const unanchoredPubkeys: string[] = [];
-      for (const entry of botTypingEntries) {
-        const messageId =
-          entry.threadHeadId ??
-          findLatestMentionedMessageId(messages, entry.pubkey);
-        if (messageId) {
-          addPubkey(botPubkeysByMessageId, messageId, entry.pubkey);
-        } else if (
-          !unanchoredPubkeys.some(
-            (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
-          )
-        ) {
-          unanchoredPubkeys.push(entry.pubkey);
-        }
+  const composerBotTypingPubkeys = React.useMemo(() => {
+    const pubkeys: string[] = [];
+    for (const entry of botTypingEntries) {
+      if (
+        !pubkeys.some(
+          (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
+        )
+      ) {
+        pubkeys.push(entry.pubkey);
       }
-
-      const footers: Record<string, React.ReactNode> = {};
-      for (const [messageId, pubkeys] of botPubkeysByMessageId) {
-        footers[messageId] = (
-          <div className="flex justify-start pl-[3.125rem]">
-            <BotActivityBar
-              agents={agentSessionAgents}
-              onOpenAgentSession={onOpenAgentSession}
-              openAgentSessionPubkey={openAgentSessionPubkey}
-              profiles={profiles}
-              typingBotPubkeys={pubkeys}
-            />
-          </div>
-        );
-      }
-
-      return {
-        messageActivityFooters: footers,
-        unanchoredBotTypingPubkeys: unanchoredPubkeys,
-      };
-    }, [
-      agentSessionAgents,
-      botTypingEntries,
-      messages,
-      onOpenAgentSession,
-      openAgentSessionPubkey,
-      profiles,
-    ]);
-  const hasBotActivity = unanchoredBotTypingPubkeys.length > 0;
+    }
+    return pubkeys;
+  }, [botTypingEntries]);
 
   const selectedAgent = React.useMemo(
     () =>
@@ -349,7 +281,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
           isFetchingOlder={isFetchingOlder}
-          messageFooters={messageActivityFooters}
           personaLookup={personaLookup}
           profiles={profiles}
           emptyDescription={
@@ -384,19 +315,6 @@ export const ChannelPane = React.memo(function ChannelPane({
               profiles={profiles}
               typingPubkeys={typingPubkeys}
             />
-          </div>
-        ) : null}
-        {hasBotActivity ? (
-          <div className="relative z-10 bg-background px-4 pb-2 sm:px-6">
-            <div className="mx-auto flex w-full max-w-4xl justify-start pl-[3.125rem]">
-              <BotActivityBar
-                agents={agentSessionAgents}
-                onOpenAgentSession={onOpenAgentSession}
-                openAgentSessionPubkey={openAgentSessionPubkey}
-                profiles={profiles}
-                typingBotPubkeys={unanchoredBotTypingPubkeys}
-              />
-            </div>
           </div>
         ) : null}
         {isNonMemberView ? (
@@ -437,6 +355,15 @@ export const ChannelPane = React.memo(function ChannelPane({
               onEditSave={onEditSave}
               onSend={onSendMessage}
               profiles={profiles}
+              toolbarExtraActions={
+                <BotActivityComposerAction
+                  agents={activityAgents}
+                  onOpenAgentSession={onOpenAgentSession}
+                  openAgentSessionPubkey={openAgentSessionPubkey}
+                  profiles={profiles}
+                  typingBotPubkeys={composerBotTypingPubkeys}
+                />
+              }
               placeholder={
                 activeChannel?.archivedAt
                   ? "Archived channels are read-only."
