@@ -52,6 +52,7 @@ pub struct Config {
     pub max_line_bytes: usize,
     pub max_history_bytes: usize,
     pub max_handoffs: usize,
+    pub auto_approve: bool,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -102,6 +103,9 @@ impl Config {
             max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
             max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
+            auto_approve: env("SPROUT_AGENT_AUTO_APPROVE")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+                .unwrap_or(false),
         };
         cfg.validate()?;
         Ok(cfg)

@@ -259,19 +259,21 @@ impl RunCtx<'_> {
                 continue;
             }
             self.emit_pending(call).await;
-            match self.ask_permission(call).await {
-                PermissionOutcome::Cancelled => {
-                    emit_failed(self.wire, self.session_id, call, "cancelled").await;
-                    fill_cancelled(self.history, &calls[idx..]);
-                    return Ok(Some(StopReason::Cancelled));
+            if !self.cfg.auto_approve {
+                match self.ask_permission(call).await {
+                    PermissionOutcome::Cancelled => {
+                        emit_failed(self.wire, self.session_id, call, "cancelled").await;
+                        fill_cancelled(self.history, &calls[idx..]);
+                        return Ok(Some(StopReason::Cancelled));
+                    }
+                    PermissionOutcome::Deny => {
+                        emit_failed(self.wire, self.session_id, call, "permission denied").await;
+                        self.history
+                            .push(synthetic_error(call, "permission denied".into()));
+                        continue;
+                    }
+                    PermissionOutcome::Allow => {}
                 }
-                PermissionOutcome::Deny => {
-                    emit_failed(self.wire, self.session_id, call, "permission denied").await;
-                    self.history
-                        .push(synthetic_error(call, "permission denied".into()));
-                    continue;
-                }
-                PermissionOutcome::Allow => {}
             }
             wire::send(
                 self.wire,
