@@ -89,8 +89,13 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
         }
     }
     flush(&mut messages, &mut pending);
-    let tools_json: Vec<Value> = tools.iter().map(|t| json!({
-        "name": t.name, "description": t.description, "input_schema": t.input_schema })).collect();
+    let tools_json: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            json!({
+        "name": t.name, "description": t.description, "input_schema": t.input_schema })
+        })
+        .collect();
     json!({ "model": cfg.model, "max_tokens": cfg.max_output_tokens,
         "system": cfg.system_prompt, "tools": tools_json, "messages": messages })
 }
@@ -105,11 +110,16 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
                 msg.insert("role".into(), json!("assistant"));
                 msg.insert("content".into(), json!(text.as_str()));
                 if !tool_calls.is_empty() {
-                    let calls: Vec<Value> = tool_calls.iter().map(|c| json!({
+                    let calls: Vec<Value> = tool_calls
+                        .iter()
+                        .map(|c| {
+                            json!({
                         "id": c.provider_id, "type": "function",
                         "function": { "name": c.name,
                             "arguments": serde_json::to_string(&c.arguments)
-                                .unwrap_or_else(|_| "{}".into()) } })).collect();
+                                .unwrap_or_else(|_| "{}".into()) } })
+                        })
+                        .collect();
                     msg.insert("tool_calls".into(), Value::Array(calls));
                 }
                 messages.push(Value::Object(msg));
@@ -118,10 +128,15 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
                 "role": "tool", "tool_call_id": r.provider_id, "content": r.text })),
         }
     }
-    let tools_json: Vec<Value> = tools.iter().map(|t| json!({
+    let tools_json: Vec<Value> = tools
+        .iter()
+        .map(|t| {
+            json!({
         "type": "function",
         "function": { "name": t.name, "description": t.description,
-            "parameters": t.input_schema } })).collect();
+            "parameters": t.input_schema } })
+        })
+        .collect();
     json!({ "model": cfg.model, "stream": false, "max_tokens": cfg.max_output_tokens,
         "messages": messages, "tools": tools_json, "tool_choice": "auto" })
 }
@@ -153,35 +168,53 @@ fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
                     }
                 }
                 Some("tool_use") => tool_calls.push(make_tool_call(
-                    str_field(b, "id"), str_field(b, "name"),
+                    str_field(b, "id"),
+                    str_field(b, "name"),
                     b.get("input").cloned().unwrap_or(Value::Null),
                 )?),
                 _ => {}
             }
         }
     }
-    Ok(LlmResponse { text, tool_calls, stop })
+    Ok(LlmResponse {
+        text,
+        tool_calls,
+        stop,
+    })
 }
 
 fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
-    let choice = v.get("choices").and_then(Value::as_array).and_then(|a| a.first())
+    let choice = v
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
         .ok_or_else(|| AgentError::Llm("response missing choices".into()))?;
     let stop = map_stop(choice.get("finish_reason").and_then(Value::as_str));
-    let msg = choice.get("message")
+    let msg = choice
+        .get("message")
         .ok_or_else(|| AgentError::Llm("missing message".into()))?;
     let text = str_field(msg, "content");
     let mut tool_calls = Vec::new();
     if let Some(arr) = msg.get("tool_calls").and_then(Value::as_array) {
         for tc in arr {
-            let f = tc.get("function")
+            let f = tc
+                .get("function")
                 .ok_or_else(|| AgentError::Llm("tool_call missing function".into()))?;
             let raw = f.get("arguments").and_then(Value::as_str).unwrap_or("{}");
             let args: Value = serde_json::from_str(raw)
                 .map_err(|e| AgentError::Llm(format!("tool_call.arguments not valid JSON: {e}")))?;
-            tool_calls.push(make_tool_call(str_field(tc, "id"), str_field(f, "name"), args)?);
+            tool_calls.push(make_tool_call(
+                str_field(tc, "id"),
+                str_field(f, "name"),
+                args,
+            )?);
         }
     }
-    Ok(LlmResponse { text, tool_calls, stop })
+    Ok(LlmResponse {
+        text,
+        tool_calls,
+        stop,
+    })
 }
 
 fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, AgentError> {
@@ -191,9 +224,17 @@ fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, Age
     let arguments = match args {
         Value::Object(_) => args,
         Value::Null => Value::Object(Default::default()),
-        _ => return Err(AgentError::Llm("tool_call arguments must be a JSON object".into())),
+        _ => {
+            return Err(AgentError::Llm(
+                "tool_call arguments must be a JSON object".into(),
+            ))
+        }
     };
-    Ok(ToolCall { provider_id: id, name, arguments })
+    Ok(ToolCall {
+        provider_id: id,
+        name,
+        arguments,
+    })
 }
 
 async fn read_error_body(mut resp: reqwest::Response) -> String {
@@ -203,7 +244,9 @@ async fn read_error_body(mut resp: reqwest::Response) -> String {
             Ok(Some(chunk)) => {
                 let take = chunk.len().min(MAX_LLM_ERROR_BODY_BYTES - buf.len());
                 buf.extend_from_slice(&chunk[..take]);
-                if take < chunk.len() { break; }
+                if take < chunk.len() {
+                    break;
+                }
             }
             _ => break,
         }
@@ -212,7 +255,8 @@ async fn read_error_body(mut resp: reqwest::Response) -> String {
 }
 
 async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
-where F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+where
+    F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
     let backoff = || tokio::time::sleep(std::time::Duration::from_secs(1));
     for attempt in 0..2u32 {
@@ -235,12 +279,16 @@ where F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
             continue;
         }
         if !status.is_success() {
-            return Err(AgentError::Llm(format!("{status}: {}", read_error_body(resp).await)));
+            return Err(AgentError::Llm(format!(
+                "{status}: {}",
+                read_error_body(resp).await
+            )));
         }
         if let Some(len) = resp.content_length() {
             if len as usize > MAX_LLM_RESPONSE_BYTES {
                 return Err(AgentError::Llm(format!(
-                    "response too large: {len} > {MAX_LLM_RESPONSE_BYTES}")));
+                    "response too large: {len} > {MAX_LLM_RESPONSE_BYTES}"
+                )));
             }
         }
         let mut buf: Vec<u8> = Vec::new();
@@ -250,7 +298,8 @@ where F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
                 Ok(Some(chunk)) => {
                     if buf.len() + chunk.len() > MAX_LLM_RESPONSE_BYTES {
                         return Err(AgentError::Llm(format!(
-                            "response exceeded {MAX_LLM_RESPONSE_BYTES} bytes")));
+                            "response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
+                        )));
                     }
                     buf.extend_from_slice(&chunk);
                 }

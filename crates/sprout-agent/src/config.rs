@@ -69,7 +69,10 @@ impl Config {
             max_output_tokens: parse_env("SPROUT_AGENT_MAX_OUTPUT_TOKENS", 4096)?,
             llm_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_LLM_TIMEOUT_SECS", 120)?),
             tool_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", 120)?),
-            mcp_init_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS", 30)?),
+            mcp_init_timeout: Duration::from_secs(parse_env(
+                "SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS",
+                30,
+            )?),
             max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
         })

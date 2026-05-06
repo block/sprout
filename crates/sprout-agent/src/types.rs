@@ -4,7 +4,10 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 pub enum HistoryItem {
     User(String),
-    Assistant { text: String, tool_calls: Vec<ToolCall> },
+    Assistant {
+        text: String,
+        tool_calls: Vec<ToolCall>,
+    },
     ToolResult(ToolResult),
 }
 
@@ -85,8 +88,12 @@ pub struct EnvVar {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text { text: String },
-    ResourceLink { uri: String },
+    Text {
+        text: String,
+    },
+    ResourceLink {
+        uri: String,
+    },
     #[serde(other)]
     Unsupported,
 }

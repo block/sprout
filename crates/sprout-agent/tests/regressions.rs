@@ -590,11 +590,7 @@ async fn history_budget_evicts_old_turns() {
 /// response must only have 64 (MAX_TOOL_CALLS_PER_TURN) executed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn per_turn_tool_call_cap_enforced() {
-    let llm = spawn_capturing_llm(vec![
-        openai_n_tool_calls(100),
-        openai_text("done"),
-    ])
-    .await;
+    let llm = spawn_capturing_llm(vec![openai_n_tool_calls(100), openai_text("done")]).await;
     let mut h = Harness::spawn(&llm.url).await;
 
     let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
@@ -738,17 +734,10 @@ async fn child_killed_on_tool_timeout() {
     ])
     .await;
 
-    let pid_file = std::env::temp_dir().join(format!(
-        "sprout-fake-mcp-{}.pid",
-        std::process::id()
-    ));
+    let pid_file = std::env::temp_dir().join(format!("sprout-fake-mcp-{}.pid", std::process::id()));
     let _ = std::fs::remove_file(&pid_file);
 
-    let mut h = Harness::spawn_with_env(
-        &llm.url,
-        &[("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "2")],
-    )
-    .await;
+    let mut h = Harness::spawn_with_env(&llm.url, &[("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "2")]).await;
 
     let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
     h.send(
@@ -826,9 +815,7 @@ async fn child_killed_on_tool_timeout() {
         rc, -1,
         "child {pid} still alive after tool timeout (kill(0) returned {rc})"
     );
-    let errno = std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(0);
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     assert_eq!(errno, libc::ESRCH, "expected ESRCH, got errno {errno}");
 
     let _ = std::fs::remove_file(&pid_file);
@@ -856,11 +843,7 @@ async fn grandchild_killed_on_tool_timeout() {
     ));
     let _ = std::fs::remove_file(&grandchild_pid_file);
 
-    let mut h = Harness::spawn_with_env(
-        &llm.url,
-        &[("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "2")],
-    )
-    .await;
+    let mut h = Harness::spawn_with_env(&llm.url, &[("SPROUT_AGENT_TOOL_TIMEOUT_SECS", "2")]).await;
 
     let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
     h.send(
@@ -946,9 +929,7 @@ async fn grandchild_killed_on_tool_timeout() {
              process-group kill did not reach the whole tree"
         );
     }
-    let errno = std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(0);
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
     assert_eq!(
         errno,
         libc::ESRCH,

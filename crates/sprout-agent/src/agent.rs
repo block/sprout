@@ -8,8 +8,8 @@ use crate::config::{Config, MAX_PROMPT_BYTES, MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
 use crate::types::{
-    AgentError, ContentBlock, HistoryItem, PermissionOutcome, ProviderStop, StopReason,
-    ToolCall, ToolResult,
+    AgentError, ContentBlock, HistoryItem, PermissionOutcome, ProviderStop, StopReason, ToolCall,
+    ToolResult,
 };
 use crate::wire::{self, WireMsg, WireSender};
 
@@ -124,9 +124,8 @@ impl RunCtx<'_> {
                 ),
             )
             .await;
-            match self.invoke_tool(call, calls, idx).await? {
-                Some(stop) => return Ok(Some(stop)),
-                None => {}
+            if let Some(stop) = self.invoke_tool(call, calls, idx).await? {
+                return Ok(Some(stop));
             }
         }
         Ok(None)
@@ -167,7 +166,10 @@ impl RunCtx<'_> {
         );
         if self
             .wire
-            .send(WireMsg::Permission { id: perm_id, params })
+            .send(WireMsg::Permission {
+                id: perm_id,
+                params,
+            })
             .await
             .is_err()
         {
@@ -284,7 +286,9 @@ fn item_bytes(item: &HistoryItem) -> usize {
                     .map(|c| {
                         c.provider_id.len()
                             + c.name.len()
-                            + serde_json::to_vec(&c.arguments).map(|b| b.len()).unwrap_or(0)
+                            + serde_json::to_vec(&c.arguments)
+                                .map(|b| b.len())
+                                .unwrap_or(0)
                     })
                     .sum::<usize>()
         }

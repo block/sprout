@@ -19,8 +19,8 @@ use crate::llm::Llm;
 use crate::mcp::McpRegistry;
 use crate::types::HistoryItem;
 use crate::wire::{
-    classify, Inbound, InitializeParams, SessionCancelParams, SessionNewParams, SessionPromptParams,
-    WireMsg, WireSender, INVALID_PARAMS, METHOD_NOT_FOUND, PARSE_ERROR,
+    classify, Inbound, InitializeParams, SessionCancelParams, SessionNewParams,
+    SessionPromptParams, WireMsg, WireSender, INVALID_PARAMS, METHOD_NOT_FOUND, PARSE_ERROR,
 };
 
 struct App {
@@ -143,20 +143,18 @@ async fn handle_notification(app: &Arc<App>, method: &str, params: Value) {
 }
 
 async fn initialize(id: Value, params: Value, wire_tx: &WireSender) {
-    let p: InitializeParams = match serde_json::from_value(params) {
+    let p: InitializeParams = match decode(params, "initialize") {
         Ok(p) => p,
-        Err(e) => return invalid_params(wire_tx, id, "initialize", e).await,
+        Err(m) => return reject(wire_tx, id, INVALID_PARAMS, &m).await,
     };
     if p.protocol_version != PROTOCOL_VERSION {
-        return wire::send(
+        return reject(
             wire_tx,
-            wire::err(
-                id,
-                INVALID_PARAMS,
-                &format!(
-                    "initialize: protocolVersion {} unsupported (require {PROTOCOL_VERSION})",
-                    p.protocol_version
-                ),
+            id,
+            INVALID_PARAMS,
+            &format!(
+                "initialize: protocolVersion {} unsupported (require {PROTOCOL_VERSION})",
+                p.protocol_version
             ),
         )
         .await;
@@ -180,37 +178,41 @@ async fn initialize(id: Value, params: Value, wire_tx: &WireSender) {
 }
 
 async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSender) {
-    let p: SessionNewParams = match serde_json::from_value(params) {
+    let p: SessionNewParams = match decode(params, "session/new") {
         Ok(p) => p,
-        Err(e) => return invalid_params(wire_tx, id, "session/new", e).await,
+        Err(m) => return reject(wire_tx, id, INVALID_PARAMS, &m).await,
     };
     if p.cwd.is_empty() || !Path::new(&p.cwd).is_absolute() {
-        return wire::send(
+        return reject(
             wire_tx,
-            wire::err(id, INVALID_PARAMS, "session/new: cwd must be an absolute path"),
+            id,
+            INVALID_PARAMS,
+            "session/new: cwd must be an absolute path",
         )
         .await;
     }
     if app.state.lock().await.is_some() {
-        return wire::send(
+        return reject(
             wire_tx,
-            wire::err(id, INVALID_PARAMS, "session/new: session already exists"),
+            id,
+            INVALID_PARAMS,
+            "session/new: session already exists",
         )
         .await;
     }
     let mcp = match McpRegistry::spawn_all(&app.cfg, &p.mcp_servers, &p.cwd).await {
         Ok(m) => Arc::new(m),
-        Err(e) => {
-            return wire::send(wire_tx, wire::err(id, e.json_rpc_code(), &e.to_string())).await
-        }
+        Err(e) => return reject(wire_tx, id, e.json_rpc_code(), &e.to_string()).await,
     };
     let session_id = format!("ses_{}", session_token());
     let (cancel_tx, _) = watch::channel(false);
     let mut st = app.state.lock().await;
     if st.is_some() {
-        return wire::send(
+        return reject(
             wire_tx,
-            wire::err(id, INVALID_PARAMS, "session/new: session already exists"),
+            id,
+            INVALID_PARAMS,
+            "session/new: session already exists",
         )
         .await;
     }
@@ -224,12 +226,12 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
     wire::send(wire_tx, wire::ok(id, json!({ "sessionId": session_id }))).await;
 }
 
-async fn invalid_params(wire_tx: &WireSender, id: Value, stage: &str, e: serde_json::Error) {
-    wire::send(
-        wire_tx,
-        wire::err(id, INVALID_PARAMS, &format!("{stage}: {e}")),
-    )
-    .await;
+fn decode<T: serde::de::DeserializeOwned>(params: Value, stage: &str) -> Result<T, String> {
+    serde_json::from_value(params).map_err(|e| format!("{stage}: {e}"))
+}
+
+async fn reject(wire_tx: &WireSender, id: Value, code: i32, message: &str) {
+    wire::send(wire_tx, wire::err(id, code, message)).await;
 }
 
 async fn cancel_session(app: &Arc<App>, params: Value) {
@@ -247,16 +249,18 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender) {
 }
 
 async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender) {
-    let p: SessionPromptParams = match serde_json::from_value(params) {
+    let p: SessionPromptParams = match decode(params, "session/prompt") {
         Ok(p) => p,
-        Err(e) => return invalid_params(&wire_tx, id, "session/prompt", e).await,
+        Err(m) => return reject(&wire_tx, id, INVALID_PARAMS, &m).await,
     };
     let (sid, mcp, mut history, mut cancel_rx) = match acquire_session(&app, &p.session_id).await {
         Ok(v) => v,
         Err(reason) => {
-            return wire::send(
+            return reject(
                 &wire_tx,
-                wire::err(id, INVALID_PARAMS, &format!("session/prompt: {reason}")),
+                id,
+                INVALID_PARAMS,
+                &format!("session/prompt: {reason}"),
             )
             .await
         }
@@ -292,7 +296,15 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
 async fn acquire_session(
     app: &Arc<App>,
     session_id: &str,
-) -> Result<(String, Arc<McpRegistry>, Vec<HistoryItem>, watch::Receiver<bool>), &'static str> {
+) -> Result<
+    (
+        String,
+        Arc<McpRegistry>,
+        Vec<HistoryItem>,
+        watch::Receiver<bool>,
+    ),
+    &'static str,
+> {
     let mut st = app.state.lock().await;
     let s = match st.as_mut() {
         Some(s) if s.id == session_id => s,
@@ -304,7 +316,12 @@ async fn acquire_session(
     s.busy = true;
     let (tx, rx) = watch::channel(false);
     s.cancel_tx = tx;
-    Ok((s.id.clone(), s.mcp.clone(), std::mem::take(&mut s.history), rx))
+    Ok((
+        s.id.clone(),
+        s.mcp.clone(),
+        std::mem::take(&mut s.history),
+        rx,
+    ))
 }
 
 fn session_token() -> String {

@@ -19,10 +19,24 @@ pub type WireSender = mpsc::Sender<WireMsg>;
 
 #[derive(Debug)]
 pub enum Inbound {
-    Request { id: Value, method: String, params: Value },
-    Notification { method: String, params: Value },
-    Response { id: i64, outcome: PermissionOutcome },
-    Invalid { id: Value, code: i32, message: String },
+    Request {
+        id: Value,
+        method: String,
+        params: Value,
+    },
+    Notification {
+        method: String,
+        params: Value,
+    },
+    Response {
+        id: i64,
+        outcome: PermissionOutcome,
+    },
+    Invalid {
+        id: Value,
+        code: i32,
+        message: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,10 +81,17 @@ pub fn classify(msg: &Value) -> Inbound {
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     match (method, id) {
-        (Some(m), Some(id)) => Inbound::Request { id, method: m, params },
+        (Some(m), Some(id)) => Inbound::Request {
+            id,
+            method: m,
+            params,
+        },
         (Some(m), None) => Inbound::Notification { method: m, params },
         (None, Some(id)) => match id.as_i64() {
-            Some(n) => Inbound::Response { id: n, outcome: parse_permission_outcome(msg) },
+            Some(n) => Inbound::Response {
+                id: n,
+                outcome: parse_permission_outcome(msg),
+            },
             None => Inbound::Invalid {
                 id,
                 code: INVALID_REQUEST,

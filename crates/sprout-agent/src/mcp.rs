@@ -325,10 +325,18 @@ fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String
         let chunk: String = match &c.raw {
             RawContent::Text(t) => t.text.clone(),
             RawContent::Image(i) => {
-                format!("[image elided: {}, {} bytes]", short(&i.mime_type), i.data.len())
+                format!(
+                    "[image elided: {}, {} bytes]",
+                    short(&i.mime_type),
+                    i.data.len()
+                )
             }
             RawContent::Audio(a) => {
-                format!("[audio elided: {}, {} bytes]", short(&a.mime_type), a.data.len())
+                format!(
+                    "[audio elided: {}, {} bytes]",
+                    short(&a.mime_type),
+                    a.data.len()
+                )
             }
             RawContent::ResourceLink(r) => format!("[resource: {}]", short(&r.uri)),
             RawContent::Resource(_) => "[resource elided]".into(),
