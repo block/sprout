@@ -57,6 +57,7 @@ type MessageThreadPanelProps = {
   threadHead: TimelineMessage | null;
   threadReplies: MainTimelineEntry[];
   threadTypingPubkeys: string[];
+  toolbarExtraActions?: React.ReactNode;
   widthPx: number;
 };
 
@@ -100,6 +101,7 @@ export function MessageThreadPanel({
   threadHead,
   threadReplies,
   threadTypingPubkeys,
+  toolbarExtraActions,
   widthPx,
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
@@ -288,6 +290,12 @@ export function MessageThreadPanel({
         ) : null}
 
         <div>
+          <TypingIndicatorRow
+            channel={channel}
+            currentPubkey={currentPubkey}
+            profiles={profiles}
+            typingPubkeys={threadTypingPubkeys}
+          />
           <MessageComposer
             channelId={channelId}
             channelName={channelName}
@@ -301,14 +309,9 @@ export function MessageThreadPanel({
             onSend={onSend}
             placeholder={`Reply in thread to ${threadHead.author}`}
             replyTarget={composerReplyTarget}
+            toolbarExtraActions={toolbarExtraActions}
             typingParentEventId={threadHead.id}
             typingRootEventId={threadHead.rootId}
-          />
-          <TypingIndicatorRow
-            channel={channel}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-            typingPubkeys={threadTypingPubkeys}
           />
         </div>
       </aside>

@@ -249,6 +249,27 @@ export const ChannelPane = React.memo(function ChannelPane({
     }
     return pubkeys;
   }, [botTypingEntries]);
+  const threadComposerBotTypingPubkeys = React.useMemo(() => {
+    if (!openThreadHeadId) {
+      return [];
+    }
+
+    const pubkeys: string[] = [];
+    for (const entry of botTypingEntries) {
+      if (entry.threadHeadId !== openThreadHeadId) {
+        continue;
+      }
+
+      if (
+        !pubkeys.some(
+          (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
+        )
+      ) {
+        pubkeys.push(entry.pubkey);
+      }
+    }
+    return pubkeys;
+  }, [botTypingEntries, openThreadHeadId]);
 
   const selectedAgent = React.useMemo(
     () =>
@@ -410,6 +431,15 @@ export const ChannelPane = React.memo(function ChannelPane({
           widthPx={threadPanelWidthPx}
           threadReplies={threadMessages}
           threadTypingPubkeys={threadTypingPubkeys}
+          toolbarExtraActions={
+            <BotActivityComposerAction
+              agents={activityAgents}
+              onOpenAgentSession={onOpenAgentSession}
+              openAgentSessionPubkey={openAgentSessionPubkey}
+              profiles={profiles}
+              typingBotPubkeys={threadComposerBotTypingPubkeys}
+            />
+          }
         />
       ) : activeChannel && selectedAgent ? (
         <AgentSessionThreadPanel

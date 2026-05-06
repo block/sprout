@@ -416,7 +416,10 @@ test("create channel with description", async ({ page }) => {
   await page.goto("/");
   await createStream(page, channelName, description);
 
-  await expect(page.getByTestId("chat-description")).toContainText(description);
+  await expect(page.getByTestId("chat-title")).toHaveAttribute(
+    "title",
+    description,
+  );
 });
 
 test("multiple channels independent", async ({ page }) => {
@@ -502,7 +505,8 @@ test("manage sheet updates channel details and context through the relay", async
   await page.getByTestId(`channel-${renamedChannel}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(renamedChannel);
   // channelDescription deduplicates by showing only the first non-empty field
-  await expect(page.getByTestId("chat-description")).toContainText(
+  await expect(page.getByTestId("chat-title")).toHaveAttribute(
+    "title",
     updatedTopic,
   );
 
