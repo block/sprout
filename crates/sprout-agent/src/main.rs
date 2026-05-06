@@ -1,14 +1,3 @@
-//! sprout-agent — minimal ACP agent over stdio.
-//!
-//!   stdin → reader → App ─► writer → stdout
-//!                       │
-//!                       └► run_prompt → LLM + MCP
-//!
-//! Reader reads bounded NDJSON. Writer is the SOLE owner of stdout and
-//! serializes a single channel of messages: notifications, permission
-//! requests, and final responses. The agent loop runs on a tokio task; the
-//! reader keeps listening for `session/cancel` and permission replies.
-
 mod agent;
 mod llm;
 mod mcp;
@@ -41,7 +30,6 @@ struct Session {
     #[allow(dead_code)]
     cwd: String,
     mcp: Arc<McpRegistry>,
-    /// Owned by the in-flight prompt task. `None` between prompts.
     history: Option<Vec<crate::types::HistoryItem>>,
     cancel_tx: watch::Sender<bool>,
     busy: bool,
@@ -66,7 +54,7 @@ async fn main() {
     });
 
     let (wire_tx, wire_rx) = mpsc::channel::<WireMsg>(64);
-    let writer = tokio::spawn(writer_task(wire_rx, app.clone()));
+    let writer = tokio::spawn(writer_task(wire_rx));
 
     let stdin = BufReader::new(tokio::io::stdin());
     if let Err(e) = reader_loop(stdin, app, wire_tx, max_line).await {
@@ -74,8 +62,6 @@ async fn main() {
     }
     let _ = writer.await;
 }
-
-// ─── Reader ─────────────────────────────────────────────────────────────────
 
 async fn reader_loop<R: tokio::io::AsyncBufRead + Unpin>(
     mut stdin: R,
@@ -95,7 +81,6 @@ async fn reader_loop<R: tokio::io::AsyncBufRead + Unpin>(
     }
 }
 
-/// Read one `\n`-terminated line, rejecting BEFORE allocation grows past `max`.
 async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
     stdin: &mut R,
     max: usize,
@@ -104,9 +89,6 @@ async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
     loop {
         let chunk = stdin.fill_buf().await?;
         if chunk.is_empty() {
-            // EOF. A partially-buffered, unterminated frame is NOT a valid
-            // message — treat it as a connection close. ACP frames must be
-            // newline-terminated.
             if !buf.is_empty() {
                 eprintln!(
                     "sprout-agent: dropping unterminated partial frame at EOF ({} bytes)",
@@ -138,13 +120,12 @@ async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
 }
 
 async fn handle_message(app: &Arc<App>, msg: Value, wire: &Wire) {
-    let has_id = msg.get("id").is_some();
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(Value::as_str).map(str::to_owned);
+    let has_id = id.is_some();
     let has_params = msg.get("params").is_some();
 
     match (method, has_id) {
-        // Response to one of OUR outbound requests (permission reply).
         (None, true) => {
             if let Some(idnum) = id.as_ref().and_then(Value::as_i64) {
                 if let Some(tx) = app.pending.lock().await.remove(&idnum) {
@@ -152,29 +133,17 @@ async fn handle_message(app: &Arc<App>, msg: Value, wire: &Wire) {
                 }
             }
         }
-        // Malformed: neither method nor id.
         (None, false) => {
             eprintln!("sprout-agent: malformed message (no method, no id)");
         }
-        // Notification: method without id. Never respond.
         (Some(method), false) => {
             if method == "session/cancel" {
-                let params = msg.get("params").cloned().unwrap_or(Value::Null);
-                if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
-                    if let Some(s) = app.state.lock().await.as_ref() {
-                        if s.id == p.session_id {
-                            let _ = s.cancel_tx.send(true);
-                        }
-                    }
-                }
+                cancel_session(app, msg.get("params").cloned().unwrap_or(Value::Null)).await;
             }
-            // Other notifications: ignored silently per JSON-RPC.
         }
-        // Request: method + id. Dispatch and respond.
         (Some(method), true) => {
             let id = id.unwrap_or(Value::Null);
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
-            // Methods that require params: -32600 if missing rather than silently coercing to null.
             let needs_params = matches!(method.as_str(), "session/new" | "session/prompt");
             if needs_params && !has_params {
                 return send(wire, jrpc_err(id, -32600, "missing params")).await;
@@ -191,18 +160,21 @@ async fn handle_message(app: &Arc<App>, msg: Value, wire: &Wire) {
                 }))).await,
                 "session/new" => handle_session_new(app, id, params, wire).await,
                 "session/prompt" => spawn_prompt(app.clone(), id, params, wire.clone()),
-                // session/cancel is a notification; if a client sends it as a request we still ack.
                 "session/cancel" => {
-                    if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
-                        if let Some(s) = app.state.lock().await.as_ref() {
-                            if s.id == p.session_id {
-                                let _ = s.cancel_tx.send(true);
-                            }
-                        }
-                    }
+                    cancel_session(app, params).await;
                     send(wire, jrpc_ok(id, Value::Null)).await;
                 }
                 _ => send(wire, jrpc_err(id, -32601, &format!("method not found: {method}"))).await,
+            }
+        }
+    }
+}
+
+async fn cancel_session(app: &Arc<App>, params: Value) {
+    if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
+        if let Some(s) = app.state.lock().await.as_ref() {
+            if s.id == p.session_id {
+                let _ = s.cancel_tx.send(true);
             }
         }
     }
@@ -213,7 +185,6 @@ async fn handle_session_new(app: &Arc<App>, id: Value, params: Value, wire: &Wir
         Ok(p) => p,
         Err(e) => return send(wire, jrpc_err(id, -32602, &format!("session/new: {e}"))).await,
     };
-    // Don't hold app.state across MCP child spawning. We re-check after.
     if app.state.lock().await.is_some() {
         return send(wire, jrpc_err(id, -32602, "session already exists")).await;
     }
@@ -252,8 +223,6 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
             }
         };
 
-        // Lift everything we need from the session under one lock, take
-        // ownership of history (moving it out of the session), and mark busy.
         let (sid, mcp, mut history, mut cancel_rx) = {
             let mut st = app.state.lock().await;
             let s = match st.as_mut() {
@@ -266,7 +235,6 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
             s.busy = true;
             let (tx, rx) = watch::channel(false);
             s.cancel_tx = tx;
-            // history is `Some` whenever a session exists and no prompt is in flight.
             let hist = s.history.take().unwrap_or_default();
             (s.id.clone(), s.mcp.clone(), hist, rx)
         };
@@ -297,9 +265,7 @@ fn spawn_prompt(app: Arc<App>, id: Value, params: Value, wire: Wire) {
     });
 }
 
-// ─── Writer ─────────────────────────────────────────────────────────────────
-
-async fn writer_task(mut rx: mpsc::Receiver<WireMsg>, _app: Arc<App>) {
+async fn writer_task(mut rx: mpsc::Receiver<WireMsg>) {
     let mut stdout = tokio::io::stdout();
     while let Some(msg) = rx.recv().await {
         let to_write = match msg {
@@ -323,8 +289,6 @@ async fn writer_task(mut rx: mpsc::Receiver<WireMsg>, _app: Arc<App>) {
         let _ = stdout.flush().await;
     }
 }
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 async fn send(wire: &Wire, msg: Value) {
     let _ = wire.send(WireMsg::Notify(msg)).await;
@@ -353,7 +317,6 @@ fn parse_permission(msg: &Value) -> PermissionOutcome {
     }
 }
 
-/// 16 hex chars (8 bytes) from `/dev/urandom`, falling back to nanos^pid.
 fn session_token() -> String {
     use std::io::Read;
     let mut b = [0u8; 8];

@@ -1,13 +1,12 @@
-//! LLM client. Two providers (Anthropic, OpenAI-compat). Non-streaming.
-//! One HTTP POST per round.
-
 use reqwest::Client;
 use serde_json::{json, Value};
 
 use crate::types::{
-    nonempty, AgentError, Config, HistoryItem, LlmResponse, Provider, ProviderStop, ToolCall,
-    ToolDef,
+    AgentError, Config, HistoryItem, LlmResponse, Provider, ProviderStop, ToolCall, ToolDef,
 };
+
+const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LLM_ERROR_BODY_BYTES: usize = 4 * 1024;
 
 pub struct Llm {
     http: Client,
@@ -55,8 +54,6 @@ impl Llm {
     }
 }
 
-// ─── Anthropic ──────────────────────────────────────────────────────────────
-
 fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     let mut pending: Vec<Value> = Vec::new();
@@ -86,9 +83,6 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
                         "name": c.name, "input": c.arguments,
                     }));
                 }
-                // Anthropic rejects empty `content` arrays. If the model
-                // returned nothing (no text, no tool calls), emit a single
-                // empty text block so history stays valid.
                 if content.is_empty() {
                     content.push(json!({ "type": "text", "text": "" }));
                 }
@@ -122,47 +116,6 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
     })
 }
 
-fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
-    let stop = match v.get("stop_reason").and_then(Value::as_str) {
-        Some("end_turn") => ProviderStop::EndTurn,
-        Some("tool_use") => ProviderStop::ToolUse,
-        Some("max_tokens") => ProviderStop::MaxTokens,
-        Some("refusal") => ProviderStop::Refusal,
-        _ => ProviderStop::Other,
-    };
-    let mut tool_calls = Vec::new();
-    let mut text = String::new();
-    if let Some(blocks) = v.get("content").and_then(Value::as_array) {
-        for b in blocks {
-            match b.get("type").and_then(Value::as_str) {
-                Some("text") => {
-                    if let Some(t) = b.get("text").and_then(Value::as_str) {
-                        text.push_str(t);
-                    }
-                }
-                Some("tool_use") => {
-                    let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
-                    let name = b
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_owned();
-                    let args = b.get("input").cloned().unwrap_or(Value::Null);
-                    tool_calls.push(make_tool_call(id, name, args)?);
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(LlmResponse {
-        text,
-        tool_calls,
-        stop,
-    })
-}
-
-// ─── OpenAI-compat ──────────────────────────────────────────────────────────
-
 fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
     let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": cfg.system_prompt })];
     for item in history {
@@ -171,16 +124,7 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
             HistoryItem::Assistant { text, tool_calls } => {
                 let mut msg = serde_json::Map::new();
                 msg.insert("role".into(), json!("assistant"));
-                // Always emit `content` as a string. Official OpenAI accepts
-                // `null` when `tool_calls` is present, but several
-                // OpenAI-compatible providers reject `null` outright. An
-                // empty string is valid in both worlds.
-                let content = if !text.is_empty() {
-                    json!(text)
-                } else {
-                    json!("")
-                };
-                msg.insert("content".into(), content);
+                msg.insert("content".into(), json!(text.as_str()));
                 if !tool_calls.is_empty() {
                     let calls: Vec<Value> = tool_calls
                         .iter()
@@ -222,49 +166,49 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
     })
 }
 
-fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
-    let choice = v
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
-        .ok_or_else(|| AgentError::Llm("response missing choices".into()))?;
-    let stop = match choice.get("finish_reason").and_then(Value::as_str) {
+fn map_anthropic_stop(s: Option<&str>) -> ProviderStop {
+    match s {
+        Some("end_turn") => ProviderStop::EndTurn,
+        Some("tool_use") => ProviderStop::ToolUse,
+        Some("max_tokens") => ProviderStop::MaxTokens,
+        Some("refusal") => ProviderStop::Refusal,
+        _ => ProviderStop::Other,
+    }
+}
+
+fn map_openai_stop(s: Option<&str>) -> ProviderStop {
+    match s {
         Some("stop") => ProviderStop::EndTurn,
         Some("tool_calls") => ProviderStop::ToolUse,
         Some("length") => ProviderStop::MaxTokens,
         Some("content_filter") => ProviderStop::Refusal,
         _ => ProviderStop::Other,
-    };
-    let msg = choice
-        .get("message")
-        .ok_or_else(|| AgentError::Llm("missing message".into()))?;
-    // OpenAI-compat: `content` is a string, null, or (rarely) an array of
-    // parts. Treat anything non-string as no text.
-    let text = msg
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
+    }
+}
+
+fn str_field(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("").to_owned()
+}
+
+fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
+    let stop = map_anthropic_stop(v.get("stop_reason").and_then(Value::as_str));
     let mut tool_calls = Vec::new();
-    if let Some(arr) = msg.get("tool_calls").and_then(Value::as_array) {
-        for tc in arr {
-            let id = tc
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let f = tc
-                .get("function")
-                .ok_or_else(|| AgentError::Llm("tool_call missing function".into()))?;
-            let name = f
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned();
-            let raw = f.get("arguments").and_then(Value::as_str).unwrap_or("{}");
-            let args: Value = serde_json::from_str(raw)
-                .map_err(|e| AgentError::Llm(format!("tool_call.arguments not valid JSON: {e}")))?;
-            tool_calls.push(make_tool_call(id, name, args)?);
+    let mut text = String::new();
+    if let Some(blocks) = v.get("content").and_then(Value::as_array) {
+        for b in blocks {
+            match b.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(t) = b.get("text").and_then(Value::as_str) {
+                        text.push_str(t);
+                    }
+                }
+                Some("tool_use") => tool_calls.push(make_tool_call(
+                    str_field(b, "id"),
+                    str_field(b, "name"),
+                    b.get("input").cloned().unwrap_or(Value::Null),
+                )?),
+                _ => {}
+            }
         }
     }
     Ok(LlmResponse {
@@ -274,11 +218,43 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
     })
 }
 
-// ─── Shared helpers ─────────────────────────────────────────────────────────
+fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
+    let choice = v
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .ok_or_else(|| AgentError::Llm("response missing choices".into()))?;
+    let stop = map_openai_stop(choice.get("finish_reason").and_then(Value::as_str));
+    let msg = choice
+        .get("message")
+        .ok_or_else(|| AgentError::Llm("missing message".into()))?;
+    let text = str_field(msg, "content");
+    let mut tool_calls = Vec::new();
+    if let Some(arr) = msg.get("tool_calls").and_then(Value::as_array) {
+        for tc in arr {
+            let f = tc
+                .get("function")
+                .ok_or_else(|| AgentError::Llm("tool_call missing function".into()))?;
+            let raw = f.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+            let args: Value = serde_json::from_str(raw)
+                .map_err(|e| AgentError::Llm(format!("tool_call.arguments not valid JSON: {e}")))?;
+            tool_calls.push(make_tool_call(str_field(tc, "id"), str_field(f, "name"), args)?);
+        }
+    }
+    Ok(LlmResponse {
+        text,
+        tool_calls,
+        stop,
+    })
+}
 
 fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, AgentError> {
-    let provider_id = nonempty(id, "tool_call.id")?;
-    let name = nonempty(name, "tool_call.name")?;
+    if id.is_empty() {
+        return Err(AgentError::Llm("tool_call.id is empty".into()));
+    }
+    if name.is_empty() {
+        return Err(AgentError::Llm("tool_call.name is empty".into()));
+    }
     let arguments = match args {
         Value::Object(_) => args,
         Value::Null => Value::Object(Default::default()),
@@ -289,24 +265,12 @@ fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, Age
         }
     };
     Ok(ToolCall {
-        provider_id,
+        provider_id: id,
         name,
         arguments,
     })
 }
 
-/// Hard cap on LLM response body size. A buggy or malicious endpoint cannot
-/// be allowed to OOM the agent before parsing.
-const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-
-/// Cap on how much of an error body we read into memory before formatting
-/// it into an `AgentError`. A hostile/buggy upstream could otherwise feed
-/// us megabytes of "error message" while we sit blocking on `text()`.
-const MAX_LLM_ERROR_BODY_BYTES: usize = 4 * 1024;
-
-/// Read at most `MAX_LLM_ERROR_BODY_BYTES` of an error response body.
-/// Streaming chunks lets us bail out early without buffering an unbounded
-/// body. Lossy UTF-8 decode is fine here — this string is for humans.
 async fn read_error_body(mut resp: reqwest::Response) -> String {
     let mut buf: Vec<u8> = Vec::new();
     while buf.len() < MAX_LLM_ERROR_BODY_BYTES {
@@ -354,7 +318,6 @@ where
                 read_error_body(resp).await
             )));
         }
-        // Reject up-front if Content-Length advertises an oversized body.
         if let Some(len) = resp.content_length() {
             if len as usize > MAX_LLM_RESPONSE_BYTES {
                 return Err(AgentError::Llm(format!(
@@ -362,7 +325,6 @@ where
                 )));
             }
         }
-        // Bounded read: stream chunks until the cap, then bail.
         let mut buf: Vec<u8> = Vec::new();
         let mut stream = resp;
         loop {

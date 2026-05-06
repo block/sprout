@@ -1,11 +1,7 @@
-//! Core types: history, tool calls, config, errors.
-
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::Value;
-
-// ─── History ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum HistoryItem {
@@ -31,13 +27,8 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-// ─── LLM ────────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
-    /// Assistant text content. Empty when the model returned only tool calls.
-    /// Preserved in history so the next turn doesn't serialize as
-    /// `content: null`/`[]`, which is invalid for both providers.
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
     pub stop: ProviderStop,
@@ -59,8 +50,6 @@ pub struct ToolDef {
     pub input_schema: Value,
 }
 
-// ─── Stop reasons (outbound) ────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StopReason {
     EndTurn,
@@ -81,8 +70,6 @@ impl StopReason {
         }
     }
 }
-
-// ─── ACP DTOs (inbound params) ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,17 +103,11 @@ pub struct SessionPromptParams {
     pub prompt: Vec<ContentBlock>,
 }
 
-/// Text and ResourceLink survive; other blocks degrade to a marker so we
-/// never silently drop input.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text {
-        text: String,
-    },
-    ResourceLink {
-        uri: String,
-    },
+    Text { text: String },
+    ResourceLink { uri: String },
     #[serde(other)]
     Other,
 }
@@ -136,8 +117,6 @@ pub enum ContentBlock {
 pub struct SessionCancelParams {
     pub session_id: String,
 }
-
-// ─── Errors ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum AgentError {
@@ -174,13 +153,14 @@ impl AgentError {
     }
 }
 
-// ─── Config ─────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Provider {
     Anthropic,
     OpenAi,
 }
+
+pub const MAX_PROMPT_BYTES: usize = 1024 * 1024;
+pub const MAX_TOOL_RESULT_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -191,8 +171,6 @@ pub struct Config {
     pub llm_timeout: Duration,
     pub tool_timeout: Duration,
     pub max_line_bytes: usize,
-    pub max_prompt_bytes: usize,
-    pub max_tool_result_bytes: usize,
     pub max_history_bytes: usize,
     pub api_key: String,
     pub model: String,
@@ -203,11 +181,27 @@ pub struct Config {
 const DEFAULT_SYSTEM_PROMPT: &str =
     "You are sprout-agent. Use the provided tools to act. Tool calls are your only output.";
 
+fn env(k: &str) -> Option<String> {
+    std::env::var(k).ok()
+}
+fn env_or(k: &str, default: &str) -> String {
+    env(k).unwrap_or_else(|| default.into())
+}
+fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, String>
+where
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(key) {
+        Ok(v) => v.parse().map_err(|e| format!("{key}: {e}")),
+        Err(_) => Ok(default),
+    }
+}
+fn req(k: &str) -> Result<String, String> {
+    env(k).ok_or_else(|| format!("{k} required"))
+}
+
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let env = |k: &str| std::env::var(k).ok();
-        let req = |k: &str| env(k).ok_or_else(|| format!("{k} required"));
-
         let provider = match env("ACP_SEED_PROVIDER")
             .ok_or("ACP_SEED_PROVIDER required (anthropic|openai)")?
             .to_ascii_lowercase()
@@ -222,12 +216,12 @@ impl Config {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
                 req("ANTHROPIC_MODEL")?,
-                env("ANTHROPIC_BASE_URL").unwrap_or_else(|| "https://api.anthropic.com".into()),
+                env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ),
             Provider::OpenAi => (
                 req("OPENAI_COMPAT_API_KEY")?,
                 req("OPENAI_COMPAT_MODEL")?,
-                env("OPENAI_COMPAT_BASE_URL").unwrap_or_else(|| "https://api.openai.com/v1".into()),
+                env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
             ),
         };
 
@@ -257,55 +251,25 @@ impl Config {
             llm_timeout: Duration::from_secs(parse_env("ACP_SEED_LLM_TIMEOUT_SECS", 120)?),
             tool_timeout: Duration::from_secs(parse_env("ACP_SEED_TOOL_TIMEOUT_SECS", 120)?),
             max_line_bytes: parse_env("ACP_SEED_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
-            max_prompt_bytes: parse_env("ACP_SEED_MAX_PROMPT_BYTES", 1024 * 1024)?,
-            max_tool_result_bytes: parse_env("ACP_SEED_MAX_TOOL_RESULT_BYTES", 256 * 1024)?,
             max_history_bytes: parse_env("ACP_SEED_MAX_HISTORY_BYTES", 1024 * 1024)?,
-            anthropic_api_version: env("ANTHROPIC_API_VERSION")
-                .unwrap_or_else(|| "2023-06-01".into()),
+            anthropic_api_version: env_or("ANTHROPIC_API_VERSION", "2023-06-01"),
         })
     }
 }
 
-fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, String>
-where
-    T::Err: std::fmt::Display,
-{
-    match std::env::var(key) {
-        Ok(v) => v.parse().map_err(|e| format!("{key}: {e}")),
-        Err(_) => Ok(default),
-    }
-}
-
-/// Reject empty strings as hard errors so we never paper over malformed input.
-pub fn nonempty(s: String, field: &str) -> Result<String, AgentError> {
-    if s.is_empty() {
-        Err(AgentError::Llm(format!("{field} is empty")))
-    } else {
-        Ok(s)
-    }
-}
-
-/// Truncate text to `max` bytes (utf-8 safe). Always returns `<= max` bytes.
-/// Appends a marker when there's room; otherwise just truncates.
 pub fn clamp(mut s: String, max: usize) -> String {
     if s.len() <= max {
         return s;
     }
     const MARKER: &str = "\n[truncated]";
-    if max < MARKER.len() {
-        // No room for the marker — truncate to max on a char boundary.
-        let mut cut = max;
-        while cut > 0 && !s.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        s.truncate(cut);
-        return s;
-    }
-    let mut cut = max - MARKER.len();
+    let budget = max.saturating_sub(MARKER.len());
+    let mut cut = budget;
     while cut > 0 && !s.is_char_boundary(cut) {
         cut -= 1;
     }
     s.truncate(cut);
-    s.push_str(MARKER);
+    if max >= MARKER.len() {
+        s.push_str(MARKER);
+    }
     s
 }
