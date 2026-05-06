@@ -13,7 +13,6 @@ use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
 
 const SEP: &str = "__";
 const MAX_NAME_LEN: usize = 64;
-const MCP_INIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(30);
 const MAX_TOOLS_PER_SESSION: usize = 128;
 const MAX_DESCRIPTION_BYTES: usize = 1024;
 const MAX_SCHEMA_BYTES: usize = 4096;
@@ -23,11 +22,12 @@ pub const MAX_MCP_SERVERS: usize = 16;
 const PASSTHROUGH_ENV: &[&str] = &["PATH", "HOME", "TERM", "LANG", "LC_ALL", "TMPDIR"];
 
 fn mcp_init_timeout() -> Duration {
-    std::env::var("ACP_SEED_MCP_INIT_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(MCP_INIT_TIMEOUT_DEFAULT)
+    Duration::from_secs(
+        std::env::var("ACP_SEED_MCP_INIT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30),
+    )
 }
 
 type Client = RunningService<RoleClient, ()>;
@@ -41,7 +41,6 @@ struct Entry {
 struct Server {
     name: String,
     pgid: Mutex<Option<u32>>,
-    _client: Arc<Client>,
 }
 
 impl Server {
@@ -101,10 +100,8 @@ impl McpRegistry {
             for kv in &s.env {
                 cmd.env(&kv.name, &kv.value);
             }
-            if let Some(dir) = cwd {
-                if !dir.is_empty() {
-                    cmd.current_dir(dir);
-                }
+            if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
+                cmd.current_dir(dir);
             }
             cmd.stderr(std::process::Stdio::inherit());
 
@@ -121,25 +118,22 @@ impl McpRegistry {
             let transport = TokioChildProcess::new(cmd)
                 .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
             let pgid = transport.id();
+            let kill_on_init_fail = || {
+                if let Some(p) = pgid {
+                    killpg(p, &s.name, "init");
+                }
+            };
 
             let client: Client = match tokio::time::timeout(init_timeout, ().serve(transport)).await
             {
                 Ok(Ok(c)) => c,
                 Ok(Err(e)) => {
-                    if let Some(p) = pgid {
-                        killpg(p, &s.name, "init");
-                    }
+                    kill_on_init_fail();
                     return Err(AgentError::Mcp(format!("init {}: {e}", s.name)));
                 }
                 Err(_) => {
-                    if let Some(p) = pgid {
-                        killpg(p, &s.name, "init");
-                    }
-                    return Err(AgentError::Mcp(format!(
-                        "init {}: timeout after {}s",
-                        s.name,
-                        init_timeout.as_secs()
-                    )));
+                    kill_on_init_fail();
+                    return Err(AgentError::Mcp(timeout_msg("init", &s.name, init_timeout)));
                 }
             };
             let client = Arc::new(client);
@@ -147,23 +141,21 @@ impl McpRegistry {
             reg.servers.push(Server {
                 name: s.name.clone(),
                 pgid: Mutex::new(pgid),
-                _client: client.clone(),
             });
 
-            let tools =
-                match tokio::time::timeout(init_timeout, client.peer().list_all_tools()).await {
-                    Ok(Ok(t)) => t,
-                    Ok(Err(e)) => {
-                        return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name)));
-                    }
-                    Err(_) => {
-                        return Err(AgentError::Mcp(format!(
-                            "list_tools {}: timeout after {}s",
-                            s.name,
-                            init_timeout.as_secs()
-                        )));
-                    }
-                };
+            let tools = match tokio::time::timeout(init_timeout, client.peer().list_all_tools())
+                .await
+            {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name))),
+                Err(_) => {
+                    return Err(AgentError::Mcp(timeout_msg(
+                        "list_tools",
+                        &s.name,
+                        init_timeout,
+                    )))
+                }
+            };
 
             for t in tools {
                 if reg.defs.len() >= MAX_TOOLS_PER_SESSION {
@@ -179,15 +171,13 @@ impl McpRegistry {
                 if reg.by_qname.contains_key(&qname) {
                     return Err(AgentError::Mcp(format!("duplicate tool: {qname}")));
                 }
-                let description = clamp(
-                    t.description.as_deref().unwrap_or("").to_owned(),
-                    MAX_DESCRIPTION_BYTES,
-                );
-                let input_schema = cap_schema(&qname, Value::Object((*t.input_schema).clone()));
                 reg.defs.push(ToolDef {
                     name: qname.clone(),
-                    description,
-                    input_schema,
+                    description: clamp(
+                        t.description.as_deref().unwrap_or("").to_owned(),
+                        MAX_DESCRIPTION_BYTES,
+                    ),
+                    input_schema: cap_schema(&qname, Value::Object((*t.input_schema).clone())),
                 });
                 reg.by_qname.insert(
                     qname,
@@ -203,11 +193,12 @@ impl McpRegistry {
     }
 
     pub fn poison(&self, server_name: &str, reason: &str) {
-        let newly_poisoned = {
-            let mut p = self.poisoned.lock().expect("poisoned mutex");
-            p.insert(server_name.to_owned())
-        };
-        if !newly_poisoned {
+        let newly = self
+            .poisoned
+            .lock()
+            .expect("poisoned mutex")
+            .insert(server_name.to_owned());
+        if !newly {
             return;
         }
         if let Some(server) = self.servers.iter().find(|s| s.name == server_name) {
@@ -246,15 +237,13 @@ impl McpRegistry {
             .by_qname
             .get(qname)
             .ok_or_else(|| AgentError::Mcp(format!("unknown tool {qname}")))?;
-
         if self.is_poisoned(&entry.server) {
             return Err(AgentError::Mcp(format!(
                 "server unavailable after timeout: {}",
                 entry.server
             )));
         }
-
-        let arg_obj: Option<Map<String, Value>> = match arguments {
+        let arg_obj = match arguments {
             Value::Object(m) => Some(m.clone()),
             Value::Null => None,
             _ => {
@@ -263,18 +252,15 @@ impl McpRegistry {
                 )))
             }
         };
-
         let mut params = CallToolRequestParams::default();
         params.name = entry.tool.clone().into();
         params.arguments = arg_obj;
-
         let res = entry
             .client
             .peer()
             .call_tool(params)
             .await
             .map_err(|e| AgentError::Mcp(format!("call {qname}: {e}")))?;
-
         let text = collapse_content(&res.content, max_bytes);
         Ok(ToolResult {
             provider_id: provider_id.to_owned(),
@@ -284,13 +270,17 @@ impl McpRegistry {
     }
 }
 
+fn timeout_msg(stage: &str, name: &str, t: Duration) -> String {
+    format!("{stage} {name}: timeout after {}s", t.as_secs())
+}
+
 fn cap_schema(qname: &str, schema: Value) -> Value {
     let size = serde_json::to_vec(&schema).map(|b| b.len()).unwrap_or(0);
     if size <= MAX_SCHEMA_BYTES {
         return schema;
     }
     eprintln!(
-        "sprout-agent: tool {qname} schema is {size} bytes (>{MAX_SCHEMA_BYTES}); replacing with empty object",
+        "sprout-agent: tool {qname} schema is {size} bytes (>{MAX_SCHEMA_BYTES}); replacing with empty object"
     );
     Value::Object(Map::new())
 }
@@ -301,8 +291,7 @@ fn killpg(pgid: u32, name: &str, stage: &str) {
     eprintln!("sprout-agent: killpg MCP {name} ({stage}) pgid={pgid} rc={rc}");
 }
 #[cfg(not(unix))]
-fn killpg(pgid: u32, name: &str, stage: &str) {
-    let _ = pgid;
+fn killpg(_pgid: u32, name: &str, stage: &str) {
     eprintln!("sprout-agent: relying on Drop to kill MCP {name} ({stage})");
 }
 
@@ -313,36 +302,28 @@ fn valid_name(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-fn push_bounded(out: &mut String, s: &str, max: usize) {
-    let remaining = max.saturating_sub(out.len());
-    if remaining == 0 {
-        return;
-    }
-    if s.len() <= remaining {
-        out.push_str(s);
-    } else {
-        let mut cut = remaining;
-        while cut > 0 && !s.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        out.push_str(&s[..cut]);
-    }
-}
-
-fn short(s: &str) -> &str {
-    if s.len() <= MARKER_FIELD_MAX {
+fn truncate_at_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
         return s;
     }
-    let mut cut = MARKER_FIELD_MAX;
+    let mut cut = max;
     while cut > 0 && !s.is_char_boundary(cut) {
         cut -= 1;
     }
     &s[..cut]
 }
 
+fn push_bounded(out: &mut String, s: &str, max: usize) {
+    let remaining = max.saturating_sub(out.len());
+    if remaining > 0 {
+        out.push_str(truncate_at_boundary(s, remaining));
+    }
+}
+
 fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String {
     use rmcp::model::RawContent;
     let mut out = String::new();
+    let short = |s: &str| truncate_at_boundary(s, MARKER_FIELD_MAX).to_owned();
     for c in blocks {
         if out.len() >= max_bytes {
             break;
@@ -350,35 +331,18 @@ fn collapse_content(blocks: &[rmcp::model::Content], max_bytes: usize) -> String
         if !out.is_empty() {
             push_bounded(&mut out, "\n", max_bytes);
         }
-        match &c.raw {
-            RawContent::Text(t) => push_bounded(&mut out, &t.text, max_bytes),
-            RawContent::Image(i) => push_bounded(
-                &mut out,
-                &format!(
-                    "[image elided: {}, {} bytes]",
-                    short(&i.mime_type),
-                    i.data.len()
-                ),
-                max_bytes,
-            ),
-            RawContent::Audio(a) => push_bounded(
-                &mut out,
-                &format!(
-                    "[audio elided: {}, {} bytes]",
-                    short(&a.mime_type),
-                    a.data.len()
-                ),
-                max_bytes,
-            ),
-            RawContent::ResourceLink(r) => push_bounded(
-                &mut out,
-                &format!("[resource: {}]", short(&r.uri)),
-                max_bytes,
-            ),
-            RawContent::Resource(_) => {
-                push_bounded(&mut out, "[resource elided]", max_bytes);
+        let chunk: String = match &c.raw {
+            RawContent::Text(t) => t.text.clone(),
+            RawContent::Image(i) => {
+                format!("[image elided: {}, {} bytes]", short(&i.mime_type), i.data.len())
             }
-        }
+            RawContent::Audio(a) => {
+                format!("[audio elided: {}, {} bytes]", short(&a.mime_type), a.data.len())
+            }
+            RawContent::ResourceLink(r) => format!("[resource: {}]", short(&r.uri)),
+            RawContent::Resource(_) => "[resource elided]".into(),
+        };
+        push_bounded(&mut out, &chunk, max_bytes);
     }
     out
 }

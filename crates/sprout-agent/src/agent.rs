@@ -30,30 +30,17 @@ pub enum PermissionOutcome {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_prompt(
-    cfg: &Config,
-    sid: &str,
-    cancel: &mut watch::Receiver<bool>,
-    wire: &Wire,
-    llm: &Llm,
-    mcp: &McpRegistry,
-    pending: &PendingMap,
-    next_id: &Arc<Mutex<i64>>,
-    history: &mut Vec<HistoryItem>,
-    prompt: Vec<ContentBlock>,
+    cfg: &Config, sid: &str, cancel: &mut watch::Receiver<bool>, wire: &Wire,
+    llm: &Llm, mcp: &McpRegistry, pending: &PendingMap, next_id: &Arc<Mutex<i64>>,
+    history: &mut Vec<HistoryItem>, prompt: Vec<ContentBlock>,
 ) -> Result<StopReason, AgentError> {
-    let user_text = prompt
-        .into_iter()
-        .map(|b| match b {
-            ContentBlock::Text { text } => text,
-            ContentBlock::ResourceLink { uri } => format!("[resource: {uri}]"),
-            ContentBlock::Other => "[unsupported content block]".into(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let user_text = prompt.into_iter().map(|b| match b {
+        ContentBlock::Text { text } => text,
+        ContentBlock::ResourceLink { uri } => format!("[resource: {uri}]"),
+        ContentBlock::Other => "[unsupported content block]".into(),
+    }).collect::<Vec<_>>().join("\n");
     if user_text.len() > MAX_PROMPT_BYTES {
-        return Err(AgentError::InvalidParams(format!(
-            "prompt exceeds {MAX_PROMPT_BYTES} bytes"
-        )));
+        return Err(AgentError::InvalidParams(format!("prompt exceeds {MAX_PROMPT_BYTES} bytes")));
     }
     history.push(HistoryItem::User(user_text));
 
@@ -107,21 +94,12 @@ pub async fn run_prompt(
                 continue;
             }
 
-            notify(
-                wire,
-                &update(
-                    sid,
-                    json!({
-                        "sessionUpdate": "tool_call",
-                        "toolCallId": call.provider_id,
-                        "title": call.name,
-                        "kind": "mcp",
-                        "status": "pending",
-                        "rawInput": call.arguments,
-                    }),
-                ),
-            )
-            .await;
+            notify(wire, &update(sid, json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": call.provider_id,
+                "title": call.name, "kind": "mcp",
+                "status": "pending", "rawInput": call.arguments,
+            }))).await;
 
             let perm_id = {
                 let mut n = next_id.lock().await;
@@ -156,35 +134,33 @@ pub async fn run_prompt(
 
             notify(wire, &tool_status(sid, &call.provider_id, "in_progress")).await;
 
+            let poison_and_fail = |reason: &str| {
+                if let Some(server) = mcp.server_of(&call.name) {
+                    mcp.poison(server, reason);
+                }
+            };
             let result = tokio::select! {
                 biased;
                 _ = cancel.changed() => {
-                    if let Some(server) = mcp.server_of(&call.name) {
-                        mcp.poison(server, "cancelled during tool call");
-                    }
+                    poison_and_fail("cancelled during tool call");
                     emit_failed(wire, sid, call, "cancelled").await;
                     fill_cancelled(history, &calls[idx..]);
                     return Ok(StopReason::Cancelled);
                 }
-                r = tokio::time::timeout(
-                    cfg.tool_timeout,
+                r = tokio::time::timeout(cfg.tool_timeout,
                     mcp.call(&call.name, &call.provider_id, &call.arguments, MAX_TOOL_RESULT_BYTES),
                 ) => match r {
                     Ok(Ok(r)) => r,
                     Ok(Err(e)) => {
                         let m = e.to_string();
-                        if let Some(server) = mcp.server_of(&call.name) {
-                            mcp.poison(server, &format!("transport error: {m}"));
-                        }
+                        poison_and_fail(&format!("transport error: {m}"));
                         emit_failed(wire, sid, call, &m).await;
                         history.push(synthetic_error(call, m));
                         idx += 1;
                         continue;
                     }
                     Err(_) => {
-                        if let Some(server) = mcp.server_of(&call.name) {
-                            mcp.poison(server, "tool timeout");
-                        }
+                        poison_and_fail("tool timeout");
                         emit_failed(wire, sid, call, "tool timeout").await;
                         history.push(synthetic_error(call, "tool timeout".into()));
                         idx += 1;
@@ -194,8 +170,7 @@ pub async fn run_prompt(
             };
 
             notify(wire, &update(sid, json!({
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": call.provider_id,
+                "sessionUpdate": "tool_call_update", "toolCallId": call.provider_id,
                 "status": "completed",
                 "content": [{ "type": "content", "content": { "type": "text", "text": result.text } }],
                 "rawOutput": { "isError": result.is_error },
@@ -226,17 +201,10 @@ fn item_bytes(item: &HistoryItem) -> usize {
     match item {
         HistoryItem::User(s) => s.len(),
         HistoryItem::Assistant { text, tool_calls } => {
-            text.len()
-                + tool_calls
-                    .iter()
-                    .map(|c| {
-                        c.provider_id.len()
-                            + c.name.len()
-                            + serde_json::to_vec(&c.arguments)
-                                .map(|b| b.len())
-                                .unwrap_or(0)
-                    })
-                    .sum::<usize>()
+            text.len() + tool_calls.iter().map(|c| {
+                c.provider_id.len() + c.name.len()
+                    + serde_json::to_vec(&c.arguments).map(|b| b.len()).unwrap_or(0)
+            }).sum::<usize>()
         }
         HistoryItem::ToolResult(r) => r.provider_id.len() + r.text.len(),
     }
@@ -261,30 +229,19 @@ fn truncate_history(history: &mut Vec<HistoryItem>, max_bytes: usize) {
         total = total.saturating_sub(dropped);
     }
     if history.len() < original_len {
-        eprintln!(
-            "sprout-agent: history truncated {original_len} -> {} items ({total} bytes)",
-            history.len()
-        );
+        eprintln!("sprout-agent: history truncated {original_len} -> {} items ({total} bytes)",
+            history.len());
     }
 }
 
 fn update(sid: &str, update: Value) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": { "sessionId": sid, "update": update },
-    })
+    json!({ "jsonrpc": "2.0", "method": "session/update",
+        "params": { "sessionId": sid, "update": update } })
 }
 
 fn tool_status(sid: &str, tool_id: &str, status: &str) -> Value {
-    update(
-        sid,
-        json!({
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": tool_id,
-            "status": status,
-        }),
-    )
+    update(sid, json!({ "sessionUpdate": "tool_call_update",
+        "toolCallId": tool_id, "status": status }))
 }
 
 async fn notify(wire: &Wire, msg: &Value) {
@@ -292,36 +249,20 @@ async fn notify(wire: &Wire, msg: &Value) {
 }
 
 async fn emit_failed(wire: &Wire, sid: &str, call: &ToolCall, err: &str) {
-    notify(
-        wire,
-        &update(
-            sid,
-            json!({
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": call.provider_id,
-                "status": "failed",
-                "rawOutput": { "error": err },
-            }),
-        ),
-    )
-    .await;
+    notify(wire, &update(sid, json!({
+        "sessionUpdate": "tool_call_update", "toolCallId": call.provider_id,
+        "status": "failed", "rawOutput": { "error": err },
+    }))).await;
 }
 
 async fn request_permission(
-    wire: &Wire,
-    sid: &str,
-    id: i64,
-    call: &ToolCall,
+    wire: &Wire, sid: &str, id: i64, call: &ToolCall,
     rx: oneshot::Receiver<PermissionOutcome>,
 ) -> PermissionOutcome {
     let params = json!({
         "sessionId": sid,
-        "toolCall": {
-            "toolCallId": call.provider_id,
-            "title": call.name,
-            "kind": "mcp",
-            "rawInput": call.arguments,
-        },
+        "toolCall": { "toolCallId": call.provider_id, "title": call.name,
+            "kind": "mcp", "rawInput": call.arguments },
         "options": [
             { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
             { "optionId": "deny",  "name": "Deny",  "kind": "reject_once" },

@@ -66,10 +66,8 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
         match item {
             HistoryItem::User(text) => {
                 flush(&mut messages, &mut pending);
-                messages.push(json!({
-                    "role": "user",
-                    "content": [{ "type": "text", "text": text }],
-                }));
+                messages.push(json!({ "role": "user",
+                    "content": [{ "type": "text", "text": text }] }));
             }
             HistoryItem::Assistant { text, tool_calls } => {
                 flush(&mut messages, &mut pending);
@@ -78,10 +76,8 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
                     content.push(json!({ "type": "text", "text": text }));
                 }
                 for c in tool_calls {
-                    content.push(json!({
-                        "type": "tool_use", "id": c.provider_id,
-                        "name": c.name, "input": c.arguments,
-                    }));
+                    content.push(json!({ "type": "tool_use", "id": c.provider_id,
+                        "name": c.name, "input": c.arguments }));
                 }
                 if content.is_empty() {
                     content.push(json!({ "type": "text", "text": "" }));
@@ -89,31 +85,15 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
                 messages.push(json!({ "role": "assistant", "content": content }));
             }
             HistoryItem::ToolResult(r) => pending.push(json!({
-                "type": "tool_result",
-                "tool_use_id": r.provider_id,
-                "content": [{ "type": "text", "text": r.text }],
-                "is_error": r.is_error,
-            })),
+                "type": "tool_result", "tool_use_id": r.provider_id,
+                "content": [{ "type": "text", "text": r.text }], "is_error": r.is_error })),
         }
     }
     flush(&mut messages, &mut pending);
-
-    let tools_json: Vec<Value> = tools
-        .iter()
-        .map(|t| {
-            json!({
-                "name": t.name, "description": t.description, "input_schema": t.input_schema,
-            })
-        })
-        .collect();
-
-    json!({
-        "model": cfg.model,
-        "max_tokens": cfg.max_output_tokens,
-        "system": cfg.system_prompt,
-        "tools": tools_json,
-        "messages": messages,
-    })
+    let tools_json: Vec<Value> = tools.iter().map(|t| json!({
+        "name": t.name, "description": t.description, "input_schema": t.input_schema })).collect();
+    json!({ "model": cfg.model, "max_tokens": cfg.max_output_tokens,
+        "system": cfg.system_prompt, "tools": tools_json, "messages": messages })
 }
 
 fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
@@ -126,62 +106,33 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
                 msg.insert("role".into(), json!("assistant"));
                 msg.insert("content".into(), json!(text.as_str()));
                 if !tool_calls.is_empty() {
-                    let calls: Vec<Value> = tool_calls
-                        .iter()
-                        .map(|c| {
-                            json!({
-                                "id": c.provider_id, "type": "function",
-                                "function": {
-                                    "name": c.name,
-                                    "arguments": serde_json::to_string(&c.arguments)
-                                        .unwrap_or_else(|_| "{}".into()),
-                                },
-                            })
-                        })
-                        .collect();
+                    let calls: Vec<Value> = tool_calls.iter().map(|c| json!({
+                        "id": c.provider_id, "type": "function",
+                        "function": { "name": c.name,
+                            "arguments": serde_json::to_string(&c.arguments)
+                                .unwrap_or_else(|_| "{}".into()) } })).collect();
                     msg.insert("tool_calls".into(), Value::Array(calls));
                 }
                 messages.push(Value::Object(msg));
             }
             HistoryItem::ToolResult(r) => messages.push(json!({
-                "role": "tool", "tool_call_id": r.provider_id, "content": r.text,
-            })),
+                "role": "tool", "tool_call_id": r.provider_id, "content": r.text })),
         }
     }
-    let tools_json: Vec<Value> = tools
-        .iter()
-        .map(|t| {
-            json!({
-                "type": "function",
-                "function": {
-                    "name": t.name, "description": t.description, "parameters": t.input_schema,
-                },
-            })
-        })
-        .collect();
-    json!({
-        "model": cfg.model, "stream": false,
-        "max_tokens": cfg.max_output_tokens,
-        "messages": messages, "tools": tools_json, "tool_choice": "auto",
-    })
+    let tools_json: Vec<Value> = tools.iter().map(|t| json!({
+        "type": "function",
+        "function": { "name": t.name, "description": t.description,
+            "parameters": t.input_schema } })).collect();
+    json!({ "model": cfg.model, "stream": false, "max_tokens": cfg.max_output_tokens,
+        "messages": messages, "tools": tools_json, "tool_choice": "auto" })
 }
 
-fn map_anthropic_stop(s: Option<&str>) -> ProviderStop {
+fn map_stop(s: Option<&str>) -> ProviderStop {
     match s {
-        Some("end_turn") => ProviderStop::EndTurn,
-        Some("tool_use") => ProviderStop::ToolUse,
-        Some("max_tokens") => ProviderStop::MaxTokens,
-        Some("refusal") => ProviderStop::Refusal,
-        _ => ProviderStop::Other,
-    }
-}
-
-fn map_openai_stop(s: Option<&str>) -> ProviderStop {
-    match s {
-        Some("stop") => ProviderStop::EndTurn,
-        Some("tool_calls") => ProviderStop::ToolUse,
-        Some("length") => ProviderStop::MaxTokens,
-        Some("content_filter") => ProviderStop::Refusal,
+        Some("end_turn" | "stop") => ProviderStop::EndTurn,
+        Some("tool_use" | "tool_calls") => ProviderStop::ToolUse,
+        Some("max_tokens" | "length") => ProviderStop::MaxTokens,
+        Some("refusal" | "content_filter") => ProviderStop::Refusal,
         _ => ProviderStop::Other,
     }
 }
@@ -191,7 +142,7 @@ fn str_field(v: &Value, key: &str) -> String {
 }
 
 fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
-    let stop = map_anthropic_stop(v.get("stop_reason").and_then(Value::as_str));
+    let stop = map_stop(v.get("stop_reason").and_then(Value::as_str));
     let mut tool_calls = Vec::new();
     let mut text = String::new();
     if let Some(blocks) = v.get("content").and_then(Value::as_array) {
@@ -203,37 +154,27 @@ fn parse_anthropic(v: Value) -> Result<LlmResponse, AgentError> {
                     }
                 }
                 Some("tool_use") => tool_calls.push(make_tool_call(
-                    str_field(b, "id"),
-                    str_field(b, "name"),
+                    str_field(b, "id"), str_field(b, "name"),
                     b.get("input").cloned().unwrap_or(Value::Null),
                 )?),
                 _ => {}
             }
         }
     }
-    Ok(LlmResponse {
-        text,
-        tool_calls,
-        stop,
-    })
+    Ok(LlmResponse { text, tool_calls, stop })
 }
 
 fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
-    let choice = v
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
+    let choice = v.get("choices").and_then(Value::as_array).and_then(|a| a.first())
         .ok_or_else(|| AgentError::Llm("response missing choices".into()))?;
-    let stop = map_openai_stop(choice.get("finish_reason").and_then(Value::as_str));
-    let msg = choice
-        .get("message")
+    let stop = map_stop(choice.get("finish_reason").and_then(Value::as_str));
+    let msg = choice.get("message")
         .ok_or_else(|| AgentError::Llm("missing message".into()))?;
     let text = str_field(msg, "content");
     let mut tool_calls = Vec::new();
     if let Some(arr) = msg.get("tool_calls").and_then(Value::as_array) {
         for tc in arr {
-            let f = tc
-                .get("function")
+            let f = tc.get("function")
                 .ok_or_else(|| AgentError::Llm("tool_call missing function".into()))?;
             let raw = f.get("arguments").and_then(Value::as_str).unwrap_or("{}");
             let args: Value = serde_json::from_str(raw)
@@ -241,34 +182,19 @@ fn parse_openai(v: Value) -> Result<LlmResponse, AgentError> {
             tool_calls.push(make_tool_call(str_field(tc, "id"), str_field(f, "name"), args)?);
         }
     }
-    Ok(LlmResponse {
-        text,
-        tool_calls,
-        stop,
-    })
+    Ok(LlmResponse { text, tool_calls, stop })
 }
 
 fn make_tool_call(id: String, name: String, args: Value) -> Result<ToolCall, AgentError> {
-    if id.is_empty() {
-        return Err(AgentError::Llm("tool_call.id is empty".into()));
-    }
-    if name.is_empty() {
-        return Err(AgentError::Llm("tool_call.name is empty".into()));
+    if id.is_empty() || name.is_empty() {
+        return Err(AgentError::Llm("tool_call missing id or name".into()));
     }
     let arguments = match args {
         Value::Object(_) => args,
         Value::Null => Value::Object(Default::default()),
-        _ => {
-            return Err(AgentError::Llm(
-                "tool_call arguments must be a JSON object".into(),
-            ))
-        }
+        _ => return Err(AgentError::Llm("tool_call arguments must be a JSON object".into())),
     };
-    Ok(ToolCall {
-        provider_id: id,
-        name,
-        arguments,
-    })
+    Ok(ToolCall { provider_id: id, name, arguments })
 }
 
 async fn read_error_body(mut resp: reqwest::Response) -> String {
@@ -276,29 +202,26 @@ async fn read_error_body(mut resp: reqwest::Response) -> String {
     while buf.len() < MAX_LLM_ERROR_BODY_BYTES {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
-                let need = MAX_LLM_ERROR_BODY_BYTES - buf.len();
-                let take = chunk.len().min(need);
+                let take = chunk.len().min(MAX_LLM_ERROR_BODY_BYTES - buf.len());
                 buf.extend_from_slice(&chunk[..take]);
-                if take < chunk.len() {
-                    break;
-                }
+                if take < chunk.len() { break; }
             }
-            Ok(None) | Err(_) => break,
+            _ => break,
         }
     }
     String::from_utf8_lossy(&buf).into_owned()
 }
 
 async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Value, AgentError>
-where
-    F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+where F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
+    let backoff = || tokio::time::sleep(std::time::Duration::from_secs(1));
     for attempt in 0..2u32 {
         let resp = match apply(http.post(url).json(body)).send().await {
             Ok(r) => r,
             Err(e) => {
                 if attempt == 0 && (e.is_timeout() || e.is_connect()) {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    backoff().await;
                     continue;
                 }
                 return Err(AgentError::Llm(format!("transport: {e}")));
@@ -309,20 +232,16 @@ where
             return Err(AgentError::LlmAuth(read_error_body(resp).await));
         }
         if (status.is_server_error() || status == 429) && attempt == 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            backoff().await;
             continue;
         }
         if !status.is_success() {
-            return Err(AgentError::Llm(format!(
-                "{status}: {}",
-                read_error_body(resp).await
-            )));
+            return Err(AgentError::Llm(format!("{status}: {}", read_error_body(resp).await)));
         }
         if let Some(len) = resp.content_length() {
             if len as usize > MAX_LLM_RESPONSE_BYTES {
                 return Err(AgentError::Llm(format!(
-                    "response too large: {len} > {MAX_LLM_RESPONSE_BYTES}"
-                )));
+                    "response too large: {len} > {MAX_LLM_RESPONSE_BYTES}")));
             }
         }
         let mut buf: Vec<u8> = Vec::new();
@@ -332,8 +251,7 @@ where
                 Ok(Some(chunk)) => {
                     if buf.len() + chunk.len() > MAX_LLM_RESPONSE_BYTES {
                         return Err(AgentError::Llm(format!(
-                            "response exceeded {MAX_LLM_RESPONSE_BYTES} bytes"
-                        )));
+                            "response exceeded {MAX_LLM_RESPONSE_BYTES} bytes")));
                     }
                     buf.extend_from_slice(&chunk);
                 }
