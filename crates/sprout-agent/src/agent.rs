@@ -14,6 +14,9 @@ use crate::types::{
 };
 use crate::wire::{self, WireSender};
 
+const ERROR_REFLECTION_SUFFIX: &str = "\n\n[Reflect] Diagnose the error above before retrying. \
+What went wrong? Why? What will you do differently?";
+
 pub struct RunCtx<'a> {
     pub cfg: &'a Config,
     pub session_id: &'a str,
@@ -242,6 +245,11 @@ impl RunCtx<'_> {
                 text: "internal error: missing result".into(),
                 is_error: true,
             });
+            // On tool error: append a reflection prompt so the LLM
+            // diagnoses the failure before blindly retrying.
+            if result.is_error {
+                result.text.push_str(ERROR_REFLECTION_SUFFIX);
+            }
             // Single banner injection point for non-todo tools. The todo
             // tool's own response is already the bare list; the banner
             // (if pending items remain) is added here too. `decorate` is
