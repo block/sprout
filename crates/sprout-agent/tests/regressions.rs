@@ -784,7 +784,7 @@ async fn todo_enforcement_blocks_premature_end() {
     let last_user_msg = messages.iter().rev().find(|m| m["role"] == "user").unwrap();
     let content = last_user_msg["content"].as_str().unwrap_or("");
     assert!(
-        content.contains("Open todos remain") || content.contains("Strike"),
+        content.contains("open todo items"),
         "enforcement reminder not found in 3rd LLM request. Last user msg: {}",
         &content[..content.len().min(200)]
     );

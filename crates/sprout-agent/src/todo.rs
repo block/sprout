@@ -2,10 +2,8 @@
 //!
 //! Enforcement:
 //!   - Cannot remove an open item without first marking it done.
-//!   - Cannot end the turn while open items remain.
-//!
-//! The first open item is implicitly "next." Tool results are decorated
-//! with a one-line warning while open items remain.
+//!   - Cannot end the turn while open items remain (the agent shows the
+//!     full list and tells the LLM to keep working).
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -16,7 +14,6 @@ pub const TOOL_NAME: &str = "todo";
 const MAX_ITEMS: usize = 50;
 const MAX_ID: u32 = 9999;
 const MAX_TITLE_CHARS: usize = 200;
-const WARN_PREFIX: &str = "⚠ Open todos remain. Update the `todo` list before ending the turn.\n\n";
 
 const DESCRIPTION: &str = "Session task list. Full-list replace. Items have id (int), \
 title (string), done (bool). Cannot remove open items. Cannot end turn with open items.";
@@ -171,27 +168,16 @@ impl Todos {
         out
     }
 
-    /// Prepend the warning banner to a tool result while open items
-    /// remain. No-op when disabled or all done.
-    pub fn decorate(&self, text: &mut String) {
-        if !self.enabled || !self.has_open() {
-            return;
-        }
-        text.insert_str(0, WARN_PREFIX);
-    }
-
-    /// Called when the LLM signals end_turn. Strikes only reset when the
-    /// done count increases. Three ignored reminders force-stop.
     /// Returns `Some(reminder)` when open items exist, `None` when the
-    /// LLM is allowed to stop. The agent injects the reminder as a user
-    /// message and loops. The only escape is completing all items or
-    /// hitting max_rounds.
+    /// LLM is allowed to stop. The reminder includes the full list so
+    /// the LLM knows exactly what remains. The only escape is completing
+    /// all items or hitting max_rounds.
     pub fn check_end_turn(&self) -> Option<String> {
         if !self.enabled || !self.has_open() {
             return None;
         }
         Some(format!(
-            "{WARN_PREFIX}Open items remain. Mark them done or revise the list:\n\n{}",
+            "You have open todo items. Keep working.\n\n{}",
             self.render()
         ))
     }
@@ -229,14 +215,6 @@ mod tests {
     fn disabled_check_end_turn_allows() {
         let t = Todos::new(false);
         assert!(t.check_end_turn().is_none());
-    }
-
-    #[test]
-    fn disabled_decorate_noop() {
-        let t = Todos::new(false);
-        let mut s = "hello".to_string();
-        t.decorate(&mut s);
-        assert_eq!(s, "hello");
     }
 
     #[test]
@@ -383,32 +361,6 @@ mod tests {
         assert!(line1.contains("← next"), "got: {out}");
         let line2 = out.lines().nth(2).unwrap();
         assert!(!line2.contains("← next"), "got: {out}");
-    }
-
-    #[test]
-    fn handle_call_returns_no_banner() {
-        // The agent's post-tool decorate() owns the banner.
-        let mut t = Todos::new(true);
-        let out = call(&mut t, &[(1, "a", false)]).unwrap();
-        assert!(!out.contains("Open todos remain"), "got: {out}");
-    }
-
-    #[test]
-    fn decorate_adds_banner() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", false)]).unwrap();
-        let mut text = "result text".to_string();
-        t.decorate(&mut text);
-        assert!(text.starts_with("⚠ Open todos remain"));
-    }
-
-    #[test]
-    fn decorate_noop_when_all_done() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", true)]).unwrap();
-        let mut text = "result text".to_string();
-        t.decorate(&mut text);
-        assert_eq!(text, "result text");
     }
 
     #[test]

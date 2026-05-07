@@ -224,11 +224,6 @@ impl RunCtx<'_> {
             if result.is_error {
                 result.text.push_str(ERROR_REFLECTION_SUFFIX);
             }
-            // Single banner injection point. The todo tool's own response
-            // is already the bare list; the banner (if open items remain)
-            // is added here too. `decorate` is a no-op when disabled or
-            // when all items are done.
-            self.todos.decorate(&mut result.text);
             self.history.push(HistoryItem::ToolResult(result));
         }
     }
