@@ -2,7 +2,7 @@
 //!
 //! Enforcement:
 //!   - Cannot remove an open item without first marking it done.
-//!   - Cannot end the turn while open items remain (3 strikes → force-stop).
+//!   - Cannot end the turn while open items remain.
 //!
 //! The first open item is implicitly "next." Tool results are decorated
 //! with a one-line warning while open items remain.
@@ -16,7 +16,6 @@ pub const TOOL_NAME: &str = "todo";
 const MAX_ITEMS: usize = 50;
 const MAX_ID: u32 = 9999;
 const MAX_TITLE_CHARS: usize = 200;
-const MAX_STRIKES: u32 = 3;
 const WARN_PREFIX: &str = "⚠ Open todos remain. Update the `todo` list before ending the turn.\n\n";
 
 const DESCRIPTION: &str = "Session task list. Full-list replace. Items have id (int), \
@@ -38,20 +37,9 @@ struct Input {
 }
 
 #[derive(Debug)]
-pub enum EndTurn {
-    Allow,
-    Continue(String),
-    Stop(String),
-}
-
-#[derive(Debug)]
 pub struct Todos {
     enabled: bool,
     items: Vec<Item>,
-    strikes: u32,
-    /// Number of done items at the last strike. Strikes only reset when
-    /// done count INCREASES — actual progress, not reordering.
-    last_strike_done_count: Option<usize>,
 }
 
 impl Todos {
@@ -59,17 +47,11 @@ impl Todos {
         Self {
             enabled,
             items: Vec::new(),
-            strikes: 0,
-            last_strike_done_count: None,
         }
     }
 
     pub fn is_enabled(&self) -> bool {
         self.enabled
-    }
-
-    fn done_count(&self) -> usize {
-        self.items.iter().filter(|i| i.done).count()
     }
 
     fn has_open(&self) -> bool {
@@ -200,34 +182,17 @@ impl Todos {
 
     /// Called when the LLM signals end_turn. Strikes only reset when the
     /// done count increases. Three ignored reminders force-stop.
-    pub fn check_end_turn(&mut self) -> EndTurn {
+    /// Returns `Some(reminder)` when open items exist, `None` when the
+    /// LLM is allowed to stop. The agent injects the reminder as a user
+    /// message and loops. The only escape is completing all items or
+    /// hitting max_rounds.
+    pub fn check_end_turn(&self) -> Option<String> {
         if !self.enabled || !self.has_open() {
-            self.strikes = 0;
-            self.last_strike_done_count = None;
-            return EndTurn::Allow;
+            return None;
         }
-        let done_now = self.done_count();
-        if let Some(prev) = self.last_strike_done_count {
-            if done_now > prev {
-                self.strikes = 0;
-            }
-        }
-        self.strikes = self.strikes.saturating_add(1);
-        self.last_strike_done_count = Some(done_now);
-        let body = self.render();
-        if self.strikes >= MAX_STRIKES {
-            let msg = format!(
-                "{WARN_PREFIX}Force-stopping after {MAX_STRIKES} ignored reminders. \
-                 Open todos:\n\n{body}"
-            );
-            self.strikes = 0;
-            self.last_strike_done_count = None;
-            return EndTurn::Stop(msg);
-        }
-        EndTurn::Continue(format!(
-            "{WARN_PREFIX}Strike {}/{MAX_STRIKES}. Finish the work and mark items done, \
-             or revise the list. Current state:\n\n{body}",
-            self.strikes,
+        Some(format!(
+            "{WARN_PREFIX}Open items remain. Mark them done or revise the list:\n\n{}",
+            self.render()
         ))
     }
 
@@ -263,7 +228,7 @@ mod tests {
     #[test]
     fn disabled_check_end_turn_allows() {
         let mut t = Todos::new(false);
-        assert!(matches!(t.check_end_turn(), EndTurn::Allow));
+        assert!(t.check_end_turn().is_none());
     }
 
     #[test]
@@ -447,57 +412,21 @@ mod tests {
     }
 
     #[test]
-    fn strikes_force_stop_after_three() {
+    fn check_end_turn_blocks_while_open() {
         let mut t = Todos::new(true);
         call(&mut t, &[(1, "a", false)]).unwrap();
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_)));
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_)));
-        match t.check_end_turn() {
-            EndTurn::Stop(_) => {}
-            other => panic!("expected Stop, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn force_stop_resets_strikes() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", false)]).unwrap();
-        let _ = t.check_end_turn();
-        let _ = t.check_end_turn();
-        let _ = t.check_end_turn(); // Stop, also resets.
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_)));
-    }
-
-    #[test]
-    fn marking_done_resets_strikes() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", false), (2, "b", false)]).unwrap();
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 1
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 2
-        call(&mut t, &[(1, "a", true), (2, "b", false)]).unwrap();
-        // Strikes reset → next is Continue (1/3), not Stop.
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_)));
-    }
-
-    #[test]
-    fn reordering_does_not_reset_strikes() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", false), (2, "b", false)]).unwrap();
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 1
-        assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 2
-                                                                     // Reorder — no done count increase.
-        call(&mut t, &[(2, "b", false), (1, "a", false)]).unwrap();
-        match t.check_end_turn() {
-            EndTurn::Stop(_) => {}
-            other => panic!("reorder bypass not blocked: {other:?}"),
-        }
+        // Blocks every time — no strikes, no limit.
+        assert!(t.check_end_turn().is_some());
+        assert!(t.check_end_turn().is_some());
+        assert!(t.check_end_turn().is_some());
+        assert!(t.check_end_turn().is_some());
     }
 
     #[test]
     fn allow_when_all_done() {
         let mut t = Todos::new(true);
         call(&mut t, &[(1, "a", true)]).unwrap();
-        assert!(matches!(t.check_end_turn(), EndTurn::Allow));
+        assert!(t.check_end_turn().is_none());
     }
 
     #[test]

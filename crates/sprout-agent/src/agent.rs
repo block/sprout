@@ -8,7 +8,7 @@ use crate::config::{Config, MAX_PROMPT_BYTES, MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_
 use crate::handoff::HandoffOutcome;
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
-use crate::todo::EndTurn;
+
 use crate::types::{
     AgentError, ContentBlock, HistoryItem, ProviderStop, StopReason, ToolCall, ToolResult,
 };
@@ -97,29 +97,9 @@ impl RunCtx<'_> {
                 let stop = map_stop(response.stop);
                 // Only gate genuine end_turn — don't override max_tokens/refusal.
                 if stop == StopReason::EndTurn {
-                    match self.todos.check_end_turn() {
-                        EndTurn::Allow => {}
-                        EndTurn::Continue(msg) => {
-                            // Inject reminder as a synthetic user turn and
-                            // loop again. This is the "nag" path.
-                            self.history.push(HistoryItem::User(msg));
-                            continue;
-                        }
-                        EndTurn::Stop(msg) => {
-                            // Surface the reason in chat then stop.
-                            wire::send(
-                                self.wire,
-                                wire::session_update(
-                                    self.session_id,
-                                    json!({
-                                        "sessionUpdate": "agent_message_chunk",
-                                        "content": { "type": "text", "text": msg }
-                                    }),
-                                ),
-                            )
-                            .await;
-                            return Ok(StopReason::EndTurn);
-                        }
+                    if let Some(msg) = self.todos.check_end_turn() {
+                        self.history.push(HistoryItem::User(msg));
+                        continue;
                     }
                 }
                 return Ok(stop);
