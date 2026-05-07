@@ -11,7 +11,7 @@ import {
   importIdentity as tauriImportIdentity,
   uploadMediaBytes,
 } from "@/shared/api/tauri";
-import { getMyRelayMembership } from "@/shared/api/relayMembers";
+import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
 import { relayClient } from "@/shared/api/relayClient";
@@ -37,8 +37,8 @@ import type {
  */
 async function checkMembershipDenied(): Promise<boolean> {
   try {
-    const membership = await getMyRelayMembership();
-    return membership === null;
+    const { membership, snapshotFound } = await getMyRelayMembershipLookup();
+    return snapshotFound && membership === null;
   } catch (error) {
     if (
       error instanceof Error &&

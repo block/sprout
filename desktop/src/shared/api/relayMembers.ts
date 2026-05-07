@@ -25,6 +25,17 @@ function eventCreatedAtIso(event: RelayEvent): string {
   return new Date(event.created_at * 1_000).toISOString();
 }
 
+export type RelayMembershipLookup = {
+  /**
+   * True when the relay returned a NIP-43 membership snapshot.
+   *
+   * Open relays do not publish kind:13534, so absence of this snapshot must not
+   * be treated as a denial by onboarding.
+   */
+  snapshotFound: boolean;
+  membership: RelayMember | null;
+};
+
 export function relayMembersFromEvent(event: RelayEvent): RelayMember[] {
   const seen = new Set<string>();
   const members: RelayMember[] = [];
@@ -53,6 +64,24 @@ export function relayMembersFromEvent(event: RelayEvent): RelayMember[] {
   return members;
 }
 
+export function relayMembershipLookupFromEvent(
+  event: RelayEvent | null,
+  pubkey: string,
+): RelayMembershipLookup {
+  if (!event) {
+    return { snapshotFound: false, membership: null };
+  }
+
+  const normalizedPubkey = normalizePubkey(pubkey);
+  return {
+    snapshotFound: true,
+    membership:
+      relayMembersFromEvent(event).find(
+        (member) => normalizePubkey(member.pubkey) === normalizedPubkey,
+      ) ?? null,
+  };
+}
+
 async function fetchMembershipListEvent(): Promise<RelayEvent | null> {
   const events = await relayClient.fetchEvents({
     kinds: [KIND_NIP43_MEMBERSHIP_LIST],
@@ -67,17 +96,16 @@ export async function listRelayMembers(): Promise<RelayMember[]> {
   return event ? relayMembersFromEvent(event) : [];
 }
 
-export async function getMyRelayMembership(): Promise<RelayMember | null> {
-  const [{ pubkey }, members] = await Promise.all([
+export async function getMyRelayMembershipLookup(): Promise<RelayMembershipLookup> {
+  const [{ pubkey }, event] = await Promise.all([
     getIdentity(),
-    listRelayMembers(),
+    fetchMembershipListEvent(),
   ]);
-  const normalizedPubkey = normalizePubkey(pubkey);
-  return (
-    members.find(
-      (member) => normalizePubkey(member.pubkey) === normalizedPubkey,
-    ) ?? null
-  );
+  return relayMembershipLookupFromEvent(event, pubkey);
+}
+
+export async function getMyRelayMembership(): Promise<RelayMember | null> {
+  return (await getMyRelayMembershipLookup()).membership;
 }
 
 async function publishRelayAdminEvent(
