@@ -699,3 +699,95 @@ async fn description_clamping_enforced() {
     );
     h.shutdown().await;
 }
+
+/// Todo enforcement: agent must not accept end_turn while pending todos exist.
+/// Sequence: LLM calls todo (creates pending items) → LLM tries to end (no tool calls)
+/// → agent injects reminder → LLM calls todo (marks all completed) → LLM ends → accepted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn todo_enforcement_blocks_premature_end() {
+    // Round 1: LLM calls todo to create 2 pending items.
+    // Round 2: LLM tries to end (text only, no tool calls) → enforcement fires.
+    // Round 3: LLM calls todo to mark both completed.
+    // Round 4: LLM ends (text only) → allowed because no pending items.
+    let llm = spawn_capturing_llm(vec![
+        // Round 1: create todos
+        openai_tool_call(
+            "tc_1",
+            "todo",
+            json!({
+                "todos": [
+                    {"id": 1, "title": "Step one", "status": "pending"},
+                    {"id": 2, "title": "Step two", "status": "pending"}
+                ]
+            }),
+        ),
+        // Round 2: try to end — should be blocked
+        openai_text("All done!"),
+        // Round 3: after enforcement reminder, complete the todos
+        openai_tool_call(
+            "tc_2",
+            "todo",
+            json!({
+                "todos": [
+                    {"id": 1, "title": "Step one", "status": "completed"},
+                    {"id": 2, "title": "Step two", "status": "completed"}
+                ]
+            }),
+        ),
+        // Round 4: end again — should be allowed now
+        openai_text("Now truly done."),
+    ])
+    .await;
+    let mut h = Harness::spawn(&llm.url).await;
+
+    h.send(
+        "initialize",
+        json!({"protocolVersion":1,"clientCapabilities":{}}),
+    )
+    .await;
+    let _ = h.recv().await;
+    h.send("session/new", json!({"cwd": "/tmp", "mcpServers": []}))
+        .await;
+    let r = h.recv().await;
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_owned();
+
+    let p_id = h
+        .send(
+            "session/prompt",
+            json!({
+                "sessionId": sid,
+                "prompt": [{"type": "text", "text": "do something"}],
+            }),
+        )
+        .await;
+
+    // Collect all messages until the prompt resolves.
+    let v = h.recv_until(|v| v["id"] == json!(p_id)).await;
+    assert_eq!(
+        v["result"]["stopReason"], "end_turn",
+        "should eventually end_turn after completing todos"
+    );
+
+    // Verify the LLM was called 4 times (enforcement forced an extra round).
+    let captured = llm.captured.lock().await;
+    assert_eq!(
+        captured.len(),
+        4,
+        "expected 4 LLM calls (todo, blocked end, todo complete, allowed end), got {}",
+        captured.len()
+    );
+
+    // The 3rd request (after enforcement) should contain the strike reminder
+    // in the messages array (injected as a user message).
+    let third_req = &captured[2];
+    let messages = third_req["messages"].as_array().unwrap();
+    let last_user_msg = messages.iter().rev().find(|m| m["role"] == "user").unwrap();
+    let content = last_user_msg["content"].as_str().unwrap_or("");
+    assert!(
+        content.contains("Pending todos remain") || content.contains("Strike"),
+        "enforcement reminder not found in 3rd LLM request. Last user msg: {}",
+        &content[..content.len().min(200)]
+    );
+
+    h.shutdown().await;
+}
