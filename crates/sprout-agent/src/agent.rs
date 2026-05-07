@@ -25,6 +25,7 @@ pub struct RunCtx<'a> {
     pub original_task: &'a mut Option<String>,
     pub handoff_count: &'a mut usize,
     pub todos: &'a mut crate::todo::Todos,
+    pub doom_loop: &'a mut crate::doom_loop::DoomLoop,
 }
 
 impl RunCtx<'_> {
@@ -55,6 +56,10 @@ impl RunCtx<'_> {
                 HandoffOutcome::Skipped => {
                     truncate_history(self.history, self.cfg.max_history_bytes)
                 }
+            }
+            if let Some(msg) = self.doom_loop.check() {
+                self.history.push(HistoryItem::User(msg));
+                continue;
             }
 
             let mut tools = self.mcp.tools();
@@ -134,6 +139,7 @@ impl RunCtx<'_> {
                 text: response.text,
                 tool_calls: calls.clone(),
             });
+            self.doom_loop.record_turn(&calls);
 
             if let Some(stop) = self.execute_calls(&calls).await {
                 return Ok(stop);

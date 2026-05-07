@@ -46,6 +46,8 @@ pub struct Config {
     pub max_handoffs: usize,
     pub max_parallel_tools: usize,
     pub todo_enabled: bool,
+    pub doom_loop_enabled: bool,
+    pub doom_loop_threshold: usize,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -102,6 +104,8 @@ impl Config {
             max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
             max_parallel_tools: parse_env("SPROUT_AGENT_MAX_PARALLEL_TOOLS", 8usize)?,
             todo_enabled: parse_bool_env("SPROUT_AGENT_TODO", true),
+            doom_loop_enabled: parse_bool_env("SPROUT_AGENT_DOOM_LOOP", true),
+            doom_loop_threshold: parse_env("SPROUT_AGENT_DOOM_LOOP_THRESHOLD", 3usize)?,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -142,6 +146,9 @@ impl Config {
         }
         if self.max_parallel_tools < 1 {
             return Err("config: SPROUT_AGENT_MAX_PARALLEL_TOOLS must be >= 1".into());
+        }
+        if self.doom_loop_enabled && !(2..=16).contains(&self.doom_loop_threshold) {
+            return Err("config: SPROUT_AGENT_DOOM_LOOP_THRESHOLD must be between 2 and 16".into());
         }
         if self.mcp_max_restart_attempts < 1 {
             return Err("config: SPROUT_AGENT_MCP_RESTART_MAX_ATTEMPTS must be >= 1".into());
