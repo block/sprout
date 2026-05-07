@@ -109,7 +109,7 @@ impl RunCtx<'_> {
             head.push('\n');
         }
         if let Some(block) = self.todos.handoff_block() {
-            head.push_str("\n");
+            head.push('\n');
             head.push_str(&block);
             head.push('\n');
         }

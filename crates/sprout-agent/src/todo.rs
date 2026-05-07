@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn disabled_check_end_turn_allows() {
-        let mut t = Todos::new(false);
+        let t = Todos::new(false);
         assert!(t.check_end_turn().is_none());
     }
 
