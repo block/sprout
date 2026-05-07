@@ -5,10 +5,14 @@ import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
+import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
-import { BotActivityBar } from "@/features/channels/ui/BotActivityBar";
+import {
+  BotActivityComposerAction,
+  type BotActivityAgent,
+} from "@/features/channels/ui/BotActivityBar";
 import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
@@ -52,8 +56,9 @@ function getInitialThreadPanelWidth(): number {
 
 type ChannelPaneProps = {
   activeChannel: Channel | null;
+  activityAgents?: BotActivityAgent[];
   agentSessionAgents: ManagedAgent[];
-  botTypingPubkeys: string[];
+  botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
   currentPubkey?: string;
   editTarget?: {
@@ -118,7 +123,8 @@ type ChannelPaneProps = {
 export const ChannelPane = React.memo(function ChannelPane({
   activeChannel,
   agentSessionAgents,
-  botTypingPubkeys,
+  activityAgents = agentSessionAgents,
+  botTypingEntries,
   channelFind,
   currentPubkey,
   editTarget = null,
@@ -229,6 +235,41 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel.archivedAt !== null ||
     activeChannel.channelType === "forum" ||
     isSending;
+  const hasTypingActivity = typingPubkeys.length > 0;
+  const composerBotTypingPubkeys = React.useMemo(() => {
+    const pubkeys: string[] = [];
+    for (const entry of botTypingEntries) {
+      if (
+        !pubkeys.some(
+          (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
+        )
+      ) {
+        pubkeys.push(entry.pubkey);
+      }
+    }
+    return pubkeys;
+  }, [botTypingEntries]);
+  const threadComposerBotTypingPubkeys = React.useMemo(() => {
+    if (!openThreadHeadId) {
+      return [];
+    }
+
+    const pubkeys: string[] = [];
+    for (const entry of botTypingEntries) {
+      if (entry.threadHeadId !== openThreadHeadId) {
+        continue;
+      }
+
+      if (
+        !pubkeys.some(
+          (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
+        )
+      ) {
+        pubkeys.push(entry.pubkey);
+      }
+    }
+    return pubkeys;
+  }, [botTypingEntries, openThreadHeadId]);
 
   const selectedAgent = React.useMemo(
     () =>
@@ -241,8 +282,8 @@ export const ChannelPane = React.memo(function ChannelPane({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden">
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {channelFind.isOpen ? (
           <ChannelFindBar
             matchCount={channelFind.matchCount}
@@ -287,6 +328,16 @@ export const ChannelPane = React.memo(function ChannelPane({
           searchQuery={channelFind.query}
           targetMessageId={targetMessageId}
         />
+        {hasTypingActivity ? (
+          <div className="relative bg-background">
+            <TypingIndicatorRow
+              channel={activeChannel}
+              currentPubkey={currentPubkey}
+              profiles={profiles}
+              typingPubkeys={typingPubkeys}
+            />
+          </div>
+        ) : null}
         {isNonMemberView ? (
           <div
             data-testid="join-banner"
@@ -314,43 +365,39 @@ export const ChannelPane = React.memo(function ChannelPane({
             </Button>
           </div>
         ) : (
-          <MessageComposer
-            channelId={activeChannel?.id ?? null}
-            channelName={activeChannel?.name ?? "channel"}
-            disabled={isComposerDisabled}
-            editTarget={editTarget}
-            isSending={isSending}
-            onCancelEdit={onCancelEdit}
-            onEditSave={onEditSave}
-            onSend={onSendMessage}
-            profiles={profiles}
-            placeholder={
-              activeChannel?.archivedAt
-                ? "Archived channels are read-only."
-                : activeChannel?.channelType === "forum"
-                  ? "Forum posting is not wired in this pass."
-                  : activeChannel
-                    ? `Message #${activeChannel.name}`
-                    : "Select a channel"
-            }
-          />
-        )}
-        <div className="relative bg-background">
-          <TypingIndicatorRow
-            channel={activeChannel}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-            typingPubkeys={typingPubkeys}
-          />
-          <div className="absolute right-0 top-0 flex h-8 items-center pr-8 sm:pr-10">
-            <BotActivityBar
-              agents={agentSessionAgents}
-              onOpenAgentSession={onOpenAgentSession}
-              openAgentSessionPubkey={openAgentSessionPubkey}
-              typingBotPubkeys={botTypingPubkeys}
+          <div className="relative z-10 shrink-0">
+            <MessageComposer
+              channelId={activeChannel?.id ?? null}
+              channelName={activeChannel?.name ?? "channel"}
+              disabled={isComposerDisabled}
+              editTarget={editTarget}
+              isSending={isSending}
+              onCancelEdit={onCancelEdit}
+              onEditSave={onEditSave}
+              onSend={onSendMessage}
+              profiles={profiles}
+              toolbarExtraActions={
+                <BotActivityComposerAction
+                  agents={activityAgents}
+                  onOpenAgentSession={onOpenAgentSession}
+                  openAgentSessionPubkey={openAgentSessionPubkey}
+                  profiles={profiles}
+                  typingBotPubkeys={composerBotTypingPubkeys}
+                />
+              }
+              placeholder={
+                activeChannel?.archivedAt
+                  ? "Archived channels are read-only."
+                  : activeChannel?.channelType === "forum"
+                    ? "Forum posting is not wired in this pass."
+                    : activeChannel
+                      ? `Message #${activeChannel.name}`
+                      : "Select a channel"
+              }
+              showTopBorder={false}
             />
           </div>
-        </div>
+        )}
       </div>
 
       {threadHeadMessage ? (
@@ -384,15 +431,24 @@ export const ChannelPane = React.memo(function ChannelPane({
           widthPx={threadPanelWidthPx}
           threadReplies={threadMessages}
           threadTypingPubkeys={threadTypingPubkeys}
+          toolbarExtraActions={
+            <BotActivityComposerAction
+              agents={activityAgents}
+              onOpenAgentSession={onOpenAgentSession}
+              openAgentSessionPubkey={openAgentSessionPubkey}
+              profiles={profiles}
+              typingBotPubkeys={threadComposerBotTypingPubkeys}
+            />
+          }
         />
       ) : activeChannel && selectedAgent ? (
         <AgentSessionThreadPanel
           agent={selectedAgent}
           canResetWidth={canResetThreadPanelWidth}
           channel={activeChannel}
-          isWorking={botTypingPubkeys.some(
-            (pubkey) =>
-              pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
+          isWorking={botTypingEntries.some(
+            (entry) =>
+              entry.pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
           )}
           onClose={onCloseAgentSession}
           onResetWidth={handleThreadPanelWidthReset}

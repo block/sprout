@@ -10,7 +10,6 @@ import { TooltipProvider } from "@/shared/ui/tooltip";
 import { TimelineSkeleton } from "./TimelineSkeleton";
 import { TimelineMessageList } from "./TimelineMessageList";
 import { useLoadOlderOnScroll } from "./useLoadOlderOnScroll";
-import { useStickyDayHeader } from "./useStickyDayHeader";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageTimelineProps = {
@@ -24,6 +23,7 @@ type MessageTimelineProps = {
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
   isFetchingOlder?: boolean;
+  messageFooters?: Record<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
   personaLookup?: Map<string, string>;
   profiles?: UserProfileLookup;
@@ -56,6 +56,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   fetchOlder,
   hasOlderMessages = true,
   isFetchingOlder = false,
+  messageFooters,
   personaLookup,
   profiles,
   onDelete,
@@ -121,29 +122,20 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     sentinelRef: topSentinelRef,
   });
 
-  const stickyDayLabel = useStickyDayHeader(scrollContainerRef);
-
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="relative min-h-0 flex-1">
-        {stickyDayLabel && !isAtBottom ? (
-          <div
-            className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-2 sm:px-6"
-            data-testid="message-timeline-sticky-day"
-          >
-            <p className="rounded-full bg-muted/90 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-muted-foreground shadow-sm backdrop-blur-sm">
-              {stickyDayLabel}
-            </p>
-          </div>
-        ) : null}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
-          className="h-full overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-6 pt-3 [overflow-anchor:none] sm:px-6"
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-12 pt-1 [overflow-anchor:none] sm:px-6"
           data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
           ref={scrollContainerRef}
         >
-          <div className="flex w-full flex-col gap-3 px-4" ref={contentRef}>
+          <div
+            className="mx-auto flex w-full max-w-4xl flex-col gap-2 pb-8 pt-14"
+            ref={contentRef}
+          >
             <div ref={topSentinelRef} aria-hidden className="h-px" />
 
             {isFetchingOlder ? (
@@ -186,6 +178,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
                 activeReplyTargetId={activeReplyTargetId}
                 currentPubkey={currentPubkey}
                 highlightedMessageId={highlightedMessageId}
+                messageFooters={messageFooters}
                 messages={messages}
                 onDelete={onDelete}
                 onEdit={onEdit}
@@ -204,17 +197,18 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         </div>
 
         {!isAtBottom ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-8 flex justify-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-12 z-20 flex justify-center px-4">
             <Button
-              className="pointer-events-auto rounded-full shadow-lg"
+              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
               data-testid="message-scroll-to-latest"
               onClick={() => {
                 scrollToBottom("smooth");
               }}
               size="sm"
               type="button"
+              variant="outline"
             >
-              <ArrowDown className="h-4 w-4" />
+              <ArrowDown aria-hidden />
               {newMessageCount > 0
                 ? `${newMessageCount} new message${newMessageCount === 1 ? "" : "s"}`
                 : "Jump to latest"}
