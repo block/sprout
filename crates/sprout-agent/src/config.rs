@@ -45,6 +45,8 @@ pub struct Config {
     pub max_history_bytes: usize,
     pub max_handoffs: usize,
     pub auto_approve: bool,
+    pub parallel_tools: bool,
+    pub parallel_tools_limit: usize,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -102,6 +104,10 @@ impl Config {
             auto_approve: env("SPROUT_AGENT_AUTO_APPROVE")
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
                 .unwrap_or(false),
+            parallel_tools: env("SPROUT_AGENT_PARALLEL_TOOLS")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+                .unwrap_or(false),
+            parallel_tools_limit: parse_env("SPROUT_AGENT_PARALLEL_TOOLS_LIMIT", 4usize)?,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -139,6 +145,9 @@ impl Config {
         }
         if self.mcp_init_timeout < MIN_TIMEOUT {
             return Err("config: SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS must be >= 1".into());
+        }
+        if self.parallel_tools && self.parallel_tools_limit < 1 {
+            return Err("config: SPROUT_AGENT_PARALLEL_TOOLS_LIMIT must be >= 1".into());
         }
         if self.mcp_max_restart_attempts < 1 {
             return Err("config: SPROUT_AGENT_MCP_RESTART_MAX_ATTEMPTS must be >= 1".into());
