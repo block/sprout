@@ -276,6 +276,27 @@ jobs:
       - name: Dependency policy
         run: cargo-deny check
 
+  dead-token-guard:
+    name: Dead Token Reference Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Check for dead API token references in client code
+        run: |
+          # Fail if dead API token patterns reappear in desktop, mobile, docs, or config.
+          # Relay crates are excluded — they still use token auth internally.
+          PATTERNS='TokenScope|MintTokenResponse|hasApiToken|spr_tok_'
+          PATHS='desktop/src/ desktop/tests/ mobile/test/ mobile/lib/ .env.example'
+          EXCLUDES='--exclude-dir=node_modules --exclude-dir=.dart_tool'
+          if grep -rn $EXCLUDES -E "$PATTERNS" $PATHS 2>/dev/null; then
+            echo "::error::Dead API token references found in client code. See above."
+            exit 1
+          fi
+          echo "No dead token references found."
+
   server-cross-compile:
     name: Server Cross-Compile
     runs-on: ubuntu-latest

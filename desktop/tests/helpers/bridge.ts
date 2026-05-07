@@ -55,21 +55,9 @@ type MockBridgeOptions = {
     acp?: MockCommandAvailability;
     mcp?: MockCommandAvailability;
   };
-  mintTokenError?: string;
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
-  seededTokens?: Array<{
-    id: string;
-    name: string;
-    scopes: string[];
-    channel_ids: string[];
-    created_at: string;
-    expires_at: string | null;
-    last_used_at: string | null;
-    revoked_at: string | null;
-    token?: string;
-  }>;
 };
 
 type BridgeOptions = {

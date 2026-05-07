@@ -10,7 +10,7 @@ third-party Nostr clients to connect:
 
 **Direct** is simpler — no extra process, no translation layer. Use it when your client speaks
 NIP-29. **Proxy** is for external guests (investors, press, partners, etc.) who use standard NIP-28
-clients and don't have company Okta/API-token credentials.
+clients and don't have company Okta credentials.
 
 Both paths require NIP-42 authentication.
 
@@ -83,10 +83,10 @@ PGPASSWORD=sprout_dev psql -h localhost -U sprout -d sprout -c \
 ### Pubkey Allowlist
 
 When `SPROUT_PUBKEY_ALLOWLIST=true`, NIP-42 connections that authenticate with only a pubkey
-(no JWT, no API token) are checked against the `pubkey_allowlist` table. This lets you open the
-relay to specific external Nostr identities without granting full Okta/API-token access.
+(no JWT) are checked against the `pubkey_allowlist` table. This lets you open the
+relay to specific external Nostr identities without granting full Okta access.
 
-- Users with valid **API tokens** (`sprout_*`) or **Okta JWTs** bypass the allowlist.
+- Users with valid **Okta JWTs** bypass the allowlist.
 - **Fail-closed:** if the DB lookup fails, the connection is denied.
 - Default: `false` (all authenticated pubkeys accepted).
 - Auth failure returns generic `auth-required: verification failed` (no allowlist-specific message).
@@ -212,11 +212,11 @@ external user maps to a consistent identity on the relay.
 export SPROUT_PROXY_SERVER_KEY=$(openssl rand -hex 32)
 PROXY_PUBKEY=$(echo $SPROUT_PROXY_SERVER_KEY | nak key public)
 
-# 3. Mint a proxy API token
-cargo run -p sprout-admin -- mint-token \
-  --name "sprout-proxy" \
-  --scopes "proxy:submit,channels:read,messages:read" \
-  --pubkey $PROXY_PUBKEY
+# 3. Mint a proxy API token (required until proxy is migrated to NIP-98 auth)
+export SPROUT_PROXY_API_TOKEN=$(curl -s -X POST http://localhost:3000/api/tokens \
+  -H "Authorization: Nostr <base64-nip98-event>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"proxy"}' | jq -r .token)
 
 # 4. Get the relay's public key (needed for attribution trust)
 #    This is the pubkey of the relay's signing keypair. If SPROUT_RELAY_PRIVATE_KEY
@@ -227,7 +227,6 @@ export SPROUT_RELAY_PUBKEY=<relay-hex-pubkey>
 # 5. Start the proxy
 export SPROUT_UPSTREAM_URL=ws://localhost:3000
 export SPROUT_PROXY_SALT=$(openssl rand -hex 32)
-export SPROUT_PROXY_API_TOKEN=<token from step 3>
 export SPROUT_PROXY_ADMIN_SECRET=$(openssl rand -hex 16)
 cargo run -p sprout-proxy             # proxy on :4869
 
@@ -312,7 +311,7 @@ curl -X DELETE http://localhost:4869/admin/guests \
   -d '{"pubkey": "<hex>"}'
 ```
 
-> **Private channels:** The proxy authenticates upstream using its own server key and API token.
+> **Private channels:** The proxy authenticates upstream using its own server key via NIP-42.
 > `GET /api/channels` and relay REQ filters only return channels accessible to that identity.
 > For the proxy to expose a private channel, the proxy's server pubkey must itself be a member
 > of that channel. Guest registration alone is not sufficient for private channels.
@@ -464,9 +463,9 @@ is dual-sourced: local snapshot metadata plus upstream edit events (kind:40003 �
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `SPROUT_UPSTREAM_URL` | ✅ | — | WebSocket URL of the relay |
+| `SPROUT_PROXY_API_TOKEN` | ✅ | — | Relay API token for REST calls (required until proxy is migrated to NIP-98 auth) |
 | `SPROUT_PROXY_SERVER_KEY` | ✅ | — | Hex-encoded 32-byte secret key (raw hex, not bech32 `nsec`) |
 | `SPROUT_PROXY_SALT` | ✅ | — | Hex 32-byte salt for shadow keys (keep stable and secret) |
-| `SPROUT_PROXY_API_TOKEN` | ✅ | — | API token with `proxy:submit,channels:read,messages:read` |
 | `SPROUT_RELAY_PUBKEY` | ✅ | — | Hex-encoded 64-char relay public key (for attribution trust) |
 | `SPROUT_PROXY_BIND_ADDR` | ❌ | `0.0.0.0:4869` | Listen address |
 | `SPROUT_PROXY_RELAY_URL` | ❌ | derived from bind addr | Public WebSocket URL for NIP-42 relay-tag validation. Set if behind a reverse proxy. |
@@ -481,7 +480,7 @@ is dual-sourced: local snapshot metadata plus upstream edit events (kind:40003 �
 |----------|:--------:|---------|-------------|
 | `SPROUT_PUBKEY_ALLOWLIST` | ❌ | `false` | Enable pubkey allowlist for NIP-42 pubkey-only auth |
 | `SPROUT_RELAY_PRIVATE_KEY` | ❌ | random | Hex secret key for relay signing (discovery events, system messages) |
-| `SPROUT_REQUIRE_AUTH_TOKEN` | ❌ | `false` | Require JWT/API token for all connections |
+| `SPROUT_REQUIRE_AUTH_TOKEN` | ❌ | `false` | Require authenticated NIP-42 for all connections |
 
 ---
 
@@ -489,7 +488,7 @@ is dual-sourced: local snapshot metadata plus upstream edit events (kind:40003 �
 
 ### Direct Path
 - **Pubkey allowlist is fail-closed.** DB errors deny the connection.
-- **API token / Okta JWT users bypass the allowlist.** The allowlist only gates pubkey-only NIP-42.
+- **Okta JWT users bypass the allowlist.** The allowlist only gates pubkey-only NIP-42.
 - **kind:9 requires `#h` tag.** Messages without a channel-scoped `#h` tag are rejected.
 - **kind:7 derives channel from target.** Reactions look up the target event's channel via `#e` — client-supplied `#h` tags are ignored. Reactions to unknown events are rejected (fail-closed).
 - **kind:5 uses `#h` if present, but doesn't require it.** Deletions validate author-match against target events via `#e` tags. Only self-authored events can be deleted (admin deletions use kind:9005).
