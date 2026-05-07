@@ -29,12 +29,12 @@ fn merge_personas_adds_missing_built_ins() {
     assert!(changed);
     assert_eq!(records.len(), BUILT_IN_PERSONAS.len());
     assert!(records.iter().all(|record| record.is_builtin));
-    assert!(records.iter().all(|record| !record.is_active));
+    assert!(records.iter().all(|record| record.is_active));
     let display_names: Vec<&str> = records
         .iter()
         .map(|record| record.display_name.as_str())
         .collect();
-    assert_eq!(display_names, vec!["Solo", "Ralph", "Scout"]);
+    assert_eq!(display_names, vec!["Solo", "Kit", "Scout"]);
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn merge_personas_backfills_new_builtins_for_existing_store() {
     let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
 
     assert!(changed);
-    assert!(records.iter().any(|record| record.id == "builtin:ralph"));
+    assert!(records.iter().any(|record| record.id == "builtin:kit"));
     assert!(records.iter().any(|record| record.id == "builtin:scout"));
     assert!(records.iter().any(|record| record.id == "builtin:solo"));
     assert!(
@@ -121,10 +121,10 @@ fn merge_personas_backfills_new_builtins_for_existing_store() {
             .is_active
     );
     assert!(
-        !records
+        records
             .iter()
-            .find(|record| record.id == "builtin:ralph")
-            .expect("ralph built-in should exist")
+            .find(|record| record.id == "builtin:kit")
+            .expect("kit built-in should exist")
             .is_active
     );
 }

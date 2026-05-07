@@ -714,10 +714,10 @@ function resetMockPersonas() {
       updated_at: now,
     },
     {
-      id: "builtin:ralph",
-      display_name: "Ralph",
+      id: "builtin:kit",
+      display_name: "Kit",
       avatar_url: null,
-      system_prompt: "You are Ralph.",
+      system_prompt: "You are Kit.",
       is_builtin: true,
       is_active: false,
       created_at: now,
