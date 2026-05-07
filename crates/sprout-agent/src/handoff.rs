@@ -57,8 +57,14 @@ impl RunCtx<'_> {
         });
         let prior = self.history.len();
         self.history.clear();
-        self.history
-            .push(HistoryItem::User(format!("[Context Handoff]\n{summary}")));
+        // Replay the todo state into the post-handoff context. Without
+        // this the next turn forgets the plan.
+        let mut handoff_text = format!("[Context Handoff]\n{summary}");
+        if let Some(block) = self.todos.handoff_block() {
+            handoff_text.push_str("\n\n");
+            handoff_text.push_str(&block);
+        }
+        self.history.push(HistoryItem::User(handoff_text));
         if let Some(prompt) = current_prompt {
             self.history.push(HistoryItem::User(prompt));
         }
@@ -86,7 +92,10 @@ impl RunCtx<'_> {
         let task = self.original_task.as_deref().unwrap_or("(unknown)");
         head.push_str(&clamp_bytes(task, HANDOFF_ORIGINAL_TASK_MAX_BYTES));
         head.push_str("\n\n# Available Tools\n");
-        let all_tools = self.mcp.tools();
+        let mut all_tools = self.mcp.tools();
+        if let Some(td) = self.todos.tool_def() {
+            all_tools.push(td);
+        }
         let total = all_tools.len();
         if total == 0 {
             head.push_str("(none)\n");
@@ -97,6 +106,11 @@ impl RunCtx<'_> {
             if shown < total {
                 head.push_str(&format!(", … (+{} more)", total - shown));
             }
+            head.push('\n');
+        }
+        if let Some(block) = self.todos.handoff_block() {
+            head.push_str("\n");
+            head.push_str(&block);
             head.push('\n');
         }
 

@@ -644,7 +644,7 @@ async fn per_turn_tool_call_cap_enforced() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn description_clamping_enforced() {
     let llm = spawn_capturing_llm(vec![openai_text("done")]).await;
-    let mut h = Harness::spawn(&llm.url).await;
+    let mut h = Harness::spawn_with_env(&llm.url, &[("SPROUT_AGENT_TODO", "0")]).await;
 
     let fake_mcp = env!("CARGO_BIN_EXE_fake-mcp");
     h.send(

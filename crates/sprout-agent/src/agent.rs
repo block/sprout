@@ -8,6 +8,7 @@ use crate::config::{Config, MAX_PROMPT_BYTES, MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_
 use crate::handoff::HandoffOutcome;
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
+use crate::todo::EndTurn;
 use crate::types::{
     AgentError, ContentBlock, HistoryItem, ProviderStop, StopReason, ToolCall, ToolResult,
 };
@@ -23,6 +24,7 @@ pub struct RunCtx<'a> {
     pub history: &'a mut Vec<HistoryItem>,
     pub original_task: &'a mut Option<String>,
     pub handoff_count: &'a mut usize,
+    pub todos: &'a mut crate::todo::Todos,
 }
 
 impl RunCtx<'_> {
@@ -55,7 +57,10 @@ impl RunCtx<'_> {
                 }
             }
 
-            let tools = self.mcp.tools();
+            let mut tools = self.mcp.tools();
+            if let Some(td) = self.todos.tool_def() {
+                tools.push(td);
+            }
             let response = tokio::select! {
                 biased;
                 _ = self.cancel.changed() => return Ok(StopReason::Cancelled),
@@ -86,7 +91,35 @@ impl RunCtx<'_> {
                     text: response.text,
                     tool_calls: Vec::new(),
                 });
-                return Ok(map_stop(response.stop));
+                let stop = map_stop(response.stop);
+                // Only gate genuine end_turn — don't override max_tokens/refusal.
+                if stop == StopReason::EndTurn {
+                    match self.todos.check_end_turn() {
+                        EndTurn::Allow => {}
+                        EndTurn::Continue(msg) => {
+                            // Inject reminder as a synthetic user turn and
+                            // loop again. This is the "nag" path.
+                            self.history.push(HistoryItem::User(msg));
+                            continue;
+                        }
+                        EndTurn::ForceStop(msg) => {
+                            // Surface the reason in chat then stop.
+                            wire::send(
+                                self.wire,
+                                wire::session_update(
+                                    self.session_id,
+                                    json!({
+                                        "sessionUpdate": "agent_message_chunk",
+                                        "content": { "type": "text", "text": msg }
+                                    }),
+                                ),
+                            )
+                            .await;
+                            return Ok(StopReason::EndTurn);
+                        }
+                    }
+                }
+                return Ok(stop);
             }
 
             let mut calls = response.tool_calls;
@@ -143,6 +176,37 @@ impl RunCtx<'_> {
                 return Some(StopReason::Cancelled);
             }
             emit_pending(self.wire, self.session_id, call).await;
+            // Intercept the agent-side todo tool before MCP. Synchronous
+            // and cheap; we emit in_progress + completed/failed ourselves
+            // so the wire shape matches an MCP tool exactly.
+            if call.name == crate::todo::TOOL_NAME && self.todos.is_enabled() {
+                emit_in_progress(self.wire, self.session_id, call).await;
+                let (result, ok) = match self.todos.handle_call(&call.arguments) {
+                    Ok(text) => (
+                        ToolResult {
+                            provider_id: call.provider_id.clone(),
+                            text,
+                            is_error: false,
+                        },
+                        true,
+                    ),
+                    Err(e) => (
+                        ToolResult {
+                            provider_id: call.provider_id.clone(),
+                            text: format!("Error: {e}"),
+                            is_error: true,
+                        },
+                        false,
+                    ),
+                };
+                if ok {
+                    emit_completed(self.wire, self.session_id, call, &result).await;
+                } else {
+                    emit_failed(self.wire, self.session_id, call, &result.text).await;
+                }
+                results[idx] = Some(result);
+                continue;
+            }
             if !self.mcp.has(&call.name) {
                 let err = format!("unknown tool: {}", call.name);
                 emit_failed(self.wire, self.session_id, call, &err).await;
@@ -167,11 +231,16 @@ impl RunCtx<'_> {
 
     fn append_results(&mut self, calls: &[ToolCall], results: &mut [Option<ToolResult>]) {
         for (i, call) in calls.iter().enumerate() {
-            let result = results[i].take().unwrap_or_else(|| ToolResult {
+            let mut result = results[i].take().unwrap_or_else(|| ToolResult {
                 provider_id: call.provider_id.clone(),
                 text: "internal error: missing result".into(),
                 is_error: true,
             });
+            // Single banner injection point for non-todo tools. The todo
+            // tool's own response is already the bare list; the banner
+            // (if pending items remain) is added here too. `decorate` is
+            // idempotent and a no-op when disabled / no pending items.
+            self.todos.decorate(&mut result.text);
             self.history.push(HistoryItem::ToolResult(result));
         }
     }

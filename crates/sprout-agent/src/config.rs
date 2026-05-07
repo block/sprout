@@ -45,6 +45,7 @@ pub struct Config {
     pub max_history_bytes: usize,
     pub max_handoffs: usize,
     pub max_parallel_tools: usize,
+    pub todo_enabled: bool,
     pub api_key: String,
     pub model: String,
     pub base_url: String,
@@ -100,6 +101,7 @@ impl Config {
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
             max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
             max_parallel_tools: parse_env("SPROUT_AGENT_MAX_PARALLEL_TOOLS", 8usize)?,
+            todo_enabled: parse_bool_env("SPROUT_AGENT_TODO", true),
         };
         cfg.validate()?;
         Ok(cfg)
@@ -175,4 +177,17 @@ where
     env(key)
         .map(|v| v.parse().map_err(|e| format!("config: {key}: {e}")))
         .unwrap_or(Ok(default))
+}
+
+/// Lenient boolean env parsing. Unset → default. "0"/"false"/"no"/"off"
+/// (case-insensitive) → false. Anything else → true. Picked over strict
+/// parsing because operators reach for `=0` or `=no` more than `=false`.
+fn parse_bool_env(key: &str, default: bool) -> bool {
+    match env(key) {
+        None => default,
+        Some(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off" | ""
+        ),
+    }
 }
