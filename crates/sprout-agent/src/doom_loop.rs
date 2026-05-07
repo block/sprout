@@ -14,7 +14,7 @@ const MAX_CYCLIC_WIDTH: usize = 4;
 const MAX_BUFFER: usize = MAX_THRESHOLD * MAX_CYCLIC_WIDTH;
 const SKIPPED_TOOL_NAMES: &[&str] = &[crate::todo::TOOL_NAME];
 
-const MESSAGE_SUFFIX: &str = "Stop and reassess before using another tool. Summarize what the previous tool results showed, explain why the repeated calls are not making progress, then choose a different next action or ask for clarification if blocked.";
+const MESSAGE_SUFFIX: &str = "Repeated tool calls detected — try a different approach.";
 
 /// Detects repeated tool-call turns.
 ///
@@ -22,11 +22,16 @@ const MESSAGE_SUFFIX: &str = "Stop and reassess before using another tool. Summa
 /// loops, that means N identical turns. For cyclic loops of width W, that means
 /// N repetitions of a W-turn sequence, requiring W*N buffered entries.
 #[derive(Debug)]
+struct Turn {
+    hash: u64,
+    tools: Vec<String>,
+}
+
+#[derive(Debug)]
 pub struct DoomLoop {
     enabled: bool,
     threshold: usize,
-    calls: VecDeque<u64>,
-    tool_names_per_turn: VecDeque<Vec<String>>,
+    turns: VecDeque<Turn>,
 }
 
 impl DoomLoop {
@@ -35,41 +40,37 @@ impl DoomLoop {
         Self {
             enabled,
             threshold: threshold.clamp(MIN_THRESHOLD, MAX_THRESHOLD),
-            calls: VecDeque::with_capacity(cap),
-            tool_names_per_turn: VecDeque::with_capacity(cap),
+            turns: VecDeque::with_capacity(cap),
         }
     }
 
     /// Clears all buffered state. Call at the start of each user prompt so
     /// patterns from a previous prompt don't bleed into the next.
     pub fn reset(&mut self) {
-        self.calls.clear();
-        self.tool_names_per_turn.clear();
+        self.turns.clear();
     }
 
     pub fn record_turn(&mut self, calls: &[ToolCall]) {
         if !self.enabled {
             return;
         }
-        let Some((fingerprint, tool_names)) = fingerprint_turn(calls) else {
+        let Some((hash, tools)) = fingerprint_turn(calls) else {
             return;
         };
-        if self.calls.len() == MAX_BUFFER {
-            self.calls.pop_front();
-            self.tool_names_per_turn.pop_front();
+        if self.turns.len() == MAX_BUFFER {
+            self.turns.pop_front();
         }
-        self.calls.push_back(fingerprint);
-        self.tool_names_per_turn.push_back(tool_names);
+        self.turns.push_back(Turn { hash, tools });
     }
 
     pub fn check(&mut self) -> Option<String> {
-        if !self.enabled || self.calls.len() < self.threshold {
+        if !self.enabled || self.turns.len() < self.threshold {
             return None;
         }
         let width = self.repeated_width()?;
         let tools = self.tool_label(width);
         eprintln!(
-            "sprout-agent: doom: loop detected: tools=[{tools}] threshold={} width={width}",
+            "sprout-agent: doom_loop: detected tools=[{tools}] threshold={} width={width}",
             self.threshold
         );
         self.reset();
@@ -90,15 +91,15 @@ impl DoomLoop {
     }
 
     fn is_repeated_pattern(&self, width: usize, need: usize) -> bool {
-        let len = self.calls.len();
+        let len = self.turns.len();
         if width == 0 || len < need || need <= width {
             return false;
         }
         let start = len - need;
         (0..need - width).all(|i| {
             matches!(
-                (self.calls.get(start + i), self.calls.get(start + i + width)),
-                (Some(left), Some(right)) if left == right
+                (self.turns.get(start + i), self.turns.get(start + i + width)),
+                (Some(left), Some(right)) if left.hash == right.hash
             )
         })
     }
@@ -107,18 +108,18 @@ impl DoomLoop {
     /// reports the single repeated turn. For width>1, reports the full cycle
     /// joined by " -> " so the model sees the actual sequence it's stuck in.
     fn tool_label(&self, width: usize) -> String {
-        let len = self.tool_names_per_turn.len();
+        let len = self.turns.len();
         if len == 0 || width == 0 {
             return "the same tool turn".into();
         }
         let start = len.saturating_sub(width);
         let segments: Vec<String> = (start..len)
-            .filter_map(|i| self.tool_names_per_turn.get(i))
-            .map(|names| {
-                if names.is_empty() {
+            .filter_map(|i| self.turns.get(i))
+            .map(|turn| {
+                if turn.tools.is_empty() {
                     "<turn>".into()
                 } else {
-                    names.join(", ")
+                    turn.tools.join(", ")
                 }
             })
             .collect();
@@ -256,8 +257,7 @@ mod tests {
         record(&mut detector, "search", 1);
         detector.reset();
         assert!(detector.check().is_none());
-        assert!(detector.calls.is_empty());
-        assert!(detector.tool_names_per_turn.is_empty());
+        assert!(detector.turns.is_empty());
 
         // After reset, need full threshold of new turns to fire.
         record(&mut detector, "search", 1);
@@ -379,8 +379,7 @@ mod tests {
     #[test]
     fn disabled_never_fires_and_does_not_preallocate() {
         let mut detector = DoomLoop::new(false, 3);
-        assert_eq!(detector.calls.capacity(), 0);
-        assert_eq!(detector.tool_names_per_turn.capacity(), 0);
+        assert_eq!(detector.turns.capacity(), 0);
 
         for _ in 0..20 {
             record(&mut detector, "search", 1);
@@ -406,8 +405,7 @@ mod tests {
         detector.record_turn(&[todo(1)]);
         detector.record_turn(&[todo(2)]);
         detector.record_turn(&[todo(3)]);
-        assert!(detector.calls.is_empty());
-        assert!(detector.tool_names_per_turn.is_empty());
+        assert!(detector.turns.is_empty());
         assert!(detector.check().is_none());
     }
 

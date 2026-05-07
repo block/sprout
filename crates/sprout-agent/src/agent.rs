@@ -52,7 +52,6 @@ impl RunCtx<'_> {
             if self.cfg.max_rounds > 0 && round >= self.cfg.max_rounds {
                 return Ok(StopReason::MaxTurnRequests);
             }
-            round = round.saturating_add(1);
             if *self.cancel.borrow() {
                 return Ok(StopReason::Cancelled);
             }
@@ -65,8 +64,6 @@ impl RunCtx<'_> {
             }
             if let Some(msg) = self.doom_loop.check() {
                 self.history.push(HistoryItem::User(msg));
-                // Don't count the injection as a round — it's not an LLM call.
-                round = round.saturating_sub(1);
                 continue;
             }
 
@@ -74,6 +71,7 @@ impl RunCtx<'_> {
             if let Some(td) = self.todos.tool_def() {
                 tools.push(td);
             }
+            round = round.saturating_add(1);
             let response = tokio::select! {
                 biased;
                 _ = self.cancel.changed() => return Ok(StopReason::Cancelled),
@@ -115,7 +113,7 @@ impl RunCtx<'_> {
                             self.history.push(HistoryItem::User(msg));
                             continue;
                         }
-                        EndTurn::ForceStop(msg) => {
+                        EndTurn::Stop(msg) => {
                             // Surface the reason in chat then stop.
                             wire::send(
                                 self.wire,

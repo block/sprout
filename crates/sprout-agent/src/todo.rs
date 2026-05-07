@@ -4,9 +4,8 @@
 //! `todo` tool before MCP, validates, renders, and gates `end_turn` while
 //! pending work remains. Three strikes → force-stop.
 //!
-//! Banner ownership: `render_list()` produces the bare list. `render()`
-//! prepends the warning banner when pending items exist. `decorate()` is
-//! the single place that prepends the banner to other tool results, so
+//! Banner ownership: `render_list()` produces the bare list. `decorate()`
+//! is the single place that prepends the banner to tool results, so
 //! `handle_call()` returns `render_list()` (no banner) and lets the agent's
 //! post-call `decorate()` add it once.
 
@@ -22,15 +21,7 @@ const MAX_TITLE_CHARS: usize = 200;
 const MAX_STRIKES: u32 = 3;
 const WARN_PREFIX: &str = "⚠ Pending todos remain. Update the `todo` list (mark in_progress / completed) before ending the turn.\n\n";
 
-const DESCRIPTION: &str = "Maintain the session todo list. Use VERY frequently for any \
-multi-step task. Before starting work, create the full plan. Mark exactly one item \
-in_progress before working on it. Mark completed immediately after finishing. Never \
-remove an incomplete item. Do not end the turn while pending todos remain. \
-\n\nThis is a full-list atomic replace: send the complete list every time you call \
-this tool. Omit the `todos` key (or pass null) to read current state without \
-modifying it. IDs are small stable integers you choose (0..=9999); reuse the same \
-id for the same item across calls. Max 50 items. Titles max 200 characters, no \
-control characters (no newlines/tabs).";
+const DESCRIPTION: &str = "Session task list with end-turn enforcement. Full-list atomic replace each call. Omit todos key to read. Max 50 items, IDs 0-9999, titles max 200 chars.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,19 +29,6 @@ pub enum Status {
     Pending,
     InProgress,
     Completed,
-}
-
-impl std::fmt::Display for Status {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Schema names — must match the `enum` in input_schema and stay
-        // stable across error messages the LLM reads.
-        let s = match self {
-            Self::Pending => "pending",
-            Self::InProgress => "in_progress",
-            Self::Completed => "completed",
-        };
-        f.write_str(s)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -71,16 +49,13 @@ struct Input {
 pub enum EndTurn {
     Allow,
     Continue(String),
-    ForceStop(String),
+    Stop(String),
 }
 
 #[derive(Debug)]
 pub struct Todos {
     enabled: bool,
     items: Vec<Item>,
-    /// Bumps only when `items` changes semantically (by value). Lets
-    /// callers detect any semantic edit (used in tests / diagnostics).
-    revision: u64,
     strikes: u32,
     /// Number of completed items at the last strike. Strikes only reset
     /// when the count of completed items INCREASES — actual progress.
@@ -94,7 +69,6 @@ impl Todos {
         Self {
             enabled,
             items: Vec::new(),
-            revision: 0,
             strikes: 0,
             last_strike_completed_count: None,
         }
@@ -209,9 +183,14 @@ impl Todos {
             }
             match new_items.iter().find(|n| n.id == old.id) {
                 None => {
+                    let status_name = match old.status {
+                        Status::Pending => "pending",
+                        Status::InProgress => "in_progress",
+                        Status::Completed => "completed",
+                    };
                     return Err(format!(
                         "cannot remove incomplete item {} ({}); mark it completed first",
-                        old.id, old.status
+                        old.id, status_name
                     ));
                 }
                 Some(new) if new.title != old.title => {
@@ -224,12 +203,11 @@ impl Todos {
                 Some(_) => {}
             }
         }
-        // Only bump revision when the list actually changed by value.
+        // Only replace when the list actually changed by value.
         // Otherwise a model could resend an identical pending list every
         // turn to reset its strike count and never finish.
         if new_items != self.items {
             self.items = new_items;
-            self.revision = self.revision.saturating_add(1);
         }
         Ok(())
     }
@@ -267,20 +245,6 @@ impl Todos {
             out.push('\n');
         }
         out
-    }
-
-    /// Render with the warning banner prepended when pending work remains.
-    #[cfg(test)]
-    pub fn render(&self) -> String {
-        let body = self.render_list();
-        if self.has_pending() {
-            let mut out = String::with_capacity(WARN_PREFIX.len() + body.len());
-            out.push_str(WARN_PREFIX);
-            out.push_str(&body);
-            out
-        } else {
-            body
-        }
     }
 
     /// Prepend a pending-todo warning to any tool result text. No-op if
@@ -328,7 +292,7 @@ impl Todos {
             // Reset so the next prompt isn't already at MAX strikes.
             self.strikes = 0;
             self.last_strike_completed_count = None;
-            return EndTurn::ForceStop(msg);
+            return EndTurn::Stop(msg);
         }
         let body = self.render_list();
         EndTurn::Continue(format!(
@@ -362,22 +326,6 @@ mod tests {
     }
     fn call_read(t: &mut Todos) -> Result<String, String> {
         t.handle_call(&json!({}))
-    }
-
-    fn item(id: u32, title: &str, status: Status) -> Item {
-        Item {
-            id,
-            title: title.into(),
-            status,
-        }
-    }
-
-    #[test]
-    fn item_helper_compiles() {
-        // Keep `item` referenced; useful for future tests building Items
-        // directly without going through the JSON path.
-        let i = item(1, "x", Status::Pending);
-        assert_eq!(i.id, 1);
     }
 
     #[test]
@@ -546,21 +494,6 @@ mod tests {
     }
 
     #[test]
-    fn render_list_no_banner_render_has_banner() {
-        let mut t = Todos::new(true);
-        call_json(&mut t, &[(1, "a", "pending")]).unwrap();
-        assert!(!t.render_list().contains("Pending todos remain"));
-        assert!(t.render().contains("Pending todos remain"));
-    }
-
-    #[test]
-    fn render_no_banner_when_all_complete() {
-        let mut t = Todos::new(true);
-        call_json(&mut t, &[(1, "a", "completed")]).unwrap();
-        assert!(!t.render().contains("Pending todos remain"));
-    }
-
-    #[test]
     fn handle_call_returns_no_banner() {
         // The agent's post-tool decorate() owns the banner; handle_call
         // must not include it or the banner appears twice.
@@ -589,8 +522,8 @@ mod tests {
         assert!(matches!(t.check_end_turn(), EndTurn::Continue(_)));
         assert!(matches!(t.check_end_turn(), EndTurn::Continue(_)));
         match t.check_end_turn() {
-            EndTurn::ForceStop(_) => {}
-            other => panic!("expected ForceStop, got {other:?}"),
+            EndTurn::Stop(_) => {}
+            other => panic!("expected Stop, got {other:?}"),
         }
     }
 
@@ -609,24 +542,20 @@ mod tests {
     #[test]
     fn semantic_revision_blocks_resend_bypass() {
         // The model resends the SAME pending list three times. Strikes
-        // must NOT reset between calls — the revision didn't change.
+        // must NOT reset between calls.
         let mut t = Todos::new(true);
         call_json(&mut t, &[(1, "a", "pending")]).unwrap();
-        let rev0 = t.revision;
         // Resend identical list.
         call_json(&mut t, &[(1, "a", "pending")]).unwrap();
-        assert_eq!(t.revision, rev0, "resending identical list bumped revision");
 
         assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 1
                                                                      // Resend identical list — no semantic change.
         call_json(&mut t, &[(1, "a", "pending")]).unwrap();
-        assert_eq!(t.revision, rev0);
         assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 2
         call_json(&mut t, &[(1, "a", "pending")]).unwrap();
-        assert_eq!(t.revision, rev0);
-        // Third strike → ForceStop, despite three "writes" between.
+        // Third strike → Stop, despite three "writes" between.
         match t.check_end_turn() {
-            EndTurn::ForceStop(_) => {}
+            EndTurn::Stop(_) => {}
             other => panic!("resend bypass not blocked: {other:?}"),
         }
     }
@@ -648,17 +577,17 @@ mod tests {
 
     #[test]
     fn reordering_does_not_reset_strikes() {
-        // Reordering bumps revision but doesn't increase completed count.
+        // Reordering doesn't increase completed count.
         // Strikes must NOT reset — model could otherwise dodge by shuffling.
         let mut t = Todos::new(true);
         call_json(&mut t, &[(1, "a", "pending"), (2, "b", "pending")]).unwrap();
         assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 1
         assert!(matches!(t.check_end_turn(), EndTurn::Continue(_))); // 2
-                                                                     // Reorder (revision will bump because Vec equality is order-sensitive).
+                                                                     // Reorder.
         call_json(&mut t, &[(2, "b", "pending"), (1, "a", "pending")]).unwrap();
-        // No completion progress → still strike 3 → ForceStop.
+        // No completion progress → still strike 3 → Stop.
         match t.check_end_turn() {
-            EndTurn::ForceStop(_) => {}
+            EndTurn::Stop(_) => {}
             other => panic!("reorder bypass not blocked: {other:?}"),
         }
     }
@@ -715,13 +644,6 @@ mod tests {
         let mut t = Todos::new(true);
         call_json(&mut t, &[(1, "a", "completed")]).unwrap();
         assert!(matches!(t.check_end_turn(), EndTurn::Allow));
-    }
-
-    #[test]
-    fn status_display_uses_schema_names() {
-        assert_eq!(Status::Pending.to_string(), "pending");
-        assert_eq!(Status::InProgress.to_string(), "in_progress");
-        assert_eq!(Status::Completed.to_string(), "completed");
     }
 
     #[test]
