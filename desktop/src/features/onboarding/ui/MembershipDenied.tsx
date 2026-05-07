@@ -16,7 +16,17 @@ export function MembershipDenied({
   onRetry,
   pubkey,
 }: MembershipDeniedProps) {
-  const npub = React.useMemo(() => pubkeyToNpub(pubkey), [pubkey]);
+  const npub = React.useMemo(() => {
+    if (!pubkey) {
+      return "Unknown public key";
+    }
+
+    try {
+      return pubkeyToNpub(pubkey);
+    } catch {
+      return pubkey;
+    }
+  }, [pubkey]);
   const [copied, setCopied] = React.useState(false);
 
   const handleCopy = React.useCallback(async () => {
