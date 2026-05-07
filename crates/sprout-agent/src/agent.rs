@@ -65,6 +65,8 @@ impl RunCtx<'_> {
             }
             if let Some(msg) = self.doom_loop.check() {
                 self.history.push(HistoryItem::User(msg));
+                // Don't count the injection as a round — it's not an LLM call.
+                round = round.saturating_sub(1);
                 continue;
             }
 
