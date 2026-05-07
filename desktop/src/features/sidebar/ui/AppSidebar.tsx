@@ -1,5 +1,14 @@
 // biome-ignore format: keep compact to stay within file size limit
-import { Activity, Bot, Home, PenSquare, Plus, Search, Zap } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  ChevronDown,
+  Home,
+  PenSquare,
+  Plus,
+  Search,
+  Zap,
+} from "lucide-react";
 import * as React from "react";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -25,6 +34,7 @@ import type {
   Profile,
   UserStatus,
 } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
   Sidebar,
@@ -48,6 +58,14 @@ import {
 
 const SECTION_ICON_BUTTON_CLASS =
   "flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground";
+const SECTION_ACTION_VISIBILITY_CLASS =
+  "opacity-0 transition-opacity group-hover/sidebar-section:opacity-100 group-focus-within/sidebar-section:opacity-100";
+const SECTION_LABEL_BUTTON_CLASS =
+  "group/section-label flex w-fit max-w-[calc(100%-3rem)] cursor-pointer appearance-none items-center gap-1 text-left transition-colors hover:text-sidebar-foreground focus-visible:text-sidebar-foreground";
+const SECTION_LABEL_CHEVRON_CLASS =
+  "h-2.5 w-2.5 shrink-0 opacity-0 text-sidebar-foreground/45 transition-[color,opacity,transform] group-hover/section-label:opacity-100 group-hover/section-label:text-sidebar-foreground group-focus-visible/section-label:opacity-100 group-focus-visible/section-label:text-sidebar-foreground";
+
+type CollapsibleSidebarGroup = "channels" | "forums" | "directMessages";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -121,18 +139,25 @@ type AppSidebarProps = {
 function SectionHeaderActions({
   browseAriaLabel,
   browseTestId,
+  className,
   createAriaLabel,
   onBrowse,
   onCreateClick,
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
+  className?: string;
   createAriaLabel: string;
   onBrowse: () => void;
   onCreateClick: () => void;
 }) {
   return (
-    <div className="absolute right-1 top-3 z-10 flex items-center gap-0.5">
+    <div
+      className={cn(
+        "absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5",
+        className,
+      )}
+    >
       <button
         aria-label={browseAriaLabel}
         className={SECTION_ICON_BUTTON_CLASS}
@@ -163,12 +188,14 @@ function ChannelGroupSection({
   browseTestId,
   createAriaLabel,
   groupClassName,
+  isCollapsed,
   isActiveChannel,
   items,
   listTestId,
   onBrowse,
   onCreateClick,
   onSelectChannel,
+  onToggleCollapsed,
   selectedChannelId,
   title,
   unreadChannelIds,
@@ -177,42 +204,70 @@ function ChannelGroupSection({
   browseTestId?: string;
   createAriaLabel: string;
   groupClassName?: string;
+  isCollapsed: boolean;
   isActiveChannel: boolean;
   items: Channel[];
   listTestId: string;
   onBrowse: () => void;
   onCreateClick: () => void;
   onSelectChannel: (channelId: string) => void;
+  onToggleCollapsed: () => void;
   selectedChannelId: string | null;
   title: string;
   unreadChannelIds: Set<string>;
 }) {
+  const contentId = `sidebar-${listTestId}`;
+
   return (
     <SidebarGroup className={groupClassName}>
-      <SidebarGroupLabel>{title}</SidebarGroupLabel>
-      <SectionHeaderActions
-        browseAriaLabel={browseAriaLabel}
-        browseTestId={browseTestId}
-        createAriaLabel={createAriaLabel}
-        onBrowse={onBrowse}
-        onCreateClick={onCreateClick}
-      />
-      <SidebarGroupContent>
-        {items.length > 0 ? (
-          <SidebarMenu data-testid={listTestId}>
-            {items.map((channel) => (
-              <SidebarMenuItem key={channel.id}>
-                <ChannelMenuButton
-                  channel={channel}
-                  hasUnread={unreadChannelIds.has(channel.id)}
-                  isActive={isActiveChannel && selectedChannelId === channel.id}
-                  onSelectChannel={onSelectChannel}
-                />
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        ) : null}
-      </SidebarGroupContent>
+      <div className="group/sidebar-section relative">
+        <SidebarGroupLabel asChild>
+          <button
+            aria-controls={contentId}
+            aria-expanded={!isCollapsed}
+            className={SECTION_LABEL_BUTTON_CLASS}
+            onClick={onToggleCollapsed}
+            type="button"
+          >
+            <span>{title}</span>
+            <ChevronDown
+              aria-hidden="true"
+              className={cn(
+                SECTION_LABEL_CHEVRON_CLASS,
+                isCollapsed ? "-rotate-90" : "rotate-0",
+              )}
+            />
+          </button>
+        </SidebarGroupLabel>
+        <SectionHeaderActions
+          browseAriaLabel={browseAriaLabel}
+          browseTestId={browseTestId}
+          className={SECTION_ACTION_VISIBILITY_CLASS}
+          createAriaLabel={createAriaLabel}
+          onBrowse={onBrowse}
+          onCreateClick={onCreateClick}
+        />
+      </div>
+      {!isCollapsed ? (
+        <SidebarGroupContent id={contentId}>
+          {items.length > 0 ? (
+            <SidebarMenu data-testid={listTestId}>
+              {items.map((channel) => (
+                <SidebarMenuItem key={channel.id}>
+                  <ChannelMenuButton
+                    channel={channel}
+                    hasUnread={unreadChannelIds.has(channel.id)}
+                    isActive={
+                      isActiveChannel && selectedChannelId === channel.id
+                    }
+                    onSelectChannel={onSelectChannel}
+                  />
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          ) : null}
+        </SidebarGroupContent>
+      ) : null}
     </SidebarGroup>
   );
 }
@@ -273,6 +328,23 @@ export function AppSidebar({
   const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = React.useState<
+    Record<CollapsibleSidebarGroup, boolean>
+  >({
+    channels: false,
+    forums: false,
+    directMessages: false,
+  });
+
+  const toggleCollapsedGroup = React.useCallback(
+    (group: CollapsibleSidebarGroup) => {
+      setCollapsedGroups((current) => ({
+        ...current,
+        [group]: !current[group],
+      }));
+    },
+    [],
+  );
 
   const streamChannels = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "stream"),
@@ -341,6 +413,7 @@ export function AppSidebar({
 
   return (
     <Sidebar
+      className="!border-r-0"
       collapsible="offcanvas"
       data-testid="app-sidebar"
       variant="sidebar"
@@ -458,12 +531,14 @@ export function AppSidebar({
               browseTestId="browse-channels"
               createAriaLabel="Create a channel"
               groupClassName="pt-1"
+              isCollapsed={collapsedGroups.channels}
               isActiveChannel={selectedView === "channel"}
               items={streamChannels}
               listTestId="stream-list"
               onBrowse={onOpenBrowseChannels}
               onCreateClick={() => setCreateDialogKind("stream")}
               onSelectChannel={onSelectChannel}
+              onToggleCollapsed={() => toggleCollapsedGroup("channels")}
               selectedChannelId={selectedChannelId}
               title="Channels"
               unreadChannelIds={unreadChannelIds}
@@ -472,12 +547,14 @@ export function AppSidebar({
               browseAriaLabel="Browse forums"
               browseTestId="browse-forums"
               createAriaLabel="Create a forum"
+              isCollapsed={collapsedGroups.forums}
               isActiveChannel={selectedView === "channel"}
               items={forumChannels}
               listTestId="forum-list"
               onBrowse={onOpenBrowseForums}
               onCreateClick={() => setCreateDialogKind("forum")}
               onSelectChannel={onSelectChannel}
+              onToggleCollapsed={() => toggleCollapsedGroup("forums")}
               selectedChannelId={selectedChannelId}
               title="Forums"
               unreadChannelIds={unreadChannelIds}
@@ -487,7 +564,10 @@ export function AppSidebar({
                 <SidebarGroupAction
                   aria-expanded={isNewDmOpen}
                   aria-label="Start a direct message"
-                  className="top-3 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                  className={cn(
+                    "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                    SECTION_ACTION_VISIBILITY_CLASS,
+                  )}
                   data-testid="new-dm-trigger"
                   onClick={() => {
                     setIsNewDmOpen(true);
@@ -498,11 +578,13 @@ export function AppSidebar({
                 </SidebarGroupAction>
               }
               dmParticipantsByChannelId={dmParticipantsByChannelId}
+              isCollapsed={collapsedGroups.directMessages}
               isActiveChannel={selectedView === "channel"}
               items={directMessages}
               channelLabels={dmChannelLabels}
               onHideDm={onHideDm}
               onSelectChannel={onSelectChannel}
+              onToggleCollapsed={() => toggleCollapsedGroup("directMessages")}
               presenceByChannelId={dmPresenceByChannelId}
               selectedChannelId={selectedChannelId}
               testId="dm-list"

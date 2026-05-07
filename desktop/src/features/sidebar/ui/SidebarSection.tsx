@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { CircleDot, FileText, Hash, Lock, X } from "lucide-react";
+import { ChevronDown, CircleDot, FileText, Hash, Lock, X } from "lucide-react";
 
 import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
@@ -17,6 +17,11 @@ import {
 } from "@/shared/ui/sidebar";
 
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
+
+const SECTION_LABEL_BUTTON_CLASS =
+  "group/section-label flex w-fit max-w-[calc(100%-3rem)] cursor-pointer appearance-none items-center gap-1 text-left transition-colors hover:text-sidebar-foreground focus-visible:text-sidebar-foreground";
+const SECTION_LABEL_CHEVRON_CLASS =
+  "h-2.5 w-2.5 shrink-0 opacity-0 text-sidebar-foreground/45 transition-[color,opacity,transform] group-hover/section-label:opacity-100 group-hover/section-label:text-sidebar-foreground group-focus-visible/section-label:opacity-100 group-focus-visible/section-label:text-sidebar-foreground";
 
 export type SidebarDmParticipant = {
   avatarUrl: string | null;
@@ -187,6 +192,7 @@ export function SidebarSection({
   emptyState,
   items,
   channelLabels,
+  isCollapsed,
   isActiveChannel,
   presenceByChannelId,
   selectedChannelId,
@@ -195,12 +201,14 @@ export function SidebarSection({
   unreadChannelIds,
   onHideDm,
   onSelectChannel,
+  onToggleCollapsed,
 }: {
   action?: React.ReactNode;
   dmParticipantsByChannelId?: Record<string, SidebarDmParticipant[]>;
   emptyState?: React.ReactNode;
   items: Channel[];
   channelLabels?: Record<string, string>;
+  isCollapsed?: boolean;
   isActiveChannel: boolean;
   presenceByChannelId?: Record<string, PresenceStatus>;
   selectedChannelId: string | null;
@@ -209,60 +217,91 @@ export function SidebarSection({
   unreadChannelIds: Set<string>;
   onHideDm?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
+  onToggleCollapsed?: () => void;
 }) {
   if (items.length === 0 && !action && !emptyState) {
     return null;
   }
 
+  const contentId = `sidebar-${testId}`;
+  const canToggle = Boolean(onToggleCollapsed);
+
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>{title}</SidebarGroupLabel>
-      {action}
-      <SidebarGroupContent>
-        {items.length > 0 ? (
-          <SidebarMenu data-testid={testId}>
-            {items.map((channel) => (
-              <SidebarMenuItem className="group/menu-item" key={channel.id}>
-                <ChannelMenuButton
-                  channel={channel}
-                  dmParticipants={dmParticipantsByChannelId?.[channel.id]}
-                  hasUnread={unreadChannelIds.has(channel.id)}
-                  isActive={isActiveChannel && selectedChannelId === channel.id}
-                  label={channelLabels?.[channel.id] ?? channel.name}
-                  presenceStatus={presenceByChannelId?.[channel.id]}
-                  onSelectChannel={onSelectChannel}
-                />
-                {channel.channelType === "dm" &&
-                unreadChannelIds.has(channel.id) &&
-                !(isActiveChannel && selectedChannelId === channel.id) ? (
-                  <span
-                    aria-hidden="true"
-                    className="absolute right-[9px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-primary group-hover/menu-item:hidden"
-                    data-testid={`channel-unread-${channel.name}`}
+      <div className="group/sidebar-section relative">
+        <SidebarGroupLabel asChild={canToggle}>
+          {canToggle ? (
+            <button
+              aria-controls={contentId}
+              aria-expanded={!isCollapsed}
+              className={SECTION_LABEL_BUTTON_CLASS}
+              onClick={onToggleCollapsed}
+              type="button"
+            >
+              <span>{title}</span>
+              <ChevronDown
+                aria-hidden="true"
+                className={cn(
+                  SECTION_LABEL_CHEVRON_CLASS,
+                  isCollapsed ? "-rotate-90" : "rotate-0",
+                )}
+              />
+            </button>
+          ) : (
+            title
+          )}
+        </SidebarGroupLabel>
+        {action}
+      </div>
+      {!isCollapsed ? (
+        <SidebarGroupContent id={contentId}>
+          {items.length > 0 ? (
+            <SidebarMenu data-testid={testId}>
+              {items.map((channel) => (
+                <SidebarMenuItem className="group/menu-item" key={channel.id}>
+                  <ChannelMenuButton
+                    channel={channel}
+                    dmParticipants={dmParticipantsByChannelId?.[channel.id]}
+                    hasUnread={unreadChannelIds.has(channel.id)}
+                    isActive={
+                      isActiveChannel && selectedChannelId === channel.id
+                    }
+                    label={channelLabels?.[channel.id] ?? channel.name}
+                    presenceStatus={presenceByChannelId?.[channel.id]}
+                    onSelectChannel={onSelectChannel}
                   />
-                ) : null}
-                {channel.channelType === "dm" && onHideDm ? (
-                  <SidebarMenuAction
-                    aria-label="Close direct message"
-                    data-testid={`hide-dm-${channel.name}`}
-                    onClick={() => onHideDm(channel.id)}
-                    showOnHover
-                  >
-                    <X />
-                  </SidebarMenuAction>
-                ) : null}
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        ) : emptyState ? (
-          <div
-            className="px-2 py-1 text-sm text-sidebar-foreground/60"
-            data-testid={`${testId}-empty`}
-          >
-            {emptyState}
-          </div>
-        ) : null}
-      </SidebarGroupContent>
+                  {channel.channelType === "dm" &&
+                  unreadChannelIds.has(channel.id) &&
+                  !(isActiveChannel && selectedChannelId === channel.id) ? (
+                    <span
+                      aria-hidden="true"
+                      className="absolute right-[9px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-primary group-hover/menu-item:hidden"
+                      data-testid={`channel-unread-${channel.name}`}
+                    />
+                  ) : null}
+                  {channel.channelType === "dm" && onHideDm ? (
+                    <SidebarMenuAction
+                      aria-label="Close direct message"
+                      data-testid={`hide-dm-${channel.name}`}
+                      onClick={() => onHideDm(channel.id)}
+                      showOnHover
+                    >
+                      <X />
+                    </SidebarMenuAction>
+                  ) : null}
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          ) : emptyState ? (
+            <div
+              className="px-2 py-1 text-sm text-sidebar-foreground/60"
+              data-testid={`${testId}-empty`}
+            >
+              {emptyState}
+            </div>
+          ) : null}
+        </SidebarGroupContent>
+      ) : null}
     </SidebarGroup>
   );
 }
