@@ -137,7 +137,7 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | `SPROUT_AGENT_MAX_OUTPUT_TOKENS` | `4096` | Per LLM call. |
 | `SPROUT_AGENT_LLM_TIMEOUT_SECS` | `120` | |
 | `SPROUT_AGENT_TOOL_TIMEOUT_SECS` | `660` | Per-tool call timeout in seconds |
-| `SPROUT_AGENT_MAX_PARALLEL_TOOLS` | `1` | Max concurrent tool calls per turn (1 = sequential) |
+| `SPROUT_AGENT_MAX_PARALLEL_TOOLS` | `8` | Max concurrent tool calls per turn (1 = sequential) |
 | `SPROUT_AGENT_MAX_LINE_BYTES` | `4194304` | 4 MiB. Hard cap on inbound JSON-RPC frames. |
 | `SPROUT_AGENT_MAX_HISTORY_BYTES` | `1048576` | 1 MiB. Old turns are evicted past this. |
 

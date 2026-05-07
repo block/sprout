@@ -99,7 +99,7 @@ impl Config {
             max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
             max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
-            max_parallel_tools: parse_env("SPROUT_AGENT_MAX_PARALLEL_TOOLS", 1usize)?,
+            max_parallel_tools: parse_env("SPROUT_AGENT_MAX_PARALLEL_TOOLS", 8usize)?,
         };
         cfg.validate()?;
         Ok(cfg)
