@@ -43,6 +43,9 @@ impl RunCtx<'_> {
             *self.original_task = Some(user_text.clone());
         }
         self.history.push(HistoryItem::User(user_text));
+        // Each user prompt starts with a clean detector — patterns from a
+        // previous prompt should never trigger on the next one.
+        self.doom_loop.reset();
 
         let mut round = 0u32;
         loop {

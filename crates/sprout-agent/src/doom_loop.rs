@@ -26,21 +26,25 @@ pub struct DoomLoop {
     enabled: bool,
     threshold: usize,
     calls: VecDeque<u64>,
-    last_tool_names: Vec<String>,
+    tool_names_per_turn: VecDeque<Vec<String>>,
 }
 
 impl DoomLoop {
     pub fn new(enabled: bool, threshold: usize) -> Self {
+        let cap = if enabled { MAX_BUFFER } else { 0 };
         Self {
             enabled,
             threshold: threshold.clamp(MIN_THRESHOLD, MAX_THRESHOLD),
-            calls: if enabled {
-                VecDeque::with_capacity(MAX_BUFFER)
-            } else {
-                VecDeque::new()
-            },
-            last_tool_names: Vec::new(),
+            calls: VecDeque::with_capacity(cap),
+            tool_names_per_turn: VecDeque::with_capacity(cap),
         }
+    }
+
+    /// Clears all buffered state. Call at the start of each user prompt so
+    /// patterns from a previous prompt don't bleed into the next.
+    pub fn reset(&mut self) {
+        self.calls.clear();
+        self.tool_names_per_turn.clear();
     }
 
     pub fn record_turn(&mut self, calls: &[ToolCall]) {
@@ -52,9 +56,10 @@ impl DoomLoop {
         };
         if self.calls.len() == MAX_BUFFER {
             self.calls.pop_front();
+            self.tool_names_per_turn.pop_front();
         }
         self.calls.push_back(fingerprint);
-        self.last_tool_names = tool_names;
+        self.tool_names_per_turn.push_back(tool_names);
     }
 
     pub fn check(&mut self) -> Option<String> {
@@ -62,15 +67,12 @@ impl DoomLoop {
             return None;
         }
         let width = self.repeated_width()?;
-        let tools = self.tool_label();
-        tracing::warn!(
-            tools = %tools,
-            threshold = self.threshold,
-            pattern_width = width,
-            "doom loop detected"
+        let tools = self.tool_label(width);
+        eprintln!(
+            "sprout-agent: doom: loop detected: tools=[{tools}] threshold={} width={width}",
+            self.threshold
         );
-        self.calls.clear();
-        self.last_tool_names.clear();
+        self.reset();
         Some(format!(
             "You have called {tools} with the same arguments {} times. {MESSAGE_SUFFIX}",
             self.threshold
@@ -101,36 +103,61 @@ impl DoomLoop {
         })
     }
 
-    fn tool_label(&self) -> String {
-        if self.last_tool_names.is_empty() {
+    /// Builds a human-readable label for the repeated pattern. For width=1,
+    /// reports the single repeated turn. For width>1, reports the full cycle
+    /// joined by " -> " so the model sees the actual sequence it's stuck in.
+    fn tool_label(&self, width: usize) -> String {
+        let len = self.tool_names_per_turn.len();
+        if len == 0 || width == 0 {
+            return "the same tool turn".into();
+        }
+        let start = len.saturating_sub(width);
+        let segments: Vec<String> = (start..len)
+            .filter_map(|i| self.tool_names_per_turn.get(i))
+            .map(|names| {
+                if names.is_empty() {
+                    "<turn>".into()
+                } else {
+                    names.join(", ")
+                }
+            })
+            .collect();
+        if segments.is_empty() {
             "the same tool turn".into()
         } else {
-            self.last_tool_names.join(", ")
+            segments.join(" -> ")
         }
     }
 }
 
 fn fingerprint_turn(calls: &[ToolCall]) -> Option<(u64, Vec<String>)> {
-    let mut hasher = DefaultHasher::new();
-    let mut tool_names = Vec::new();
-    let mut count = 0usize;
-
-    for call in calls
+    // Collect non-skipped calls, sort by (name, arguments) so parallel tool
+    // calls are order-independent in the fingerprint.
+    let mut entries: Vec<(&str, Vec<u8>)> = calls
         .iter()
         .filter(|call| !SKIPPED_TOOL_NAMES.contains(&call.name.as_str()))
-    {
-        call.name.hash(&mut hasher);
-        serde_json::to_vec(&call.arguments).ok()?.hash(&mut hasher);
-        if !tool_names.iter().any(|name| name == &call.name) {
-            tool_names.push(call.name.clone());
-        }
-        count = count.saturating_add(1);
+        .filter_map(|call| {
+            serde_json::to_vec(&call.arguments)
+                .ok()
+                .map(|args| (call.name.as_str(), args))
+        })
+        .collect();
+    if entries.is_empty() {
+        return None;
     }
+    entries.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(&b.1)));
 
-    (count > 0).then(|| {
-        count.hash(&mut hasher);
-        (hasher.finish(), tool_names)
-    })
+    let mut hasher = DefaultHasher::new();
+    let mut tool_names: Vec<String> = Vec::new();
+    for (name, args) in &entries {
+        name.hash(&mut hasher);
+        args.hash(&mut hasher);
+        if !tool_names.iter().any(|n| n == name) {
+            tool_names.push((*name).to_string());
+        }
+    }
+    entries.len().hash(&mut hasher);
+    Some((hasher.finish(), tool_names))
 }
 
 #[cfg(test)]
@@ -188,10 +215,22 @@ mod tests {
         assert!(detector.check().is_none());
         detector.record_turn(&[call("search", 1), call("open", 2)]);
 
-        let message = detector.check();
-        assert!(message.as_deref().is_some_and(
-            |msg| msg.contains("You have called search, open with the same arguments 2 times")
-        ));
+        let message = detector.check().expect("should fire");
+        assert!(message.contains("You have called"));
+        assert!(message.contains("search"));
+        assert!(message.contains("open"));
+        assert!(message.contains("with the same arguments 2 times"));
+    }
+
+    #[test]
+    fn parallel_tool_calls_are_order_independent() {
+        let mut detector = DoomLoop::new(true, 2);
+
+        detector.record_turn(&[call("search", 1), call("open", 2)]);
+        // Same calls in reverse order — should hash identically.
+        detector.record_turn(&[call("open", 2), call("search", 1)]);
+
+        assert!(detector.check().is_some());
     }
 
     #[test]
@@ -203,6 +242,24 @@ mod tests {
         assert!(detector.check().is_some());
         assert!(detector.check().is_none());
 
+        record(&mut detector, "search", 1);
+        assert!(detector.check().is_none());
+        record(&mut detector, "search", 1);
+        assert!(detector.check().is_some());
+    }
+
+    #[test]
+    fn reset_clears_state() {
+        let mut detector = DoomLoop::new(true, 2);
+
+        record(&mut detector, "search", 1);
+        record(&mut detector, "search", 1);
+        detector.reset();
+        assert!(detector.check().is_none());
+        assert!(detector.calls.is_empty());
+        assert!(detector.tool_names_per_turn.is_empty());
+
+        // After reset, need full threshold of new turns to fire.
         record(&mut detector, "search", 1);
         assert!(detector.check().is_none());
         record(&mut detector, "search", 1);
@@ -249,6 +306,59 @@ mod tests {
     }
 
     #[test]
+    fn abcd_width_4_pattern_fires() {
+        let mut detector = DoomLoop::new(true, 3);
+
+        let cycle = [("a", 1), ("b", 2), ("c", 3), ("d", 4)];
+        for _ in 0..3 {
+            for (name, value) in cycle {
+                record(&mut detector, name, value);
+            }
+        }
+
+        assert!(detector.check().is_some());
+    }
+
+    #[test]
+    fn width_5_pattern_does_not_fire() {
+        let mut detector = DoomLoop::new(true, 3);
+
+        let cycle = [("a", 1), ("b", 2), ("c", 3), ("d", 4), ("e", 5)];
+        for _ in 0..3 {
+            for (name, value) in cycle {
+                record(&mut detector, name, value);
+            }
+        }
+
+        // Width 5 is beyond MAX_CYCLIC_WIDTH; even though the pattern is
+        // perfectly periodic, the detector must not report it.
+        assert!(detector.check().is_none());
+    }
+
+    #[test]
+    fn cyclic_message_includes_full_sequence() {
+        let mut detector = DoomLoop::new(true, 3);
+
+        for (name, value) in [
+            ("search", 1),
+            ("open", 2),
+            ("search", 1),
+            ("open", 2),
+            ("search", 1),
+            ("open", 2),
+        ] {
+            record(&mut detector, name, value);
+        }
+
+        let message = detector.check().expect("should fire");
+        // The full cycle should be reported, not just the last turn.
+        assert!(
+            message.contains("search -> open"),
+            "message should include full cycle, got: {message}"
+        );
+    }
+
+    #[test]
     fn broken_pattern_does_not_fire() {
         let mut detector = DoomLoop::new(true, 3);
 
@@ -270,6 +380,7 @@ mod tests {
     fn disabled_never_fires_and_does_not_preallocate() {
         let mut detector = DoomLoop::new(false, 3);
         assert_eq!(detector.calls.capacity(), 0);
+        assert_eq!(detector.tool_names_per_turn.capacity(), 0);
 
         for _ in 0..20 {
             record(&mut detector, "search", 1);
@@ -286,6 +397,18 @@ mod tests {
         detector.record_turn(&[todo(2), call("search", 1)]);
 
         assert!(detector.check().is_some());
+    }
+
+    #[test]
+    fn todo_only_turns_do_not_add_to_buffer() {
+        let mut detector = DoomLoop::new(true, 2);
+
+        detector.record_turn(&[todo(1)]);
+        detector.record_turn(&[todo(2)]);
+        detector.record_turn(&[todo(3)]);
+        assert!(detector.calls.is_empty());
+        assert!(detector.tool_names_per_turn.is_empty());
+        assert!(detector.check().is_none());
     }
 
     #[test]
