@@ -138,6 +138,7 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | `SPROUT_AGENT_LLM_TIMEOUT_SECS` | `120` | |
 | `SPROUT_AGENT_TOOL_TIMEOUT_SECS` | `660` | Per-tool call timeout in seconds |
 | `SPROUT_AGENT_MAX_PARALLEL_TOOLS` | `8` | Max concurrent tool calls per turn (1 = sequential) |
+| `SPROUT_AGENT_MAX_SESSIONS` | `8` | Max concurrent ACP sessions |
 | `SPROUT_AGENT_MAX_LINE_BYTES` | `4194304` | 4 MiB. Hard cap on inbound JSON-RPC frames. |
 | `SPROUT_AGENT_MAX_HISTORY_BYTES` | `1048576` | 1 MiB. Old turns are evicted past this. |
 
@@ -203,7 +204,7 @@ The trust boundary is **the operator who launched the agent**. The harness, MCP 
 | Frame size | `SPROUT_AGENT_MAX_LINE_BYTES` (default 4 MiB). Oversize → connection killed. |
 | LLM response size | 16 MiB hard cap. Both `Content-Length` precheck and streaming-buffer cap. |
 | Cancellation | `tokio::select! { biased; _ = cancel.changed() => ... }` at every loop boundary. Cancel always wins the race. |
-| One in flight | One session per process; one prompt per session. Concurrent attempts get `-32602`. |
+| Session isolation | Up to 8 concurrent sessions (configurable). One prompt per session at a time. Each session gets its own MCP servers. |
 | `tool_use ↔ tool_result` pairing | Encoded in the type system. Every `ToolCall` and `ToolResult` carries a `provider_id: String` (not `Option`). |
 
 ### Bounded Everything
@@ -223,7 +224,7 @@ The trust boundary is **the operator who launched the agent**. The harness, MCP 
 | Tool calls per turn | 64 | `MAX_TOOL_CALLS_PER_TURN` |
 | Loop rounds | 16 | `SPROUT_AGENT_MAX_ROUNDS` |
 | LLM call timeout | 120 s | `SPROUT_AGENT_LLM_TIMEOUT_SECS` |
-| Tool call timeout | 120 s | `SPROUT_AGENT_TOOL_TIMEOUT_SECS` |
+| Tool call timeout | 660 s | `SPROUT_AGENT_TOOL_TIMEOUT_SECS` |
 
 ## What This Is NOT
 

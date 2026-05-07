@@ -298,6 +298,11 @@ async fn invoke_tool_inner(
     tool_timeout: std::time::Duration,
     mut cancel: watch::Receiver<bool>,
 ) -> InvokeOutcome {
+    // Check if already cancelled before waiting for changes (a cloned
+    // receiver that starts at the current version won't fire changed()).
+    if *cancel.borrow() {
+        return InvokeOutcome::Failed("cancelled".into());
+    }
     tokio::select! {
         biased;
         _ = cancel.changed() => InvokeOutcome::Failed("cancelled".into()),
