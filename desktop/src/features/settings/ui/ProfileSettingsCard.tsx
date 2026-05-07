@@ -1,4 +1,4 @@
-import { AtSign, Check, Fingerprint, Link2, UserRound } from "lucide-react";
+import { AtSign, Check, Link2, UserRound } from "lucide-react";
 import * as React from "react";
 
 import {
@@ -134,10 +134,6 @@ export function ProfileSettingsCard({
             <p className="text-sm text-muted-foreground">
               Manage how your identity appears across Sprout.
             </p>
-          </div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/70 px-3 py-1 text-xs font-medium text-muted-foreground">
-            <Fingerprint className="h-3.5 w-3.5" />
-            <span>Your relay profile</span>
           </div>
         </div>
       </div>
