@@ -11,6 +11,8 @@ import {
 import type * as React from "react";
 
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
+import { cn } from "@/shared/lib/cn";
+import { useSidebar } from "@/shared/ui/sidebar";
 
 type ChatHeaderProps = {
   actions?: React.ReactNode;
@@ -72,36 +74,63 @@ export function ChatHeader({
   statusBadge,
 }: ChatHeaderProps) {
   const trimmedDescription = description.trim();
+  const { isMobile, state } = useSidebar();
+  const centerTitle = state === "collapsed" && !isMobile;
+  const titleContent = (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2",
+        centerTitle ? "justify-center text-center" : "flex-wrap",
+      )}
+    >
+      <ChannelIcon
+        channelType={channelType}
+        mode={mode}
+        visibility={visibility}
+      />
+      <h1
+        className="min-w-0 truncate text-lg font-semibold tracking-tight"
+        data-testid="chat-title"
+        title={trimmedDescription || undefined}
+      >
+        {title}
+      </h1>
+      {statusBadge ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {statusBadge}
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <header
-      className="relative z-20 flex min-w-0 shrink-0 items-center gap-3 bg-background/25 px-4 pb-2 pt-6 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6"
+      className={cn(
+        "relative z-20 min-w-0 shrink-0 items-center gap-3 bg-background/25 px-4 pb-2 pt-6 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6",
+        centerTitle
+          ? "grid grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)]"
+          : "flex",
+      )}
       data-testid="chat-header"
       data-tauri-drag-region
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <ChannelIcon
-            channelType={channelType}
-            mode={mode}
-            visibility={visibility}
-          />
-          <h1
-            className="min-w-0 truncate text-lg font-semibold tracking-tight"
-            data-testid="chat-title"
-            title={trimmedDescription || undefined}
-          >
-            {title}
-          </h1>
-          {statusBadge ? (
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              {statusBadge}
-            </div>
-          ) : null}
-        </div>
-      </div>
+      {centerTitle ? <div /> : null}
 
-      {actions ? <div className="shrink-0">{actions}</div> : null}
+      {centerTitle ? (
+        titleContent
+      ) : (
+        <div className="min-w-0 flex-1">{titleContent}</div>
+      )}
+
+      {actions ? (
+        <div
+          className={cn(centerTitle ? "min-w-0 justify-self-end" : "shrink-0")}
+        >
+          {actions}
+        </div>
+      ) : centerTitle ? (
+        <div />
+      ) : null}
     </header>
   );
 }
