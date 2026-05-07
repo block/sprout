@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use crate::types::{ContentBlock, McpServerStdio, PermissionOutcome};
+use crate::types::{ContentBlock, McpServerStdio};
 
 pub const PARSE_ERROR: i32 = -32700;
 pub const INVALID_REQUEST: i32 = -32600;
@@ -12,7 +12,6 @@ pub const INVALID_PARAMS: i32 = -32602;
 
 pub enum WireMsg {
     Notify(Value),
-    Permission { id: i64, params: Value },
 }
 
 pub type WireSender = mpsc::Sender<WireMsg>;
@@ -28,10 +27,7 @@ pub enum Inbound {
         method: String,
         params: Value,
     },
-    Response {
-        id: i64,
-        outcome: PermissionOutcome,
-    },
+    Ignored,
     Invalid {
         id: Value,
         code: i32,
@@ -87,38 +83,14 @@ pub fn classify(msg: &Value) -> Inbound {
             params,
         },
         (Some(m), None) => Inbound::Notification { method: m, params },
-        (None, Some(id)) => match id.as_i64() {
-            Some(n) => Inbound::Response {
-                id: n,
-                outcome: parse_permission_outcome(msg),
-            },
-            None => Inbound::Invalid {
-                id,
-                code: INVALID_REQUEST,
-                message: "jsonrpc: response id must be integer".into(),
-            },
-        },
+        // Bare responses (id present, no method) are unexpected — sprout-agent
+        // does not issue requests to the client. Ignore silently.
+        (None, Some(_)) => Inbound::Ignored,
         (None, None) => Inbound::Invalid {
             id: Value::Null,
             code: INVALID_REQUEST,
             message: "jsonrpc: missing method and id".into(),
         },
-    }
-}
-
-fn parse_permission_outcome(msg: &Value) -> PermissionOutcome {
-    let o = msg
-        .get("result")
-        .and_then(|r| r.get("outcome"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    match (
-        o.get("outcome").and_then(Value::as_str),
-        o.get("optionId").and_then(Value::as_str),
-    ) {
-        (Some("selected"), Some("allow")) => PermissionOutcome::Allow,
-        (Some("cancelled"), _) => PermissionOutcome::Cancelled,
-        _ => PermissionOutcome::Deny,
     }
 }
 
@@ -135,22 +107,6 @@ pub fn session_update(sid: &str, update: Value) -> Value {
         "jsonrpc": "2.0",
         "method": "session/update",
         "params": { "sessionId": sid, "update": update },
-    })
-}
-
-pub fn permission_request(sid: &str, call_id: &str, name: &str, raw_input: &Value) -> Value {
-    json!({
-        "sessionId": sid,
-        "toolCall": {
-            "toolCallId": call_id,
-            "title": name,
-            "kind": "other",
-            "rawInput": raw_input,
-        },
-        "options": [
-            { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
-            { "optionId": "deny",  "name": "Deny",  "kind": "reject_once" },
-        ],
     })
 }
 
@@ -207,15 +163,7 @@ pub async fn read_bounded_line<R: AsyncBufRead + Unpin>(
 pub async fn writer_task(mut rx: mpsc::Receiver<WireMsg>) {
     let mut stdout = tokio::io::stdout();
     while let Some(msg) = rx.recv().await {
-        let v = match msg {
-            WireMsg::Notify(v) => v,
-            WireMsg::Permission { id, params } => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "session/request_permission",
-                "params": params,
-            }),
-        };
+        let WireMsg::Notify(v) = msg;
         let mut s = match serde_json::to_string(&v) {
             Ok(s) => s,
             Err(e) => {

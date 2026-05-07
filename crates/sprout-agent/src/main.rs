@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tokio::io::BufReader;
 use tokio::sync::{mpsc, watch, Mutex};
 
-use crate::agent::{PendingMap, RunCtx};
+use crate::agent::RunCtx;
 use crate::config::{Config, PROTOCOL_VERSION};
 use crate::llm::Llm;
 use crate::mcp::McpRegistry;
@@ -30,8 +30,6 @@ struct App {
     cfg: Config,
     llm: Arc<Llm>,
     sessions: Mutex<HashMap<String, Session>>,
-    pending: PendingMap,
-    next_id: Arc<Mutex<i64>>,
 }
 
 struct Session {
@@ -58,8 +56,6 @@ async fn main() {
         cfg,
         llm,
         sessions: Mutex::new(HashMap::new()),
-        pending: Arc::new(Mutex::new(HashMap::new())),
-        next_id: Arc::new(Mutex::new(1_000_000)),
     });
     let (wire_tx, wire_rx) = mpsc::channel::<WireMsg>(64);
     let writer = tokio::spawn(wire::writer_task(wire_rx));
@@ -109,13 +105,7 @@ async fn dispatch(app: &Arc<App>, msg: Value, wire_tx: &WireSender) {
             handle_request(app, id, method, params, wire_tx).await
         }
         Inbound::Notification { method, params } => handle_notification(app, &method, params).await,
-        Inbound::Response { id, outcome } => {
-            if let Some(tx) = app.pending.lock().await.remove(&id) {
-                let _ = tx.send(outcome);
-            } else {
-                eprintln!("sprout-agent: jsonrpc: response with unknown id {id}");
-            }
-        }
+        Inbound::Ignored => {}
         Inbound::Invalid { id, code, message } => {
             wire::send(wire_tx, wire::err(id, code, &message)).await
         }
@@ -288,8 +278,6 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         llm: &app.llm,
         mcp: &mcp,
         wire: &wire_tx,
-        pending: &app.pending,
-        next_id: &app.next_id,
         cancel: &mut cancel_rx,
         history: &mut history,
         original_task: &mut original_task,

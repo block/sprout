@@ -237,14 +237,6 @@ impl McpRegistry {
             .collect()
     }
 
-    pub fn kill_server(&self, server_name: &str) {
-        if let Some(server) = self.servers.iter().find(|s| s.name == server_name) {
-            if let ClientState::Healthy { pgid: Some(p), .. } = &**server.client.load() {
-                killpg(*p, &server.name, "kill_server");
-            }
-        }
-    }
-
     pub fn mark_dead(&self, server_name: &str, reason: &str) {
         let server = match self.servers.iter().find(|s| s.name == server_name) {
             Some(s) => s,

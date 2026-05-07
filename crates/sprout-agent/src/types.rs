@@ -120,13 +120,6 @@ pub enum ContentBlock {
     Unsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PermissionOutcome {
-    Allow,
-    Deny,
-    Cancelled,
-}
-
 #[derive(Debug)]
 pub enum AgentError {
     InvalidParams(String),
