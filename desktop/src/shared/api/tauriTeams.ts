@@ -10,6 +10,7 @@ type RawTeam = {
   name: string;
   description: string | null;
   persona_ids: string[];
+  is_builtin?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -20,6 +21,7 @@ function fromRawTeam(team: RawTeam): AgentTeam {
     name: team.name,
     description: team.description,
     personaIds: team.persona_ids,
+    isBuiltin: team.is_builtin ?? false,
     createdAt: team.created_at,
     updatedAt: team.updated_at,
   };

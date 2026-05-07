@@ -48,7 +48,7 @@ test("emptyResolvedTeamPersonas starts empty but complete", () => {
 test("resolveTeamPersonas preserves team order and marks complete teams usable", () => {
   const personas = [
     createPersona("persona-1", "Solo"),
-    createPersona("persona-2", "Ralph"),
+    createPersona("persona-2", "Kit"),
   ];
   const resolution = resolveTeamPersonas(
     createTeam("team-1", ["persona-2", "persona-1"]),
@@ -60,7 +60,7 @@ test("resolveTeamPersonas preserves team order and marks complete teams usable",
   assert.deepEqual(resolution.resolvedPersonaIds, ["persona-2", "persona-1"]);
   assert.deepEqual(
     resolution.resolvedPersonas.map((persona) => persona.displayName),
-    ["Ralph", "Solo"],
+    ["Kit", "Solo"],
   );
 });
 

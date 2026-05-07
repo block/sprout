@@ -21,7 +21,7 @@ function createPersona(id, displayName) {
 test("pickQuickBotPersonas prefers recents before defaults", () => {
   const personas = [
     createPersona("builtin:solo", "Solo"),
-    createPersona("builtin:ralph", "Ralph"),
+    createPersona("builtin:kit", "Kit"),
     createPersona("builtin:reviewer", "Reviewer"),
   ];
 
@@ -29,7 +29,7 @@ test("pickQuickBotPersonas prefers recents before defaults", () => {
     pickQuickBotPersonas(personas, ["builtin:reviewer"]).map(
       (persona) => persona.id,
     ),
-    ["builtin:reviewer", "builtin:solo", "builtin:ralph"],
+    ["builtin:reviewer", "builtin:solo", "builtin:kit"],
   );
 });
 
@@ -49,7 +49,7 @@ test("pickQuickBotPersonas falls back to any active personas when defaults are m
 test("pickQuickBotPersonas skips duplicate and missing recents", () => {
   const personas = [
     createPersona("builtin:solo", "Solo"),
-    createPersona("builtin:ralph", "Ralph"),
+    createPersona("builtin:kit", "Kit"),
     createPersona("builtin:scout", "Scout"),
   ];
 
@@ -58,8 +58,8 @@ test("pickQuickBotPersonas skips duplicate and missing recents", () => {
       "builtin:solo",
       "missing",
       "builtin:solo",
-      "builtin:ralph",
+      "builtin:kit",
     ]).map((persona) => persona.id),
-    ["builtin:solo", "builtin:ralph", "builtin:scout"],
+    ["builtin:solo", "builtin:kit", "builtin:scout"],
   );
 });

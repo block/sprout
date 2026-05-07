@@ -145,7 +145,7 @@ test("built-in personas are chosen from the dialog and can be selected", async (
   await expect(page.getByTestId("agents-persona-catalog")).toHaveCount(0);
   await page.getByTestId("open-persona-catalog").click();
   await expect(page.getByTestId("persona-catalog-dialog")).toContainText(
-    "Reviewer",
+    "Scout",
   );
   await expect(page.getByTestId("persona-catalog-dialog-header")).toBeVisible();
   await expect(
@@ -167,33 +167,29 @@ test("built-in personas are chosen from the dialog and can be selected", async (
   await expect(page.getByRole("tooltip")).toHaveCount(0);
   const initialCatalogOrder = await getCatalogOrder(page);
 
-  await page
-    .getByTestId("persona-catalog-card-target-builtin:reviewer")
-    .click();
+  await page.getByTestId("persona-catalog-card-target-builtin:scout").click();
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Selected Reviewer for My Agents." }),
+      .filter({ hasText: "Selected Scout for My Agents." }),
   ).toBeVisible();
 
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Reviewer",
+    "Scout",
   );
   await expect(
-    page.getByTestId("persona-catalog-card-target-builtin:reviewer"),
+    page.getByTestId("persona-catalog-card-target-builtin:scout"),
   ).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => getCatalogOrder(page)).toEqual(initialCatalogOrder);
 
-  await page
-    .getByTestId("persona-catalog-card-target-builtin:reviewer")
-    .click();
+  await page.getByTestId("persona-catalog-card-target-builtin:scout").click();
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Deselected Reviewer from My Agents." }),
+      .filter({ hasText: "Deselected Scout from My Agents." }),
   ).toBeVisible();
   await expect(page.getByTestId("agents-library-personas")).not.toContainText(
-    "Reviewer",
+    "Scout",
   );
   await expect.poll(() => getCatalogOrder(page)).toEqual(initialCatalogOrder);
 });
@@ -205,11 +201,9 @@ test("persona catalog can reopen from the populated library header", async ({
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("open-persona-catalog").click();
 
-  await page
-    .getByTestId("persona-catalog-card-target-builtin:reviewer")
-    .click();
+  await page.getByTestId("persona-catalog-card-target-builtin:scout").click();
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Reviewer",
+    "Scout",
   );
 
   await page.getByTestId("persona-catalog-dialog-done").click();
@@ -217,7 +211,7 @@ test("persona catalog can reopen from the populated library header", async ({
 
   await expect(page.getByTestId("persona-catalog-dialog")).toBeVisible();
   await expect(
-    page.getByTestId("persona-catalog-card-target-builtin:reviewer"),
+    page.getByTestId("persona-catalog-card-target-builtin:scout"),
   ).toHaveAttribute("aria-pressed", "true");
 });
 
@@ -247,23 +241,23 @@ test("catalog details sheet shows the full persona details", async ({
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("open-persona-catalog").click();
 
-  await page.getByTestId("persona-catalog-details-builtin:reviewer").click();
+  await page.getByTestId("persona-catalog-details-builtin:scout").click();
   const detailSelectionTarget = page.getByTestId(
-    "persona-catalog-detail-selection-target-builtin:reviewer",
+    "persona-catalog-detail-selection-target-builtin:scout",
   );
 
   await expect(page.getByTestId("persona-catalog-details-sheet")).toContainText(
-    "Reviewer",
+    "Scout",
   );
   await expect(page.getByTestId("persona-catalog-details-sheet")).toContainText(
-    "You are Reviewer.",
+    "You are Scout.",
   );
   await expect(
     page.getByTestId("persona-catalog-detail-selection-title"),
   ).toHaveText("Available in Persona Catalog");
   await expect(detailSelectionTarget).toHaveAttribute(
     "aria-label",
-    "Select Reviewer in My Agents",
+    "Select Scout in My Agents",
   );
   await expect(detailSelectionTarget).toHaveAttribute("aria-pressed", "false");
 
@@ -273,11 +267,11 @@ test("catalog details sheet shows the full persona details", async ({
   ).toHaveText("Selected for My Agents");
   await expect(detailSelectionTarget).toHaveAttribute(
     "aria-label",
-    "Deselect Reviewer in My Agents",
+    "Deselect Scout in My Agents",
   );
   await expect(detailSelectionTarget).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("agents-library-personas")).toContainText(
-    "Reviewer",
+    "Scout",
   );
 });
 
@@ -286,13 +280,13 @@ test("inactive built-ins cannot be used to create teams", async ({ page }) => {
 
   const error = await invokeTauriExpectError(page, "create_team", {
     input: {
-      name: "Reviewers",
-      personaIds: ["builtin:reviewer"],
+      name: "Scouts",
+      personaIds: ["builtin:scout"],
     },
   });
 
   expect(error).toBe(
-    "Reviewer is not in My Agents. Choose it from Persona Catalog first.",
+    "Scout is not in My Agents. Choose it from Persona Catalog first.",
   );
 });
 
@@ -303,25 +297,21 @@ test("built-in deselection failures show up in Persona Catalog", async ({
 
   await page.getByTestId("open-agents-view").click();
   await page.getByTestId("open-persona-catalog").click();
-  await page
-    .getByTestId("persona-catalog-card-target-builtin:reviewer")
-    .click();
+  await page.getByTestId("persona-catalog-card-target-builtin:scout").click();
 
   await invokeTauri(page, "create_team", {
     input: {
-      name: "Reviewers",
-      personaIds: ["builtin:reviewer"],
+      name: "Scouts",
+      personaIds: ["builtin:scout"],
     },
   });
 
-  await page
-    .getByTestId("persona-catalog-card-target-builtin:reviewer")
-    .click();
+  await page.getByTestId("persona-catalog-card-target-builtin:scout").click();
 
   await expect(
     page
       .locator("[data-sonner-toast]")
-      .filter({ hasText: "Reviewer is still referenced by a team." }),
+      .filter({ hasText: "Scout is still referenced by a team." }),
   ).toBeVisible();
 });
 
