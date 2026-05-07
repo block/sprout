@@ -15,7 +15,6 @@ import { TeamDialog } from "./TeamDialog";
 import { TeamImportDialog } from "./TeamImportDialog";
 import { TeamImportUpdateDialog } from "./TeamImportUpdateDialog";
 import { TeamsSection } from "./TeamsSection";
-import { TokenRevealDialog } from "./TokenRevealDialog";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
@@ -143,9 +142,6 @@ export function AgentsView() {
               onDelete={(pubkey) => {
                 void agents.handleDelete(pubkey);
               }}
-              onMintToken={(pubkey, name) => {
-                void agents.handleMintToken(pubkey, name);
-              }}
               onSelectLogAgent={agents.setLogAgentPubkey}
               onStart={(pubkey) => {
                 void agents.handleStart(pubkey);
@@ -201,15 +197,6 @@ export function AgentsView() {
             agents.setCreatedAgent(null);
           }
         }}
-      />
-      <TokenRevealDialog
-        name={agents.revealedToken?.name ?? null}
-        onOpenChange={(open) => {
-          if (!open) {
-            agents.setRevealedToken(null);
-          }
-        }}
-        token={agents.revealedToken?.token ?? null}
       />
       <PersonaDialog
         description={personas.personaDialogState?.description ?? ""}

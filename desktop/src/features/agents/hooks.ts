@@ -16,7 +16,6 @@ import {
   getManagedAgentLog,
   listManagedAgents,
   listRelayAgents,
-  mintManagedAgentToken,
   startManagedAgent,
   stopManagedAgent,
   updateManagedAgent,
@@ -43,7 +42,6 @@ import type {
   CreatePersonaInput,
   CreateTeamInput,
   ManagedAgent,
-  MintManagedAgentTokenInput,
   UpdateManagedAgentInput,
   UpdatePersonaInput,
   UpdateTeamInput,
@@ -337,19 +335,6 @@ export function useDeleteManagedAgentMutation() {
       pubkey: string;
       forceRemoteDelete?: boolean;
     }) => deleteManagedAgent(pubkey, forceRemoteDelete),
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
-      await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });
-    },
-  });
-}
-
-export function useMintManagedAgentTokenMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (input: MintManagedAgentTokenInput) =>
-      mintManagedAgentToken(input),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: managedAgentsQueryKey });
       await queryClient.invalidateQueries({ queryKey: relayAgentsQueryKey });

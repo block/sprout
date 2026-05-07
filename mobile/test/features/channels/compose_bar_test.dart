@@ -160,7 +160,7 @@ void main() {
       final nsec = nostr.Nip19.encodePrivkey(keychain.private);
       final uploadService = MediaUploadService(
         baseUrl: 'https://relay.example',
-        apiToken: 'sprout_test_token',
+        apiToken: null,
         nsec: nsec,
         httpClient: http_testing.MockClient((request) async {
           return http.Response(
@@ -226,7 +226,7 @@ void main() {
       final nsec = nostr.Nip19.encodePrivkey(keychain.private);
       final uploadService = MediaUploadService(
         baseUrl: 'https://relay.example',
-        apiToken: 'sprout_test_token',
+        apiToken: null,
         nsec: nsec,
         httpClient: http_testing.MockClient((request) async {
           return http.Response(
@@ -294,7 +294,7 @@ void main() {
       final nsec = nostr.Nip19.encodePrivkey(keychain.private);
       final uploadService = MediaUploadService(
         baseUrl: 'https://relay.example',
-        apiToken: 'sprout_test_token',
+        apiToken: null,
         nsec: nsec,
         httpClient: http_testing.MockClient((request) async {
           return http.Response('bad upload', 401);
@@ -329,7 +329,7 @@ void main() {
       final nsec = nostr.Nip19.encodePrivkey(keychain.private);
       final uploadService = MediaUploadService(
         baseUrl: 'https://relay.example',
-        apiToken: 'sprout_test_token',
+        apiToken: null,
         nsec: nsec,
         pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
@@ -366,7 +366,7 @@ void main() {
       final nsec = nostr.Nip19.encodePrivkey(keychain.private);
       final uploadService = MediaUploadService(
         baseUrl: 'https://relay.example',
-        apiToken: 'sprout_test_token',
+        apiToken: null,
         nsec: nsec,
         pickGalleryVideo: () async => null,
         pickGalleryImage: () async =>
@@ -422,7 +422,7 @@ void main() {
       try {
         final uploadService = MediaUploadService(
           baseUrl: 'https://relay.example',
-          apiToken: 'sprout_test_token',
+          apiToken: null,
           nsec: nsec,
           httpClient: http_testing.MockClient((request) async {
             return http.Response(

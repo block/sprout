@@ -34,7 +34,6 @@ export function ManagedAgentsSection({
   onBulkStopRunning,
   onCreate,
   onDelete,
-  onMintToken,
   onSelectLogAgent,
   onStart,
   onStop,
@@ -59,7 +58,6 @@ export function ManagedAgentsSection({
   onBulkStopRunning: () => void;
   onCreate: () => void;
   onDelete: (pubkey: string) => void;
-  onMintToken: (pubkey: string, name: string) => void;
   onSelectLogAgent: (pubkey: string | null) => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
@@ -176,7 +174,6 @@ export function ManagedAgentsSection({
               presenceLookup={presenceLookup}
               onAddToChannel={onAddToChannel}
               onDelete={onDelete}
-              onMintToken={onMintToken}
               onSelectLogAgent={onSelectLogAgent}
               onStart={onStart}
               onStop={onStop}

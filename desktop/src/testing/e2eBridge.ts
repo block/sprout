@@ -33,27 +33,13 @@ type E2eConfig = {
       acp?: MockCommandAvailability;
       mcp?: MockCommandAvailability;
     };
-    mintTokenError?: string;
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
-    seededTokens?: RawMockTokenSeed[];
   };
   relayHttpUrl?: string;
   relayWsUrl?: string;
   identity?: TestIdentity;
-};
-
-type RawMockTokenSeed = {
-  id: string;
-  name: string;
-  scopes: string[];
-  channel_ids: string[];
-  created_at: string;
-  expires_at: string | null;
-  last_used_at: string | null;
-  revoked_at: string | null;
-  token?: string;
 };
 
 type RawRelayMember = {
@@ -274,29 +260,6 @@ type RawSendChannelMessageResponse = {
   created_at: number;
 };
 
-type RawToken = {
-  id: string;
-  name: string;
-  scopes: string[];
-  channel_ids: string[];
-  created_at: string;
-  expires_at: string | null;
-  last_used_at: string | null;
-  revoked_at: string | null;
-};
-
-type RawListTokensResponse = {
-  tokens: RawToken[];
-};
-
-type RawMintTokenResponse = RawToken & {
-  token: string;
-};
-
-type RawRevokeAllTokensResponse = {
-  revoked_count: number;
-};
-
 type RawRelayAgent = {
   pubkey: string;
   name: string;
@@ -322,7 +285,6 @@ type RawManagedAgent = {
   parallelism: number;
   system_prompt: string | null;
   model: string | null;
-  has_api_token: boolean;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   created_at: string;
@@ -342,14 +304,8 @@ type RawManagedAgent = {
 type RawCreateManagedAgentResponse = {
   agent: RawManagedAgent;
   private_key_nsec: string;
-  api_token: string | null;
   profile_sync_error: string | null;
   spawn_error: string | null;
-};
-
-type RawMintManagedAgentTokenResponse = {
-  agent: RawManagedAgent;
-  token: string;
 };
 
 type RawManagedAgentLog = {
@@ -397,13 +353,8 @@ type RawTeam = {
   updated_at: string;
 };
 
-type MockToken = RawToken & {
-  token: string;
-};
-
 type MockManagedAgent = RawManagedAgent & {
   private_key_nsec: string;
-  api_token: string | null;
   log_lines: string[];
 };
 
@@ -682,21 +633,6 @@ function cloneProfile(profile: RawProfile): RawProfile {
   return { ...profile };
 }
 
-function cloneToken(token: RawToken): RawToken {
-  return {
-    ...token,
-    channel_ids: [...token.channel_ids],
-    scopes: [...token.scopes],
-  };
-}
-
-function cloneMintedToken(token: MockToken): RawMintTokenResponse {
-  return {
-    ...cloneToken(token),
-    token: token.token,
-  };
-}
-
 function cloneRelayAgent(agent: RawRelayAgent): RawRelayAgent {
   return {
     ...agent,
@@ -722,7 +658,6 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     parallelism: agent.parallelism,
     system_prompt: agent.system_prompt,
     model: agent.model,
-    has_api_token: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
     created_at: agent.created_at,
@@ -736,20 +671,6 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     backend: agent.backend ?? { type: "local" as const },
     backend_agent_id: agent.backend_agent_id ?? null,
   };
-}
-
-function toMockToken(seed: RawMockTokenSeed): MockToken {
-  return {
-    ...cloneToken(seed),
-    token:
-      seed.token ??
-      `spr_tok_mock_${seed.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 24)}`,
-  };
-}
-
-function resetMockTokens(config: E2eConfig | undefined) {
-  mockTokens = (config?.mock?.seededTokens ?? []).map(toMockToken);
-  mockMintTokenError = config?.mock?.mintTokenError ?? null;
 }
 
 function resetMockRelayMembers(config: E2eConfig | undefined) {
@@ -1150,8 +1071,6 @@ const mockMessages = new Map<string, RelayEvent[]>();
 let mockRelayMembers: RawRelayMember[] = [];
 const mockSockets = new Map<number, MockSocket>();
 const realSockets = new Map<number, WebSocket>();
-let mockTokens: MockToken[] = [];
-let mockMintTokenError: string | null = null;
 let mockManagedAgents: MockManagedAgent[] = [];
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
@@ -3510,107 +3429,6 @@ async function handleGetFeed(
   };
 }
 
-async function handleListTokens(
-  config: E2eConfig | undefined,
-): Promise<RawListTokensResponse> {
-  const identity = getIdentity(config);
-  if (!identity) {
-    return {
-      tokens: mockTokens.map(cloneToken),
-    };
-  }
-
-  // Tokens are deleted in pure-nostr — return empty list
-  return { tokens: [] };
-}
-
-async function handleMintToken(
-  args: {
-    name: string;
-    scopes: string[];
-    channelIds?: string[];
-    expiresInDays?: number;
-  },
-  config: E2eConfig | undefined,
-): Promise<RawMintTokenResponse> {
-  const identity = getIdentity(config);
-  if (!identity) {
-    if (mockMintTokenError) {
-      throw mockMintTokenError;
-    }
-
-    const now = new Date();
-    const token: MockToken = {
-      id: crypto.randomUUID(),
-      name: args.name,
-      scopes: [...args.scopes],
-      channel_ids: [...(args.channelIds ?? [])],
-      created_at: now.toISOString(),
-      expires_at:
-        typeof args.expiresInDays === "number"
-          ? new Date(
-              now.getTime() + args.expiresInDays * 24 * 60 * 60 * 1_000,
-            ).toISOString()
-          : null,
-      last_used_at: null,
-      revoked_at: null,
-      token: `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`,
-    };
-
-    mockTokens.unshift(token);
-    return cloneMintedToken(token);
-  }
-
-  // Tokens are deleted in pure-nostr — return error
-  throw new Error(
-    "Token minting is not available in pure-nostr mode. Auth uses keypairs directly.",
-  );
-}
-
-async function handleRevokeToken(
-  args: { tokenId: string },
-  config: E2eConfig | undefined,
-) {
-  const identity = getIdentity(config);
-  if (!identity) {
-    const token = mockTokens.find((candidate) => candidate.id === args.tokenId);
-    if (!token) {
-      throw new Error(`Token ${args.tokenId} not found.`);
-    }
-
-    token.revoked_at = new Date().toISOString();
-    return;
-  }
-
-  // Tokens deleted in pure-nostr — no-op
-}
-
-async function handleRevokeAllTokens(
-  config: E2eConfig | undefined,
-): Promise<RawRevokeAllTokensResponse> {
-  const identity = getIdentity(config);
-  if (!identity) {
-    const now = new Date().toISOString();
-    let revokedCount = 0;
-
-    for (const token of mockTokens) {
-      if (token.revoked_at) {
-        continue;
-      }
-
-      token.revoked_at = now;
-      revokedCount += 1;
-    }
-
-    return {
-      revoked_count: revokedCount,
-    };
-  }
-
-  // Tokens deleted in pure-nostr — no-op
-  return { revoked_count: 0 };
-}
-
 async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
   syncMockRelayAgentsFromManagedAgents();
   return mockRelayAgents.map(cloneRelayAgent);
@@ -3961,9 +3779,6 @@ async function handleCreateManagedAgent(args: {
     systemPrompt?: string;
     avatarUrl?: string;
     model?: string;
-    mintToken?: boolean;
-    tokenScopes?: string[];
-    tokenName?: string;
     spawnAfterCreate?: boolean;
     startOnAppLaunch?: boolean;
     backend?:
@@ -3981,10 +3796,6 @@ async function handleCreateManagedAgent(args: {
     .replace(/-/g, "")
     .padEnd(64, "0")
     .slice(0, 64);
-  const token =
-    args.input.mintToken === false
-      ? null
-      : `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`;
   const managedAgent: MockManagedAgent = {
     pubkey,
     name,
@@ -4003,7 +3814,6 @@ async function handleCreateManagedAgent(args: {
     parallelism: args.input.parallelism ?? 1,
     system_prompt: args.input.systemPrompt?.trim() || null,
     model: args.input.model?.trim() || null,
-    has_api_token: token !== null,
     status: args.input.spawnAfterCreate ? "running" : "stopped",
     pid: args.input.spawnAfterCreate ? 42000 + mockManagedAgents.length : null,
     created_at: now,
@@ -4017,7 +3827,6 @@ async function handleCreateManagedAgent(args: {
     backend: args.input.backend ?? { type: "local" as const },
     backend_agent_id: null,
     private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
-    api_token: token,
     log_lines: [
       `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey} parallelism=${args.input.parallelism ?? 1}`,
       args.input.systemPrompt?.trim()
@@ -4035,7 +3844,6 @@ async function handleCreateManagedAgent(args: {
   return {
     agent: cloneManagedAgent(managedAgent),
     private_key_nsec: managedAgent.private_key_nsec,
-    api_token: managedAgent.api_token,
     profile_sync_error: null,
     spawn_error: null,
   };
@@ -4112,28 +3920,6 @@ async function handleSetManagedAgentStartOnAppLaunch(args: {
   agent.start_on_app_launch = args.startOnAppLaunch;
   agent.updated_at = new Date().toISOString();
   return cloneManagedAgent(agent);
-}
-
-async function handleMintManagedAgentToken(args: {
-  input: {
-    pubkey: string;
-    tokenName?: string;
-    scopes?: string[];
-  };
-}): Promise<RawMintManagedAgentTokenResponse> {
-  const agent = getMockManagedAgent(args.input.pubkey);
-  const now = new Date().toISOString();
-  agent.api_token = `spr_tok_mock_${crypto.randomUUID().replace(/-/g, "")}`;
-  agent.has_api_token = true;
-  agent.updated_at = now;
-  agent.log_lines.push(
-    `minted token ${args.input.tokenName ?? `${agent.name}-token`} at ${now}`,
-  );
-
-  return {
-    agent: cloneManagedAgent(agent),
-    token: agent.api_token ?? "",
-  };
 }
 
 async function handleGetManagedAgentLog(args: {
@@ -4679,7 +4465,6 @@ export function maybeInstallE2eTauriMocks() {
     return;
   }
 
-  resetMockTokens(config);
   resetMockRelayMembers(config);
   resetMockManagedAgents();
   resetMockPersonas();
@@ -4811,20 +4596,6 @@ export function maybeInstallE2eTauriMocks() {
           (payload as Parameters<typeof handleGetFeed>[0]) ?? {},
           activeConfig,
         );
-      case "list_tokens":
-        return handleListTokens(activeConfig);
-      case "mint_token":
-        return handleMintToken(
-          payload as Parameters<typeof handleMintToken>[0],
-          activeConfig,
-        );
-      case "revoke_token":
-        return handleRevokeToken(
-          payload as Parameters<typeof handleRevokeToken>[0],
-          activeConfig,
-        );
-      case "revoke_all_tokens":
-        return handleRevokeAllTokens(activeConfig);
       case "list_relay_agents":
         return handleListRelayAgents();
       case "list_personas":
@@ -4892,10 +4663,6 @@ export function maybeInstallE2eTauriMocks() {
       case "delete_managed_agent":
         return handleDeleteManagedAgent(
           payload as Parameters<typeof handleDeleteManagedAgent>[0],
-        );
-      case "mint_managed_agent_token":
-        return handleMintManagedAgentToken(
-          payload as Parameters<typeof handleMintManagedAgentToken>[0],
         );
       case "get_managed_agent_log":
         return handleGetManagedAgentLog(

@@ -248,44 +248,6 @@ export type RelayMember = {
   createdAt: string;
 };
 
-export type TokenScope =
-  | "messages:read"
-  | "messages:write"
-  | "channels:read"
-  | "channels:write"
-  | "users:read"
-  | "users:write"
-  | "files:read"
-  | "files:write";
-
-export type Token = {
-  id: string;
-  name: string;
-  scopes: TokenScope[];
-  channelIds: string[];
-  createdAt: string;
-  expiresAt: string | null;
-  lastUsedAt: string | null;
-  revokedAt: string | null;
-};
-
-export type MintTokenInput = {
-  name: string;
-  scopes: TokenScope[];
-  channelIds?: string[];
-  expiresInDays?: number;
-};
-
-export type MintTokenResponse = {
-  id: string;
-  token: string;
-  name: string;
-  scopes: TokenScope[];
-  channelIds: string[];
-  createdAt: string;
-  expiresAt: string | null;
-};
-
 export type RelayAgent = {
   pubkey: string;
   name: string;
@@ -316,7 +278,6 @@ export type ManagedAgent = {
   systemPrompt: string | null;
   model: string | null;
   mcpToolsets: string | null;
-  hasApiToken: boolean;
   status: "running" | "stopped" | "deployed" | "not_deployed";
   pid: number | null;
   createdAt: string;
@@ -360,9 +321,6 @@ export type CreateManagedAgentInput = {
   avatarUrl?: string;
   model?: string;
   mcpToolsets?: string;
-  mintToken?: boolean;
-  tokenScopes?: TokenScope[];
-  tokenName?: string;
   spawnAfterCreate?: boolean;
   startOnAppLaunch?: boolean;
   backend?: ManagedAgentBackend;
@@ -371,20 +329,8 @@ export type CreateManagedAgentInput = {
 export type CreateManagedAgentResponse = {
   agent: ManagedAgent;
   privateKeyNsec: string;
-  apiToken: string | null;
   profileSyncError: string | null;
   spawnError: string | null;
-};
-
-export type MintManagedAgentTokenInput = {
-  pubkey: string;
-  tokenName?: string;
-  scopes?: TokenScope[];
-};
-
-export type MintManagedAgentTokenResponse = {
-  agent: ManagedAgent;
-  token: string;
 };
 
 export type ManagedAgentLog = {

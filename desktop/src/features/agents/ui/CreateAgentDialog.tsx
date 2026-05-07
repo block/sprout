@@ -7,13 +7,11 @@ import {
   useCreateManagedAgentMutation,
   useManagedAgentPrereqsQuery,
 } from "@/features/agents/hooks";
-import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
 import { probeBackendProvider } from "@/shared/api/tauri";
 import type {
   BackendProviderProbeResult,
   CreateManagedAgentInput,
   CreateManagedAgentResponse,
-  TokenScope,
 } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import {
@@ -28,7 +26,6 @@ import {
   CreateAgentOptionToggles,
   CreateAgentRuntimeProviderField,
   CreateAgentRuntimeFields,
-  CreateAgentTokenSection,
 } from "./CreateAgentDialogSections";
 import {
   coerceConfigValues,
@@ -59,13 +56,8 @@ export function CreateAgentDialog({
   const prereqsQuery = useManagedAgentPrereqsQuery(acpCommand, mcpCommand);
   const [name, setName] = React.useState("");
   const [relayUrl, setRelayUrl] = React.useState("");
-  const [mintToken, setMintToken] = React.useState(true);
   const [spawnAfterCreate, setSpawnAfterCreate] = React.useState(true);
   const [startOnAppLaunch, setStartOnAppLaunch] = React.useState(true);
-  const [tokenName, setTokenName] = React.useState("");
-  const [selectedScopes, setSelectedScopes] = React.useState<Set<TokenScope>>(
-    () => new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES),
-  );
   const [turnTimeoutSeconds, setTurnTimeoutSeconds] = React.useState("320");
   const [parallelism, setParallelism] = React.useState("3");
   const [systemPrompt, setSystemPrompt] = React.useState("");
@@ -97,13 +89,9 @@ export function CreateAgentDialog({
     [backendProviders, runOn],
   );
   const isProviderMode = runOn !== "local";
-  // Provider agents always mint — ownership is established during mint.
-  // Use this everywhere instead of raw `mintToken` for validation/rendering.
-  const effectiveMintToken = isProviderMode || mintToken;
 
   const isSpawnSupported =
     prereqs?.acp.available === true && prereqs?.mcp.available === true;
-  const mintToggleDisabled = prereqsQuery.isLoading;
   const spawnToggleDisabled =
     prereqsQuery.isLoading || (prereqs !== null && !isSpawnSupported);
   const isDiscoveryPending = providersQuery.isLoading || prereqsQuery.isLoading;
@@ -207,11 +195,8 @@ export function CreateAgentDialog({
   function reset() {
     setName("");
     setRelayUrl("");
-    setMintToken(true);
     setSpawnAfterCreate(true);
     setStartOnAppLaunch(true);
-    setTokenName("");
-    setSelectedScopes(new Set<TokenScope>(DEFAULT_MANAGED_AGENT_SCOPES));
     setAcpCommand("sprout-acp");
     setAgentCommand("goose");
     setAgentArgs("acp");
@@ -236,35 +221,6 @@ export function CreateAgentDialog({
     }
 
     onOpenChange(next);
-  }
-
-  // Scopes required for remote agent controllability (!shutdown path).
-  // These cannot be removed in provider mode.
-  const PROVIDER_REQUIRED_SCOPES: TokenScope[] = [
-    "users:read" as TokenScope,
-    "messages:read" as TokenScope,
-    "messages:write" as TokenScope,
-    "channels:read" as TokenScope,
-  ];
-
-  function toggleScope(scope: TokenScope) {
-    // Prevent removing required scopes in provider mode.
-    if (
-      isProviderMode &&
-      PROVIDER_REQUIRED_SCOPES.includes(scope) &&
-      selectedScopes.has(scope)
-    ) {
-      return; // locked — required for remote agent controllability
-    }
-    setSelectedScopes((previous) => {
-      const next = new Set(previous);
-      if (next.has(scope)) {
-        next.delete(scope);
-      } else {
-        next.add(scope);
-      }
-      return next;
-    });
   }
 
   function handleProviderChange(nextProviderId: string) {
@@ -306,7 +262,6 @@ export function CreateAgentDialog({
 
   const canSubmit =
     name.trim().length > 0 &&
-    (!effectiveMintToken || selectedScopes.size > 0) &&
     !isDiscoveryPending &&
     !(
       !isProviderMode &&
@@ -335,9 +290,6 @@ export function CreateAgentDialog({
                 ? Number.parseInt(parallelism, 10)
                 : undefined,
             systemPrompt: systemPrompt.trim() || undefined,
-            mintToken: true, // Required: ownership established during mint
-            tokenName: tokenName.trim() || undefined,
-            tokenScopes: [...selectedScopes],
             spawnAfterCreate: true,
             startOnAppLaunch: false, // Remote agents don't auto-start with the desktop
             backend: {
@@ -369,9 +321,6 @@ export function CreateAgentDialog({
                 ? Number.parseInt(parallelism, 10)
                 : undefined,
             systemPrompt: systemPrompt.trim() || undefined,
-            mintToken: effectiveMintToken,
-            tokenName: tokenName.trim() || undefined,
-            tokenScopes: [...selectedScopes],
             spawnAfterCreate,
             startOnAppLaunch,
             backend: { type: "local" },
@@ -393,8 +342,7 @@ export function CreateAgentDialog({
             <DialogTitle>Create agent</DialogTitle>
             <DialogDescription>
               This creates a local agent identity, syncs its display name when
-              possible, optionally mints a relay token, and can spawn
-              `sprout-acp` immediately.
+              possible, and can spawn `sprout-acp` immediately.
             </DialogDescription>
           </DialogHeader>
 
@@ -467,13 +415,6 @@ export function CreateAgentDialog({
 
             <CreateAgentOptionToggles
               isSpawnSupported={isSpawnSupported}
-              mintToken={effectiveMintToken}
-              mintToggleDisabled={isProviderMode || mintToggleDisabled}
-              onToggleMintToken={() => {
-                if (!mintToggleDisabled) {
-                  setMintToken((current) => !current);
-                }
-              }}
               onToggleStartOnAppLaunch={() => {
                 setStartOnAppLaunch((current) => !current);
               }}
@@ -488,20 +429,6 @@ export function CreateAgentDialog({
               spawnAfterCreate={isProviderMode ? true : spawnAfterCreate}
               spawnToggleDisabled={isProviderMode || spawnToggleDisabled}
             />
-
-            {effectiveMintToken ? (
-              <CreateAgentTokenSection
-                lockedScopes={
-                  isProviderMode
-                    ? new Set<TokenScope>(PROVIDER_REQUIRED_SCOPES)
-                    : undefined
-                }
-                onScopeToggle={toggleScope}
-                onTokenNameChange={setTokenName}
-                selectedScopes={selectedScopes}
-                tokenName={tokenName}
-              />
-            ) : null}
 
             <div className="rounded-2xl border border-border/70 bg-muted/20">
               <button

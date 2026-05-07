@@ -258,7 +258,7 @@ void main() {
 
       final service = MediaUploadService(
         baseUrl: 'https://relay.example:8443',
-        apiToken: 'sprout_test_token',
+        apiToken: null,
         nsec: nsec,
         httpClient: client,
         pickGalleryVideo: () async => null,
@@ -277,7 +277,6 @@ void main() {
         'https://relay.example:8443/media/upload',
       );
       expect(capturedRequest!.headers['Content-Type'], 'image/png');
-      expect(capturedRequest!.headers['X-Auth-Token'], 'sprout_test_token');
       expect(capturedRequest!.headers['X-SHA-256'], isNotEmpty);
       expect(capturedRequest!.bodyBytes, _pngBytes);
 

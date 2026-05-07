@@ -48,10 +48,10 @@ challenge/response before writing events. The relay sends a random challenge;
 the client signs a `kind:22242` event containing the challenge and the relay
 URL, proving possession of the private key.
 
-API tokens (bearer tokens minted by `sprout-admin`) are presented inside the
-NIP-42 signed event as an `auth_token` tag. The relay validates the token
-against the database before granting elevated scopes. Tokens are stored as
-SHA-256 hashes — the plaintext is shown once at mint time and never stored.
+REST endpoints authenticate via
+[NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) HTTP Auth —
+the client signs a `kind:27235` event containing the request URL and method.
+The relay verifies the Schnorr signature and extracts the pubkey.
 
 ### Authorization — Channel Membership as the Gate
 
@@ -63,13 +63,6 @@ member, the relay rejects their requests — even if they are authenticated.
 Private channels are invisible to non-members: they do not appear in channel
 listings, and subscription filters for private channel events return nothing
 unless the subscriber is a member.
-
-### Scope-Based Token Permissions
-
-API tokens carry a set of scopes (e.g., `messages:read`, `channels:write`).
-The relay enforces scopes on every REST endpoint and WebSocket write. A token
-without `channels:write` cannot create channels, regardless of channel
-membership.
 
 ### Append-Only Audit Log
 

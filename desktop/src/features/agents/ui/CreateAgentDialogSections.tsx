@@ -1,9 +1,4 @@
-import type {
-  AcpProvider,
-  ManagedAgentPrereqs,
-  TokenScope,
-} from "@/shared/api/types";
-import { MANAGED_AGENT_SCOPE_OPTIONS } from "@/features/tokens/lib/scopeOptions";
+import type { AcpProvider, ManagedAgentPrereqs } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
@@ -326,51 +321,26 @@ export function CreateAgentRuntimeFields({
 
 export function CreateAgentOptionToggles({
   isSpawnSupported,
-  mintToken,
-  mintToggleDisabled,
   prereqs,
   startOnAppLaunch,
   startOnAppLaunchDisabled,
   spawnAfterCreate,
   spawnToggleDisabled,
-  onToggleMintToken,
   onToggleStartOnAppLaunch,
   onToggleSpawnAfterCreate,
 }: {
   isSpawnSupported: boolean;
-  mintToken: boolean;
-  mintToggleDisabled: boolean;
   prereqs: ManagedAgentPrereqs | null;
   startOnAppLaunch: boolean;
   /** When true, the toggle is disabled (e.g. remote agents don't support auto-start). */
   startOnAppLaunchDisabled?: boolean;
   spawnAfterCreate: boolean;
   spawnToggleDisabled: boolean;
-  onToggleMintToken: () => void;
   onToggleStartOnAppLaunch: () => void;
   onToggleSpawnAfterCreate: () => void;
 }) {
   return (
-    <div className="grid gap-3 md:grid-cols-3">
-      <button
-        aria-pressed={mintToken}
-        className={cn(
-          "rounded-2xl border px-4 py-3 text-left transition-colors",
-          mintToggleDisabled && "cursor-not-allowed opacity-60",
-          mintToken
-            ? "border-primary bg-primary/10"
-            : "border-border/70 bg-background/70",
-        )}
-        disabled={mintToggleDisabled}
-        onClick={onToggleMintToken}
-        type="button"
-      >
-        <p className="text-sm font-semibold tracking-tight">Mint token</p>
-        <p className="mt-1 text-sm text-foreground/70">
-          Mint a relay API token for this agent.
-        </p>
-      </button>
-
+    <div className="grid gap-3 md:grid-cols-2">
       <button
         aria-pressed={startOnAppLaunch}
         className={cn(
@@ -416,77 +386,6 @@ export function CreateAgentOptionToggles({
             : "Start the local ACP harness immediately after the profile is saved."}
         </p>
       </button>
-    </div>
-  );
-}
-
-export function CreateAgentTokenSection({
-  selectedScopes,
-  tokenName,
-  lockedScopes,
-  onScopeToggle,
-  onTokenNameChange,
-}: {
-  selectedScopes: Set<TokenScope>;
-  tokenName: string;
-  /** Scopes that cannot be removed (e.g. required for remote agent controllability). */
-  lockedScopes?: Set<TokenScope>;
-  onScopeToggle: (scope: TokenScope) => void;
-  onTokenNameChange: (value: string) => void;
-}) {
-  return (
-    <div className="space-y-4 rounded-2xl border border-border/70 bg-muted/20 p-4">
-      <div className="space-y-1.5">
-        <label className="text-sm font-medium" htmlFor="agent-token-name">
-          Token name
-        </label>
-        <Input
-          id="agent-token-name"
-          onChange={(event) => onTokenNameChange(event.target.value)}
-          placeholder="Leave blank to reuse the agent name"
-          value={tokenName}
-        />
-      </div>
-
-      <div className="space-y-2">
-        <p className="text-sm font-medium">Scopes</p>
-        <div className="grid grid-cols-2 gap-2">
-          {MANAGED_AGENT_SCOPE_OPTIONS.map((scope) => {
-            const selected = selectedScopes.has(scope.value);
-            const locked = lockedScopes?.has(scope.value) && selected;
-            return (
-              <button
-                className={cn(
-                  "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                  selected
-                    ? "border-primary bg-primary/10 text-foreground"
-                    : "border-border/60 text-muted-foreground hover:bg-accent",
-                  locked && "cursor-not-allowed opacity-70",
-                )}
-                disabled={locked}
-                key={scope.value}
-                onClick={() => onScopeToggle(scope.value)}
-                title={
-                  locked
-                    ? "Required for remote agent controllability"
-                    : undefined
-                }
-                type="button"
-              >
-                {scope.label}
-                {locked ? (
-                  <span className="ml-1 text-xs text-muted-foreground">
-                    (required)
-                  </span>
-                ) : null}
-                <span className="block text-xs text-foreground/60">
-                  {scope.description}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }

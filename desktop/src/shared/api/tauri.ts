@@ -14,9 +14,6 @@ import type {
   GetHomeFeedInput,
   HomeFeedResponse,
   Identity,
-  MintTokenInput,
-  MintTokenResponse,
-  MintManagedAgentTokenInput,
   ManagedAgent,
   ManagedAgentBackend,
   RelayAgent,
@@ -34,8 +31,6 @@ import type {
   SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
-  Token,
-  TokenScope,
   UpdateProfileInput,
   UpdateChannelInput,
   UserProfileSummary,
@@ -193,31 +188,6 @@ type RawSendChannelMessageResult = {
   created_at: number;
 };
 
-type RawToken = {
-  id: string;
-  name: string;
-  scopes: TokenScope[];
-  channel_ids: string[];
-  created_at: string;
-  expires_at: string | null;
-  last_used_at: string | null;
-  revoked_at: string | null;
-};
-
-type RawListTokensResponse = {
-  tokens: RawToken[];
-};
-
-type RawMintTokenResponse = {
-  id: string;
-  token: string;
-  name: string;
-  scopes: TokenScope[];
-  channel_ids: string[];
-  created_at: string;
-  expires_at: string | null;
-};
-
 type RawRelayAgent = {
   pubkey: string;
   name: string;
@@ -244,7 +214,6 @@ export type RawManagedAgent = {
   system_prompt: string | null;
   model: string | null;
   mcp_toolsets: string | null;
-  has_api_token: boolean;
   status: ManagedAgent["status"];
   pid: number | null;
   created_at: string;
@@ -262,14 +231,8 @@ export type RawManagedAgent = {
 type RawCreateManagedAgentResponse = {
   agent: RawManagedAgent;
   private_key_nsec: string;
-  api_token: string | null;
   profile_sync_error: string | null;
   spawn_error: string | null;
-};
-
-type RawMintManagedAgentTokenResponse = {
-  agent: RawManagedAgent;
-  token: string;
 };
 
 type RawManagedAgentLog = {
@@ -828,19 +791,6 @@ export async function createAuthEvent(input: {
   return JSON.parse(eventJson) as RelayEvent;
 }
 
-function fromRawToken(token: RawToken): Token {
-  return {
-    id: token.id,
-    name: token.name,
-    scopes: token.scopes,
-    channelIds: token.channel_ids,
-    createdAt: token.created_at,
-    expiresAt: token.expires_at,
-    lastUsedAt: token.last_used_at,
-    revokedAt: token.revoked_at,
-  };
-}
-
 function fromRawRelayAgent(agent: RawRelayAgent): RelayAgent {
   return {
     pubkey: agent.pubkey,
@@ -870,7 +820,6 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     systemPrompt: agent.system_prompt,
     model: agent.model,
     mcpToolsets: agent.mcp_toolsets,
-    hasApiToken: agent.has_api_token,
     status: agent.status,
     pid: agent.pid,
     createdAt: agent.created_at,
@@ -904,42 +853,6 @@ function fromRawCommandAvailability(
     resolvedPath: command.resolved_path,
     available: command.available,
   };
-}
-
-export async function listTokens(): Promise<Token[]> {
-  const response = await invokeTauri<RawListTokensResponse>("list_tokens");
-  return response.tokens.map(fromRawToken);
-}
-
-export async function mintToken(
-  input: MintTokenInput,
-): Promise<MintTokenResponse> {
-  const response = await invokeTauri<RawMintTokenResponse>("mint_token", {
-    name: input.name,
-    scopes: input.scopes,
-    channelIds: input.channelIds,
-    expiresInDays: input.expiresInDays,
-  });
-  return {
-    id: response.id,
-    token: response.token,
-    name: response.name,
-    scopes: response.scopes,
-    channelIds: response.channel_ids,
-    createdAt: response.created_at,
-    expiresAt: response.expires_at,
-  };
-}
-
-export async function revokeToken(tokenId: string): Promise<void> {
-  await invokeTauri("revoke_token", { tokenId });
-}
-
-export async function revokeAllTokens(): Promise<{ revokedCount: number }> {
-  const response = await invokeTauri<{ revoked_count: number }>(
-    "revoke_all_tokens",
-  );
-  return { revokedCount: response.revoked_count };
 }
 
 // ── Relay Members ────────────────────────────────────────────────────────────
@@ -1027,9 +940,6 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         systemPrompt: input.systemPrompt,
         avatarUrl: input.avatarUrl,
         model: input.model,
-        mintToken: input.mintToken,
-        tokenScopes: input.tokenScopes,
-        tokenName: input.tokenName,
         spawnAfterCreate: input.spawnAfterCreate,
         startOnAppLaunch: input.startOnAppLaunch,
         backend: input.backend,
@@ -1040,7 +950,6 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
   return {
     agent: fromRawManagedAgent(response.agent),
     privateKeyNsec: response.private_key_nsec,
-    apiToken: response.api_token,
     profileSyncError: response.profile_sync_error,
     spawnError: response.spawn_error,
   };
@@ -1068,24 +977,6 @@ export async function deleteManagedAgent(
     pubkey,
     forceRemoteDelete: forceRemoteDelete ?? null,
   });
-}
-
-export async function mintManagedAgentToken(input: MintManagedAgentTokenInput) {
-  const response = await invokeTauri<RawMintManagedAgentTokenResponse>(
-    "mint_managed_agent_token",
-    {
-      input: {
-        pubkey: input.pubkey,
-        tokenName: input.tokenName,
-        scopes: input.scopes,
-      },
-    },
-  );
-
-  return {
-    agent: fromRawManagedAgent(response.agent),
-    token: response.token,
-  };
 }
 
 export async function getManagedAgentLog(pubkey: string, lineCount?: number) {

@@ -6,7 +6,6 @@ import {
   Clipboard,
   Ellipsis,
   FileText,
-  KeyRound,
   Pencil,
   Play,
   Power,
@@ -49,7 +48,6 @@ export function ManagedAgentRow({
   presenceLookup,
   onAddToChannel,
   onDelete,
-  onMintToken,
   onSelectLogAgent,
   onStart,
   onStop,
@@ -67,7 +65,6 @@ export function ManagedAgentRow({
   presenceLookup: PresenceLookup;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
-  onMintToken: (pubkey: string, name: string) => void;
   onSelectLogAgent: (pubkey: string | null) => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
@@ -158,7 +155,6 @@ export function ManagedAgentRow({
             isActive={isActive}
             onAddToChannel={onAddToChannel}
             onDelete={onDelete}
-            onMintToken={onMintToken}
             onOpenLogs={(pubkey) => onSelectLogAgent(pubkey)}
             onStart={onStart}
             onStop={onStop}
@@ -307,7 +303,6 @@ function AgentActionsMenu({
   isActive,
   onAddToChannel,
   onDelete,
-  onMintToken,
   onOpenLogs,
   onStart,
   onStop,
@@ -318,7 +313,6 @@ function AgentActionsMenu({
   isActive: boolean;
   onAddToChannel: (agent: ManagedAgent) => void;
   onDelete: (pubkey: string) => void;
-  onMintToken: (pubkey: string, name: string) => void;
   onOpenLogs: (pubkey: string) => void;
   onStart: (pubkey: string) => void;
   onStop: (pubkey: string) => void;
@@ -389,14 +383,6 @@ function AgentActionsMenu({
           >
             <UserPlus className="h-4 w-4" />
             Add to channel
-          </DropdownMenuItem>
-
-          <DropdownMenuItem
-            disabled={isActionPending}
-            onClick={() => onMintToken(agent.pubkey, agent.name)}
-          >
-            <KeyRound className="h-4 w-4" />
-            Mint token
           </DropdownMenuItem>
 
           <DropdownMenuItem

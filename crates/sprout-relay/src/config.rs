@@ -57,16 +57,16 @@ pub struct Config {
     /// TCP port for the Prometheus metrics exporter (`GET /metrics`).
     pub metrics_port: u16,
 
-    /// When true, NIP-42 pubkey-only authentication (no JWT or API token) is
+    /// When true, NIP-42 pubkey-only authentication (no API token) is
     /// restricted to pubkeys in the `pubkey_allowlist` table. Users with valid
-    /// API tokens or Okta JWTs bypass the allowlist entirely.
+    /// API tokens bypass the allowlist entirely.
     /// Applies to all NIP-42 pubkey-only connections, regardless of `require_auth_token`.
     pub pubkey_allowlist_enabled: bool,
 
     /// When true, every authenticated request must also pass a relay-level
     /// membership check against the `relay_members` table.
     /// When false (default), the check is a no-op and all authenticated callers
-    /// are permitted regardless of auth method (API token, JWT, NIP-42).
+    /// are permitted regardless of auth method (API token, NIP-42).
     pub require_relay_membership: bool,
 
     /// Optional hex-encoded pubkey of the relay owner.
