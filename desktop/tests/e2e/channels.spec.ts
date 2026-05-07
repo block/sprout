@@ -329,8 +329,10 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
   await expect(
     page.getByTestId(`channel-ephemeral-${channelName}`),
   ).toBeVisible();
-  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
-    /Ephemeral.+left/,
+  await expect(page.getByTestId("chat-ephemeral-badge")).toBeVisible();
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveAttribute(
+    "title",
+    /Ephemeral channel\..+left/,
   );
 
   await page.getByRole("button", { name: "Toggle Sidebar" }).click();
@@ -370,8 +372,9 @@ test("ephemeral countdown refreshes when switching channels after a clock jump",
 
   await page.getByTestId(`channel-${firstChannelName}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(firstChannelName);
-  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
-    /Ephemeral.+22h left/,
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveAttribute(
+    "title",
+    /Ephemeral channel\..+22 hours left/,
   );
 });
 
