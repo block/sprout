@@ -44,8 +44,8 @@ futures-util = "0.3"
 opus = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-nostr = { version = "0.37", features = ["nip44"] }
-nostr-compat = { package = "nostr", version = "0.36" }
+nostr = { version = "0.44", features = ["nip44"] }
+nostr-compat = { package = "nostr", version = "0.44" }
 zeroize = "1"
 reqwest = { version = "0.13", features = ["json", "query", "stream"] }
 url = "2"
@@ -55,7 +55,7 @@ sprout-sdk = { path = "../../crates/sprout-sdk" }
 base64 = "0.22"
 sha2 = "0.11"
 tar = "0.4"
-bzip2 = "0.5"
+bzip2 = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2.3.3"
