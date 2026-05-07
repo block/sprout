@@ -21,6 +21,7 @@ export function useChannelPaneHandlers({
   editTargetId,
   expandedThreadReplyIds,
   getFirstReplyIdForMessage,
+  getReplyDescendantIdsForMessage,
   openThreadHeadId,
   sendMessageMutation,
   setExpandedThreadReplyIds,
@@ -36,6 +37,7 @@ export function useChannelPaneHandlers({
   editTargetId: string | null;
   expandedThreadReplyIds: ReadonlySet<string>;
   getFirstReplyIdForMessage: (messageId: string) => string | null;
+  getReplyDescendantIdsForMessage: (messageId: string) => string[];
   openThreadHeadId: string | null;
   sendMessageMutation: ReturnType<typeof useSendMessageMutation>;
   setExpandedThreadReplyIds: React.Dispatch<React.SetStateAction<Set<string>>>;
@@ -158,14 +160,25 @@ export function useChannelPaneHandlers({
 
   const handleExpandThreadReplies = React.useCallback(
     (message: { id: string }) => {
-      const firstReplyId = getFirstReplyIdForMessage(message.id);
-      if (!expandedThreadReplyIdsRef.current.has(message.id)) {
+      if (expandedThreadReplyIdsRef.current.has(message.id)) {
+        const descendantIds = getReplyDescendantIdsForMessage(message.id);
         setExpandedThreadReplyIds((current) => {
           const next = new Set(current);
-          next.add(message.id);
+          next.delete(message.id);
+          for (const descendantId of descendantIds) {
+            next.delete(descendantId);
+          }
           return next;
         });
+        return;
       }
+
+      const firstReplyId = getFirstReplyIdForMessage(message.id);
+      setExpandedThreadReplyIds((current) => {
+        const next = new Set(current);
+        next.add(message.id);
+        return next;
+      });
 
       if (firstReplyId) {
         setThreadScrollTargetId(firstReplyId);
@@ -173,6 +186,7 @@ export function useChannelPaneHandlers({
     },
     [
       getFirstReplyIdForMessage,
+      getReplyDescendantIdsForMessage,
       setExpandedThreadReplyIds,
       setThreadScrollTargetId,
     ],

@@ -7,7 +7,6 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { KIND_STREAM_MESSAGE_DIFF } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
-import { Badge } from "@/shared/ui/badge";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
@@ -128,7 +127,7 @@ export const MessageRow = React.memo(
     const guideBleedPx = isThreadReplyLayout ? 4 : 0;
     const avatarSizeClass = isThreadReplyLayout
       ? "!h-5 !w-5 !rounded-md"
-      : "!h-[42px] !w-[42px]";
+      : "!h-8 !w-8";
     const avatarButtonRadiusClass = isThreadReplyLayout
       ? "rounded-md"
       : "rounded-xl";
@@ -144,11 +143,11 @@ export const MessageRow = React.memo(
     );
 
     const authorNode = message.pubkey ? (
-      <span className="truncate text-sm font-semibold tracking-tight hover:underline">
+      <span className="truncate text-sm font-semibold leading-none tracking-tight hover:underline">
         {message.author}
       </span>
     ) : (
-      <h3 className="truncate text-sm font-semibold tracking-tight">
+      <h3 className="truncate text-sm font-semibold leading-none tracking-tight">
         {message.author}
       </h3>
     );
@@ -255,8 +254,8 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message rounded-2xl px-2 py-1.5 transition-colors",
-            isThreadReplyLayout ? "space-y-1.5" : "flex items-start gap-2.5",
+            "group/message rounded-2xl px-2 py-1 transition-colors",
+            isThreadReplyLayout ? "space-y-1" : "flex items-start gap-2.5",
             highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
           )}
           data-message-id={message.id}
@@ -272,7 +271,7 @@ export const MessageRow = React.memo(
                     botIdenticonValue={message.author}
                   >
                     <button
-                      className="flex shrink-0 items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="flex shrink-0 items-start gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       type="button"
                     >
                       {avatarNode}
@@ -288,20 +287,18 @@ export const MessageRow = React.memo(
                   </>
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
                     {message.personaDisplayName &&
                     message.personaDisplayName !== message.author ? (
                       <span className="text-xs text-muted-foreground">
                         {message.personaDisplayName}
                       </span>
-                    ) : message.role ? (
-                      <Badge variant="secondary">{message.role}</Badge>
                     ) : null}
                     {metadataNode}
                   </div>
                 </div>
               </div>
-              <div className="min-w-0 space-y-1">{messageBodyNode}</div>
+              <div className="min-w-0 space-y-0.5">{messageBodyNode}</div>
             </>
           ) : (
             <>
@@ -324,8 +321,8 @@ export const MessageRow = React.memo(
               ) : (
                 <div className="flex shrink-0 items-start">{avatarNode}</div>
               )}
-              <div className="min-w-0 flex-1 space-y-1">
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <div className="-mt-1 min-w-0 flex-1 space-y-0.5">
+                <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
                   {message.pubkey ? (
                     <UserProfilePopover
                       pubkey={message.pubkey}
@@ -347,8 +344,6 @@ export const MessageRow = React.memo(
                     <span className="text-xs text-muted-foreground">
                       {message.personaDisplayName}
                     </span>
-                  ) : message.role ? (
-                    <Badge variant="secondary">{message.role}</Badge>
                   ) : null}
                   {metadataNode}
                 </div>

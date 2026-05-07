@@ -1,157 +1,166 @@
-import { Bot, Loader2 } from "lucide-react";
+import * as React from "react";
+import { Loader2 } from "lucide-react";
 
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ManagedAgent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/shared/ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
+
+export type BotActivityAgent = Pick<ManagedAgent, "pubkey" | "name">;
 
 type BotActivityBarProps = {
-  agents: ManagedAgent[];
+  agents: BotActivityAgent[];
   onOpenAgentSession: (pubkey: string) => void;
   openAgentSessionPubkey: string | null;
+  profiles?: UserProfileLookup;
   typingBotPubkeys: string[];
 };
 
-const COMPACT_THRESHOLD = 4;
-const OVERFLOW_THRESHOLD = 6;
-const MAX_VISIBLE_WITH_OVERFLOW = 5;
+const HOVER_OPEN_DELAY_MS = 150;
+const HOVER_CLOSE_DELAY_MS = 180;
 
-/**
- * Compact right-aligned row of clickable bot pills.
- * Only renders pills for bots that are currently typing (actively working).
- */
-export function BotActivityBar({
+export function BotActivityComposerAction({
   agents,
   onOpenAgentSession,
   openAgentSessionPubkey,
+  profiles,
   typingBotPubkeys,
 }: BotActivityBarProps) {
-  if (typingBotPubkeys.length === 0) {
-    return null;
-  }
-
-  const typingSet = new Set(
-    typingBotPubkeys.map((pubkey) => pubkey.toLowerCase()),
+  const [open, setOpen] = React.useState(false);
+  const hoverTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null,
   );
 
-  const typingAgents = agents.filter((agent) =>
-    typingSet.has(agent.pubkey.toLowerCase()),
-  );
+  const typingAgents = React.useMemo(() => {
+    const typingSet = new Set(
+      typingBotPubkeys.map((pubkey) => pubkey.toLowerCase()),
+    );
+
+    return agents.filter((agent) => typingSet.has(agent.pubkey.toLowerCase()));
+  }, [agents, typingBotPubkeys]);
+
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const openWithDelay = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, HOVER_OPEN_DELAY_MS);
+  }, [clearHoverTimer]);
+
+  const closeWithDelay = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, HOVER_CLOSE_DELAY_MS);
+  }, [clearHoverTimer]);
+
+  const keepOpen = React.useCallback(() => {
+    clearHoverTimer();
+  }, [clearHoverTimer]);
+
+  React.useEffect(() => {
+    return () => clearHoverTimer();
+  }, [clearHoverTimer]);
 
   if (typingAgents.length === 0) {
     return null;
   }
 
-  const { hiddenAgents, visibleAgents } = splitVisibleAgents(
-    typingAgents,
-    openAgentSessionPubkey,
-  );
-  const isCompact = typingAgents.length >= COMPACT_THRESHOLD;
+  const agentAvatarUrl = (agent: BotActivityAgent) =>
+    profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null;
+  const selectedPubkey = openAgentSessionPubkey?.toLowerCase() ?? null;
+  const triggerLabel =
+    typingAgents.length === 1
+      ? `${typingAgents[0]?.name ?? "Agent"} is working`
+      : `${typingAgents.length} agents working`;
 
   return (
-    <div
-      className="flex min-w-0 shrink items-center justify-end gap-1 overflow-hidden"
-      data-testid="bot-activity-bar"
-    >
-      {visibleAgents.map((agent) => {
-        const isSelected =
-          openAgentSessionPubkey?.toLowerCase() === agent.pubkey.toLowerCase();
-        return (
-          <Tooltip key={agent.pubkey}>
-            <TooltipTrigger asChild>
+    <Popover onOpenChange={setOpen} open={open}>
+      <PopoverTrigger asChild>
+        <button
+          aria-label={`${triggerLabel}. View activity.`}
+          className="inline-flex h-9 min-w-9 items-center justify-center gap-1.5 rounded-full border border-border/60 bg-background px-2 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-primary/40 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
+          data-testid="bot-activity-composer-trigger"
+          onBlur={closeWithDelay}
+          onClick={() => {
+            clearHoverTimer();
+            setOpen((current) => !current);
+          }}
+          onFocus={() => setOpen(true)}
+          onMouseEnter={openWithDelay}
+          onMouseLeave={closeWithDelay}
+          type="button"
+        >
+          <span className="flex -space-x-1">
+            {typingAgents.slice(0, 2).map((agent) => (
+              <UserAvatar
+                avatarUrl={agentAvatarUrl(agent)}
+                className="!h-5 !w-5 rounded-full border border-background text-[8px]"
+                displayName={agent.name}
+                key={agent.pubkey}
+              />
+            ))}
+          </span>
+          {typingAgents.length > 2 ? (
+            <span className="text-[11px] leading-none">
+              +{typingAgents.length - 2}
+            </span>
+          ) : null}
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin opacity-70" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-64 p-2"
+        onMouseEnter={keepOpen}
+        onMouseLeave={closeWithDelay}
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        side="top"
+        sideOffset={8}
+      >
+        <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+          Agents working
+        </div>
+        <div className="mt-1 flex flex-col gap-1">
+          {typingAgents.map((agent) => {
+            const isSelected = selectedPubkey === agent.pubkey.toLowerCase();
+
+            return (
               <button
                 className={cn(
-                  "inline-flex min-w-0 shrink items-center gap-1 rounded-full border py-1 text-xs font-medium transition-colors",
-                  isCompact ? "max-w-[6.5rem] px-2" : "max-w-[9rem] px-2.5",
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
                   isSelected
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:bg-primary/5 hover:text-foreground",
+                    ? "bg-primary/10 text-primary"
+                    : "text-foreground hover:bg-accent hover:text-accent-foreground",
                 )}
-                data-testid={`bot-chip-${agent.pubkey}`}
-                onClick={() => onOpenAgentSession(agent.pubkey)}
+                data-testid={`bot-activity-composer-item-${agent.pubkey}`}
+                key={agent.pubkey}
+                onClick={() => {
+                  clearHoverTimer();
+                  setOpen(false);
+                  onOpenAgentSession(agent.pubkey);
+                }}
                 type="button"
               >
-                <Bot className="h-3 w-3 shrink-0" />
-                <span className="min-w-0 truncate">{agent.name}</span>
-                <Loader2 className="h-3 w-3 shrink-0 animate-spin opacity-60" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              {agent.name} is working — click to view activity
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
-
-      {hiddenAgents.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              aria-label={`Show ${hiddenAgents.length} more working agents`}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border/60 bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground data-[state=open]:border-primary/40 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
-              data-testid="bot-chip-overflow"
-              type="button"
-            >
-              +{hiddenAgents.length}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel className="px-2 py-1 text-xs text-muted-foreground">
-              More agents working
-            </DropdownMenuLabel>
-            {hiddenAgents.map((agent) => (
-              <DropdownMenuItem
-                className="cursor-pointer"
-                data-testid={`bot-chip-overflow-item-${agent.pubkey}`}
-                key={agent.pubkey}
-                onClick={() => onOpenAgentSession(agent.pubkey)}
-              >
-                <Bot className="h-4 w-4 text-muted-foreground" />
+                <UserAvatar
+                  avatarUrl={agentAvatarUrl(agent)}
+                  className="!h-6 !w-6 shrink-0 rounded-full text-[9px]"
+                  displayName={agent.name}
+                />
                 <span className="min-w-0 flex-1 truncate">{agent.name}</span>
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
-    </div>
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground/70" />
+              </button>
+            );
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
-}
-
-function splitVisibleAgents(
-  typingAgents: ManagedAgent[],
-  openAgentSessionPubkey: string | null,
-): { visibleAgents: ManagedAgent[]; hiddenAgents: ManagedAgent[] } {
-  if (typingAgents.length < OVERFLOW_THRESHOLD) {
-    return { visibleAgents: typingAgents, hiddenAgents: [] };
-  }
-
-  const selectedAgent = openAgentSessionPubkey
-    ? typingAgents.find(
-        (agent) =>
-          agent.pubkey.toLowerCase() === openAgentSessionPubkey.toLowerCase(),
-      )
-    : null;
-
-  const visibleAgents = typingAgents.slice(0, MAX_VISIBLE_WITH_OVERFLOW);
-
-  if (
-    selectedAgent &&
-    !visibleAgents.some((agent) => agent.pubkey === selectedAgent.pubkey)
-  ) {
-    visibleAgents[visibleAgents.length - 1] = selectedAgent;
-  }
-
-  const visibleSet = new Set(visibleAgents.map((agent) => agent.pubkey));
-  const hiddenAgents = typingAgents.filter(
-    (agent) => !visibleSet.has(agent.pubkey),
-  );
-
-  return { visibleAgents, hiddenAgents };
 }

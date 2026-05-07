@@ -20,6 +20,7 @@ import {
 } from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
 import { ComposerAttachments } from "./ComposerAttachments";
@@ -56,6 +57,8 @@ type MessageComposerProps = {
     body: string;
     id: string;
   } | null;
+  showTopBorder?: boolean;
+  toolbarExtraActions?: React.ReactNode;
   typingParentEventId?: string | null;
   typingRootEventId?: string | null;
 };
@@ -74,6 +77,8 @@ export function MessageComposer({
   placeholder,
   profiles,
   replyTarget = null,
+  showTopBorder = false,
+  toolbarExtraActions,
   typingParentEventId = null,
   typingRootEventId = null,
 }: MessageComposerProps) {
@@ -537,10 +542,15 @@ export function MessageComposer({
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <footer className="relative z-10 -mt-4 px-8 pb-0 pt-0 sm:px-10">
-      <div className="flex w-full flex-col gap-3">
+    <footer
+      className={cn(
+        "shrink-0 bg-transparent px-4 pb-4 pt-0",
+        showTopBorder ? "border-t border-border/40 pt-3" : "",
+      )}
+    >
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
         <form
-          className="relative rounded-2xl border border-input bg-card px-4 pb-3 pt-4"
+          className="relative isolate rounded-2xl border border-border/50 bg-background/25 px-3 py-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)] sm:px-4"
           data-testid="message-composer"
           onDragOver={media.handleDragOver}
           onDrop={(e) => {
@@ -655,6 +665,7 @@ export function MessageComposer({
           <MessageComposerToolbar
             composerDisabled={disabled}
             editor={richText.editor}
+            extraActions={toolbarExtraActions}
             formattingDisabled={disabled}
             isEmojiPickerOpen={isEmojiPickerOpen}
             isFormattingOpen={isFormattingOpen}

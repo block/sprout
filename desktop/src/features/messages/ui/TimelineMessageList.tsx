@@ -17,6 +17,7 @@ type TimelineMessageListProps = {
   activeReplyTargetId?: string | null;
   currentPubkey?: string;
   highlightedMessageId?: string | null;
+  messageFooters?: Record<string, React.ReactNode>;
   messages: TimelineMessage[];
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -41,6 +42,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   activeReplyTargetId = null,
   currentPubkey,
   highlightedMessageId = null,
+  messageFooters,
   messages,
   onDelete,
   onEdit,
@@ -52,75 +54,111 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   searchMatchingMessageIds,
   searchQuery,
 }: TimelineMessageListProps) {
-  const elements: React.ReactNode[] = [];
   const entries = React.useMemo(
     () => buildMainTimelineEntries(messages),
     [messages],
   );
+  const dayGroups: Array<{
+    key: string;
+    label: string;
+    elements: React.ReactNode[];
+  }> = [];
+  let currentDayGroup: (typeof dayGroups)[number] | null = null;
 
   for (let i = 0; i < entries.length; i++) {
     const { message, summary } = entries[i];
     const prev = i > 0 ? entries[i - 1]?.message : null;
 
     if (!prev || !isSameDay(prev.createdAt, message.createdAt)) {
-      elements.push(
-        <DayDivider
-          key={`day-${message.createdAt}`}
-          label={formatDayHeading(message.createdAt)}
-        />,
-      );
+      currentDayGroup = {
+        key: `day-${message.createdAt}`,
+        label: formatDayHeading(message.createdAt),
+        elements: [],
+      };
+      dayGroups.push(currentDayGroup);
     }
 
     if (message.kind === KIND_SYSTEM_MESSAGE) {
-      elements.push(
-        <SystemMessageRow
-          key={message.id}
-          message={message}
-          currentPubkey={currentPubkey}
-          onToggleReaction={onToggleReaction}
-          personaLookup={personaLookup}
-          profiles={profiles}
-        />,
+      const footer = messageFooters?.[message.id] ?? null;
+      currentDayGroup?.elements.push(
+        <div key={message.id} className="flex flex-col gap-1">
+          <SystemMessageRow
+            message={message}
+            currentPubkey={currentPubkey}
+            onToggleReaction={onToggleReaction}
+            personaLookup={personaLookup}
+            profiles={profiles}
+          />
+          {footer}
+        </div>,
+      );
+    } else if (summary && onReply) {
+      const footer = messageFooters?.[message.id] ?? null;
+      currentDayGroup?.elements.push(
+        <div key={message.id} className="flex flex-col gap-0">
+          <MessageRow
+            activeReplyTargetId={activeReplyTargetId}
+            highlighted={message.id === highlightedMessageId}
+            message={message}
+            onDelete={
+              onDelete && currentPubkey && message.pubkey === currentPubkey
+                ? onDelete
+                : undefined
+            }
+            onEdit={
+              onEdit && currentPubkey && message.pubkey === currentPubkey
+                ? onEdit
+                : undefined
+            }
+            onToggleReaction={onToggleReaction}
+            onReply={onReply}
+            profiles={profiles}
+          />
+          <MessageThreadSummaryRow
+            depth={message.depth}
+            message={message}
+            onOpenThread={onReply}
+            summary={summary}
+          />
+          {footer}
+        </div>,
       );
     } else {
       const isSearchMatch = searchMatchingMessageIds?.has(message.id) ?? false;
       const isSearchActive = message.id === searchActiveMessageId;
+      const footer = messageFooters?.[message.id] ?? null;
 
-      elements.push(
-        <MessageRow
-          key={message.id}
-          activeReplyTargetId={activeReplyTargetId}
-          highlighted={message.id === highlightedMessageId || isSearchActive}
-          message={message}
-          onDelete={
-            onDelete && currentPubkey && message.pubkey === currentPubkey
-              ? onDelete
-              : undefined
-          }
-          onEdit={
-            onEdit && currentPubkey && message.pubkey === currentPubkey
-              ? onEdit
-              : undefined
-          }
-          onToggleReaction={onToggleReaction}
-          onReply={onReply}
-          profiles={profiles}
-          searchQuery={isSearchMatch ? searchQuery : undefined}
-        />,
-      );
-
-      if (summary && onReply) {
-        elements.push(
-          <MessageThreadSummaryRow
-            key={`thread-summary-${message.id}`}
+      currentDayGroup?.elements.push(
+        <div key={message.id} className="flex flex-col gap-1">
+          <MessageRow
+            activeReplyTargetId={activeReplyTargetId}
+            highlighted={message.id === highlightedMessageId || isSearchActive}
             message={message}
-            onOpenThread={onReply}
-            summary={summary}
-          />,
-        );
-      }
+            onDelete={
+              onDelete && currentPubkey && message.pubkey === currentPubkey
+                ? onDelete
+                : undefined
+            }
+            onEdit={
+              onEdit && currentPubkey && message.pubkey === currentPubkey
+                ? onEdit
+                : undefined
+            }
+            onToggleReaction={onToggleReaction}
+            onReply={onReply}
+            profiles={profiles}
+            searchQuery={isSearchMatch ? searchQuery : undefined}
+          />
+          {footer}
+        </div>,
+      );
     }
   }
 
-  return elements;
+  return dayGroups.map((group) => (
+    <section className="flex flex-col gap-2.5" key={group.key}>
+      <DayDivider label={group.label} />
+      {group.elements}
+    </section>
+  ));
 });

@@ -1,4 +1,4 @@
-import { ArrowRightLeft, SmilePlus } from "lucide-react";
+import { SmilePlus } from "lucide-react";
 import Picker from "@emoji-mart/react";
 import data from "@emoji-mart/data";
 import * as React from "react";
@@ -22,6 +22,11 @@ type SystemMessagePayload = {
   target?: string;
   topic?: string;
   purpose?: string;
+};
+
+type SystemMessageDescription = {
+  action: React.ReactNode;
+  title: string;
 };
 
 function resolveLabel(
@@ -52,157 +57,88 @@ function resolveAvatarUrl(
   return profiles[pubkey.toLowerCase()]?.avatarUrl ?? null;
 }
 
-function UserChip({
-  pubkey,
-  currentPubkey,
-  profiles,
-  suffix,
-}: {
-  pubkey: string | undefined;
-  currentPubkey: string | undefined;
-  profiles: UserProfileLookup | undefined;
-  suffix?: string;
-}) {
-  const label = resolveLabel(pubkey, currentPubkey, profiles);
-  return (
-    <span className="inline-flex items-center gap-1">
-      <UserAvatar
-        avatarUrl={resolveAvatarUrl(pubkey, profiles)}
-        displayName={label}
-        size="xs"
-      />
-      <span className="font-medium">
-        {label}
-        {suffix}
-      </span>
-    </span>
-  );
+function labelWithSuffix(
+  pubkey: string | undefined,
+  currentPubkey: string | undefined,
+  profiles: UserProfileLookup | undefined,
+  suffix = "",
+): string {
+  return `${resolveLabel(pubkey, currentPubkey, profiles)}${suffix}`;
 }
 
-function describeSystemEventStructured(
+function describeSystemEvent(
   payload: SystemMessagePayload,
   currentPubkey: string | undefined,
   profiles: UserProfileLookup | undefined,
   personaLookup?: Map<string, string>,
-): React.ReactNode | null {
+): SystemMessageDescription | null {
   const personaSuffix = resolvePersonaSuffix(payload.target, personaLookup);
+  const actorLabel = labelWithSuffix(payload.actor, currentPubkey, profiles);
+  const targetLabel = labelWithSuffix(
+    payload.target,
+    currentPubkey,
+    profiles,
+    personaSuffix,
+  );
 
   switch (payload.type) {
     case "member_joined": {
       if (payload.actor === payload.target) {
-        return (
-          <span className="inline-flex flex-wrap items-center gap-1">
-            <UserChip
-              pubkey={payload.actor}
-              currentPubkey={currentPubkey}
-              profiles={profiles}
-              suffix={personaSuffix}
-            />
-            <span>joined the channel</span>
-          </span>
-        );
+        return {
+          title: targetLabel,
+          action: "joined the channel",
+        };
       }
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>added</span>
-          <UserChip
-            pubkey={payload.target}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-            suffix={personaSuffix}
-          />
-          <span>to the channel</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: (
+          <>
+            added <span className="font-medium">{targetLabel}</span> to the
+            channel
+          </>
+        ),
+      };
     }
     case "member_left":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>left the channel</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: "left the channel",
+      };
     case "member_removed":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>removed</span>
-          <UserChip
-            pubkey={payload.target}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>from the channel</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: (
+          <>
+            removed <span className="font-medium">{targetLabel}</span> from the
+            channel
+          </>
+        ),
+      };
     case "topic_changed":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>changed the topic to &ldquo;{payload.topic}&rdquo;</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: <>changed the topic to &ldquo;{payload.topic}&rdquo;</>,
+      };
     case "purpose_changed":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>changed the purpose to &ldquo;{payload.purpose}&rdquo;</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: <>changed the purpose to &ldquo;{payload.purpose}&rdquo;</>,
+      };
     case "channel_created":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>created this channel</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: "created this channel",
+      };
     case "channel_archived":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>archived this channel</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: "archived this channel",
+      };
     case "channel_unarchived":
-      return (
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <UserChip
-            pubkey={payload.actor}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-          />
-          <span>unarchived this channel</span>
-        </span>
-      );
+      return {
+        title: actorLabel,
+        action: "unarchived this channel",
+      };
     default:
       return null;
   }
@@ -242,7 +178,7 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
     return null;
   }
 
-  const description = describeSystemEventStructured(
+  const description = describeSystemEvent(
     payload,
     currentPubkey,
     profiles,
@@ -252,16 +188,46 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
     return null;
   }
 
+  const avatarPubkey = payload.actor ?? payload.target;
+  const avatarLabel = resolveLabel(avatarPubkey, currentPubkey, profiles);
+
   return (
     <div
-      className="group/message rounded-lg px-2 py-1"
+      className="group/message rounded-2xl px-2 py-1 transition-colors"
       data-testid="system-message-row"
     >
-      <div className="flex items-center gap-2.5">
-        <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-muted">
-          <ArrowRightLeft className="h-3 w-3 text-muted-foreground" />
+      <div className="flex items-start gap-2.5">
+        <UserAvatar
+          avatarUrl={resolveAvatarUrl(avatarPubkey, profiles)}
+          className="!h-8 !w-8 shrink-0 text-[10px]"
+          displayName={avatarLabel}
+          testId="system-message-avatar"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold leading-none tracking-tight text-foreground/90">
+            {description.title}
+          </p>
+          <p className="mt-1 text-sm leading-snug text-muted-foreground/70">
+            {description.action}
+          </p>
+          <div>
+            <MessageReactions
+              messageId={message.id}
+              reactions={reactions}
+              canToggle={canToggleReactions}
+              pending={reactionPending}
+              className="mt-0.5 pt-0.5"
+              onSelect={(emoji) => {
+                void handleReactionSelect(emoji);
+              }}
+            />
+            {reactionErrorMessage ? (
+              <p className="mt-1.5 text-xs text-destructive">
+                {reactionErrorMessage}
+              </p>
+            ) : null}
+          </div>
         </div>
-        <p className="text-xs text-muted-foreground">{description}</p>
         <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground/60">
           <div className="relative">
             <div className="absolute right-0 top-1/2 -translate-y-1/2">
@@ -344,20 +310,6 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
           <MessageTimestamp createdAt={message.createdAt} time={message.time} />
         </div>
       </div>
-      <MessageReactions
-        messageId={message.id}
-        reactions={reactions}
-        canToggle={canToggleReactions}
-        pending={reactionPending}
-        onSelect={(emoji) => {
-          void handleReactionSelect(emoji);
-        }}
-      />
-      {reactionErrorMessage ? (
-        <p className="mt-1.5 text-xs text-destructive">
-          {reactionErrorMessage}
-        </p>
-      ) : null}
     </div>
   );
 });

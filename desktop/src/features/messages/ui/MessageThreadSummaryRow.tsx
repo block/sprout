@@ -30,24 +30,27 @@ function ParticipantAvatar({
 
 export function MessageThreadSummaryRow({
   depth = 0,
+  layoutVariant = "default",
   message,
   onOpenThread,
   summary,
 }: {
   depth?: number;
+  layoutVariant?: "default" | "thread-reply";
   message: TimelineMessage;
   onOpenThread: (message: TimelineMessage) => void;
   summary: TimelineThreadSummary;
 }) {
   const visibleDepth = Math.min(Math.max(depth, 0), 6);
-  const marginLeftPx = visibleDepth * 28;
+  const messageTextOffsetPx = layoutVariant === "thread-reply" ? 8 : 50;
+  const marginLeftPx = visibleDepth * 28 + messageTextOffsetPx;
   const depthGuideOffsets = Array.from(
     { length: visibleDepth },
     (_, index) => 14 + index * 28,
   );
 
   return (
-    <div className="relative">
+    <div className="relative pb-1">
       {depthGuideOffsets.length > 0 ? (
         <div
           aria-hidden
@@ -68,7 +71,7 @@ export function MessageThreadSummaryRow({
       ) : null}
 
       <button
-        className="flex w-fit max-w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        className="-mt-1 inline-flex w-fit max-w-full items-center gap-1 rounded-full border border-border/70 bg-muted/70 py-0.5 pl-0.5 pr-2 text-left text-xs font-medium text-foreground/90 transition-colors hover:bg-accent hover:text-accent-foreground"
         data-thread-head-id={message.id}
         data-testid="message-thread-summary"
         onClick={() => onOpenThread(message)}

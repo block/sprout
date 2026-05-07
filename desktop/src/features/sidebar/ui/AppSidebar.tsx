@@ -40,7 +40,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
-  SidebarSeparator,
 } from "@/shared/ui/sidebar";
 
 // ---------------------------------------------------------------------------
@@ -437,8 +436,6 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-
-      <SidebarSeparator className="mx-0 w-full" />
 
       <SidebarContent>
         {isLoading ? (

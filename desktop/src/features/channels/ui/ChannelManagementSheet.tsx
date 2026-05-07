@@ -38,7 +38,6 @@ import {
 } from "@/shared/ui/alert-dialog";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { Separator } from "@/shared/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -214,7 +213,7 @@ export function ChannelManagementSheet({
         data-testid="channel-management-sheet"
         side="right"
       >
-        <SheetHeader className="space-y-4 border-b border-border/80 bg-muted/20 px-6 py-6 text-left">
+        <SheetHeader className="relative z-10 space-y-4 bg-background/25 px-6 py-6 text-left shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
           <div className="space-y-2">
             <SheetTitle className="pr-8">{channel.name}</SheetTitle>
             <SheetDescription>
@@ -260,63 +259,59 @@ export function ChannelManagementSheet({
           ) : null}
 
           {showAccessSection ? (
-            <>
-              <Section
-                description="Open channels stay visible to everyone. Private channels require an invite."
-                title="Access"
-              >
-                <div className="flex flex-wrap gap-2">
-                  {canJoin ? (
-                    <Button
-                      data-testid="channel-management-join"
-                      disabled={joinChannelMutation.isPending}
-                      onClick={() => {
-                        void joinChannelMutation.mutateAsync();
-                      }}
-                      size="sm"
-                      type="button"
-                    >
-                      <DoorOpen className="h-4 w-4" />
-                      {joinChannelMutation.isPending
-                        ? "Joining..."
-                        : "Join channel"}
-                    </Button>
-                  ) : null}
-
-                  {canLeave ? (
-                    <Button
-                      data-testid="channel-management-leave"
-                      disabled={leaveChannelMutation.isPending}
-                      onClick={() => {
-                        void leaveChannelMutation.mutateAsync().then(() => {
-                          onOpenChange(false);
-                        });
-                      }}
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      <DoorClosed className="h-4 w-4" />
-                      {leaveChannelMutation.isPending
-                        ? "Leaving..."
-                        : "Leave channel"}
-                    </Button>
-                  ) : null}
-                </div>
-                {joinChannelMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {joinChannelMutation.error.message}
-                  </p>
+            <Section
+              description="Open channels stay visible to everyone. Private channels require an invite."
+              title="Access"
+            >
+              <div className="flex flex-wrap gap-2">
+                {canJoin ? (
+                  <Button
+                    data-testid="channel-management-join"
+                    disabled={joinChannelMutation.isPending}
+                    onClick={() => {
+                      void joinChannelMutation.mutateAsync();
+                    }}
+                    size="sm"
+                    type="button"
+                  >
+                    <DoorOpen className="h-4 w-4" />
+                    {joinChannelMutation.isPending
+                      ? "Joining..."
+                      : "Join channel"}
+                  </Button>
                 ) : null}
-                {leaveChannelMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {leaveChannelMutation.error.message}
-                  </p>
-                ) : null}
-              </Section>
 
-              <Separator />
-            </>
+                {canLeave ? (
+                  <Button
+                    data-testid="channel-management-leave"
+                    disabled={leaveChannelMutation.isPending}
+                    onClick={() => {
+                      void leaveChannelMutation.mutateAsync().then(() => {
+                        onOpenChange(false);
+                      });
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <DoorClosed className="h-4 w-4" />
+                    {leaveChannelMutation.isPending
+                      ? "Leaving..."
+                      : "Leave channel"}
+                  </Button>
+                ) : null}
+              </div>
+              {joinChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {joinChannelMutation.error.message}
+                </p>
+              ) : null}
+              {leaveChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {leaveChannelMutation.error.message}
+                </p>
+              ) : null}
+            </Section>
           ) : null}
 
           <Section
@@ -329,8 +324,6 @@ export function ChannelManagementSheet({
               isArchived={isArchived}
             />
           </Section>
-
-          <Separator />
 
           <Section
             description="Topic and purpose show the current context for the channel."
@@ -415,8 +408,6 @@ export function ChannelManagementSheet({
             </form>
           </Section>
 
-          <Separator />
-
           <Section
             description="Name and description are owner/admin actions."
             title="Details"
@@ -480,133 +471,125 @@ export function ChannelManagementSheet({
           </Section>
 
           {resolvedChannel.channelType !== "dm" ? (
-            <>
-              <Separator />
-
-              <Section
-                description="Archiving keeps history but blocks new changes."
-                title="Channel state"
-              >
-                <div className="flex flex-wrap gap-2">
-                  {isArchived ? (
-                    <Button
-                      data-testid="channel-management-unarchive"
-                      disabled={
-                        !canManageChannel || unarchiveChannelMutation.isPending
-                      }
-                      onClick={() => {
-                        void unarchiveChannelMutation.mutateAsync();
-                      }}
-                      size="sm"
-                      type="button"
-                    >
-                      <ArchiveRestore className="h-4 w-4" />
-                      {unarchiveChannelMutation.isPending
-                        ? "Restoring..."
-                        : "Unarchive channel"}
-                    </Button>
-                  ) : (
-                    <Button
-                      data-testid="channel-management-archive"
-                      disabled={
-                        !canManageChannel || archiveChannelMutation.isPending
-                      }
-                      onClick={() => {
-                        void archiveChannelMutation.mutateAsync();
-                      }}
-                      size="sm"
-                      type="button"
-                      variant="outline"
-                    >
-                      <Archive className="h-4 w-4" />
-                      {archiveChannelMutation.isPending
-                        ? "Archiving..."
-                        : "Archive channel"}
-                    </Button>
-                  )}
-                </div>
-                {archiveChannelMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {archiveChannelMutation.error.message}
-                  </p>
-                ) : null}
-                {unarchiveChannelMutation.error instanceof Error ? (
-                  <p className="text-sm text-destructive">
-                    {unarchiveChannelMutation.error.message}
-                  </p>
-                ) : null}
-              </Section>
-            </>
+            <Section
+              description="Archiving keeps history but blocks new changes."
+              title="Channel state"
+            >
+              <div className="flex flex-wrap gap-2">
+                {isArchived ? (
+                  <Button
+                    data-testid="channel-management-unarchive"
+                    disabled={
+                      !canManageChannel || unarchiveChannelMutation.isPending
+                    }
+                    onClick={() => {
+                      void unarchiveChannelMutation.mutateAsync();
+                    }}
+                    size="sm"
+                    type="button"
+                  >
+                    <ArchiveRestore className="h-4 w-4" />
+                    {unarchiveChannelMutation.isPending
+                      ? "Restoring..."
+                      : "Unarchive channel"}
+                  </Button>
+                ) : (
+                  <Button
+                    data-testid="channel-management-archive"
+                    disabled={
+                      !canManageChannel || archiveChannelMutation.isPending
+                    }
+                    onClick={() => {
+                      void archiveChannelMutation.mutateAsync();
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Archive className="h-4 w-4" />
+                    {archiveChannelMutation.isPending
+                      ? "Archiving..."
+                      : "Archive channel"}
+                  </Button>
+                )}
+              </div>
+              {archiveChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {archiveChannelMutation.error.message}
+                </p>
+              ) : null}
+              {unarchiveChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {unarchiveChannelMutation.error.message}
+                </p>
+              ) : null}
+            </Section>
           ) : null}
 
           {isOwner && resolvedChannel.channelType !== "dm" ? (
-            <>
-              <Separator />
-
-              <Section
-                description="Deleting removes the channel from the workspace list."
-                title="Danger zone"
+            <Section
+              description="Deleting removes the channel from the workspace list."
+              title="Danger zone"
+            >
+              <AlertDialog
+                onOpenChange={handleDeleteDialogOpenChange}
+                open={isDeleteDialogOpen}
               >
-                <AlertDialog
-                  onOpenChange={handleDeleteDialogOpenChange}
-                  open={isDeleteDialogOpen}
-                >
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      data-testid="channel-management-delete"
-                      disabled={deleteChannelMutation.isPending}
-                      size="sm"
-                      type="button"
-                      variant="destructive"
-                    >
-                      Delete channel
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Delete channel?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Delete {resolvedChannel.name} from the workspace list.
-                        This action cannot be undone.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    {deleteChannelMutation.error instanceof Error ? (
-                      <p className="text-sm text-destructive">
-                        {deleteChannelMutation.error.message}
-                      </p>
-                    ) : null}
-                    <AlertDialogFooter>
-                      <AlertDialogCancel asChild>
-                        <Button
-                          data-testid="channel-delete-cancel"
-                          disabled={deleteChannelMutation.isPending}
-                          type="button"
-                          variant="outline"
-                        >
-                          Cancel
-                        </Button>
-                      </AlertDialogCancel>
-                      <AlertDialogAction asChild>
-                        <Button
-                          data-testid="channel-delete-confirm"
-                          disabled={deleteChannelMutation.isPending}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            void handleDeleteChannel();
-                          }}
-                          type="button"
-                          variant="destructive"
-                        >
-                          {deleteChannelMutation.isPending
-                            ? "Deleting..."
-                            : "Delete channel"}
-                        </Button>
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              </Section>
-            </>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    data-testid="channel-management-delete"
+                    disabled={deleteChannelMutation.isPending}
+                    size="sm"
+                    type="button"
+                    variant="destructive"
+                  >
+                    Delete channel
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete channel?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Delete {resolvedChannel.name} from the workspace list.
+                      This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  {deleteChannelMutation.error instanceof Error ? (
+                    <p className="text-sm text-destructive">
+                      {deleteChannelMutation.error.message}
+                    </p>
+                  ) : null}
+                  <AlertDialogFooter>
+                    <AlertDialogCancel asChild>
+                      <Button
+                        data-testid="channel-delete-cancel"
+                        disabled={deleteChannelMutation.isPending}
+                        type="button"
+                        variant="outline"
+                      >
+                        Cancel
+                      </Button>
+                    </AlertDialogCancel>
+                    <AlertDialogAction asChild>
+                      <Button
+                        data-testid="channel-delete-confirm"
+                        disabled={deleteChannelMutation.isPending}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void handleDeleteChannel();
+                        }}
+                        type="button"
+                        variant="destructive"
+                      >
+                        {deleteChannelMutation.isPending
+                          ? "Deleting..."
+                          : "Delete channel"}
+                      </Button>
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </Section>
           ) : null}
         </div>
       </SheetContent>

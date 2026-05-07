@@ -13,7 +13,7 @@ import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 
-import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent } from "@/shared/ui/popover";
 import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 
 type UserProfilePopoverProps = {
@@ -121,6 +121,7 @@ export function UserProfilePopover({
       clearHoverTimer();
       if (openProfilePanel) {
         event.preventDefault();
+        event.stopPropagation();
         setOpen(false);
         openProfilePanel(pubkey);
       }
@@ -134,7 +135,7 @@ export function UserProfilePopover({
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger asChild>
+      <PopoverAnchor asChild>
         {/* biome-ignore lint/a11y/useSemanticElements: wrapper div for hover/click behavior */}
         <div
           role="button"
@@ -143,6 +144,7 @@ export function UserProfilePopover({
           onKeyDown={(e) => {
             if ((e.key === "Enter" || e.key === " ") && openProfilePanel) {
               e.preventDefault();
+              e.stopPropagation();
               clearHoverTimer();
               setOpen(false);
               openProfilePanel(pubkey);
@@ -154,10 +156,11 @@ export function UserProfilePopover({
         >
           {children}
         </div>
-      </PopoverTrigger>
+      </PopoverAnchor>
       <PopoverContent
         align="start"
         className="w-80"
+        data-testid="user-profile-popover"
         onMouseEnter={handleContentMouseEnter}
         onMouseLeave={handleMouseLeave}
         side="top"
