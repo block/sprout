@@ -95,7 +95,12 @@ export function rewriteRelayUrl(url: string): string {
   // (different origin) pass through unchanged — they work fine via WKWebView.
   // If the relay origin isn't cached yet, fall through to the rewrite path
   // as a safe default (relay URLs need the proxy to avoid Cloudflare 403s).
-  if (cachedRelayOrigin && !url.startsWith(`${cachedRelayOrigin}/`)) {
+  //
+  // We compare by extracting the origin from the URL and checking against
+  // the relay origin. We also accept URLs whose origin matches the relay's
+  // hostname with any subdomain prefix (handles cases where the relay's
+  // SPROUT_MEDIA_BASE_URL is stale/mismatched with the actual relay URL).
+  if (cachedRelayOrigin && !isRelayMediaOrigin(url, cachedRelayOrigin)) {
     return url;
   }
 
@@ -109,4 +114,47 @@ export function rewriteRelayUrl(url: string): string {
   }
 
   return `sprout-media://localhost/media/${m[1]}`;
+}
+
+/**
+ * Check if a media URL belongs to our relay. Matches if:
+ * 1. The URL starts with the relay origin (exact match), OR
+ * 2. The URL's hostname shares the same base domain as the relay
+ *    (e.g. "sprout-relay-production.up.railway.app" matches relay origin
+ *    "https://sprout.up.railway.app" because both are *.up.railway.app).
+ *
+ * This handles the case where the relay's SPROUT_MEDIA_BASE_URL env var
+ * points to a different hostname than the relay's actual public URL.
+ */
+function isRelayMediaOrigin(url: string, relayOrigin: string): boolean {
+  if (url.startsWith(`${relayOrigin}/`)) {
+    return true;
+  }
+
+  // Extract hostnames and compare base domains.
+  // "https://foo.up.railway.app/media/..." → "foo.up.railway.app"
+  try {
+    const urlHost = new URL(url).hostname;
+    const relayHost = new URL(relayOrigin).hostname;
+
+    // Exact match
+    if (urlHost === relayHost) return true;
+
+    // Share the same parent domain (≥2 levels).
+    // e.g. both end in ".up.railway.app" or ".stage.blox.sqprod.co"
+    const urlParts = urlHost.split(".");
+    const relayParts = relayHost.split(".");
+
+    if (urlParts.length >= 3 && relayParts.length >= 3) {
+      // Compare last N-1 parts (the parent domain)
+      const urlParent = urlParts.slice(1).join(".");
+      const relayParent = relayParts.slice(1).join(".");
+      if (urlParent === relayParent) return true;
+    }
+  } catch {
+    // URL parsing failed — fall through to proxy (safe default)
+    return true;
+  }
+
+  return false;
 }
