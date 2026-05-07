@@ -1,13 +1,15 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
 use rmcp::model::CallToolRequestParams;
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::TokioChildProcess;
 use rmcp::ServiceExt;
 use serde_json::{Map, Value};
 use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::config::Config;
 use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
@@ -24,43 +26,80 @@ const PASSTHROUGH_ENV: &[&str] = &["PATH", "HOME", "TERM", "LANG", "LC_ALL", "TM
 
 type Client = RunningService<RoleClient, ()>;
 
-struct Entry {
-    server: String,
-    tool: String,
-    client: Arc<Client>,
+/// Spawn-time spec, immutable. Cloned into Server so we can re-spawn
+/// without consulting external config.
+#[derive(Clone)]
+struct ServerSpec {
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    cwd: String,
+}
+
+/// Two states. That's the whole state machine.
+enum ClientState {
+    Healthy {
+        client: Arc<Client>,
+        pgid: Option<u32>,
+        /// Bare tool names this server advertised at last successful init.
+        tools: Arc<Vec<String>>,
+    },
+    Dead {
+        attempts: u32,
+        next_retry: Instant,
+        reason: String,
+        /// Last known tool set — preserved from the previous Healthy state
+        /// so tools() filtering stays accurate while dead.
+        tools: Arc<Vec<String>>,
+    },
 }
 
 struct Server {
     name: String,
-    pgid: Mutex<Option<u32>>,
+    spec: ServerSpec,
+    client: ArcSwap<ClientState>,
+    /// Held across the entire restart attempt. Concurrent callers that
+    /// lose the race re-read state after acquiring.
+    restart_lock: AsyncMutex<()>,
 }
 
 impl Server {
-    fn kill_group(&self, stage: &str) {
-        if let Some(p) = self.pgid.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            killpg(p, &self.name, stage);
+    fn current_pgid(&self) -> Option<u32> {
+        match &**self.client.load() {
+            ClientState::Healthy { pgid, .. } => *pgid,
+            ClientState::Dead { .. } => None,
         }
     }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        if let Some(p) = self
-            .pgid
-            .get_mut()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
+        if let Some(p) = self.current_pgid() {
             killpg(p, &self.name, "drop");
         }
     }
 }
 
+/// One row per qualified tool name ("server__tool").
+struct Entry {
+    server_idx: usize,
+    bare: String,
+}
+
 pub struct McpRegistry {
     by_qname: HashMap<String, Entry>,
+    /// Fully-qualified tool definitions captured at boot. Filtered
+    /// dynamically by `tools()` based on each server's live state.
     defs: Vec<ToolDef>,
-    servers: Vec<Server>,
-    poisoned: Mutex<HashSet<String>>,
+    servers: Vec<Arc<Server>>,
+    /// Restart budget: max consecutive failed restart attempts per server.
+    max_attempts: u32,
+    /// Backoff: `min(2^(attempt-1) * base_ms, max_ms)` with ±20% jitter.
+    backoff_base: Duration,
+    backoff_max: Duration,
+    /// Per-server spawn+init+list_tools deadline, used for boot AND restart.
+    init_timeout: Duration,
 }
 
 impl McpRegistry {
@@ -79,10 +118,13 @@ impl McpRegistry {
             by_qname: HashMap::new(),
             defs: Vec::new(),
             servers: Vec::new(),
-            poisoned: Mutex::new(HashSet::new()),
+
+            max_attempts: cfg.mcp_max_restart_attempts.max(1),
+            backoff_base: Duration::from_millis(cfg.mcp_restart_base_ms.max(1)),
+            backoff_max: Duration::from_millis(cfg.mcp_restart_max_ms.max(1)),
+            init_timeout: cfg.mcp_init_timeout,
         };
 
-        let init_timeout = cfg.mcp_init_timeout;
         let mut seen_names = HashSet::new();
         for s in servers {
             if !valid_name(&s.name) {
@@ -94,66 +136,32 @@ impl McpRegistry {
                     s.name
                 )));
             }
-            let mut cmd = Command::new(&s.command);
-            cmd.args(&s.args);
-            cmd.env_clear();
-            for k in PASSTHROUGH_ENV {
-                if let Ok(v) = std::env::var(k) {
-                    cmd.env(k, v);
-                }
-            }
-            for kv in &s.env {
-                cmd.env(&kv.name, &kv.value);
-            }
-            cmd.current_dir(cwd);
-            cmd.stderr(std::process::Stdio::inherit());
-
-            #[cfg(unix)]
-            cmd.process_group(0);
-
-            let transport = TokioChildProcess::new(cmd)
-                .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", s.name)))?;
-            let pgid = transport.id();
-            let kill_on_init_fail = || {
-                if let Some(p) = pgid {
-                    killpg(p, &s.name, "init");
-                }
-            };
-
-            let client: Client = match tokio::time::timeout(init_timeout, ().serve(transport)).await
-            {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => {
-                    kill_on_init_fail();
-                    return Err(AgentError::Mcp(format!("init {}: {e}", s.name)));
-                }
-                Err(_) => {
-                    kill_on_init_fail();
-                    return Err(AgentError::Mcp(timeout_msg("init", &s.name, init_timeout)));
-                }
-            };
-            let client = Arc::new(client);
-
-            reg.servers.push(Server {
+            let spec = ServerSpec {
                 name: s.name.clone(),
-                pgid: Mutex::new(pgid),
-            });
-
-            let tools = match tokio::time::timeout(init_timeout, client.peer().list_all_tools())
-                .await
-            {
-                Ok(Ok(t)) => t,
-                Ok(Err(e)) => return Err(AgentError::Mcp(format!("list_tools {}: {e}", s.name))),
-                Err(_) => {
-                    return Err(AgentError::Mcp(timeout_msg(
-                        "list_tools",
-                        &s.name,
-                        init_timeout,
-                    )))
-                }
+                command: s.command.clone(),
+                args: s.args.clone(),
+                env: s
+                    .env
+                    .iter()
+                    .map(|e| (e.name.clone(), e.value.clone()))
+                    .collect(),
+                cwd: cwd.to_owned(),
             };
+            let (client, pgid, tool_names, raw_tools) = spawn_one(&spec, reg.init_timeout).await?;
+            let server_idx = reg.servers.len();
+            let server = Arc::new(Server {
+                name: spec.name.clone(),
+                spec,
+                client: ArcSwap::from_pointee(ClientState::Healthy {
+                    client: Arc::new(client),
+                    pgid,
+                    tools: Arc::new(tool_names),
+                }),
+                restart_lock: AsyncMutex::new(()),
+            });
+            reg.servers.push(server);
 
-            for t in tools {
+            for t in raw_tools {
                 if reg.defs.len() >= MAX_TOOLS_PER_SESSION {
                     return Err(AgentError::Mcp(format!(
                         "too many tools (>{MAX_TOOLS_PER_SESSION})"
@@ -175,51 +183,120 @@ impl McpRegistry {
                     ),
                     input_schema: cap_schema(&qname, Value::Object((*t.input_schema).clone())),
                 });
-                reg.by_qname.insert(
-                    qname,
-                    Entry {
-                        server: s.name.clone(),
-                        tool: bare,
-                        client: client.clone(),
-                    },
-                );
+                reg.by_qname.insert(qname, Entry { server_idx, bare });
             }
         }
         Ok(reg)
     }
 
-    pub fn poison(&self, server_name: &str, reason: &str) {
-        let newly = self
-            .poisoned
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(server_name.to_owned());
-        if !newly {
-            return;
-        }
-        if let Some(server) = self.servers.iter().find(|s| s.name == server_name) {
-            server.kill_group(reason);
-        }
-        eprintln!("sprout-agent: MCP server '{server_name}' killed after {reason}");
-    }
-
-    fn is_poisoned(&self, server_name: &str) -> bool {
-        self.poisoned
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(server_name)
-    }
-
     pub fn server_of(&self, qname: &str) -> Option<&str> {
-        self.by_qname.get(qname).map(|e| e.server.as_str())
-    }
-
-    pub fn tools(&self) -> &[ToolDef] {
-        &self.defs
+        self.by_qname
+            .get(qname)
+            .map(|e| self.servers[e.server_idx].name.as_str())
     }
 
     pub fn has(&self, qname: &str) -> bool {
         self.by_qname.contains_key(qname)
+    }
+
+    /// Live tool list, filtered by current server state. Returns owned
+    /// `Vec<ToolDef>` because the filter changes as servers transition
+    /// between Healthy/Dead.
+    pub fn tools(&self) -> Vec<ToolDef> {
+        self.defs
+            .iter()
+            .filter(|d| {
+                let entry = match self.by_qname.get(&d.name) {
+                    Some(e) => e,
+                    None => return false,
+                };
+                let server = &self.servers[entry.server_idx];
+                match &**server.client.load() {
+                    ClientState::Healthy { tools, .. } => tools.iter().any(|t| t == &entry.bare),
+                    ClientState::Dead {
+                        attempts, tools, ..
+                    } => {
+                        // Still under restart budget AND tool was in last known set.
+                        *attempts < self.max_attempts && tools.iter().any(|t| t == &entry.bare)
+                    }
+                }
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// SIGKILL the server's process group if it has one. Idempotent;
+    /// safe to call on Dead servers (no-op).
+    pub fn kill_server(&self, server_name: &str) {
+        if let Some(server) = self.servers.iter().find(|s| s.name == server_name) {
+            if let Some(p) = server.current_pgid() {
+                killpg(p, &server.name, "kill_server");
+            }
+        }
+    }
+
+    /// Mark the named server `Dead`. Idempotent — calling on an already-Dead
+    /// server is a no-op (does not bump attempts).
+    pub fn mark_dead(&self, server_name: &str, reason: &str) {
+        let server = match self.servers.iter().find(|s| s.name == server_name) {
+            Some(s) => s,
+            None => return,
+        };
+        let prev = server.client.load_full();
+        let tools = match &*prev {
+            ClientState::Dead { .. } => return, // idempotent
+            ClientState::Healthy { tools, .. } => tools.clone(),
+        };
+        let next_retry = Instant::now() + backoff(1, self.backoff_base, self.backoff_max);
+        server.client.store(Arc::new(ClientState::Dead {
+            attempts: 0, // no restart attempts yet; maybe_restart increments before trying
+            next_retry,
+            reason: reason.to_owned(),
+            tools,
+        }));
+        eprintln!(
+            "sprout-agent: MCP server '{}' marked dead (attempts=0, reason={reason})",
+            server.name
+        );
+    }
+
+    /// Kill the server and mark it dead, but ONLY if `failed_client` is still
+    /// the current client. Atomic: captures pgid/tools from the matched state
+    /// and uses compare_and_swap so a concurrent restart can't be clobbered.
+    fn kill_and_mark_dead_if_current(
+        &self,
+        server: &Server,
+        failed_client: &Arc<Client>,
+        reason: &str,
+    ) {
+        let current = server.client.load_full();
+        match &*current {
+            ClientState::Healthy {
+                client,
+                pgid,
+                tools,
+            } if Arc::ptr_eq(client, failed_client) => {
+                // Kill the captured pgid directly (not via reload).
+                if let Some(p) = *pgid {
+                    killpg(p, &server.name, "call_failed");
+                }
+                let dead = Arc::new(ClientState::Dead {
+                    attempts: 0,
+                    next_retry: Instant::now() + backoff(1, self.backoff_base, self.backoff_max),
+                    reason: reason.to_owned(),
+                    tools: tools.clone(),
+                });
+                // CAS: only swap if state hasn't changed since we loaded it.
+                let _ = server.client.compare_and_swap(&current, dead);
+                eprintln!(
+                    "sprout-agent: MCP server '{}' marked dead (attempts=0, reason={reason})",
+                    server.name
+                );
+            }
+            _ => {
+                // Server already dead or restarted with a new client — stale error, ignore.
+            }
+        }
     }
 
     pub async fn call(
@@ -233,12 +310,76 @@ impl McpRegistry {
             .by_qname
             .get(qname)
             .ok_or_else(|| AgentError::Mcp(format!("unknown tool {qname}")))?;
-        if self.is_poisoned(&entry.server) {
-            return Err(AgentError::Mcp(format!(
-                "server unavailable after timeout: {}",
-                entry.server
-            )));
+        let server = self.servers[entry.server_idx].clone();
+
+        // Fast path: already healthy.
+        let state = server.client.load();
+        if let ClientState::Healthy { client, tools, .. } = &**state {
+            // Detect "tool gone after restart" — server returned a different
+            // tool set than the one captured in `defs`.
+            if !tools.iter().any(|t| t == &entry.bare) {
+                return Err(AgentError::Mcp(format!(
+                    "tool '{qname}': no longer available; the MCP server restarted with a different tool set."
+                )));
+            }
+            let client = client.clone();
+            drop(state);
+            return self
+                .do_call(
+                    &server,
+                    &client,
+                    &entry.bare,
+                    qname,
+                    provider_id,
+                    arguments,
+                    max_bytes,
+                )
+                .await;
         }
+        drop(state);
+
+        // Slow path: server is Dead. Try to restart, then call once.
+        self.maybe_restart(&server).await?;
+        let state = server.client.load();
+        let client = match &**state {
+            ClientState::Healthy { client, tools, .. } => {
+                if !tools.iter().any(|t| t == &entry.bare) {
+                    return Err(AgentError::Mcp(format!(
+                        "tool '{qname}': no longer available; the MCP server restarted with a different tool set."
+                    )));
+                }
+                client.clone()
+            }
+            ClientState::Dead { reason, .. } => {
+                return Err(AgentError::Mcp(format!(
+                    "tool '{qname}': server '{}' restart failed: {reason}",
+                    server.name
+                )));
+            }
+        };
+        drop(state);
+        self.do_call(
+            &server,
+            &client,
+            &entry.bare,
+            qname,
+            provider_id,
+            arguments,
+            max_bytes,
+        )
+        .await
+    }
+
+    async fn do_call(
+        &self,
+        server: &Server,
+        client: &Arc<Client>,
+        bare: &str,
+        qname: &str,
+        provider_id: &str,
+        arguments: &Value,
+        max_bytes: usize,
+    ) -> Result<ToolResult, AgentError> {
         let arg_obj = match arguments {
             Value::Object(m) => Some(m.clone()),
             Value::Null => None,
@@ -249,14 +390,19 @@ impl McpRegistry {
             }
         };
         let mut params = CallToolRequestParams::default();
-        params.name = entry.tool.clone().into();
+        params.name = bare.to_owned().into();
         params.arguments = arg_obj;
-        let res = entry
-            .client
-            .peer()
-            .call_tool(params)
-            .await
-            .map_err(|e| AgentError::Mcp(format!("call {qname}: {e}")))?;
+        let res = match client.peer().call_tool(params).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Any RPC-level error means the server process is broken or
+                // gone. Tool-level errors come back as Ok(is_error=true).
+                // Only kill/mark-dead if this client is still the current one
+                // (prevents a stale error from clobbering a fresh restart).
+                self.kill_and_mark_dead_if_current(server, client, &format!("call failed: {e}"));
+                return Err(AgentError::Mcp(format!("call {qname}: {e}")));
+            }
+        };
         let text = collapse_content(&res.content, max_bytes);
         Ok(ToolResult {
             provider_id: provider_id.to_owned(),
@@ -264,6 +410,205 @@ impl McpRegistry {
             is_error: res.is_error.unwrap_or(false),
         })
     }
+
+    /// Attempt to bring a Dead server back to Healthy. Single in-flight
+    /// restart per server (stampede lock). On success, atomically swaps
+    /// state to Healthy. On failure, swaps a refreshed Dead
+    /// state with incremented attempts and updated `next_retry`.
+    async fn maybe_restart(&self, server: &Server) -> Result<(), AgentError> {
+        // Cheap pre-check without the lock.
+        match &**server.client.load() {
+            ClientState::Healthy { .. } => return Ok(()),
+            ClientState::Dead {
+                attempts,
+                next_retry,
+                reason,
+                ..
+            } => {
+                if *attempts >= self.max_attempts {
+                    return Err(AgentError::Mcp(format!(
+                        "The MCP server '{}' is unavailable (reason: {reason}; {attempts} restart attempts failed). Its tools have been removed for this session. Continue without them.",
+                        server.name
+                    )));
+                }
+                if Instant::now() < *next_retry {
+                    return Err(AgentError::Mcp(format!(
+                        "server '{}' is recovering (last error: {reason}). Try again later or use a different tool.",
+                        server.name
+                    )));
+                }
+            }
+        }
+
+        let _guard = server.restart_lock.lock().await;
+
+        // Re-check after acquiring — another task may have just restarted,
+        // or a prior restart may have failed and set a backoff.
+        let (attempt_n, prev_tools) = match &**server.client.load() {
+            ClientState::Healthy { .. } => return Ok(()),
+            ClientState::Dead { attempts, .. } if *attempts >= self.max_attempts => {
+                return Err(AgentError::Mcp(format!(
+                    "The MCP server '{}' is unavailable (exhausted). Its tools have been removed for this session.",
+                    server.name
+                )));
+            }
+            ClientState::Dead {
+                next_retry, reason, ..
+            } if Instant::now() < *next_retry => {
+                return Err(AgentError::Mcp(format!(
+                    "server '{}' is recovering (last error: {reason}). Try again later or use a different tool.",
+                    server.name
+                )));
+            }
+            ClientState::Dead {
+                attempts, tools, ..
+            } => (attempts + 1, tools.clone()),
+        };
+
+        let started = Instant::now();
+        eprintln!(
+            "sprout-agent: MCP server '{}' restarting (attempt {attempt_n}/{})",
+            server.name, self.max_attempts
+        );
+        match spawn_one(&server.spec, self.init_timeout).await {
+            Ok((client, pgid, tool_names, _raw_tools)) => {
+                server.client.store(Arc::new(ClientState::Healthy {
+                    client: Arc::new(client),
+                    pgid,
+                    tools: Arc::new(tool_names),
+                }));
+
+                eprintln!(
+                    "sprout-agent: MCP server '{}' restarted in {}ms (attempt {attempt_n})",
+                    server.name,
+                    started.elapsed().as_millis()
+                );
+                Ok(())
+            }
+            Err(e) => {
+                let reason = format!("restart failed: {e}");
+                let permanent = attempt_n >= self.max_attempts;
+                let next_retry = if permanent {
+                    Instant::now() + Duration::from_secs(86_400)
+                } else {
+                    Instant::now() + backoff(attempt_n, self.backoff_base, self.backoff_max)
+                };
+                server.client.store(Arc::new(ClientState::Dead {
+                    attempts: attempt_n,
+                    next_retry,
+                    reason: reason.clone(),
+                    tools: prev_tools,
+                }));
+
+                eprintln!(
+                    "sprout-agent: MCP server '{}' restart failed (attempt {attempt_n}/{}, permanent={permanent}): {reason}",
+                    server.name, self.max_attempts
+                );
+                Err(AgentError::Mcp(reason))
+            }
+        }
+    }
+}
+
+/// Spawn one MCP server: launch the child, init the rmcp client, and
+/// list its tools. All bounded by `timeout`. On any failure, kills the
+/// pgid before returning the error. Returns
+/// (client, pgid, bare_tool_names, raw_tool_list).
+async fn spawn_one(
+    spec: &ServerSpec,
+    timeout: Duration,
+) -> Result<(Client, Option<u32>, Vec<String>, Vec<rmcp::model::Tool>), AgentError> {
+    let mut cmd = Command::new(&spec.command);
+    cmd.args(&spec.args);
+    cmd.env_clear();
+    for k in PASSTHROUGH_ENV {
+        if let Ok(v) = std::env::var(k) {
+            cmd.env(k, v);
+        }
+    }
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
+    }
+    cmd.current_dir(&spec.cwd);
+    cmd.stderr(std::process::Stdio::inherit());
+
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let transport = TokioChildProcess::new(cmd)
+        .map_err(|e| AgentError::Mcp(format!("spawn {}: {e}", spec.name)))?;
+    let pgid = transport.id();
+
+    // Drop guard: kills the pgid if spawn_one is dropped mid-flight (e.g.,
+    // by an outer timeout or cancellation). Disarmed on successful return.
+    struct PgidGuard {
+        pgid: Option<u32>,
+        name: String,
+    }
+    impl Drop for PgidGuard {
+        fn drop(&mut self) {
+            if let Some(p) = self.pgid.take() {
+                killpg(p, &self.name, "spawn_dropped");
+            }
+        }
+    }
+    let mut guard = PgidGuard {
+        pgid,
+        name: spec.name.clone(),
+    };
+
+    let client: Client = match tokio::time::timeout(timeout, ().serve(transport)).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            return Err(AgentError::Mcp(format!("init {}: {e}", spec.name)));
+        }
+        Err(_) => {
+            return Err(AgentError::Mcp(timeout_msg("init", &spec.name, timeout)));
+        }
+    };
+
+    let tools = match tokio::time::timeout(timeout, client.peer().list_all_tools()).await {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            return Err(AgentError::Mcp(format!("list_tools {}: {e}", spec.name)));
+        }
+        Err(_) => {
+            return Err(AgentError::Mcp(timeout_msg(
+                "list_tools",
+                &spec.name,
+                timeout,
+            )));
+        }
+    };
+    let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+    // Success — disarm the guard so the pgid lives on in the returned state.
+    guard.pgid = None;
+    Ok((client, pgid, names, tools))
+}
+
+/// Exponential backoff with ±20% jitter: `min(2^(attempt-1) * base, max)`.
+/// `attempt` is 1-based.
+fn backoff(attempt: u32, base: Duration, max: Duration) -> Duration {
+    let shift = attempt.saturating_sub(1).min(20);
+    let scaled = base.saturating_mul(1u32 << shift);
+    let capped = scaled.min(max);
+    let ms = capped.as_millis() as u64;
+    // ±20% jitter using getrandom-free cheap jitter.
+    let jitter_pct = jitter_percent();
+    let jittered = (ms as i64) + ((ms as i64) * jitter_pct / 100);
+    Duration::from_millis(jittered.max(0) as u64)
+}
+
+/// Return an integer in [-20, 20] using a cheap PRNG seeded from the
+/// current time. Good enough for desync — not crypto.
+fn jitter_percent() -> i64 {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    // Map nanos to [-20, 20].
+    ((nanos % 41) as i64) - 20
 }
 
 fn timeout_msg(stage: &str, name: &str, t: Duration) -> String {

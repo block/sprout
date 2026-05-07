@@ -26,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process"] }
+arc-swap = "1"
 getrandom = "0.2"
 
 [target.'cfg(unix)'.dependencies]

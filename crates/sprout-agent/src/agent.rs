@@ -66,10 +66,11 @@ impl RunCtx<'_> {
                 truncate_history(self.history, self.cfg.max_history_bytes);
             }
 
+            let tools = self.mcp.tools();
             let response = tokio::select! {
                 biased;
                 _ = self.cancel.changed() => return Ok(StopReason::Cancelled),
-                r = self.llm.complete(self.cfg, self.history, self.mcp.tools()) => r?,
+                r = self.llm.complete(self.cfg, self.history, &tools) => r?,
             };
 
             if !response.text.is_empty() {
@@ -360,15 +361,15 @@ impl RunCtx<'_> {
         calls: &[ToolCall],
         idx: usize,
     ) -> Result<Option<StopReason>, AgentError> {
-        let poison = |reason: &str| {
-            if let Some(server) = self.mcp.server_of(&call.name) {
-                self.mcp.poison(server, reason);
-            }
-        };
         let result = tokio::select! {
             biased;
             _ = self.cancel.changed() => {
-                poison("cancelled during tool call");
+                // Session ending — kill first (while pgid is still in Healthy
+                // state), then mark dead for consistent state.
+                if let Some(server) = self.mcp.server_of(&call.name).map(str::to_owned) {
+                    self.mcp.kill_server(&server);
+                    self.mcp.mark_dead(&server, "cancelled");
+                }
                 emit_failed(self.wire, self.session_id, call, "cancelled").await;
                 fill_cancelled(self.history, &calls[idx..]);
                 return Ok(Some(StopReason::Cancelled));
@@ -379,16 +380,27 @@ impl RunCtx<'_> {
             ) => match r {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
+                    // Tool call failed. mcp.call() has already marked the
+                    // server dead if it was a transport error. Surface the
+                    // error to the LLM; lazy restart happens on the next call.
                     let m = e.to_string();
-                    poison(&format!("transport error: {m}"));
                     emit_failed(self.wire, self.session_id, call, &m).await;
                     self.history.push(synthetic_error(call, m));
                     return Ok(None);
                 }
                 Err(_) => {
-                    poison("tool timeout");
-                    emit_failed(self.wire, self.session_id, call, "tool: timeout").await;
-                    self.history.push(synthetic_error(call, "tool: timeout".into()));
+                    // Tool timed out — kill the pgid to unstick the child,
+                    // then mark the server dead. Lazy restart on next call.
+                    if let Some(server) = self.mcp.server_of(&call.name).map(str::to_owned) {
+                        self.mcp.kill_server(&server);
+                        self.mcp.mark_dead(&server, "tool timeout");
+                    }
+                    let m = format!(
+                        "tool: timeout after {}s. The command took too long. Try a faster approach.",
+                        self.cfg.tool_timeout.as_secs()
+                    );
+                    emit_failed(self.wire, self.session_id, call, &m).await;
+                    self.history.push(synthetic_error(call, m));
                     return Ok(None);
                 }
             },

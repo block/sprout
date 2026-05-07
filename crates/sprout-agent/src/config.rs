@@ -49,6 +49,12 @@ pub struct Config {
     pub llm_timeout: Duration,
     pub tool_timeout: Duration,
     pub mcp_init_timeout: Duration,
+    /// Max consecutive failed restart attempts before a server is permanently dead.
+    pub mcp_max_restart_attempts: u32,
+    /// Base for `2^(n-1) * base` restart backoff, in milliseconds.
+    pub mcp_restart_base_ms: u64,
+    /// Cap for restart backoff, in milliseconds.
+    pub mcp_restart_max_ms: u64,
     pub max_line_bytes: usize,
     pub max_history_bytes: usize,
     pub max_handoffs: usize,
@@ -95,11 +101,14 @@ impl Config {
             max_rounds: parse_env("SPROUT_AGENT_MAX_ROUNDS", 16)?,
             max_output_tokens: parse_env("SPROUT_AGENT_MAX_OUTPUT_TOKENS", 4096)?,
             llm_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_LLM_TIMEOUT_SECS", 120)?),
-            tool_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", 120)?),
+            tool_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_TOOL_TIMEOUT_SECS", 660)?),
             mcp_init_timeout: Duration::from_secs(parse_env(
                 "SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS",
                 30,
             )?),
+            mcp_max_restart_attempts: parse_env("SPROUT_AGENT_MCP_RESTART_MAX_ATTEMPTS", 3u32)?,
+            mcp_restart_base_ms: parse_env("SPROUT_AGENT_MCP_RESTART_BASE_MS", 500u64)?,
+            mcp_restart_max_ms: parse_env("SPROUT_AGENT_MCP_RESTART_MAX_MS", 30_000u64)?,
             max_line_bytes: parse_env("SPROUT_AGENT_MAX_LINE_BYTES", 4 * 1024 * 1024)?,
             max_history_bytes: parse_env("SPROUT_AGENT_MAX_HISTORY_BYTES", 1024 * 1024)?,
             max_handoffs: parse_env("SPROUT_AGENT_MAX_HANDOFFS", 5)?,
@@ -140,6 +149,17 @@ impl Config {
         }
         if self.mcp_init_timeout < MIN_TIMEOUT {
             return Err("config: SPROUT_AGENT_MCP_INIT_TIMEOUT_SECS must be >= 1".into());
+        }
+        if self.mcp_max_restart_attempts < 1 {
+            return Err("config: SPROUT_AGENT_MCP_RESTART_MAX_ATTEMPTS must be >= 1".into());
+        }
+        if self.mcp_restart_base_ms < 1 {
+            return Err("config: SPROUT_AGENT_MCP_RESTART_BASE_MS must be >= 1".into());
+        }
+        if self.mcp_restart_max_ms < self.mcp_restart_base_ms {
+            return Err(
+                "config: SPROUT_AGENT_MCP_RESTART_MAX_MS must be >= SPROUT_AGENT_MCP_RESTART_BASE_MS".into(),
+            );
         }
         Ok(())
     }

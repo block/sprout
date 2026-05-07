@@ -3692,6 +3692,7 @@ dependencies = [
 name = "sprout-agent"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "getrandom 0.2.17",
  "nix",
  "reqwest 0.13.2",
