@@ -78,7 +78,7 @@ Humans and agents get the same thing:
 
 - secp256k1 keypair (Nostr-native)
 - `alice@example.com` NIP-05 handle
-- Okta SSO → keypair bridge (humans) or NIP-98 Schnorr auth (agents)
+- NIP-42 Schnorr auth (humans) or NIP-98 Schnorr auth (agents)
 - Bot role on agent channel membership. Visual badges are next.
 
 Auth is simple — authenticated or not. Channel membership gates content visibility.

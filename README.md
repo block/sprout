@@ -34,7 +34,7 @@ just build
 ```
 
 `just setup` does the heavy lifting:
-- Starts Docker services (Postgres, Redis, Typesense, Adminer, Keycloak, MinIO, Prometheus)
+- Starts Docker services (Postgres, Redis, Typesense, Adminer, MinIO, Prometheus)
 - Waits for core services (Postgres, Redis, Typesense) to be healthy
 - Runs database migrations
 - Installs desktop dependencies (`pnpm install`)
@@ -67,7 +67,7 @@ That's it — you're running Sprout locally.
 | ✅ | **ACP agent harness** — AI agents connect out of the box via `sprout-acp` |
 | ✅ | **Tamper-evident audit log** — hash-chain, SOX-grade compliance |
 | ✅ | **Permission-aware full-text search** — Typesense, respects channel membership |
-| ✅ | **Enterprise SSO bridge** — NIP-42 authentication with OIDC |
+| ✅ | **NIP-42 + NIP-98 authentication** — Schnorr signatures for WebSocket and REST |
 | ✅ | **Pure Rust backend** — memory safe, no GC pauses |
 
 ## Supported NIPs
@@ -136,7 +136,7 @@ That's it — you're running Sprout locally.
 | Crate | Role |
 |-------|------|
 | `sprout-db` | Postgres access layer — events, channels, users, DMs, threads, reactions, workflows, tokens, feed (sqlx) |
-| `sprout-auth` | NIP-42 challenge/response + Okta OIDC JWT validation + NIP-98 HTTP Auth + token scopes + rate limiting |
+| `sprout-auth` | NIP-42 challenge/response + NIP-98 HTTP Auth + token scopes + rate limiting |
 | `sprout-pubsub` | Redis pub/sub fan-out, presence tracking, typing indicators, and rate limiting |
 | `sprout-search` | Typesense indexing and query — full-text search over event content |
 | `sprout-audit` | Append-only audit log with SHA-256 hash chain for tamper detection |
@@ -213,8 +213,6 @@ Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the
 | `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind address (host:port) |
 | `RELAY_URL` | `ws://localhost:3000` | Public URL (used in NIP-42 challenges) |
 | `SPROUT_RELAY_PRIVATE_KEY` | auto-generated | Relay keypair for signing system messages |
-| `OKTA_ISSUER` | — | Okta OIDC issuer URL (optional) |
-| `OKTA_AUDIENCE` | — | Expected JWT audience (optional) |
 | `RUST_LOG` | `sprout_relay=info` | Log filter (tracing env-filter syntax) |
 | `SPROUT_PROXY_BIND_ADDR` | `0.0.0.0:4869` | Proxy bind address (see [NOSTR.md](NOSTR.md) for full proxy config) |
 | `SPROUT_UPSTREAM_URL` | — | Upstream relay URL for the proxy (e.g., `ws://localhost:3000`) |
@@ -234,10 +232,9 @@ Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the
 | `SPROUT_S3_SECRET_KEY` | `sprout_dev_secret` | S3 secret key |
 | `SPROUT_S3_BUCKET` | `sprout-media` | S3 bucket name for media uploads |
 | `SPROUT_METRICS_PORT` | `9102` | Port for Prometheus metrics endpoint |
-| `SPROUT_PUBKEY_ALLOWLIST` | `false` | Restrict NIP-42 pubkey-only auth to allowlisted keys (`true`/`1`); Okta JWT auth bypasses |
+| `SPROUT_PUBKEY_ALLOWLIST` | `false` | Restrict NIP-42 pubkey-only auth to allowlisted keys (`true`/`1`) |
 | `SPROUT_SEND_BUFFER` | `1000` | WebSocket send buffer size |
 | `SPROUT_UDS_PATH` | — | Unix domain socket path (alternative to TCP) |
-| `OKTA_JWKS_URI` | — | Okta JWKS endpoint URI for JWT verification |
 | `SPROUT_TOOLSETS` | `default` | MCP toolsets to enable (comma-separated: `default`, `channel_admin`, `dms`, `canvas`, `workflow_admin`, `identity`, `forums`, `all`, `none`; append `:ro` for read-only) |
 | `SPROUT_RELAY_PUBKEY` | — | Relay's hex pubkey — required by `sprout-proxy`; also used as fallback auth by `sprout-workflow` |
 

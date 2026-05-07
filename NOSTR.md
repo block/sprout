@@ -10,7 +10,7 @@ third-party Nostr clients to connect:
 
 **Direct** is simpler — no extra process, no translation layer. Use it when your client speaks
 NIP-29. **Proxy** is for external guests (investors, press, partners, etc.) who use standard NIP-28
-clients and don't have company Okta credentials.
+clients and don't have company credentials.
 
 Both paths require NIP-42 authentication.
 
@@ -83,10 +83,10 @@ PGPASSWORD=sprout_dev psql -h localhost -U sprout -d sprout -c \
 ### Pubkey Allowlist
 
 When `SPROUT_PUBKEY_ALLOWLIST=true`, NIP-42 connections that authenticate with only a pubkey
-(no JWT) are checked against the `pubkey_allowlist` table. This lets you open the
-relay to specific external Nostr identities without granting full Okta access.
+(no API token) are checked against the `pubkey_allowlist` table. This lets you open the
+relay to specific external Nostr identities without granting full access.
 
-- Users with valid **Okta JWTs** bypass the allowlist.
+- Users with valid **API tokens** bypass the allowlist.
 - **Fail-closed:** if the DB lookup fails, the connection is denied.
 - Default: `false` (all authenticated pubkeys accepted).
 - Auth failure returns generic `auth-required: verification failed` (no allowlist-specific message).
@@ -488,7 +488,7 @@ is dual-sourced: local snapshot metadata plus upstream edit events (kind:40003 �
 
 ### Direct Path
 - **Pubkey allowlist is fail-closed.** DB errors deny the connection.
-- **Okta JWT users bypass the allowlist.** The allowlist only gates pubkey-only NIP-42.
+- **API token users bypass the allowlist.** The allowlist only gates pubkey-only NIP-42.
 - **kind:9 requires `#h` tag.** Messages without a channel-scoped `#h` tag are rejected.
 - **kind:7 derives channel from target.** Reactions look up the target event's channel via `#e` — client-supplied `#h` tags are ignored. Reactions to unknown events are rejected (fail-closed).
 - **kind:5 uses `#h` if present, but doesn't require it.** Deletions validate author-match against target events via `#e` tags. Only self-authored events can be deleted (admin deletions use kind:9005).
