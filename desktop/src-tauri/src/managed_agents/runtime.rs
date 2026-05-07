@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::{
+    app_state::AppState,
     managed_agents::{
         append_log_marker, login_shell_path, managed_agent_log_path, missing_command_message,
         normalize_agent_args, open_log_file, resolve_command, ManagedAgentProcess,
@@ -560,6 +561,11 @@ pub fn spawn_agent_child(
         command.env("SPROUT_AUTH_TAG", auth_tag);
     } else {
         command.env_remove("SPROUT_AUTH_TAG");
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(keys) = state.keys.lock() {
+            command.env("SPROUT_ACP_AGENT_OWNER", keys.public_key().to_hex());
+        }
     }
 
     command.env("SPROUT_ACP_RELAY_OBSERVER", "true");

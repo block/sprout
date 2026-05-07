@@ -47,10 +47,8 @@ export function useChannelAgentSessions({
       channelMembers.map((member) => normalizePubkey(member.pubkey)),
     );
 
-    return managedAgents.filter(
-      (agent) =>
-        agent.backend.type === "local" &&
-        memberPubkeys.has(normalizePubkey(agent.pubkey)),
+    return managedAgents.filter((agent) =>
+      memberPubkeys.has(normalizePubkey(agent.pubkey)),
     );
   }, [channelMembers, managedAgents]);
 

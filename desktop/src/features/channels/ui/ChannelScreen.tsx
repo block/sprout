@@ -16,6 +16,7 @@ import { MembersSidebar } from "@/features/channels/ui/MembersSidebar";
 import {
   useManagedAgentsQuery,
   usePersonasQuery,
+  useRelayAgentsQuery,
 } from "@/features/agents/hooks";
 import { useManagedAgentObserverBridge } from "@/features/agents/observerRelayStore";
 import {
@@ -52,6 +53,7 @@ import { AgentSessionProvider } from "@/shared/context/AgentSessionContext";
 import { ProfilePanelProvider } from "@/shared/context/ProfilePanelContext";
 import { useChannelAgentSessions } from "./useChannelAgentSessions";
 import { useChannelProfilePanel } from "./useChannelProfilePanel";
+import type { BotActivityAgent } from "./BotActivityBar";
 type ChannelScreenProps = {
   activeChannel: Channel | null;
   currentIdentity?: Identity;
@@ -165,46 +167,66 @@ export function ChannelScreen({
     enabled: messageProfilePubkeys.length > 0,
   });
   const managedAgentsQuery = useManagedAgentsQuery();
+  const relayAgentsQuery = useRelayAgentsQuery();
   useManagedAgentObserverBridge(managedAgentsQuery.data ?? []);
   const { botTypingEntries, humanTypingPubkeys } = React.useMemo<{
     botTypingEntries: TypingIndicatorEntry[];
     humanTypingPubkeys: string[];
   }>(() => {
-    const localAgentSet = new Set(
-      (managedAgentsQuery.data ?? [])
-        .filter((agent) => agent.backend.type === "local")
-        .map((agent) => agent.pubkey.toLowerCase()),
+    const managedAgentSet = new Set(
+      (managedAgentsQuery.data ?? []).map((agent) =>
+        agent.pubkey.toLowerCase(),
+      ),
+    );
+    const relayAgentSet = new Set(
+      (relayAgentsQuery.data ?? []).map((agent) => agent.pubkey.toLowerCase()),
     );
     const channelTypingEntries = typingEntries.filter(
       (entry) => entry.threadHeadId === null,
     );
-    const agentTypingEntries = typingEntries.filter((entry) =>
-      localAgentSet.has(entry.pubkey.toLowerCase()),
+    const agentTypingEntries = typingEntries.filter(
+      (entry) =>
+        managedAgentSet.has(entry.pubkey.toLowerCase()) ||
+        relayAgentSet.has(entry.pubkey.toLowerCase()),
     );
     return {
       botTypingEntries: agentTypingEntries,
       humanTypingPubkeys: channelTypingEntries
-        .filter((entry) => !localAgentSet.has(entry.pubkey.toLowerCase()))
+        .filter(
+          (entry) =>
+            !managedAgentSet.has(entry.pubkey.toLowerCase()) &&
+            !relayAgentSet.has(entry.pubkey.toLowerCase()),
+        )
         .map((entry) => entry.pubkey),
     };
-  }, [managedAgentsQuery.data, typingEntries]);
+  }, [managedAgentsQuery.data, relayAgentsQuery.data, typingEntries]);
   const messageProfiles = React.useMemo(() => {
     const base =
       mergeCurrentProfileIntoLookup(
         messageProfilesQuery.data?.profiles,
         currentProfile,
       ) ?? {};
-    // Merge managed agent names so system messages resolve instantly
+    // Merge agent names so system messages and activity pills resolve instantly
     // (without waiting for the relay profile batch query).
-    const agents = managedAgentsQuery.data ?? [];
     const merged = { ...base };
-    for (const agent of agents) {
+    for (const agent of managedAgentsQuery.data ?? []) {
       const key = agent.pubkey.toLowerCase();
       if (!merged[key]?.displayName) {
         merged[key] = {
           ...merged[key],
           displayName: agent.name,
-          avatarUrl: null,
+          avatarUrl: merged[key]?.avatarUrl ?? null,
+          nip05Handle: null,
+        };
+      }
+    }
+    for (const agent of relayAgentsQuery.data ?? []) {
+      const key = agent.pubkey.toLowerCase();
+      if (!merged[key]?.displayName) {
+        merged[key] = {
+          ...merged[key],
+          displayName: agent.name,
+          avatarUrl: merged[key]?.avatarUrl ?? null,
           nip05Handle: null,
         };
       }
@@ -214,9 +236,43 @@ export function ChannelScreen({
     currentProfile,
     managedAgentsQuery.data,
     messageProfilesQuery.data?.profiles,
+    relayAgentsQuery.data,
   ]);
   const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
   const channelMembers = channelMembersQuery.data;
+  const activityAgents = React.useMemo<BotActivityAgent[]>(() => {
+    const byPubkey = new Map<string, BotActivityAgent>();
+    for (const agent of managedAgentsQuery.data ?? []) {
+      byPubkey.set(agent.pubkey.toLowerCase(), {
+        name: agent.name,
+        pubkey: agent.pubkey,
+      });
+    }
+    for (const agent of relayAgentsQuery.data ?? []) {
+      const key = agent.pubkey.toLowerCase();
+      if (!byPubkey.has(key)) {
+        byPubkey.set(key, { name: agent.name, pubkey: agent.pubkey });
+      }
+    }
+    for (const member of channelMembers ?? []) {
+      const key = member.pubkey.toLowerCase();
+      if (member.role === "bot" && !byPubkey.has(key)) {
+        byPubkey.set(key, {
+          name:
+            member.displayName ??
+            messageProfiles[key]?.displayName ??
+            `Agent ${member.pubkey.slice(0, 8)}`,
+          pubkey: member.pubkey,
+        });
+      }
+    }
+    return [...byPubkey.values()];
+  }, [
+    channelMembers,
+    managedAgentsQuery.data,
+    messageProfiles,
+    relayAgentsQuery.data,
+  ]);
   const personasQuery = usePersonasQuery();
   const personaLookup = React.useMemo(() => {
     const agents = managedAgentsQuery.data ?? [];
@@ -470,6 +526,7 @@ export function ChannelScreen({
               <React.Suspense fallback={<ViewLoadingFallback kind="channel" />}>
                 <ChannelPane
                   activeChannel={activeChannel}
+                  activityAgents={activityAgents}
                   agentSessionAgents={channelAgentSessionAgents}
                   botTypingEntries={botTypingEntries}
                   channelFind={channelFind}
