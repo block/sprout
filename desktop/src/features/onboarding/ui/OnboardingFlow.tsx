@@ -35,15 +35,25 @@ import type {
  * Returns `true` if denied, `false` if the user is a member (or if the
  * relay doesn't enforce membership / isn't reachable).
  */
+function isRelayMembershipDeniedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.message.includes("You must be a relay member") ||
+    error.message.includes("relay_membership_required") ||
+    error.message.includes("restricted: not a relay member") ||
+    error.message.includes("invalid: you are not a relay member")
+  );
+}
+
 async function checkMembershipDenied(): Promise<boolean> {
   try {
     const { membership, snapshotFound } = await getMyRelayMembershipLookup();
     return snapshotFound && membership === null;
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes("relay returned 403")
-    ) {
+    if (isRelayMembershipDeniedError(error)) {
       return true;
     }
     // Network errors, 401s, 500s — not membership denials.
@@ -271,7 +281,18 @@ export function OnboardingFlow({
     if (Object.keys(updatePayload).length > 0) {
       try {
         await profileUpdateMutation.mutateAsync(updatePayload);
-      } catch {
+      } catch (error) {
+        if (isRelayMembershipDeniedError(error)) {
+          try {
+            const identity = await getIdentity();
+            setDeniedPubkey(identity.pubkey);
+          } catch {
+            setDeniedPubkey("");
+          }
+          setCurrentPage("membership-denied");
+          return;
+        }
+
         // Error falls through to the error banner / recovery buttons.
         return;
       }
