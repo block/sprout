@@ -27,6 +27,7 @@ import {
   setDesktopAppBadgeCount,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
+import { playNotificationSound } from "@/features/notifications/lib/sound";
 import { PreventSleepProvider } from "@/features/agents/usePreventSleep";
 import {
   usePresenceSession,
@@ -187,7 +188,7 @@ export function AppShell() {
           : "New message";
 
       void sendDesktopNotification({
-        title: "Direct message",
+        title: channelName,
         body,
         target: {
           channelId: channel.id,
@@ -198,6 +199,10 @@ export function AppShell() {
           kind: event.kind,
           pubkey: event.pubkey,
         },
+      }).then((didSend) => {
+        if (didSend && notificationSettings.settings.soundEnabled) {
+          playNotificationSound();
+        }
       });
     },
   );
@@ -668,6 +673,7 @@ export function AppShell() {
                       onSetNeedsActionNotificationsEnabled={
                         notificationSettings.setNeedsActionEnabled
                       }
+                      onSetSoundEnabled={notificationSettings.setSoundEnabled}
                       section={settingsSection}
                     />
                   </React.Suspense>

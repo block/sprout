@@ -220,6 +220,7 @@ export async function sendDesktopNotification(
 
   const notification = new window.Notification(payload.title, {
     body: payload.body,
+    silent: true,
     extra: notificationExtra(payload.target),
   } as DesktopNotificationOptions);
 
