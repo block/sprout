@@ -10,7 +10,7 @@ We wanted something we could read in an afternoon and audit with confidence.
 
 Two binaries, two protocols, no coupling between them.
 
-**sprout-agent** (~2,500 LOC) is an ACP agent. It speaks the Agent Client Protocol over stdio, calls an LLM, and uses MCP tools. One session, one prompt in flight. When context fills up, it summarizes its own history and continues. The client sees a single coherent session. It works with Zed, JetBrains, sprout-acp, or anything else that speaks ACP.
+**sprout-agent** (~2,500 LOC) is an ACP agent. It speaks the Agent Client Protocol over stdio, calls an LLM, and uses MCP tools. Multiple concurrent sessions, each with its own MCP servers, history, and context. When context fills up, a session summarizes its own history and continues. It works with Zed, JetBrains, sprout-acp, or anything else that speaks ACP.
 
 **sprout-dev-mcp** (~1,500 LOC) is an MCP server. It gives any agent a shell and a file editor. Ephemeral processes with process-group kill on every exit path. Bounded output. File edits resolve against the working directory. It works with any agent or client that speaks MCP.
 
@@ -31,9 +31,9 @@ Any ACP client (Zed, JetBrains, sprout-acp, custom)
         |
         | stdio ACP (JSON-RPC 2.0)
         v
-  sprout-agent
+  sprout-agent (up to 8 concurrent sessions)
         |
-        | stdio MCP (JSON-RPC 2.0)
+        | stdio MCP (JSON-RPC 2.0) — one per session
         v
   sprout-dev-mcp (or any MCP server)
         |
@@ -41,11 +41,11 @@ Any ACP client (Zed, JetBrains, sprout-acp, custom)
   shell, str_replace; rg on PATH
 ```
 
-Two pipes. Two protocols. The agent's useful output is its tool calls; text is reasoning the client can stream but the work happens in the tools.
+Two pipes. Two protocols. Each session gets its own MCP server instances — fully isolated. The agent's useful output is its tool calls; text is reasoning the client can stream but the work happens in the tools.
 
 ## Design Principles
 
-- **Minimal.** If you can delete it, delete it. We deleted the TODO tool, context injection, ast-grep, streaming, persistence, multi-session support, and a provider trait. The system got better with each one gone.
+- **Minimal.** If you can delete it, delete it. We deleted the TODO tool, context injection, ast-grep, streaming, persistence, and a provider trait. The system got better with each one gone.
 
 - **Hardened.** Zero unsafe. Zero panics. Bounded process lifetime, bounded output sizes, bounded history. Process-group kill on every exit path. File edits resolve against the working directory. The shell runs at the operator's trust level, like bash itself. History validity is maintained on every cancellation path. The system degrades gracefully, with bounded failure modes.
 
@@ -55,6 +55,7 @@ Two pipes. Two protocols. The agent's useful output is its tool calls; text is r
 
 ## What This Enables
 
+- Multiple concurrent sessions in one process — each with independent MCP servers, history, and context (configurable cap, default 8)
 - Ten agents in parallel behind sprout, each with their own MCP configuration
 - Any ACP client gets a coding agent without a custom adapter
 - Any MCP server gets a capable caller without a custom adapter

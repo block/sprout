@@ -29,7 +29,7 @@ use crate::wire::{
 struct App {
     cfg: Config,
     llm: Arc<Llm>,
-    state: Mutex<Option<Session>>,
+    sessions: Mutex<HashMap<String, Session>>,
     pending: PendingMap,
     next_id: Arc<Mutex<i64>>,
 }
@@ -57,7 +57,7 @@ async fn main() {
     let app = Arc::new(App {
         cfg,
         llm,
-        state: Mutex::new(None),
+        sessions: Mutex::new(HashMap::new()),
         pending: Arc::new(Mutex::new(HashMap::new())),
         next_id: Arc::new(Mutex::new(1_000_000)),
     });
@@ -73,7 +73,7 @@ async fn main() {
     {
         eprintln!("sprout-agent: io: reader: {e}");
     }
-    if let Some(session) = app.state.lock().await.as_ref() {
+    for session in app.sessions.lock().await.values() {
         let _ = session.cancel_tx.send(true);
     }
     let _ = writer.await;
@@ -195,15 +195,18 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         )
         .await;
     }
-    let mut st = app.state.lock().await;
-    if st.is_some() {
-        return reject(
-            wire_tx,
-            id,
-            INVALID_PARAMS,
-            "session/new: session already exists",
-        )
-        .await;
+    // Check cap without holding lock across MCP spawn (which may be slow).
+    {
+        let sessions = app.sessions.lock().await;
+        if sessions.len() >= app.cfg.max_sessions {
+            return reject(
+                wire_tx,
+                id,
+                INVALID_PARAMS,
+                "session/new: max sessions reached",
+            )
+            .await;
+        }
     }
     let mcp = match McpRegistry::spawn_all(&app.cfg, &p.mcp_servers, &p.cwd).await {
         Ok(m) => Arc::new(m),
@@ -214,16 +217,30 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         Err(e) => return reject(wire_tx, id, -32000, &e).await,
     };
     let (cancel_tx, _) = watch::channel(false);
-    *st = Some(Session {
-        id: session_id.clone(),
-        mcp,
-        history: Vec::new(),
-        cancel_tx,
-        busy: false,
-        original_task: None,
-        handoff_count: 0,
-    });
-    drop(st);
+    let mut sessions = app.sessions.lock().await;
+    // Re-check cap (another session may have been created while we spawned MCP).
+    if sessions.len() >= app.cfg.max_sessions {
+        return reject(
+            wire_tx,
+            id,
+            INVALID_PARAMS,
+            "session/new: max sessions reached",
+        )
+        .await;
+    }
+    sessions.insert(
+        session_id.clone(),
+        Session {
+            id: session_id.clone(),
+            mcp,
+            history: Vec::new(),
+            cancel_tx,
+            busy: false,
+            original_task: None,
+            handoff_count: 0,
+        },
+    );
+    drop(sessions);
     wire::send(wire_tx, wire::ok(id, json!({ "sessionId": session_id }))).await;
 }
 
@@ -237,10 +254,8 @@ async fn reject(wire_tx: &WireSender, id: Value, code: i32, message: &str) {
 
 async fn cancel_session(app: &Arc<App>, params: Value) {
     if let Ok(p) = serde_json::from_value::<SessionCancelParams>(params) {
-        if let Some(s) = app.state.lock().await.as_ref() {
-            if s.id == p.session_id {
-                let _ = s.cancel_tx.send(true);
-            }
+        if let Some(s) = app.sessions.lock().await.get(&p.session_id) {
+            let _ = s.cancel_tx.send(true);
         }
     }
 }
@@ -281,7 +296,7 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         handoff_count: &mut handoff_count,
     };
     let result = ctx.run(p.prompt).await;
-    if let Some(s) = app.state.lock().await.as_mut() {
+    if let Some(s) = app.sessions.lock().await.get_mut(&sid) {
         s.busy = false;
         s.history = history;
         s.original_task = original_task;
@@ -313,11 +328,8 @@ async fn acquire_session(
     ),
     &'static str,
 > {
-    let mut st = app.state.lock().await;
-    let s = match st.as_mut() {
-        Some(s) if s.id == session_id => s,
-        _ => return Err("unknown session"),
-    };
+    let mut sessions = app.sessions.lock().await;
+    let s = sessions.get_mut(session_id).ok_or("unknown session")?;
     if s.busy {
         return Err("prompt already in flight");
     }
