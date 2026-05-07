@@ -485,6 +485,7 @@ export type AgentTeam = {
   name: string;
   description: string | null;
   personaIds: string[];
+  isBuiltin: boolean;
   createdAt: string;
   updatedAt: string;
 };

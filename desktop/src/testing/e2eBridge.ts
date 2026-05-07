@@ -385,6 +385,7 @@ type RawTeam = {
   name: string;
   description: string | null;
   persona_ids: string[];
+  is_builtin: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -3755,6 +3756,7 @@ async function handleCreateTeam(args: {
     name: args.input.name.trim(),
     description: args.input.description?.trim() || null,
     persona_ids: [...args.input.personaIds],
+    is_builtin: false,
     created_at: now,
     updated_at: now,
   };
@@ -3785,6 +3787,10 @@ async function handleUpdateTeam(args: {
 }
 
 async function handleDeleteTeam(args: { id: string }): Promise<void> {
+  const team = mockTeams.find((candidate) => candidate.id === args.id);
+  if (team?.is_builtin) {
+    throw new Error("Built-in teams cannot be deleted.");
+  }
   mockTeams = mockTeams.filter((candidate) => candidate.id !== args.id);
 }
 
