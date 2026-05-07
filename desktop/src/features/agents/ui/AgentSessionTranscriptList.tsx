@@ -1,5 +1,6 @@
-import { Bot, Brain, ChevronDown, Radio, TerminalSquare } from "lucide-react";
+import { Brain, ChevronDown, Radio, TerminalSquare } from "lucide-react";
 
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { cn } from "@/shared/lib/cn";
 import { Markdown } from "@/shared/ui/markdown";
 import type { TranscriptItem } from "./agentSessionTypes";
@@ -8,10 +9,12 @@ import { formatTranscriptTime } from "./agentSessionUtils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 export function AgentSessionTranscriptList({
+  agentAvatarUrl,
   agentName,
   emptyDescription,
   items,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   emptyDescription: string;
   items: TranscriptItem[];
@@ -30,12 +33,16 @@ export function AgentSessionTranscriptList({
     <div
       aria-label="Live ACP transcript"
       aria-live="polite"
-      className="mx-auto w-full max-w-3xl py-1"
+      className="w-full py-1"
       role="log"
     >
       {items.map((item) => (
         <div className="mt-4 first:mt-0" key={item.id}>
-          <TranscriptItemView agentName={agentName} item={item} />
+          <TranscriptItemView
+            agentAvatarUrl={agentAvatarUrl}
+            agentName={agentName}
+            item={item}
+          />
         </div>
       ))}
     </div>
@@ -43,14 +50,22 @@ export function AgentSessionTranscriptList({
 }
 
 function TranscriptItemView({
+  agentAvatarUrl,
   agentName,
   item,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   item: TranscriptItem;
 }) {
   if (item.type === "message") {
-    return <MessageItem agentName={agentName} item={item} />;
+    return (
+      <MessageItem
+        agentAvatarUrl={agentAvatarUrl}
+        agentName={agentName}
+        item={item}
+      />
+    );
   }
   if (item.type === "tool") {
     return <ToolItem item={item} />;
@@ -65,9 +80,11 @@ function TranscriptItemView({
 }
 
 function MessageItem({
+  agentAvatarUrl,
   agentName,
   item,
 }: {
+  agentAvatarUrl: string | null;
   agentName: string;
   item: Extract<TranscriptItem, { type: "message" }>;
 }) {
@@ -89,9 +106,12 @@ function MessageItem({
       >
         {isAssistant ? (
           <div className="mb-0.5 flex items-center gap-1 text-xs">
-            <span className="flex h-5 w-5 items-center justify-center">
-              <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-            </span>
+            <ProfileAvatar
+              avatarUrl={agentAvatarUrl}
+              className="h-5 w-5 rounded-full text-[9px] shadow-none"
+              iconClassName="h-3 w-3"
+              label={agentName}
+            />
             <span className="font-normal text-foreground">{agentName}</span>
             <TranscriptTimestamp timestamp={item.timestamp} />
           </div>
@@ -181,7 +201,7 @@ function LifecycleItem({
   return (
     <div
       className={cn(
-        "flex items-center justify-center gap-1.5 px-4 py-2 text-center text-xs",
+        "flex items-center justify-start gap-1.5 px-1 py-2 text-left text-xs",
         isError ? "text-destructive" : "text-muted-foreground",
       )}
     >

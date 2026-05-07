@@ -1,8 +1,10 @@
 import type * as React from "react";
-import { Activity, Bot, CircleDot, Octagon, X } from "lucide-react";
+import { Activity, CircleDot, Octagon, X } from "lucide-react";
 import { toast } from "sonner";
 
+import { usePersonasQuery } from "@/features/agents/hooks";
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { cancelManagedAgentTurn } from "@/shared/api/agentControl";
 import type { Channel, ManagedAgent } from "@/shared/api/types";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
@@ -41,6 +43,11 @@ export function AgentSessionThreadPanel({
 }: AgentSessionThreadPanelProps) {
   const isLive = agent.status === "running";
   const isOverlay = useIsThreadPanelOverlay();
+  const personasQuery = usePersonasQuery();
+  const agentPersona = personasQuery.data?.find(
+    (persona) => persona.id === agent.personaId,
+  );
+  const agentAvatarUrl = agentPersona?.avatarUrl ?? null;
   useEscapeKey(onClose, isOverlay);
 
   const { ref: scrollRef, onScroll } = useStickToBottom<HTMLDivElement>();
@@ -87,7 +94,13 @@ export function AgentSessionThreadPanel({
         )}
 
         <div className="flex items-center gap-3 border-b border-border/70 px-4 py-2.5">
-          <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <ProfileAvatar
+            avatarUrl={agentAvatarUrl}
+            className="h-8 w-8 rounded-xl text-xs shadow-none"
+            iconClassName="h-4 w-4"
+            label={agent.name}
+            testId="agent-session-avatar"
+          />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold tracking-tight">
               {agent.name}
@@ -151,6 +164,7 @@ export function AgentSessionThreadPanel({
         >
           <ManagedAgentSessionPanel
             agent={agent}
+            agentAvatarUrl={agentAvatarUrl}
             channelId={channel.id}
             className="border-0 bg-transparent p-0 shadow-none"
             emptyDescription={`Mention ${agent.name} in the channel to see its work here.`}
