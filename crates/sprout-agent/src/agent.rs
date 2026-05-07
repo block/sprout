@@ -14,8 +14,8 @@ use crate::types::{
 };
 use crate::wire::{self, WireSender};
 
-const ERROR_REFLECTION_SUFFIX: &str = "\n\n[Reflect] Diagnose the error above before retrying. \
-What went wrong? Why? What will you do differently?";
+const ERROR_REFLECTION_SUFFIX: &str =
+    "\n\n[Reflect] Before retrying, identify the cause and change your approach.";
 
 pub struct RunCtx<'a> {
     pub cfg: &'a Config,
@@ -28,7 +28,6 @@ pub struct RunCtx<'a> {
     pub original_task: &'a mut Option<String>,
     pub handoff_count: &'a mut usize,
     pub todos: &'a mut crate::todo::Todos,
-    pub doom_loop: &'a mut crate::doom_loop::DoomLoop,
 }
 
 impl RunCtx<'_> {
@@ -43,9 +42,6 @@ impl RunCtx<'_> {
             *self.original_task = Some(user_text.clone());
         }
         self.history.push(HistoryItem::User(user_text));
-        // Each user prompt starts with a clean detector — patterns from a
-        // previous prompt should never trigger on the next one.
-        self.doom_loop.reset();
 
         let mut round = 0u32;
         loop {
@@ -61,10 +57,6 @@ impl RunCtx<'_> {
                 HandoffOutcome::Skipped => {
                     truncate_history(self.history, self.cfg.max_history_bytes)
                 }
-            }
-            if let Some(msg) = self.doom_loop.check() {
-                self.history.push(HistoryItem::User(msg));
-                continue;
             }
 
             let mut tools = self.mcp.tools();
@@ -145,7 +137,6 @@ impl RunCtx<'_> {
                 text: response.text,
                 tool_calls: calls.clone(),
             });
-            self.doom_loop.record_turn(&calls);
 
             if let Some(stop) = self.execute_calls(&calls).await {
                 return Ok(stop);
@@ -253,10 +244,10 @@ impl RunCtx<'_> {
             if result.is_error {
                 result.text.push_str(ERROR_REFLECTION_SUFFIX);
             }
-            // Single banner injection point for non-todo tools. The todo
-            // tool's own response is already the bare list; the banner
-            // (if pending items remain) is added here too. `decorate` is
-            // idempotent and a no-op when disabled / no pending items.
+            // Single banner injection point. The todo tool's own response
+            // is already the bare list; the banner (if open items remain)
+            // is added here too. `decorate` is a no-op when disabled or
+            // when all items are done.
             self.todos.decorate(&mut result.text);
             self.history.push(HistoryItem::ToolResult(result));
         }

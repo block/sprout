@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 mod agent;
 mod config;
-mod doom_loop;
 mod handoff;
 mod llm;
 mod log;
@@ -43,7 +42,6 @@ struct Session {
     original_task: Option<String>,
     handoff_count: usize,
     todos: crate::todo::Todos,
-    doom_loop: crate::doom_loop::DoomLoop,
 }
 
 fn die(msg: String) -> ! {
@@ -233,10 +231,6 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             original_task: None,
             handoff_count: 0,
             todos: crate::todo::Todos::new(app.cfg.todo_enabled),
-            doom_loop: crate::doom_loop::DoomLoop::new(
-                app.cfg.doom_loop_enabled,
-                app.cfg.doom_loop_threshold,
-            ),
         },
     );
     drop(sessions);
@@ -268,27 +262,19 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         Ok(p) => p,
         Err(m) => return reject(&wire_tx, id, INVALID_PARAMS, &m).await,
     };
-    let (
-        sid,
-        mcp,
-        mut history,
-        mut original_task,
-        mut handoff_count,
-        mut todos,
-        mut doom_loop,
-        mut cancel_rx,
-    ) = match acquire_session(&app, &p.session_id).await {
-        Ok(v) => v,
-        Err(reason) => {
-            return reject(
-                &wire_tx,
-                id,
-                INVALID_PARAMS,
-                &format!("session/prompt: {reason}"),
-            )
-            .await
-        }
-    };
+    let (sid, mcp, mut history, mut original_task, mut handoff_count, mut todos, mut cancel_rx) =
+        match acquire_session(&app, &p.session_id).await {
+            Ok(v) => v,
+            Err(reason) => {
+                return reject(
+                    &wire_tx,
+                    id,
+                    INVALID_PARAMS,
+                    &format!("session/prompt: {reason}"),
+                )
+                .await
+            }
+        };
     let mut ctx = RunCtx {
         cfg: &app.cfg,
         session_id: &sid,
@@ -300,7 +286,6 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         original_task: &mut original_task,
         handoff_count: &mut handoff_count,
         todos: &mut todos,
-        doom_loop: &mut doom_loop,
     };
     let result = ctx.run(p.prompt).await;
     if let Some(s) = app.sessions.lock().await.get_mut(&sid) {
@@ -309,7 +294,6 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         s.original_task = original_task;
         s.handoff_count = handoff_count;
         s.todos = todos;
-        s.doom_loop = doom_loop;
     }
     match result {
         Ok(stop) => {
@@ -334,7 +318,6 @@ async fn acquire_session(
         Option<String>,
         usize,
         crate::todo::Todos,
-        crate::doom_loop::DoomLoop,
         watch::Receiver<bool>,
     ),
     &'static str,
@@ -351,7 +334,6 @@ async fn acquire_session(
     // on exit. Disabled placeholders are safe because the Session is
     // locked-busy until we put them back.
     let todos = std::mem::replace(&mut s.todos, crate::todo::Todos::new(false));
-    let doom_loop = std::mem::replace(&mut s.doom_loop, crate::doom_loop::DoomLoop::new(false, 3));
     Ok((
         s.id.clone(),
         s.mcp.clone(),
@@ -359,7 +341,6 @@ async fn acquire_session(
         s.original_task.take(),
         s.handoff_count,
         todos,
-        doom_loop,
         rx,
     ))
 }

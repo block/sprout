@@ -705,10 +705,10 @@ async fn description_clamping_enforced() {
 /// → agent injects reminder → LLM calls todo (marks all completed) → LLM ends → accepted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn todo_enforcement_blocks_premature_end() {
-    // Round 1: LLM calls todo to create 2 pending items.
+    // Round 1: LLM calls todo to create 2 open items.
     // Round 2: LLM tries to end (text only, no tool calls) → enforcement fires.
-    // Round 3: LLM calls todo to mark both completed.
-    // Round 4: LLM ends (text only) → allowed because no pending items.
+    // Round 3: LLM calls todo to mark both done.
+    // Round 4: LLM ends (text only) → allowed because no open items.
     let llm = spawn_capturing_llm(vec![
         // Round 1: create todos
         openai_tool_call(
@@ -716,8 +716,8 @@ async fn todo_enforcement_blocks_premature_end() {
             "todo",
             json!({
                 "todos": [
-                    {"id": 1, "title": "Step one", "status": "pending"},
-                    {"id": 2, "title": "Step two", "status": "pending"}
+                    {"id": 1, "title": "Step one", "done": false},
+                    {"id": 2, "title": "Step two", "done": false}
                 ]
             }),
         ),
@@ -729,8 +729,8 @@ async fn todo_enforcement_blocks_premature_end() {
             "todo",
             json!({
                 "todos": [
-                    {"id": 1, "title": "Step one", "status": "completed"},
-                    {"id": 2, "title": "Step two", "status": "completed"}
+                    {"id": 1, "title": "Step one", "done": true},
+                    {"id": 2, "title": "Step two", "done": true}
                 ]
             }),
         ),
@@ -784,7 +784,7 @@ async fn todo_enforcement_blocks_premature_end() {
     let last_user_msg = messages.iter().rev().find(|m| m["role"] == "user").unwrap();
     let content = last_user_msg["content"].as_str().unwrap_or("");
     assert!(
-        content.contains("Pending todos remain") || content.contains("Strike"),
+        content.contains("Open todos remain") || content.contains("Strike"),
         "enforcement reminder not found in 3rd LLM request. Last user msg: {}",
         &content[..content.len().min(200)]
     );
