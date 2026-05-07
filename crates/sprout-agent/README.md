@@ -232,9 +232,8 @@ A short list, because the answer is mostly "no":
 
 - **Not a framework.** No plugins, no recipes, no slash commands, no modes, no hooks.
 - **Not streaming.** One non-streaming HTTP POST per round. The LLM's text never reaches the client mid-flight.
-- **Not persistent.** Everything is in-memory, per-process. No SQLite. No compaction. When context fills, return `max_tokens` and let the harness open a new session.
-- **Not multi-session.** One `Option<Session>` in `App`. A second `session/new` after one is open returns `-32602`.
-- **Not concurrent.** One in-flight prompt per session. A second `session/prompt` while one is running returns `-32602`.
+- **Not persistent.** Everything is in-memory, per-process. No SQLite. No compaction. When context fills, the agent summarizes and continues.
+- **Multi-session.** Up to `MAX_SESSIONS` (default 8) concurrent sessions, each with its own MCP servers and history. One in-flight prompt per session.
 - **Not an SDK.** This is a binary. The protocol seam is stdin/stdout. Use it from any language.
 - **Not a UI.** No TUI, no web, no notifications. The client renders.
 - **Not authenticated.** API keys come from env. Use systemd, Docker secrets, or a wrapper.
@@ -296,7 +295,7 @@ main ─┬──> agent ─┬──> llm ──> types
                   └───────────────────────────────┘
 ```
 
-One reader, one writer, one prompt task at a time.
+One reader, one writer, up to 8 concurrent prompt tasks (one per session).
 
 ## Building
 
