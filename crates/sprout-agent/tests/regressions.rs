@@ -541,23 +541,25 @@ fn openai_n_tool_calls(n: usize) -> Value {
 /// body stays below a sane bound. Round 7 fix; round 8 test.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn history_budget_evicts_old_turns() {
-    // Force a small history budget so eviction kicks in fast.
-    // 12 prompts × ~5KB each would blow the cap; we expect the captured
-    // request body to stay under ~30KB (cap + one overflow turn).
-    let responses: Vec<Value> = (0..12).map(|_| openai_text(&"y".repeat(2000))).collect();
+    // Budget = 1 MB (MIN allowed by config). Each prompt is ~200 KB, so
+    // 12 prompts × 200 KB = ~2.4 MB blows the cap and forces eviction.
+    // We expect the captured request body to stay under 3× the cap.
+    const BUDGET: usize = 1024 * 1024; // 1 MB — must be >= MAX_PROMPT_BYTES
+    const PROMPT_BYTES: usize = 200 * 1024; // 200 KB per turn
+    let responses: Vec<Value> = (0..12).map(|_| openai_text(&"y".repeat(200))).collect();
     let llm = spawn_capturing_llm(responses).await;
     let mut h = Harness::spawn_with_env(
         &llm.url,
         &[
-            ("SPROUT_AGENT_MAX_HISTORY_BYTES", "8192"), // 8 KB
-            ("SPROUT_AGENT_MAX_HANDOFFS", "0"),         // exercise truncation, not handoff
+            ("SPROUT_AGENT_MAX_HISTORY_BYTES", &BUDGET.to_string()),
+            ("SPROUT_AGENT_MAX_HANDOFFS", "0"), // exercise truncation, not handoff
         ],
     )
     .await;
     let sid = init_session(&mut h, json!([])).await;
 
     for i in 0..12 {
-        let user = "x".repeat(2000);
+        let user = "x".repeat(PROMPT_BYTES);
         let p = h
             .send(
                 "session/prompt",
@@ -569,14 +571,11 @@ async fn history_budget_evicts_old_turns() {
 
     let captured = llm.captured.lock().await;
     assert_eq!(captured.len(), 12);
-    // The first request has only one turn; the last must show eviction.
+    // The last request must show eviction: body well under unbounded 12 × 200 KB = 2.4 MB.
     let last = &captured[captured.len() - 1];
     let body_bytes = serde_json::to_vec(last).unwrap().len();
-    // Cap is 8KB; the newest turn alone is ~4KB. The whole request body
-    // (system prompt + last user + tools + a bit) must stay well under
-    // the unbounded ~12 × 4KB = 48KB.
     assert!(
-        body_bytes < 30_000,
+        body_bytes < BUDGET * 3,
         "history not evicted: request body is {body_bytes} bytes"
     );
     let msgs = last["messages"].as_array().unwrap();

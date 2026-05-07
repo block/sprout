@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, ServerCapabilities, ServerInfo},
@@ -8,6 +9,7 @@ use rmcp::{
 use std::path::Path;
 use std::sync::Arc;
 
+mod log;
 mod rg;
 mod shell;
 mod shim;
@@ -41,7 +43,7 @@ impl DevMcp {
 
     #[tool(
         name = "str_replace",
-        description = "Atomic find-and-replace in a file within the workspace. `old_str` must occur exactly once. Returns a unified diff. Path is rejected if it resolves outside the workdir. Prefer this over sed/awk."
+        description = "Atomic find-and-replace in a file. `old_str` must occur exactly once. Returns a unified diff. Path is resolved relative to workdir (defaults to server cwd). Prefer this over sed/awk."
     )]
     async fn str_replace(
         &self,

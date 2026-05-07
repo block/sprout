@@ -48,8 +48,6 @@ impl SharedState {
     }
 
     fn next_id(&self) -> u64 {
-        // Mutex<u64> can only be poisoned if a panic occurred while held;
-        // recover gracefully by reading the value past the poison.
         let mut g = match self.next_call_id.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
@@ -162,78 +160,95 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
     };
 
     let pid = child.id();
+
+    struct PgidGuard(Option<u32>);
+    impl Drop for PgidGuard {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0 {
+                kill_process_group(pid as i32);
+            }
+        }
+    }
+    let mut pgid_guard = PgidGuard(pid);
+
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
-    let read_stdout = async move {
+    let mut stdout_handle = tokio::spawn(async move {
         match stdout_pipe {
             Some(p) => read_capped(p).await,
             None => CapturedStream::default(),
         }
-    };
-    let read_stderr = async move {
+    });
+    let mut stderr_handle = tokio::spawn(async move {
         match stderr_pipe {
             Some(p) => read_capped(p).await,
             None => CapturedStream::default(),
         }
+    });
+
+    let timeout_dur = Duration::from_millis(timeout_ms);
+    let mut notes: Vec<String> = Vec::new();
+    let (status, timed_out) = match tokio::time::timeout(timeout_dur, child.wait()).await {
+        Ok(Ok(s)) => (Some(s), false),
+        Ok(Err(err)) => {
+            notes.push(format!("child wait failed: {err}"));
+            (None, false)
+        }
+        Err(_) => {
+            // Kill process group — this closes the pipes, causing reads to EOF.
+            if let Some(pid) = pid {
+                kill_process_group(pid as i32);
+            }
+            // Reap the child so it doesn't become a zombie.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() >= deadline => {
+                        if let Err(e) = child.start_kill() {
+                            notes.push(format!("force-kill failed: {e}"));
+                        }
+                        if let Err(e) = child.wait().await {
+                            notes.push(format!("post-kill wait: {e}"));
+                        }
+                        break;
+                    }
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(err) => {
+                        notes.push(format!("try_wait failed: {err}"));
+                        break;
+                    }
+                }
+            }
+            (None, true)
+        }
     };
 
-    let timeout = Duration::from_millis(timeout_ms);
-    // Drain stdout/stderr concurrently with wait(). If we waited first, a
-    // child that writes >64KB (the OS pipe buffer) would block on its own
-    // write and wait() would never return — every such call would time out.
-    let wait = async {
-        let (out, err, status) = tokio::join!(read_stdout, read_stderr, child.wait());
+    if !timed_out {
         if let Some(pid) = pid {
             kill_process_group(pid as i32);
         }
-        (out, err, status)
-    };
+    }
 
-    let mut notes: Vec<String> = Vec::new();
-    let (stdout_cap, stderr_cap, status, timed_out) =
-        match tokio::time::timeout(timeout, wait).await {
-            Ok((o, e, Ok(s))) => (o, e, Some(s), false),
-            Ok((o, e, Err(err))) => {
-                notes.push(format!("child wait failed: {err}"));
-                (o, e, None, false)
-            }
-            Err(_) => {
-                if let Some(pid) = pid {
-                    kill_process_group(pid as i32);
-                }
-                // Reap the child so it doesn't become a zombie.
-                let deadline = Instant::now() + Duration::from_secs(2);
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(_)) => break,
-                        Ok(None) if Instant::now() >= deadline => {
-                            // Last-ditch: force-kill via tokio so kill_on_drop can clean up.
-                            if let Err(err) = child.start_kill() {
-                                notes.push(format!("force-kill failed: {err}"));
-                            }
-                            if let Err(err) = child.wait().await {
-                                notes.push(format!("post-kill wait failed: {err}"));
-                            }
-                            break;
-                        }
-                        Ok(None) => {
-                            tokio::time::sleep(Duration::from_millis(20)).await;
-                        }
-                        Err(err) => {
-                            notes.push(format!("try_wait failed: {err}"));
-                            break;
-                        }
-                    }
-                }
-                (
-                    CapturedStream::default(),
-                    CapturedStream::default(),
-                    None,
-                    true,
-                )
-            }
-        };
+    let stdout_cap = match tokio::time::timeout(Duration::from_secs(5), &mut stdout_handle).await {
+        Ok(Ok(cap)) => cap,
+        _ => {
+            stdout_handle.abort();
+            notes.push("stdout reader did not complete".into());
+            CapturedStream::default()
+        }
+    };
+    let stderr_cap = match tokio::time::timeout(Duration::from_secs(5), &mut stderr_handle).await {
+        Ok(Ok(cap)) => cap,
+        _ => {
+            stderr_handle.abort();
+            notes.push("stderr reader did not complete".into());
+            CapturedStream::default()
+        }
+    };
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let exit_code = status
@@ -260,6 +275,7 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
         "notes": notes,
     });
     let text = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into());
+    pgid_guard.0 = None;
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
@@ -314,8 +330,6 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R) -> CapturedStream {
                         }
                     }
                 }
-                // If capped, keep draining to let the child make progress,
-                // but discard the data.
             }
             Err(_) => break,
         }

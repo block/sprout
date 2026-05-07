@@ -1,16 +1,12 @@
+use crate::log::{log_error, log_warn};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Bounds for the built-in fallback. Mirrors the shell tool's caps so
-/// agents see consistent limits regardless of which `rg` actually ran.
+const MAX_LINE_BYTES: usize = 1024 * 1024; // 1MB per line — skip files with longer lines (likely binary)
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_OUTPUT_LINES: usize = 2000;
-/// Hard cap on `-C <n>`: a user-supplied huge value would otherwise feed
-/// straight into `VecDeque::with_capacity(n)` and OOM the process.
 const MAX_CONTEXT: usize = 100;
-/// Recursion guard for `walk`. Even with the symlink-skip below, deeply
-/// nested trees are bounded so a pathological input can't pin a CPU.
 const MAX_WALK_DEPTH: usize = 50;
 
 pub fn run(args: Vec<String>) -> i32 {
@@ -140,7 +136,6 @@ fn parse(args: Vec<String>) -> Result<RgArgs, String> {
     Ok(out)
 }
 
-/// Bounded stdout sink. Stops accepting lines once byte or line cap is hit.
 struct CappedSink {
     bytes: usize,
     lines: usize,
@@ -155,6 +150,7 @@ impl CappedSink {
             capped: false,
         }
     }
+
     fn writeln(&mut self, s: &str) {
         if self.capped {
             return;
@@ -162,7 +158,7 @@ impl CappedSink {
         let next = self.bytes.saturating_add(s.len()).saturating_add(1);
         if next > MAX_OUTPUT_BYTES || self.lines >= MAX_OUTPUT_LINES {
             self.capped = true;
-            eprintln!("rg (fallback): output capped at {MAX_OUTPUT_BYTES} bytes / {MAX_OUTPUT_LINES} lines");
+            log_warn!("rg (fallback): output capped at {MAX_OUTPUT_BYTES} bytes / {MAX_OUTPUT_LINES} lines");
             return;
         }
         println!("{s}");
@@ -175,7 +171,7 @@ fn fallback(args: Vec<String>) -> i32 {
     let opts = match parse(args) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("rg (fallback): {e}");
+            log_error!("rg (fallback): {e}");
             return 2;
         }
     };
@@ -188,6 +184,7 @@ fn fallback(args: Vec<String>) -> i32 {
             walk(root, &opts, &mut |p| {
                 sink.writeln(&p.display().to_string());
                 found = true;
+                !sink.capped
             });
             if sink.capped {
                 break;
@@ -199,7 +196,7 @@ fn fallback(args: Vec<String>) -> i32 {
     let pattern = match &opts.pattern {
         Some(p) => p.clone(),
         None => {
-            eprintln!("rg (fallback): missing PATTERN");
+            log_error!("rg (fallback): missing PATTERN");
             return 2;
         }
     };
@@ -212,11 +209,12 @@ fn fallback(args: Vec<String>) -> i32 {
     for root in &opts.paths {
         walk(root, &opts, &mut |path| {
             if sink.capped {
-                return;
+                return false;
             }
             if scan_file(path, &needle, &opts, &mut sink, &mut printed) {
                 found = true;
             }
+            !sink.capped
         });
         if sink.capped {
             break;
@@ -229,8 +227,41 @@ fn fallback(args: Vec<String>) -> i32 {
     }
 }
 
-/// Stream a single file line-by-line. Buffers a ring of preceding lines for
-/// `-C <n>` leading context. Returns true if the file had any match.
+fn read_bounded_line(reader: &mut impl BufRead, max: usize) -> Option<Result<String, ()>> {
+    let mut buf = Vec::new();
+    loop {
+        let available = match reader.fill_buf() {
+            Ok([]) => {
+                if buf.is_empty() {
+                    return None;
+                }
+                return match String::from_utf8(buf) {
+                    Ok(s) => Some(Ok(s)),
+                    Err(_) => Some(Err(())),
+                };
+            }
+            Ok(b) => b,
+            Err(_) => return None,
+        };
+        let take = available
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(available.len(), |i| i + 1);
+        if buf.len() + take > max {
+            return Some(Err(()));
+        }
+        buf.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if buf.ends_with(b"\n") {
+            buf.pop();
+            return match String::from_utf8(buf) {
+                Ok(s) => Some(Ok(s)),
+                Err(_) => Some(Err(())),
+            };
+        }
+    }
+}
+
 fn scan_file(
     path: &Path,
     needle: &str,
@@ -249,14 +280,17 @@ fn scan_file(
     let mut last: Option<usize> = None;
     let mut found = false;
 
-    for (idx, line) in BufReader::new(file).lines().enumerate() {
+    let mut reader = BufReader::new(file);
+    let mut idx = 0usize;
+    loop {
+        let line = match read_bounded_line(&mut reader, MAX_LINE_BYTES) {
+            None => break,
+            Some(Err(())) => return found,
+            Some(Ok(l)) => l,
+        };
         if sink.capped {
             return found;
         }
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => return found,
-        };
         let is_match = if opts.ignore_case {
             line.to_lowercase().contains(needle)
         } else {
@@ -296,6 +330,7 @@ fn scan_file(
             }
             ring.push_back(line);
         }
+        idx += 1;
     }
     found
 }
@@ -309,17 +344,13 @@ fn emit_line(path: &Path, line_idx: usize, line: &str, opts: &RgArgs, sink: &mut
     sink.writeln(&format!("{prefix}{line}"));
 }
 
-fn walk(root: &Path, opts: &RgArgs, on_file: &mut dyn FnMut(&Path)) {
+fn walk(root: &Path, opts: &RgArgs, on_file: &mut dyn FnMut(&Path) -> bool) {
     if root.is_file() {
         if accept(root, opts) {
             on_file(root);
         }
         return;
     }
-    // Each stack entry carries its depth. We refuse to descend past
-    // MAX_WALK_DEPTH and skip symlinked directories outright — a symlink
-    // that points back into the tree (or into `/`) would otherwise loop
-    // forever, since `Path::is_dir` follows symlinks.
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
     while let Some((dir, depth)) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
@@ -335,7 +366,6 @@ fn walk(root: &Path, opts: &RgArgs, on_file: &mut dyn FnMut(&Path)) {
             if name.starts_with('.') {
                 continue;
             }
-            // file_type() does NOT follow symlinks — exactly what we want.
             let ft = match entry.file_type() {
                 Ok(t) => t,
                 Err(_) => continue,
@@ -350,8 +380,8 @@ fn walk(root: &Path, opts: &RgArgs, on_file: &mut dyn FnMut(&Path)) {
                 if depth < MAX_WALK_DEPTH {
                     stack.push((path, depth + 1));
                 }
-            } else if ft.is_file() && accept(&path, opts) {
-                on_file(&path);
+            } else if ft.is_file() && accept(&path, opts) && !on_file(&path) {
+                return;
             }
         }
     }
@@ -371,27 +401,34 @@ fn glob_match(pattern: &str, path: &Path) -> bool {
 }
 
 fn simple_glob(pattern: &str, text: &str) -> bool {
-    let mut p: Vec<char> = pattern.chars().collect();
-    let mut t: Vec<char> = text.chars().collect();
-    glob_recurse(&mut p, 0, &mut t, 0)
-}
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
 
-fn glob_recurse(p: &mut Vec<char>, pi: usize, t: &mut Vec<char>, ti: usize) -> bool {
-    if pi == p.len() {
-        return ti == t.len();
-    }
-    match p[pi] {
-        '*' => {
-            for end in ti..=t.len() {
-                if glob_recurse(p, pi + 1, t, end) {
-                    return true;
-                }
-            }
-            false
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star_pi, mut star_ti) = (usize::MAX, 0usize);
+
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star_pi = pi;
+            star_ti = ti;
+            pi += 1;
+        } else if star_pi != usize::MAX {
+            pi = star_pi + 1;
+            star_ti += 1;
+            ti = star_ti;
+        } else {
+            return false;
         }
-        '?' => ti < t.len() && glob_recurse(p, pi + 1, t, ti + 1),
-        c => ti < t.len() && t[ti] == c && glob_recurse(p, pi + 1, t, ti + 1),
     }
+
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+
+    pi == p.len()
 }
 
 #[cfg(test)]

@@ -12,8 +12,6 @@ pub enum HistoryItem {
 }
 
 impl HistoryItem {
-    /// Rough byte estimate for context-window accounting. Not exact — counts
-    /// text plus a serialized form of tool-call args. Intentionally cheap.
     pub fn estimated_bytes(&self) -> usize {
         match self {
             Self::User(s) => s.len(),
@@ -135,7 +133,6 @@ pub enum AgentError {
     Llm(String),
     LlmAuth(String),
     Mcp(String),
-    Io(std::io::Error),
 }
 
 impl std::fmt::Display for AgentError {
@@ -145,18 +142,11 @@ impl std::fmt::Display for AgentError {
             Self::Llm(s) => write!(f, "llm: {s}"),
             Self::LlmAuth(s) => write!(f, "llm auth: {s}"),
             Self::Mcp(s) => write!(f, "mcp: {s}"),
-            Self::Io(e) => write!(f, "io: {e}"),
         }
     }
 }
 
 impl std::error::Error for AgentError {}
-
-impl From<std::io::Error> for AgentError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
 
 impl AgentError {
     pub fn json_rpc_code(&self) -> i32 {

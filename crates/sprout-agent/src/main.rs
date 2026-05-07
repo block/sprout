@@ -1,6 +1,9 @@
+#![forbid(unsafe_code)]
 mod agent;
 mod config;
+mod handoff;
 mod llm;
+mod log;
 mod mcp;
 mod types;
 mod wire;
@@ -37,11 +40,7 @@ struct Session {
     history: Vec<HistoryItem>,
     cancel_tx: watch::Sender<bool>,
     busy: bool,
-    /// First user prompt verbatim. Stored on the first `run()` and never
-    /// changed — handoff summaries reference it so the agent never loses
-    /// sight of the task it was originally given.
     original_task: Option<String>,
-    /// Number of internal context handoffs performed in this session.
     handoff_count: usize,
 }
 
@@ -64,8 +63,18 @@ async fn main() {
     });
     let (wire_tx, wire_rx) = mpsc::channel::<WireMsg>(64);
     let writer = tokio::spawn(wire::writer_task(wire_rx));
-    if let Err(e) = read_loop(BufReader::new(tokio::io::stdin()), app, wire_tx, max_line).await {
+    if let Err(e) = read_loop(
+        BufReader::new(tokio::io::stdin()),
+        app.clone(),
+        wire_tx,
+        max_line,
+    )
+    .await
+    {
         eprintln!("sprout-agent: io: reader: {e}");
+    }
+    if let Some(session) = app.state.lock().await.as_ref() {
+        let _ = session.cancel_tx.send(true);
     }
     let _ = writer.await;
 }
@@ -186,7 +195,8 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         )
         .await;
     }
-    if app.state.lock().await.is_some() {
+    let mut st = app.state.lock().await;
+    if st.is_some() {
         return reject(
             wire_tx,
             id,
@@ -199,18 +209,11 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         Ok(m) => Arc::new(m),
         Err(e) => return reject(wire_tx, id, e.json_rpc_code(), &e.to_string()).await,
     };
-    let session_id = format!("ses_{}", session_token());
+    let session_id = match session_token() {
+        Ok(t) => format!("ses_{t}"),
+        Err(e) => return reject(wire_tx, id, -32000, &e).await,
+    };
     let (cancel_tx, _) = watch::channel(false);
-    let mut st = app.state.lock().await;
-    if st.is_some() {
-        return reject(
-            wire_tx,
-            id,
-            INVALID_PARAMS,
-            "session/new: session already exists",
-        )
-        .await;
-    }
     *st = Some(Session {
         id: session_id.clone(),
         mcp,
@@ -220,6 +223,7 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
         original_task: None,
         handoff_count: 0,
     });
+    drop(st);
     wire::send(wire_tx, wire::ok(id, json!({ "sessionId": session_id }))).await;
 }
 
@@ -330,11 +334,8 @@ async fn acquire_session(
     ))
 }
 
-fn session_token() -> String {
+fn session_token() -> Result<String, String> {
     let mut b = [0u8; 8];
-    if let Err(e) = getrandom::getrandom(&mut b) {
-        eprintln!("sprout-agent: rng: getrandom failed: {e}");
-        std::process::exit(2);
-    }
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    getrandom::getrandom(&mut b).map_err(|e| format!("rng: getrandom failed: {e}"))?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }

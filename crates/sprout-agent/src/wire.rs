@@ -191,7 +191,15 @@ pub async fn read_bounded_line<R: AsyncBufRead + Unpin>(
             if buf.ends_with(b"\r") {
                 buf.pop();
             }
-            return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+            match String::from_utf8(buf) {
+                Ok(s) => return Ok(Some(s)),
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "io: frame contains invalid UTF-8",
+                    ))
+                }
+            }
         }
     }
 }

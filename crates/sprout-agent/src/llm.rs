@@ -52,9 +52,6 @@ impl Llm {
         }
     }
 
-    /// Single tool-less completion with a caller-supplied system prompt and
-    /// output-token cap. Used for internal context handoff. Returns the raw
-    /// text body of the assistant's reply.
     pub async fn summarize(
         &self,
         cfg: &Config,
@@ -147,8 +144,12 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
         "name": t.name, "description": t.description, "input_schema": t.input_schema })
         })
         .collect();
-    json!({ "model": cfg.model, "max_tokens": cfg.max_output_tokens,
-        "system": cfg.system_prompt, "tools": tools_json, "messages": messages })
+    let mut body = json!({ "model": cfg.model, "max_tokens": cfg.max_output_tokens,
+        "system": cfg.system_prompt, "messages": messages });
+    if !tools_json.is_empty() {
+        body["tools"] = Value::Array(tools_json);
+    }
+    body
 }
 
 fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
@@ -188,8 +189,13 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
             "parameters": t.input_schema } })
         })
         .collect();
-    json!({ "model": cfg.model, "stream": false, "max_tokens": cfg.max_output_tokens,
-        "messages": messages, "tools": tools_json, "tool_choice": "auto" })
+    let mut body = json!({ "model": cfg.model, "stream": false, "max_tokens": cfg.max_output_tokens,
+        "messages": messages });
+    if !tools_json.is_empty() {
+        body["tools"] = Value::Array(tools_json);
+        body["tool_choice"] = json!("auto");
+    }
+    body
 }
 
 fn map_stop(s: Option<&str>) -> ProviderStop {
@@ -309,14 +315,10 @@ const MAX_RETRIES: u32 = 3;
 const BASE_BACKOFF_MS: u64 = 500;
 const MAX_BACKOFF_MS: u64 = 8_000;
 
-/// Exponential backoff with jitter. Prevents thundering herd when multiple
-/// agents hit the same LLM endpoint concurrently.
 async fn backoff_with_jitter(attempt: u32) {
     let base = BASE_BACKOFF_MS
         .saturating_mul(1u64 << attempt)
         .min(MAX_BACKOFF_MS);
-    // Simple jitter: random value in [base/2, base]. Uses getrandom to avoid
-    // pulling in a full RNG crate.
     let mut buf = [0u8; 8];
     let jitter_range = base / 2;
     let delay = if jitter_range > 0 && getrandom::getrandom(&mut buf).is_ok() {

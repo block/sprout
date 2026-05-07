@@ -6,7 +6,8 @@ use similar::{DiffTag, TextDiff};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_INPUT_BYTES: usize = 1024 * 1024;
 const HINT_SCAN_LINE_LIMIT: usize = 200;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -25,6 +26,12 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
             None,
         ));
     }
+    if p.old_str.len() > MAX_INPUT_BYTES || p.new_str.len() > MAX_INPUT_BYTES {
+        return Err(ErrorData::invalid_params(
+            format!("old_str/new_str exceeds {} byte limit", MAX_INPUT_BYTES),
+            None,
+        ));
+    }
 
     let workspace_root = match p.workdir.as_deref() {
         Some(w) => PathBuf::from(w),
@@ -35,32 +42,64 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
         Err(e) => return Err(ErrorData::invalid_params(e, None)),
     };
 
-    match std::fs::metadata(&target) {
-        Ok(m) if m.len() > MAX_FILE_BYTES => {
-            return Err(ErrorData::invalid_params(
-                format!(
-                    "file too large: {} is {} bytes (limit {} bytes)",
-                    target.display(),
-                    m.len(),
-                    MAX_FILE_BYTES
-                ),
-                None,
-            ));
-        }
-        Ok(_) => {}
+    let meta = match std::fs::metadata(&target) {
+        Ok(m) => m,
         Err(e) => {
             return Err(ErrorData::internal_error(
                 format!("cannot stat {}: {e}", target.display()),
                 None,
             ));
         }
+    };
+    if !meta.is_file() {
+        return Err(ErrorData::invalid_params(
+            format!("not a regular file: {}", target.display()),
+            None,
+        ));
+    }
+    if meta.len() > MAX_FILE_BYTES {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "file too large: {} is {} bytes (limit {} bytes)",
+                target.display(),
+                meta.len(),
+                MAX_FILE_BYTES
+            ),
+            None,
+        ));
     }
 
-    let content = match std::fs::read_to_string(&target) {
-        Ok(c) => c,
+    let file = match std::fs::File::open(&target) {
+        Ok(f) => f,
+        Err(e) => {
+            return Err(ErrorData::internal_error(
+                format!("cannot open {}: {e}", target.display()),
+                None,
+            ));
+        }
+    };
+    let mut buf = Vec::with_capacity(meta.len() as usize);
+    use std::io::Read;
+    match file.take(MAX_FILE_BYTES + 1).read_to_end(&mut buf) {
+        Ok(n) if n as u64 > MAX_FILE_BYTES => {
+            return Err(ErrorData::invalid_params(
+                format!("file grew past {} bytes during read", MAX_FILE_BYTES),
+                None,
+            ));
+        }
+        Ok(_) => {}
         Err(e) => {
             return Err(ErrorData::internal_error(
                 format!("cannot read {}: {e}", target.display()),
+                None,
+            ));
+        }
+    }
+    let content = match String::from_utf8(buf) {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(ErrorData::internal_error(
+                format!("not valid UTF-8: {}: {e}", target.display()),
                 None,
             ));
         }
@@ -83,6 +122,16 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
         }
         1 => {
             let new_content = content.replacen(&p.old_str, &p.new_str, 1);
+            if new_content.len() as u64 > MAX_FILE_BYTES {
+                return Err(ErrorData::invalid_params(
+                    format!(
+                        "result would exceed {} byte limit ({} bytes)",
+                        MAX_FILE_BYTES,
+                        new_content.len()
+                    ),
+                    None,
+                ));
+            }
             if let Err(e) = atomic_write(&target, &new_content) {
                 return Err(ErrorData::internal_error(
                     format!("failed to write {}: {e}", target.display()),
@@ -105,8 +154,6 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
     }
 }
 
-/// Resolve `path` against `root` and ensure the result is contained within `root`.
-///
 pub(crate) fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String> {
     let raw = Path::new(path);
     let candidate: PathBuf = if raw.is_absolute() {
@@ -131,36 +178,25 @@ pub(crate) fn resolve_within(root: &Path, path: &str) -> Result<PathBuf, String>
     Ok(resolved)
 }
 
-/// Count occurrences of `pattern` in `text`, capped at 2.
-///
-/// We only need to know: 0 (not found), 1 (unique), or 2+ (ambiguous).
-/// Stopping early avoids scanning huge files for nothing.
 pub(crate) fn count_occurrences_capped(text: &str, pattern: &str) -> usize {
     if pattern.is_empty() {
         return 0;
     }
-    let bytes = text.as_bytes();
-    let pat = pattern.as_bytes();
     let mut count = 0;
-    let mut i = 0;
-    while i + pat.len() <= bytes.len() {
-        if &bytes[i..i + pat.len()] == pat {
-            count += 1;
-            if count >= 2 {
-                return count;
-            }
-            i += pat.len();
-        } else {
-            i += 1;
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(pattern) {
+        count += 1;
+        if count >= 2 {
+            return count;
         }
+        start += pos + pattern.len();
     }
     count
 }
 
 fn atomic_write(target: &Path, content: &str) -> std::io::Result<()> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    // Capture original permissions (if the file exists) so the atomic rename
-    // doesn't drop the original file's mode.
+    // Preserve original permissions so the atomic rename doesn't drop the file's mode.
     let original_perms = std::fs::metadata(target).ok().map(|m| m.permissions());
 
     let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
@@ -169,18 +205,24 @@ fn atomic_write(target: &Path, content: &str) -> std::io::Result<()> {
     tmp.persist(target).map_err(|e| e.error)?;
 
     if let Some(perms) = original_perms {
-        // Best-effort: if restoring perms fails, the file is still written.
         let _ = std::fs::set_permissions(target, perms);
     }
     Ok(())
 }
+
+const MAX_DIFF_BYTES: usize = 64 * 1024;
 
 fn unified_diff(old: &str, new: &str, path: &Path) -> String {
     let diff = TextDiff::from_lines(old, new);
     let display = path.display();
     let mut out = format!("--- a/{display}\n+++ b/{display}\n");
     for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
-        out.push_str(&hunk.to_string());
+        let h = hunk.to_string();
+        if out.len() + h.len() > MAX_DIFF_BYTES {
+            out.push_str("\n[diff truncated]\n");
+            break;
+        }
+        out.push_str(&h);
     }
     out
 }
@@ -194,6 +236,17 @@ fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+fn truncate_str(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut cut = max;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
+}
+
 fn similarity(a: &str, b: &str) -> f64 {
     if a == b {
         return 1.0;
@@ -201,6 +254,9 @@ fn similarity(a: &str, b: &str) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
+    const MAX: usize = 512;
+    let a = truncate_str(a, MAX);
+    let b = truncate_str(b, MAX);
     let matched: usize = TextDiff::from_chars(a, b)
         .ops()
         .iter()
@@ -314,7 +370,6 @@ mod tests {
     fn run_rejects_file_too_large() {
         let dir = tempdir().expect("tempdir");
         let f = dir.path().join("big.bin");
-        // 11MB of zeros
         let big = vec![b'a'; (MAX_FILE_BYTES as usize) + 1024];
         fs::write(&f, &big).expect("write");
         let state = make_state(dir.path());

@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 pub struct Shim {
-    /// Drop guard: removes the temp dir when Shim is dropped.
     _dir: TempDir,
     pub path_env: String,
 }
