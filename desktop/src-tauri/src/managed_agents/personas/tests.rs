@@ -34,7 +34,7 @@ fn merge_personas_adds_missing_built_ins() {
         .iter()
         .map(|record| record.display_name.as_str())
         .collect();
-    assert_eq!(display_names, vec!["Solo", "Ralph", "Scout", "Reviewer"]);
+    assert_eq!(display_names, vec!["Solo", "Ralph", "Scout"]);
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn merge_personas_preserves_custom_records() {
 
 #[test]
 fn merge_personas_restores_builtin_defaults() {
-    let mut edited_builtin = custom_persona("builtin:reviewer", "My Reviewer");
+    let mut edited_builtin = custom_persona("builtin:solo", "My Solo");
     edited_builtin.is_builtin = true;
     edited_builtin.is_active = true;
     let original_created_at = edited_builtin.created_at.clone();
@@ -57,15 +57,19 @@ fn merge_personas_restores_builtin_defaults() {
     let (records, changed) = merge_personas(vec![edited_builtin], "2026-03-19T00:00:00Z");
 
     assert!(changed);
-    let reviewer = records
+    let solo = records
         .iter()
-        .find(|record| record.id == "builtin:reviewer")
-        .expect("reviewer built-in should exist");
-    assert_eq!(reviewer.display_name, "Reviewer");
-    assert_eq!(reviewer.avatar_url, None);
-    assert_eq!(reviewer.created_at, original_created_at);
-    assert_eq!(reviewer.updated_at, original_updated_at);
-    assert!(reviewer.is_active);
+        .find(|record| record.id == "builtin:solo")
+        .expect("solo built-in should exist");
+    let canonical = BUILT_IN_PERSONAS
+        .iter()
+        .find(|persona| persona.id == "builtin:solo")
+        .expect("solo built-in definition should exist");
+    assert_eq!(solo.display_name, canonical.display_name);
+    assert_eq!(solo.avatar_url.as_deref(), canonical.avatar_url,);
+    assert_eq!(solo.created_at, original_created_at);
+    assert_eq!(solo.updated_at, original_updated_at);
+    assert!(solo.is_active);
 }
 
 #[test]
@@ -97,7 +101,7 @@ fn merge_personas_restores_builtin_name_pool_and_preserves_is_active() {
 
 #[test]
 fn merge_personas_backfills_new_builtins_for_existing_store() {
-    let mut legacy_builtins = vec![custom_persona("builtin:reviewer", "Reviewer")];
+    let mut legacy_builtins = vec![custom_persona("builtin:solo", "Solo")];
     for persona in &mut legacy_builtins {
         persona.is_builtin = true;
         persona.avatar_url = None;
@@ -106,24 +110,43 @@ fn merge_personas_backfills_new_builtins_for_existing_store() {
     let (records, changed) = merge_personas(legacy_builtins, "2026-03-19T00:00:00Z");
 
     assert!(changed);
-    assert!(records.iter().any(|record| record.id == "builtin:reviewer"));
     assert!(records.iter().any(|record| record.id == "builtin:ralph"));
     assert!(records.iter().any(|record| record.id == "builtin:scout"));
     assert!(records.iter().any(|record| record.id == "builtin:solo"));
     assert!(
         records
             .iter()
-            .find(|record| record.id == "builtin:reviewer")
-            .expect("reviewer built-in should exist")
+            .find(|record| record.id == "builtin:solo")
+            .expect("solo built-in should exist")
             .is_active
     );
     assert!(
         !records
             .iter()
-            .find(|record| record.id == "builtin:solo")
-            .expect("solo built-in should exist")
+            .find(|record| record.id == "builtin:ralph")
+            .expect("ralph built-in should exist")
             .is_active
     );
+}
+
+#[test]
+fn merge_personas_demotes_retired_builtins() {
+    let mut retired = custom_persona("builtin:reviewer", "Reviewer");
+    retired.is_builtin = true;
+    retired.is_active = true;
+    let original_created_at = retired.created_at.clone();
+
+    let (records, changed) = merge_personas(vec![retired], "2026-04-01T00:00:00Z");
+
+    assert!(changed);
+    let demoted = records
+        .iter()
+        .find(|record| record.id == "builtin:reviewer")
+        .expect("retired built-in should be retained as a custom persona");
+    assert!(!demoted.is_builtin);
+    assert!(demoted.is_active);
+    assert_eq!(demoted.created_at, original_created_at);
+    assert_eq!(demoted.updated_at, "2026-04-01T00:00:00Z");
 }
 
 #[test]

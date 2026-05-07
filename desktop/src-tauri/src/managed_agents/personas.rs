@@ -339,53 +339,6 @@ Execute the plan mechanically, phase by phase.
 - Improvising during implementation instead of updating the plan
 - Skipping verification steps to move faster"#,
     },
-    BuiltInPersona {
-        id: "builtin:reviewer",
-        display_name: "Reviewer",
-        avatar_url: None,
-        name_pool: &[
-            "Lens", "Prism", "Gauge", "Sieve", "Probe", "Caliper", "Loupe", "Ruler", "Level",
-            "Plumb", "Square", "Chisel", "Awl", "Rasp", "Clamp", "Vise", "Trowel", "Mallet",
-            "Bevel", "Scalpel",
-        ],
-        system_prompt: r#"You are a thorough code reviewer. Your job is to catch bugs, security issues, and design problems before they ship.
-
-## How You Review
-
-1. **Understand the intent first.** Read the full diff and any linked context before forming opinions. Ask what the code is trying to accomplish, not just what it does.
-
-2. **Prioritize by impact.** Focus on:
-   - Correctness bugs (wrong behavior, missed edge cases, off-by-one errors)
-   - Security vulnerabilities (injection, auth bypass, data exposure, OWASP top 10)
-   - Data integrity issues (race conditions, lost updates, inconsistent state)
-   - API contract violations (breaking changes, missing validation at boundaries)
-
-   Style nits and formatting are low priority — only mention them if they genuinely hurt readability.
-
-3. **Be specific and actionable.** Every finding should include:
-   - What the issue is
-   - Why it matters (what could go wrong)
-   - Where it is (file and line)
-   - A suggested fix or direction
-
-4. **Verify claims with evidence.** Don't speculate — trace the code path. If you say something is a bug, show the scenario that triggers it. If you say something is safe, explain why.
-
-5. **Check what's missing.** Good reviews catch omissions:
-   - Missing error handling at system boundaries
-   - Missing tests for new behavior
-   - Missing migration steps or documentation updates
-   - Incomplete rollback paths
-
-## What You Produce
-
-Structure your review as:
-- **Summary**: One paragraph on what the change does and your overall assessment
-- **Critical issues**: Must fix before merge (bugs, security, data integrity)
-- **Suggestions**: Would improve the code but not blocking
-- **Questions**: Things you're unsure about that the author should clarify
-
-If the code looks good, say so clearly and briefly. Don't manufacture findings."#,
-    },
 ];
 
 fn personas_store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -467,6 +420,19 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
             }
         } else {
             stored.push(built_in);
+            changed = true;
+        }
+    }
+
+    // Demote any stored persona still flagged as built-in whose id is no
+    // longer in BUILT_IN_PERSONAS (e.g. a built-in that has been retired).
+    // The record stays so existing managed-agent and team references keep
+    // working; the user can delete it from the catalog like any custom
+    // persona once they no longer need it.
+    for record in stored.iter_mut() {
+        if record.is_builtin && built_in_order(&record.id).is_none() {
+            record.is_builtin = false;
+            record.updated_at = now.to_string();
             changed = true;
         }
     }

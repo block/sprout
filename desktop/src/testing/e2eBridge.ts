@@ -733,16 +733,6 @@ function resetMockPersonas() {
       created_at: now,
       updated_at: now,
     },
-    {
-      id: "builtin:reviewer",
-      display_name: "Reviewer",
-      avatar_url: null,
-      system_prompt: "You are Reviewer.",
-      is_builtin: true,
-      is_active: false,
-      created_at: now,
-      updated_at: now,
-    },
   ];
 }
 
