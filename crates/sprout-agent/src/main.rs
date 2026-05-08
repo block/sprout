@@ -123,7 +123,11 @@ async fn handle_request(
 ) {
     match method.as_str() {
         "initialize" => initialize(id, params, wire_tx).await,
-        "session/new" => session_new(app, id, params, wire_tx).await,
+        "session/new" => {
+            let app = app.clone();
+            let wire_tx = wire_tx.clone();
+            tokio::spawn(async move { session_new(&app, id, params, &wire_tx).await });
+        }
         "session/prompt" => spawn_prompt(app.clone(), id, params, wire_tx.clone()),
         "session/cancel" => {
             cancel_session(app, params).await;
