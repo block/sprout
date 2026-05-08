@@ -28,13 +28,13 @@ export function EphemeralChannelBadge({
       className={cn(
         "inline-flex items-center gap-1 rounded-full font-medium text-slate-500 dark:text-slate-400",
         isHeader
-          ? "h-5 w-5 justify-center border border-sky-500/20 bg-sky-500/5 p-0 text-xs"
+          ? "h-[18px] w-[18px] justify-center border border-border/70 bg-muted/35 p-0 text-xs text-muted-foreground"
           : "shrink-0 h-4 w-4 justify-center border border-sky-500/15 bg-slate-500/5 p-0 text-slate-500/80 dark:text-slate-400/80",
       )}
       data-testid={testId}
       title={display.tooltipLabel}
     >
-      <Clock className={cn(isHeader ? "h-3 w-3" : "h-2.5 w-2.5")} />
+      <Clock className={cn(isHeader ? "h-2.5 w-2.5" : "h-2.5 w-2.5")} />
     </span>
   );
 }

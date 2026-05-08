@@ -1,5 +1,7 @@
 import { Card } from "@/shared/ui/card";
+import { useSidebar } from "@/shared/ui/sidebar";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { cn } from "@/shared/lib/cn";
 
 type ViewLoadingFallbackKind =
   | "agents"
@@ -14,21 +16,26 @@ type ViewLoadingFallbackProps = {
 };
 
 function LoadingHeaderSkeleton() {
+  const { state: sidebarState } = useSidebar();
+
   return (
     <header
-      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 pb-3 pt-8 sm:px-6"
+      className={cn(
+        "flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 py-1.5 transition-[padding] duration-200 ease-linear sm:px-6",
+        sidebarState === "collapsed" && "md:pl-40",
+      )}
       data-tauri-drag-region
     >
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <Skeleton className="h-5 w-5 rounded-sm" />
-          <Skeleton className="h-6 w-36 max-w-[50vw]" />
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Skeleton className="h-4 w-4 rounded-sm" />
+          <Skeleton className="h-5 w-32 max-w-[50vw]" />
         </div>
         <Skeleton className="mt-2 h-4 w-full max-w-2xl" />
       </div>
       <div className="hidden shrink-0 items-center gap-2 sm:flex">
-        <Skeleton className="h-8 w-8 rounded-lg" />
-        <Skeleton className="h-8 w-8 rounded-lg" />
+        <Skeleton className="h-7 w-7 rounded-lg" />
+        <Skeleton className="h-7 w-7 rounded-lg" />
       </div>
     </header>
   );

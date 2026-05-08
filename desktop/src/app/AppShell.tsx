@@ -481,7 +481,7 @@ export function AppShell() {
           <HuddleProvider>
             <div className="flex h-dvh flex-col overflow-hidden overscroll-none">
               <SidebarProvider className="min-h-0 flex-1 overflow-hidden">
-                <div className="fixed left-[80px] top-[8px] z-50 flex items-center gap-1.5">
+                <div className="fixed left-[80px] top-[8px] z-50 flex items-center gap-0.5">
                   <SidebarTrigger className="h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
                   <Button
                     aria-label="Go back"
