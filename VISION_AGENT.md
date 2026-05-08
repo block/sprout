@@ -45,7 +45,7 @@ Two pipes. Two protocols. Each session gets its own MCP server instances — ful
 
 ## Design Principles
 
-- **Minimal.** If you can delete it, delete it. We deleted context injection, ast-grep, streaming, persistence, and a provider trait. The system got better with each one gone. The TODO tool came back — but only because enforcement (the agent cannot stop while open items remain) makes it structural, not decorative.
+- **Minimal.** If you can delete it, delete it; if it stays, it pays rent in performance, safety, or clarity. We deleted context injection, ast-grep, streaming, persistence, and a provider trait. The system got better with each one gone.
 
 - **Hardened.** Zero unsafe. Zero panics. Bounded process lifetime, bounded output sizes, bounded history. Process-group kill on every exit path. File edits resolve against the working directory. The shell runs at the operator's trust level, like bash itself. History validity is maintained on every cancellation path. The system degrades gracefully, with bounded failure modes.
 

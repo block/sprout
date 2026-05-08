@@ -141,8 +141,7 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | `SPROUT_AGENT_MAX_SESSIONS` | `8` | Max concurrent ACP sessions |
 | `SPROUT_AGENT_MAX_LINE_BYTES` | `4194304` | 4 MiB. Hard cap on inbound JSON-RPC frames. |
 | `SPROUT_AGENT_MAX_HISTORY_BYTES` | `1048576` | 1 MiB. Old turns are evicted past this. |
-| `SPROUT_AGENT_DOOM_LOOP` | `1` | Set to `0` to disable repeated tool-call detection. |
-| `SPROUT_AGENT_DOOM_LOOP_THRESHOLD` | `3` | Repetition count required to inject a corrective user message. Valid range: 2-16. |
+
 
 ## Providers
 
