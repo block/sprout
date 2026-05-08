@@ -1,8 +1,10 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const MAX_OUTPUT_BYTES: usize = 50 * 1024;
 const MAX_OUTPUT_LINES: usize = 2000;
 const MAX_WALK_DEPTH: usize = 50;
+const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const SKIP_DIRS: &[&str] = &["target", "node_modules", "dist", "build"];
 
 pub fn run(args: Vec<String>) -> i32 {
@@ -23,20 +25,22 @@ pub fn run(args: Vec<String>) -> i32 {
         .file_name()
         .unwrap_or(root.as_os_str())
         .to_string_lossy();
-    println!("{name}/  [{total}]");
+    let stdout = std::io::stdout();
+    let mut w = stdout.lock();
+    if writeln!(w, "{name}/  [{total}]").is_err() { return 0 }
     let mut bytes = 0usize;
     let limit = MAX_OUTPUT_LINES.saturating_sub(1);
     let truncated = out.len() > limit;
     for line in out.into_iter().take(limit) {
         if bytes + line.len() + 1 > MAX_OUTPUT_BYTES {
-            println!("[truncated]");
+            let _ = writeln!(w, "[truncated]");
             return 0;
         }
-        println!("{line}");
+        if writeln!(w, "{line}").is_err() { return 0 }
         bytes += line.len() + 1;
     }
     if truncated {
-        println!("[truncated]");
+        let _ = writeln!(w, "[truncated]");
     }
     0
 }
@@ -48,6 +52,13 @@ fn parse(args: Vec<String>) -> Result<(PathBuf, usize), String> {
     let mut iter = args.into_iter();
     while let Some(a) = iter.next() {
         match a.as_str() {
+            "--" => {
+                if let Some(p) = iter.next() {
+                    if path_set { return Err("multiple paths not supported".to_string()) }
+                    path = PathBuf::from(p);
+                }
+                break;
+            }
             "-d" | "--depth" => {
                 let n = iter.next().ok_or("missing value for --depth")?;
                 depth = n.parse::<usize>().map_err(|_| format!("bad depth: {n}"))?;
@@ -109,7 +120,7 @@ fn collect(
             out.push(String::new());
             let sub = collect(d, &child_prefix, max_depth, depth + 1, out, line_budget);
             out[idx] = format!("{prefix}{name}/  [{sub}]");
-            total += sub;
+            total = total.saturating_add(sub);
         } else {
             out.push(format!("{prefix}{name}/"));
         }
@@ -117,7 +128,10 @@ fn collect(
     for f in &files {
         if out.len() >= line_budget { break }
         let Some(name) = f.file_name().map(|n| n.to_string_lossy()) else { continue };
-        let lc = std::fs::read(f)
+        let lc = std::fs::metadata(f)
+            .ok()
+            .filter(|m| m.is_file() && m.len() <= MAX_FILE_BYTES)
+            .and_then(|_| std::fs::read(f).ok())
             .map(|b| {
                 if b.is_empty() {
                     0
@@ -127,7 +141,7 @@ fn collect(
                 }
             })
             .unwrap_or(0);
-        total += lc;
+        total = total.saturating_add(lc);
         out.push(format!("{prefix}{name}  [{lc}]"));
     }
     total
