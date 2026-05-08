@@ -34,12 +34,11 @@ async function closeChannelManagement(page: import("@playwright/test").Page) {
   await expect(page.getByTestId("channel-management-sheet")).not.toBeVisible();
 }
 
-async function enableDesktopNotifications(
+async function assertDesktopNotificationsEnabled(
   page: import("@playwright/test").Page,
 ) {
   await openSettings(page, "notifications");
   await expect(page.getByTestId("settings-notifications")).toBeVisible();
-  await page.getByTestId("notifications-desktop-toggle").click();
   await expect(page.getByTestId("notifications-desktop-state")).toContainText(
     "On",
   );
@@ -261,7 +260,7 @@ test("live mentions refetch the home feed without waiting for polling", async ({
 
     await targetPage.goto("/");
     await senderPage.goto("/");
-    await enableDesktopNotifications(targetPage);
+    await assertDesktopNotificationsEnabled(targetPage);
 
     await targetPage.getByTestId("channel-general").click();
     await expect(targetPage.getByTestId("chat-title")).toHaveText("general");
@@ -326,7 +325,7 @@ test("live forum mentions refetch the home feed without waiting for polling", as
 
     await targetPage.goto("/");
     await senderPage.goto("/");
-    await enableDesktopNotifications(targetPage);
+    await assertDesktopNotificationsEnabled(targetPage);
 
     await targetPage.getByTestId("channel-general").click();
     await expect(targetPage.getByTestId("chat-title")).toHaveText("general");

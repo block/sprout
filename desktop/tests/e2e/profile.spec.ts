@@ -86,13 +86,9 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   await openSettings(page, "notifications");
   await expect(page.getByTestId("settings-notifications")).toBeVisible();
   await expect(page.getByTestId("notifications-desktop-state")).toContainText(
-    "Off",
-  );
-
-  await page.getByTestId("notifications-desktop-toggle").click();
-  await expect(page.getByTestId("notifications-desktop-state")).toContainText(
     "On",
   );
+
   await page.getByTestId("settings-close").click();
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
@@ -207,7 +203,6 @@ test("desktop notification clicks open the matching forum thread", async ({
   await page.goto("/");
 
   await openSettings(page, "notifications");
-  await page.getByTestId("notifications-desktop-toggle").click();
   await expect(page.getByTestId("notifications-desktop-state")).toContainText(
     "On",
   );

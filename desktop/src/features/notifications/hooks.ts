@@ -2,30 +2,22 @@ import * as React from "react";
 
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
-import {
-  resolveUserLabel,
-  truncatePubkey,
-  type UserProfileLookup,
-} from "@/features/profile/lib/identity";
-import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
-import {
-  collectHomeAlertItems,
-  eligibleFeedNotificationItems,
-  notificationBody,
-  notificationTitle,
-} from "./lib/feed";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import type { HomeFeedResponse } from "@/shared/api/types";
 import {
   getDesktopNotificationPermissionState,
   requestDesktopNotificationAccess,
-  sendDesktopNotification,
   type DesktopNotificationPermissionState,
 } from "./lib/desktop";
-import { playNotificationSound } from "./lib/sound";
+import {
+  readStoredSeenFeedIds,
+  useFeedDesktopNotifications,
+  writeStoredSeenFeedIds,
+} from "./use-feed-desktop-notifications";
 
 export type { DesktopNotificationPermissionState } from "./lib/desktop";
 
 const NOTIFICATION_SETTINGS_STORAGE_KEY = "sprout-notification-settings.v1";
-const HOME_FEED_SEEN_STORAGE_KEY = "sprout-home-feed-seen.v1";
 const HOME_FEED_SEEN_MAX_ITEMS = 500;
 
 export type NotificationSettings = {
@@ -37,7 +29,7 @@ export type NotificationSettings = {
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
-  desktopEnabled: false,
+  desktopEnabled: true,
   homeBadgeEnabled: true,
   mentions: true,
   needsAction: true,
@@ -46,10 +38,6 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
 
 function notificationSettingsStorageKey(pubkey: string) {
   return `${NOTIFICATION_SETTINGS_STORAGE_KEY}:${pubkey}`;
-}
-
-function homeFeedSeenStorageKey(pubkey: string) {
-  return `${HOME_FEED_SEEN_STORAGE_KEY}:${pubkey}`;
 }
 
 function sanitizeNotificationSettings(value: unknown): NotificationSettings {
@@ -112,41 +100,6 @@ function writeStoredNotificationSettings(
   window.localStorage.setItem(
     notificationSettingsStorageKey(pubkey),
     JSON.stringify(settings),
-  );
-}
-
-function readStoredSeenFeedIds(pubkey: string): string[] {
-  if (typeof window === "undefined" || pubkey.length === 0) {
-    return [];
-  }
-
-  const rawValue = window.localStorage.getItem(homeFeedSeenStorageKey(pubkey));
-  if (!rawValue) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed
-      .filter((value): value is string => typeof value === "string")
-      .slice(-HOME_FEED_SEEN_MAX_ITEMS);
-  } catch {
-    return [];
-  }
-}
-
-function writeStoredSeenFeedIds(pubkey: string, ids: string[]) {
-  if (typeof window === "undefined" || pubkey.length === 0) {
-    return;
-  }
-
-  window.localStorage.setItem(
-    homeFeedSeenStorageKey(pubkey),
-    JSON.stringify(ids.slice(-HOME_FEED_SEEN_MAX_ITEMS)),
   );
 }
 
@@ -300,125 +253,21 @@ export function useNotificationSettings(pubkey?: string) {
   };
 }
 
-export function useFeedDesktopNotifications(
-  feed: HomeFeedResponse | undefined,
-  pubkey: string | undefined,
-  settings: NotificationSettings,
-  profiles?: UserProfileLookup,
-) {
-  const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
-  const seenItemIdsRef = React.useRef<Set<string>>(
-    new Set(readStoredSeenFeedIds(normalizedPubkey)),
-  );
-
-  React.useEffect(() => {
-    seenItemIdsRef.current = new Set(readStoredSeenFeedIds(normalizedPubkey));
-  }, [normalizedPubkey]);
-
-  const deliverFeedNotification = React.useEffectEvent(
-    async (item: FeedItem, senderName?: string) => {
-      const didSend = await sendDesktopNotification({
-        body: notificationBody(item),
-        target: {
-          channelId: item.channelId,
-          channelName: item.channelName,
-          content: item.content,
-          createdAt: item.createdAt,
-          eventId: item.id,
-          kind: item.kind,
-          pubkey: item.pubkey,
-        },
-        title: notificationTitle(item, senderName),
-      });
-
-      if (didSend && settings.soundEnabled) {
-        playNotificationSound();
-      }
-    },
-  );
-
-  React.useEffect(() => {
-    if (!feed) {
-      return;
-    }
-
-    // Wait for sender profiles to load so notification titles include names.
-    // The first-load seed below marks all current items as seen, so we must
-    // defer it until profiles are available — otherwise items get marked seen
-    // before we can dispatch notifications with sender names.
-    if (profiles === undefined) {
-      return;
-    }
-
-    const currentFeedItems = collectHomeAlertItems(feed);
-
-    // Guard: empty seen set + populated feed means first load or cleared
-    // storage. Seed the seen set without notifying to prevent a flood.
-    if (seenItemIdsRef.current.size === 0 && currentFeedItems.length > 0) {
-      seenItemIdsRef.current = new Set(currentFeedItems.map((item) => item.id));
-      writeStoredSeenFeedIds(normalizedPubkey, [...seenItemIdsRef.current]);
-      return;
-    }
-
-    const nextSeenItemIds = new Set(seenItemIdsRef.current);
-    const newItems = settings.desktopEnabled
-      ? eligibleFeedNotificationItems(feed, {
-          mentions: settings.mentions,
-          needsAction: settings.needsAction,
-        }).filter((item) => !nextSeenItemIds.has(item.id))
-      : [];
-
-    for (const item of currentFeedItems) {
-      nextSeenItemIds.add(item.id);
-    }
-
-    // Prevent unbounded growth — keep only the most recent entries.
-    if (nextSeenItemIds.size > HOME_FEED_SEEN_MAX_ITEMS) {
-      const excess = nextSeenItemIds.size - HOME_FEED_SEEN_MAX_ITEMS;
-      let removed = 0;
-      for (const id of nextSeenItemIds) {
-        if (removed >= excess) break;
-        nextSeenItemIds.delete(id);
-        removed++;
-      }
-    }
-
-    seenItemIdsRef.current = nextSeenItemIds;
-    writeStoredSeenFeedIds(normalizedPubkey, [...nextSeenItemIds]);
-
-    for (const item of newItems) {
-      const resolvedLabel = profiles
-        ? resolveUserLabel({
-            pubkey: item.pubkey,
-            profiles,
-            preferResolvedSelfLabel: true,
-          })
-        : undefined;
-      // Only use real display names, not truncated pubkey fallbacks.
-      const senderName =
-        resolvedLabel && resolvedLabel !== truncatePubkey(item.pubkey)
-          ? resolvedLabel
-          : undefined;
-      void deliverFeedNotification(item, senderName);
-    }
-  }, [
-    feed,
-    normalizedPubkey,
-    profiles,
-    settings.desktopEnabled,
-    settings.mentions,
-    settings.needsAction,
-  ]);
-}
-
 export function useHomeFeedNotificationState(
   feed: HomeFeedResponse | undefined,
   pubkey: string | undefined,
   settings: NotificationSettings,
+  setDesktopEnabled: (enabled: boolean) => Promise<boolean>,
   isHomeActive: boolean,
   profiles?: UserProfileLookup,
 ) {
-  useFeedDesktopNotifications(feed, pubkey, settings, profiles);
+  useFeedDesktopNotifications(
+    feed,
+    pubkey,
+    settings,
+    setDesktopEnabled,
+    profiles,
+  );
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
   const [seenFeedIds, setSeenFeedIds] = React.useState<string[]>(() =>
     readStoredSeenFeedIds(normalizedPubkey),
@@ -519,6 +368,7 @@ export function useHomeFeedNotifications(
     homeFeedQuery.data,
     pubkey,
     notificationSettings.settings,
+    notificationSettings.setDesktopEnabled,
     isHomeActive,
     feedProfilesQuery.data?.profiles,
   );

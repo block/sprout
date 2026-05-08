@@ -19,7 +19,6 @@ import { ProfileStep } from "./ProfileStep";
 import { SetupStep } from "./SetupStep";
 import type {
   OnboardingActions,
-  OnboardingNotifications,
   OnboardingPage,
   OnboardingProfileSeed,
   OnboardingProfileValues,
@@ -63,7 +62,6 @@ async function checkMembershipDenied(): Promise<boolean> {
 type OnboardingFlowProps = {
   actions: OnboardingActions;
   initialProfile: OnboardingProfileSeed;
-  notifications: OnboardingNotifications;
 };
 
 function isFallbackDisplayName(value?: string | null) {
@@ -131,10 +129,8 @@ function resolveProfileSaveRecovery(
 export function OnboardingFlow({
   actions,
   initialProfile,
-  notifications,
 }: OnboardingFlowProps) {
   const { complete, skipForNow } = actions;
-  const { setDesktopEnabled } = notifications;
   const savedProfile = resolveSavedProfile(initialProfile);
   const profileUpdateMutation = useUpdateProfileMutation();
   const { error: profileSaveError, isPending: isSavingProfile } =
@@ -259,9 +255,6 @@ export function OnboardingFlow({
     updateProfileDraft({ avatarUrl: savedProfile.avatarUrl });
   }, [savedProfile.avatarUrl, updateProfileDraft]);
 
-  const handleEnableDesktopNotifications = React.useCallback(() => {
-    void setDesktopEnabled(true);
-  }, [setDesktopEnabled]);
   const saveErrorMessage =
     profileSaveError instanceof Error ? profileSaveError.message : null;
   const profileStepState: ProfileStepState = {
@@ -360,9 +353,7 @@ export function OnboardingFlow({
             actions={{
               back: showProfilePage,
               complete,
-              enableDesktopNotifications: handleEnableDesktopNotifications,
             }}
-            notifications={notifications}
           />
         )}
       </div>

@@ -1,7 +1,3 @@
-import type {
-  DesktopNotificationPermissionState,
-  NotificationSettings,
-} from "@/features/notifications/hooks";
 import type { AcpProvider, Profile } from "@/shared/api/types";
 
 export type OnboardingPage = "profile" | "setup" | "membership-denied";
@@ -18,14 +14,6 @@ export type OnboardingProfileSeed = {
 export type OnboardingProfileValues = {
   avatarUrl: string;
   displayName: string;
-};
-
-export type OnboardingNotifications = {
-  errorMessage: string | null;
-  isUpdatingDesktopEnabled: boolean;
-  permission: DesktopNotificationPermissionState;
-  setDesktopEnabled: (enabled: boolean) => Promise<boolean>;
-  settings: NotificationSettings;
 };
 
 export type ProfileStepSaveRecovery = {
@@ -69,7 +57,6 @@ export type ProfileStepActions = {
 export type SetupStepActions = {
   back: () => void;
   complete: () => void;
-  enableDesktopNotifications: () => void;
 };
 
 export type SetupStepRuntimeState = {
@@ -80,6 +67,5 @@ export type SetupStepRuntimeState = {
 };
 
 export type SetupStepState = {
-  notifications: OnboardingNotifications;
   runtimeProviders: SetupStepRuntimeState;
 };
