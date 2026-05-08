@@ -52,8 +52,8 @@ export const MessageComposerToolbar = React.memo(
     sendDisabled: boolean;
   }) {
     return (
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-1 py-1 min-h-11">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-h-10 min-w-0 flex-1 items-center gap-1 py-1">
           {/*
            * AnimatePresence with mode="popLayout" — exiting elements
            * are popped out of flow immediately so entering elements

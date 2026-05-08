@@ -544,13 +544,17 @@ export function MessageComposer({
   return (
     <footer
       className={cn(
-        "shrink-0 bg-transparent px-4 pb-4 pt-0",
+        "relative shrink-0 bg-transparent px-4 pb-4 pt-0",
         showTopBorder ? "border-t border-border/40 pt-3" : "",
       )}
     >
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-3">
+      <div
+        aria-hidden="true"
+        className="absolute inset-x-0 bottom-0 h-5 bg-background"
+      />
+      <div className="relative mx-auto flex w-full max-w-4xl flex-col gap-3">
         <form
-          className="relative isolate rounded-2xl border border-border/50 bg-background/25 px-3 py-4 shadow-[0_4px_24px_rgba(0,0,0,0.08)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)] sm:px-4"
+          className="relative isolate rounded-2xl border border-border/50 bg-background/70 px-3 py-3 shadow-[0_4px_24px_rgba(0,0,0,0.08)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.35)] sm:px-4"
           data-testid="message-composer"
           onDragOver={media.handleDragOver}
           onDrop={(e) => {

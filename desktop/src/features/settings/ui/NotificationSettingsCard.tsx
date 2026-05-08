@@ -34,8 +34,7 @@ export function NotificationSettingsCard({
       <div className="mb-3 min-w-0">
         <h2 className="text-sm font-semibold tracking-tight">Notifications</h2>
         <p className="text-sm text-muted-foreground">
-          Zero by default. Keep channel noise inside Home, then opt in to
-          desktop alerts only for the items that truly need you.
+          Desktop alerts are on by default. Fine-tune what gets through below.
         </p>
       </div>
 

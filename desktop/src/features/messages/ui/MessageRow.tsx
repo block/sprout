@@ -127,7 +127,7 @@ export const MessageRow = React.memo(
     const guideBleedPx = isThreadReplyLayout ? 4 : 0;
     const avatarSizeClass = isThreadReplyLayout
       ? "!h-5 !w-5 !rounded-md"
-      : "!h-8 !w-8";
+      : "!h-9 !w-9";
     const avatarButtonRadiusClass = isThreadReplyLayout
       ? "rounded-md"
       : "rounded-xl";
@@ -321,8 +321,8 @@ export const MessageRow = React.memo(
               ) : (
                 <div className="flex shrink-0 items-start">{avatarNode}</div>
               )}
-              <div className="-mt-1 min-w-0 flex-1 space-y-0.5">
-                <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0.5">
+              <div className="-mt-1 min-w-0 flex-1 space-y-0">
+                <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-0">
                   {message.pubkey ? (
                     <UserProfilePopover
                       pubkey={message.pubkey}
@@ -347,7 +347,7 @@ export const MessageRow = React.memo(
                   ) : null}
                   {metadataNode}
                 </div>
-                {messageBodyNode}
+                <div className="-mt-0.5">{messageBodyNode}</div>
               </div>
             </>
           )}

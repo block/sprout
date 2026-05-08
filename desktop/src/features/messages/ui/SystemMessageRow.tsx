@@ -206,7 +206,7 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
       <div className="flex items-start gap-2.5">
         <UserAvatar
           avatarUrl={resolveAvatarUrl(avatarPubkey, profiles)}
-          className="!h-8 !w-8 shrink-0 text-[10px]"
+          className="!h-9 !w-9 shrink-0 text-[10px]"
           displayName={avatarLabel}
           testId="system-message-avatar"
         />

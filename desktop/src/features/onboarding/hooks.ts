@@ -2,7 +2,6 @@ import * as React from "react";
 import { useQueryClient, type QueryStatus } from "@tanstack/react-query";
 
 import { channelsQueryKey } from "@/features/channels/hooks";
-import { useNotificationSettings } from "@/features/notifications/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { getChannels, joinChannel } from "@/shared/api/tauri";
@@ -220,7 +219,6 @@ export function useAppOnboardingState() {
   const identity = identityQuery.data;
   const currentPubkey = identity?.pubkey ?? null;
   const profileQuery = useProfileQuery();
-  const notificationState = useNotificationSettings(currentPubkey ?? undefined);
   const onboardingGate = useFirstRunOnboardingGate({
     currentPubkey,
     identityIsFetching: identityQuery.fetchStatus === "fetching",
@@ -239,13 +237,6 @@ export function useAppOnboardingState() {
     },
     initialProfile: {
       profile: profileQuery.data,
-    },
-    notifications: {
-      errorMessage: notificationState.errorMessage,
-      isUpdatingDesktopEnabled: notificationState.isUpdatingDesktopEnabled,
-      permission: notificationState.permission,
-      setDesktopEnabled: notificationState.setDesktopEnabled,
-      settings: notificationState.settings,
     },
   };
 

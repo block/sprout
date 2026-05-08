@@ -39,7 +39,6 @@ function AppReady() {
         actions={onboarding.flow.actions}
         initialProfile={onboarding.flow.initialProfile}
         key={onboarding.currentPubkey ?? "anonymous"}
-        notifications={onboarding.flow.notifications}
       />
     );
   }

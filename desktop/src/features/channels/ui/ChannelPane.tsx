@@ -328,16 +328,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           searchQuery={channelFind.query}
           targetMessageId={targetMessageId}
         />
-        {hasTypingActivity ? (
-          <div className="relative bg-background">
-            <TypingIndicatorRow
-              channel={activeChannel}
-              currentPubkey={currentPubkey}
-              profiles={profiles}
-              typingPubkeys={typingPubkeys}
-            />
-          </div>
-        ) : null}
         {isNonMemberView ? (
           <div
             data-testid="join-banner"
@@ -365,37 +355,47 @@ export const ChannelPane = React.memo(function ChannelPane({
             </Button>
           </div>
         ) : (
-          <div className="relative z-10 shrink-0">
-            <MessageComposer
-              channelId={activeChannel?.id ?? null}
-              channelName={activeChannel?.name ?? "channel"}
-              disabled={isComposerDisabled}
-              editTarget={editTarget}
-              isSending={isSending}
-              onCancelEdit={onCancelEdit}
-              onEditSave={onEditSave}
-              onSend={onSendMessage}
-              profiles={profiles}
-              toolbarExtraActions={
-                <BotActivityComposerAction
-                  agents={activityAgents}
-                  onOpenAgentSession={onOpenAgentSession}
-                  openAgentSessionPubkey={openAgentSessionPubkey}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+            <div className="pointer-events-auto">
+              {hasTypingActivity ? (
+                <TypingIndicatorRow
+                  channel={activeChannel}
+                  currentPubkey={currentPubkey}
                   profiles={profiles}
-                  typingBotPubkeys={composerBotTypingPubkeys}
+                  typingPubkeys={typingPubkeys}
                 />
-              }
-              placeholder={
-                activeChannel?.archivedAt
-                  ? "Archived channels are read-only."
-                  : activeChannel?.channelType === "forum"
-                    ? "Forum posting is not wired in this pass."
-                    : activeChannel
-                      ? `Message #${activeChannel.name}`
-                      : "Select a channel"
-              }
-              showTopBorder={false}
-            />
+              ) : null}
+              <MessageComposer
+                channelId={activeChannel?.id ?? null}
+                channelName={activeChannel?.name ?? "channel"}
+                disabled={isComposerDisabled}
+                editTarget={editTarget}
+                isSending={isSending}
+                onCancelEdit={onCancelEdit}
+                onEditSave={onEditSave}
+                onSend={onSendMessage}
+                profiles={profiles}
+                toolbarExtraActions={
+                  <BotActivityComposerAction
+                    agents={activityAgents}
+                    onOpenAgentSession={onOpenAgentSession}
+                    openAgentSessionPubkey={openAgentSessionPubkey}
+                    profiles={profiles}
+                    typingBotPubkeys={composerBotTypingPubkeys}
+                  />
+                }
+                placeholder={
+                  activeChannel?.archivedAt
+                    ? "Archived channels are read-only."
+                    : activeChannel?.channelType === "forum"
+                      ? "Forum posting is not wired in this pass."
+                      : activeChannel
+                        ? `Message #${activeChannel.name}`
+                        : "Select a channel"
+                }
+                showTopBorder={false}
+              />
+            </div>
           </div>
         )}
       </div>

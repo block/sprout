@@ -1,18 +1,12 @@
-import { BellRing, Check, Loader2, TerminalSquare } from "lucide-react";
+import { TerminalSquare } from "lucide-react";
 
 import { useAcpProvidersQuery } from "@/features/agents/hooks";
-import type { BadgeProps } from "@/shared/ui/badge";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
-import type {
-  OnboardingNotifications,
-  SetupStepActions,
-  SetupStepState,
-} from "./types";
+import type { SetupStepActions, SetupStepState } from "./types";
 
 type SetupStepProps = {
   actions: SetupStepActions;
-  notifications: OnboardingNotifications;
 };
 
 type SetupStepContentProps = {
@@ -20,51 +14,7 @@ type SetupStepContentProps = {
   state: SetupStepState;
 };
 
-type NotificationStatusDescriptor = {
-  detail: string;
-  label: string;
-  variant: NonNullable<BadgeProps["variant"]>;
-};
-
-function getNotificationStatus(
-  desktopEnabled: boolean,
-  permission: SetupStepState["notifications"]["permission"],
-): NotificationStatusDescriptor {
-  if (permission === "unsupported") {
-    return {
-      detail: "Desktop alerts are unavailable here.",
-      label: "Unavailable",
-      variant: "warning",
-    };
-  }
-
-  if (permission === "denied") {
-    return {
-      detail: "Sprout is blocked from sending alerts. You can fix that later.",
-      label: "Blocked",
-      variant: "destructive",
-    };
-  }
-
-  if (desktopEnabled) {
-    return {
-      detail: "Mentions and needs-action alerts can break through to desktop.",
-      label: "Enabled",
-      variant: "success",
-    };
-  }
-
-  return {
-    detail:
-      "Mentions and needs-action still land in Home. Desktop alerts stay optional.",
-    label: "Optional",
-    variant: "outline",
-  };
-}
-
-function useSetupStepState(
-  notifications: OnboardingNotifications,
-): SetupStepState {
+function useSetupStepState(): SetupStepState {
   const providersQuery = useAcpProvidersQuery();
   const items = providersQuery.data ?? [];
   const isChecking = providersQuery.isLoading;
@@ -72,7 +22,6 @@ function useSetupStepState(
     providersQuery.error instanceof Error ? providersQuery.error.message : null;
 
   return {
-    notifications,
     runtimeProviders: {
       errorMessage,
       isChecking,
@@ -150,11 +99,7 @@ function RuntimeProvidersSection({
 }
 
 function SetupStepContent({ actions, state }: SetupStepContentProps) {
-  const { notifications, runtimeProviders } = state;
-  const notificationStatus = getNotificationStatus(
-    notifications.settings.desktopEnabled,
-    notifications.permission,
-  );
+  const { runtimeProviders } = state;
 
   return (
     <div className="space-y-6" data-testid="onboarding-page-2">
@@ -162,65 +107,13 @@ function SetupStepContent({ actions, state }: SetupStepContentProps) {
         <Badge variant="info">First run</Badge>
         <div className="space-y-2">
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-            Alerts and ACP runtimes
+            ACP runtimes
           </h1>
           <p className="max-w-xl text-sm leading-6 text-muted-foreground">
-            Desktop alerts are optional. ACP runtimes only matter when you want
-            Sprout to launch local tools from this machine.
+            ACP runtimes only matter when you want Sprout to launch local tools
+            from this machine.
           </p>
         </div>
-      </div>
-
-      <div className="space-y-3 rounded-[28px] border border-border/70 bg-background/85 p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-sm font-medium">Desktop alerts</p>
-            <p className="text-sm text-muted-foreground">
-              {notificationStatus.detail}
-            </p>
-          </div>
-          <Badge variant={notificationStatus.variant}>
-            {notificationStatus.label}
-          </Badge>
-        </div>
-
-        <Button
-          className="w-full justify-center"
-          data-testid="onboarding-notifications-enable"
-          disabled={
-            notifications.isUpdatingDesktopEnabled ||
-            notifications.settings.desktopEnabled ||
-            notifications.permission === "unsupported"
-          }
-          onClick={actions.enableDesktopNotifications}
-          type="button"
-          variant={
-            notifications.settings.desktopEnabled ? "secondary" : "outline"
-          }
-        >
-          {notifications.isUpdatingDesktopEnabled ? (
-            <>
-              <Loader2 className="animate-spin" />
-              Requesting permission...
-            </>
-          ) : notifications.settings.desktopEnabled ? (
-            <>
-              <Check />
-              Alerts enabled
-            </>
-          ) : (
-            <>
-              <BellRing />
-              Enable desktop alerts
-            </>
-          )}
-        </Button>
-
-        {notifications.errorMessage ? (
-          <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {notifications.errorMessage}
-          </p>
-        ) : null}
       </div>
 
       <RuntimeProvidersSection runtimeProviders={runtimeProviders} />
@@ -246,8 +139,8 @@ function SetupStepContent({ actions, state }: SetupStepContentProps) {
   );
 }
 
-export function SetupStep({ actions, notifications }: SetupStepProps) {
-  const state = useSetupStepState(notifications);
+export function SetupStep({ actions }: SetupStepProps) {
+  const state = useSetupStepState();
 
   return <SetupStepContent actions={actions} state={state} />;
 }

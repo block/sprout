@@ -126,7 +126,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
     <TooltipProvider delayDuration={200}>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
-          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-12 pt-1 [overflow-anchor:none] sm:px-6"
+          className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-24 pt-1 [overflow-anchor:none] sm:px-6"
           data-scroll-restoration-id="message-timeline"
           data-testid="message-timeline"
           onScroll={syncScrollState}
@@ -197,7 +197,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         </div>
 
         {!isAtBottom ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-12 z-20 flex justify-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-32 z-20 flex justify-center px-4">
             <Button
               className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
               data-testid="message-scroll-to-latest"
