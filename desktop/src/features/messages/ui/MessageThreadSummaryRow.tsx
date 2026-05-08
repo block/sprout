@@ -50,7 +50,7 @@ export function MessageThreadSummaryRow({
   );
 
   return (
-    <div className="relative pb-1">
+    <div className="relative pb-1 pt-1">
       {depthGuideOffsets.length > 0 ? (
         <div
           aria-hidden
@@ -71,7 +71,7 @@ export function MessageThreadSummaryRow({
       ) : null}
 
       <button
-        className="-mt-1 inline-flex w-fit max-w-full items-center gap-1 rounded-full border border-border/70 bg-muted/70 py-0.5 pl-0.5 pr-2 text-left text-xs font-medium text-foreground/90 transition-colors hover:bg-accent hover:text-accent-foreground"
+        className="inline-flex w-fit max-w-full items-center gap-1 rounded-full border border-border/70 bg-muted/70 py-0.5 pl-0.5 pr-2 text-left text-xs font-medium text-foreground/90 transition-colors hover:bg-accent hover:text-accent-foreground"
         data-thread-head-id={message.id}
         data-testid="message-thread-summary"
         onClick={() => onOpenThread(message)}
