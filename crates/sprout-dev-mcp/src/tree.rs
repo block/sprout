@@ -57,7 +57,7 @@ pub fn run(args: Vec<String>) -> i32 {
         let is_file = entry.file_type().is_some_and(|t| t.is_file());
 
         while stack.last().is_some_and(|f| f.depth >= depth) {
-            let frame = stack.pop().unwrap();
+            let Some(frame) = stack.pop() else { break };
             if let Some(parent) = stack.last_mut() {
                 parent.total = parent.total.saturating_add(frame.total);
             }
