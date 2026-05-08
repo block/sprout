@@ -189,7 +189,14 @@ export const SystemMessageRow = React.memo(function SystemMessageRow({
   }
 
   const avatarPubkey = payload.actor ?? payload.target;
-  const avatarLabel = resolveLabel(avatarPubkey, currentPubkey, profiles);
+  const avatarLabel = avatarPubkey
+    ? resolveUserLabel({
+        pubkey: avatarPubkey,
+        currentPubkey,
+        profiles,
+        preferResolvedSelfLabel: true,
+      })
+    : "Someone";
 
   return (
     <div
