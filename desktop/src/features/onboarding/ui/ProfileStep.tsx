@@ -244,14 +244,23 @@ export function ProfileStep({ actions, state }: ProfileStepProps) {
     advanceWithoutSaving,
     clearAvatarDraft,
     importIdentity,
+    onUploadingChange,
     skipForNow,
     submit,
     updateAvatarUrl,
     updateDisplayName,
   } = actions;
-  const { avatar, currentNpub, isSaving, name, saveRecovery } = state;
+  const {
+    avatar,
+    currentNpub,
+    isUploadingAvatar,
+    isSaving,
+    name,
+    saveRecovery,
+  } = state;
   const { draftValue: displayNameDraft, savedValue: savedDisplayName } = name;
-  const canSubmit = displayNameDraft.trim().length > 0 && !isSaving;
+  const canSubmit =
+    displayNameDraft.trim().length > 0 && !isSaving && !isUploadingAvatar;
   const avatarPreviewLabel =
     displayNameDraft.trim() || savedDisplayName || "You";
 
@@ -321,6 +330,7 @@ export function ProfileStep({ actions, state }: ProfileStepProps) {
         previewName={avatarPreviewLabel}
         onUrlChange={updateAvatarUrl}
         onClear={clearAvatarDraft}
+        onUploadingChange={onUploadingChange}
         showClear={
           avatar.draftUrl.length > 0 && avatar.draftUrl !== avatar.savedUrl
         }

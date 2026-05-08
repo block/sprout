@@ -49,6 +49,7 @@ export type ProfileStepState = {
   /** Bech32-encoded current pubkey (npub1…), shown so the user can confirm
    *  which identity they're saving the profile for. */
   currentNpub: string | null;
+  isUploadingAvatar: boolean;
   isSaving: boolean;
   name: ProfileStepNameState;
   saveRecovery: ProfileStepSaveRecovery;
@@ -58,6 +59,7 @@ export type ProfileStepActions = {
   advanceWithoutSaving: () => void;
   clearAvatarDraft: () => void;
   importIdentity: (nsec: string) => Promise<void>;
+  onUploadingChange: (isUploading: boolean) => void;
   skipForNow: () => void;
   submit: () => void;
   updateAvatarUrl: (value: string) => void;

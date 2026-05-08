@@ -11,8 +11,10 @@ type AvatarUploadProps = {
   previewName: string;
   onUrlChange: (url: string) => void;
   onClear?: () => void;
+  onUploadingChange?: (isUploading: boolean) => void;
   showClear?: boolean;
   disabled?: boolean;
+  idleHint?: string;
   testIdPrefix?: string;
 };
 
@@ -21,8 +23,10 @@ export function AvatarUpload({
   previewName,
   onUrlChange,
   onClear,
+  onUploadingChange,
   showClear,
   disabled,
+  idleHint = "You can always add one later.",
   testIdPrefix = "avatar",
 }: AvatarUploadProps) {
   const onUploadSuccess = React.useCallback(
@@ -40,6 +44,10 @@ export function AvatarUpload({
     openPicker,
     handleFileChange,
   } = useAvatarUpload({ onUploadSuccess });
+
+  React.useEffect(() => {
+    onUploadingChange?.(isUploading);
+  }, [isUploading, onUploadingChange]);
 
   const isInputDisabled = disabled || isUploading;
 
@@ -90,9 +98,7 @@ export function AvatarUpload({
               Undo
             </Button>
           ) : (
-            <p className="text-xs text-muted-foreground">
-              You can always add one later.
-            </p>
+            <p className="text-xs text-muted-foreground">{idleHint}</p>
           )}
           <input
             accept="image/gif,image/jpeg,image/png,image/webp"

@@ -6,6 +6,7 @@ import {
   useUpdateProfileMutation,
 } from "@/features/profile/hooks";
 import { AvatarUpload } from "@/features/profile/ui/AvatarUpload";
+import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
@@ -116,13 +117,23 @@ export function ProfileSettingsCard({
 
   return (
     <section className="min-w-0" data-testid="settings-profile">
-      <div className="min-w-0 space-y-2">
-        <h2 className="break-words text-base font-semibold tracking-tight">
-          {resolvedName}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Manage how your identity appears across Sprout.
-        </p>
+      <div className="flex min-w-0 items-start gap-4">
+        <ProfileAvatar
+          avatarUrl={profile?.avatarUrl ?? null}
+          className="h-16 w-16 rounded-3xl text-lg"
+          iconClassName="h-6 w-6"
+          label={resolvedName}
+        />
+        <div className="min-w-0 space-y-2">
+          <div>
+            <h2 className="break-words text-base font-semibold tracking-tight">
+              {resolvedName}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Manage how your identity appears across Sprout.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="mt-6 space-y-6">
@@ -186,6 +197,7 @@ export function ProfileSettingsCard({
               previewName={resolvedName}
               onUrlChange={(url) => setAvatarUrlDraft(url)}
               disabled={updateProfileMutation.isPending}
+              idleHint="Upload or paste a URL to change your avatar."
               testIdPrefix="profile-avatar"
             />
 

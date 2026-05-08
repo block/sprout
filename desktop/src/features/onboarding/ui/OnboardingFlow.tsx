@@ -144,6 +144,7 @@ export function OnboardingFlow({
   const [profileDraft, setProfileDraft] =
     React.useState<OnboardingProfileValues>(savedProfile);
   const [deniedPubkey, setDeniedPubkey] = React.useState<string>("");
+  const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
 
   // For displaying the current identity at the top of the profile step and
   // for refreshing the UI in place after `import_identity` completes — the
@@ -269,6 +270,7 @@ export function OnboardingFlow({
       savedUrl: savedProfile.avatarUrl,
     },
     currentNpub,
+    isUploadingAvatar,
     isSaving: isSavingProfile,
     name: {
       draftValue: profileDraft.displayName,
@@ -343,6 +345,7 @@ export function OnboardingFlow({
               advanceWithoutSaving: showSetupPage,
               clearAvatarDraft: resetAvatarDraft,
               importIdentity: handleImportIdentity,
+              onUploadingChange: setIsUploadingAvatar,
               skipForNow,
               submit: () => {
                 void saveProfileAndContinue();
