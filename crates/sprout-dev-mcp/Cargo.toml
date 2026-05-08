@@ -17,6 +17,7 @@ rmcp = { workspace = true }
 schemars = { workspace = true }
 similar = "2"
 tempfile = "3"
+ignore = "0.4.25"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
