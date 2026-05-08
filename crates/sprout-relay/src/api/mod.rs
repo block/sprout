@@ -40,13 +40,15 @@ pub mod relay_members {
 
     /// Enforce relay membership for a pubkey, with NIP-OA agent delegation fallback.
     ///
-    /// - If `config.require_relay_membership` is false → always Ok (no-op).
-    /// - If enabled → checks `relay_members` table for the pubkey.
-    /// - If not a direct member and NIP-OA is enabled → verifies the `auth_tag_header`
-    ///   to check if the agent's owner is a relay member.
+    /// Returns `Ok(Some(owner_pubkey))` when the agent is not a direct member but
+    /// its NIP-OA owner *is* — access is granted via delegation.
     ///
-    /// Returns `Ok(None)` for direct members, `Ok(Some(owner_pubkey))` when
-    /// access was granted via NIP-OA owner delegation.
+    /// On open relays (`require_relay_membership = false`), returns `Ok(None)`
+    /// immediately — no membership check is performed. Callers that need NIP-OA
+    /// owner extraction on open relays should call [`extract_nip_oa_owner`] directly.
+    ///
+    /// Returns `Ok(None)` when the caller is a direct member (closed relay) or when
+    /// no NIP-OA tag is present/applicable (open relay without auth tag).
     pub async fn enforce_relay_membership(
         state: &AppState,
         pubkey_bytes: &[u8],
@@ -106,5 +108,71 @@ pub mod relay_members {
                 "message": "You must be a relay member to access this relay"
             })),
         ))
+    }
+
+    /// Extract NIP-OA owner from an auth tag without membership enforcement.
+    ///
+    /// Used on open relays (`require_relay_membership = false`) to opportunistically
+    /// extract the owner pubkey for agent→owner backfill. The NIP-OA signature is
+    /// cryptographically self-proving, so no feature flag is needed — if the tag
+    /// verifies, the owner relationship is authentic. Returns `None` if the tag
+    /// is absent or invalid.
+    pub fn extract_nip_oa_owner(
+        pubkey_bytes: &[u8],
+        auth_tag_header: Option<&str>,
+    ) -> Option<nostr::PublicKey> {
+        let tag_json = auth_tag_header?;
+        let agent_pubkey = nostr::PublicKey::from_slice(pubkey_bytes).ok()?;
+        match sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
+            Ok(owner) => Some(owner),
+            Err(e) => {
+                debug!("extract_nip_oa_owner: invalid auth tag: {e}");
+                None
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use nostr::Keys;
+        use sprout_sdk::nip_oa::compute_auth_tag;
+
+        /// Valid NIP-OA auth tag → returns Some(owner_pubkey).
+        #[test]
+        fn valid_nip_oa_returns_owner() {
+            let owner_keys = Keys::generate();
+            let agent_keys = Keys::generate();
+            let agent_pubkey = agent_keys.public_key();
+
+            let tag_json = compute_auth_tag(&owner_keys, &agent_pubkey, "")
+                .expect("compute_auth_tag must succeed");
+
+            let result = extract_nip_oa_owner(&agent_pubkey.to_bytes(), Some(&tag_json));
+
+            assert_eq!(result, Some(owner_keys.public_key()));
+        }
+
+        /// No auth tag → returns None.
+        #[test]
+        fn no_auth_tag_returns_none() {
+            let agent_keys = Keys::generate();
+            let agent_pubkey = agent_keys.public_key();
+
+            let result = extract_nip_oa_owner(&agent_pubkey.to_bytes(), None);
+
+            assert_eq!(result, None);
+        }
+
+        /// Invalid auth tag → returns None.
+        #[test]
+        fn invalid_auth_tag_returns_none() {
+            let agent_keys = Keys::generate();
+            let agent_pubkey = agent_keys.public_key();
+
+            let result = extract_nip_oa_owner(&agent_pubkey.to_bytes(), Some("not valid json"));
+
+            assert_eq!(result, None);
+        }
     }
 }
