@@ -1,9 +1,8 @@
 import * as React from "react";
-import { Camera, Link2, Loader2 } from "lucide-react";
+import { Camera, Link2, Loader2, Upload, X } from "lucide-react";
 
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { useAvatarUpload } from "@/features/profile/useAvatarUpload";
-import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
 type AvatarUploadProps = {
@@ -26,9 +25,11 @@ export function AvatarUpload({
   onUploadingChange,
   showClear,
   disabled,
-  idleHint = "You can always add one later.",
+  idleHint = "",
   testIdPrefix = "avatar",
 }: AvatarUploadProps) {
+  const [isDragging, setIsDragging] = React.useState(false);
+
   const onUploadSuccess = React.useCallback(
     (url: string) => {
       onUrlChange(url);
@@ -51,68 +52,113 @@ export function AvatarUpload({
 
   const isInputDisabled = disabled || isUploading;
 
+  const handleDrop = React.useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      const file = e.dataTransfer.files[0];
+      if (file && inputRef.current) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        inputRef.current.files = dt.files;
+        void handleFileChange({
+          target: inputRef.current,
+        } as React.ChangeEvent<HTMLInputElement>);
+      }
+    },
+    [inputRef, handleFileChange],
+  );
+
   return (
-    <div className="rounded-[28px] border border-border/70 bg-muted/20 p-5">
-      <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
-          <div className="relative h-20 w-20 shrink-0">
-            <ProfileAvatar
-              avatarUrl={avatarUrl || null}
-              className="h-full w-full rounded-3xl text-xl"
-              iconClassName="h-6 w-6"
-              label={previewName}
-              testId={`${testIdPrefix}-preview`}
-            />
+    <div className="space-y-4">
+      <p className="text-sm font-medium">Add a profile photo</p>
+      <div className="flex items-center gap-4">
+        <div className="relative h-20 w-20 shrink-0">
+          <ProfileAvatar
+            avatarUrl={avatarUrl || null}
+            className="h-full w-full rounded-3xl text-xl"
+            iconClassName="h-6 w-6"
+            label={previewName}
+            testId={`${testIdPrefix}-preview`}
+          />
+          {showClear && onClear ? (
+            <button
+              className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-background bg-destructive text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/80"
+              data-testid={`${testIdPrefix}-clear`}
+              onClick={onClear}
+              title="Remove photo"
+              type="button"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          ) : (
             <div className="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full border border-background bg-primary text-primary-foreground shadow-sm">
               <Camera className="h-4 w-4" />
             </div>
-          </div>
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Add a profile photo</p>
-            <p className="max-w-sm text-sm text-muted-foreground">
-              Optional, but it makes conversations easier to scan.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-stretch gap-2 sm:min-w-[220px]">
-          <Button
-            className="w-full justify-center"
-            data-testid={`${testIdPrefix}-upload`}
-            disabled={isInputDisabled}
-            onClick={openPicker}
-            size="lg"
-            type="button"
-          >
-            {isUploading ? <Loader2 className="animate-spin" /> : <Camera />}
-            {isUploading ? "Uploading..." : "Upload photo"}
-          </Button>
-          {showClear && onClear ? (
-            <Button
-              data-testid={`${testIdPrefix}-clear`}
-              onClick={onClear}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              Undo
-            </Button>
-          ) : (
-            <p className="text-xs text-muted-foreground">{idleHint}</p>
           )}
-          <input
-            accept="image/gif,image/jpeg,image/png,image/webp"
-            className="hidden"
-            onChange={(event) => {
-              void handleFileChange(event);
-            }}
-            ref={inputRef}
-            type="file"
-          />
         </div>
+        <button
+          className={`flex flex-1 cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed bg-transparent px-4 py-5 transition-colors ${
+            isDragging
+              ? "border-primary bg-primary/5"
+              : "border-primary/30 hover:border-primary/60 hover:bg-primary/5"
+          }`}
+          data-testid={`${testIdPrefix}-upload`}
+          disabled={isInputDisabled}
+          onClick={() => openPicker()}
+          onDragEnter={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.currentTarget.contains(e.relatedTarget as Node | null))
+              return;
+            setIsDragging(false);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onDrop={handleDrop}
+          type="button"
+        >
+          {isUploading ? (
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          ) : (
+            <Upload className="h-5 w-5 text-muted-foreground" />
+          )}
+          <span className="text-xs text-muted-foreground">
+            {isUploading ? (
+              "Uploading..."
+            ) : (
+              <>
+                Drop an image or{" "}
+                <span className="font-medium text-foreground underline underline-offset-2">
+                  browse
+                </span>
+              </>
+            )}
+          </span>
+        </button>
+        <input
+          accept="image/gif,image/jpeg,image/png,image/webp"
+          className="hidden"
+          onChange={(event) => {
+            void handleFileChange(event);
+          }}
+          ref={inputRef}
+          type="file"
+        />
       </div>
+      {idleHint ? (
+        <p className="text-xs text-muted-foreground">{idleHint}</p>
+      ) : null}
 
-      <div className="mt-5 space-y-1.5">
+      <div className="space-y-1.5">
         <label className="text-sm font-medium" htmlFor={`${testIdPrefix}-url`}>
           Avatar URL
         </label>
@@ -132,12 +178,12 @@ export function AvatarUpload({
           />
         </div>
         <p className="text-xs text-muted-foreground">
-          Prefer a link instead? Paste it here and we&apos;ll save that instead.
+          Or paste a direct image URL.
         </p>
       </div>
 
       {errorMessage ? (
-        <p className="mt-3 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {errorMessage}
         </p>
       ) : null}

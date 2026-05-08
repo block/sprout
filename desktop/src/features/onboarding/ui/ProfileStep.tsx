@@ -1,5 +1,13 @@
 import * as React from "react";
-import { Check, KeyRound, Loader2, Upload, UserRound } from "lucide-react";
+import {
+  Check,
+  Copy,
+  KeyRound,
+  Loader2,
+  Upload,
+  UserRound,
+} from "lucide-react";
+import { toast } from "sonner";
 
 import { AvatarUpload } from "@/features/profile/ui/AvatarUpload";
 import { nsecToNpub, shortenNpub } from "@/shared/lib/nostrUtils";
@@ -272,25 +280,6 @@ export function ProfileStep({ actions, state }: ProfileStepProps) {
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">
             Set up your profile
           </h1>
-          <p className="max-w-xl text-sm leading-6 text-muted-foreground">
-            Add the name people will see in Sprout. A photo is optional, but it
-            helps people spot you faster.
-          </p>
-          {/* Show the active identity so the user can confirm which key
-              they're saving the profile for — and so it's obvious when
-              they need to swap to a different key (e.g. an allowlisted
-              one for a gated relay). */}
-          {currentNpub ? (
-            <p
-              className="font-mono text-[11px] text-muted-foreground"
-              data-testid="onboarding-current-npub"
-            >
-              You are{" "}
-              <span className="text-foreground">
-                {shortenNpub(currentNpub)}
-              </span>
-            </p>
-          ) : null}
         </div>
       </div>
 
@@ -320,9 +309,6 @@ export function ProfileStep({ actions, state }: ProfileStepProps) {
             value={displayNameDraft}
           />
         </div>
-        <p className="text-xs text-muted-foreground">
-          You can change this later in Profile settings.
-        </p>
       </div>
 
       <AvatarUpload
@@ -335,6 +321,7 @@ export function ProfileStep({ actions, state }: ProfileStepProps) {
           avatar.draftUrl.length > 0 && avatar.draftUrl !== avatar.savedUrl
         }
         disabled={isSaving}
+        idleHint=""
         testIdPrefix="onboarding-avatar"
       />
 
@@ -342,7 +329,29 @@ export function ProfileStep({ actions, state }: ProfileStepProps) {
 
       <ErrorBanner message={saveRecovery.errorMessage} />
 
-      <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="flex items-center gap-2">
+        {currentNpub ? (
+          <>
+            <p
+              className="font-mono text-[11px] text-muted-foreground"
+              data-testid="onboarding-current-npub"
+            >
+              {shortenNpub(currentNpub)}
+            </p>
+            <button
+              className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={async () => {
+                await navigator.clipboard.writeText(currentNpub);
+                toast.success("Copied npub to clipboard");
+              }}
+              title="Copy npub"
+              type="button"
+            >
+              <Copy className="h-3 w-3" />
+            </button>
+          </>
+        ) : null}
+        <div className="flex-1" />
         {saveRecovery.canSkipForNow ? (
           <Button
             data-testid="onboarding-skip"
