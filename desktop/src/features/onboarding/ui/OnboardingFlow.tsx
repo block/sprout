@@ -9,7 +9,6 @@ import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import {
   getIdentity,
   importIdentity as tauriImportIdentity,
-  uploadMediaBytes,
 } from "@/shared/api/tauri";
 import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -129,13 +128,6 @@ function resolveProfileSaveRecovery(
   };
 }
 
-const AVATAR_IMAGE_TYPES = [
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
-
 export function OnboardingFlow({
   actions,
   initialProfile,
@@ -144,7 +136,6 @@ export function OnboardingFlow({
   const { complete, skipForNow } = actions;
   const { setDesktopEnabled } = notifications;
   const savedProfile = resolveSavedProfile(initialProfile);
-  const avatarInputRef = React.useRef<HTMLInputElement | null>(null);
   const profileUpdateMutation = useUpdateProfileMutation();
   const { error: profileSaveError, isPending: isSavingProfile } =
     profileUpdateMutation;
@@ -152,10 +143,6 @@ export function OnboardingFlow({
     React.useState<OnboardingPage>("profile");
   const [profileDraft, setProfileDraft] =
     React.useState<OnboardingProfileValues>(savedProfile);
-  const [avatarErrorMessage, setAvatarErrorMessage] = React.useState<
-    string | null
-  >(null);
-  const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
   const [deniedPubkey, setDeniedPubkey] = React.useState<string>("");
 
   // For displaying the current identity at the top of the profile step and
@@ -183,67 +170,19 @@ export function OnboardingFlow({
   // labels and similar UI reflect the active identity.
   const { activeWorkspace, updateWorkspace } = useWorkspaces();
 
-  const openAvatarPicker = React.useCallback(() => {
-    avatarInputRef.current?.click();
-  }, []);
-
   const resetProfileSaveError = React.useCallback(() => {
     profileUpdateMutation.reset();
   }, [profileUpdateMutation]);
 
   const updateProfileDraft = React.useCallback(
-    (
-      patch: Partial<OnboardingProfileValues>,
-      options?: { clearAvatarError?: boolean },
-    ) => {
+    (patch: Partial<OnboardingProfileValues>) => {
       resetProfileSaveError();
-      if (options?.clearAvatarError) {
-        setAvatarErrorMessage(null);
-      }
       setProfileDraft((current) => ({
         ...current,
         ...patch,
       }));
     },
     [resetProfileSaveError],
-  );
-
-  const handleAvatarFileChange = React.useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      event.target.value = "";
-
-      if (!file) {
-        return;
-      }
-
-      if (!AVATAR_IMAGE_TYPES.includes(file.type)) {
-        setAvatarErrorMessage("Choose a PNG, JPG, GIF, or WebP image.");
-        return;
-      }
-
-      resetProfileSaveError();
-      setIsUploadingAvatar(true);
-      setAvatarErrorMessage(null);
-
-      try {
-        const buffer = await file.arrayBuffer();
-        const uploaded = await uploadMediaBytes([...new Uint8Array(buffer)]);
-        updateProfileDraft(
-          { avatarUrl: uploaded.url },
-          { clearAvatarError: true },
-        );
-      } catch (error) {
-        setAvatarErrorMessage(
-          error instanceof Error
-            ? error.message
-            : "Could not upload that avatar.",
-        );
-      } finally {
-        setIsUploadingAvatar(false);
-      }
-    },
-    [resetProfileSaveError, updateProfileDraft],
   );
 
   const showSetupPage = React.useCallback(() => {
@@ -310,16 +249,13 @@ export function OnboardingFlow({
 
   const updateAvatarUrlDraft = React.useCallback(
     (value: string) => {
-      updateProfileDraft({ avatarUrl: value }, { clearAvatarError: true });
+      updateProfileDraft({ avatarUrl: value });
     },
     [updateProfileDraft],
   );
 
   const resetAvatarDraft = React.useCallback(() => {
-    updateProfileDraft(
-      { avatarUrl: savedProfile.avatarUrl },
-      { clearAvatarError: true },
-    );
+    updateProfileDraft({ avatarUrl: savedProfile.avatarUrl });
   }, [savedProfile.avatarUrl, updateProfileDraft]);
 
   const handleEnableDesktopNotifications = React.useCallback(() => {
@@ -330,9 +266,6 @@ export function OnboardingFlow({
   const profileStepState: ProfileStepState = {
     avatar: {
       draftUrl: profileDraft.avatarUrl,
-      errorMessage: avatarErrorMessage,
-      inputRef: avatarInputRef,
-      isUploading: isUploadingAvatar,
       savedUrl: savedProfile.avatarUrl,
     },
     currentNpub,
@@ -410,16 +343,12 @@ export function OnboardingFlow({
               advanceWithoutSaving: showSetupPage,
               clearAvatarDraft: resetAvatarDraft,
               importIdentity: handleImportIdentity,
-              openAvatarPicker,
               skipForNow,
               submit: () => {
                 void saveProfileAndContinue();
               },
               updateAvatarUrl: updateAvatarUrlDraft,
               updateDisplayName: updateDisplayNameDraft,
-              uploadAvatarFile: (event) => {
-                void handleAvatarFileChange(event);
-              },
             }}
             state={profileStepState}
           />

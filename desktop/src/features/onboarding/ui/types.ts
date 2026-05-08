@@ -1,5 +1,3 @@
-import type * as React from "react";
-
 import type {
   DesktopNotificationPermissionState,
   NotificationSettings,
@@ -43,9 +41,6 @@ export type ProfileStepNameState = {
 
 export type ProfileStepAvatarState = {
   draftUrl: string;
-  errorMessage: string | null;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-  isUploading: boolean;
   savedUrl: string;
 };
 
@@ -63,12 +58,10 @@ export type ProfileStepActions = {
   advanceWithoutSaving: () => void;
   clearAvatarDraft: () => void;
   importIdentity: (nsec: string) => Promise<void>;
-  openAvatarPicker: () => void;
   skipForNow: () => void;
   submit: () => void;
   updateAvatarUrl: (value: string) => void;
   updateDisplayName: (value: string) => void;
-  uploadAvatarFile: (event: React.ChangeEvent<HTMLInputElement>) => void;
 };
 
 export type SetupStepActions = {
