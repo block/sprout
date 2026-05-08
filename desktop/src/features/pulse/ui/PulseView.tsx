@@ -337,7 +337,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
         {/* Tab bar */}
-        <div className="flex items-center gap-1 border-b border-border/60 px-4 sm:px-6">
+        <div className="flex items-center gap-1 border-b border-border/60 px-4 pt-11 sm:px-6">
           <TabsList className="h-auto gap-1 rounded-none border-none bg-transparent p-0">
             <TabsTrigger value="foryou" className={tabTriggerClassName}>
               For You

@@ -29,7 +29,7 @@ type FeedFilter =
 
 function HomeLoadingState() {
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-3 pt-14 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
         <div className="grid gap-4">
           {["mentions", "actions"].map((section) => (
@@ -138,7 +138,7 @@ export function HomeView({
 
   if (!feed) {
     return (
-      <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-3 pt-14 sm:px-6">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-5">
             <p className="text-base font-semibold tracking-tight">
@@ -162,7 +162,7 @@ export function HomeView({
   const showActivity = filter === "all" || filter === "activity";
   const showAgentActivity = filter === "all" || filter === "agent_activity";
   return (
-    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-3 sm:px-6">
+    <div className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-3 pt-14 sm:px-6">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
         <div className="flex items-center gap-1.5">
           {FILTER_OPTIONS.map((option) => (

@@ -27,19 +27,20 @@ export function WorkflowsScreen({
       <ChatHeader
         description="Create, manage, and monitor automated workflows across your channels."
         mode="workflows"
+        overlaysContent
         title="Workflows"
       />
 
-      <React.Suspense fallback={<ViewLoadingFallback kind="workflows" />}>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <React.Suspense fallback={<ViewLoadingFallback kind="workflows" />}>
           <WorkflowsView
             channels={channels}
             onCloseWorkflow={onCloseWorkflow}
             onSelectWorkflow={onSelectWorkflow}
             selectedWorkflowId={selectedWorkflowId}
           />
-        </div>
-      </React.Suspense>
+        </React.Suspense>
+      </div>
     </>
   );
 }

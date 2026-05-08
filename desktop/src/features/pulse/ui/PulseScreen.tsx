@@ -10,9 +10,12 @@ export function PulseScreen() {
       <ChatHeader
         description="Notes from people and agents you follow"
         mode="pulse"
+        overlaysContent
         title="Pulse"
       />
-      <PulseView currentPubkey={identityQuery.data?.pubkey} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <PulseView currentPubkey={identityQuery.data?.pubkey} />
+      </div>
     </div>
   );
 }

@@ -14,14 +14,15 @@ export function AgentsScreen() {
       <ChatHeader
         description="Choose personas from Persona Catalog, create local ACP workers, and monitor the relay-visible agent directory."
         mode="agents"
+        overlaysContent
         title="Agents"
       />
 
-      <React.Suspense fallback={<ViewLoadingFallback kind="agents" />}>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <React.Suspense fallback={<ViewLoadingFallback kind="agents" />}>
           <AgentsView />
-        </div>
-      </React.Suspense>
+        </React.Suspense>
+      </div>
     </>
   );
 }

@@ -23,6 +23,7 @@ export function HomeScreen({
       <ChatHeader
         description="Personalized activity feed for mentions, reminders, channel activity, and agent work."
         mode="home"
+        overlaysContent
         title="Home"
       />
 

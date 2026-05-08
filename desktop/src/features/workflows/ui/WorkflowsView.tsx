@@ -166,7 +166,7 @@ export function WorkflowsView({
       data-testid="workflows-view"
     >
       <div
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4 pt-14"
         data-scroll-restoration-id="workflows-list"
       >
         <div className="mb-4 flex items-center justify-between">
