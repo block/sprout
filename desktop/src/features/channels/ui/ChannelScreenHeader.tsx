@@ -64,6 +64,7 @@ export function ChannelScreenHeader({
       }
       channelType={activeChannel?.channelType}
       description={getChannelDescription(activeChannel)}
+      overlaysContent
       statusBadge={
         <ChannelHeaderStatusBadge
           channelType={activeChannel?.channelType}
