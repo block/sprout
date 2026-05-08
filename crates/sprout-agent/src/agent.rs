@@ -341,9 +341,9 @@ enum InvokeOutcome {
 }
 
 /// Standalone tool invocation. Takes only owned/cloned handles so it can
-/// run inside a spawned task. On timeout, marks the offending MCP server
-/// dead (the registry's lazy restart handles it on the next call) but does
-/// NOT kill the process — killing races with concurrent calls / restart.
+/// run inside a spawned task. On timeout, kills the offending MCP server's
+/// process group and marks it dead; the registry's lazy restart handles it
+/// on the next call.
 async fn invoke_tool_inner(
     mcp: &Arc<McpRegistry>,
     call: &ToolCall,
@@ -366,7 +366,7 @@ async fn invoke_tool_inner(
             Ok(Err(e)) => InvokeOutcome::Failed(e.to_string()),
             Err(_) => {
                 if let Some(server) = mcp.server_of(&call.name) {
-                    mcp.mark_dead(server, "tool timeout");
+                    mcp.kill_server(server, "tool timeout");
                 }
                 let msg = format!(
                     "tool: timeout after {}s. The command took too long. Try a faster approach.",

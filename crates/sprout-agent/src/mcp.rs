@@ -237,27 +237,38 @@ impl McpRegistry {
             .collect()
     }
 
-    pub fn mark_dead(&self, server_name: &str, reason: &str) {
-        let server = match self.servers.iter().find(|s| s.name == server_name) {
+    /// Kill the server's process group and mark it dead. Idempotent:
+    /// if the server is already Dead (or unknown), this is a no-op.
+    pub fn kill_server(&self, name: &str, reason: &str) {
+        let server = match self.servers.iter().find(|s| s.name == name) {
             Some(s) => s,
             None => return,
         };
-        let prev = server.client.load_full();
-        let tools = match &*prev {
-            ClientState::Dead { .. } => return, // idempotent
-            ClientState::Healthy { tools, .. } => tools.clone(),
+        let current = server.client.load_full();
+        let (pgid, tools) = match &*current {
+            ClientState::Dead { .. } => return,
+            ClientState::Healthy { pgid, tools, .. } => (*pgid, tools.clone()),
         };
-        let next_retry = Instant::now() + backoff(1, self.backoff_base, self.backoff_max);
-        server.client.store(Arc::new(ClientState::Dead {
-            attempts: 0, // no restart attempts yet; maybe_restart increments before trying
-            next_retry,
+        let dead = Arc::new(ClientState::Dead {
+            attempts: 0,
+            next_retry: Instant::now() + backoff(1, self.backoff_base, self.backoff_max),
             reason: reason.to_owned(),
             tools,
-        }));
-        log_error!(
-            "MCP server '{}' marked dead (attempts=0, reason={reason})",
-            server.name
-        );
+        });
+        // CAS so we don't clobber a concurrent restart that already
+        // transitioned the state. If the swap fails, the kill below is
+        // still safe — the pgid we read belonged to a process we observed
+        // as Healthy, and killpg on an already-reaped pgid is a no-op.
+        let prev = server.client.compare_and_swap(&current, dead);
+        if Arc::ptr_eq(&prev, &current) {
+            if let Some(p) = pgid {
+                killpg(p, &server.name, "kill_server");
+            }
+            log_error!(
+                "MCP server '{}' marked dead (attempts=0, reason={reason})",
+                server.name
+            );
+        }
     }
 
     fn kill_and_mark_dead_if_current(
