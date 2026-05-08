@@ -21,6 +21,7 @@ members = [
     "crates/git-credential-nostr",
     "crates/git-sign-nostr",
     "crates/sprout-pair-relay",
+    "examples/countdown-bot",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
