@@ -164,7 +164,7 @@ test("notification settings drive the Home badge and desktop alerts", async ({
   expect(notifications).toEqual([
     {
       body: "Please review the rollout checklist.",
-      title: "@Mention in #engineering",
+      title: "bob mentioned you in #engineering",
     },
   ]);
 

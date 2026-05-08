@@ -13,6 +13,7 @@ export function NotificationSettingsCard({
   onSetHomeBadgeEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  onSetSoundEnabled,
 }: {
   isUpdatingDesktopNotifications: boolean;
   notificationErrorMessage: string | null;
@@ -22,6 +23,7 @@ export function NotificationSettingsCard({
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetSoundEnabled: (enabled: boolean) => void;
 }) {
   const permissionBlocked =
     notificationPermission === "denied" ||
@@ -71,6 +73,32 @@ export function NotificationSettingsCard({
             id="desktop-alerts-switch"
             onCheckedChange={(checked) => {
               void onSetDesktopNotificationsEnabled(checked);
+            }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <label
+              className="text-sm font-medium"
+              htmlFor="notification-sound-switch"
+            >
+              Notification sound
+            </label>
+            <p className="text-sm text-muted-foreground">
+              Play a sound when a desktop notification fires.
+            </p>
+          </div>
+          <Switch
+            checked={
+              notificationSettings.desktopEnabled &&
+              notificationSettings.soundEnabled
+            }
+            data-testid="notifications-sound-toggle"
+            disabled={!notificationSettings.desktopEnabled}
+            id="notification-sound-switch"
+            onCheckedChange={(checked) => {
+              onSetSoundEnabled(checked);
             }}
           />
         </div>

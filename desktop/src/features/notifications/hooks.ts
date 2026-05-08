@@ -1,6 +1,12 @@
 import * as React from "react";
 
 import { useHomeFeedQuery } from "@/features/home/hooks";
+import { useUsersBatchQuery } from "@/features/profile/hooks";
+import {
+  resolveUserLabel,
+  truncatePubkey,
+  type UserProfileLookup,
+} from "@/features/profile/lib/identity";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 import {
   collectHomeAlertItems,
@@ -14,6 +20,7 @@ import {
   sendDesktopNotification,
   type DesktopNotificationPermissionState,
 } from "./lib/desktop";
+import { playNotificationSound } from "./lib/sound";
 
 export type { DesktopNotificationPermissionState } from "./lib/desktop";
 
@@ -26,6 +33,7 @@ export type NotificationSettings = {
   homeBadgeEnabled: boolean;
   mentions: boolean;
   needsAction: boolean;
+  soundEnabled: boolean;
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -33,6 +41,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   homeBadgeEnabled: true,
   mentions: true,
   needsAction: true,
+  soundEnabled: true,
 };
 
 function notificationSettingsStorageKey(pubkey: string) {
@@ -66,6 +75,10 @@ function sanitizeNotificationSettings(value: unknown): NotificationSettings {
       typeof candidate.needsAction === "boolean"
         ? candidate.needsAction
         : DEFAULT_NOTIFICATION_SETTINGS.needsAction,
+    soundEnabled:
+      typeof candidate.soundEnabled === "boolean"
+        ? candidate.soundEnabled
+        : DEFAULT_NOTIFICATION_SETTINGS.soundEnabled,
   };
 }
 
@@ -267,6 +280,13 @@ export function useNotificationSettings(pubkey?: string) {
     }));
   }, []);
 
+  const setSoundEnabled = React.useCallback((enabled: boolean) => {
+    setSettings((current) => ({
+      ...current,
+      soundEnabled: enabled,
+    }));
+  }, []);
+
   return {
     errorMessage,
     isUpdatingDesktopEnabled,
@@ -275,6 +295,7 @@ export function useNotificationSettings(pubkey?: string) {
     setHomeBadgeEnabled,
     setMentionsEnabled,
     setNeedsActionEnabled,
+    setSoundEnabled,
     settings,
   };
 }
@@ -283,6 +304,7 @@ export function useFeedDesktopNotifications(
   feed: HomeFeedResponse | undefined,
   pubkey: string | undefined,
   settings: NotificationSettings,
+  profiles?: UserProfileLookup,
 ) {
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
   const seenItemIdsRef = React.useRef<Set<string>>(
@@ -294,8 +316,8 @@ export function useFeedDesktopNotifications(
   }, [normalizedPubkey]);
 
   const deliverFeedNotification = React.useEffectEvent(
-    async (item: FeedItem) => {
-      await sendDesktopNotification({
+    async (item: FeedItem, senderName?: string) => {
+      const didSend = await sendDesktopNotification({
         body: notificationBody(item),
         target: {
           channelId: item.channelId,
@@ -306,13 +328,25 @@ export function useFeedDesktopNotifications(
           kind: item.kind,
           pubkey: item.pubkey,
         },
-        title: notificationTitle(item),
+        title: notificationTitle(item, senderName),
       });
+
+      if (didSend && settings.soundEnabled) {
+        playNotificationSound();
+      }
     },
   );
 
   React.useEffect(() => {
     if (!feed) {
+      return;
+    }
+
+    // Wait for sender profiles to load so notification titles include names.
+    // The first-load seed below marks all current items as seen, so we must
+    // defer it until profiles are available — otherwise items get marked seen
+    // before we can dispatch notifications with sender names.
+    if (profiles === undefined) {
       return;
     }
 
@@ -353,11 +387,24 @@ export function useFeedDesktopNotifications(
     writeStoredSeenFeedIds(normalizedPubkey, [...nextSeenItemIds]);
 
     for (const item of newItems) {
-      void deliverFeedNotification(item);
+      const resolvedLabel = profiles
+        ? resolveUserLabel({
+            pubkey: item.pubkey,
+            profiles,
+            preferResolvedSelfLabel: true,
+          })
+        : undefined;
+      // Only use real display names, not truncated pubkey fallbacks.
+      const senderName =
+        resolvedLabel && resolvedLabel !== truncatePubkey(item.pubkey)
+          ? resolvedLabel
+          : undefined;
+      void deliverFeedNotification(item, senderName);
     }
   }, [
     feed,
     normalizedPubkey,
+    profiles,
     settings.desktopEnabled,
     settings.mentions,
     settings.needsAction,
@@ -369,8 +416,9 @@ export function useHomeFeedNotificationState(
   pubkey: string | undefined,
   settings: NotificationSettings,
   isHomeActive: boolean,
+  profiles?: UserProfileLookup,
 ) {
-  useFeedDesktopNotifications(feed, pubkey, settings);
+  useFeedDesktopNotifications(feed, pubkey, settings, profiles);
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
   const [seenFeedIds, setSeenFeedIds] = React.useState<string[]>(() =>
     readStoredSeenFeedIds(normalizedPubkey),
@@ -451,11 +499,28 @@ export function useHomeFeedNotifications(
     };
   }, []);
 
+  const feedItems = React.useMemo(
+    () =>
+      homeFeedQuery.data
+        ? [
+            ...homeFeedQuery.data.feed.mentions,
+            ...homeFeedQuery.data.feed.needsAction,
+          ]
+        : [],
+    [homeFeedQuery.data],
+  );
+
+  const feedProfilesQuery = useUsersBatchQuery(
+    feedItems.map((item) => item.pubkey),
+    { enabled: feedItems.length > 0 },
+  );
+
   const homeBadgeCount = useHomeFeedNotificationState(
     homeFeedQuery.data,
     pubkey,
     notificationSettings.settings,
     isHomeActive,
+    feedProfilesQuery.data?.profiles,
   );
 
   return {
