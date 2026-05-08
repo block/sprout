@@ -38,7 +38,7 @@ const overrides = new Map([
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/channels/ui/ChannelPane.tsx", 520], // composer/timeline/sidebar orchestration + anchored agent activity footers
   ["src/features/channels/ui/ChannelScreen.tsx", 550], // profile panel state + mutual exclusion wiring + ProfilePanelProvider context + agent typing classification
-  ["src/features/notifications/hooks.ts", 530], // notification settings + feed notification lifecycle + profile batch resolution + badge state
+  ["src/features/notifications/hooks.ts", 535], // notification settings + feed notification lifecycle + profile batch resolution + truncated-pubkey guard + badge state
   ["src/features/messages/hooks.ts", 500], // message query/mutation hooks + optimistic updates
   ["src/features/messages/ui/MessageComposer.tsx", 700], // media upload handlers (paste, drop, dialog) + channelId reset effect + edit mode (pre-fill, save, cancel, escape)
   ["src/features/settings/ui/SettingsView.tsx", 600],

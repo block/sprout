@@ -4,6 +4,7 @@ import { useHomeFeedQuery } from "@/features/home/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import {
   resolveUserLabel,
+  truncatePubkey,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
 import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
@@ -386,13 +387,18 @@ export function useFeedDesktopNotifications(
     writeStoredSeenFeedIds(normalizedPubkey, [...nextSeenItemIds]);
 
     for (const item of newItems) {
-      const senderName = profiles
+      const resolvedLabel = profiles
         ? resolveUserLabel({
             pubkey: item.pubkey,
             profiles,
             preferResolvedSelfLabel: true,
           })
         : undefined;
+      // Only use real display names, not truncated pubkey fallbacks.
+      const senderName =
+        resolvedLabel && resolvedLabel !== truncatePubkey(item.pubkey)
+          ? resolvedLabel
+          : undefined;
       void deliverFeedNotification(item, senderName);
     }
   }, [

@@ -291,7 +291,7 @@ test("live mentions refetch the home feed without waiting for polling", async ({
     expect(notifications).toEqual([
       {
         body: message,
-        title: "alice mentioned you in #general",
+        title: "@Mention in #general",
       },
     ]);
 
@@ -355,7 +355,7 @@ test("live forum mentions refetch the home feed without waiting for polling", as
     expect(notifications).toEqual([
       {
         body: message,
-        title: "alice mentioned you in #watercooler",
+        title: "@Mention in #watercooler",
       },
     ]);
 
