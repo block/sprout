@@ -18,7 +18,7 @@ pub fn run(args: Vec<String>) -> i32 {
         return 2;
     }
     let mut out = Vec::new();
-    let total = collect(&root, "", max_depth, 0, &mut out);
+    let total = collect(&root, "", max_depth, 0, &mut out, MAX_OUTPUT_LINES);
     let name = root
         .file_name()
         .unwrap_or(root.as_os_str())
@@ -71,7 +71,11 @@ fn collect(
     max_depth: usize,
     depth: usize,
     out: &mut Vec<String>,
+    line_budget: usize,
 ) -> usize {
+    if out.len() >= line_budget {
+        return 0;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -99,10 +103,11 @@ fn collect(
     let child_prefix = format!("{prefix}  ");
     for d in &dirs {
         let Some(name) = d.file_name().map(|n| n.to_string_lossy()) else { continue };
+        if out.len() >= line_budget { break }
         if depth < max_depth {
             let idx = out.len();
             out.push(String::new());
-            let sub = collect(d, &child_prefix, max_depth, depth + 1, out);
+            let sub = collect(d, &child_prefix, max_depth, depth + 1, out, line_budget);
             out[idx] = format!("{prefix}{name}/  [{sub}]");
             total += sub;
         } else {
@@ -110,6 +115,7 @@ fn collect(
         }
     }
     for f in &files {
+        if out.len() >= line_budget { break }
         let Some(name) = f.file_name().map(|n| n.to_string_lossy()) else { continue };
         let lc = std::fs::read(f)
             .map(|b| {
