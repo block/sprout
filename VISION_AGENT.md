@@ -14,7 +14,7 @@ Two binaries, two protocols, no coupling between them.
 
 **sprout-dev-mcp** (~1,500 LOC) is an MCP server. It gives any agent a shell and a file editor. Ephemeral processes with process-group kill on every exit path. Bounded output. File edits resolve against the working directory. It works with any agent or client that speaks MCP.
 
-Together they are ~4,000 lines of Rust purpose-built for headless autonomous coding work.
+Together they are ~4,400 lines of Rust purpose-built for headless autonomous coding work.
 
 ## Why We Built Our Own
 
@@ -65,10 +65,10 @@ Two pipes. Two protocols. Each session gets its own MCP server instances — ful
 
 | | sprout-agent | sprout-dev-mcp |
 |---|---|---|
-| Production LOC | ~2,500 | ~1,500 |
-| Source files | 9 | 6 |
+| Production LOC | ~2,900 | ~1,500 |
+| Source files | 10 | 7 |
 | Direct dependencies | 7 | 8 |
-| Tests | 25 | 14 |
+| Tests | 39 | 14 |
 | Unsafe blocks | 0 | 0 |
 | Panic paths (expect/unwrap) | 0 | 0 |
 | Works with any ACP client | yes | n/a |

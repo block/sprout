@@ -1,6 +1,6 @@
 # sprout-agent
 
-> Minimal, unbreakable ACP-compliant LLM agent. ~1,400 lines of Rust. Stdio in, tool calls out. Non-streaming. No persistence. No cleverness.
+> Minimal, unbreakable ACP-compliant LLM agent. ~2,900 lines of Rust. Stdio in, tool calls out. Non-streaming. No persistence. No cleverness.
 
 [ACP](https://agentclientprotocol.com) is the Agent Client Protocol — JSON-RPC 2.0 over stdio between a client (Zed, JetBrains, sprout-acp, …) and an agent. [MCP](https://modelcontextprotocol.io) is how the agent talks to its tools.
 
@@ -242,11 +242,11 @@ A short list, because the answer is mostly "no":
 - **Not load-able.** No `session/load`. We advertise `loadSession: false`.
 - **Not a router.** No agent-to-agent, no fan-out, no orchestration. One model. One loop.
 
-If you want any of those, fork. The whole thing is seven files; you'll have it changed by lunch.
+If you want any of those, fork. The whole thing is ten files; you'll have it changed by lunch.
 
 ## Architecture
 
-Seven source files. Each describable in one sentence.
+Ten source files. Each describable in one sentence.
 
 ```
 crates/sprout-agent/
@@ -255,13 +255,18 @@ crates/sprout-agent/
 │   ├── agent.rs      The non-streaming tool loop with cooperative cancellation.
 │   ├── llm.rs        Anthropic Messages + OpenAI Chat in one enum, no traits.
 │   ├── mcp.rs        rmcp client registry: spawn, list, call, poison, kill.
-│   ├── types.rs      DTOs (history, tool calls, ACP params), Config, AgentError.
-│   └── (config lives in types.rs; see below)
+│   ├── config.rs     Env-var config with validation.
+│   ├── handoff.rs    Context summarization when history fills.
+│   ├── todo.rs       In-memory task list with end-turn enforcement.
+│   ├── types.rs      DTOs (history, tool calls, errors).
+│   ├── wire.rs       JSON-RPC framing, bounded line reader.
+│   └── log.rs        Logging macros.
 ├── tests/
 │   ├── fake_llm.rs   ACP smoke tests against a real-TCP fake LLM.
+│   ├── golden_transcripts.rs  Full protocol transcript tests.
 │   ├── regressions.rs One #[test] per fixed bug, named for the bug.
 │   └── bin/fake_mcp.rs Misbehaving MCP server (env-driven faults).
-└── Cargo.toml        Five runtime dependencies.
+└── Cargo.toml        Seven runtime dependencies.
 ```
 
 **Dependency DAG** (acyclic, three levels deep):
@@ -304,7 +309,7 @@ One reader, one writer, up to 8 concurrent prompt tasks (one per session).
 cargo build --release -p sprout-agent
 ```
 
-Five runtime dependencies: `tokio`, `serde`, `serde_json`, `reqwest`, `rmcp`. Plus `libc` on Unix for `setpgid`/`killpg`. That's it.
+Seven runtime dependencies: `tokio`, `serde`, `serde_json`, `reqwest`, `rmcp`, `arc-swap`, `getrandom`. Plus `nix` on Unix for `setpgid`/`killpg`. That's it.
 
 Binary size: ~12 MB stripped (includes rustls, native TLS roots, tokio multi-thread runtime).
 
