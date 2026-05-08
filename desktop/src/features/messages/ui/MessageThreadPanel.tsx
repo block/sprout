@@ -187,7 +187,7 @@ export function MessageThreadPanel({
         </div>
 
         <div
-          className="min-h-0 flex-1 overflow-y-auto pb-6"
+          className="min-h-0 flex-1 overflow-y-auto pb-24"
           data-testid="message-thread-body"
           onScroll={syncScrollState}
           ref={threadBodyRef}
@@ -273,7 +273,7 @@ export function MessageThreadPanel({
         </div>
 
         {!isAtBottom ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center px-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-24 flex justify-center px-4">
             <Button
               className="pointer-events-auto rounded-full shadow-lg"
               data-testid="thread-scroll-to-latest"
@@ -289,30 +289,32 @@ export function MessageThreadPanel({
           </div>
         ) : null}
 
-        <div>
-          <TypingIndicatorRow
-            channel={channel}
-            currentPubkey={currentPubkey}
-            profiles={profiles}
-            typingPubkeys={threadTypingPubkeys}
-          />
-          <MessageComposer
-            channelId={channelId}
-            channelName={channelName}
-            disabled={disabled || isSending || !channelId}
-            draftKey={`thread:${threadHead.id}`}
-            editTarget={editTarget}
-            isSending={isSending}
-            onCancelEdit={onCancelEdit}
-            onCancelReply={composerReplyTarget ? onCancelReply : undefined}
-            onEditSave={onEditSave}
-            onSend={onSend}
-            placeholder={`Reply in thread to ${threadHead.author}`}
-            replyTarget={composerReplyTarget}
-            toolbarExtraActions={toolbarExtraActions}
-            typingParentEventId={threadHead.id}
-            typingRootEventId={threadHead.rootId}
-          />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+          <div className="pointer-events-auto">
+            <TypingIndicatorRow
+              channel={channel}
+              currentPubkey={currentPubkey}
+              profiles={profiles}
+              typingPubkeys={threadTypingPubkeys}
+            />
+            <MessageComposer
+              channelId={channelId}
+              channelName={channelName}
+              disabled={disabled || isSending || !channelId}
+              draftKey={`thread:${threadHead.id}`}
+              editTarget={editTarget}
+              isSending={isSending}
+              onCancelEdit={onCancelEdit}
+              onCancelReply={composerReplyTarget ? onCancelReply : undefined}
+              onEditSave={onEditSave}
+              onSend={onSend}
+              placeholder={`Reply in thread to ${threadHead.author}`}
+              replyTarget={composerReplyTarget}
+              toolbarExtraActions={toolbarExtraActions}
+              typingParentEventId={threadHead.id}
+              typingRootEventId={threadHead.rootId}
+            />
+          </div>
         </div>
       </aside>
     </>
