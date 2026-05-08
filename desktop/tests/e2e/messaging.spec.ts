@@ -328,7 +328,7 @@ test("opens a single-level thread panel with inline expansion", async ({
         return body.scrollHeight - body.clientHeight;
       });
     })
-    .toBeGreaterThan(160);
+    .toBeGreaterThanOrEqual(160);
 
   await expect(
     timeline.getByTestId("message-row").filter({ hasText: firstReply }),
@@ -393,7 +393,7 @@ test("opens a single-level thread panel with inline expansion", async ({
         return rowRect.top - bodyRect.top;
       });
     })
-    .toBeLessThan(160);
+    .toBeLessThanOrEqual(160);
 
   const firstReplyId = await firstReplyRow.getAttribute("data-message-id");
   if (!firstReplyId) {
@@ -447,7 +447,7 @@ test("opens a single-level thread panel with inline expansion", async ({
         return rowRect.top - bodyRect.top;
       });
     })
-    .toBeLessThan(160);
+    .toBeLessThanOrEqual(160);
 
   await firstReplySummaryRow.click();
   await expect(

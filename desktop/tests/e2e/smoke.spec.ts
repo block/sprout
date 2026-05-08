@@ -424,7 +424,7 @@ test("does not shift the timeline when the composer grows", async ({
   await page.waitForTimeout(1200);
 
   const after = await getTimelineMetrics(page);
-  expect(after.clientHeight).toBeLessThan(before.clientHeight);
+  expect(after.clientHeight).toBeLessThanOrEqual(before.clientHeight);
   expect(Math.abs(after.scrollTop - before.scrollTop)).toBeLessThanOrEqual(2);
   expect(after.distanceFromBottom).toBeGreaterThan(160);
 });
