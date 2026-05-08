@@ -37,6 +37,37 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
         Some(w) => PathBuf::from(w),
         None => state.cwd.clone(),
     };
+
+    // If a workdir override was provided, validate it stays within the server's cwd.
+    // Canonicalize both sides so symlink escapes are caught.
+    if p.workdir.is_some() {
+        let workdir_canon = std::fs::canonicalize(&workspace_root).map_err(|e| {
+            ErrorData::invalid_params(
+                format!(
+                    "workdir not accessible: {} ({e})",
+                    workspace_root.display()
+                ),
+                None,
+            )
+        })?;
+        let cwd_canon = std::fs::canonicalize(&state.cwd).map_err(|e| {
+            ErrorData::invalid_params(
+                format!("server cwd not accessible: {} ({e})", state.cwd.display()),
+                None,
+            )
+        })?;
+        if !workdir_canon.starts_with(&cwd_canon) {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "workdir escapes workspace: {} is not within {}",
+                    workdir_canon.display(),
+                    cwd_canon.display()
+                ),
+                None,
+            ));
+        }
+    }
+
     let target = match resolve_within(&workspace_root, &p.path) {
         Ok(t) => t,
         Err(e) => return Err(ErrorData::invalid_params(e, None)),
@@ -364,6 +395,46 @@ mod tests {
             msg.contains("escapes workspace") || msg.contains("not accessible"),
             "msg: {msg}"
         );
+    }
+
+    #[test]
+    fn run_rejects_workdir_outside_cwd() {
+        let dir = tempdir().expect("tempdir");
+        let outside = tempdir().expect("tempdir2");
+        // Put a file inside the outside dir so the path itself is plausible.
+        let f = outside.path().join("a.txt");
+        fs::write(&f, "x").expect("write");
+        let state = make_state(dir.path());
+        let p = StrReplaceParams {
+            path: "a.txt".into(),
+            old_str: "x".into(),
+            new_str: "y".into(),
+            workdir: Some(outside.path().display().to_string()),
+        };
+        let err = run(&state, p).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("escapes workspace"), "msg: {msg}");
+        // Side-effect check: file should be untouched.
+        assert_eq!(fs::read_to_string(&f).expect("read"), "x");
+    }
+
+    #[test]
+    fn run_accepts_workdir_subdirectory_of_cwd() {
+        let dir = tempdir().expect("tempdir");
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).expect("mkdir");
+        let f = sub.join("a.txt");
+        fs::write(&f, "alpha\n").expect("write");
+        let state = make_state(dir.path());
+        let p = StrReplaceParams {
+            path: "a.txt".into(),
+            old_str: "alpha".into(),
+            new_str: "ALPHA".into(),
+            workdir: Some(sub.display().to_string()),
+        };
+        let out = run(&state, p).expect("ok");
+        assert!(out.contains("Replaced 1 occurrence"), "out: {out}");
+        assert_eq!(fs::read_to_string(&f).expect("read"), "ALPHA\n");
     }
 
     #[test]
