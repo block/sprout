@@ -255,11 +255,13 @@ export function ChannelManagementSheet({
             </div>
           ) : null}
 
-          <ChannelCanvas
-            canEdit={canEditNarrative}
-            channelId={channelId}
-            isArchived={isArchived}
-          />
+          <div data-testid="channel-canvas-section">
+            <ChannelCanvas
+              canEdit={canEditNarrative}
+              channelId={channelId}
+              isArchived={isArchived}
+            />
+          </div>
 
           <form
             className="space-y-3"

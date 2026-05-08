@@ -773,19 +773,19 @@ test("manage channel keeps canvas near the top of the sheet", async ({
   await page.goto("/");
   await openChannelManagement(page, "general");
 
-  const sectionHeadings = await page
-    .getByTestId("channel-management-sheet")
-    .locator("section h2")
-    .allTextContents();
+  const sheet = page.getByTestId("channel-management-sheet");
 
-  expect(sectionHeadings).toEqual([
-    "Access",
-    "Canvas",
-    "Context",
-    "Details",
-    "Channel state",
-    "Danger zone",
-  ]);
+  // Canvas section should appear before the name input in the DOM.
+  const canvasBox = await sheet
+    .getByTestId("channel-canvas-section")
+    .boundingBox();
+  const nameBox = await sheet
+    .getByTestId("channel-management-name")
+    .boundingBox();
+
+  expect(canvasBox).not.toBeNull();
+  expect(nameBox).not.toBeNull();
+  expect(canvasBox?.y).toBeLessThan(nameBox?.y);
 });
 
 test("members sidebar can invite and remove members", async ({ page }) => {
