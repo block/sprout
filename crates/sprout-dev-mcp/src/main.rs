@@ -14,6 +14,7 @@ mod rg;
 mod shell;
 mod shim;
 mod str_replace;
+mod tree;
 
 #[derive(Clone)]
 struct DevMcp {
@@ -32,7 +33,7 @@ impl DevMcp {
 
     #[tool(
         name = "shell",
-        description = "Run a bash command. Ephemeral process per call. Output capture is hard-capped at 10MB per stream and shown tail-heavy (~8KB to the LLM); full captured output is saved to an artifact file when truncated. timeout_ms is capped at 600000. `rg` is on PATH (use it instead of grep)."
+        description = "Run a bash command. Ephemeral process per call. Output tail-truncated to ~8KB for the LLM; full output (first 10MB) saved to artifact file. timeout_ms capped at 600000. On PATH: rg (prefer over grep; flags: -n -i -l -g <glob> -C <n> --files) and tree (flags: -d <depth>; shows line counts)."
     )]
     async fn shell(
         &self,
@@ -43,7 +44,7 @@ impl DevMcp {
 
     #[tool(
         name = "str_replace",
-        description = "Atomic find-and-replace in a file. `old_str` must occur exactly once. Returns a unified diff. Path is resolved relative to workdir (defaults to server cwd). Prefer this over sed/awk."
+        description = "Atomic find-and-replace in a file. old_str must occur exactly once. Returns a unified diff. Path resolved relative to workdir (defaults to server cwd). Prefer over sed/awk."
     )]
     async fn str_replace(
         &self,
@@ -77,6 +78,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if cmd == "rg" {
         let args: Vec<String> = std::env::args().skip(1).collect();
         std::process::exit(rg::run(args));
+    }
+
+    if cmd == "tree" {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        std::process::exit(tree::run(args));
     }
 
     let cwd = std::env::current_dir()?;

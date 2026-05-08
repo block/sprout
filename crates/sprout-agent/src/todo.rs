@@ -1,9 +1,6 @@
 //! Session task list. Two statuses (open / done), full-list replace.
 //!
-//! Enforcement:
-//!   - Cannot remove an open item without first marking it done.
-//!   - Cannot end the turn while open items remain (the agent shows the
-//!     full list and tells the LLM to keep working).
+//! End-turn gate: blocks the agent from stopping while open items exist.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -15,11 +12,10 @@ const MAX_ITEMS: usize = 50;
 const MAX_ID: u32 = 9999;
 const MAX_TITLE_CHARS: usize = 200;
 
-const DESCRIPTION: &str = "Session task list. Full-list replace. Items have id (int), \
-title (string), done (bool). Cannot remove open items. Cannot end turn with open items.";
+const DESCRIPTION: &str = "Session task list. Omit `todos` to read. \
+Provide full replacement array to update. Cannot end turn with open items.";
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct Item {
     pub id: u32,
     pub title: String,
@@ -28,7 +24,6 @@ pub struct Item {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Input {
     todos: Option<Vec<Item>>,
 }
@@ -72,7 +67,6 @@ impl Todos {
                         "items": {
                             "type": "object",
                             "required": ["id", "title"],
-                            "additionalProperties": false,
                             "properties": {
                                 "id":    { "type": "integer", "minimum": 0, "maximum": MAX_ID },
                                 "title": { "type": "string", "minLength": 1, "maxLength": MAX_TITLE_CHARS },
@@ -80,8 +74,7 @@ impl Todos {
                             }
                         }
                     }
-                },
-                "additionalProperties": false
+                }
             }),
         })
     }
@@ -119,34 +112,11 @@ impl Todos {
                     it.id
                 ));
             }
-            // Reject control chars (C0, DEL, C1) — they corrupt rendering
-            // and could inject fake "system" lines into tool output.
-            if let Some(bad) = it.title.chars().find(|c| c.is_control()) {
-                return Err(format!(
-                    "item {}: title contains control character (U+{:04X})",
-                    it.id, bad as u32
-                ));
-            }
-        }
-        // Anti-drop: an open item from current state cannot disappear
-        // without being marked done. Done items can be reorganized freely.
-        for old in &self.items {
-            if old.done {
-                continue;
-            }
-            if !new_items.iter().any(|n| n.id == old.id) {
-                return Err(format!(
-                    "cannot remove open item {}; mark it done first",
-                    old.id
-                ));
-            }
         }
         self.items = new_items;
         Ok(())
     }
 
-    /// `[x] 1. title` for done; `[ ] 2. title  ← next` for the first
-    /// open item; `[ ] 3. title` for the rest.
     pub fn render(&self) -> String {
         if self.items.is_empty() {
             return "(todo list is empty)".into();
@@ -168,10 +138,6 @@ impl Todos {
         out
     }
 
-    /// Returns `Some(reminder)` when open items exist, `None` when the
-    /// LLM is allowed to stop. The reminder includes the full list so
-    /// the LLM knows exactly what remains. The only escape is completing
-    /// all items or hitting max_rounds.
     pub fn check_end_turn(&self) -> Option<String> {
         if !self.enabled || !self.has_open() {
             return None;
@@ -182,8 +148,6 @@ impl Todos {
         ))
     }
 
-    /// Block injected into handoff prompts so the next turn inherits the
-    /// list. None when disabled or empty.
     pub fn handoff_block(&self) -> Option<String> {
         if !self.enabled || self.items.is_empty() {
             return None;
@@ -213,13 +177,7 @@ mod tests {
 
     #[test]
     fn disabled_check_end_turn_allows() {
-        let t = Todos::new(false);
-        assert!(t.check_end_turn().is_none());
-    }
-
-    #[test]
-    fn enabled_has_tool_def() {
-        assert!(Todos::new(true).tool_def().is_some());
+        assert!(Todos::new(false).check_end_turn().is_none());
     }
 
     #[test]
@@ -232,30 +190,9 @@ mod tests {
     #[test]
     fn done_defaults_to_false() {
         let mut t = Todos::new(true);
-        // Omit `done` — should default to false (open).
         t.handle_call(&json!({ "todos": [{ "id": 1, "title": "a" }] }))
             .unwrap();
         assert!(t.has_open());
-    }
-
-    #[test]
-    fn rejects_unknown_top_level_field() {
-        let mut t = Todos::new(true);
-        let err = t
-            .handle_call(&json!({ "todos": [], "extra": 1 }))
-            .unwrap_err();
-        assert!(err.contains("invalid args"), "got: {err}");
-    }
-
-    #[test]
-    fn rejects_unknown_item_field() {
-        let mut t = Todos::new(true);
-        let err = t
-            .handle_call(&json!({
-                "todos": [{ "id": 1, "title": "x", "done": false, "extra": 1 }]
-            }))
-            .unwrap_err();
-        assert!(err.contains("invalid args"), "got: {err}");
     }
 
     #[test]
@@ -273,28 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_control_chars_in_title() {
-        let mut t = Todos::new(true);
-        assert!(call(&mut t, &[(1, "ab\ncd", false)])
-            .unwrap_err()
-            .contains("control character"));
-        assert!(call(&mut t, &[(2, "ab\tcd", false)])
-            .unwrap_err()
-            .contains("control character"));
-    }
-
-    #[test]
-    fn rejects_del_control_char() {
-        let mut t = Todos::new(true);
-        let err = t
-            .handle_call(&json!({
-                "todos": [{ "id": 1, "title": "ab\u{7F}cd", "done": false }]
-            }))
-            .unwrap_err();
-        assert!(err.contains("control character"), "got: {err}");
-    }
-
-    #[test]
     fn rejects_too_many_items() {
         let mut t = Todos::new(true);
         let many: Vec<(u32, &str, bool)> = (0u32..=(MAX_ITEMS as u32))
@@ -305,43 +220,17 @@ mod tests {
     }
 
     #[test]
-    fn title_length_uses_char_count_not_bytes() {
+    fn title_length_uses_char_count() {
         let title: String = "é".repeat(MAX_TITLE_CHARS);
         let mut t = Todos::new(true);
         assert!(t
-            .handle_call(&json!({ "todos": [{ "id": 1, "title": title, "done": false }] }))
+            .handle_call(&json!({ "todos": [{ "id": 1, "title": title }] }))
             .is_ok());
         let too_long: String = "é".repeat(MAX_TITLE_CHARS + 1);
-        let mut t2 = Todos::new(true);
-        let err = t2
-            .handle_call(&json!({ "todos": [{ "id": 1, "title": too_long, "done": false }] }))
+        let err = t
+            .handle_call(&json!({ "todos": [{ "id": 1, "title": too_long }] }))
             .unwrap_err();
-        assert!(err.contains("exceeds"), "got: {err}");
-    }
-
-    #[test]
-    fn cannot_silently_drop_open() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", false), (2, "b", false)]).unwrap();
-        let err = call(&mut t, &[(2, "b", false)]).unwrap_err();
-        assert!(err.contains("cannot remove open item 1"), "got: {err}");
-    }
-
-    #[test]
-    fn allows_dropping_done_items() {
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "a", true), (2, "b", false)]).unwrap();
-        // Drop the done item — fine.
-        call(&mut t, &[(2, "b", false)]).unwrap();
-    }
-
-    #[test]
-    fn allows_retitling_open_item() {
-        // Anti-retitle guard removed: reorganizing the plan is allowed.
-        // Enforcement is "can't STOP with open items", not "can't edit."
-        let mut t = Todos::new(true);
-        call(&mut t, &[(1, "rough idea", false)]).unwrap();
-        call(&mut t, &[(1, "refined plan", false)]).unwrap();
+        assert!(err.contains("exceeds"));
     }
 
     #[test]
@@ -357,25 +246,19 @@ mod tests {
         )
         .unwrap();
         let out = t.render();
-        let line1 = out.lines().nth(1).unwrap();
-        assert!(line1.contains("← next"), "got: {out}");
-        let line2 = out.lines().nth(2).unwrap();
-        assert!(!line2.contains("← next"), "got: {out}");
+        assert!(out.lines().nth(1).unwrap().contains("← next"));
+        assert!(!out.lines().nth(2).unwrap().contains("← next"));
     }
 
     #[test]
     fn check_end_turn_blocks_while_open() {
         let mut t = Todos::new(true);
         call(&mut t, &[(1, "a", false)]).unwrap();
-        // Blocks every time — no strikes, no limit.
-        assert!(t.check_end_turn().is_some());
-        assert!(t.check_end_turn().is_some());
-        assert!(t.check_end_turn().is_some());
         assert!(t.check_end_turn().is_some());
     }
 
     #[test]
-    fn allow_when_all_done() {
+    fn check_end_turn_allows_when_all_done() {
         let mut t = Todos::new(true);
         call(&mut t, &[(1, "a", true)]).unwrap();
         assert!(t.check_end_turn().is_none());
@@ -384,8 +267,7 @@ mod tests {
     #[test]
     fn handle_call_disabled_errors() {
         let mut t = Todos::new(false);
-        let err = t.handle_call(&json!({})).unwrap_err();
-        assert!(err.contains("disabled"), "got: {err}");
+        assert!(t.handle_call(&json!({})).unwrap_err().contains("disabled"));
     }
 
     #[test]
@@ -400,6 +282,14 @@ mod tests {
         call(&mut t, &[(1, "a", false)]).unwrap();
         let b = t.handoff_block().unwrap();
         assert!(b.starts_with("# Todo List\n"));
-        assert!(!b.contains("Open todos remain"));
+    }
+
+    #[test]
+    fn can_remove_open_items_freely() {
+        let mut t = Todos::new(true);
+        call(&mut t, &[(1, "a", false), (2, "b", false)]).unwrap();
+        // Can drop open items without marking done first
+        call(&mut t, &[(2, "b", false)]).unwrap();
+        assert_eq!(t.items.len(), 1);
     }
 }

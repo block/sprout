@@ -400,7 +400,6 @@ impl McpRegistry {
             Ok(r) => r,
             Err(e) => {
                 if is_transport_error(&e) {
-                    // Transport/protocol failure — server is dead or unreachable.
                     self.kill_and_mark_dead_if_current(
                         server,
                         client,

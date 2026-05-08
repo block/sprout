@@ -14,8 +14,8 @@ use tokio::process::Command;
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
-const MAX_COMMAND_BYTES: usize = 1_000_000; // 1MB command cap
-const CAPTURE_CAP: usize = 10 * 1024 * 1024; // 10MB hard cap per stream
+const MAX_COMMAND_BYTES: usize = 1_000_000;
+const CAPTURE_CAP: usize = 10 * 1024 * 1024;
 const MAX_BYTES: usize = 50 * 1024;
 const MAX_LINES: usize = 2000;
 const TAIL_BYTES: usize = 8 * 1024;
@@ -60,19 +60,9 @@ impl SharedState {
 fn build_bootstrap(cwd: &Path) -> String {
     let stack = detect_stack(cwd);
     format!(
-        "sprout-dev-mcp — minimal dev tools for coding agents.\n\
-         \n\
-         Working directory: {}\n\
+        "Working directory: {}\n\
          Detected stack: {}\n\
-         \n\
-         Tools:\n\
-         - shell(command, workdir?, timeout_ms?): run a bash command. Output is tail-truncated to ~8KB; captured output (first 10MB per stream) goes to an artifact file. timeout_ms capped at 600000.\n\
-         - str_replace(path, old_str, new_str, workdir?): atomic find-and-replace within the workspace. `old_str` must occur exactly once. Returns a unified diff.\n\
-         \n\
-         On PATH inside shell:\n\
-         - rg: prefers system ripgrep when available. Built-in fallback supports literal text search only (no regex) with flags -n, -i, -l, -g <glob>, -C <n>, --files.\n\
-         \n\
-         Conventions: prefer str_replace over sed/awk for edits. Use `rg` instead of grep -r. Pass `workdir` per call rather than `cd`.\n",
+         Pass `workdir` per call rather than `cd`.\n",
         cwd.display(),
         stack,
     )
@@ -315,11 +305,9 @@ async fn kill_process_group_graceful(_pid: i32) {}
 
 #[derive(Default)]
 struct CapturedStream {
-    /// Bytes captured up to CAPTURE_CAP.
     bytes: Vec<u8>,
     /// Total bytes the process produced (may exceed bytes.len() if capped).
     total_bytes: usize,
-    /// Whether we hit CAPTURE_CAP and stopped reading.
     capped: bool,
 }
 

@@ -141,7 +141,6 @@ impl RunCtx<'_> {
         let mut results: Vec<Option<ToolResult>> = vec![None; calls.len()];
         let mut runnable: Vec<usize> = Vec::with_capacity(calls.len());
 
-        // Phase 1: preflight.
         for (idx, call) in calls.iter().enumerate() {
             if *self.cancel.borrow() {
                 for (j, c) in calls.iter().enumerate() {
@@ -199,10 +198,8 @@ impl RunCtx<'_> {
             runnable.push(idx);
         }
 
-        // Phase 2: execute.
         self.execute_parallel(calls, &runnable, &mut results).await;
 
-        // Phase 3: append in original call order.
         self.append_results(calls, &mut results);
 
         if *self.cancel.borrow() {
