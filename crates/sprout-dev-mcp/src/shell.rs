@@ -139,8 +139,6 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
         ));
     }
 
-
-
     let mut cmd = Command::new("bash");
     cmd.arg("-c").arg(&p.command);
     cmd.current_dir(&workdir);
@@ -523,10 +521,11 @@ mod tests {
         // Compare canonicalized paths (macOS /tmp -> /private/tmp, etc.).
         let sub_canon = std::fs::canonicalize(&sub).expect("canon");
         assert!(
-            stdout.trim().ends_with(sub_canon.to_string_lossy().as_ref())
+            stdout
+                .trim()
+                .ends_with(sub_canon.to_string_lossy().as_ref())
                 || stdout.contains(sub.file_name().unwrap().to_str().unwrap()),
             "stdout: {stdout}"
         );
     }
-
 }
