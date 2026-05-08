@@ -61,6 +61,7 @@ export type SettingsPanelProps = {
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetSoundEnabled: (enabled: boolean) => void;
 };
 
 export const settingsSections: SettingsSectionDescriptor[] = [
@@ -254,6 +255,7 @@ export function renderSettingsSection(
           onSetNeedsActionNotificationsEnabled={
             props.onSetNeedsActionNotificationsEnabled
           }
+          onSetSoundEnabled={props.onSetSoundEnabled}
         />
       );
     case "agents":

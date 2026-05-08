@@ -5,7 +5,10 @@ import {
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
-import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import {
+  formatMemberName,
+  formatPubkey,
+} from "@/features/channels/lib/memberUtils";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { changeChannelMemberRole } from "@/shared/api/tauri";
@@ -162,6 +165,7 @@ export function MembersSidebar({
         }
         member={member}
         memberIsBot={memberIsBot}
+        memberAvatarLabel={member.displayName ?? formatPubkey(member.pubkey)}
         memberLabel={formatMemberName(member, currentPubkey)}
         onChangeRole={(m, role) => {
           void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });

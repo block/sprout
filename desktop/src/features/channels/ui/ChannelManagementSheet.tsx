@@ -8,6 +8,7 @@ import {
   Lock,
   MessageSquare,
   Users,
+  Zap,
 } from "lucide-react";
 import * as React from "react";
 
@@ -24,6 +25,7 @@ import {
   useUpdateChannelMutation,
 } from "@/features/channels/hooks";
 import { compareMembersByRole } from "@/features/channels/lib/memberUtils";
+import { CreateWorkflowDialog } from "@/features/workflows/ui/CreateWorkflowDialog";
 import type { Channel } from "@/shared/api/types";
 import {
   AlertDialog,
@@ -55,27 +57,6 @@ type ChannelManagementSheetProps = {
   onOpenChange: (open: boolean) => void;
   open: boolean;
 };
-
-function Section({
-  title,
-  description,
-  children,
-}: React.PropsWithChildren<{
-  title: string;
-  description?: string;
-}>) {
-  return (
-    <section className="space-y-3">
-      <div className="space-y-1">
-        <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
-        {description ? (
-          <p className="text-sm text-muted-foreground">{description}</p>
-        ) : null}
-      </div>
-      {children}
-    </section>
-  );
-}
 
 function MetadataPill({
   icon: Icon,
@@ -138,17 +119,15 @@ export function ChannelManagementSheet({
     detail?.channelType !== "dm" &&
     !isArchived &&
     selfMember !== null;
-  const showAccessSection =
-    canJoin ||
-    canLeave ||
-    joinChannelMutation.error instanceof Error ||
-    leaveChannelMutation.error instanceof Error;
+  const memberCount =
+    members.length || detail?.memberCount || channel?.memberCount || 0;
 
   const [nameDraft, setNameDraft] = React.useState("");
   const [descriptionDraft, setDescriptionDraft] = React.useState("");
   const [topicDraft, setTopicDraft] = React.useState("");
   const [purposeDraft, setPurposeDraft] = React.useState("");
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
+  const [isCreateWorkflowOpen, setIsCreateWorkflowOpen] = React.useState(false);
 
   // Sync drafts from server only when the sheet opens or the channel changes —
   // not on every background refetch, which would clobber in-flight edits.
@@ -158,6 +137,7 @@ export function ChannelManagementSheet({
       // Reset on close so the next open re-syncs from server.
       syncedForRef.current = null;
       setIsDeleteDialogOpen(false);
+      setIsCreateWorkflowOpen(false);
       return;
     }
     if (!detail) {
@@ -214,13 +194,11 @@ export function ChannelManagementSheet({
         side="right"
       >
         <SheetHeader className="relative z-10 space-y-4 bg-background/25 px-6 py-6 text-left shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
-          <div className="space-y-2">
-            <SheetTitle className="pr-8">{channel.name}</SheetTitle>
-            <SheetDescription>
-              Manage channel settings, membership, and access.
-            </SheetDescription>
-          </div>
-          <div className="flex flex-wrap gap-2">
+          <SheetTitle className="pr-8">{channel.name}</SheetTitle>
+          <SheetDescription className="sr-only">
+            Channel settings
+          </SheetDescription>
+          <div className="flex flex-wrap items-center gap-2">
             <MetadataPill
               icon={
                 channel.channelType === "forum"
@@ -235,10 +213,7 @@ export function ChannelManagementSheet({
               icon={channel.visibility === "private" ? Lock : DoorOpen}
               label={channel.visibility}
             />
-            <MetadataPill
-              icon={Users}
-              label={`${resolvedChannel.memberCount} members`}
-            />
+            <MetadataPill icon={Users} label={`${memberCount} members`} />
             {isArchived ? (
               <MetadataPill icon={Archive} label="archived" />
             ) : null}
@@ -258,29 +233,179 @@ export function ChannelManagementSheet({
             </p>
           ) : null}
 
-          {showAccessSection ? (
-            <Section
-              description="Open channels stay visible to everyone. Private channels require an invite."
-              title="Access"
-            >
-              <div className="flex flex-wrap gap-2">
-                {canJoin ? (
-                  <Button
-                    data-testid="channel-management-join"
-                    disabled={joinChannelMutation.isPending}
-                    onClick={() => {
-                      void joinChannelMutation.mutateAsync();
-                    }}
-                    size="sm"
-                    type="button"
-                  >
-                    <DoorOpen className="h-4 w-4" />
-                    {joinChannelMutation.isPending
-                      ? "Joining..."
-                      : "Join channel"}
-                  </Button>
-                ) : null}
+          {canJoin ? (
+            <div className="space-y-3">
+              <Button
+                data-testid="channel-management-join"
+                disabled={joinChannelMutation.isPending}
+                onClick={() => {
+                  void joinChannelMutation.mutateAsync();
+                }}
+                size="sm"
+                type="button"
+              >
+                <DoorOpen className="h-4 w-4" />
+                {joinChannelMutation.isPending ? "Joining..." : "Join channel"}
+              </Button>
+              {joinChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {joinChannelMutation.error.message}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
+          <div data-testid="channel-canvas-section">
+            <ChannelCanvas
+              canEdit={canEditNarrative}
+              channelId={channelId}
+              isArchived={isArchived}
+            />
+          </div>
+
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void updateChannelMutation.mutateAsync({
+                description: descriptionDraft.trim() || undefined,
+                name: nameDraft.trim() || undefined,
+              });
+            }}
+          >
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="channel-name">
+                Name
+              </label>
+              <Input
+                data-testid="channel-management-name"
+                disabled={!canManageChannel || updateChannelMutation.isPending}
+                id="channel-name"
+                onChange={(event) => setNameDraft(event.target.value)}
+                value={nameDraft}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label
+                className="text-sm font-medium"
+                htmlFor="channel-description"
+              >
+                Description
+              </label>
+              <Textarea
+                className="min-h-24"
+                data-testid="channel-management-description"
+                disabled={!canManageChannel || updateChannelMutation.isPending}
+                id="channel-description"
+                onChange={(event) => setDescriptionDraft(event.target.value)}
+                value={descriptionDraft}
+              />
+            </div>
+            <Button
+              data-testid="channel-management-save-details"
+              disabled={!canManageChannel || updateChannelMutation.isPending}
+              size="sm"
+              type="submit"
+            >
+              {updateChannelMutation.isPending ? "Saving..." : "Save details"}
+            </Button>
+            {updateChannelMutation.error instanceof Error ? (
+              <p className="text-sm text-destructive">
+                {updateChannelMutation.error.message}
+              </p>
+            ) : null}
+          </form>
+
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void setTopicMutation.mutateAsync({
+                topic: topicDraft.trim(),
+              });
+            }}
+          >
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="channel-topic">
+                Topic
+              </label>
+              <Input
+                data-testid="channel-management-topic"
+                disabled={!canEditNarrative || setTopicMutation.isPending}
+                id="channel-topic"
+                onChange={(event) => setTopicDraft(event.target.value)}
+                value={topicDraft}
+              />
+            </div>
+            <Button
+              data-testid="channel-management-save-topic"
+              disabled={!canEditNarrative || setTopicMutation.isPending}
+              size="sm"
+              type="submit"
+              variant="outline"
+            >
+              {setTopicMutation.isPending ? "Saving..." : "Save topic"}
+            </Button>
+            {setTopicMutation.error instanceof Error ? (
+              <p className="text-sm text-destructive">
+                {setTopicMutation.error.message}
+              </p>
+            ) : null}
+          </form>
+
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void setPurposeMutation.mutateAsync({
+                purpose: purposeDraft.trim(),
+              });
+            }}
+          >
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="channel-purpose">
+                Purpose
+              </label>
+              <Input
+                data-testid="channel-management-purpose"
+                disabled={!canEditNarrative || setPurposeMutation.isPending}
+                id="channel-purpose"
+                onChange={(event) => setPurposeDraft(event.target.value)}
+                value={purposeDraft}
+              />
+            </div>
+            <Button
+              data-testid="channel-management-save-purpose"
+              disabled={!canEditNarrative || setPurposeMutation.isPending}
+              size="sm"
+              type="submit"
+              variant="outline"
+            >
+              {setPurposeMutation.isPending ? "Saving..." : "Save purpose"}
+            </Button>
+            {setPurposeMutation.error instanceof Error ? (
+              <p className="text-sm text-destructive">
+                {setPurposeMutation.error.message}
+              </p>
+            ) : null}
+          </form>
+
+          {canEditNarrative ? (
+            <Button
+              data-testid="channel-management-create-workflow"
+              onClick={() => setIsCreateWorkflowOpen(true)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Zap className="h-4 w-4" />
+              Create workflow
+            </Button>
+          ) : null}
+
+          {resolvedChannel.channelType !== "dm" ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
                 {canLeave ? (
                   <Button
                     data-testid="channel-management-leave"
@@ -295,187 +420,9 @@ export function ChannelManagementSheet({
                     variant="outline"
                   >
                     <DoorClosed className="h-4 w-4" />
-                    {leaveChannelMutation.isPending
-                      ? "Leaving..."
-                      : "Leave channel"}
+                    {leaveChannelMutation.isPending ? "Leaving..." : "Leave"}
                   </Button>
                 ) : null}
-              </div>
-              {joinChannelMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {joinChannelMutation.error.message}
-                </p>
-              ) : null}
-              {leaveChannelMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {leaveChannelMutation.error.message}
-                </p>
-              ) : null}
-            </Section>
-          ) : null}
-
-          <Section
-            description="A shared Markdown document for the channel."
-            title="Canvas"
-          >
-            <ChannelCanvas
-              canEdit={canEditNarrative}
-              channelId={channelId}
-              isArchived={isArchived}
-            />
-          </Section>
-
-          <Section
-            description="Topic and purpose show the current context for the channel."
-            title="Context"
-          >
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void setTopicMutation.mutateAsync({
-                  topic: topicDraft.trim(),
-                });
-              }}
-            >
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="channel-topic">
-                  Topic
-                </label>
-                <Input
-                  data-testid="channel-management-topic"
-                  disabled={!canEditNarrative || setTopicMutation.isPending}
-                  id="channel-topic"
-                  onChange={(event) => setTopicDraft(event.target.value)}
-                  value={topicDraft}
-                />
-              </div>
-              <Button
-                data-testid="channel-management-save-topic"
-                disabled={!canEditNarrative || setTopicMutation.isPending}
-                size="sm"
-                type="submit"
-                variant="outline"
-              >
-                {setTopicMutation.isPending ? "Saving..." : "Save topic"}
-              </Button>
-              {setTopicMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {setTopicMutation.error.message}
-                </p>
-              ) : null}
-            </form>
-
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void setPurposeMutation.mutateAsync({
-                  purpose: purposeDraft.trim(),
-                });
-              }}
-            >
-              <div className="space-y-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="channel-purpose"
-                >
-                  Purpose
-                </label>
-                <Textarea
-                  className="min-h-24"
-                  data-testid="channel-management-purpose"
-                  disabled={!canEditNarrative || setPurposeMutation.isPending}
-                  id="channel-purpose"
-                  onChange={(event) => setPurposeDraft(event.target.value)}
-                  value={purposeDraft}
-                />
-              </div>
-              <Button
-                data-testid="channel-management-save-purpose"
-                disabled={!canEditNarrative || setPurposeMutation.isPending}
-                size="sm"
-                type="submit"
-                variant="outline"
-              >
-                {setPurposeMutation.isPending ? "Saving..." : "Save purpose"}
-              </Button>
-              {setPurposeMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {setPurposeMutation.error.message}
-                </p>
-              ) : null}
-            </form>
-          </Section>
-
-          <Section
-            description="Name and description are owner/admin actions."
-            title="Details"
-          >
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void updateChannelMutation.mutateAsync({
-                  description: descriptionDraft.trim() || undefined,
-                  name: nameDraft.trim() || undefined,
-                });
-              }}
-            >
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium" htmlFor="channel-name">
-                  Name
-                </label>
-                <Input
-                  data-testid="channel-management-name"
-                  disabled={
-                    !canManageChannel || updateChannelMutation.isPending
-                  }
-                  id="channel-name"
-                  onChange={(event) => setNameDraft(event.target.value)}
-                  value={nameDraft}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="channel-description"
-                >
-                  Description
-                </label>
-                <Textarea
-                  className="min-h-24"
-                  data-testid="channel-management-description"
-                  disabled={
-                    !canManageChannel || updateChannelMutation.isPending
-                  }
-                  id="channel-description"
-                  onChange={(event) => setDescriptionDraft(event.target.value)}
-                  value={descriptionDraft}
-                />
-              </div>
-              <Button
-                data-testid="channel-management-save-details"
-                disabled={!canManageChannel || updateChannelMutation.isPending}
-                size="sm"
-                type="submit"
-              >
-                {updateChannelMutation.isPending ? "Saving..." : "Save details"}
-              </Button>
-              {updateChannelMutation.error instanceof Error ? (
-                <p className="text-sm text-destructive">
-                  {updateChannelMutation.error.message}
-                </p>
-              ) : null}
-            </form>
-          </Section>
-
-          {resolvedChannel.channelType !== "dm" ? (
-            <Section
-              description="Archiving keeps history but blocks new changes."
-              title="Channel state"
-            >
-              <div className="flex flex-wrap gap-2">
                 {isArchived ? (
                   <Button
                     data-testid="channel-management-unarchive"
@@ -491,7 +438,7 @@ export function ChannelManagementSheet({
                     <ArchiveRestore className="h-4 w-4" />
                     {unarchiveChannelMutation.isPending
                       ? "Restoring..."
-                      : "Unarchive channel"}
+                      : "Unarchive"}
                   </Button>
                 ) : (
                   <Button
@@ -509,10 +456,76 @@ export function ChannelManagementSheet({
                     <Archive className="h-4 w-4" />
                     {archiveChannelMutation.isPending
                       ? "Archiving..."
-                      : "Archive channel"}
+                      : "Archive"}
                   </Button>
                 )}
+                <div className="flex-1" />
+                {isOwner ? (
+                  <AlertDialog
+                    onOpenChange={handleDeleteDialogOpenChange}
+                    open={isDeleteDialogOpen}
+                  >
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        data-testid="channel-management-delete"
+                        disabled={deleteChannelMutation.isPending}
+                        size="sm"
+                        type="button"
+                        variant="destructive"
+                      >
+                        Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete channel?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Delete {resolvedChannel.name} from the workspace list.
+                          This action cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      {deleteChannelMutation.error instanceof Error ? (
+                        <p className="text-sm text-destructive">
+                          {deleteChannelMutation.error.message}
+                        </p>
+                      ) : null}
+                      <AlertDialogFooter>
+                        <AlertDialogCancel asChild>
+                          <Button
+                            data-testid="channel-delete-cancel"
+                            disabled={deleteChannelMutation.isPending}
+                            type="button"
+                            variant="outline"
+                          >
+                            Cancel
+                          </Button>
+                        </AlertDialogCancel>
+                        <AlertDialogAction asChild>
+                          <Button
+                            data-testid="channel-delete-confirm"
+                            disabled={deleteChannelMutation.isPending}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void handleDeleteChannel();
+                            }}
+                            type="button"
+                            variant="destructive"
+                          >
+                            {deleteChannelMutation.isPending
+                              ? "Deleting..."
+                              : "Delete channel"}
+                          </Button>
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                ) : null}
               </div>
+              {leaveChannelMutation.error instanceof Error ? (
+                <p className="text-sm text-destructive">
+                  {leaveChannelMutation.error.message}
+                </p>
+              ) : null}
               {archiveChannelMutation.error instanceof Error ? (
                 <p className="text-sm text-destructive">
                   {archiveChannelMutation.error.message}
@@ -523,76 +536,16 @@ export function ChannelManagementSheet({
                   {unarchiveChannelMutation.error.message}
                 </p>
               ) : null}
-            </Section>
-          ) : null}
-
-          {isOwner && resolvedChannel.channelType !== "dm" ? (
-            <Section
-              description="Deleting removes the channel from the workspace list."
-              title="Danger zone"
-            >
-              <AlertDialog
-                onOpenChange={handleDeleteDialogOpenChange}
-                open={isDeleteDialogOpen}
-              >
-                <AlertDialogTrigger asChild>
-                  <Button
-                    data-testid="channel-management-delete"
-                    disabled={deleteChannelMutation.isPending}
-                    size="sm"
-                    type="button"
-                    variant="destructive"
-                  >
-                    Delete channel
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent data-testid="channel-delete-confirmation-dialog">
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Delete channel?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Delete {resolvedChannel.name} from the workspace list.
-                      This action cannot be undone.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  {deleteChannelMutation.error instanceof Error ? (
-                    <p className="text-sm text-destructive">
-                      {deleteChannelMutation.error.message}
-                    </p>
-                  ) : null}
-                  <AlertDialogFooter>
-                    <AlertDialogCancel asChild>
-                      <Button
-                        data-testid="channel-delete-cancel"
-                        disabled={deleteChannelMutation.isPending}
-                        type="button"
-                        variant="outline"
-                      >
-                        Cancel
-                      </Button>
-                    </AlertDialogCancel>
-                    <AlertDialogAction asChild>
-                      <Button
-                        data-testid="channel-delete-confirm"
-                        disabled={deleteChannelMutation.isPending}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          void handleDeleteChannel();
-                        }}
-                        type="button"
-                        variant="destructive"
-                      >
-                        {deleteChannelMutation.isPending
-                          ? "Deleting..."
-                          : "Delete channel"}
-                      </Button>
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </Section>
+            </div>
           ) : null}
         </div>
       </SheetContent>
+
+      <CreateWorkflowDialog
+        channels={[channel]}
+        onOpenChange={setIsCreateWorkflowOpen}
+        open={isCreateWorkflowOpen}
+      />
     </Sheet>
   );
 }

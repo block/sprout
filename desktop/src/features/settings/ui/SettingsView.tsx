@@ -75,6 +75,7 @@ export function SettingsView({
   onSetHomeBadgeEnabled,
   onSetMentionNotificationsEnabled,
   onSetNeedsActionNotificationsEnabled,
+  onSetSoundEnabled,
   section,
 }: SettingsViewProps) {
   const myMembershipQuery = useMyRelayMembershipQuery();
@@ -213,6 +214,7 @@ export function SettingsView({
                 onSetHomeBadgeEnabled,
                 onSetMentionNotificationsEnabled,
                 onSetNeedsActionNotificationsEnabled,
+                onSetSoundEnabled,
               })}
             </div>
           </section>

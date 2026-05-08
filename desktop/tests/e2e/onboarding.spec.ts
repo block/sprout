@@ -108,7 +108,7 @@ test("identity fallback text does not count as a real onboarding name", async ({
 
   await expectIncompleteOnboarding(page);
   await expect(page.getByTestId("onboarding-avatar-upload")).toHaveText(
-    "Upload photo",
+    "Drop an image or browse",
   );
   await expect(page.getByTestId("onboarding-avatar-url")).toHaveValue("");
   await expect(page.getByTestId("onboarding-next")).toBeDisabled();

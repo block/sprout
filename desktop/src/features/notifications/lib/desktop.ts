@@ -124,12 +124,23 @@ export async function getDesktopNotificationPermissionState(): Promise<DesktopNo
   }
 }
 
+let pendingPermissionRequest: Promise<DesktopNotificationPermissionState> | null =
+  null;
+
 export async function requestDesktopNotificationAccess(): Promise<DesktopNotificationPermissionState> {
   if (!hasNotificationApi()) {
     return "unsupported";
   }
 
-  return requestPermission();
+  if (pendingPermissionRequest) {
+    return pendingPermissionRequest;
+  }
+
+  pendingPermissionRequest = requestPermission().finally(() => {
+    pendingPermissionRequest = null;
+  });
+
+  return pendingPermissionRequest;
 }
 
 export async function listenForDesktopNotificationActions(
@@ -220,6 +231,7 @@ export async function sendDesktopNotification(
 
   const notification = new window.Notification(payload.title, {
     body: payload.body,
+    silent: true,
     extra: notificationExtra(payload.target),
   } as DesktopNotificationOptions);
 

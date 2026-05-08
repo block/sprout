@@ -39,6 +39,7 @@ type MembersSidebarMemberCardProps = {
   isArchived: boolean;
   managedAgent?: ManagedAgent;
   member: ChannelMember;
+  memberAvatarLabel: string;
   memberIsBot: boolean;
   memberLabel: string;
   onChangeRole: (member: ChannelMember, role: string) => void;
@@ -77,6 +78,7 @@ export function MembersSidebarMemberCard({
   isArchived,
   managedAgent,
   member,
+  memberAvatarLabel,
   memberIsBot,
   memberLabel,
   onChangeRole,
@@ -107,7 +109,7 @@ export function MembersSidebarMemberCard({
             avatarUrl={profileAvatarUrl ?? null}
             className="h-9 w-9 rounded-full text-[11px] shadow-none"
             iconClassName="h-4 w-4"
-            label={memberLabel}
+            label={memberAvatarLabel}
           />
           {presenceStatus ? (
             <span
