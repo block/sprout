@@ -1,10 +1,11 @@
-import { AtSign, Check, Link2, UserRound } from "lucide-react";
+import { AtSign, Check, UserRound } from "lucide-react";
 import * as React from "react";
 
 import {
   useProfileQuery,
   useUpdateProfileMutation,
 } from "@/features/profile/hooks";
+import { AvatarUpload } from "@/features/profile/ui/AvatarUpload";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -112,18 +113,15 @@ export function ProfileSettingsCard({
     fallbackDisplayName ||
     "Your profile";
   const resolvedPubkey = profile?.pubkey ?? currentPubkey ?? "Unavailable";
-  const resolvedAvatarUrl =
-    nextAvatarUrl.length > 0 ? nextAvatarUrl : (profile?.avatarUrl ?? null);
   const nip05Handle = profile?.nip05Handle ?? "Not set";
 
   return (
     <section className="min-w-0" data-testid="settings-profile">
       <div className="flex min-w-0 items-start gap-4">
         <ProfileAvatar
-          avatarUrl={resolvedAvatarUrl}
+          avatarUrl={profile?.avatarUrl ?? null}
           className="h-16 w-16 rounded-3xl text-lg"
           iconClassName="h-6 w-6"
-          key={resolvedAvatarUrl ?? "profile-fallback-avatar"}
           label={resolvedName}
         />
         <div className="min-w-0 space-y-2">
@@ -194,26 +192,14 @@ export function ProfileSettingsCard({
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="profile-avatar-url"
-              >
-                Avatar URL
-              </label>
-              <div className="relative min-w-0">
-                <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="pl-9"
-                  data-testid="profile-avatar-url"
-                  disabled={updateProfileMutation.isPending}
-                  id="profile-avatar-url"
-                  onChange={(event) => setAvatarUrlDraft(event.target.value)}
-                  placeholder="https://example.com/avatar.png"
-                  value={avatarUrlDraft}
-                />
-              </div>
-            </div>
+            <AvatarUpload
+              avatarUrl={avatarUrlDraft}
+              previewName={resolvedName}
+              onUrlChange={(url) => setAvatarUrlDraft(url)}
+              disabled={updateProfileMutation.isPending}
+              idleHint="Upload or paste a URL to change your avatar."
+              testIdPrefix="profile-avatar"
+            />
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="profile-about">

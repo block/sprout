@@ -1,5 +1,3 @@
-import type * as React from "react";
-
 import type {
   DesktopNotificationPermissionState,
   NotificationSettings,
@@ -43,9 +41,6 @@ export type ProfileStepNameState = {
 
 export type ProfileStepAvatarState = {
   draftUrl: string;
-  errorMessage: string | null;
-  inputRef: React.RefObject<HTMLInputElement | null>;
-  isUploading: boolean;
   savedUrl: string;
 };
 
@@ -54,6 +49,7 @@ export type ProfileStepState = {
   /** Bech32-encoded current pubkey (npub1…), shown so the user can confirm
    *  which identity they're saving the profile for. */
   currentNpub: string | null;
+  isUploadingAvatar: boolean;
   isSaving: boolean;
   name: ProfileStepNameState;
   saveRecovery: ProfileStepSaveRecovery;
@@ -63,12 +59,11 @@ export type ProfileStepActions = {
   advanceWithoutSaving: () => void;
   clearAvatarDraft: () => void;
   importIdentity: (nsec: string) => Promise<void>;
-  openAvatarPicker: () => void;
+  onUploadingChange: (isUploading: boolean) => void;
   skipForNow: () => void;
   submit: () => void;
   updateAvatarUrl: (value: string) => void;
   updateDisplayName: (value: string) => void;
-  uploadAvatarFile: (event: React.ChangeEvent<HTMLInputElement>) => void;
 };
 
 export type SetupStepActions = {
