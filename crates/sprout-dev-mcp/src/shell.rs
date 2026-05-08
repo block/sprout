@@ -139,6 +139,30 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
         ));
     }
 
+    // Validate workdir is within the server's cwd (canonicalize catches symlink escapes).
+    let workdir_canon = std::fs::canonicalize(&workdir).map_err(|e| {
+        ErrorData::invalid_params(
+            format!("workdir not accessible: {} ({e})", workdir.display()),
+            None,
+        )
+    })?;
+    let cwd_canon = std::fs::canonicalize(&state.cwd).map_err(|e| {
+        ErrorData::invalid_params(
+            format!("server cwd not accessible: {} ({e})", state.cwd.display()),
+            None,
+        )
+    })?;
+    if !workdir_canon.starts_with(&cwd_canon) {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "workdir escapes workspace: {} is not within {}",
+                workdir_canon.display(),
+                cwd_canon.display()
+            ),
+            None,
+        ));
+    }
+
     let mut cmd = Command::new("bash");
     cmd.arg("-c").arg(&p.command);
     cmd.current_dir(&workdir);
@@ -165,7 +189,7 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
     impl Drop for PgidGuard {
         fn drop(&mut self) {
             if let Some(pid) = self.0 {
-                kill_process_group(pid as i32);
+                kill_process_group_immediate(pid as i32);
             }
         }
     }
@@ -198,7 +222,7 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
         Err(_) => {
             // Kill process group — this closes the pipes, causing reads to EOF.
             if let Some(pid) = pid {
-                kill_process_group(pid as i32);
+                kill_process_group_graceful(pid as i32).await;
             }
             // Reap the child so it doesn't become a zombie.
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -229,7 +253,7 @@ pub async fn run(state: &SharedState, p: ShellParams) -> Result<CallToolResult, 
 
     if !timed_out {
         if let Some(pid) = pid {
-            kill_process_group(pid as i32);
+            kill_process_group_graceful(pid as i32).await;
         }
     }
 
@@ -287,18 +311,31 @@ fn set_process_group(cmd: &mut Command) {
 #[cfg(not(unix))]
 fn set_process_group(_cmd: &mut Command) {}
 
+/// Immediate SIGKILL of the process group. Sync; safe to call from Drop.
+/// No grace period — used when the parent task is being torn down.
 #[cfg(unix)]
-fn kill_process_group(pid: i32) {
+fn kill_process_group_immediate(pid: i32) {
+    use nix::sys::signal::{killpg, Signal};
+    use nix::unistd::Pid;
+    let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+}
+
+#[cfg(not(unix))]
+fn kill_process_group_immediate(_pid: i32) {}
+
+/// Graceful SIGTERM → 200ms async sleep → SIGKILL. Async; never blocks the runtime.
+#[cfg(unix)]
+async fn kill_process_group_graceful(pid: i32) {
     use nix::sys::signal::{killpg, Signal};
     use nix::unistd::Pid;
     let pgid = Pid::from_raw(pid);
     let _ = killpg(pgid, Signal::SIGTERM);
-    std::thread::sleep(Duration::from_millis(200));
+    tokio::time::sleep(Duration::from_millis(200)).await;
     let _ = killpg(pgid, Signal::SIGKILL);
 }
 
 #[cfg(not(unix))]
-fn kill_process_group(_pid: i32) {}
+async fn kill_process_group_graceful(_pid: i32) {}
 
 #[derive(Default)]
 struct CapturedStream {
@@ -490,12 +527,14 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn workdir_is_honored() {
         let dir = tempdir().expect("tempdir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
         let state = make_state(dir.path());
         let r = run(
             &state,
             ShellParams {
                 command: "pwd".into(),
-                workdir: Some("/tmp".into()),
+                workdir: Some(sub.display().to_string()),
                 timeout_ms: Some(5_000),
             },
         )
@@ -503,6 +542,31 @@ mod tests {
         .expect("ok");
         let v = body(r);
         let stdout = v["stdout"].as_str().unwrap_or("");
-        assert!(stdout.contains("/tmp"), "stdout: {stdout}");
+        // Compare canonicalized paths (macOS /tmp -> /private/tmp, etc.).
+        let sub_canon = std::fs::canonicalize(&sub).expect("canon");
+        assert!(
+            stdout.trim().ends_with(sub_canon.to_string_lossy().as_ref())
+                || stdout.contains(sub.file_name().unwrap().to_str().unwrap()),
+            "stdout: {stdout}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workdir_outside_cwd_is_rejected() {
+        let dir = tempdir().expect("tempdir");
+        let outside = tempdir().expect("tempdir2");
+        let state = make_state(dir.path());
+        let err = run(
+            &state,
+            ShellParams {
+                command: "echo nope".into(),
+                workdir: Some(outside.path().display().to_string()),
+                timeout_ms: Some(5_000),
+            },
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("escapes workspace"), "msg: {msg}");
     }
 }
