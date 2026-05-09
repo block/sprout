@@ -10,9 +10,9 @@ We wanted something we could read in an afternoon and audit with confidence.
 
 Two binaries, two protocols, no coupling between them.
 
-**sprout-agent** (~2,500 LOC) is an ACP agent. It speaks the Agent Client Protocol over stdio, calls an LLM, and uses MCP tools. Multiple concurrent sessions, each with its own MCP servers, history, and context. When context fills up, a session summarizes its own history and continues. It works with Zed, JetBrains, sprout-acp, or anything else that speaks ACP.
+**sprout-agent** is an ACP agent. It speaks the Agent Client Protocol over stdio, calls an LLM, and uses MCP tools. Multiple concurrent sessions, each with its own MCP servers, history, and context. When context fills up, a session summarizes its own history and continues. It works with Zed, JetBrains, sprout-acp, or anything else that speaks ACP.
 
-**sprout-dev-mcp** (~1,500 LOC) is an MCP server. It gives any agent a shell and a file editor. Ephemeral processes with process-group kill on every exit path. Bounded output. File edits resolve against the working directory. It works with any agent or client that speaks MCP.
+**sprout-dev-mcp** is an MCP server. It gives any agent a shell and a file editor. Ephemeral processes with process-group kill on every exit path. Bounded output. File edits resolve against the working directory. It works with any agent or client that speaks MCP.
 
 Together they are ~4,400 lines of Rust purpose-built for headless autonomous coding work.
 
@@ -45,13 +45,13 @@ Two pipes. Two protocols. Each session gets its own MCP server instances — ful
 
 ## Design Principles
 
-- **Minimal.** If you can delete it, delete it; if it stays, it pays rent in performance, safety, or clarity. We deleted context injection, ast-grep, streaming, persistence, and a provider trait. The system got better with each one gone.
+- **Minimal.** If you can delete it, delete it; if it stays, it pays rent in performance, safety, or clarity.
 
 - **Hardened.** Zero unsafe. Zero panics. Bounded process lifetime, bounded output sizes, bounded history. Process-group kill on every exit path. File edits resolve against the working directory. The shell runs at the operator's trust level, like bash itself. History validity is maintained on every cancellation path. The system degrades gracefully, with bounded failure modes.
 
 - **Protocol-native.** ACP is the only interface to the agent. MCP is the only interface to the tools. No runtime coupling. No shared state. No custom wire formats.
 
-- **Honest.** The agent is a loop: prompt the LLM, execute tool calls, repeat. When context fills, it hands off to itself. When it cannot proceed, it stops. The handoff is a heuristic; everything else is mechanical.
+- **Honest.** The agent is a loop: prompt the LLM, execute tool calls, repeat. When context fills, it hands off to itself. When it cannot proceed, it stops.
 
 ## What This Enables
 
@@ -60,16 +60,3 @@ Two pipes. Two protocols. Each session gets its own MCP server instances — ful
 - Any ACP client gets a coding agent without a custom adapter
 - Any MCP server gets a capable caller without a custom adapter
 - A codebase small enough to fork, modify, and understand in a day
-
-## The Numbers
-
-| | sprout-agent | sprout-dev-mcp |
-|---|---|---|
-| Production LOC | ~2,900 | ~1,500 |
-| Source files | 10 | 7 |
-| Direct dependencies | 7 | 8 |
-| Tests | 39 | 14 |
-| Unsafe blocks | 0 | 0 |
-| Panic paths (expect/unwrap) | 0 | 0 |
-| Works with any ACP client | yes | n/a |
-| Works with any MCP client | n/a | yes |
