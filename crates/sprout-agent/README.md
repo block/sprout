@@ -234,50 +234,12 @@ A short list, because the answer is mostly "no":
 - **Not a framework.** No plugins, no recipes, no slash commands, no modes, no hooks.
 - **Not streaming.** One non-streaming HTTP POST per round. The LLM's text never reaches the client mid-flight.
 - **Not persistent.** Everything is in-memory, per-process. No SQLite. No compaction. When context fills, the agent summarizes and continues.
-- **Multi-session.** Up to `MAX_SESSIONS` (default 8) concurrent sessions, each with its own MCP servers and history. One in-flight prompt per session.
 - **Not an SDK.** This is a binary. The protocol seam is stdin/stdout. Use it from any language.
 - **Not a UI.** No TUI, no web, no notifications. The client renders.
 - **Not authenticated.** API keys come from env. Use systemd, Docker secrets, or a wrapper.
 - **Not networked MCP.** Stdio transport only. No HTTP/SSE MCP transport.
 - **Not load-able.** No `session/load`. We advertise `loadSession: false`.
 - **Not a router.** No agent-to-agent, no fan-out, no orchestration. One model. One loop.
-
-If you want any of those, fork. The whole thing is ten files; you'll have it changed by lunch.
-
-## Architecture
-
-Ten source files. Each describable in one sentence.
-
-```
-crates/sprout-agent/
-├── src/
-│   ├── main.rs       ACP wire loop: read stdin, dispatch, writer task, session lifecycle.
-│   ├── agent.rs      The non-streaming tool loop with cooperative cancellation.
-│   ├── llm.rs        Anthropic Messages + OpenAI Chat in one enum, no traits.
-│   ├── mcp.rs        rmcp client registry: spawn, list, call, poison, kill.
-│   ├── config.rs     Env-var config with validation.
-│   ├── handoff.rs    Context summarization when history fills.
-│   ├── todo.rs       In-memory task list with end-turn enforcement.
-│   ├── types.rs      DTOs (history, tool calls, errors).
-│   ├── wire.rs       JSON-RPC framing, bounded line reader.
-│   └── log.rs        Logging macros.
-├── tests/
-│   ├── fake_llm.rs   ACP smoke tests against a real-TCP fake LLM.
-│   ├── golden_transcripts.rs  Full protocol transcript tests.
-│   ├── regressions.rs One #[test] per fixed bug, named for the bug.
-│   └── bin/fake_mcp.rs Misbehaving MCP server (env-driven faults).
-└── Cargo.toml        Seven runtime dependencies.
-```
-
-**Dependency DAG** (acyclic, three levels deep):
-
-```
-main ─┬──> agent ─┬──> llm ──> types
-      ├──> llm   │
-      ├──> mcp ──┼──> types
-      └──> types │
-                 └──> mcp
-```
 
 **Concurrency model:**
 
@@ -293,7 +255,7 @@ main ─┬──> agent ─┬──> llm ──> types
                   │     │                     │              │
                   │     ├── session/cancel ───┼─> watch::send│ (biased select wins)
                   │     │                     │              │
-                  └───────────────────────────────┘              │
+                  └───────────────────────────┘              │
                                                              │
                   ┌── writer task ────────────────┐          │
    stdout ────────┤  mpsc<WireMsg> consumer       │<─────────┘
@@ -309,10 +271,6 @@ One reader, one writer, up to 8 concurrent prompt tasks (one per session).
 cargo build --release -p sprout-agent
 ```
 
-Seven runtime dependencies: `tokio`, `serde`, `serde_json`, `reqwest`, `rmcp`, `arc-swap`, `getrandom`. Plus `nix` on Unix for `setpgid`/`killpg`. That's it.
-
-Binary size: ~12 MB stripped (includes rustls, native TLS roots, tokio multi-thread runtime).
-
 ## Testing
 
 ```bash
@@ -324,11 +282,3 @@ Test strategy is **real subprocess, no mocks**:
 - **Fake LLM** — `tests/fake_llm.rs` and the helpers in `tests/regressions.rs` spin up a real `tokio::net::TcpListener` on port 0, parse `Content-Length`, and return scripted JSON. ~50 lines, no HTTP mocking library.
 - **Fake MCP server** — `tests/bin/fake_mcp.rs` is a separate binary controlled by env vars: `FAKE_MCP_HANG_INIT`, `FAKE_MCP_TOOL_DELAY`, `FAKE_MCP_SPAWN_GRANDCHILD`, etc. Each fault path is a real process being abused.
 - **Regression tests are the changelog.** Each `#[test]` in `regressions.rs` is named for the bug it locks down: `assistant_text_preserved_across_prompts`, `cancel_leaves_history_valid_for_next_prompt`, `mcp_init_timeout_kills_child`, `oversize_line_kills_connection`. Read them in order to learn the protocol's failure modes.
-
-## Design Doc
-
-The full design rationale — every decision and every rejected alternative — lives in [`RESEARCH/SPROUT_AGENT_DESIGN.md`](../../../RESEARCH/SPROUT_AGENT_DESIGN.md) (in the goosetown checkout).
-
-## License
-
-Apache-2.0 OR MIT. Pick one.
