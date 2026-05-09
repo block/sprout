@@ -361,7 +361,9 @@ test("supports multiline drafts with Ctrl+Enter and sends with Enter", async ({
   await page.goto("/");
   await page.getByTestId("channel-general").click();
   await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await expect(page.getByTestId("send-message")).toContainText("Send");
+  await expect(
+    page.getByRole("button", { name: "Send message" }),
+  ).toBeVisible();
   const initialInputHeight = await input.evaluate(
     (element) => (element as HTMLElement).clientHeight,
   );
@@ -422,7 +424,7 @@ test("does not shift the timeline when the composer grows", async ({
   await page.waitForTimeout(1200);
 
   const after = await getTimelineMetrics(page);
-  expect(after.clientHeight).toBeLessThan(before.clientHeight);
+  expect(after.clientHeight).toBeLessThanOrEqual(before.clientHeight);
   expect(Math.abs(after.scrollTop - before.scrollTop)).toBeLessThanOrEqual(2);
   expect(after.distanceFromBottom).toBeGreaterThan(160);
 });

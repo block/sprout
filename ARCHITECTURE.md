@@ -70,7 +70,7 @@ Sprout is a Rust monorepo (~72K LOC across 17 crates), licensed Apache 2.0 under
 sprout-core  (zero I/O — types, verification, filter matching, kind registry)
     │
     ├── sprout-db        (Postgres: events, channels, tokens, workflows, audit)
-    ├── sprout-auth      (NIP-42, Okta JWT, API tokens, scopes, rate limiting)
+    ├── sprout-auth      (NIP-42, NIP-98, API tokens, scopes, rate limiting)
     ├── sprout-pubsub    (Redis pub/sub, presence, typing indicators)
     ├── sprout-search    (Typesense: index, query, delete)
     ├── sprout-audit     (hash-chain tamper-evident log)
@@ -171,14 +171,12 @@ The relay immediately sends `["AUTH", "<challenge>"]`. The challenge is a random
 
 ### Step 3: Authentication
 
-The client must respond with `["AUTH", <signed-event>]` before submitting events or subscriptions. Four authentication paths:
+The client must respond with `["AUTH", <signed-event>]` before submitting events or subscriptions. Authentication paths:
 
 | Path | Mechanism | Use Case |
 |------|-----------|---------|
-| NIP-42 only | Signed challenge, pubkey verified | Dev mode / open relay |
-| NIP-42 + Okta JWT | Challenge + JWKS-validated JWT in `auth_token` tag | Human SSO via Okta |
-| NIP-42 + API token | Challenge + `auth_token` tag, constant-time hash verify | Agent/service accounts |
-| HTTP Bearer JWT | `Authorization: Bearer <jwt>` header on REST endpoints | REST API clients |
+| NIP-42 | Signed challenge, pubkey verified | WebSocket connections |
+| NIP-98 HTTP Auth | Schnorr-signed `kind:27235` event on REST endpoints | REST API clients |
 
 On success, `ConnectionState.auth_state` transitions from `Pending` → `Authenticated(AuthContext)`. On failure → `Failed`. Unauthenticated EVENT/REQ messages are rejected with `["CLOSED", ...]` or `["OK", ..., false, "auth-required: ..."]`.
 
@@ -347,22 +345,20 @@ pub const ALL_KINDS: &[u32]  // 80 entries (KIND_AUTH excluded — never stored)
 
 ### sprout-auth — Authentication and Authorization
 
-**2,310 LOC.** Handles all four authentication paths, JWKS caching, scope enforcement, and token operations.
+**2,310 LOC.** Handles authentication paths, scope enforcement, and token operations.
 
-**Four auth paths:**
+**Auth paths:**
 
 | Path | Entry Point | Notes |
 |------|-------------|-------|
-| NIP-42 only | `verify_auth_event()` | Dev mode; grants `Scope::all_known()` (all 14 scopes) |
-| NIP-42 + Okta JWT | `verify_auth_event()` | JWT in `auth_token` tag; JWKS-validated |
-| NIP-42 + API token | Relay AUTH handler → DB lookup | `auth_token` tag with `sprout_` prefix; relay intercepts before `verify_auth_event()` (which has no DB access) |
-| HTTP Bearer JWT | `validate_bearer_jwt()` | REST endpoints; skips pubkey cross-check; always adds `ChannelsRead` |
+| NIP-42 | `verify_auth_event()` | Schnorr-signed challenge/response; grants `Scope::all_known()` (all 14 scopes) |
+| NIP-98 HTTP Auth | `validate_nip98_auth()` | REST endpoints; Schnorr-signed `kind:27235` event |
 
 **Key types:**
 
 ```rust
 pub struct AuthContext { pub pubkey: PublicKey, pub scopes: Vec<Scope>, pub auth_method: AuthMethod }
-pub enum AuthMethod { Nip42PubkeyOnly, Nip42Okta, Nip42ApiToken }
+pub enum AuthMethod { Nip42, Nip98 }
 pub enum Scope { MessagesRead, MessagesWrite, ChannelsRead, ChannelsWrite,
                  AdminChannels, UsersRead, UsersWrite, AdminUsers,
                  JobsRead, JobsWrite, SubscriptionsRead, SubscriptionsWrite,
@@ -372,10 +368,7 @@ pub trait RateLimiter: Send + Sync { ... }
 ```
 
 **Security details:**
-- JWKS double-checked locking: two read-lock checks before fetching, HTTP fetch with no lock held, write-lock re-check after. Cache TTL: 300 seconds.
-- Token comparison: `subtle::ConstantTimeEq` — constant-time, prevents timing attacks.
-- Token format: `sprout_<64-hex-chars>` (71 chars). `hash_token()` → SHA-256 → stored hash.
-- Scopeless JWT defaults to `[MessagesRead]` only (not read+write).
+- NIP-98 auth: Schnorr-signed `kind:27235` events with URL + method tags.
 - NIP-42 timestamp tolerance: ±60 seconds.
 - Dev-only key derivation: `SHA-256("sprout-test-key:{username}")` — gated behind `#[cfg(any(test, feature = "dev"))]`. The `dev` feature must not be enabled in production relay deployments.
 
@@ -396,7 +389,6 @@ pub trait RateLimiter: Send + Sync { ... }
 | `feed.rs` | `query_mentions` (INNER JOIN event_mentions), `query_needs_action`, `query_activity` |
 | `workflow.rs` | Full workflow/run/approval CRUD; SHA-256 hashed approval tokens |
 | `partition.rs` | Monthly range partitioning for `events` and `delivery_log` tables |
-| `api_token.rs` | Token creation; receives pre-hashed token from caller |
 | `dm.rs` | DM channel management |
 | `reaction.rs` | Reaction storage and retrieval |
 | `thread.rs` | Thread/reply tracking |
@@ -415,8 +407,7 @@ pub trait RateLimiter: Send + Sync { ... }
 - Soft-delete for channel members: `remove_member` sets `removed_at`; re-adding reverses it.
 - Feed hard cap: `FEED_MAX_LIMIT = 100` rows regardless of caller-requested limit.
 - `query_mentions` uses `INNER JOIN event_mentions` — normalized table with composite index on `(pubkey_hex, created_at)`.
-- API tokens: raw token never reaches the DB — caller hashes with SHA-256 before passing to `create_api_token`.
-- Approval tokens: separate path — `create_approval` receives the raw token and hashes it internally.
+- Approval tokens: `create_approval` receives the raw token and hashes it internally with SHA-256.
 - DDL injection protection in partition manager: allowlist of table names + strict suffix/date validators.
 
 **Does NOT:** cache queries, implement connection pooling logic (delegated to sqlx), or make network calls outside Postgres.
@@ -664,8 +655,6 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | POST | `/api/approvals/{token}/deny` | Deny a workflow step (🚧 unreachable — see WF-08) |
 | POST | `/api/approvals/by-hash/{hash}/grant` | Approve by hash (🚧 unreachable — see WF-08) |
 | POST | `/api/approvals/by-hash/{hash}/deny` | Deny by hash (🚧 unreachable — see WF-08) |
-| GET/POST/DELETE | `/api/tokens` | List/create/delete all API tokens |
-| DELETE | `/api/tokens/{id}` | Delete specific API token |
 | GET | `/api/dms` | List DM channels |
 | POST | `/api/dms` | Open a DM channel |
 | POST | `/api/dms/{channel_id}/members` | Add DM member |
@@ -715,7 +704,7 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 - Connects to relay via WebSocket (`tokio_tungstenite`). Handles NIP-42 auth automatically.
 - Ephemeral keypair generated if `SPROUT_PRIVATE_KEY` not set (printed to stderr).
 - Exponential backoff reconnection: 1s → 30s. Resubscribes all active subscriptions after reconnect.
-- REST calls use `Authorization: Bearer <token>` when `SPROUT_API_TOKEN` is set; falls back to `X-Pubkey: <hex>` in dev mode.
+- REST calls use NIP-98 Schnorr-signed auth when `SPROUT_PRIVATE_KEY` is set; falls back to `X-Pubkey: <hex>` in dev mode.
 - `create_channel` sends a signed Nostr kind 9007 event (NIP-29 group creation, not a REST call).
 - `set_canvas` sends kind 40100 with `h` tag pointing to channel UUID.
 - UUID validation at tool boundary before any network call.
@@ -812,12 +801,9 @@ Every security-sensitive operation uses an explicit, verified pattern. No implic
 
 | Concern | Mechanism |
 |---------|-----------|
-| Token comparison | `subtle::ConstantTimeEq` — prevents timing attacks |
-| Token storage | SHA-256 hash only — raw token shown once at mint, never stored |
-| JWKS cache | Double-checked locking; HTTP fetch with no lock held (prevents global DoS) |
 | NIP-42 timestamp | ±60 second tolerance — prevents replay attacks |
 | AUTH events | Never stored in Postgres, never logged in audit chain |
-| Scopeless JWT | Defaults to `[MessagesRead]` only — least-privilege default |
+| NIP-98 HTTP Auth | Schnorr-signed `kind:27235` events — URL and method verification |
 
 ### Input Validation
 
@@ -873,7 +859,6 @@ Docker Compose provides the full local development stack. All services include h
 | Redis | `redis:7-alpine` | 6379 | Pub/sub fan-out, presence (SET EX), typing (sorted sets) |
 | Typesense | `typesense/typesense:27.1` | 8108 | Full-text search index |
 | Adminer | `adminer` | 8082 | DB web UI (dev only) |
-| Keycloak | `quay.io/keycloak/keycloak:26` | 8180 | Local OAuth/OIDC stand-in for Okta |
 | MinIO | `minio/minio` | 9000 (API), 9001 (console) | S3-compatible object storage (media) |
 | Prometheus | `prom/prometheus` | 9090 | Metrics collection |
 
@@ -887,7 +872,6 @@ Docker Compose provides the full local development stack. All services include h
 | `workflows` | Workflow definitions (YAML stored as canonical JSON) |
 | `workflow_runs` | Execution records with trigger context and trace |
 | `workflow_approvals` | Approval gates (token stored as SHA-256 hash) |
-| `api_tokens` | API token records (hash only, never plaintext) |
 | `audit_log` | Hash-chain audit entries |
 | `delivery_log` | Delivery tracking (partitioned; Rust module pending) |
 

@@ -333,6 +333,8 @@ pub struct TeamRecord {
     pub name: String,
     pub description: Option<String>,
     pub persona_ids: Vec<String>,
+    #[serde(default)]
+    pub is_builtin: bool,
     pub created_at: String,
     pub updated_at: String,
 }

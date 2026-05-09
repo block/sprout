@@ -2,24 +2,30 @@ import type { FeedItem, HomeFeedResponse } from "@/shared/api/types";
 
 const FEED_NOTIFICATION_BODY_MAX_LENGTH = 140;
 
-export function notificationTitle(item: FeedItem) {
+export function notificationTitle(item: FeedItem, senderName?: string) {
   const channelLabel = item.channelName.trim()
     ? ` in #${item.channelName.trim()}`
     : "";
 
   if (item.channelType === "dm") {
-    return "Direct message";
+    return senderName || "Direct message";
   }
 
   if (item.category === "mention") {
-    return `@Mention${channelLabel}`;
+    return senderName
+      ? `${senderName} mentioned you${channelLabel}`
+      : `@Mention${channelLabel}`;
   }
 
   if (item.kind === 46010) {
-    return `Approval Requested${channelLabel}`;
+    return senderName
+      ? `${senderName} requested approval${channelLabel}`
+      : `Approval Requested${channelLabel}`;
   }
 
-  return `Needs Action${channelLabel}`;
+  return senderName
+    ? `${senderName}${channelLabel}`
+    : `Needs Action${channelLabel}`;
 }
 
 export function notificationBody(item: FeedItem) {

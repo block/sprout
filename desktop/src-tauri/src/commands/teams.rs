@@ -6,8 +6,8 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         encode_team_json, ensure_persona_ids_are_active, load_personas, load_teams,
-        parse_team_json, save_teams, CreateTeamRequest, ParsedTeamPreview, TeamRecord,
-        UpdateTeamRequest,
+        parse_team_json, save_teams, validate_team_deletion, CreateTeamRequest, ParsedTeamPreview,
+        TeamRecord, UpdateTeamRequest,
     },
     util::now_iso,
 };
@@ -58,6 +58,7 @@ pub fn create_team(
         name,
         description,
         persona_ids: input.persona_ids,
+        is_builtin: false,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -104,11 +105,12 @@ pub fn delete_team(id: String, app: AppHandle, state: State<'_, AppState>) -> Re
         .lock()
         .map_err(|error| error.to_string())?;
     let mut teams = load_teams(&app)?;
-    let original_len = teams.len();
+    let team = teams
+        .iter()
+        .find(|record| record.id == id)
+        .ok_or_else(|| format!("team {id} not found"))?;
+    validate_team_deletion(team)?;
     teams.retain(|record| record.id != id);
-    if teams.len() == original_len {
-        return Err(format!("team {id} not found"));
-    }
     save_teams(&app, &teams)
 }
 

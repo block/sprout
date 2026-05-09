@@ -1,13 +1,7 @@
 import * as React from "react";
 import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "motion/react";
-import {
-  ALargeSmall,
-  AtSign,
-  Paperclip,
-  SendHorizontal,
-  X,
-} from "lucide-react";
+import { ALargeSmall, ArrowUp, AtSign, Paperclip, X } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -58,8 +52,8 @@ export const MessageComposerToolbar = React.memo(
     sendDisabled: boolean;
   }) {
     return (
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-1 py-1 min-h-11">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-h-10 min-w-0 flex-1 items-center gap-1 py-1">
           {/*
            * AnimatePresence with mode="popLayout" — exiting elements
            * are popped out of flow immediately so entering elements
@@ -244,20 +238,23 @@ export const MessageComposerToolbar = React.memo(
 
         <div className="flex items-center gap-2">
           {extraActions}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                className="gap-2"
-                data-testid="send-message"
-                disabled={sendDisabled || isSending}
-                type="submit"
-              >
-                <SendHorizontal className="h-4 w-4" />
-                {isSending ? "Sending" : "Send"}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Send (Enter)</TooltipContent>
-          </Tooltip>
+          <Button
+            aria-label={isSending ? "Sending" : "Send message"}
+            className="rounded-full"
+            data-testid="send-message"
+            disabled={sendDisabled || isSending}
+            size="icon"
+            type="submit"
+          >
+            {isSending ? (
+              <span
+                aria-hidden
+                className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
+              />
+            ) : (
+              <ArrowUp aria-hidden className="h-4 w-4" />
+            )}
+          </Button>
         </div>
       </div>
     );

@@ -2,7 +2,10 @@ use std::{fs, path::PathBuf};
 
 use tauri::AppHandle;
 
-use crate::managed_agents::{managed_agents_base_dir, PersonaRecord, TeamRecord};
+use crate::{
+    managed_agents::{managed_agents_base_dir, PersonaRecord, TeamRecord},
+    util::now_iso,
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,24 +31,118 @@ fn teams_store_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn sort_teams(records: &mut [TeamRecord]) {
     records.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
+        let left_builtin = if left.is_builtin { 0 } else { 1 };
+        let right_builtin = if right.is_builtin { 0 } else { 1 };
+        left_builtin
+            .cmp(&right_builtin)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.id.cmp(&right.id))
     });
 }
 
-pub fn load_teams(app: &AppHandle) -> Result<Vec<TeamRecord>, String> {
-    let path = teams_store_path(app)?;
-    if !path.exists() {
-        return Ok(Vec::new());
+// ---------------------------------------------------------------------------
+// Built-in teams
+// ---------------------------------------------------------------------------
+
+struct BuiltInTeam {
+    id: &'static str,
+    name: &'static str,
+    description: Option<&'static str>,
+    persona_ids: &'static [&'static str],
+}
+
+const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
+    id: "builtin-team:kit-scout",
+    name: "Kit & Scout",
+    description: Some("Kit orchestrates and builds; Scout researches, plans, and reviews."),
+    persona_ids: &["builtin:kit", "builtin:scout"],
+}];
+
+fn built_in_team_records(now: &str) -> Vec<TeamRecord> {
+    BUILT_IN_TEAMS
+        .iter()
+        .map(|team| TeamRecord {
+            id: team.id.to_string(),
+            name: team.name.to_string(),
+            description: team.description.map(|s| s.to_string()),
+            persona_ids: team.persona_ids.iter().map(|s| s.to_string()).collect(),
+            is_builtin: true,
+            created_at: now.to_string(),
+            updated_at: now.to_string(),
+        })
+        .collect()
+}
+
+fn built_in_team_order(id: &str) -> Option<usize> {
+    BUILT_IN_TEAMS.iter().position(|team| team.id == id)
+}
+
+/// Add missing built-in teams, demote stale built-ins, and preserve any
+/// user customizations to existing built-in teams (name, description,
+/// persona membership). Returns the merged list and whether the store
+/// changed.
+fn merge_teams(mut stored: Vec<TeamRecord>, now: &str) -> (Vec<TeamRecord>, bool) {
+    let mut changed = false;
+
+    for built_in in built_in_team_records(now) {
+        if let Some(existing) = stored.iter_mut().find(|record| record.id == built_in.id) {
+            if !existing.is_builtin {
+                existing.is_builtin = true;
+                existing.updated_at = now.to_string();
+                changed = true;
+            }
+        } else {
+            stored.push(built_in);
+            changed = true;
+        }
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read teams store: {error}"))?;
-    let mut records: Vec<TeamRecord> = serde_json::from_str(&content)
-        .map_err(|error| format!("failed to parse teams store: {error}"))?;
+    // Demote any stored team flagged as built-in whose id is no longer in
+    // BUILT_IN_TEAMS (e.g. a built-in that has been retired). The record
+    // stays so existing references keep working; it becomes a user-owned
+    // custom team they can edit or delete.
+    for record in stored.iter_mut() {
+        if record.is_builtin && built_in_team_order(&record.id).is_none() {
+            record.is_builtin = false;
+            record.updated_at = now.to_string();
+            changed = true;
+        }
+    }
+
+    (stored, changed)
+}
+
+/// Reject deletion of built-in teams. Mirrors `validate_persona_deletion`
+/// for personas — built-ins always come back via `merge_teams` on the
+/// next load, so blocking the delete avoids a confusing "keeps coming
+/// back" UX.
+pub fn validate_team_deletion(team: &TeamRecord) -> Result<(), String> {
+    if team.is_builtin {
+        return Err("Built-in teams cannot be deleted.".to_string());
+    }
+    Ok(())
+}
+
+pub fn load_teams(app: &AppHandle) -> Result<Vec<TeamRecord>, String> {
+    let path = teams_store_path(app)?;
+    let now = now_iso();
+
+    let records = if path.exists() {
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read teams store: {error}"))?;
+        serde_json::from_str::<Vec<TeamRecord>>(&content)
+            .map_err(|error| format!("failed to parse teams store: {error}"))?
+    } else {
+        Vec::new()
+    };
+
+    let (mut records, changed) = merge_teams(records, &now);
     sort_teams(&mut records);
+
+    if changed || !path.exists() {
+        save_teams(app, &records)?;
+    }
+
     Ok(records)
 }
 
@@ -179,7 +276,10 @@ pub fn parse_team_json(json_bytes: &[u8]) -> Result<ParsedTeamPreview, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_team_json, parse_team_json, sort_teams};
+    use super::{
+        encode_team_json, merge_teams, parse_team_json, sort_teams, validate_team_deletion,
+        BUILT_IN_TEAMS,
+    };
     use crate::managed_agents::{PersonaRecord, TeamRecord};
 
     fn team(id: &str, name: &str) -> TeamRecord {
@@ -188,6 +288,7 @@ mod tests {
             name: name.to_string(),
             description: None,
             persona_ids: Vec::new(),
+            is_builtin: false,
             created_at: "2026-03-20T00:00:00Z".to_string(),
             updated_at: "2026-03-20T00:00:00Z".to_string(),
         }
@@ -346,5 +447,94 @@ mod tests {
         let parsed = parse_team_json(&bytes).unwrap();
         assert!(parsed.personas.is_empty());
         assert_eq!(parsed.name, "Solo");
+    }
+
+    // -----------------------------------------------------------------------
+    // merge_teams + validate_team_deletion tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn merge_teams_adds_missing_built_ins() {
+        let (records, changed) = merge_teams(Vec::new(), "2026-05-07T00:00:00Z");
+
+        assert!(changed);
+        assert_eq!(records.len(), BUILT_IN_TEAMS.len());
+        assert!(records.iter().all(|record| record.is_builtin));
+        let names: Vec<&str> = records.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["Kit & Scout"]);
+    }
+
+    #[test]
+    fn merge_teams_preserves_user_customizations_to_builtin() {
+        let mut customized = team("builtin-team:kit-scout", "Kit & Scout (mine)");
+        customized.is_builtin = true;
+        customized.persona_ids = vec!["builtin:kit".to_string()];
+
+        let (records, _changed) = merge_teams(vec![customized], "2026-05-07T00:00:00Z");
+
+        let kit_scout = records
+            .iter()
+            .find(|t| t.id == "builtin-team:kit-scout")
+            .expect("Kit & Scout built-in should exist");
+        assert_eq!(kit_scout.name, "Kit & Scout (mine)");
+        assert_eq!(kit_scout.persona_ids, vec!["builtin:kit".to_string()]);
+        assert!(kit_scout.is_builtin);
+    }
+
+    #[test]
+    fn merge_teams_preserves_unrelated_user_teams() {
+        let user_team = team("user-uuid", "My Team");
+        let (records, _changed) = merge_teams(vec![user_team], "2026-05-07T00:00:00Z");
+
+        assert!(records.iter().any(|t| t.id == "user-uuid"));
+        assert!(records.iter().any(|t| t.id == "builtin-team:kit-scout"));
+    }
+
+    #[test]
+    fn merge_teams_demotes_retired_built_ins() {
+        let mut retired = team("builtin-team:legacy", "Legacy");
+        retired.is_builtin = true;
+
+        let (records, changed) = merge_teams(vec![retired], "2026-05-07T00:00:00Z");
+
+        assert!(changed);
+        let demoted = records
+            .iter()
+            .find(|t| t.id == "builtin-team:legacy")
+            .expect("retired built-in should be retained as a custom team");
+        assert!(!demoted.is_builtin);
+        assert_eq!(demoted.updated_at, "2026-05-07T00:00:00Z");
+    }
+
+    #[test]
+    fn merge_teams_repromotes_existing_builtin_marked_as_custom() {
+        // If someone hand-edits the store and flips is_builtin to false on a
+        // canonical built-in id, merge_teams should restore the flag.
+        let mut downgraded = team("builtin-team:kit-scout", "Kit & Scout");
+        downgraded.is_builtin = false;
+
+        let (records, changed) = merge_teams(vec![downgraded], "2026-05-07T00:00:00Z");
+
+        assert!(changed);
+        let kit_scout = records
+            .iter()
+            .find(|t| t.id == "builtin-team:kit-scout")
+            .expect("Kit & Scout should exist");
+        assert!(kit_scout.is_builtin);
+    }
+
+    #[test]
+    fn validate_team_deletion_rejects_built_ins() {
+        let mut built_in = team("builtin-team:kit-scout", "Kit & Scout");
+        built_in.is_builtin = true;
+
+        let err = validate_team_deletion(&built_in).unwrap_err();
+        assert_eq!(err, "Built-in teams cannot be deleted.");
+    }
+
+    #[test]
+    fn validate_team_deletion_allows_custom_teams() {
+        let custom = team("user-uuid", "My Team");
+        assert!(validate_team_deletion(&custom).is_ok());
     }
 }

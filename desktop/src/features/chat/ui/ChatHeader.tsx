@@ -71,9 +71,11 @@ export function ChatHeader({
   mode = "channel",
   statusBadge,
 }: ChatHeaderProps) {
+  const trimmedDescription = description.trim();
+
   return (
     <header
-      className="flex min-w-0 items-center gap-3 border-b border-border/80 bg-background px-4 pb-3 pt-8 sm:px-6"
+      className="relative z-20 flex min-w-0 shrink-0 items-center gap-3 bg-background/25 px-4 pb-2 pt-6 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6"
       data-testid="chat-header"
       data-tauri-drag-region
     >
@@ -87,6 +89,7 @@ export function ChatHeader({
           <h1
             className="min-w-0 truncate text-lg font-semibold tracking-tight"
             data-testid="chat-title"
+            title={trimmedDescription || undefined}
           >
             {title}
           </h1>
@@ -96,12 +99,6 @@ export function ChatHeader({
             </div>
           ) : null}
         </div>
-        <p
-          className="truncate text-sm text-muted-foreground"
-          data-testid="chat-description"
-        >
-          {description}
-        </p>
       </div>
 
       {actions ? <div className="shrink-0">{actions}</div> : null}

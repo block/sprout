@@ -10,25 +10,21 @@ cargo install --path crates/sprout-cli
 
 ## Authentication
 
-Three modes, checked in order:
+Two modes, checked in order:
 
 | Priority | Env Var | Mode | Use Case |
 |----------|---------|------|----------|
-| 1 | `SPROUT_API_TOKEN` | Bearer token | Production — fastest, no extra HTTP call |
-| 2 | `SPROUT_PRIVATE_KEY` | Auto-mint short-lived token via NIP-98 | Agents with a keypair |
-| 3 | `SPROUT_PUBKEY` | X-Pubkey header (dev relay only) | Local development |
+| 1 | `SPROUT_PRIVATE_KEY` | NIP-98 Schnorr signature | Agents with a keypair |
+| 2 | `SPROUT_PUBKEY` | X-Pubkey header (dev relay only) | Local development |
 
 ```bash
-# Option 1: Pre-minted token
-export SPROUT_API_TOKEN="sprout_tok_..."
-sprout list-channels
-
-# Option 2: Private key (auto-mints a 1-day token at startup)
+# Option 1: Private key (NIP-98 signed requests)
 export SPROUT_PRIVATE_KEY="nsec1..."
 sprout list-channels
 
-# Option 3: Mint a long-lived token explicitly
-export SPROUT_API_TOKEN=$(SPROUT_PRIVATE_KEY=nsec1... sprout auth)
+# Option 2: Dev mode (no auth)
+export SPROUT_PUBKEY="<hex>"
+sprout list-channels
 ```
 
 ## Usage
@@ -83,17 +79,11 @@ sprout vote-on-post --event <event-id> --direction up
 sprout get-canvas --channel <uuid>
 sprout set-canvas --channel <uuid> --content "# Welcome" 
 
-# Tokens
-sprout auth                               # mint token, print to stdout
-sprout list-tokens
-sprout delete-token --id <uuid>
-sprout delete-all-tokens
-
 # Pipe to jq
 sprout list-channels | jq '.[].name'
 ```
 
-## All 48 Commands
+## All 44 Commands
 
 | Command | Description |
 |---------|-------------|
@@ -141,10 +131,6 @@ sprout list-channels | jq '.[].name'
 | `approve-step` | Approve/deny a workflow step |
 | `get-feed` | Get your activity feed |
 | `vote-on-post` | Vote on a forum post |
-| `auth` | Mint a long-lived API token |
-| `list-tokens` | List your API tokens |
-| `delete-token` | Delete a token |
-| `delete-all-tokens` | Delete all tokens |
 
 ## Architecture
 

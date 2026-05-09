@@ -97,6 +97,8 @@ pub struct RestClient {
     pub http: reqwest::Client,
     pub base_url: String,
     pub keys: Keys,
+    /// Optional NIP-OA auth tag JSON for `x-auth-tag` header (relay membership delegation).
+    pub auth_tag_json: Option<String>,
 }
 
 /// Whether an HTTP status code is retriable (transient server/rate-limit errors).
@@ -231,18 +233,22 @@ impl RestClient {
     ) -> Result<reqwest::Response, RelayError> {
         let url = format!("{}{}", self.base_url, path);
         let body_owned = body_bytes.to_vec();
+        let auth_tag_header = self.auth_tag_json.clone();
         self.request_with_retry("POST", path, || {
             // NIP-98 is re-signed each attempt (fresh created_at).
             // sign_nip98 is infallible in practice (key is always valid).
             let auth = self
                 .nip98_header("POST", &url, Some(&body_owned))
                 .unwrap_or_default();
-            self.http
+            let mut req = self
+                .http
                 .post(&url)
                 .header("Authorization", auth)
-                .header("Content-Type", "application/json")
-                .body(body_owned.clone())
-                .send()
+                .header("Content-Type", "application/json");
+            if let Some(ref tag) = auth_tag_header {
+                req = req.header("x-auth-tag", tag);
+            }
+            req.body(body_owned.clone()).send()
         })
         .await
     }
@@ -412,6 +418,9 @@ pub struct HarnessRelay {
     /// Agent public key (hex) used as the `#p` filter on subscriptions.
     #[allow(dead_code)]
     agent_pubkey_hex: String,
+    /// Optional NIP-OA auth tag for relay membership delegation.
+    #[allow(dead_code)]
+    auth_tag: Option<nostr::Tag>,
     /// Handle to the background task (for clean shutdown).
     /// Wrapped in `Option` so `shutdown()` can take ownership without conflicting
     /// with `Drop` (which only has `&mut self`).
@@ -440,15 +449,19 @@ impl HarnessRelay {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// Connect to relay and authenticate via NIP-42.
+    ///
+    /// `auth_tag` is an optional NIP-OA owner attestation included in the AUTH
+    /// event for relay membership delegation.
     pub async fn connect(
         relay_url: &str,
         keys: &Keys,
         agent_pubkey_hex: &str,
+        auth_tag: Option<nostr::Tag>,
     ) -> Result<Self, RelayError> {
         // Perform the initial connection and auth handshake.
         // Finding #8: capture the handshake buffer and pass it to the background
         // task so buffered messages aren't silently discarded.
-        let (ws, handshake_buffer) = do_connect(relay_url, keys).await?;
+        let (ws, handshake_buffer) = do_connect(relay_url, keys, auth_tag.as_ref()).await?;
 
         let (event_tx, event_rx) = mpsc::channel::<Option<SproutEvent>>(event_channel_capacity());
         let (observer_control_tx, observer_control_rx) =
@@ -458,6 +471,7 @@ impl HarnessRelay {
         let bg_keys = keys.clone();
         let bg_relay_url = relay_url.to_string();
         let bg_agent_pubkey_hex = agent_pubkey_hex.to_string();
+        let bg_auth_tag = auth_tag.clone();
 
         let bg_handle = tokio::spawn(async move {
             run_background_task(
@@ -469,6 +483,7 @@ impl HarnessRelay {
                 bg_keys,
                 bg_relay_url,
                 bg_agent_pubkey_hex,
+                bg_auth_tag,
             )
             .await;
         });
@@ -485,6 +500,7 @@ impl HarnessRelay {
             relay_url: relay_url.to_string(),
             keys: keys.clone(),
             agent_pubkey_hex: agent_pubkey_hex.to_string(),
+            auth_tag,
             bg_handle: Some(bg_handle),
         })
     }
@@ -609,6 +625,10 @@ impl HarnessRelay {
             http: self.http.clone(),
             base_url: relay_ws_to_http(&self.relay_url),
             keys: self.keys.clone(),
+            auth_tag_json: self
+                .auth_tag
+                .as_ref()
+                .and_then(|t| serde_json::to_string(t.as_slice()).ok()),
         }
     }
 
@@ -1148,6 +1168,7 @@ async fn run_background_task(
     keys: Keys,
     relay_url: String,
     agent_pubkey_hex: String,
+    auth_tag: Option<nostr::Tag>,
 ) {
     let mut state = BgState::new();
 
@@ -1162,6 +1183,7 @@ async fn run_background_task(
         &keys,
         &relay_url,
         &agent_pubkey_hex,
+        auth_tag.as_ref(),
     )
     .await;
     if !handshake_ok {
@@ -1178,6 +1200,7 @@ async fn run_background_task(
             &agent_pubkey_hex,
             &event_tx,
             &observer_control_tx,
+            auth_tag.as_ref(),
         )
         .await
         {
@@ -1202,6 +1225,7 @@ async fn run_background_task(
                         &event_tx,
                         &observer_control_tx,
                         true,
+                        auth_tag.as_ref(),
                     )
                     .await,
                     ReconnectOutcome::Shutdown
@@ -1241,6 +1265,7 @@ async fn run_background_task(
                     &agent_pubkey_hex,
                     &event_tx,
                     &observer_control_tx,
+                    auth_tag.as_ref(),
                 )
                 .await
                 {
@@ -1271,6 +1296,7 @@ async fn run_background_task(
                                 &event_tx,
                                 &observer_control_tx,
                                 true,
+                                auth_tag.as_ref(),
                             )
                             .await,
                             ReconnectOutcome::Shutdown
@@ -1307,6 +1333,7 @@ async fn run_background_task(
                                        &keys,
                                        &relay_url,
                                        &agent_pubkey_hex,
+                                       auth_tag.as_ref(),
                                    )
                                    .await
                                }
@@ -1335,6 +1362,7 @@ async fn run_background_task(
                                &agent_pubkey_hex,
                                &event_tx,
                            &observer_control_tx,
+            auth_tag.as_ref(),
                            )
                            .await;
                            match outcome {
@@ -1355,6 +1383,7 @@ async fn run_background_task(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                        auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
                                ) { return; }
@@ -1375,6 +1404,7 @@ async fn run_background_task(
                                    wait_for_reconnect(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                        auth_tag.as_ref(),
                                    ).await,
                                    ReconnectOutcome::Shutdown
                                ) { return; }
@@ -1409,6 +1439,7 @@ async fn run_background_task(
                                        &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                                    &observer_control_tx,
+            auth_tag.as_ref(),
                                    ).await {
                                        ReconnectOutcome::Shutdown => return,
                                        ReconnectOutcome::Ok => {
@@ -1422,6 +1453,7 @@ async fn run_background_task(
                                                wait_for_reconnect(
                                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                        auth_tag.as_ref(),
                                                ).await,
                                                ReconnectOutcome::Shutdown
                                            ) { return; }
@@ -1447,6 +1479,7 @@ async fn run_background_task(
                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                            &observer_control_tx,
+            auth_tag.as_ref(),
                            ).await {
                                ReconnectOutcome::Shutdown => return,
                                ReconnectOutcome::Ok => {
@@ -1460,6 +1493,7 @@ async fn run_background_task(
                                        wait_for_reconnect(
                                            &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                        auth_tag.as_ref(),
                                        ).await,
                                        ReconnectOutcome::Shutdown
                                    ) { return; }
@@ -1478,6 +1512,7 @@ async fn run_background_task(
                                    &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx,
                                &observer_control_tx,
+            auth_tag.as_ref(),
                                ).await {
                                    ReconnectOutcome::Shutdown => return,
                                    ReconnectOutcome::Ok => {
@@ -1491,6 +1526,7 @@ async fn run_background_task(
                                            wait_for_reconnect(
                                                &mut ws, &mut cmd_rx, &mut state, &keys, &relay_url,
         &agent_pubkey_hex, &event_tx, &observer_control_tx, true,
+                        auth_tag.as_ref(),
                                            ).await,
                                            ReconnectOutcome::Shutdown
                                        ) { return; }
@@ -1532,6 +1568,7 @@ async fn handle_ws_message(
     keys: &Keys,
     relay_url: &str,
     agent_pubkey_hex: &str,
+    auth_tag: Option<&nostr::Tag>,
 ) -> bool {
     match msg {
         Message::Text(text) => {
@@ -1781,7 +1818,9 @@ async fn handle_ws_message(
                 RelayMessage::Auth { challenge } => {
                     // Finding #18: AUTH send failure must trigger reconnect.
                     debug!("received mid-session AUTH challenge — re-authenticating");
-                    if let Err(e) = send_auth_response(ws, &challenge, relay_url, keys).await {
+                    if let Err(e) =
+                        send_auth_response(ws, &challenge, relay_url, keys, auth_tag).await
+                    {
                         warn!("failed to respond to mid-session AUTH challenge: {e} — triggering reconnect");
                         return false;
                     }
@@ -1833,6 +1872,7 @@ async fn process_handshake_buffer(
     keys: &Keys,
     relay_url: &str,
     agent_pubkey_hex: &str,
+    auth_tag: Option<&nostr::Tag>,
 ) -> bool {
     if buffer.is_empty() {
         return true;
@@ -1875,6 +1915,7 @@ async fn process_handshake_buffer(
                 keys,
                 relay_url,
                 agent_pubkey_hex,
+                auth_tag,
             )
             .await;
             if !should_continue {
@@ -2038,6 +2079,7 @@ async fn try_autonomous_reconnect(
     agent_pubkey_hex: &str,
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
+    auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
     // Finding #42: 5 attempts, up to 16s base backoff.
     let backoffs = [
@@ -2054,7 +2096,7 @@ async fn try_autonomous_reconnect(
             attempt + 1,
             backoffs.len()
         );
-        match do_connect(relay_url, keys).await {
+        match do_connect(relay_url, keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
                 info!("autonomous reconnect succeeded (attempt {})", attempt + 1);
@@ -2068,6 +2110,7 @@ async fn try_autonomous_reconnect(
                     keys,
                     relay_url,
                     agent_pubkey_hex,
+                    auth_tag,
                 )
                 .await;
                 if !handshake_ok {
@@ -2140,6 +2183,7 @@ async fn wait_for_reconnect(
     event_tx: &mpsc::Sender<Option<SproutEvent>>,
     observer_control_tx: &mpsc::Sender<Event>,
     skip_drain: bool,
+    auth_tag: Option<&nostr::Tag>,
 ) -> ReconnectOutcome {
     if !skip_drain {
         // Drain commands until we get Reconnect (or Shutdown).
@@ -2167,7 +2211,7 @@ async fn wait_for_reconnect(
     let mut delay = Duration::from_secs(1);
     loop {
         info!("attempting relay reconnect to {relay_url}…");
-        match do_connect(relay_url, keys).await {
+        match do_connect(relay_url, keys, auth_tag).await {
             Ok((new_ws, handshake_buffer)) => {
                 *ws = new_ws;
                 info!("relay reconnected to {relay_url}");
@@ -2181,6 +2225,7 @@ async fn wait_for_reconnect(
                     keys,
                     relay_url,
                     agent_pubkey_hex,
+                    auth_tag,
                 )
                 .await;
                 if !handshake_ok {
@@ -2429,17 +2474,33 @@ fn extract_h_tag_uuid(event: &nostr::Event) -> Option<Uuid> {
 }
 
 /// Build and send a NIP-42 AUTH response event.
+///
+/// If `auth_tag` is provided (NIP-OA owner attestation), it is included in the
+/// AUTH event so the relay can use it for membership delegation fallback.
 async fn send_auth_response(
     ws: &mut WsStream,
     challenge: &str,
     relay_url: &str,
     keys: &Keys,
+    auth_tag: Option<&nostr::Tag>,
 ) -> Result<(), RelayError> {
     let relay_nostr_url: NostrUrl = relay_url
         .parse()
         .map_err(|e: url::ParseError| RelayError::Http(format!("invalid relay URL: {e}")))?;
 
-    let auth_event = EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?;
+    let auth_event = if let Some(tag) = auth_tag {
+        // Cannot use EventBuilder::auth() shortcut — it doesn't accept extra tags.
+        let tags = vec![
+            nostr::Tag::parse(&["relay", relay_url])
+                .map_err(|e| RelayError::Http(format!("tag parse error: {e}")))?,
+            nostr::Tag::parse(&["challenge", challenge])
+                .map_err(|e| RelayError::Http(format!("tag parse error: {e}")))?,
+            tag.clone(),
+        ];
+        EventBuilder::new(nostr::Kind::Authentication, "", tags).sign_with_keys(keys)?
+    } else {
+        EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?
+    };
 
     let auth_msg = serde_json::to_string(&json!(["AUTH", auth_event]))?;
     ws_send_timeout(ws, Message::Text(auth_msg.into()), WS_SEND_TIMEOUT_SECS).await?;
@@ -2576,6 +2637,7 @@ pub(crate) fn parse_relay_message(text: &str) -> Result<RelayMessage, RelayError
 async fn do_connect(
     relay_url: &str,
     keys: &Keys,
+    auth_tag: Option<&nostr::Tag>,
 ) -> Result<(WsStream, VecDeque<RelayMessage>), RelayError> {
     let parsed = relay_url
         .parse::<url::Url>()
@@ -2594,7 +2656,7 @@ async fn do_connect(
     let challenge = wait_for_auth_challenge(&mut ws, &mut buffer, AUTH_TIMEOUT).await?;
 
     // ── Step 2: Build and send kind:22242 auth event ──────────────────────
-    send_auth_response(&mut ws, &challenge, relay_url, keys).await?;
+    send_auth_response(&mut ws, &challenge, relay_url, keys, auth_tag).await?;
 
     // ── Step 3: Wait for OK ───────────────────────────────────────────────
     let event_id = {

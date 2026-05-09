@@ -137,8 +137,9 @@ pub async fn submit_event(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    // Enforce relay membership
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, None).await?;
+    // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
+    let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
 
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
@@ -184,7 +185,8 @@ pub async fn query_events(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, None).await?;
+    let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
 
     let filters: Vec<nostr::Filter> = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid filters: {e}")))?;
@@ -278,7 +280,8 @@ pub async fn count_events(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.serialize().to_vec();
 
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, None).await?;
+    let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
+    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
 
     let filters: Vec<nostr::Filter> = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid filters: {e}")))?;

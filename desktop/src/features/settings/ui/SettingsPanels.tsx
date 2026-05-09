@@ -5,7 +5,6 @@ import {
   Check,
   Download,
   Keyboard,
-  KeyRound,
   LockKeyhole,
   MonitorCog,
   Moon,
@@ -21,7 +20,6 @@ import type {
   NotificationSettings,
 } from "@/features/notifications/hooks";
 import { RelayMembersSettingsCard } from "@/features/relay-members/ui/RelayMembersSettingsCard";
-import { TokenSettingsCard } from "@/features/tokens/ui/TokenSettingsCard";
 import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
@@ -39,7 +37,6 @@ export type SettingsSection =
   | "agents"
   | "appearance"
   | "shortcuts"
-  | "tokens"
   | "relay-members"
   | "mobile"
   | "updates"
@@ -64,6 +61,7 @@ export type SettingsPanelProps = {
   onSetHomeBadgeEnabled: (enabled: boolean) => void;
   onSetMentionNotificationsEnabled: (enabled: boolean) => void;
   onSetNeedsActionNotificationsEnabled: (enabled: boolean) => void;
+  onSetSoundEnabled: (enabled: boolean) => void;
 };
 
 export const settingsSections: SettingsSectionDescriptor[] = [
@@ -91,11 +89,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "shortcuts",
     label: "Shortcuts",
     icon: Keyboard,
-  },
-  {
-    value: "tokens",
-    label: "Tokens",
-    icon: KeyRound,
   },
   {
     value: "relay-members",
@@ -262,6 +255,7 @@ export function renderSettingsSection(
           onSetNeedsActionNotificationsEnabled={
             props.onSetNeedsActionNotificationsEnabled
           }
+          onSetSoundEnabled={props.onSetSoundEnabled}
         />
       );
     case "agents":
@@ -270,8 +264,6 @@ export function renderSettingsSection(
       return <ThemeSettingsCard />;
     case "shortcuts":
       return <KeyboardShortcutsCard />;
-    case "tokens":
-      return <TokenSettingsCard currentPubkey={props.currentPubkey} />;
     case "relay-members":
       return <RelayMembersSettingsCard currentPubkey={props.currentPubkey} />;
     case "mobile":

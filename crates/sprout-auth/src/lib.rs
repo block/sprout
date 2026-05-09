@@ -64,6 +64,11 @@ pub struct AuthContext {
     pub channel_ids: Option<Vec<uuid::Uuid>>,
     /// How the connection was authenticated.
     pub auth_method: AuthMethod,
+    /// NIP-OA verified owner pubkey (if authenticated via owner attestation).
+    ///
+    /// `None` for direct relay members or non-NIP-OA auth paths.
+    /// Set by the relay membership gate when NIP-OA fallback succeeds.
+    pub agent_owner_pubkey: Option<nostr::PublicKey>,
 }
 
 impl AuthContext {
@@ -125,6 +130,7 @@ impl AuthService {
             scopes: Scope::all_known(),
             channel_ids: None,
             auth_method: AuthMethod::Nip42,
+            agent_owner_pubkey: None, // Set later by relay membership gate if NIP-OA
         })
     }
 }
@@ -176,6 +182,7 @@ mod tests {
             scopes: vec![Scope::MessagesRead, Scope::ChannelsRead],
             channel_ids: None,
             auth_method: AuthMethod::Nip42,
+            agent_owner_pubkey: None,
         };
         assert!(ctx.has_scope(&Scope::MessagesRead));
         assert!(!ctx.has_scope(&Scope::MessagesWrite));

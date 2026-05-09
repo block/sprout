@@ -329,8 +329,10 @@ test("create ephemeral stream shows sidebar and header affordances", async ({
   await expect(
     page.getByTestId(`channel-ephemeral-${channelName}`),
   ).toBeVisible();
-  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
-    /Ephemeral.+left/,
+  await expect(page.getByTestId("chat-ephemeral-badge")).toBeVisible();
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveAttribute(
+    "title",
+    /Ephemeral channel\. Cleans up (tomorrow|in \d+ hours?)\./,
   );
 
   await page.getByRole("button", { name: "Toggle Sidebar" }).click();
@@ -370,8 +372,9 @@ test("ephemeral countdown refreshes when switching channels after a clock jump",
 
   await page.getByTestId(`channel-${firstChannelName}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(firstChannelName);
-  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveText(
-    /Ephemeral.+22h left/,
+  await expect(page.getByTestId("chat-ephemeral-badge")).toHaveAttribute(
+    "title",
+    /Ephemeral channel\. Cleans up in 22 hours\./,
   );
 });
 
@@ -770,19 +773,19 @@ test("manage channel keeps canvas near the top of the sheet", async ({
   await page.goto("/");
   await openChannelManagement(page, "general");
 
-  const sectionHeadings = await page
-    .getByTestId("channel-management-sheet")
-    .locator("section h2")
-    .allTextContents();
+  const sheet = page.getByTestId("channel-management-sheet");
 
-  expect(sectionHeadings).toEqual([
-    "Access",
-    "Canvas",
-    "Context",
-    "Details",
-    "Channel state",
-    "Danger zone",
-  ]);
+  // Canvas section should appear before the name input in the DOM.
+  const canvasBox = await sheet
+    .getByTestId("channel-canvas-section")
+    .boundingBox();
+  const nameBox = await sheet
+    .getByTestId("channel-management-name")
+    .boundingBox();
+
+  expect(canvasBox).not.toBeNull();
+  expect(nameBox).not.toBeNull();
+  expect(canvasBox?.y).toBeLessThan(nameBox?.y);
 });
 
 test("members sidebar can invite and remove members", async ({ page }) => {

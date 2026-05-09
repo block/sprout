@@ -112,12 +112,16 @@ pub enum UploadError {
 ///
 /// Performs validation, SHA-256 hashing, Blossom auth signing, and the HTTP PUT.
 /// Returns the relay's [`BlobDescriptor`] on success.
+///
+/// `auth_tag_json` is an optional NIP-OA auth tag (JSON-array string) sent as
+/// the `x-auth-tag` header for relay membership delegation.
 pub async fn upload_file(
     http: &reqwest::Client,
     keys: &Keys,
     relay_http_url: &str,
     server_domain: Option<&str>,
     file_path: &str,
+    auth_tag_json: Option<&str>,
 ) -> Result<BlobDescriptor, UploadError> {
     // 1. Validate path exists
     let metadata = std::fs::metadata(file_path).map_err(|e| {
@@ -223,15 +227,16 @@ pub async fn upload_file(
     };
 
     let url = format!("{}/media/upload", relay_http_url.trim_end_matches('/'));
-    let resp = http
+    let mut req = http
         .put(&url)
         .timeout(upload_timeout)
         .header("Authorization", &auth_header)
         .header("Content-Type", mime)
-        .header("X-SHA-256", &sha256)
-        .body(bytes)
-        .send()
-        .await?;
+        .header("X-SHA-256", &sha256);
+    if let Some(tag) = auth_tag_json {
+        req = req.header("x-auth-tag", tag);
+    }
+    let resp = req.body(bytes).send().await?;
 
     // 9. Handle response
     let status = resp.status();

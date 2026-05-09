@@ -280,7 +280,7 @@ check-compile:
 # ─── Agent Harness ────────────────────────────────────────────────────────────
 
 # Run a goose agent connected to a Sprout relay (foreground)
-goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY" token="$SPROUT_ACP_API_TOKEN":
+goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY":
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release -p sprout-acp -p sprout-mcp
@@ -293,7 +293,6 @@ goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROU
         SPROUT_ACP_AGENTS="{{agents}}"
         GOOSE_MODE=auto
     )
-    [[ -n "{{token}}"  ]] && env_args+=(SPROUT_ACP_API_TOKEN="{{token}}")
     [[ -n "{{prompt}}" ]] && env_args+=(SPROUT_ACP_SYSTEM_PROMPT="{{prompt}}")
     if [[ "{{heartbeat}}" != "0" ]]; then
         env_args+=(SPROUT_ACP_HEARTBEAT_INTERVAL={{heartbeat}})
@@ -301,7 +300,7 @@ goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROU
     exec env "${env_args[@]}" ./target/release/sprout-acp
 
 # Run a goose agent in the background (screen session named 'goose-agent-N')
-goose-bg relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY" token="$SPROUT_ACP_API_TOKEN":
+goose-bg relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY":
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build --release -p sprout-acp -p sprout-mcp
@@ -314,7 +313,6 @@ goose-bg relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SP
         SPROUT_ACP_AGENTS="{{agents}}"
         GOOSE_MODE=auto
     )
-    [[ -n "{{token}}"  ]] && env_args+=(SPROUT_ACP_API_TOKEN="{{token}}")
     [[ -n "{{prompt}}" ]] && env_args+=(SPROUT_ACP_SYSTEM_PROMPT="{{prompt}}")
     if [[ "{{heartbeat}}" != "0" ]]; then
         env_args+=(SPROUT_ACP_HEARTBEAT_INTERVAL={{heartbeat}})

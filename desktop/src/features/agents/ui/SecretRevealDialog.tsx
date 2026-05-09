@@ -23,8 +23,8 @@ export function SecretRevealDialog({
           <DialogHeader className="border-b border-border/60 px-6 py-5 pr-14">
             <DialogTitle>Agent created</DialogTitle>
             <DialogDescription>
-              Save the private key and token now. The app can keep running the
-              harness locally, but these secrets are only revealed here.
+              Save the private key now. The app can keep running the harness
+              locally, but this secret is only revealed here.
             </DialogDescription>
           </DialogHeader>
 
@@ -50,26 +50,6 @@ export function SecretRevealDialog({
                     {created.privateKeyNsec}
                   </code>
                 </div>
-
-                {created.apiToken ? (
-                  <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold tracking-tight">
-                          API token
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Optional for local dev, required when the relay
-                          enforces bearer auth.
-                        </p>
-                      </div>
-                      <CopyButton label="Copy token" value={created.apiToken} />
-                    </div>
-                    <code className="mt-3 block break-all rounded-xl border border-border/70 bg-background/80 px-3 py-2 text-xs">
-                      {created.apiToken}
-                    </code>
-                  </div>
-                ) : null}
 
                 {created.profileSyncError ? (
                   <p className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">

@@ -43,3 +43,7 @@ typesense-data/
 .hermit/
 doc/
 /repos/
+
+# Local identity files
+identity.key
+**/identity.key

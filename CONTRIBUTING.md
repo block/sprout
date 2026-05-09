@@ -286,7 +286,7 @@ The short version:
 sprout-relay      ← WebSocket server, REST API, event ingestion
 sprout-core       ← Shared types, event verification, filter matching
 sprout-db         ← Postgres access layer (sqlx)
-sprout-auth       ← NIP-42 + OIDC JWT + API token scopes
+sprout-auth       ← NIP-42 + NIP-98 + API token scopes
 sprout-pubsub     ← Redis fan-out
 sprout-search     ← Typesense full-text search
 sprout-audit      ← Tamper-evident hash-chain audit log

@@ -1,4 +1,3 @@
-import { DEFAULT_MANAGED_AGENT_SCOPES } from "@/features/tokens/lib/scopeOptions";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   addChannelMembers,
@@ -170,12 +169,6 @@ function pickPreferredManagedAgent(agents: ManagedAgent[]) {
       return rightRunningScore - leftRunningScore;
     }
 
-    const leftTokenScore = left.hasApiToken ? 1 : 0;
-    const rightTokenScore = right.hasApiToken ? 1 : 0;
-    if (leftTokenScore !== rightTokenScore) {
-      return rightTokenScore - leftTokenScore;
-    }
-
     return parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt);
   })[0];
 }
@@ -256,9 +249,6 @@ export async function ensureChannelAgentPresetInChannel(
     agentCommand: input.provider.command,
     agentArgs: input.provider.defaultArgs,
     mcpCommand: "sprout-mcp-server",
-    mintToken: true,
-    tokenName: `${expectedName} agent`,
-    tokenScopes: DEFAULT_MANAGED_AGENT_SCOPES,
     spawnAfterCreate: false,
   });
   const attached = await attachManagedAgentToChannel(channelId, {
@@ -310,9 +300,6 @@ export async function createChannelManagedAgent(
     agentCommand: input.provider.command,
     agentArgs: input.provider.defaultArgs,
     mcpCommand: "sprout-mcp-server",
-    mintToken: true,
-    tokenName: `${trimmedName} agent`,
-    tokenScopes: DEFAULT_MANAGED_AGENT_SCOPES,
     personaId: input.personaId ?? undefined,
     systemPrompt: input.systemPrompt?.trim() || undefined,
     avatarUrl: resolvedAvatarUrl,

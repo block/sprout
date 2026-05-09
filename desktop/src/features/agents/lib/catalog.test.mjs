@@ -27,7 +27,7 @@ function createPersona(id, displayName, overrides = {}) {
 test("getCatalogPersonas keeps built-ins visible whether selected or not", () => {
   const personas = [
     createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: false }),
-    createPersona("builtin:ralph", "Ralph", {
+    createPersona("builtin:kit", "Kit", {
       isBuiltIn: true,
       isActive: true,
     }),
@@ -36,14 +36,14 @@ test("getCatalogPersonas keeps built-ins visible whether selected or not", () =>
 
   assert.deepEqual(
     getCatalogPersonas(personas).map((persona) => persona.id),
-    ["builtin:ralph", "builtin:solo"],
+    ["builtin:kit", "builtin:solo"],
   );
 });
 
 test("getCatalogSelectionState keeps built-in selection rules in one place", () => {
   const personas = [
     createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: false }),
-    createPersona("builtin:ralph", "Ralph", {
+    createPersona("builtin:kit", "Kit", {
       isBuiltIn: true,
       isActive: true,
     }),
@@ -54,11 +54,11 @@ test("getCatalogSelectionState keeps built-in selection rules in one place", () 
 
   assert.deepEqual(
     state.catalogPersonas.map((persona) => persona.id),
-    ["builtin:ralph", "builtin:solo"],
+    ["builtin:kit", "builtin:solo"],
   );
   assert.deepEqual(
     state.selectedCatalogPersonas.map((persona) => persona.id),
-    ["builtin:ralph"],
+    ["builtin:kit"],
   );
   assert.deepEqual(
     state.unselectedCatalogPersonas.map((persona) => persona.id),
@@ -69,7 +69,7 @@ test("getCatalogSelectionState keeps built-in selection rules in one place", () 
 test("getCatalogPersonas keeps chooser order stable when selection changes", () => {
   const inactiveFirst = [
     createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: false }),
-    createPersona("builtin:ralph", "Ralph", {
+    createPersona("builtin:kit", "Kit", {
       isBuiltIn: true,
       isActive: true,
     }),
@@ -80,7 +80,7 @@ test("getCatalogPersonas keeps chooser order stable when selection changes", () 
   ];
   const activeFirst = [
     createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: true }),
-    createPersona("builtin:ralph", "Ralph", {
+    createPersona("builtin:kit", "Kit", {
       isBuiltIn: true,
       isActive: false,
     }),
@@ -136,7 +136,7 @@ test("getPersonaLabelsById keeps every returned persona addressable", () => {
 test("getPersonaLibraryState keeps the working library and full catalog in one place", () => {
   const personas = [
     createPersona("builtin:solo", "Solo", { isBuiltIn: true, isActive: false }),
-    createPersona("builtin:ralph", "Ralph", {
+    createPersona("builtin:kit", "Kit", {
       isBuiltIn: true,
       isActive: true,
     }),
@@ -147,11 +147,11 @@ test("getPersonaLibraryState keeps the working library and full catalog in one p
 
   assert.deepEqual(
     state.libraryPersonas.map((persona) => persona.id),
-    ["builtin:ralph", "custom:builder"],
+    ["builtin:kit", "custom:builder"],
   );
   assert.deepEqual(
     state.catalogPersonas.map((persona) => persona.id),
-    ["builtin:ralph", "builtin:solo"],
+    ["builtin:kit", "builtin:solo"],
   );
   assert.equal(state.personaLabelsById["builtin:solo"], "Solo");
 });

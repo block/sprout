@@ -49,7 +49,7 @@ test("duplicatePersonaDialogState copies persona fields into a new draft", () =>
 test("editPersonaDialogState preserves the persona id for updates", () => {
   const state = editPersonaDialogState({
     id: "persona-2",
-    displayName: "Ralph",
+    displayName: "Kit",
     avatarUrl: null,
     systemPrompt: "Keep it weird.",
     provider: null,
@@ -65,7 +65,7 @@ test("editPersonaDialogState preserves the persona id for updates", () => {
   assert.equal(state.submitLabel, "Save changes");
   assert.deepEqual(state.initialValues, {
     id: "persona-2",
-    displayName: "Ralph",
+    displayName: "Kit",
     avatarUrl: "",
     systemPrompt: "Keep it weird.",
     provider: undefined,

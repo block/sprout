@@ -23,6 +23,7 @@ members = [
     "crates/git-sign-nostr",
     "crates/sprout-pair-relay",
     "crates/sprout-dev-mcp",
+    "examples/countdown-bot",
 ]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
@@ -92,10 +93,6 @@ zeroize = "1.8"
 # Concurrent data structures
 dashmap = "6"
 moka    = { version = "0.12", features = ["sync"] }
-
-# JWT validation (Okta JWKS)
-jsonwebtoken = "9"
-
 
 # Async stream utilities
 futures-util = "0.3"

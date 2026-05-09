@@ -3,8 +3,13 @@ import { expect, type Page } from "@playwright/test";
 type SettingsSection =
   | "profile"
   | "notifications"
+  | "agents"
   | "appearance"
+  | "shortcuts"
   | "tokens"
+  | "relay-members"
+  | "mobile"
+  | "updates"
   | "doctor";
 
 export async function openProfileMenu(page: Page) {

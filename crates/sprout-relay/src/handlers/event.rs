@@ -539,26 +539,41 @@ async fn handle_agent_observer_event(
         }
     };
 
+    // Fast path: if this connection authenticated via NIP-OA and the verified
+    // owner matches the observer frame's target owner, skip the DB lookup entirely.
+    let session_owner_match = {
+        let auth = conn.auth_state.read().await;
+        if let crate::connection::AuthState::Authenticated(ctx) = &*auth {
+            ctx.agent_owner_pubkey.as_ref() == Some(&route.owner)
+        } else {
+            false
+        }
+    };
+
     let agent_bytes = route.agent.serialize().to_vec();
     let owner_bytes = route.owner.serialize().to_vec();
     let cache_key = (agent_bytes.clone(), owner_bytes.clone());
-    let is_owner = match state.observer_owner_cache.get(&cache_key) {
-        Some(cached) => cached,
-        None => {
-            let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
-            match result {
-                Ok(v) => {
-                    state.observer_owner_cache.insert(cache_key, v);
-                    v
-                }
-                Err(e) => {
-                    warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
-                    conn.send(RelayMessage::ok(
-                        event_id_hex,
-                        false,
-                        "error: internal server error",
-                    ));
-                    return;
+    let is_owner = if session_owner_match {
+        true
+    } else {
+        match state.observer_owner_cache.get(&cache_key) {
+            Some(cached) => cached,
+            None => {
+                let result = state.db.is_agent_owner(&agent_bytes, &owner_bytes).await;
+                match result {
+                    Ok(v) => {
+                        state.observer_owner_cache.insert(cache_key, v);
+                        v
+                    }
+                    Err(e) => {
+                        warn!(conn_id = %conn_id, event_id = %event_id_hex, "agent observer owner check failed: {e}");
+                        conn.send(RelayMessage::ok(
+                            event_id_hex,
+                            false,
+                            "error: internal server error",
+                        ));
+                        return;
+                    }
                 }
             }
         }

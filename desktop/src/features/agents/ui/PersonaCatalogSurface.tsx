@@ -62,6 +62,8 @@ export function PersonaCatalogSurface({
       />
 
       <PersonaCatalogDetailsSheet
+        feedbackErrorMessage={feedbackErrorMessage}
+        feedbackNoticeMessage={feedbackNoticeMessage}
         isPending={isPending}
         onOpenChange={(open) => {
           if (!open) {

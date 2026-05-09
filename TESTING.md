@@ -70,8 +70,8 @@ sleep 3 && curl -s http://localhost:3000/health   # → "ok"
 
 ### 3. Generate Keys
 
-Each agent needs a Nostr keypair. In dev mode (`SPROUT_REQUIRE_AUTH_TOKEN=false`),
-the `X-Pubkey` header authenticates all REST calls — no tokens needed.
+Each agent needs a Nostr keypair. Authentication uses NIP-42 (WebSocket) and
+NIP-98 Schnorr signatures (REST).
 
 ```bash
 # Agent identity

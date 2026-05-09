@@ -4,7 +4,6 @@ import {
   type AttachManagedAgentToChannelResult,
   useManagedAgentLogQuery,
   useManagedAgentsQuery,
-  useMintManagedAgentTokenMutation,
   useRelayAgentsQuery,
   useSetManagedAgentStartOnAppLaunchMutation,
   useStartManagedAgentMutation,
@@ -36,17 +35,11 @@ export function useManagedAgentActions() {
   const stopMutation = useStopManagedAgentMutation();
   const deleteMutation = useDeleteManagedAgentMutation();
   const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
-  const mintTokenMutation = useMintManagedAgentTokenMutation();
-
   const [isCreateOpen, setIsCreateOpen] = React.useState(false);
   const [agentToAddToChannel, setAgentToAddToChannel] =
     React.useState<ManagedAgent | null>(null);
   const [createdAgent, setCreatedAgent] =
     React.useState<CreateManagedAgentResponse | null>(null);
-  const [revealedToken, setRevealedToken] = React.useState<{
-    name: string;
-    token: string;
-  } | null>(null);
   const [logAgentPubkey, setLogAgentPubkey] = React.useState<string | null>(
     null,
   );
@@ -210,21 +203,6 @@ export function useManagedAgentActions() {
     }
   }
 
-  async function handleMintToken(pubkey: string, name: string) {
-    clearFeedback();
-    try {
-      const result = await mintTokenMutation.mutateAsync({
-        pubkey,
-        tokenName: `${name}-token`,
-      });
-      setRevealedToken({ name, token: result.token });
-    } catch (error) {
-      setActionErrorMessage(
-        error instanceof Error ? error.message : "Failed to mint token.",
-      );
-    }
-  }
-
   function handleAddedToChannel(
     channel: Channel,
     result: AttachManagedAgentToChannelResult,
@@ -318,8 +296,7 @@ export function useManagedAgentActions() {
     startMutation.isPending ||
     stopMutation.isPending ||
     startOnLaunchMutation.isPending ||
-    deleteMutation.isPending ||
-    mintTokenMutation.isPending;
+    deleteMutation.isPending;
 
   return {
     // Queries
@@ -339,8 +316,6 @@ export function useManagedAgentActions() {
     setAgentToAddToChannel,
     createdAgent,
     setCreatedAgent,
-    revealedToken,
-    setRevealedToken,
     logAgentPubkey,
     setLogAgentPubkey,
     actionNoticeMessage,
@@ -352,7 +327,6 @@ export function useManagedAgentActions() {
     handleStop,
     handleDelete,
     handleToggleStartOnAppLaunch,
-    handleMintToken,
     handleAddedToChannel,
     handleBulkStopRunning,
     handleBulkRemoveStopped,

@@ -157,14 +157,13 @@ test("hovering avatar opens popover, clicking opens profile panel", async ({
 
   // Hover should open the popover
   await avatarButton.hover();
-  await expect(
-    page.locator("[data-radix-popper-content-wrapper]"),
-  ).toBeVisible();
+  const profilePopover = page.locator(
+    '[data-testid="user-profile-popover"][data-state="open"]',
+  );
+  await expect(profilePopover).toBeVisible();
 
   // Click should close the popover and open the profile panel
   await avatarButton.click();
-  await expect(
-    page.locator("[data-radix-popper-content-wrapper]"),
-  ).not.toBeVisible();
+  await expect(profilePopover).toHaveCount(0);
   await expect(page.getByTestId("user-profile-panel")).toBeVisible();
 });

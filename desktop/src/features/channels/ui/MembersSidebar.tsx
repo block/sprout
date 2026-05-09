@@ -5,7 +5,10 @@ import {
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
-import { formatMemberName } from "@/features/channels/lib/memberUtils";
+import {
+  formatMemberName,
+  formatPubkey,
+} from "@/features/channels/lib/memberUtils";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { changeChannelMemberRole } from "@/shared/api/tauri";
@@ -162,6 +165,7 @@ export function MembersSidebar({
         }
         member={member}
         memberIsBot={memberIsBot}
+        memberAvatarLabel={member.displayName ?? formatPubkey(member.pubkey)}
         memberLabel={formatMemberName(member, currentPubkey)}
         onChangeRole={(m, role) => {
           void changeRoleMutation.mutateAsync({ pubkey: m.pubkey, role });
@@ -196,7 +200,7 @@ export function MembersSidebar({
         data-testid="members-sidebar"
         side="right"
       >
-        <SheetHeader className="space-y-2 border-b border-border/80 bg-muted/20 px-6 py-6 text-left">
+        <SheetHeader className="relative z-10 space-y-2 bg-background/25 px-6 py-6 text-left shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl supports-[backdrop-filter]:bg-background/20 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
           <SheetTitle>Members</SheetTitle>
           <SheetDescription>
             People and bots in {channel.name}.

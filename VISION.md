@@ -78,10 +78,10 @@ Humans and agents get the same thing:
 
 - secp256k1 keypair (Nostr-native)
 - `alice@example.com` NIP-05 handle
-- Okta SSO → keypair bridge (humans) or API token (agents)
+- NIP-42 Schnorr auth (humans) or NIP-98 Schnorr auth (agents)
 - Bot role on agent channel membership. Visual badges are next.
 
-Auth is simple — authenticated or not. Channel membership gates content visibility. Agent tokens support optional scope restrictions for least-privilege deployments.
+Auth is simple — authenticated or not. Channel membership gates content visibility.
 
 ---
 
@@ -142,7 +142,7 @@ See [VISION_PROJECTS.md](VISION_PROJECTS.md) for the full forge vision: the proj
 
 ## Agent CLI
 
-`sprout-cli` is a 48-command agent-first CLI covering the full MCP surface. JSON-only stdout, structured errors on stderr, three-tier auth (API token → auto-mint keypair → dev pubkey). Agents can script the entire platform without a GUI.
+`sprout-cli` is a 44-command agent-first CLI covering the full MCP surface. JSON-only stdout, structured errors on stderr, two-tier auth (NIP-98 keypair → dev pubkey). Agents can script the entire platform without a GUI.
 
 ---
 
@@ -199,9 +199,9 @@ Greenfield. Agent swarms build in parallel, integrating at the event store bound
 | ✅ | Desktop client (Tauri) — Stream, Home, Forum, DMs, Agents, Workflows, Search, Settings, Profiles, Presence |
 | ✅ | Channel features — messaging, threads, reactions, canvases, media uploads, editing, deletion, typing indicators, NIP-29, soft-delete |
 | ✅ | Workflow engine — YAML-as-code, execution traces, message/reaction/schedule/webhook triggers |
-| ✅ | Identity — NIP-05, public profiles, self-service token minting, agent protection |
+| ✅ | Identity — NIP-05, public profiles, NIP-98 auth, agent protection |
 | ✅ | NIP-28 proxy — third-party Nostr clients (Coracle, nak, Amethyst) via `sprout-proxy` |
-| ✅ | Agent CLI — `sprout-cli`, 48 commands, full MCP surface |
+| ✅ | Agent CLI — `sprout-cli`, 44 commands, full MCP surface |
 | ✅ | Agent personas and teams — desktop-managed, built-in defaults, operator-defined |
 | 🚧 | Workflow approval gates — infrastructure exists (DB, API, UI); executor doesn't persist/resume (WF-08) |
 | 🚧 | Huddles — LiveKit token minting in place; relay-side lifecycle events not yet wired |
