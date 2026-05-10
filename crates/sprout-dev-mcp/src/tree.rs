@@ -19,12 +19,12 @@ pub fn run(args: Vec<String>) -> i32 {
     let (root, max_depth) = match parse(args) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("tree: {e}");
+            tracing::error!("tree: {e}");
             return 2;
         }
     };
     if !root.is_dir() {
-        eprintln!("tree: not a directory: {}", root.display());
+        tracing::error!("tree: not a directory: {}", root.display());
         return 2;
     }
 

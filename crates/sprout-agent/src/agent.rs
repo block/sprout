@@ -132,8 +132,8 @@ impl RunCtx<'_> {
 
             let mut calls = response.tool_calls;
             if calls.len() > MAX_TOOL_CALLS_PER_TURN {
-                eprintln!(
-                    "sprout-agent: agent: capping tool_calls {} -> {MAX_TOOL_CALLS_PER_TURN}",
+                tracing::warn!(
+                    "capping tool_calls {} -> {MAX_TOOL_CALLS_PER_TURN}",
                     calls.len()
                 );
                 calls.truncate(MAX_TOOL_CALLS_PER_TURN);
@@ -287,7 +287,7 @@ impl RunCtx<'_> {
                             results[i] = Some(outcome_to_result(&calls[i], outcome));
                         }
                         Some(Err(e)) => {
-                            eprintln!("sprout-agent: agent: tool task join error: {e}");
+                            tracing::warn!("tool task join error: {e}");
                         }
                         None => break,
                     }
@@ -310,7 +310,7 @@ impl RunCtx<'_> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("sprout-agent: agent: tool task join error (drain): {e}");
+                        tracing::warn!("tool task join error (drain): {e}");
                     }
                 }
             }
@@ -561,8 +561,8 @@ pub(crate) fn truncate_history(history: &mut Vec<HistoryItem>, max_bytes: usize)
         total = total.saturating_sub(dropped);
     }
     if history.len() < original_len {
-        eprintln!(
-            "sprout-agent: agent: history truncated {original_len} -> {} items ({total} bytes)",
+        tracing::info!(
+            "history truncated {original_len} -> {} items ({total} bytes)",
             history.len()
         );
     }

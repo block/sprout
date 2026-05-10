@@ -13,7 +13,6 @@ use tokio::process::Command;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::config::{Config, HookServers};
-use crate::log::{log_error, log_info, log_warn};
 use crate::types::{clamp, AgentError, McpServerStdio, ToolDef, ToolResult};
 
 const SEP: &str = "__";
@@ -324,19 +323,17 @@ impl McpRegistry {
                         *c
                     };
                     if count >= 2 {
-                        eprintln!(
-                            "sprout-agent: hook: killing server '{}' after {} consecutive timeouts",
-                            server_name, count
+                        tracing::warn!(
+                            "hook: killing server '{}' after {} consecutive timeouts",
+                            server_name,
+                            count
                         );
                         self.kill_server(&server_name, "hook timeout (consecutive)");
                         if let Ok(mut counts) = self.hook_timeouts.lock() {
                             counts.remove(&server_name);
                         }
                     } else {
-                        eprintln!(
-                            "sprout-agent: hook: server '{}' timed out ({}/2)",
-                            server_name, count
-                        );
+                        tracing::warn!("hook: server '{}' timed out ({}/2)", server_name, count);
                     }
                 }
                 _ => {}
@@ -379,7 +376,7 @@ impl McpRegistry {
             if let Some(p) = pgid {
                 killpg(p, &server.name, "kill_server");
             }
-            log_error!(
+            tracing::error!(
                 "MCP server '{}' killed and marked dead (reason={reason})",
                 server.name
             );
@@ -409,7 +406,7 @@ impl McpRegistry {
                     tools: tools.clone(),
                 });
                 let _ = server.client.compare_and_swap(&current, dead);
-                log_error!(
+                tracing::error!(
                     "MCP server '{}' killed and marked dead (reason={reason})",
                     server.name
                 );
@@ -553,7 +550,7 @@ impl McpRegistry {
         };
 
         let started = Instant::now();
-        log_info!(
+        tracing::info!(
             "MCP server '{}' restarting (attempt {attempt_n}/{})",
             server.name,
             self.max_attempts
@@ -566,7 +563,7 @@ impl McpRegistry {
                     tools: Arc::new(tool_names),
                 }));
 
-                log_info!(
+                tracing::info!(
                     "MCP server '{}' restarted in {}ms (attempt {attempt_n})",
                     server.name,
                     started.elapsed().as_millis()
@@ -588,7 +585,7 @@ impl McpRegistry {
                     tools: prev_tools,
                 }));
 
-                log_error!(
+                tracing::error!(
                     "MCP server '{}' restart failed (attempt {attempt_n}/{}, permanent={permanent}): {reason}",
                     server.name, self.max_attempts
                 );
@@ -705,7 +702,7 @@ fn cap_schema(qname: &str, schema: Value) -> Value {
     if size <= MAX_SCHEMA_BYTES {
         return schema;
     }
-    log_warn!(
+    tracing::warn!(
         "tool {qname} schema is {size} bytes (>{MAX_SCHEMA_BYTES}); replacing with empty object"
     );
     Value::Object(Map::new())
@@ -716,14 +713,14 @@ fn killpg(pgid: u32, name: &str, stage: &str) {
     use nix::sys::signal::{killpg as nix_killpg, Signal};
     use nix::unistd::Pid;
     let result = nix_killpg(Pid::from_raw(pgid as i32), Signal::SIGKILL);
-    log_info!(
+    tracing::info!(
         "killpg MCP {name} ({stage}) pgid={pgid} ok={}",
         result.is_ok()
     );
 }
 #[cfg(not(unix))]
 fn killpg(_pgid: u32, name: &str, stage: &str) {
-    log_info!("relying on Drop to kill MCP {name} ({stage})");
+    tracing::info!("relying on Drop to kill MCP {name} ({stage})");
 }
 
 fn valid_name(s: &str) -> bool {

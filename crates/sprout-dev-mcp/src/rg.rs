@@ -1,4 +1,3 @@
-use crate::log::{log_error, log_warn};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -158,7 +157,7 @@ impl CappedSink {
         let next = self.bytes.saturating_add(s.len()).saturating_add(1);
         if next > MAX_OUTPUT_BYTES || self.lines >= MAX_OUTPUT_LINES {
             self.capped = true;
-            log_warn!("rg (fallback): output capped at {MAX_OUTPUT_BYTES} bytes / {MAX_OUTPUT_LINES} lines");
+            tracing::warn!("rg (fallback): output capped at {MAX_OUTPUT_BYTES} bytes / {MAX_OUTPUT_LINES} lines");
             return;
         }
         println!("{s}");
@@ -171,7 +170,7 @@ fn fallback(args: Vec<String>) -> i32 {
     let opts = match parse(args) {
         Ok(o) => o,
         Err(e) => {
-            log_error!("rg (fallback): {e}");
+            tracing::error!("rg (fallback): {e}");
             return 2;
         }
     };
@@ -196,7 +195,7 @@ fn fallback(args: Vec<String>) -> i32 {
     let pattern = match &opts.pattern {
         Some(p) => p.clone(),
         None => {
-            log_error!("rg (fallback): missing PATTERN");
+            tracing::error!("rg (fallback): missing PATTERN");
             return 2;
         }
     };

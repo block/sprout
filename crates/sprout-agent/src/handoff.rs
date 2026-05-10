@@ -24,8 +24,8 @@ impl RunCtx<'_> {
             return HandoffOutcome::Skipped;
         }
         if *self.handoff_count >= self.cfg.max_handoffs {
-            eprintln!(
-                "sprout-agent: agent: handoff cap reached ({}); using truncation",
+            tracing::info!(
+                "handoff cap reached ({}); using truncation",
                 self.cfg.max_handoffs
             );
             return HandoffOutcome::Skipped;
@@ -42,11 +42,11 @@ impl RunCtx<'_> {
             ) => match r {
                 Ok(s) if !s.trim().is_empty() => s,
                 Ok(_) => {
-                    eprintln!("sprout-agent: agent: handoff returned empty summary; truncating");
+                    tracing::warn!("handoff returned empty summary; truncating");
                     return HandoffOutcome::Skipped;
                 }
                 Err(e) => {
-                    eprintln!("sprout-agent: agent: handoff failed: {e}; truncating");
+                    tracing::warn!("handoff failed: {e}; truncating");
                     return HandoffOutcome::Skipped;
                 }
             },
@@ -81,9 +81,10 @@ impl RunCtx<'_> {
             self.history.push(HistoryItem::User(prompt));
         }
         *self.handoff_count += 1;
-        eprintln!(
-            "sprout-agent: agent: handoff #{} (history {prior} -> 1 item)",
-            *self.handoff_count
+        tracing::info!(
+            "handoff #{} (history {prior} -> {} items)",
+            *self.handoff_count,
+            self.history.len()
         );
         HandoffOutcome::Performed
     }
@@ -142,7 +143,7 @@ impl RunCtx<'_> {
             dropped += 1;
         }
         if dropped > 0 {
-            eprintln!("sprout-agent: agent: handoff prompt cap, dropped {dropped} oldest snippets");
+            tracing::info!("handoff prompt cap, dropped {dropped} oldest snippets");
         }
 
         let mut out =

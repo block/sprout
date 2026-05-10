@@ -9,7 +9,6 @@ use rmcp::{
 use std::path::Path;
 use std::sync::Arc;
 
-mod log;
 mod rg;
 mod shell;
 mod shim;
@@ -111,6 +110,10 @@ impl ServerHandler for DevMcp {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
     let argv0 = std::env::args().next().unwrap_or_default();
     let cmd = Path::new(&argv0)
         .file_name()

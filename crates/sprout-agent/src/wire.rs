@@ -123,8 +123,8 @@ pub async fn read_bounded_line<R: AsyncBufRead + Unpin>(
         let chunk = stdin.fill_buf().await?;
         if chunk.is_empty() {
             if !buf.is_empty() {
-                eprintln!(
-                    "sprout-agent: io: unterminated frame at EOF ({} bytes dropped)",
+                tracing::error!(
+                    "io: unterminated frame at EOF ({} bytes dropped)",
                     buf.len()
                 );
             }
@@ -167,7 +167,7 @@ pub async fn writer_task(mut rx: mpsc::Receiver<WireMsg>) {
         let mut s = match serde_json::to_string(&v) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("sprout-agent: io: serialize: {e}");
+                tracing::error!("io: serialize: {e}");
                 continue;
             }
         };

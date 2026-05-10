@@ -3,7 +3,6 @@ mod agent;
 mod config;
 mod handoff;
 mod llm;
-mod log;
 mod mcp;
 mod types;
 mod wire;
@@ -44,12 +43,16 @@ struct Session {
 }
 
 fn die(msg: String) -> ! {
-    eprintln!("sprout-agent: {msg}");
+    tracing::error!("{msg}");
     std::process::exit(2);
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
     let cfg = Config::from_env().unwrap_or_else(|e| die(e));
     let llm = Arc::new(Llm::new(&cfg).unwrap_or_else(|e| die(e.to_string())));
     let max_line = cfg.max_line_bytes;
@@ -68,7 +71,7 @@ async fn main() {
     )
     .await
     {
-        eprintln!("sprout-agent: io: reader: {e}");
+        tracing::error!("io: reader: {e}");
     }
     for session in app.sessions.lock().await.values() {
         let _ = session.cancel_tx.send(true);
