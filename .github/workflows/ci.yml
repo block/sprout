@@ -346,6 +346,8 @@ jobs:
           mkdir -p desktop/src-tauri/binaries
           touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
           touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
+          touch "desktop/src-tauri/binaries/sprout-agent-$TARGET"
+          touch "desktop/src-tauri/binaries/sprout-dev-mcp-$TARGET"
           touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
       - name: Build Tauri app
         run: cd desktop && pnpm tauri build
