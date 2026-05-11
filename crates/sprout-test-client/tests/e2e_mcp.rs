@@ -68,7 +68,8 @@ async fn create_channel_for_test(keys: &Keys, name: &str) -> String {
         Tag::parse(["channel_type", "stream"]).unwrap(),
         Tag::parse(["visibility", "open"]).unwrap(),
     ];
-    let event = EventBuilder::new(Kind::Custom(9007), "").tags(tags)
+    let event = EventBuilder::new(Kind::Custom(9007), "")
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap();
     let resp = client

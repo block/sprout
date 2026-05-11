@@ -159,7 +159,9 @@ impl SproutTestClient {
     ) -> Result<OkResponse, TestClientError> {
         let h_tag = Tag::parse(["h", channel_id])
             .map_err(|e| TestClientError::EventBuilder(e.to_string()))?;
-        let event = EventBuilder::new(Kind::Custom(kind), content).tags([h_tag]).sign_with_keys(keys)?;
+        let event = EventBuilder::new(Kind::Custom(kind), content)
+            .tags([h_tag])
+            .sign_with_keys(keys)?;
         self.send_event(event).await
     }
 
@@ -536,7 +538,8 @@ mod tests {
         let keys = Keys::generate();
         let channel_id = "my-channel-123";
         let h_tag = Tag::parse(["h", channel_id]).unwrap();
-        let event = EventBuilder::new(Kind::Custom(9), "hello").tags([h_tag])
+        let event = EventBuilder::new(Kind::Custom(9), "hello")
+            .tags([h_tag])
             .sign_with_keys(&keys)
             .unwrap();
 

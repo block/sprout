@@ -442,8 +442,10 @@ async fn respond_to_auth_challenge(
     let token_tag = Tag::parse(["auth_token", &inner.api_token])
         .map_err(|e| crate::ProxyError::Auth(format!("auth_token tag: {e}")))?;
 
-    let auth_event = EventBuilder::new(Kind::Authentication, // kind:22242
-        "")
+    let auth_event = EventBuilder::new(
+        Kind::Authentication, // kind:22242
+        "",
+    )
     .tags([relay_tag, challenge_tag, token_tag])
     .sign_with_keys(&inner.auth_keys)
     .map_err(|e| crate::ProxyError::Auth(format!("sign auth event: {e}")))?;

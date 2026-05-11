@@ -91,7 +91,8 @@ mod tests {
 
     fn stored_with_tag(tag: Tag) -> StoredEvent {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "test").tags([tag])
+        let event = EventBuilder::new(Kind::TextNote, "test")
+            .tags([tag])
             .sign_with_keys(&keys)
             .expect("sign");
         StoredEvent::with_received_at(event, Utc::now(), None, true)

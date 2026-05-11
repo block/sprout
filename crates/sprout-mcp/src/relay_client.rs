@@ -330,8 +330,8 @@ fn build_auth_event(
     api_token: Option<&str>,
     auth_tag: Option<&Tag>,
 ) -> Result<Event, RelayClientError> {
-    let relay_nostr_url = nostr::RelayUrl::parse(relay_url)
-        .map_err(|e| RelayClientError::Url(e.to_string()))?;
+    let relay_nostr_url =
+        nostr::RelayUrl::parse(relay_url).map_err(|e| RelayClientError::Url(e.to_string()))?;
     if let Some(token) = api_token {
         let mut tags = vec![
             Tag::parse(["relay", relay_url])
@@ -344,7 +344,9 @@ fn build_auth_event(
         if let Some(t) = auth_tag {
             tags.push(t.clone());
         }
-        Ok(EventBuilder::new(Kind::Authentication, "").tags(tags).sign_with_keys(keys)?)
+        Ok(EventBuilder::new(Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(keys)?)
     } else if let Some(t) = auth_tag {
         // Cannot use EventBuilder::auth() shortcut — it doesn't accept extra tags.
         let tags = vec![
@@ -354,7 +356,9 @@ fn build_auth_event(
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
             t.clone(),
         ];
-        Ok(EventBuilder::new(Kind::Authentication, "").tags(tags).sign_with_keys(keys)?)
+        Ok(EventBuilder::new(Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(keys)?)
     } else {
         Ok(EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?)
     }
@@ -1387,7 +1391,8 @@ mod tests {
         let client = make_client(keys.clone(), Some(real_tag));
 
         // Build event with forged auth tag, bypassing sign_event
-        let event = EventBuilder::new(Kind::TextNote, "forged").tags([forged_tag])
+        let event = EventBuilder::new(Kind::TextNote, "forged")
+            .tags([forged_tag])
             .sign_with_keys(&keys)
             .unwrap();
 
@@ -1408,7 +1413,8 @@ mod tests {
 
         let client = make_client(keys.clone(), None);
 
-        let event = EventBuilder::new(Kind::TextNote, "sneaky").tags([sneaky_tag])
+        let event = EventBuilder::new(Kind::TextNote, "sneaky")
+            .tags([sneaky_tag])
             .sign_with_keys(&keys)
             .unwrap();
 

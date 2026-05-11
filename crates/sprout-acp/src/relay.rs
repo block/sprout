@@ -146,7 +146,8 @@ impl RestClient {
             tags.push(payload_tag);
         }
 
-        let event = EventBuilder::new(Kind::HttpAuth, "").tags(tags)
+        let event = EventBuilder::new(Kind::HttpAuth, "")
+            .tags(tags)
             .sign_with_keys(&self.keys)
             .map_err(|e| RelayError::Http(format!("NIP-98 sign error: {e}")))?;
         let event_json = serde_json::to_string(&event)
@@ -749,7 +750,8 @@ impl HarnessRelay {
                     .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
             );
         }
-        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "").tags(tags)
+        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "")
+            .tags(tags)
             .sign_with_keys(&self.keys)?;
         Ok(event)
     }
@@ -2496,7 +2498,9 @@ async fn send_auth_response(
                 .map_err(|e| RelayError::Http(format!("tag parse error: {e}")))?,
             tag.clone(),
         ];
-        EventBuilder::new(nostr::Kind::Authentication, "").tags(tags).sign_with_keys(keys)?
+        EventBuilder::new(nostr::Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(keys)?
     } else {
         EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?
     };

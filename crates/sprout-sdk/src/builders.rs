@@ -153,7 +153,11 @@ pub fn build_agent_observer_frame(
         tag(&[OBSERVER_FRAME_TAG, frame])?,
     ];
 
-    Ok(EventBuilder::new(Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16), encrypted_content).tags(tags))
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
+        encrypted_content,
+    )
+    .tags(tags))
 }
 
 // ── Builder 2: build_forum_post ───────────────────────────────────────────────
@@ -1417,7 +1421,8 @@ mod tests {
     fn extract_channel_id_invalid_uuid() {
         // Build an event with a malformed h-tag value
         let tags = vec![Tag::parse(["h", "not-a-uuid"]).unwrap()];
-        let ev = EventBuilder::new(Kind::Custom(9), "x").tags(tags)
+        let ev = EventBuilder::new(Kind::Custom(9), "x")
+            .tags(tags)
             .sign_with_keys(&keys())
             .unwrap();
         assert_eq!(extract_channel_id(&ev), None);

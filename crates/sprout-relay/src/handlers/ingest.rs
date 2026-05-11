@@ -1818,9 +1818,12 @@ mod tests {
 
     fn make_event_with_tags(kind: u32, content: &str, tags: &[&[&str]]) -> Event {
         let keys = nostr::Keys::generate();
-        let nostr_tags: Vec<nostr::Tag> =
-            tags.iter().map(|t| nostr::Tag::parse(t.iter().copied()).unwrap()).collect();
-        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content).tags(nostr_tags)
+        let nostr_tags: Vec<nostr::Tag> = tags
+            .iter()
+            .map(|t| nostr::Tag::parse(t.iter().copied()).unwrap())
+            .collect();
+        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content)
+            .tags(nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
     }

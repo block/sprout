@@ -1816,7 +1816,8 @@ mod tests {
                 nostr::Tag::parse(strs).unwrap()
             })
             .collect();
-        EventBuilder::new(Kind::Custom(9), content).tags(nostr_tags)
+        EventBuilder::new(Kind::Custom(9), content)
+            .tags(nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
     }

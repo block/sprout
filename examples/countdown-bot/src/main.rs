@@ -16,9 +16,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use nostr::{
-    Alphabet, Event, EventBuilder, Filter, JsonUtil, Keys, Kind, SingleLetterTag, Tag,
-};
+use nostr::{Alphabet, Event, EventBuilder, Filter, JsonUtil, Keys, Kind, SingleLetterTag, Tag};
 use serde_json::{json, Value};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url as WsUrl;
@@ -150,7 +148,9 @@ fn build_auth_event(config: &Config, challenge: &str) -> Result<Event> {
             Tag::parse(["challenge", challenge])?,
             auth_tag.clone(),
         ];
-        Ok(EventBuilder::new(Kind::Authentication, "").tags(tags).sign_with_keys(&config.bot_keys)?)
+        Ok(EventBuilder::new(Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(&config.bot_keys)?)
     } else {
         Ok(EventBuilder::auth(challenge, relay_url).sign_with_keys(&config.bot_keys)?)
     }

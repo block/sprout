@@ -494,7 +494,8 @@ mod tests {
     fn make_event_with_p_tag(kind: u32, content: &str, p_hex: &str) -> nostr::Event {
         let keys = Keys::generate();
         let p_tag = Tag::parse(["p", p_hex]).expect("tag parse");
-        EventBuilder::new(Kind::Custom(kind as u16), content).tags([p_tag])
+        EventBuilder::new(Kind::Custom(kind as u16), content)
+            .tags([p_tag])
             .sign_with_keys(&keys)
             .unwrap()
     }

@@ -728,7 +728,8 @@ async fn publish_ref_state(
     );
 
     // Sign with relay keypair — the relay is the authoritative source of ref state.
-    let event = nostr::EventBuilder::new(nostr::Kind::Custom(30618), "").tags(tags)
+    let event = nostr::EventBuilder::new(nostr::Kind::Custom(30618), "")
+        .tags(tags)
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:30618: {e}"))?;
 

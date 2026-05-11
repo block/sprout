@@ -1075,7 +1075,8 @@ steps:
         let target_id_hex = target_event.id.to_hex();
         // NIP-25: reaction references the target via an `e` tag.
         let e_tag = Tag::parse(["e", &target_id_hex]).expect("tag parse");
-        let event = EventBuilder::new(Kind::Reaction, "👍").tags([e_tag])
+        let event = EventBuilder::new(Kind::Reaction, "👍")
+            .tags([e_tag])
             .sign_with_keys(&keys)
             .expect("sign");
         (

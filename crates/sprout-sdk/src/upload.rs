@@ -173,7 +173,10 @@ pub async fn upload_bytes(
     };
     let size = bytes.len() as u64;
     if size > max_size {
-        return Err(UploadError::FileTooLarge { size, max: max_size });
+        return Err(UploadError::FileTooLarge {
+            size,
+            max: max_size,
+        });
     }
 
     // 3. SHA-256.
@@ -184,7 +187,11 @@ pub async fn upload_bytes(
     let server_domain = opts.server_domain.or(auto_domain.as_deref());
 
     // 5. Sign Blossom auth event (kind:24242).
-    let expiry_secs: u64 = if mime.starts_with("video/") { 3600 } else { 600 };
+    let expiry_secs: u64 = if mime.starts_with("video/") {
+        3600
+    } else {
+        600
+    };
     let auth_header = sign_blossom_auth(keys, &sha256, expiry_secs, server_domain)?;
 
     // 6. HTTP PUT with generous timeout for large files.

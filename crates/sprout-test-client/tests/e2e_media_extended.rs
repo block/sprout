@@ -33,7 +33,8 @@ fn sign_blossom_auth(keys: &Keys, sha256: &str) -> nostr::Event {
         Tag::parse(["x", sha256]).unwrap(),
         Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
     ];
-    EventBuilder::new(Kind::from(24242), "Upload test").tags(tags)
+    EventBuilder::new(Kind::from(24242), "Upload test")
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap()
 }
@@ -127,7 +128,8 @@ fn tiny_webp() -> Vec<u8> {
 // ── Auth edge case helpers ──────────────────────────────────────────────────
 
 fn sign_custom_auth(keys: &Keys, kind: u16, content: &str, tags: Vec<Tag>) -> nostr::Event {
-    EventBuilder::new(Kind::from(kind), content).tags(tags)
+    EventBuilder::new(Kind::from(kind), content)
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap()
 }
@@ -487,14 +489,15 @@ async fn test_ws_valid_imeta() {
     // Create channel via signed kind:9007 event
     let channel_uuid = uuid::Uuid::new_v4();
     let channel_name = format!("ws-imeta-test-{}", channel_uuid);
-    let create_event = EventBuilder::new(Kind::from(9007), "").tags(vec![
+    let create_event = EventBuilder::new(Kind::from(9007), "")
+        .tags(vec![
             Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
             Tag::parse(["name", &channel_name]).unwrap(),
             Tag::parse(["channel_type", "stream"]).unwrap(),
             Tag::parse(["visibility", "open"]).unwrap(),
         ])
-    .sign_with_keys(&keys)
-    .unwrap();
+        .sign_with_keys(&keys)
+        .unwrap();
     let create_resp = http
         .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
@@ -531,8 +534,8 @@ async fn test_ws_valid_imeta() {
             ])
             .unwrap(),
         ])
-    .sign_with_keys(&keys)
-    .unwrap();
+        .sign_with_keys(&keys)
+        .unwrap();
 
     let ok = client.send_event(event).await.unwrap();
     assert!(
@@ -556,14 +559,15 @@ async fn test_ws_invalid_imeta_external_url() {
 
     let channel_uuid = uuid::Uuid::new_v4();
     let channel_name = format!("ws-imeta-bad-{}", channel_uuid);
-    let create_event = EventBuilder::new(Kind::from(9007), "").tags(vec![
+    let create_event = EventBuilder::new(Kind::from(9007), "")
+        .tags(vec![
             Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
             Tag::parse(["name", &channel_name]).unwrap(),
             Tag::parse(["channel_type", "stream"]).unwrap(),
             Tag::parse(["visibility", "open"]).unwrap(),
         ])
-    .sign_with_keys(&keys)
-    .unwrap();
+        .sign_with_keys(&keys)
+        .unwrap();
     let create_resp = http
         .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
@@ -592,8 +596,8 @@ async fn test_ws_invalid_imeta_external_url() {
             ])
             .unwrap(),
         ])
-    .sign_with_keys(&keys)
-    .unwrap();
+        .sign_with_keys(&keys)
+        .unwrap();
 
     let ok = client.send_event(event).await.unwrap();
     assert!(!ok.accepted, "external URL imeta via WS must be rejected");

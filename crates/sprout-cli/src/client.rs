@@ -190,15 +190,9 @@ impl SproutClient {
             auth_tag_json: self.auth_tag_json.as_deref(),
             ..Default::default()
         };
-        sprout_sdk::upload::upload_file(
-            &self.http,
-            &self.keys,
-            &self.relay_url,
-            file_path,
-            &opts,
-        )
-        .await
-        .map_err(|e| CliError::Other(format!("upload failed: {e}")))
+        sprout_sdk::upload::upload_file(&self.http, &self.keys, &self.relay_url, file_path, &opts)
+            .await
+            .map_err(|e| CliError::Other(format!("upload failed: {e}")))
     }
 
     // -----------------------------------------------------------------------

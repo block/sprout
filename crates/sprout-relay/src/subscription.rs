@@ -456,7 +456,8 @@ mod tests {
 
     fn make_stored_event_with_p(kind: Kind, p: &str, channel_id: Option<Uuid>) -> StoredEvent {
         let keys = Keys::generate();
-        let event = EventBuilder::new(kind, "test").tags([Tag::parse(["p", p]).expect("valid p tag")])
+        let event = EventBuilder::new(kind, "test")
+            .tags([Tag::parse(["p", p]).expect("valid p tag")])
             .sign_with_keys(&keys)
             .expect("sign");
         StoredEvent::with_received_at(event, Utc::now(), channel_id, true)

@@ -116,7 +116,8 @@ async fn create_channel_via_event(
     if let Some(desc) = description {
         tags.push(Tag::parse(["about", desc]).unwrap());
     }
-    let event = EventBuilder::new(Kind::Custom(9007), "").tags(tags)
+    let event = EventBuilder::new(Kind::Custom(9007), "")
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap();
     let resp = client
@@ -396,7 +397,8 @@ async fn test_search_returns_indexed_event() {
         .expect("WebSocket connect failed");
 
     let h_tag = Tag::parse(["h", &channel_id]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(Kind::Custom(9), &content).tags([h_tag])
+    let event = nostr::EventBuilder::new(Kind::Custom(9), &content)
+        .tags([h_tag])
         .sign_with_keys(&keys)
         .expect("event sign failed");
 
@@ -889,7 +891,8 @@ async fn test_feed_returns_activity() {
         .expect("WebSocket connect failed");
 
     let h_tag = Tag::parse(["h", &channel_id]).expect("tag parse failed");
-    let event = nostr::EventBuilder::new(Kind::Custom(9), &content).tags([h_tag])
+    let event = nostr::EventBuilder::new(Kind::Custom(9), &content)
+        .tags([h_tag])
         .sign_with_keys(&keys)
         .expect("event sign failed");
 
@@ -1696,7 +1699,8 @@ async fn test_get_contact_list_returns_latest() {
         Tag::parse(["p", &contact1]).unwrap(),
         Tag::parse(["p", &contact2]).unwrap(),
     ];
-    let event_v1 = EventBuilder::new(Kind::Custom(3), "").tags(tags_v1)
+    let event_v1 = EventBuilder::new(Kind::Custom(3), "")
+        .tags(tags_v1)
         .sign_with_keys(&keys)
         .unwrap();
 
@@ -1720,7 +1724,8 @@ async fn test_get_contact_list_returns_latest() {
     // ── Second contact list: 1 different contact ──────────────────────────────
     let contact3 = Keys::generate().public_key().to_hex();
     let tags_v2 = vec![Tag::parse(["p", &contact3]).unwrap()];
-    let event_v2 = EventBuilder::new(Kind::Custom(3), "").tags(tags_v2)
+    let event_v2 = EventBuilder::new(Kind::Custom(3), "")
+        .tags(tags_v2)
         .sign_with_keys(&keys)
         .unwrap();
 

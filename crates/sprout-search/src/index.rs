@@ -273,7 +273,8 @@ mod tests {
     fn tag_flattening_uses_unit_separator() {
         let keys = Keys::generate();
         let tag = nostr::Tag::parse(["e", "abc123def456"]).expect("tag parse");
-        let event = EventBuilder::new(Kind::TextNote, "tagged").tags([tag])
+        let event = EventBuilder::new(Kind::TextNote, "tagged")
+            .tags([tag])
             .sign_with_keys(&keys)
             .expect("sign");
         let stored = StoredEvent::new(event, None);
@@ -325,7 +326,8 @@ mod tests {
         let keys = Keys::generate();
         // "r" tag with a URL value containing colons
         let tag = nostr::Tag::parse(["r", "wss://relay.example.com"]).expect("tag parse");
-        let event = EventBuilder::new(Kind::TextNote, "relay ref").tags([tag])
+        let event = EventBuilder::new(Kind::TextNote, "relay ref")
+            .tags([tag])
             .sign_with_keys(&keys)
             .expect("sign");
         let stored = StoredEvent::new(event, None);
