@@ -10,12 +10,6 @@
       "groupName": null,
       "separateMinorPatch": true,
       "separateMultipleMinor": true
-    },
-    {
-      "description": "Hold secp256k1 until sprout-pair-relay is migrated from rand-std to rand/std features.",
-      "matchManagers": ["cargo"],
-      "matchPackageNames": ["secp256k1"],
-      "allowedVersions": "<0.31"
     }
   ]
 }
