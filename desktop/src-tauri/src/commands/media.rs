@@ -109,7 +109,7 @@ const ALLOWED_MIME: &[&str] = &[
     "video/mp4",
 ];
 
-fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
+pub(crate) fn detect_and_validate_mime(body: &[u8]) -> Result<String, String> {
     let mime = infer::get(body)
         .map(|t| t.mime_type().to_string())
         .unwrap_or_else(|| "application/octet-stream".to_string());

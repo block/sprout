@@ -9,10 +9,23 @@ pub async fn save_json_with_dialog(
     suggested_filename: &str,
     data: &[u8],
 ) -> Result<bool, String> {
+    save_bytes_with_dialog(app, suggested_filename, "JSON", &["json"], data).await
+}
+
+/// Show a save-file dialog with a custom filter and write `data` to the chosen
+/// path. Returns `Ok(true)` when the file was written, `Ok(false)` when the
+/// user cancelled the dialog.
+pub async fn save_bytes_with_dialog(
+    app: &AppHandle,
+    suggested_filename: &str,
+    filter_name: &str,
+    extensions: &[&str],
+    data: &[u8],
+) -> Result<bool, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .add_filter("JSON", &["json"])
+        .add_filter(filter_name, extensions)
         .set_file_name(suggested_filename)
         .save_file(move |path| {
             let _ = tx.send(path);

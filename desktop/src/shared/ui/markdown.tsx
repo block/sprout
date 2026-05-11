@@ -4,7 +4,10 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 
+import { toast } from "sonner";
+
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import { invokeTauri } from "@/shared/api/tauri";
 import type { Channel } from "@/shared/api/types";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { cn } from "@/shared/lib/cn";
@@ -36,6 +39,67 @@ type MarkdownProps = {
 };
 
 type MarkdownVariant = "default" | "compact" | "tight";
+
+function ImageContextMenu({
+  children,
+  src,
+}: {
+  children: React.ReactNode;
+  src: string | undefined;
+}) {
+  const [menu, setMenu] = React.useState<{ x: number; y: number } | null>(null);
+
+  React.useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [menu]);
+
+  return (
+    <>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: context menu handler on image wrapper */}
+      <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        {children}
+      </div>
+      {menu && src && (
+        <div
+          className="fixed z-[100] min-w-[160px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+          style={{ left: menu.x, top: menu.y }}
+        >
+          <button
+            type="button"
+            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+            onClick={() => {
+              setMenu(null);
+              invokeTauri("download_image", { url: src }).catch(
+                (err: unknown) => {
+                  const msg =
+                    err instanceof Error ? err.message : "Download failed";
+                  toast.error(msg);
+                },
+              );
+            }}
+          >
+            Download image
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
 
 function createMarkdownComponents(
   variant: MarkdownVariant,
@@ -140,62 +204,68 @@ function createMarkdownComponents(
         );
       }
       return (
-        <DialogPrimitive.Root>
-          <DialogPrimitive.Trigger asChild>
-            <div className="mt-1 max-w-sm cursor-pointer transition-opacity hover:opacity-90">
-              <img
-                alt={alt}
-                className="max-h-64 max-w-full rounded-xl object-contain"
-                src={resolvedSrc}
-              />
-            </div>
-          </DialogPrimitive.Trigger>
-          <DialogPrimitive.Portal>
-            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-            <DialogPrimitive.Content
-              className="fixed inset-0 z-50 flex items-center justify-center p-8"
-              // Let clicks on the backdrop (the content container itself) close the lightbox
-              onPointerDownOutside={(e) => e.preventDefault()}
-              onInteractOutside={(e) => e.preventDefault()}
-            >
-              <DialogPrimitive.Title className="sr-only">
-                {alt || "Image preview"}
-              </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="sr-only">
-                Full-size image preview. Press Escape or click outside the image
-                to close.
-              </DialogPrimitive.Description>
-              {/* Close region: clicking anywhere except the image closes the dialog */}
-              <DialogPrimitive.Close
-                className="absolute inset-0 cursor-default"
-                aria-label="Close lightbox"
-              />
-              <img
-                alt={alt}
-                className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
-                src={resolvedSrc}
-              />
-              <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
-                <svg
-                  aria-hidden="true"
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-                <span className="sr-only">Close</span>
-              </DialogPrimitive.Close>
-            </DialogPrimitive.Content>
-          </DialogPrimitive.Portal>
-        </DialogPrimitive.Root>
+        <ImageContextMenu src={src}>
+          <DialogPrimitive.Root>
+            <DialogPrimitive.Trigger asChild>
+              <div className="mt-1 max-w-sm cursor-pointer transition-opacity hover:opacity-90">
+                <img
+                  alt={alt}
+                  className="max-h-64 max-w-full rounded-xl object-contain"
+                  src={resolvedSrc}
+                  onContextMenu={(e) => e.preventDefault()}
+                />
+              </div>
+            </DialogPrimitive.Trigger>
+            <DialogPrimitive.Portal>
+              <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+              <DialogPrimitive.Content
+                className="fixed inset-0 z-50 flex items-center justify-center p-8"
+                // Let clicks on the backdrop (the content container itself) close the lightbox
+                onPointerDownOutside={(e) => e.preventDefault()}
+                onInteractOutside={(e) => e.preventDefault()}
+              >
+                <DialogPrimitive.Title className="sr-only">
+                  {alt || "Image preview"}
+                </DialogPrimitive.Title>
+                <DialogPrimitive.Description className="sr-only">
+                  Full-size image preview. Press Escape or click outside the
+                  image to close.
+                </DialogPrimitive.Description>
+                {/* Close region: clicking anywhere except the image closes the dialog */}
+                <DialogPrimitive.Close
+                  className="absolute inset-0 cursor-default"
+                  aria-label="Close lightbox"
+                />
+                <ImageContextMenu src={src}>
+                  <img
+                    alt={alt}
+                    className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+                    src={resolvedSrc}
+                    onContextMenu={(e) => e.preventDefault()}
+                  />
+                </ImageContextMenu>
+                <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
+                  <svg
+                    aria-hidden="true"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                  <span className="sr-only">Close</span>
+                </DialogPrimitive.Close>
+              </DialogPrimitive.Content>
+            </DialogPrimitive.Portal>
+          </DialogPrimitive.Root>
+        </ImageContextMenu>
       );
     },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
