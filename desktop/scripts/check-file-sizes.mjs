@@ -33,7 +33,7 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/personas.rs", 900], // built-in persona system prompts (Solo + Kit + Scout) + persona pack import/uninstall/list + uninstall safety check
   ["src-tauri/src/managed_agents/teams.rs", 580], // built-in team registry (Kit & Scout) + merge_teams + validate_team_deletion + JSON export/import + tests
   ["src-tauri/src/managed_agents/persona_card.rs", 970], // PNG/ZIP/MD persona card codec + pack-zip detection + nested root finder + provider/model/namePool fields + 27 unit tests
-  ["src/app/AppShell.tsx", 860], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + memory-leak safeguards
+  ["src/app/AppShell.tsx", 770], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + memory-leak safeguards
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/channels/ui/ChannelPane.tsx", 520], // composer/timeline/sidebar orchestration + anchored agent activity footers
@@ -61,7 +61,8 @@ const overrides = new Map([
   ["src/features/agents/ui/useTeamActions.ts", 510], // team CRUD + export + import + import-update orchestration with query invalidation
   ["src/features/agents/ui/CreateAgentDialog.tsx", 685], // provider selector + config form + schema-typed config coercion + required field validation + locked scopes
   ["src/features/channels/ui/AddChannelBotDialog.tsx", 640], // provider mode: Run on selector, trust warning, probe effect, single-agent enforcement, provider warnings display
-  ["src/shared/api/types.ts", 570], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets + sourcePack + UpdateManagedAgentInput edit fields + UserStatus/UserStatusLookup (NIP-38) + RelayMember/RelayMemberRole types
+  ["src/features/settings/ui/ChannelTemplatesSettingsCard.tsx", 850], // template CRUD card + TemplateFormDialog (persona/team chip selectors + provider assignments + canvas template) + TemplateTeamSelector + ProviderAssignments + ProviderRow
+  ["src/shared/api/types.ts", 580], // persona provider/model fields + forum types + workflow type re-exports + ephemeral channel TTL fields + mcpToolsets + sourcePack + UpdateManagedAgentInput edit fields + UserStatus/UserStatusLookup (NIP-38) + RelayMember/RelayMemberRole types + ChannelTemplate/TemplateAgentEntry/TemplateTeamEntry
   ["src-tauri/src/events.rs", 610], // event builders + build_huddle_guidelines (kind:48106) + post_event_raw transport helper + participant p-tag on join/leave + NIP-43 relay admin builders (add/remove/change-role) + check_relay_role + DM/presence/workflow command builders
   ["src-tauri/src/huddle/kokoro.rs", 980], // Kokoro ONNX TTS engine + three-tier G2P + ARPAbet→IPA + CoreML + synth_chunk() public API + style validation + hyphenated compound splitting + 23 unit tests
   ["src-tauri/src/huddle/mod.rs", 1020], // huddle state machine + Tauri commands + sync protocol doc; state/relay/pipeline extracted + emit_huddle_state_changed wiring

@@ -46,7 +46,7 @@ export const ChooserDialogContent = React.forwardRef<
   ) => (
     <DialogContent
       className={cn(
-        "flex max-h-[85vh] flex-col overflow-hidden p-0",
+        "flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0",
         className,
       )}
       ref={ref}
@@ -67,12 +67,12 @@ export const ChooserDialogContent = React.forwardRef<
 
       <div
         className={cn(
-          "min-h-0 flex-1 overflow-y-auto px-6 py-5",
+          "min-h-0 flex-1 overflow-y-auto px-6",
           scrollAreaClassName,
         )}
         data-testid={scrollAreaTestId}
       >
-        {children}
+        <div className="py-5">{children}</div>
       </div>
 
       {footer ? (

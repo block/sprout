@@ -450,6 +450,68 @@ export type UpdateTeamInput = {
   description?: string;
   personaIds: string[];
 };
+// ── Channel Template types ─────────────────────────────────────────────────────
+
+export type TemplateBackend =
+  | { type: "local" }
+  | { type: "provider"; id: string };
+
+export type TemplateAgentEntry = {
+  personaId: string;
+  provider: string | null;
+  model: string | null;
+  role: string | null;
+  backend: TemplateBackend | null;
+};
+
+export type TemplateTeamEntry = {
+  teamId: string;
+  provider: string | null;
+  model: string | null;
+  backend: TemplateBackend | null;
+};
+
+export type ChannelTemplate = {
+  id: string;
+  name: string;
+  description: string | null;
+  channelType: "stream" | "forum";
+  visibility: "open" | "private";
+  canvasTemplate: string | null;
+  agents: {
+    personas: TemplateAgentEntry[];
+    teams: TemplateTeamEntry[];
+  };
+  isBuiltin: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateChannelTemplateInput = {
+  name: string;
+  description?: string;
+  channelType?: string;
+  visibility?: string;
+  canvasTemplate?: string;
+  agents?: {
+    personas: TemplateAgentEntry[];
+    teams: TemplateTeamEntry[];
+  };
+};
+
+export type UpdateChannelTemplateInput = {
+  id: string;
+  name: string;
+  description?: string;
+  channelType?: string;
+  visibility?: string;
+  canvasTemplate?: string;
+  agents?: {
+    personas: TemplateAgentEntry[];
+    teams: TemplateTeamEntry[];
+  };
+};
+
 export type {
   ApprovalActionResponse,
   Workflow,

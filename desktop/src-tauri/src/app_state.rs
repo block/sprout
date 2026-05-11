@@ -17,6 +17,7 @@ pub struct AppState {
     /// init and takes priority over env vars and compile-time defaults.
     pub relay_url_override: Mutex<Option<String>>,
     pub managed_agents_store_lock: Mutex<()>,
+    pub channel_templates_store_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<String, ManagedAgentProcess>>,
     pub huddle_state: Mutex<HuddleState>,
     /// Tauri app handle — stored after setup so huddle commands can emit
@@ -68,6 +69,7 @@ pub fn build_app_state() -> AppState {
             .unwrap_or_else(|_| reqwest::Client::new()),
         relay_url_override: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
+        channel_templates_store_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),
         app_handle: Mutex::new(None),
