@@ -117,7 +117,11 @@ export function UserProfilePanel({
     <>
       {isOverlay && <OverlayPanelBackdrop onClose={onClose} />}
       <aside
-        className={cn(PANEL_BASE_CLASS, isOverlay && PANEL_OVERLAY_CLASS)}
+        className={cn(
+          PANEL_BASE_CLASS,
+          !isOverlay && "pt-11",
+          isOverlay && PANEL_OVERLAY_CLASS,
+        )}
         data-testid="user-profile-panel"
         style={{ width: `${widthPx}px` }}
       >
