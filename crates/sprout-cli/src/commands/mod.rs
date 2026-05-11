@@ -4,6 +4,7 @@ pub mod feed;
 pub mod messages;
 pub mod pack;
 pub mod reactions;
+pub mod repos;
 pub mod social;
 pub mod users;
 pub mod workflows;

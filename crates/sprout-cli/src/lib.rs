@@ -474,6 +474,50 @@ enum Cmd {
         pubkey: String,
     },
 
+    // ---- Git Repos ---------------------------------------------------------
+    /// Create a git repository (publishes kind:30617 announcement)
+    #[command(name = "create-repo")]
+    CreateRepo {
+        /// Repository identifier: [a-zA-Z0-9._-]{1,64}
+        #[arg(long)]
+        id: String,
+        /// Human-readable display name
+        #[arg(long)]
+        name: Option<String>,
+        /// Repository description
+        #[arg(long)]
+        description: Option<String>,
+        /// Clone URL(s) — can be specified multiple times
+        #[arg(long = "clone")]
+        clone_urls: Vec<String>,
+        /// Web browsing URL
+        #[arg(long)]
+        web: Option<String>,
+        /// Preferred relay(s) — can be specified multiple times
+        #[arg(long = "relay")]
+        relays: Vec<String>,
+    },
+    /// Get a repository's announcement event by ID
+    #[command(name = "get-repo")]
+    GetRepo {
+        /// Repository identifier (d-tag)
+        #[arg(long)]
+        id: String,
+        /// Owner pubkey (64-char hex). Omit to match any owner.
+        #[arg(long)]
+        owner: Option<String>,
+    },
+    /// List repositories (defaults to your own)
+    #[command(name = "list-repos")]
+    ListRepos {
+        /// Owner pubkey (64-char hex). Omit for your repos.
+        #[arg(long)]
+        owner: Option<String>,
+        /// Maximum number of results
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+
     // ---- Pack (local) ------------------------------------------------------
     /// Persona pack operations (local, no relay connection needed)
     #[command(subcommand)]
@@ -818,6 +862,33 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             commands::social::cmd_get_contact_list(&client, &pubkey).await
         }
 
+        // ---- Git Repos -------------------------------------------------
+        Cmd::CreateRepo {
+            id,
+            name,
+            description,
+            clone_urls,
+            web,
+            relays,
+        } => {
+            commands::repos::cmd_create_repo(
+                &client,
+                &id,
+                name.as_deref(),
+                description.as_deref(),
+                &clone_urls,
+                web.as_deref(),
+                &relays,
+            )
+            .await
+        }
+        Cmd::GetRepo { id, owner } => {
+            commands::repos::cmd_get_repo(&client, &id, owner.as_deref()).await
+        }
+        Cmd::ListRepos { owner, limit } => {
+            commands::repos::cmd_list_repos(&client, owner.as_deref(), limit).await
+        }
+
         // ---- Pack (local) --------------------------------------------------
         Cmd::Pack(_) => unreachable!("handled above"),
     }
@@ -879,6 +950,7 @@ mod tests {
             "approve-step",
             "archive-channel",
             "create-channel",
+            "create-repo",
             "create-workflow",
             "delete-channel",
             "delete-message",
@@ -892,6 +964,7 @@ mod tests {
             "get-messages",
             "get-presence",
             "get-reactions",
+            "get-repo",
             "get-thread",
             "get-user-notes",
             "get-users",
@@ -902,6 +975,7 @@ mod tests {
             "list-channel-members",
             "list-channels",
             "list-dms",
+            "list-repos",
             "list-workflows",
             "open-dm",
             "pack",

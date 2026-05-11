@@ -5,7 +5,7 @@
 
 use nostr::{EventBuilder, Kind, Tag};
 use sprout_core::{
-    kind::KIND_AGENT_OBSERVER_FRAME,
+    kind::{KIND_AGENT_OBSERVER_FRAME, KIND_GIT_REPO_ANNOUNCEMENT},
     observer::{
         content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
         OBSERVER_FRAME_TELEMETRY,
@@ -742,6 +742,158 @@ pub fn extract_channel_id(event: &nostr::Event) -> Option<Uuid> {
             None
         }
     })
+}
+
+// ── Builder 30: build_repo_announcement ──────────────────────────────────────
+
+/// Build a git repository announcement event (kind:30617, NIP-34).
+///
+/// Creates or updates a repository. The `repo_id` is the unique identifier
+/// (d-tag) — must be `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`.
+///
+/// This is a parameterized replaceable event: publishing again with the same
+/// `repo_id` updates the announcement (relay overwrites the previous one).
+pub fn build_repo_announcement(
+    repo_id: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+    clone_urls: &[&str],
+    web_url: Option<&str>,
+    relays: &[&str],
+) -> Result<EventBuilder, SdkError> {
+    // Validate repo_id
+    if repo_id.is_empty() {
+        return Err(SdkError::InvalidInput("repo_id must not be empty".into()));
+    }
+    if repo_id.len() > 64 {
+        return Err(SdkError::InvalidInput(format!(
+            "repo_id exceeds 64 characters (got {})",
+            repo_id.len()
+        )));
+    }
+    if !repo_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(SdkError::InvalidInput(
+            "repo_id may only contain [a-zA-Z0-9._-]".into(),
+        ));
+    }
+    if repo_id.starts_with('.') {
+        return Err(SdkError::InvalidInput(
+            "repo_id must not start with a dot".into(),
+        ));
+    }
+    if repo_id.contains("..") {
+        return Err(SdkError::InvalidInput(
+            "repo_id must not contain '..'".into(),
+        ));
+    }
+
+    // Validate optional name
+    if let Some(n) = name {
+        if n.len() > 128 {
+            return Err(SdkError::InvalidInput(format!(
+                "name exceeds 128 characters (got {})",
+                n.len()
+            )));
+        }
+    }
+
+    // Validate optional description
+    if let Some(d) = description {
+        if d.len() > 1024 {
+            return Err(SdkError::InvalidInput(format!(
+                "description exceeds 1024 characters (got {})",
+                d.len()
+            )));
+        }
+    }
+
+    // Validate clone_urls
+    if clone_urls.len() > 5 {
+        return Err(SdkError::InvalidInput(format!(
+            "too many clone_urls (max 5, got {})",
+            clone_urls.len()
+        )));
+    }
+    for url in clone_urls {
+        if url.is_empty() {
+            return Err(SdkError::InvalidInput("clone_url must not be empty".into()));
+        }
+        if url.len() > 512 {
+            return Err(SdkError::InvalidInput(format!(
+                "clone_url exceeds 512 characters (got {})",
+                url.len()
+            )));
+        }
+    }
+
+    // Validate web_url
+    if let Some(url) = web_url {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(SdkError::InvalidInput(format!(
+                "web_url must start with http:// or https:// (got {:?})",
+                url
+            )));
+        }
+        if url.len() > 512 {
+            return Err(SdkError::InvalidInput(format!(
+                "web_url exceeds 512 characters (got {})",
+                url.len()
+            )));
+        }
+    }
+
+    // Validate relays
+    if relays.len() > 10 {
+        return Err(SdkError::InvalidInput(format!(
+            "too many relays (max 10, got {})",
+            relays.len()
+        )));
+    }
+    for relay in relays {
+        if !relay.starts_with("ws://") && !relay.starts_with("wss://") {
+            return Err(SdkError::InvalidInput(format!(
+                "relay must start with ws:// or wss:// (got {:?})",
+                relay
+            )));
+        }
+        if relay.len() > 256 {
+            return Err(SdkError::InvalidInput(format!(
+                "relay exceeds 256 characters (got {})",
+                relay.len()
+            )));
+        }
+    }
+
+    // Build tags
+    let mut tags = vec![tag(&["d", repo_id])?];
+    if let Some(n) = name {
+        tags.push(tag(&["name", n])?);
+    }
+    if let Some(d) = description {
+        tags.push(tag(&["description", d])?);
+    }
+    if !clone_urls.is_empty() {
+        let mut clone_tag = vec!["clone"];
+        clone_tag.extend_from_slice(clone_urls);
+        tags.push(tag(&clone_tag)?);
+    }
+    if let Some(url) = web_url {
+        tags.push(tag(&["web", url])?);
+    }
+    if !relays.is_empty() {
+        let mut relay_tag = vec!["relays"];
+        relay_tag.extend_from_slice(relays);
+        tags.push(tag(&relay_tag)?);
+    }
+
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_GIT_REPO_ANNOUNCEMENT as u16),
+        "",
+        tags,
+    ))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1696,5 +1848,120 @@ mod tests {
         let ev = sign(build_huddle_ended(parent, ephemeral).unwrap());
         assert!(has_tag(&ev, "h", &parent.to_string()));
         assert!(!has_tag(&ev, "h", &ephemeral.to_string()));
+    }
+
+    // ── build_repo_announcement ───────────────────────────────────────────────
+
+    #[test]
+    fn repo_announcement_happy_path_all_fields() {
+        let ev = sign(
+            build_repo_announcement(
+                "my-repo",
+                Some("My Repo"),
+                Some("A test repository"),
+                &["https://github.com/example/my-repo.git"],
+                Some("https://github.com/example/my-repo"),
+                &["wss://relay.example.com"],
+            )
+            .unwrap(),
+        );
+        assert_eq!(ev.kind.as_u16(), 30617);
+        assert_eq!(ev.content, "");
+        assert!(has_tag(&ev, "d", "my-repo"));
+        assert!(has_tag(&ev, "name", "My Repo"));
+        assert!(has_tag(&ev, "description", "A test repository"));
+        assert!(has_tag(
+            &ev,
+            "clone",
+            "https://github.com/example/my-repo.git"
+        ));
+        assert!(has_tag(&ev, "web", "https://github.com/example/my-repo"));
+        // relays is a multi-value tag — check the tag key exists
+        assert!(ev.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.first().map(|v| v.as_str()) == Some("relays")
+                && s.get(1).map(|v| v.as_str()) == Some("wss://relay.example.com")
+        }));
+    }
+
+    #[test]
+    fn repo_announcement_happy_path_minimal() {
+        let ev = sign(build_repo_announcement("bare-repo", None, None, &[], None, &[]).unwrap());
+        assert_eq!(ev.kind.as_u16(), 30617);
+        assert_eq!(ev.content, "");
+        assert!(has_tag(&ev, "d", "bare-repo"));
+        // No optional tags present
+        assert!(!ev
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("name")));
+        assert!(!ev
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|v| v.as_str()) == Some("clone")));
+    }
+
+    #[test]
+    fn repo_announcement_rejects_empty_repo_id() {
+        let err = build_repo_announcement("", None, None, &[], None, &[]).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn repo_announcement_rejects_leading_dot() {
+        let err = build_repo_announcement(".hidden", None, None, &[], None, &[]).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn repo_announcement_rejects_double_dot() {
+        let err = build_repo_announcement("some..repo", None, None, &[], None, &[]).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn repo_announcement_rejects_repo_id_over_64_chars() {
+        let long_id = "a".repeat(65);
+        let err = build_repo_announcement(&long_id, None, None, &[], None, &[]).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn repo_announcement_rejects_invalid_chars_in_repo_id() {
+        let err = build_repo_announcement("bad repo!", None, None, &[], None, &[]).unwrap_err();
+        assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn repo_announcement_multiple_clone_urls_multi_value_tag() {
+        let ev = sign(
+            build_repo_announcement(
+                "multi-clone",
+                None,
+                None,
+                &[
+                    "https://relay.example.com/git/abc/multi-clone",
+                    "ssh://git@github.com/org/multi-clone.git",
+                ],
+                None,
+                &[],
+            )
+            .unwrap(),
+        );
+        // clone is a multi-value tag per NIP-34: ["clone", url1, url2, ...]
+        let clone_tag = ev
+            .tags
+            .iter()
+            .find(|t| t.as_slice().first().map(|v| v.as_str()) == Some("clone"))
+            .expect("clone tag missing");
+        let vals: Vec<&str> = clone_tag
+            .as_slice()
+            .iter()
+            .skip(1)
+            .map(|v| v.as_str())
+            .collect();
+        assert_eq!(vals.len(), 2);
+        assert_eq!(vals[0], "https://relay.example.com/git/abc/multi-clone");
+        assert_eq!(vals[1], "ssh://git@github.com/org/multi-clone.git");
     }
 }

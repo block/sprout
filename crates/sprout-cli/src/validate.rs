@@ -22,6 +22,31 @@ pub fn validate_hex64(s: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Validate a git repo identifier: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`.
+pub fn validate_repo_id(s: &str) -> Result<(), CliError> {
+    if s.is_empty() || s.len() > 64 {
+        return Err(CliError::Usage(format!(
+            "repo ID must be 1-64 characters (got {})",
+            s.len()
+        )));
+    }
+    if s.starts_with('.') {
+        return Err(CliError::Usage("repo ID must not start with '.'".into()));
+    }
+    if s.contains("..") {
+        return Err(CliError::Usage("repo ID must not contain '..'".into()));
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    {
+        return Err(CliError::Usage(format!(
+            "repo ID contains invalid characters (allowed: a-z A-Z 0-9 . _ -): {s}"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate content does not exceed MAX_CONTENT_BYTES (65,536).
 pub fn validate_content_size(content: &str) -> Result<(), CliError> {
     if content.len() > MAX_CONTENT_BYTES {
@@ -490,5 +515,48 @@ mod tests {
         let mut m: Vec<String> = (0..50).map(|i| format!("{i:064}")).collect();
         merge_mentions(&mut m, &["extra".into()], 50);
         assert_eq!(m.len(), 50);
+    }
+
+    // ── validate_repo_id ─────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_repo_id_valid() {
+        assert!(super::validate_repo_id("my-repo").is_ok());
+        assert!(super::validate_repo_id("repo_v2.0").is_ok());
+        assert!(super::validate_repo_id("a").is_ok());
+    }
+
+    #[test]
+    fn validate_repo_id_boundary_64_chars() {
+        let id = "a".repeat(64);
+        assert!(super::validate_repo_id(&id).is_ok());
+    }
+
+    #[test]
+    fn validate_repo_id_rejects_empty() {
+        assert!(super::validate_repo_id("").is_err());
+    }
+
+    #[test]
+    fn validate_repo_id_rejects_over_64() {
+        let id = "a".repeat(65);
+        assert!(super::validate_repo_id(&id).is_err());
+    }
+
+    #[test]
+    fn validate_repo_id_rejects_leading_dot() {
+        assert!(super::validate_repo_id(".hidden").is_err());
+    }
+
+    #[test]
+    fn validate_repo_id_rejects_double_dot() {
+        assert!(super::validate_repo_id("foo..bar").is_err());
+    }
+
+    #[test]
+    fn validate_repo_id_rejects_invalid_chars() {
+        assert!(super::validate_repo_id("my repo").is_err());
+        assert!(super::validate_repo_id("foo/bar").is_err());
+        assert!(super::validate_repo_id("a@b").is_err());
     }
 }
