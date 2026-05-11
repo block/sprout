@@ -348,6 +348,21 @@ export function AppShell() {
     },
   );
 
+  // Prevent the webview from navigating to file:/// URLs when a file is
+  // dropped outside the composer. The composer's own drop handler still works
+  // because it calls preventDefault/stopPropagation on its form element.
+  React.useEffect(() => {
+    function preventNavigation(e: DragEvent) {
+      e.preventDefault();
+    }
+    window.addEventListener("dragover", preventNavigation);
+    window.addEventListener("drop", preventNavigation);
+    return () => {
+      window.removeEventListener("dragover", preventNavigation);
+      window.removeEventListener("drop", preventNavigation);
+    };
+  }, []);
+
   React.useEffect(() => {
     let isCancelled = false;
 
