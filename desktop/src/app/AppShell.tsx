@@ -72,6 +72,18 @@ const WINDOW_DRAG_HANDLE_HEIGHT = 44;
 const WINDOW_DRAG_INTERACTIVE_SELECTOR =
   'button, a, input, textarea, select, [role="button"], [contenteditable="true"]';
 
+function isWindowDragHandleEvent(event: MouseEvent | PointerEvent) {
+  if (event.clientY > WINDOW_DRAG_HANDLE_HEIGHT) {
+    return false;
+  }
+
+  const target = event.target;
+  return !(
+    target instanceof Element &&
+    target.closest(WINDOW_DRAG_INTERACTIVE_SELECTOR)
+  );
+}
+
 function toSearchHit(target: DesktopNotificationTarget): SearchHit | null {
   if (!target.eventId) {
     return null;
@@ -474,24 +486,31 @@ export function AppShell() {
 
   React.useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
-      if (event.button !== 0 || event.clientY > WINDOW_DRAG_HANDLE_HEIGHT) {
+      if (event.button !== 0 || event.detail > 1) {
         return;
       }
 
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest(WINDOW_DRAG_INTERACTIVE_SELECTOR)
-      ) {
+      if (!isWindowDragHandleEvent(event)) {
         return;
       }
 
       void getCurrentWindow().startDragging();
     }
 
+    function handleDoubleClick(event: MouseEvent) {
+      if (event.button !== 0 || !isWindowDragHandleEvent(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      void getCurrentWindow().toggleMaximize();
+    }
+
     window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("dblclick", handleDoubleClick, true);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("dblclick", handleDoubleClick, true);
     };
   }, []);
 

@@ -21,7 +21,7 @@ function LoadingHeaderSkeleton() {
   return (
     <header
       className={cn(
-        "flex min-h-11 min-w-0 cursor-default select-none items-center gap-2.5 bg-background/70 px-4 py-1.5 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6",
+        "flex min-h-11 min-w-0 cursor-default select-none items-center gap-2.5 bg-background/70 py-1.5 pl-4 pr-2 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:pl-6 sm:pr-3",
         sidebarState === "collapsed" && "md:pl-40",
       )}
       data-tauri-drag-region

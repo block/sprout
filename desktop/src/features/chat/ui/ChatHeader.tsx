@@ -84,7 +84,7 @@ export function ChatHeader({
   return (
     <header
       className={cn(
-        "relative z-30 flex min-h-11 min-w-0 shrink-0 cursor-default select-none items-center gap-2.5 bg-background/70 px-4 py-1.5 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[margin,padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6",
+        "relative z-30 flex min-h-11 min-w-0 shrink-0 cursor-default select-none items-center gap-2.5 bg-background/70 py-1.5 pl-4 pr-2 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[margin,padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:pl-6 sm:pr-3",
         overlaysContent && "-mb-11",
         reserveGlobalControls && "md:pl-40",
       )}
