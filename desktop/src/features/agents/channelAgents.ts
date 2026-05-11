@@ -331,24 +331,30 @@ export async function createChannelManagedAgents(
   channelId: string,
   inputs: readonly CreateChannelManagedAgentInput[],
 ): Promise<CreateChannelManagedAgentsResult> {
+  const results = await Promise.allSettled(
+    inputs.map((input) => createChannelManagedAgent(channelId, input)),
+  );
+
   const successes: CreateChannelManagedAgentResult[] = [];
   const failures: CreateChannelManagedAgentBatchFailure[] = [];
 
-  for (const input of inputs) {
-    try {
-      successes.push(await createChannelManagedAgent(channelId, input));
-    } catch (error) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    const input = inputs[i];
+    if (result.status === "fulfilled") {
+      successes.push(result.value);
+    } else {
       failures.push({
         kind: input.personaId ? "persona" : "generic",
         name: input.name.trim() || "agent",
         personaId: input.personaId ?? null,
-        error: error instanceof Error ? error.message : "Failed to add agent.",
+        error:
+          result.reason instanceof Error
+            ? result.reason.message
+            : "Failed to add agent.",
       });
     }
   }
 
-  return {
-    successes,
-    failures,
-  };
+  return { successes, failures };
 }

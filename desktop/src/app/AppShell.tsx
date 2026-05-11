@@ -47,6 +47,7 @@ import {
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
+import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useDeferredStartup } from "@/shared/hooks/useDeferredStartup";
@@ -261,6 +262,8 @@ export function AppShell() {
 
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
+  const { applyCanvas, applyAgents } = useApplyTemplate();
+
   const openDmMutation = useOpenDmMutation();
   const hideDmMutation = useHideDmMutation();
   const handleOpenBrowseChannels = React.useCallback(() => {
@@ -599,6 +602,7 @@ export function AppShell() {
                     name,
                     visibility,
                     ttlSeconds,
+                    templateId,
                   }) => {
                     const createdChannel =
                       await createChannelMutation.mutateAsync({
@@ -609,13 +613,16 @@ export function AppShell() {
                         ttlSeconds,
                       });
 
+                    await applyCanvas(templateId, createdChannel.id, name);
                     await goChannel(createdChannel.id);
+                    void applyAgents(templateId, createdChannel.id);
                   }}
                   onCreateForum={async ({
                     description,
                     name,
                     visibility,
                     ttlSeconds,
+                    templateId,
                   }) => {
                     const createdForum = await createForumMutation.mutateAsync({
                       name,
@@ -625,7 +632,9 @@ export function AppShell() {
                       ttlSeconds,
                     });
 
+                    await applyCanvas(templateId, createdForum.id, name);
                     await goChannel(createdForum.id);
+                    void applyAgents(templateId, createdForum.id);
                   }}
                   onHideDm={handleHideDm}
                   onOpenBrowseChannels={handleOpenBrowseChannels}

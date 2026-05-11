@@ -72,6 +72,8 @@ type AddChannelBotPersonasSectionProps = {
   onTogglePersona: (personaId: string) => void;
   personas: AgentPersona[];
   selectedPersonaIds: readonly string[];
+  /** Whether to show the "Generic" chip. Defaults to true. */
+  showGeneric?: boolean;
 };
 
 export function AddChannelBotPersonasSection({
@@ -83,6 +85,7 @@ export function AddChannelBotPersonasSection({
   onTogglePersona,
   personas,
   selectedPersonaIds,
+  showGeneric = true,
 }: AddChannelBotPersonasSectionProps) {
   return (
     <div className="space-y-3">
@@ -97,29 +100,31 @@ export function AddChannelBotPersonasSection({
 
         <TooltipProvider delayDuration={150}>
           <div className="flex flex-wrap gap-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div>
-                  <SelectionChipButton
-                    disabled={!canToggleSelections}
-                    label="Generic"
-                    onClick={onToggleGeneric}
-                    selected={includeGeneric}
-                  >
-                    <Bot
-                      className={cn(
-                        "h-4 w-4",
-                        includeGeneric ? "text-primary" : "text-current",
-                      )}
-                    />
-                    Generic
-                  </SelectionChipButton>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs text-left">
-                Add one custom agent with a channel-specific name and prompt.
-              </TooltipContent>
-            </Tooltip>
+            {showGeneric ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div>
+                    <SelectionChipButton
+                      disabled={!canToggleSelections}
+                      label="Generic"
+                      onClick={onToggleGeneric}
+                      selected={includeGeneric}
+                    >
+                      <Bot
+                        className={cn(
+                          "h-4 w-4",
+                          includeGeneric ? "text-primary" : "text-current",
+                        )}
+                      />
+                      Generic
+                    </SelectionChipButton>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-left">
+                  Add one custom agent with a channel-specific name and prompt.
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
             {personas.map((persona) => {
               const isSelected = selectedPersonaIds.includes(persona.id);
               const isInChannel = inChannelPersonaIds?.has(persona.id) ?? false;

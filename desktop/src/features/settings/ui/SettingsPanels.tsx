@@ -5,6 +5,7 @@ import {
   Check,
   Download,
   Keyboard,
+  LayoutTemplate,
   LockKeyhole,
   MonitorCog,
   Moon,
@@ -23,6 +24,7 @@ import { RelayMembersSettingsCard } from "@/features/relay-members/ui/RelayMembe
 import { cn } from "@/shared/lib/cn";
 import { ACCENT_COLORS, useTheme } from "@/shared/theme/ThemeProvider";
 import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
+import { ChannelTemplatesSettingsCard } from "./ChannelTemplatesSettingsCard";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
@@ -35,6 +37,7 @@ export type SettingsSection =
   | "profile"
   | "notifications"
   | "agents"
+  | "channel-templates"
   | "appearance"
   | "shortcuts"
   | "relay-members"
@@ -79,6 +82,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "agents",
     label: "Agents",
     icon: Bot,
+  },
+  {
+    value: "channel-templates",
+    label: "Templates",
+    icon: LayoutTemplate,
   },
   {
     value: "appearance",
@@ -260,6 +268,8 @@ export function renderSettingsSection(
       );
     case "agents":
       return <PreventSleepSettingsCard />;
+    case "channel-templates":
+      return <ChannelTemplatesSettingsCard />;
     case "appearance":
       return <ThemeSettingsCard />;
     case "shortcuts":
