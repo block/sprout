@@ -5,9 +5,6 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-// nostr 0.36 alias — required for cross-version bridging with sprout-sdk.
-use nostr_compat;
-
 use crate::app_state::AppState;
 
 const DEFAULT_RELAY_WS_URL: &str = "ws://localhost:3000";
@@ -200,10 +197,6 @@ pub fn parse_command_response<T: DeserializeOwned>(message: &str) -> Result<T, S
 ///
 /// This is a pure function (no I/O) extracted from `sync_managed_agent_profile` so that
 /// the event-building and auth-tag-injection logic can be unit tested without HTTP calls.
-///
-/// `sprout-sdk` uses `nostr 0.36` while the desktop crate uses `nostr 0.37`. Cross-version
-/// bridging is done via hex-encoded public keys and raw tag slices — both versions share the
-/// same wire format.
 fn build_profile_event(
     agent_keys: &nostr::Keys,
     display_name: &str,
@@ -213,20 +206,14 @@ fn build_profile_event(
     let builder = crate::events::build_profile(Some(display_name), None, avatar_url, None, None)?;
 
     let builder = if let Some(tag_json) = auth_tag_json {
-        // Bridge nostr 0.37 PublicKey → nostr 0.36 PublicKey via hex encoding.
-        let agent_pubkey_hex = agent_keys.public_key().to_hex();
-        let compat_pubkey = nostr_compat::PublicKey::from_hex(&agent_pubkey_hex)
-            .map_err(|e| format!("failed to convert agent pubkey for auth verification: {e}"))?;
+        let agent_pubkey = agent_keys.public_key();
 
         // Verify Schnorr signature before injecting into profile event.
-        sprout_sdk::nip_oa::verify_auth_tag(tag_json, &compat_pubkey)
+        sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey)
             .map_err(|e| format!("auth tag verification failed for profile event: {e}"))?;
 
-        // parse_auth_tag returns a nostr 0.36 Tag; bridge to nostr 0.37 via raw slice.
-        let compat_tag = sprout_sdk::nip_oa::parse_auth_tag(tag_json)
+        let tag = sprout_sdk::nip_oa::parse_auth_tag(tag_json)
             .map_err(|e| format!("failed to parse verified auth tag: {e}"))?;
-        let tag = nostr::Tag::parse(compat_tag.as_slice())
-            .map_err(|e| format!("failed to convert auth tag to nostr 0.37: {e}"))?;
         builder.tags([tag])
     } else {
         builder
@@ -396,16 +383,10 @@ mod tests {
 
     /// Generate a valid NIP-OA auth tag JSON string signed by a fresh owner key
     /// and addressed to `agent_keys`.
-    ///
-    /// Uses `nostr_compat` (nostr 0.36) for the owner keys because
-    /// `sprout_sdk::nip_oa::compute_auth_tag` expects nostr 0.36 types.
-    /// The agent pubkey is bridged via hex encoding.
     fn make_valid_auth_tag(agent_keys: &nostr::Keys) -> String {
-        let owner_keys = nostr_compat::Keys::generate();
-        let agent_pubkey_hex = agent_keys.public_key().to_hex();
-        let agent_compat_pubkey = nostr_compat::PublicKey::from_hex(&agent_pubkey_hex)
-            .expect("valid hex pubkey should parse");
-        sprout_sdk::nip_oa::compute_auth_tag(&owner_keys, &agent_compat_pubkey, "")
+        let owner_keys = nostr::Keys::generate();
+        let agent_pubkey = agent_keys.public_key();
+        sprout_sdk::nip_oa::compute_auth_tag(&owner_keys, &agent_pubkey, "")
             .expect("compute_auth_tag should not fail with distinct keys")
     }
 

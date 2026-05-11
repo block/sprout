@@ -1,5 +1,4 @@
 use nostr::{Keys, ToBech32};
-use nostr_compat;
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -203,12 +202,7 @@ pub async fn create_managed_agent(
     // No tokens are minted. Fail closed: bad auth tag → don't create agent.
     let auth_tag = {
         let owner_keys = state.keys.lock().map_err(|e| e.to_string())?;
-        // Bridge nostr 0.37 → 0.36 (sprout-sdk) via hex round-trip.
-        let compat_owner = nostr_compat::Keys::parse(&owner_keys.secret_key().to_secret_hex())
-            .map_err(|e| format!("failed to bridge owner keys: {e}"))?;
-        let compat_agent = nostr_compat::PublicKey::from_hex(&agent_keys.public_key().to_hex())
-            .map_err(|e| format!("failed to bridge agent pubkey: {e}"))?;
-        let tag = sprout_sdk::nip_oa::compute_auth_tag(&compat_owner, &compat_agent, "")
+        let tag = sprout_sdk::nip_oa::compute_auth_tag(&owner_keys, &agent_keys.public_key(), "")
             .map_err(|e| format!("failed to compute NIP-OA auth tag: {e}"))?;
         Some(tag)
     };

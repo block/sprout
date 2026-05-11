@@ -470,7 +470,7 @@ async fn test_auth_event_kind_rejected() {
         .await
         .expect("connect");
 
-    let relay_url_parsed = nostr::RelayUrl::parse(&url.replace("ws://", "http://")).unwrap();
+    let relay_url_parsed = nostr::RelayUrl::parse(url.replace("ws://", "http://")).unwrap();
     let auth_event = nostr::EventBuilder::auth("fake-challenge", relay_url_parsed)
         .sign_with_keys(&keys)
         .expect("sign");
