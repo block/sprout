@@ -187,7 +187,7 @@ staging *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     pnpm install
-    cargo build --release -p sprout-acp -p sprout-mcp
+    cargo build --release -p sprout-acp -p sprout-mcp -p sprout-agent -p sprout-dev-mcp
     cd {{desktop_dir}}
     source ../scripts/instance-env.sh
     export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
