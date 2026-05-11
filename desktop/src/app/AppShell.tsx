@@ -348,12 +348,14 @@ export function AppShell() {
     },
   );
 
-  // Prevent the webview from navigating to file:/// URLs when a file is
-  // dropped outside the composer. The composer's own drop handler still works
-  // because it calls preventDefault/stopPropagation on its form element.
+  // Prevent webview file:/// navigation on file drop outside the composer.
+  // Scoped to file drags only (text drag-and-drop into inputs still works).
+  // Composer's onDrop fires first (React synthetic before window bubble).
   React.useEffect(() => {
     function preventNavigation(e: DragEvent) {
-      e.preventDefault();
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+      }
     }
     window.addEventListener("dragover", preventNavigation);
     window.addEventListener("drop", preventNavigation);
