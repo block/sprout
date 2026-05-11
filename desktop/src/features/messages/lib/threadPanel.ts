@@ -150,67 +150,56 @@ function buildSummaryForDirectReplies(
   };
 }
 
-function appendExpandedReplies(params: {
+function appendThreadPanelReplies(params: {
   entries: MainTimelineEntry[];
   parentId: string;
   depth: number;
   directChildrenByParentId: Map<string, TimelineMessage[]>;
-  descendantStatsByMessageId: Map<string, ThreadDescendantStats>;
-  expandedReplyIds: ReadonlySet<string>;
+  visitedMessageIds: Set<string>;
 }) {
   const {
     entries,
     parentId,
     depth,
     directChildrenByParentId,
-    descendantStatsByMessageId,
-    expandedReplyIds,
+    visitedMessageIds,
   } = params;
   const directReplies = directChildrenByParentId.get(parentId) ?? [];
 
   for (const reply of directReplies) {
+    if (visitedMessageIds.has(reply.id)) {
+      continue;
+    }
+    visitedMessageIds.add(reply.id);
+
     entries.push({
       message: normalizeInlineReplyMessage(reply, depth),
-      summary: buildSummaryForDirectReplies(
-        reply.id,
-        descendantStatsByMessageId,
-      ),
+      summary: null,
     });
 
-    if (expandedReplyIds.has(reply.id)) {
-      appendExpandedReplies({
-        entries,
-        parentId: reply.id,
-        depth: depth + 1,
-        directChildrenByParentId,
-        descendantStatsByMessageId,
-        expandedReplyIds,
-      });
-    }
+    appendThreadPanelReplies({
+      entries,
+      parentId: reply.id,
+      depth: depth + 1,
+      directChildrenByParentId,
+      visitedMessageIds,
+    });
   }
 }
 
 function buildVisibleThreadReplies(params: {
   openThreadHeadId: string;
   directChildrenByParentId: Map<string, TimelineMessage[]>;
-  descendantStatsByMessageId: Map<string, ThreadDescendantStats>;
-  expandedReplyIds: ReadonlySet<string>;
 }) {
-  const {
-    openThreadHeadId,
-    directChildrenByParentId,
-    descendantStatsByMessageId,
-    expandedReplyIds,
-  } = params;
+  const { openThreadHeadId, directChildrenByParentId } = params;
   const entries: MainTimelineEntry[] = [];
 
-  appendExpandedReplies({
+  appendThreadPanelReplies({
     entries,
     parentId: openThreadHeadId,
     depth: 0,
     directChildrenByParentId,
-    descendantStatsByMessageId,
-    expandedReplyIds,
+    visitedMessageIds: new Set([openThreadHeadId]),
   });
 
   return entries;
@@ -238,7 +227,6 @@ export function buildThreadPanelData(
   messages: TimelineMessage[],
   openThreadHeadId: string | null,
   threadReplyTargetId: string | null,
-  expandedReplyIds: ReadonlySet<string>,
 ): ThreadPanelData {
   if (!openThreadHeadId) {
     return {
@@ -267,8 +255,6 @@ export function buildThreadPanelData(
   const visibleReplies = buildVisibleThreadReplies({
     openThreadHeadId,
     directChildrenByParentId,
-    descendantStatsByMessageId,
-    expandedReplyIds,
   });
 
   const replyTargetInBranch =

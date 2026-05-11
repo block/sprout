@@ -296,14 +296,8 @@ export function ChannelScreen({
         timelineMessages,
         openThreadHeadId,
         threadReplyTargetId,
-        expandedThreadReplyIds,
       ),
-    [
-      expandedThreadReplyIds,
-      openThreadHeadId,
-      threadReplyTargetId,
-      timelineMessages,
-    ],
+    [openThreadHeadId, threadReplyTargetId, timelineMessages],
   );
   const openThreadHeadMessage = threadPanelData.threadHead;
   const threadMessages = threadPanelData.visibleReplies;
@@ -322,7 +316,6 @@ export function ChannelScreen({
     handleDelete,
     handleEdit,
     handleEditSave,
-    handleExpandThreadReplies,
     handleOpenThread,
     handleSendMessage,
     handleSendThreadReply,
@@ -496,7 +489,6 @@ export function ChannelScreen({
                   onDelete={handleDelete}
                   onEdit={handleEdit}
                   onEditSave={handleEditSave}
-                  onExpandThreadReplies={handleExpandThreadReplies}
                   onOpenAgentSession={handleOpenAgentSession}
                   onOpenDm={handleOpenDm}
                   onCloseProfilePanel={handleCloseProfilePanel}

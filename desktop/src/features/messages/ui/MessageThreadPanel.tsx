@@ -16,7 +16,6 @@ import {
 } from "@/shared/ui/OverlayPanelBackdrop";
 import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
-import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
@@ -35,7 +34,6 @@ type MessageThreadPanelProps = {
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
-  onExpandReplies: (message: TimelineMessage) => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onScrollTargetResolved: () => void;
@@ -87,7 +85,6 @@ export function MessageThreadPanel({
   onDelete,
   onEdit,
   onEditSave,
-  onExpandReplies,
   onResetWidth,
   onResizeStart,
   onScrollTargetResolved,
@@ -244,15 +241,6 @@ export function MessageThreadPanel({
                           onToggleReaction={onToggleReaction}
                           profiles={profiles}
                         />
-                        {entry.summary ? (
-                          <MessageThreadSummaryRow
-                            depth={entry.message.depth}
-                            layoutVariant="thread-reply"
-                            message={entry.message}
-                            onOpenThread={onExpandReplies}
-                            summary={entry.summary}
-                          />
-                        ) : null}
                       </div>
                     );
                   })}

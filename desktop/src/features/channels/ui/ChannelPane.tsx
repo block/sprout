@@ -81,7 +81,6 @@ type ChannelPaneProps = {
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
   onEditSave?: (content: string) => Promise<void>;
-  onExpandThreadReplies: (message: TimelineMessage) => void;
   onJoinChannel?: () => Promise<void>;
   onOpenAgentSession: (pubkey: string) => void;
   onOpenDm?: (pubkeys: string[]) => void;
@@ -143,7 +142,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   onDelete,
   onEdit,
   onEditSave,
-  onExpandThreadReplies,
   onJoinChannel,
   onOpenAgentSession,
   onOpenDm,
@@ -418,7 +416,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           onDelete={onDelete}
           onEdit={onEdit}
           onEditSave={onEditSave}
-          onExpandReplies={onExpandThreadReplies}
           onSelectReplyTarget={onSelectThreadReplyTarget}
           onSend={onSendThreadReply}
           onScrollTargetResolved={onThreadScrollTargetResolved}
