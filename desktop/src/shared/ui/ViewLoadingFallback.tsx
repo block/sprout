@@ -21,21 +21,21 @@ function LoadingHeaderSkeleton() {
   return (
     <header
       className={cn(
-        "flex min-h-11 min-w-0 items-center gap-3 bg-background/70 px-4 py-1.5 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6",
+        "flex min-h-11 min-w-0 cursor-default select-none items-center gap-2.5 bg-background/70 px-4 py-1.5 shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:px-6",
         sidebarState === "collapsed" && "md:pl-40",
       )}
       data-tauri-drag-region
     >
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
-          <Skeleton className="h-4 w-4 rounded-sm" />
-          <Skeleton className="h-5 w-32 max-w-[50vw]" />
+          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+          <Skeleton className="h-4 w-28 max-w-[50vw]" />
         </div>
         <Skeleton className="mt-2 h-4 w-full max-w-2xl" />
       </div>
       <div className="hidden shrink-0 items-center gap-2 sm:flex">
-        <Skeleton className="h-7 w-7 rounded-lg" />
-        <Skeleton className="h-7 w-7 rounded-lg" />
+        <Skeleton className="h-6 w-6 rounded-lg" />
+        <Skeleton className="h-6 w-6 rounded-lg" />
       </div>
     </header>
   );

@@ -209,7 +209,7 @@ export function HuddleIndicator({
     return (
       <Button
         aria-label="Start huddle"
-        className={cn("h-8 w-8 rounded-full", className)}
+        className={cn("h-7 w-7 rounded-full", className)}
         data-testid="channel-start-huddle-trigger"
         disabled={startDisabled || isStarting}
         onClick={() => onStart()}
@@ -217,7 +217,7 @@ export function HuddleIndicator({
         type="button"
         variant="outline"
       >
-        <Headphones className="h-3.5 w-3.5" />
+        <Headphones className="h-3 w-3" />
       </Button>
     );
   }
@@ -246,18 +246,18 @@ export function HuddleIndicator({
       <TooltipTrigger asChild>
         <Button
           aria-label={`Join active huddle (${participantCount} participant${participantCount !== 1 ? "s" : ""})`}
-          className={cn("relative h-8 w-8 rounded-full", className)}
+          className={cn("relative h-7 w-7 rounded-full", className)}
           disabled={isJoining || isStarting}
           onClick={() => void handleJoin()}
           size="icon"
           type="button"
           variant="outline"
         >
-          <Headphones className="h-3.5 w-3.5 text-muted-foreground" />
+          <Headphones className="h-3 w-3 text-muted-foreground" />
           <span className="absolute inset-0 animate-pulse rounded-full ring-2 ring-border/70" />
           {/* Participant count badge */}
           {participantCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-border bg-background px-0.5 text-[10px] font-bold text-muted-foreground">
+            <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border border-border bg-background px-0.5 text-[9px] font-bold text-muted-foreground">
               {participantCount}
             </span>
           )}

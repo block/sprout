@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import * as React from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
 
@@ -66,6 +67,10 @@ const LazySettingsScreen = React.lazy(async () => {
   const module = await import("@/features/settings/ui/SettingsScreen");
   return { default: module.SettingsScreen };
 });
+
+const WINDOW_DRAG_HANDLE_HEIGHT = 44;
+const WINDOW_DRAG_INTERACTIVE_SELECTOR =
+  'button, a, input, textarea, select, [role="button"], [contenteditable="true"]';
 
 function toSearchHit(target: DesktopNotificationTarget): SearchHit | null {
   if (!target.eventId) {
@@ -467,6 +472,29 @@ export function AppShell() {
     };
   }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
 
+  React.useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      if (event.button !== 0 || event.clientY > WINDOW_DRAG_HANDLE_HEIGHT) {
+        return;
+      }
+
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(WINDOW_DRAG_INTERACTIVE_SELECTOR)
+      ) {
+        return;
+      }
+
+      void getCurrentWindow().startDragging();
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+    };
+  }, []);
+
   return (
     <PreventSleepProvider>
       <ChannelNavigationProvider channels={channels}>
@@ -481,29 +509,34 @@ export function AppShell() {
           <HuddleProvider>
             <div className="flex h-dvh flex-col overflow-hidden overscroll-none">
               <SidebarProvider className="min-h-0 flex-1 overflow-hidden">
-                <div className="fixed left-[80px] top-[8px] z-50 flex items-center gap-0.5">
-                  <SidebarTrigger className="h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
+                <div
+                  aria-hidden="true"
+                  className="fixed inset-x-0 top-0 z-20 h-10 cursor-default select-none"
+                  data-tauri-drag-region
+                />
+                <div className="fixed left-[80px] top-[9px] z-50 flex items-center gap-0.5">
+                  <SidebarTrigger className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
                   <Button
                     aria-label="Go back"
-                    className="h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
+                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
                     data-testid="global-back"
                     disabled={!canGoBack}
                     onClick={goBack}
                     size="icon"
                     variant="ghost"
                   >
-                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <ChevronLeft className="h-3 w-3" />
                   </Button>
                   <Button
                     aria-label="Go forward"
-                    className="h-6 w-6 text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
+                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
                     data-testid="global-forward"
                     disabled={!canGoForward}
                     onClick={goForward}
                     size="icon"
                     variant="ghost"
                   >
-                    <ChevronRight className="h-3.5 w-3.5" />
+                    <ChevronRight className="h-3 w-3" />
                   </Button>
                 </div>
                 <div className="fixed right-[16px] top-[8px] z-50">

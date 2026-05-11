@@ -418,7 +418,10 @@ export function AppSidebar({
       data-testid="app-sidebar"
       variant="sidebar"
     >
-      <SidebarHeader className="gap-3 pt-10" data-tauri-drag-region>
+      <SidebarHeader
+        className="cursor-default select-none gap-3 pt-10"
+        data-tauri-drag-region
+      >
         <div className="px-0.5">
           <WorkspaceSwitcher
             activeWorkspace={activeWorkspace}

@@ -6,9 +6,9 @@ import { useUpdaterContext } from "./hooks/UpdaterProvider";
 import type { UpdateStatus } from "./hooks/use-updater";
 
 const indicatorButtonClass =
-  "relative text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground";
+  "relative h-7 px-2 text-xs text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground";
 
-const iconClass = "h-3.5 w-3.5";
+const iconClass = "h-3 w-3";
 
 const variants: Record<
   "available" | "downloading" | "installing" | "ready",
@@ -82,7 +82,7 @@ export function UpdateIndicator({
       <Icon className={variantIconClass} />
       {label}
       <span
-        className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ${badgeColor} animate-pulse`}
+        className={`absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ${badgeColor} animate-pulse`}
       />
     </Button>
   );
