@@ -5,10 +5,24 @@ use crate::error::CliError;
 use crate::validate::validate_hex64;
 
 /// Get user profiles (kind:0 metadata events).
-/// 0 pubkeys → query our own profile
-/// 1 pubkey → query that user's profile
-/// 2+ pubkeys → query batch
-pub async fn cmd_get_users(client: &SproutClient, pubkeys: &[String]) -> Result<(), CliError> {
+///
+/// - 0 pubkeys, no name → query our own profile
+/// - 1+ pubkeys → query those users' profiles
+/// - --name "foo" → NIP-50 search on kind:0, then client-side filter
+pub async fn cmd_get_users(
+    client: &SproutClient,
+    pubkeys: &[String],
+    name: Option<&str>,
+) -> Result<(), CliError> {
+    if let Some(query) = name {
+        if !pubkeys.is_empty() {
+            return Err(CliError::Usage(
+                "--name and --pubkey are mutually exclusive".into(),
+            ));
+        }
+        return search_by_name(client, query).await;
+    }
+
     for pk in pubkeys {
         validate_hex64(pk)?;
     }
@@ -30,6 +44,55 @@ pub async fn cmd_get_users(client: &SproutClient, pubkeys: &[String]) -> Result<
     });
     let resp = client.query(&filter).await?;
     println!("{resp}");
+    Ok(())
+}
+
+/// Search for users by display name via NIP-50 full-text search on kind:0 profiles.
+/// Returns [] if the relay does not implement NIP-50 search.
+async fn search_by_name(client: &SproutClient, query: &str) -> Result<(), CliError> {
+    if query.trim().is_empty() {
+        return Err(CliError::Usage("--name cannot be empty".into()));
+    }
+
+    let filter = serde_json::json!({
+        "kinds": [0],
+        "search": query,
+        "limit": 100
+    });
+    let raw = client.query(&filter).await?;
+
+    // Parse and filter client-side for case-insensitive substring match
+    // on display_name or name fields (NIP-50 may return broader matches).
+    let events: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| CliError::Other(format!("failed to parse response: {e}")))?;
+
+    let Some(arr) = events.as_array() else {
+        println!("[]");
+        return Ok(());
+    };
+
+    let lower_query = query.to_ascii_lowercase();
+    let matches: Vec<&serde_json::Value> = arr
+        .iter()
+        .filter(|event| {
+            let Some(content_str) = event.get("content").and_then(|v| v.as_str()) else {
+                return false;
+            };
+            let Ok(content) = serde_json::from_str::<serde_json::Value>(content_str) else {
+                return false;
+            };
+            let display_name = content
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let name = content.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            display_name.to_ascii_lowercase().contains(&lower_query)
+                || name.to_ascii_lowercase().contains(&lower_query)
+        })
+        .collect();
+
+    let output = serde_json::to_string(&matches).expect("serializing parsed JSON values");
+    println!("{output}");
     Ok(())
 }
 

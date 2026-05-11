@@ -332,10 +332,13 @@ enum Cmd {
     },
 
     // ---- Users -------------------------------------------------------------
-    /// Get user profiles (0 = self, 1 = single, 2+ = batch)
+    /// Get user profiles by pubkey or display name
     GetUsers {
         #[arg(long = "pubkey")]
         pubkeys: Vec<String>,
+        /// Search by display name (case-insensitive substring match)
+        #[arg(long = "name")]
+        name: Option<String>,
     },
     /// Update your profile
     SetProfile {
@@ -788,7 +791,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
 
         // ---- Users ---------------------------------------------------------
-        Cmd::GetUsers { pubkeys } => commands::users::cmd_get_users(&client, &pubkeys).await,
+        Cmd::GetUsers { pubkeys, name } => {
+            commands::users::cmd_get_users(&client, &pubkeys, name.as_deref()).await
+        }
         Cmd::SetProfile {
             name,
             avatar,
