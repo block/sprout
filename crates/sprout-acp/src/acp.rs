@@ -101,6 +101,9 @@ pub enum AcpError {
 
     #[error("Protocol error: {0}")]
     Protocol(String),
+
+    #[error("Agent reported error: {0}")]
+    AgentError(String),
 }
 
 // ─── AcpClient ───────────────────────────────────────────────────────────────
@@ -709,7 +712,7 @@ impl AcpClient {
             if let Some(id) = msg.get("id") {
                 if *id == serde_json::json!(expected_id) && msg.get("method").is_none() {
                     if let Some(error) = msg.get("error") {
-                        return Err(AcpError::Protocol(error.to_string()));
+                        return Err(AcpError::AgentError(error.to_string()));
                     }
                     return Ok(msg["result"].clone());
                 }
@@ -823,7 +826,7 @@ impl AcpClient {
                     if let Some(id) = msg.get("id") {
                         if *id == serde_json::json!(expected_id) && msg.get("method").is_none() {
                             if let Some(error) = msg.get("error") {
-                                return Err(AcpError::Protocol(error.to_string()));
+                                return Err(AcpError::AgentError(error.to_string()));
                             }
                             return Ok(msg["result"].clone());
                         }
