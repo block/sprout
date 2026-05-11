@@ -1,4 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"]
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "recreateWhen": "never",
+  "separateMinorPatch": true,
+  "packageRules": [
+    {
+      "description": "Keep Rust crate updates isolated because 0.x minor releases often contain breaking changes.",
+      "matchManagers": ["cargo"],
+      "groupName": null,
+      "separateMinorPatch": true,
+      "separateMultipleMinor": true
+    },
+    {
+      "description": "Hold secp256k1 until sprout-pair-relay is migrated from rand-std to rand/std features.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["secp256k1"],
+      "allowedVersions": "<0.31"
+    }
+  ]
 }
