@@ -136,35 +136,7 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
         .await
         .unwrap_or_default();
 
-        let mut counts: std::collections::HashMap<String, i64> =
-            std::collections::HashMap::with_capacity(members_events.len());
-        for ev in &members_events {
-            let mut d_value: Option<String> = None;
-            let mut unique_pubkeys: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for tag in ev.tags.iter() {
-                let slice = tag.as_slice();
-                match slice.first().map(String::as_str) {
-                    Some("d") if d_value.is_none() => {
-                        if let Some(v) = slice.get(1) {
-                            d_value = Some(v.clone());
-                        }
-                    }
-                    Some("p") => {
-                        if let Some(pk) = slice.get(1) {
-                            if !pk.is_empty() {
-                                unique_pubkeys.insert(pk.clone());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(d) = d_value {
-                counts.insert(d, unique_pubkeys.len() as i64);
-            }
-        }
-
+        let counts = count_members_by_channel(&members_events);
         for channel in &mut channels {
             if let Some(count) = counts.get(&channel.id) {
                 channel.member_count = *count;
@@ -173,6 +145,28 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
     }
 
     Ok(channels)
+}
+
+/// Build a `channel_id → unique-member-count` map from a batch of kind:39002
+/// events. Events without a `d` tag are skipped; member dedupe is delegated to
+/// [`nostr_convert::channel_members_from_event`] so the parsing rules match the
+/// per-channel `get_channel_members` path.
+fn count_members_by_channel(events: &[nostr::Event]) -> std::collections::HashMap<String, i64> {
+    let mut counts: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::with_capacity(events.len());
+    for ev in events {
+        let Some(d) = ev.tags.iter().find_map(|t| {
+            let s = t.as_slice();
+            (s.len() >= 2 && s[0] == "d").then(|| s[1].clone())
+        }) else {
+            continue;
+        };
+        let Ok(resp) = nostr_convert::channel_members_from_event(ev) else {
+            continue;
+        };
+        counts.insert(d, resp.members.len() as i64);
+    }
+    counts
 }
 
 #[tauri::command]
@@ -471,3 +465,7 @@ pub async fn leave_channel(channel_id: String, state: State<'_, AppState>) -> Re
     submit_event(builder, &state).await?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "channels_tests.rs"]
+mod tests;
