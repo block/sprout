@@ -98,7 +98,7 @@ export function MessageComposer({
   const drafts = useDrafts();
   const effectiveDraftKey = draftKey ?? channelId;
   const previousDraftKeyRef = React.useRef<string | null>(null);
-
+  const preEditContentRef = React.useRef<string | null>(null);
   const mentions = useMentions(channelId, undefined, profiles);
   const channelLinks = useChannelLinks();
   const emojiAutocomplete = useEmojiAutocomplete();
@@ -127,7 +127,6 @@ export function MessageComposer({
   editTargetRef.current = editTarget;
   channelIdRef.current = channelId;
 
-  // ── Refs consumed by Tiptap's submitOnEnter extension ──────────────
   const isAutocompleteOpenRef = React.useRef(false);
   isAutocompleteOpenRef.current =
     mentions.isMentionOpen ||
@@ -136,7 +135,6 @@ export function MessageComposer({
 
   const submitMessageRef = React.useRef<() => void>(() => {});
 
-  // ── Computed placeholder ─────────────────────────────────────────────
   const computedPlaceholder = editTarget
     ? "Edit your message"
     : (placeholder ??
@@ -204,14 +202,22 @@ export function MessageComposer({
     };
   }, [effectiveDraftKey]);
 
-  // ── Edit mode: pre-fill content ─────────────────────────────────────
+  // ── Edit mode: pre-fill content & restore on cancel ─────────────────
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger
   React.useEffect(() => {
-    if (!editTarget) return;
-    setContent(editTarget.body);
-    contentRef.current = editTarget.body;
-    richText.setContent(editTarget.body);
-    richText.focus();
+    if (editTarget) {
+      preEditContentRef.current = contentRef.current;
+      setContent(editTarget.body);
+      contentRef.current = editTarget.body;
+      richText.setContent(editTarget.body);
+      richText.focus();
+    } else if (preEditContentRef.current !== null) {
+      const restored = preEditContentRef.current;
+      preEditContentRef.current = null;
+      setContent(restored);
+      contentRef.current = restored;
+      restored ? richText.setContent(restored) : richText.clearContent();
+    }
   }, [editTarget?.id]);
 
   // ── Focus on reply ──────────────────────────────────────────────────
