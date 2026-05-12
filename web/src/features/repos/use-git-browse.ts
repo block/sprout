@@ -22,17 +22,7 @@ import {
 export function useGitClone(owner: string, repoName: string, ref: string) {
   return useQuery({
     queryKey: ["git-clone", owner, repoName, ref],
-    queryFn: async () => {
-      console.log("[git-clone] cloning", { owner, repoName, ref });
-      try {
-        const result = await ensureClone(owner, repoName, ref);
-        console.log("[git-clone] success");
-        return result;
-      } catch (err) {
-        console.error("[git-clone] failed", err);
-        throw err;
-      }
-    },
+    queryFn: () => ensureClone(owner, repoName, ref),
     staleTime: 5 * 60_000,
     enabled: !!owner && !!repoName && !!ref,
     retry: false,
