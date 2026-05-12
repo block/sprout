@@ -22,7 +22,10 @@ import {
   sendChannelMessage,
 } from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
-import { KIND_STREAM_MESSAGE } from "@/shared/constants/kinds";
+import {
+  KIND_STREAM_MESSAGE,
+  KIND_SYSTEM_MESSAGE,
+} from "@/shared/constants/kinds";
 
 type MessageQueryContext = {
   optimisticId: string;
@@ -185,6 +188,27 @@ export function useChannelSubscription(channel: Channel | null) {
       channelMessagesKey(channelId),
       (current = []) => mergeTimelineCacheMessages(current, event),
     );
+
+    if (event.kind === KIND_SYSTEM_MESSAGE) {
+      try {
+        const payload = JSON.parse(event.content) as { type?: string };
+        if (
+          payload.type === "member_joined" ||
+          payload.type === "member_left" ||
+          payload.type === "member_removed"
+        ) {
+          void queryClient.invalidateQueries({
+            queryKey: ["channels", channelId, "members"],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["channels"],
+            exact: true,
+          });
+        }
+      } catch {
+        // Non-JSON system message — ignore.
+      }
+    }
   });
 
   useEffect(() => {

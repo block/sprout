@@ -323,9 +323,6 @@ export function useUnarchiveChannelMutation(channelId: string | null) {
 
       setChannelArchivedState(queryClient, channelId, null);
     },
-    onSettled: async () => {
-      await invalidateChannelState(queryClient, channelId);
-    },
   });
 }
 
