@@ -1,3 +1,4 @@
+import * as React from "react";
 import { Bot, Brain, ChevronDown, Radio, TerminalSquare } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
@@ -42,7 +43,7 @@ export function AgentSessionTranscriptList({
   );
 }
 
-function TranscriptItemView({
+const TranscriptItemView = React.memo(function TranscriptItemView({
   agentName,
   item,
 }: {
@@ -62,7 +63,7 @@ function TranscriptItemView({
     return <MetadataItem item={item} />;
   }
   return <LifecycleItem item={item} />;
-}
+});
 
 function MessageItem({
   agentName,

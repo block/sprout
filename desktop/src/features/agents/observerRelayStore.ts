@@ -5,18 +5,38 @@ import type { RelayEvent, ManagedAgent } from "@/shared/api/types";
 import { getIdentity } from "@/shared/api/tauri";
 import { decryptObserverEvent } from "@/shared/api/tauriObserver";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import type { ConnectionState, ObserverEvent } from "./ui/agentSessionTypes";
+import type {
+  ConnectionState,
+  ObserverEvent,
+  TranscriptItem,
+} from "./ui/agentSessionTypes";
+import {
+  type TranscriptState,
+  buildTranscriptState,
+  createEmptyTranscriptState,
+  processTranscriptEvent,
+} from "./ui/agentSessionTranscript";
 
 const MAX_OBSERVER_EVENTS = 800;
 
-type ObserverSnapshot = {
+export type ObserverSnapshot = {
   connectionState: ConnectionState;
   errorMessage: string | null;
   events: ObserverEvent[];
 };
 
+const IDLE_SNAPSHOT: ObserverSnapshot = {
+  connectionState: "idle",
+  errorMessage: null,
+  events: [],
+};
+
+const EMPTY_TRANSCRIPT: TranscriptItem[] = [];
+
 const listeners = new Set<() => void>();
 const eventsByAgent = new Map<string, ObserverEvent[]>();
+const transcriptByAgent = new Map<string, TranscriptState>();
+const snapshotByAgent = new Map<string, ObserverSnapshot>();
 
 // Normalized pubkeys of agents we are actively managing. Only events whose
 // "agent" tag matches an entry here will be decrypted (defense-in-depth).
@@ -35,12 +55,18 @@ function notifyListeners() {
   }
 }
 
+function invalidateSnapshot(key: string) {
+  snapshotByAgent.delete(key);
+}
+
 function setConnectionState(
   nextState: ConnectionState,
   nextErrorMessage: string | null = errorMessage,
 ) {
   connectionState = nextState;
   errorMessage = nextErrorMessage;
+  // Invalidate all cached snapshots since connectionState changed
+  snapshotByAgent.clear();
   notifyListeners();
 }
 
@@ -60,13 +86,32 @@ function appendAgentEvent(agentPubkey: string, event: ObserverEvent) {
     return;
   }
 
-  const next = [...current, event].sort(compareObserverEvents);
-  eventsByAgent.set(
-    key,
-    next.length > MAX_OBSERVER_EVENTS
-      ? next.slice(next.length - MAX_OBSERVER_EVENTS)
-      : next,
-  );
+  const sorted = [...current, event].sort(compareObserverEvents);
+  const trimmed = sorted.length > MAX_OBSERVER_EVENTS;
+  const final = trimmed
+    ? sorted.slice(sorted.length - MAX_OBSERVER_EVENTS)
+    : sorted;
+  eventsByAgent.set(key, final);
+
+  // Determine whether the new event landed at the end of the sorted array.
+  // If it did (common case), we can incrementally process just this event.
+  // If not (out-of-order arrival) or if we trimmed, fall back to full rebuild.
+  const eventAtEnd = sorted[sorted.length - 1] === event;
+
+  if (eventAtEnd && !trimmed) {
+    // Fast path: incremental update
+    const transcriptState =
+      transcriptByAgent.get(key) ?? createEmptyTranscriptState();
+    const updatedTranscript = processTranscriptEvent(transcriptState, event);
+    transcriptByAgent.set(key, updatedTranscript);
+  } else {
+    // Slow path: full rebuild (out-of-order insertion or trim fired)
+    transcriptByAgent.set(key, buildTranscriptState(final));
+  }
+
+  // Invalidate cached snapshot for this agent
+  invalidateSnapshot(key);
+
   notifyListeners();
 }
 
@@ -188,13 +233,40 @@ export function subscribeAgentObserverStore(listener: () => void) {
 }
 
 export function getAgentObserverSnapshot(
-  agentPubkey: string,
+  agentPubkey?: string | null,
+  enabled?: boolean,
 ): ObserverSnapshot {
-  return {
+  if (!enabled || !agentPubkey) {
+    return IDLE_SNAPSHOT;
+  }
+  const key = normalizePubkey(agentPubkey);
+  const cached = snapshotByAgent.get(key);
+  if (
+    cached &&
+    cached.connectionState === connectionState &&
+    cached.errorMessage === errorMessage
+  ) {
+    return cached;
+  }
+  const snapshot: ObserverSnapshot = {
     connectionState,
     errorMessage,
-    events: eventsByAgent.get(normalizePubkey(agentPubkey)) ?? [],
+    events: eventsByAgent.get(key) ?? [],
   };
+  snapshotByAgent.set(key, snapshot);
+  return snapshot;
+}
+
+export function getAgentTranscript(
+  agentPubkey?: string | null,
+  enabled?: boolean,
+): TranscriptItem[] {
+  if (!enabled || !agentPubkey) {
+    return EMPTY_TRANSCRIPT;
+  }
+  const key = normalizePubkey(agentPubkey);
+  const state = transcriptByAgent.get(key);
+  return state?.items ?? EMPTY_TRANSCRIPT;
 }
 
 export function useManagedAgentObserverBridge(agents: readonly ManagedAgent[]) {
@@ -229,6 +301,8 @@ export function resetAgentObserverStore() {
   startPromise = null;
   eventProcessingQueue = Promise.resolve();
   eventsByAgent.clear();
+  transcriptByAgent.clear();
+  snapshotByAgent.clear();
   knownAgentPubkeys.clear();
   connectionState = "idle";
   errorMessage = null;

@@ -24,194 +24,269 @@ import {
 
 export { describeRawEvent } from "./agentSessionTranscriptHelpers";
 
-export function buildTranscript(events: ObserverEvent[]): TranscriptItem[] {
-  const items: TranscriptItem[] = [];
-  const itemsById = new Map<string, TranscriptItem>();
+export type TranscriptState = {
+  items: TranscriptItem[];
+  itemsById: Map<string, TranscriptItem>;
+  activeMessageKey: Map<string, string>;
+  sealedKeys: Set<string>;
+  continuationSeq: number;
+  latestSessionId: string | null;
+};
 
-  // Maps a logical message ID (e.g. `assistant:msg1`) to the *actual* key
-  // currently being appended to.  When a non-message item interleaves, we
-  // seal the current key so subsequent chunks create a fresh entry.
-  const activeMessageKey = new Map<string, string>();
-  const sealedKeys = new Set<string>();
-  let continuationSeq = 0;
+export function createEmptyTranscriptState(): TranscriptState {
+  return {
+    items: [],
+    itemsById: new Map(),
+    activeMessageKey: new Map(),
+    sealedKeys: new Set(),
+    continuationSeq: 0,
+    latestSessionId: null,
+  };
+}
 
-  /** Seal every currently-open message so the next chunk starts a new entry. */
-  function sealOpenMessages() {
-    for (const [, currentKey] of activeMessageKey) {
-      if (!sealedKeys.has(currentKey)) {
-        sealedKeys.add(currentKey);
+/**
+ * Mutable draft that collects changes during a single processTranscriptEvent
+ * call. Replaces the previous pattern of nested closures capturing bare `let`
+ * bindings — all mutation now targets this explicit object.
+ */
+type TranscriptDraft = {
+  items: TranscriptItem[];
+  itemsById: Map<string, TranscriptItem>;
+  activeMessageKey: Map<string, string>;
+  sealedKeys: Set<string>;
+  continuationSeq: number;
+  latestSessionId: string | null;
+  changed: boolean;
+};
+
+function draftFrom(state: TranscriptState): TranscriptDraft {
+  return {
+    items: state.items,
+    itemsById: state.itemsById,
+    activeMessageKey: state.activeMessageKey,
+    sealedKeys: state.sealedKeys,
+    continuationSeq: state.continuationSeq,
+    latestSessionId: state.latestSessionId,
+    changed: false,
+  };
+}
+
+/** Lazily copy items + itemsById on first mutation so callers get new refs. */
+function ensureMutable(d: TranscriptDraft) {
+  if (!d.changed) {
+    d.items = [...d.items];
+    d.itemsById = new Map(d.itemsById);
+    d.changed = true;
+  }
+}
+
+function replaceItem(d: TranscriptDraft, id: string, updated: TranscriptItem) {
+  ensureMutable(d);
+  const idx = d.items.findIndex((it) => it.id === id);
+  if (idx !== -1) {
+    d.items[idx] = updated;
+  }
+  d.itemsById.set(id, updated);
+}
+
+function pushItem(d: TranscriptDraft, item: TranscriptItem) {
+  ensureMutable(d);
+  d.items.push(item);
+  d.itemsById.set(item.id, item);
+}
+
+function sealOpenMessages(d: TranscriptDraft) {
+  let copied = false;
+  for (const [, currentKey] of d.activeMessageKey) {
+    if (!d.sealedKeys.has(currentKey)) {
+      if (!copied) {
+        d.sealedKeys = new Set(d.sealedKeys);
+        copied = true;
       }
+      d.sealedKeys.add(currentKey);
     }
   }
+}
 
-  function upsertMessage(
-    id: string,
-    role: "assistant" | "user",
-    title: string,
-    text: string,
-    timestamp: string,
-  ) {
-    const currentKey = activeMessageKey.get(id);
+function upsertMessage(
+  d: TranscriptDraft,
+  id: string,
+  role: "assistant" | "user",
+  title: string,
+  text: string,
+  timestamp: string,
+  channelId: string | null,
+) {
+  const currentKey = d.activeMessageKey.get(id);
 
-    // If there is an active (non-sealed) key, append to it.
-    if (currentKey && !sealedKeys.has(currentKey)) {
-      const existing = itemsById.get(currentKey);
-      if (existing?.type === "message") {
-        existing.text += text;
-        return;
-      }
-    }
-
-    // Otherwise create a new entry (either first time, or continuation).
-    continuationSeq += 1;
-    const newKey = currentKey ? `${id}:c${continuationSeq}` : id;
-    const item: TranscriptItem = {
-      id: newKey,
-      type: "message",
-      role,
-      title,
-      text,
-      timestamp,
-    };
-    items.push(item);
-    itemsById.set(newKey, item);
-    activeMessageKey.set(id, newKey);
-  }
-
-  function upsertTextItem(
-    id: string,
-    type: "thought" | "lifecycle",
-    title: string,
-    text: string,
-    timestamp: string,
-  ) {
-    const existing = itemsById.get(id);
-    if (existing && existing.type === type) {
-      existing.text += text;
+  if (currentKey && !d.sealedKeys.has(currentKey)) {
+    const existing = d.itemsById.get(currentKey);
+    if (existing?.type === "message") {
+      replaceItem(d, currentKey, {
+        ...existing,
+        text: existing.text + text,
+        channelId,
+      });
       return;
     }
-    sealOpenMessages();
-    const item: TranscriptItem = { id, type, title, text, timestamp };
-    items.push(item);
-    itemsById.set(id, item);
   }
 
-  function upsertMetadata(
-    id: string,
-    title: string,
-    sections: PromptSection[],
-    timestamp: string,
-  ) {
-    const existing = itemsById.get(id);
-    if (existing?.type === "metadata") {
-      existing.sections = sections;
-      return;
+  d.continuationSeq += 1;
+  const newKey = currentKey ? `${id}:c${d.continuationSeq}` : id;
+  pushItem(d, {
+    id: newKey,
+    type: "message",
+    role,
+    title,
+    text,
+    timestamp,
+    channelId,
+  });
+  d.activeMessageKey = new Map(d.activeMessageKey);
+  d.activeMessageKey.set(id, newKey);
+}
+
+function upsertTextItem(
+  d: TranscriptDraft,
+  id: string,
+  type: "thought" | "lifecycle",
+  title: string,
+  text: string,
+  timestamp: string,
+  channelId: string | null,
+) {
+  const existing = d.itemsById.get(id);
+  if (existing && existing.type === type) {
+    replaceItem(d, id, { ...existing, text: existing.text + text, channelId });
+    return;
+  }
+  sealOpenMessages(d);
+  pushItem(d, { id, type, title, text, timestamp, channelId });
+}
+
+function upsertMetadata(
+  d: TranscriptDraft,
+  id: string,
+  title: string,
+  sections: PromptSection[],
+  timestamp: string,
+  channelId: string | null,
+) {
+  const existing = d.itemsById.get(id);
+  if (existing?.type === "metadata") {
+    replaceItem(d, id, { ...existing, sections, channelId });
+    return;
+  }
+  sealOpenMessages(d);
+  pushItem(d, { id, type: "metadata", title, sections, timestamp, channelId });
+}
+
+function upsertTool(
+  d: TranscriptDraft,
+  id: string,
+  title: string,
+  toolName: string,
+  sproutToolName: string | null,
+  status: ToolStatus,
+  args: Record<string, unknown>,
+  result: string,
+  isError: boolean,
+  timestamp: string,
+  channelId: string | null,
+) {
+  const existing = d.itemsById.get(id);
+  const canonicalSproutToolName =
+    sproutToolName ?? findSproutToolName(toolName, true);
+  if (existing?.type === "tool") {
+    const updatedTitle = !isGenericToolTitle(title) ? title : existing.title;
+    let updatedToolName = existing.toolName;
+    let updatedSproutToolName = existing.sproutToolName;
+    if (canonicalSproutToolName) {
+      updatedSproutToolName = canonicalSproutToolName;
+      updatedToolName = canonicalSproutToolName;
+    } else if (!existing.sproutToolName && !isGenericToolTitle(toolName)) {
+      updatedToolName = toolName;
     }
-    sealOpenMessages();
-    const item: TranscriptItem = {
-      id,
-      type: "metadata",
-      title,
-      sections,
-      timestamp,
-    };
-    items.push(item);
-    itemsById.set(id, item);
-  }
-
-  function upsertTool(
-    id: string,
-    title: string,
-    toolName: string,
-    sproutToolName: string | null,
-    status: ToolStatus,
-    args: Record<string, unknown>,
-    result: string,
-    isError: boolean,
-    timestamp: string,
-  ) {
-    const existing = itemsById.get(id);
-    const canonicalSproutToolName =
-      sproutToolName ?? findSproutToolName(toolName, true);
-    if (existing?.type === "tool") {
-      if (!isGenericToolTitle(title)) {
-        existing.title = title;
-      }
-      if (canonicalSproutToolName) {
-        existing.sproutToolName = canonicalSproutToolName;
-        existing.toolName = canonicalSproutToolName;
-      } else if (!existing.sproutToolName && !isGenericToolTitle(toolName)) {
-        existing.toolName = toolName;
-      }
-      existing.status = status;
-      existing.args = Object.keys(args).length > 0 ? args : existing.args;
-      if (result) existing.result = result;
-      existing.isError = isError || existing.isError;
-      if (
+    replaceItem(d, id, {
+      ...existing,
+      title: updatedTitle,
+      toolName: updatedToolName,
+      sproutToolName: updatedSproutToolName,
+      status,
+      args: Object.keys(args).length > 0 ? args : existing.args,
+      result: result || existing.result,
+      isError: isError || existing.isError,
+      completedAt:
         (status === "completed" || status === "failed") &&
         existing.completedAt == null
-      ) {
-        existing.completedAt = timestamp;
-      }
-      return;
-    }
-    sealOpenMessages();
-    const item: TranscriptItem = {
-      id,
-      type: "tool",
-      title,
-      toolName: canonicalSproutToolName ?? toolName,
-      sproutToolName: canonicalSproutToolName,
-      status,
-      args,
-      result,
-      isError,
-      timestamp,
-      startedAt: timestamp,
-      completedAt: null,
-    };
-    items.push(item);
-    itemsById.set(id, item);
+          ? timestamp
+          : existing.completedAt,
+      channelId,
+    });
+    return;
+  }
+  sealOpenMessages(d);
+  pushItem(d, {
+    id,
+    type: "tool",
+    title,
+    toolName: canonicalSproutToolName ?? toolName,
+    sproutToolName: canonicalSproutToolName,
+    status,
+    args,
+    result,
+    isError,
+    timestamp,
+    startedAt: timestamp,
+    completedAt: null,
+    channelId,
+  });
+}
+
+export function processTranscriptEvent(
+  state: TranscriptState,
+  event: ObserverEvent,
+): TranscriptState {
+  const d = draftFrom(state);
+
+  if (event.sessionId && event.sessionId !== d.latestSessionId) {
+    d.latestSessionId = event.sessionId;
   }
 
-  for (const event of events) {
-    if (event.kind === "turn_started") {
-      upsertTextItem(
-        `turn:${event.turnId ?? event.seq}`,
-        "lifecycle",
-        "Turn started",
-        describeTurnStarted(event.payload),
-        event.timestamp,
-      );
-      continue;
-    }
+  const channelId = event.channelId ?? null;
+  const ch = channelId ?? "global";
 
-    if (event.kind === "session_resolved") {
-      upsertTextItem(
-        `session:${event.turnId ?? event.seq}`,
-        "lifecycle",
-        "Session ready",
-        describeSessionResolved(event.payload),
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (event.kind === "acp_parse_error") {
-      upsertTextItem(
-        `parse-error:${event.seq}`,
-        "lifecycle",
-        "Wire parse error",
-        extractBlockText(event.payload),
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (event.kind !== "acp_read" && event.kind !== "acp_write") {
-      continue;
-    }
-
+  if (event.kind === "turn_started") {
+    upsertTextItem(
+      d,
+      `turn:${ch}:${event.turnId ?? event.seq}`,
+      "lifecycle",
+      "Turn started",
+      describeTurnStarted(event.payload),
+      event.timestamp,
+      channelId,
+    );
+  } else if (event.kind === "session_resolved") {
+    upsertTextItem(
+      d,
+      `session:${ch}:${event.turnId ?? event.seq}`,
+      "lifecycle",
+      "Session ready",
+      describeSessionResolved(event.payload),
+      event.timestamp,
+      channelId,
+    );
+  } else if (event.kind === "acp_parse_error") {
+    upsertTextItem(
+      d,
+      `parse-error:${ch}:${event.seq}`,
+      "lifecycle",
+      "Wire parse error",
+      extractBlockText(event.payload),
+      event.timestamp,
+      channelId,
+    );
+  } else if (event.kind === "acp_read" || event.kind === "acp_write") {
     const payload = asRecord(event.payload);
     const method = asString(payload.method);
 
@@ -221,115 +296,134 @@ export function buildTranscript(events: ObserverEvent[]): TranscriptItem[] {
         const parsedPrompt = parsePromptText(promptText);
         if (parsedPrompt.userText) {
           upsertMessage(
-            `prompt:${event.turnId ?? event.seq}`,
+            d,
+            `prompt:${ch}:${event.turnId ?? event.seq}`,
             "user",
             parsedPrompt.userTitle,
             parsedPrompt.userText,
             event.timestamp,
+            channelId,
           );
         }
         if (parsedPrompt.sections.length > 0) {
           upsertMetadata(
-            `prompt-context:${event.turnId ?? event.seq}`,
+            d,
+            `prompt-context:${ch}:${event.turnId ?? event.seq}`,
             "Prompt context",
             parsedPrompt.sections,
             event.timestamp,
+            channelId,
           );
         }
       }
-      continue;
-    }
+    } else if (event.kind === "acp_read" && method === "session/update") {
+      const params = asRecord(payload.params);
+      const update = asRecord(params.update);
+      const updateType = asString(update.sessionUpdate) ?? "unknown";
+      const turnKey = event.turnId ?? event.sessionId ?? "unknown";
+      const messageId = asString(update.messageId);
 
-    if (event.kind !== "acp_read" || method !== "session/update") {
-      continue;
-    }
-
-    const params = asRecord(payload.params);
-    const update = asRecord(params.update);
-    const updateType = asString(update.sessionUpdate) ?? "unknown";
-    const turnKey = event.turnId ?? event.sessionId ?? "unknown";
-    const messageId = asString(update.messageId);
-
-    if (updateType === "agent_message_chunk") {
-      upsertMessage(
-        `assistant:${messageId ?? turnKey}`,
-        "assistant",
-        "Assistant",
-        extractContentText(update.content),
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (updateType === "user_message_chunk") {
-      upsertMessage(
-        `user:${messageId ?? turnKey}`,
-        "user",
-        "User",
-        extractContentText(update.content),
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (updateType === "agent_thought_chunk") {
-      upsertTextItem(
-        `thinking:${messageId ?? turnKey}`,
-        "thought",
-        "Thinking",
-        extractContentText(update.content),
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (updateType === "tool_call") {
-      const toolId = asString(update.toolCallId) ?? `tool:${event.seq}`;
-      const identity = extractToolIdentity(update);
-      upsertTool(
-        `tool:${toolId}`,
-        identity.title,
-        identity.toolName,
-        identity.sproutToolName,
-        normalizeToolStatus(asString(update.status) ?? "executing"),
-        extractToolArgs(update),
-        extractToolResult(update),
-        false,
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (updateType === "tool_call_update") {
-      const toolId = asString(update.toolCallId) ?? `tool:${event.seq}`;
-      const status = normalizeToolStatus(
-        asString(update.status) ?? "completed",
-      );
-      const identity = extractToolIdentity(update);
-      upsertTool(
-        `tool:${toolId}`,
-        identity.title,
-        identity.toolName,
-        identity.sproutToolName,
-        status,
-        extractToolArgs(update),
-        extractToolResult(update),
-        status === "failed",
-        event.timestamp,
-      );
-      continue;
-    }
-
-    if (updateType === "plan") {
-      upsertTextItem(
-        `plan:${turnKey}`,
-        "thought",
-        "Plan",
-        extractContentText(update.content) || JSON.stringify(update, null, 2),
-        event.timestamp,
-      );
+      if (updateType === "agent_message_chunk") {
+        upsertMessage(
+          d,
+          `assistant:${ch}:${messageId ?? turnKey}`,
+          "assistant",
+          "Assistant",
+          extractContentText(update.content),
+          event.timestamp,
+          channelId,
+        );
+      } else if (updateType === "user_message_chunk") {
+        upsertMessage(
+          d,
+          `user:${ch}:${messageId ?? turnKey}`,
+          "user",
+          "User",
+          extractContentText(update.content),
+          event.timestamp,
+          channelId,
+        );
+      } else if (updateType === "agent_thought_chunk") {
+        upsertTextItem(
+          d,
+          `thinking:${ch}:${messageId ?? turnKey}`,
+          "thought",
+          "Thinking",
+          extractContentText(update.content),
+          event.timestamp,
+          channelId,
+        );
+      } else if (updateType === "tool_call") {
+        const toolId = asString(update.toolCallId) ?? `tool:${event.seq}`;
+        const identity = extractToolIdentity(update);
+        upsertTool(
+          d,
+          `tool:${ch}:${toolId}`,
+          identity.title,
+          identity.toolName,
+          identity.sproutToolName,
+          normalizeToolStatus(asString(update.status) ?? "executing"),
+          extractToolArgs(update),
+          extractToolResult(update),
+          false,
+          event.timestamp,
+          channelId,
+        );
+      } else if (updateType === "tool_call_update") {
+        const toolId = asString(update.toolCallId) ?? `tool:${event.seq}`;
+        const status = normalizeToolStatus(
+          asString(update.status) ?? "completed",
+        );
+        const identity = extractToolIdentity(update);
+        upsertTool(
+          d,
+          `tool:${ch}:${toolId}`,
+          identity.title,
+          identity.toolName,
+          identity.sproutToolName,
+          status,
+          extractToolArgs(update),
+          extractToolResult(update),
+          status === "failed",
+          event.timestamp,
+          channelId,
+        );
+      } else if (updateType === "plan") {
+        upsertTextItem(
+          d,
+          `plan:${ch}:${turnKey}`,
+          "thought",
+          "Plan",
+          extractContentText(update.content) || JSON.stringify(update, null, 2),
+          event.timestamp,
+          channelId,
+        );
+      }
     }
   }
 
-  return items;
+  if (!d.changed && d.latestSessionId === state.latestSessionId) {
+    return state;
+  }
+
+  return {
+    items: d.items,
+    itemsById: d.itemsById,
+    activeMessageKey: d.activeMessageKey,
+    sealedKeys: d.sealedKeys,
+    continuationSeq: d.continuationSeq,
+    latestSessionId: d.latestSessionId,
+  };
+}
+
+export function buildTranscriptState(events: ObserverEvent[]): TranscriptState {
+  let state = createEmptyTranscriptState();
+  for (const event of events) {
+    state = processTranscriptEvent(state, event);
+  }
+  return state;
+}
+
+export function buildTranscript(events: ObserverEvent[]): TranscriptItem[] {
+  return buildTranscriptState(events).items;
 }

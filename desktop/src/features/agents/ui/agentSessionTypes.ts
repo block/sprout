@@ -28,6 +28,7 @@ export type TranscriptItem =
       title: string;
       text: string;
       timestamp: string;
+      channelId?: string | null;
     }
   | {
       id: string;
@@ -35,6 +36,7 @@ export type TranscriptItem =
       title: string;
       text: string;
       timestamp: string;
+      channelId?: string | null;
     }
   | {
       id: string;
@@ -42,6 +44,7 @@ export type TranscriptItem =
       title: string;
       text: string;
       timestamp: string;
+      channelId?: string | null;
     }
   | {
       id: string;
@@ -49,6 +52,7 @@ export type TranscriptItem =
       title: string;
       sections: PromptSection[];
       timestamp: string;
+      channelId?: string | null;
     }
   | {
       id: string;
@@ -63,6 +67,7 @@ export type TranscriptItem =
       timestamp: string;
       startedAt: string;
       completedAt: string | null;
+      channelId?: string | null;
     };
 
 export type PromptSection = {

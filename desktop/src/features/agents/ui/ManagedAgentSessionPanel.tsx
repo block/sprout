@@ -19,9 +19,8 @@ import type {
   ObserverEvent,
   TranscriptItem,
 } from "./agentSessionTypes";
-import { buildTranscript } from "./agentSessionTranscript";
 import { shorten } from "./agentSessionUtils";
-import { useObserverEvents } from "./useObserverEvents";
+import { useObserverEvents, useAgentTranscript } from "./useObserverEvents";
 
 type ManagedAgentSessionPanelProps = {
   agent: ManagedAgent;
@@ -40,10 +39,23 @@ export function ManagedAgentSessionPanel({
   showHeader = true,
   showRaw = true,
 }: ManagedAgentSessionPanelProps) {
+  const isRunning = agent.status === "running";
   const { connectionState, errorMessage, events } = useObserverEvents(
-    agent.status === "running",
+    isRunning,
     agent.pubkey,
   );
+  const transcript = useAgentTranscript(isRunning, agent.pubkey);
+
+  // Filter transcript items by channelId (lightweight — items now carry channelId)
+  const scopedTranscript = React.useMemo(
+    () =>
+      channelId
+        ? transcript.filter((item) => item.channelId === channelId)
+        : transcript,
+    [channelId, transcript],
+  );
+
+  // Filter raw events by channelId for the RawEventRail
   const scopedEvents = React.useMemo(
     () =>
       channelId
@@ -51,15 +63,14 @@ export function ManagedAgentSessionPanel({
         : events,
     [channelId, events],
   );
-  const transcript = React.useMemo(
-    () => buildTranscript(scopedEvents),
-    [scopedEvents],
-  );
-  const latestSessionId = React.useMemo(
-    () =>
-      [...scopedEvents].reverse().find((event) => event.sessionId)?.sessionId,
-    [scopedEvents],
-  );
+
+  // Derive latestSessionId from channel-scoped events
+  const latestSessionId = React.useMemo(() => {
+    for (let i = scopedEvents.length - 1; i >= 0; i--) {
+      if (scopedEvents[i].sessionId) return scopedEvents[i].sessionId;
+    }
+    return null;
+  }, [scopedEvents]);
 
   return (
     <section
@@ -72,7 +83,7 @@ export function ManagedAgentSessionPanel({
         <SessionHeader
           connectionState={connectionState}
           eventCount={scopedEvents.length}
-          hasObserver={agent.status === "running"}
+          hasObserver={isRunning}
           latestSessionId={latestSessionId}
         />
       ) : null}
@@ -83,9 +94,9 @@ export function ManagedAgentSessionPanel({
         emptyDescription={emptyDescription}
         errorMessage={errorMessage}
         events={scopedEvents}
-        hasObserver={agent.status === "running"}
+        hasObserver={isRunning}
         showRaw={showRaw}
-        transcript={transcript}
+        transcript={scopedTranscript}
       />
     </section>
   );

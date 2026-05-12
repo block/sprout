@@ -3,48 +3,45 @@ import * as React from "react";
 import {
   ensureRelayObserverSubscription,
   getAgentObserverSnapshot,
+  getAgentTranscript,
   subscribeAgentObserverStore,
 } from "@/features/agents/observerRelayStore";
-import type { ConnectionState, ObserverEvent } from "./agentSessionTypes";
+import type { TranscriptItem } from "./agentSessionTypes";
+
+// Stable subscribe reference shared by all useSyncExternalStore hooks.
+// subscribeAgentObserverStore already has a fixed identity, so this thin
+// wrapper satisfies React's requirement without per-hook useCallback.
+const subscribeToStore = (onStoreChange: () => void) =>
+  subscribeAgentObserverStore(onStoreChange);
 
 export function useObserverEvents(
   enabled: boolean,
   agentPubkey?: string | null,
 ) {
-  const [events, setEvents] = React.useState<ObserverEvent[]>([]);
-  const [connectionState, setConnectionState] =
-    React.useState<ConnectionState>("idle");
-  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const getSnapshot = React.useCallback(
+    () => getAgentObserverSnapshot(agentPubkey, enabled),
+    [agentPubkey, enabled],
+  );
+
+  const snapshot = React.useSyncExternalStore(subscribeToStore, getSnapshot);
 
   React.useEffect(() => {
-    setEvents([]);
-    setErrorMessage(null);
-
-    if (!enabled) {
-      setConnectionState("idle");
-      return;
+    if (enabled && agentPubkey) {
+      void ensureRelayObserverSubscription();
     }
+  }, [enabled, agentPubkey]);
 
-    if (!agentPubkey) {
-      setConnectionState("idle");
-      return;
-    }
+  return snapshot;
+}
 
-    const syncSnapshot = () => {
-      const snapshot = getAgentObserverSnapshot(agentPubkey);
-      setConnectionState(snapshot.connectionState);
-      setErrorMessage(snapshot.errorMessage);
-      setEvents(snapshot.events);
-    };
+export function useAgentTranscript(
+  enabled: boolean,
+  agentPubkey?: string | null,
+): TranscriptItem[] {
+  const getSnapshot = React.useCallback(
+    () => getAgentTranscript(agentPubkey, enabled),
+    [agentPubkey, enabled],
+  );
 
-    syncSnapshot();
-    const unsubscribe = subscribeAgentObserverStore(syncSnapshot);
-    void ensureRelayObserverSubscription();
-
-    return () => {
-      unsubscribe();
-    };
-  }, [agentPubkey, enabled]);
-
-  return { connectionState, errorMessage, events };
+  return React.useSyncExternalStore(subscribeToStore, getSnapshot);
 }
