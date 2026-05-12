@@ -250,10 +250,22 @@ export function buildInboxItems({
   }
 
   const feedItems = [
-    ...feed.feed.mentions,
-    ...feed.feed.needsAction,
-    ...feed.feed.activity,
-    ...feed.feed.agentActivity,
+    ...feed.feed.mentions.map((item) => ({
+      ...item,
+      category: "mention" as const,
+    })),
+    ...feed.feed.needsAction.map((item) => ({
+      ...item,
+      category: "needs_action" as const,
+    })),
+    ...feed.feed.activity.map((item) => ({
+      ...item,
+      category: "activity" as const,
+    })),
+    ...feed.feed.agentActivity.map((item) => ({
+      ...item,
+      category: "agent_activity" as const,
+    })),
   ];
 
   const threadGroups = new Map<

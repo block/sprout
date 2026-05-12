@@ -37,10 +37,7 @@ export function InboxListPane({
 }: InboxListPaneProps) {
   return (
     <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/70 bg-background">
-      <div
-        className="border-b border-border/70 px-4 pb-4 pt-3"
-        data-tauri-drag-region
-      >
+      <div className="border-b border-border/70 px-4 pb-4 pt-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
