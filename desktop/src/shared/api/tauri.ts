@@ -738,8 +738,8 @@ export async function uploadMedia(
   });
 }
 
-export async function pickAndUploadMedia(): Promise<BlobDescriptor | null> {
-  return invokeTauri<BlobDescriptor | null>("pick_and_upload_media", {});
+export async function pickAndUploadMedia(): Promise<BlobDescriptor[]> {
+  return invokeTauri<BlobDescriptor[]>("pick_and_upload_media", {});
 }
 
 export async function uploadMediaBytes(

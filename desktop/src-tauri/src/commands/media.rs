@@ -469,46 +469,12 @@ fn transcode_and_extract_poster(
     Ok((video_bytes?, poster_bytes))
 }
 
-/// Open a native file dialog, read the selected file, and upload it.
-///
-/// All file I/O happens in trusted Rust — the renderer never touches the
-/// filesystem. This is the secure path for the 📎 paperclip button.
-///
-/// **Residual TOCTOU note:** The Tauri dialog plugin returns a pathname, not
-/// a file handle, so there is a small race window between dialog return and
-/// `File::open()`. This is an inherent limitation of the OS file-picker API
-/// (no platform exposes a handle/bookmark from the open-file dialog in a way
-/// the Tauri plugin surfaces). The risk is bounded: the attacker must be local
-/// and must win a race against an immediate open. Server-side content validation
-/// (MIME, image decode, size caps) provides defense-in-depth.
-#[tauri::command]
-pub async fn pick_and_upload_media(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<BlobDescriptor>, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter(
-            "Media",
-            &[
-                "jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "mkv", "webm", "avi",
-            ],
-        )
-        .pick_file(move |path| {
-            let _ = tx.send(path);
-        });
-
-    let selected = rx.await.map_err(|_| "dialog cancelled".to_string())?;
-    let file_path = match selected {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-
-    let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
-
+/// Read a picked path through the TOCTOU-safe pipeline (fd pin → sniff →
+/// transcode-or-passthrough → MIME validation → upload).
+async fn process_picked_path(
+    path: std::path::PathBuf,
+    state: &State<'_, AppState>,
+) -> Result<BlobDescriptor, String> {
     // Pin the inode by opening the fd BEFORE spawn_blocking. This prevents a
     // local attacker from swapping the file between dialog return and read.
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -549,16 +515,67 @@ pub async fn pick_and_upload_media(
 
     // Upload video first, then poster (best-effort). If poster upload fails,
     // the video descriptor is returned without an image field.
-    let mut descriptor = do_upload(body, &mime, &state).await?;
+    let mut descriptor = do_upload(body, &mime, state).await?;
 
     if let Some(poster) = poster_bytes {
-        match do_upload(poster, "image/jpeg", &state).await {
+        match do_upload(poster, "image/jpeg", state).await {
             Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
             Err(e) => eprintln!("sprout-desktop: poster upload failed (non-fatal): {e}"),
         }
     }
 
-    Ok(Some(descriptor))
+    Ok(descriptor)
+}
+
+/// Open a native file dialog (multi-select), read each selected file, and
+/// upload it. Returns the resulting `BlobDescriptor` list — empty when the
+/// user cancels.
+///
+/// All file I/O happens in trusted Rust — the renderer never touches the
+/// filesystem. This is the secure path for the 📎 paperclip button.
+///
+/// **Residual TOCTOU note:** The Tauri dialog plugin returns pathnames, not
+/// file handles, so there is a small race window between dialog return and
+/// `File::open()` — an inherent limit of the OS file-picker API. The risk is
+/// bounded (local attacker winning a race against an immediate open) and
+/// server-side content validation (MIME, image decode, size caps) is the
+/// defense in depth.
+///
+/// Uploads run sequentially; on first failure, prior uploads are not
+/// rolled back (they're already content-addressed on the relay).
+#[tauri::command]
+pub async fn pick_and_upload_media(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<BlobDescriptor>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter(
+            "Media",
+            &[
+                "jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "mkv", "webm", "avi",
+            ],
+        )
+        .pick_files(move |paths| {
+            let _ = tx.send(paths);
+        });
+
+    let file_paths = match rx.await.map_err(|_| "dialog cancelled".to_string())? {
+        Some(paths) => paths,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut descriptors = Vec::with_capacity(file_paths.len());
+    for file_path in file_paths {
+        let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
+        let descriptor = process_picked_path(path, &state).await?;
+        descriptors.push(descriptor);
+    }
+
+    Ok(descriptors)
 }
 
 /// Upload raw bytes directly (for paste and drag-drop).

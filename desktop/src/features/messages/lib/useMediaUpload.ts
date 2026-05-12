@@ -112,18 +112,22 @@ export function useMediaUpload() {
   }, []);
 
   const handlePaperclip = React.useCallback(async () => {
+    // Hold a single pending tick while the native picker is open + uploads
+    // run in Rust. We don't know the file count until the dialog returns,
+    // and uploads are already complete by then, so we just append each
+    // descriptor when we get them back.
     setUploadingCount((c) => c + 1);
     try {
-      const descriptor = await pickAndUploadMedia();
-      if (descriptor) {
-        onUploaded(descriptor);
-      } else {
-        setUploadingCount((c) => Math.max(0, c - 1));
+      const descriptors = await pickAndUploadMedia();
+      setUploadingCount((c) => Math.max(0, c - 1));
+      for (const descriptor of descriptors) {
+        nextSlotRef.current += 1;
+        setImetaSlots((prev) => [...prev, descriptor]);
       }
     } catch (err) {
       onUploadError(err);
     }
-  }, [onUploaded, onUploadError]);
+  }, [onUploadError]);
 
   const handleDrop = React.useCallback(
     async (event: React.DragEvent<HTMLFormElement>) => {
