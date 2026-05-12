@@ -4,6 +4,7 @@ import {
   Check,
   Copy,
   ExternalLink,
+  MessageSquare,
   Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -12,9 +13,11 @@ import { toast } from "sonner";
 
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import { useRepoRefs } from "../use-repo-refs";
 import { useRepo } from "../use-repos";
 import { ConnectButton } from "./ConnectButton";
 import { PubkeyAvatar } from "./PubkeyAvatar";
+import { RepoRefsSection } from "./RepoRefsSection";
 
 function relativeTime(unix: number): string {
   const now = Date.now();
@@ -85,6 +88,7 @@ function DetailSkeleton() {
 export function RepoDetailPage() {
   const { repoId } = useParams({ from: "/repos/$repoId" });
   const { data: repo, isLoading, error } = useRepo(repoId);
+  const { data: refs, isLoading: refsLoading } = useRepoRefs(repoId);
 
   useEffect(() => {
     if (error) {
@@ -146,6 +150,9 @@ export function RepoDetailPage() {
         </p>
       </div>
 
+      {/* Refs & HEAD */}
+      <RepoRefsSection refs={refs} isLoading={refsLoading} />
+
       {/* Clone URLs */}
       {repo.cloneUrls.length > 0 && (
         <div className="mt-8">
@@ -185,6 +192,18 @@ export function RepoDetailPage() {
             ))}
         </div>
       </div>
+
+      {/* Channel link */}
+      {repo.channelId && (
+        <div className="mt-8">
+          <Button variant="outline" asChild>
+            <a href={`/channels/${repo.channelId}`}>
+              <MessageSquare className="h-4 w-4" />
+              View channel
+            </a>
+          </Button>
+        </div>
+      )}
 
       {/* Open in Sprout CTA */}
       <div className="mt-8 rounded-lg border border-border bg-muted/30 p-6 text-center">

@@ -8,13 +8,14 @@ export interface Repo {
   description: string;
   cloneUrls: string[];
   webUrl: string | null;
+  channelId: string | null;
   owner: string;
   contributors: string[];
   createdAt: number;
 }
 
 /** Extract the first value for a given tag name from a Nostr event. */
-function getTag(event: NostrEvent, name: string): string | undefined {
+export function getTag(event: NostrEvent, name: string): string | undefined {
   return event.tags.find((t) => t[0] === name)?.[1];
 }
 
@@ -29,6 +30,7 @@ function eventToRepo(event: NostrEvent): Repo {
   const description = getTag(event, "description") || event.content || "";
   const cloneUrls = getAllTags(event, "clone");
   const webUrl = getTag(event, "web") ?? null;
+  const channelId = getTag(event, "sprout-channel") ?? null;
   const contributors = getAllTags(event, "p");
   const owner = event.pubkey;
 
@@ -38,6 +40,7 @@ function eventToRepo(event: NostrEvent): Repo {
     description,
     cloneUrls,
     webUrl,
+    channelId,
     owner,
     contributors,
     createdAt: event.created_at,
@@ -45,7 +48,7 @@ function eventToRepo(event: NostrEvent): Repo {
 }
 
 /** Deduplicate NIP-33 parameterized replaceable events, keeping the latest per (pubkey, kind, d-tag). */
-function dedup(events: NostrEvent[]): NostrEvent[] {
+export function dedup(events: NostrEvent[]): NostrEvent[] {
   const best = new Map<string, NostrEvent>();
   for (const e of events) {
     const d = getTag(e, "d") ?? "";
