@@ -63,6 +63,13 @@ export function useReadState(
     [],
   );
 
+  const markContextUnread = React.useCallback(
+    (contextId: string, lastMessageUnix: number): void => {
+      managerRef.current?.markContextUnread(contextId, lastMessageUnix);
+    },
+    [],
+  );
+
   const seedContextRead = React.useCallback(
     (contextId: string, unixTimestamp: number): void => {
       managerRef.current?.seedContextRead(contextId, unixTimestamp);
@@ -79,6 +86,7 @@ export function useReadState(
       getEffectiveTimestamp: noopGetTimestamp,
       isReady: false,
       markContextRead: noopMarkRead,
+      markContextUnread: noopMarkRead,
       seedContextRead: noopMarkRead,
       readStateVersion: 0,
     };
@@ -88,6 +96,7 @@ export function useReadState(
     getEffectiveTimestamp,
     isReady,
     markContextRead,
+    markContextUnread,
     seedContextRead,
     readStateVersion,
   };

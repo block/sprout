@@ -1,6 +1,13 @@
 import type * as React from "react";
 import { ChevronDown, CircleDot, FileText, Hash, Lock, X } from "lucide-react";
 
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/shared/ui/context-menu";
+
 import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -200,6 +207,7 @@ export function SidebarSection({
   testId,
   unreadChannelIds,
   onHideDm,
+  onMarkChannelUnread,
   onSelectChannel,
   onToggleCollapsed,
 }: {
@@ -216,6 +224,10 @@ export function SidebarSection({
   testId: string;
   unreadChannelIds: Set<string>;
   onHideDm?: (channelId: string) => void;
+  onMarkChannelUnread?: (
+    channelId: string,
+    lastMessageAt: string | null | undefined,
+  ) => void;
   onSelectChannel: (channelId: string) => void;
   onToggleCollapsed?: () => void;
 }) {
@@ -258,38 +270,54 @@ export function SidebarSection({
           {items.length > 0 ? (
             <SidebarMenu data-testid={testId}>
               {items.map((channel) => (
-                <SidebarMenuItem className="group/menu-item" key={channel.id}>
-                  <ChannelMenuButton
-                    channel={channel}
-                    dmParticipants={dmParticipantsByChannelId?.[channel.id]}
-                    hasUnread={unreadChannelIds.has(channel.id)}
-                    isActive={
-                      isActiveChannel && selectedChannelId === channel.id
-                    }
-                    label={channelLabels?.[channel.id] ?? channel.name}
-                    presenceStatus={presenceByChannelId?.[channel.id]}
-                    onSelectChannel={onSelectChannel}
-                  />
-                  {channel.channelType === "dm" &&
-                  unreadChannelIds.has(channel.id) &&
-                  !(isActiveChannel && selectedChannelId === channel.id) ? (
-                    <span
-                      aria-hidden="true"
-                      className="absolute right-[9px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-primary"
-                      data-testid={`channel-unread-${channel.name}`}
-                    />
+                <ContextMenu key={channel.id}>
+                  <ContextMenuTrigger asChild>
+                    <SidebarMenuItem className="group/menu-item">
+                      <ChannelMenuButton
+                        channel={channel}
+                        dmParticipants={dmParticipantsByChannelId?.[channel.id]}
+                        hasUnread={unreadChannelIds.has(channel.id)}
+                        isActive={
+                          isActiveChannel && selectedChannelId === channel.id
+                        }
+                        label={channelLabels?.[channel.id] ?? channel.name}
+                        presenceStatus={presenceByChannelId?.[channel.id]}
+                        onSelectChannel={onSelectChannel}
+                      />
+                      {channel.channelType === "dm" &&
+                      unreadChannelIds.has(channel.id) &&
+                      !(isActiveChannel && selectedChannelId === channel.id) ? (
+                        <span
+                          aria-hidden="true"
+                          className="absolute right-[9px] top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-primary"
+                          data-testid={`channel-unread-${channel.name}`}
+                        />
+                      ) : null}
+                      {channel.channelType === "dm" && onHideDm ? (
+                        <SidebarMenuAction
+                          aria-label="Close direct message"
+                          data-testid={`hide-dm-${channel.name}`}
+                          onClick={() => onHideDm(channel.id)}
+                          showOnHover
+                        >
+                          <X />
+                        </SidebarMenuAction>
+                      ) : null}
+                    </SidebarMenuItem>
+                  </ContextMenuTrigger>
+                  {onMarkChannelUnread ? (
+                    <ContextMenuContent>
+                      <ContextMenuItem
+                        onClick={() =>
+                          onMarkChannelUnread(channel.id, channel.lastMessageAt)
+                        }
+                      >
+                        <CircleDot className="h-4 w-4" />
+                        Mark unread
+                      </ContextMenuItem>
+                    </ContextMenuContent>
                   ) : null}
-                  {channel.channelType === "dm" && onHideDm ? (
-                    <SidebarMenuAction
-                      aria-label="Close direct message"
-                      data-testid={`hide-dm-${channel.name}`}
-                      onClick={() => onHideDm(channel.id)}
-                      showOnHover
-                    >
-                      <X />
-                    </SidebarMenuAction>
-                  ) : null}
-                </SidebarMenuItem>
+                </ContextMenu>
               ))}
             </SidebarMenu>
           ) : emptyState ? (

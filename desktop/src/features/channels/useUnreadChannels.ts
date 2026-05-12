@@ -45,6 +45,7 @@ export function useUnreadChannels(
     getEffectiveTimestamp,
     isReady: isReadStateReady,
     markContextRead,
+    markContextUnread,
     readStateVersion,
     seedContextRead,
   } = useReadState(pubkey, relayClient);
@@ -59,6 +60,15 @@ export function useUnreadChannels(
       markContextRead(channelId, unixSeconds);
     },
     [markContextRead],
+  );
+
+  const markChannelUnread = React.useCallback(
+    (channelId: string, lastMessageAt: string | null | undefined) => {
+      const unixSeconds = toUnixSeconds(lastMessageAt);
+      if (unixSeconds === null) return;
+      markContextUnread(channelId, unixSeconds);
+    },
+    [markContextUnread],
   );
 
   // Seed new channels so they don't flash as unread on first load.
@@ -132,5 +142,6 @@ export function useUnreadChannels(
   return {
     unreadChannelIds,
     markChannelRead,
+    markChannelUnread,
   };
 }

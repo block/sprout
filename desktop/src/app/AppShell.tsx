@@ -264,20 +264,21 @@ export function AppShell() {
     [channels, selectedChannelId],
   );
 
-  const { markChannelRead, unreadChannelIds } = useUnreadChannels(
-    channels,
-    activeChannel,
-    // Wait for ChannelScreen to report the latest loaded message before
-    // advancing unread state for the active channel.
-    null,
-    {
-      pubkey: identityQuery.data?.pubkey,
-      relayClient,
-      currentPubkey: identityQuery.data?.pubkey,
-      onDmMessage: handleDmNotification,
-      onLiveMention: refetchHomeFeedOnLiveMention,
-    },
-  );
+  const { markChannelRead, markChannelUnread, unreadChannelIds } =
+    useUnreadChannels(
+      channels,
+      activeChannel,
+      // Wait for ChannelScreen to report the latest loaded message before
+      // advancing unread state for the active channel.
+      null,
+      {
+        pubkey: identityQuery.data?.pubkey,
+        relayClient,
+        currentPubkey: identityQuery.data?.pubkey,
+        onDmMessage: handleDmNotification,
+        onLiveMention: refetchHomeFeedOnLiveMention,
+      },
+    );
 
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
@@ -668,6 +669,7 @@ export function AppShell() {
                     void applyAgents(templateId, createdForum.id);
                   }}
                   onHideDm={handleHideDm}
+                  onMarkChannelUnread={markChannelUnread}
                   onOpenBrowseChannels={handleOpenBrowseChannels}
                   onOpenBrowseForums={handleOpenBrowseForums}
                   onOpenDm={async ({ pubkeys }) => {

@@ -113,6 +113,18 @@ export class ReadStateManager {
     this.advanceContext(contextId, unixTimestamp, { publishable: false });
   }
 
+  markContextUnread(contextId: string, lastMessageUnix: number): void {
+    // Roll back the read timestamp to just before the last message so the
+    // channel appears unread. This is published via NIP-RS and syncs across
+    // devices.
+    const rollbackTo = lastMessageUnix - 1;
+    this.effectiveState.set(contextId, rollbackTo);
+    this.publishableContextIds.add(contextId);
+    this.persistLocalState();
+    this.notifyListeners();
+    this.schedulePublish();
+  }
+
   private advanceContext(
     contextId: string,
     unixTimestamp: number,
