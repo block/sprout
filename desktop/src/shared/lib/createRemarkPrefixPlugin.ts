@@ -38,7 +38,10 @@ function walkChildren(node: any, pattern: RegExp, buildNode: NodeBuilder) {
 
     if (child.type === "text") {
       const parts = splitByPattern(child.value, pattern, buildNode);
-      if (parts.length > 1) {
+      if (
+        parts.length > 1 ||
+        (parts.length === 1 && parts[0].type !== "text")
+      ) {
         node.children.splice(i, 1, ...parts);
       }
     } else {

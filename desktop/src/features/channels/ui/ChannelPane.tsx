@@ -224,6 +224,17 @@ export const ChannelPane = React.memo(function ChannelPane({
   const canResetThreadPanelWidth =
     threadPanelWidthPx !== THREAD_PANEL_DEFAULT_WIDTH_PX;
 
+  // Scope the edit target to the correct composer: if the message being edited
+  // lives inside the open thread (thread head or a reply), show the editing UI
+  // only in the thread panel; otherwise show it in the main channel composer.
+  const isEditInThread =
+    editTarget != null &&
+    threadHeadMessage != null &&
+    (editTarget.id === threadHeadMessage.id ||
+      threadMessages.some((entry) => entry.message.id === editTarget.id));
+  const mainEditTarget = editTarget && !isEditInThread ? editTarget : null;
+  const threadEditTarget = editTarget && isEditInThread ? editTarget : null;
+
   const isNonMemberView =
     activeChannel !== null &&
     !activeChannel.isMember &&
@@ -361,7 +372,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 channelId={activeChannel?.id ?? null}
                 channelName={activeChannel?.name ?? "channel"}
                 disabled={isComposerDisabled}
-                editTarget={editTarget}
+                editTarget={mainEditTarget}
                 isSending={isSending}
                 onCancelEdit={onCancelEdit}
                 onEditSave={onEditSave}
@@ -410,7 +421,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           channelName={activeChannel?.name ?? "channel"}
           currentPubkey={currentPubkey}
           disabled={isComposerDisabled}
-          editTarget={editTarget}
+          editTarget={threadEditTarget}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
           onCancelReply={onCancelThreadReply}

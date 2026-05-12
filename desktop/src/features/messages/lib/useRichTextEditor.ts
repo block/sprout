@@ -426,6 +426,11 @@ function getMarkdownFromEditor(editor: Editor): string {
     // line break syntax). Chat messages are plain text, not rendered markdown,
     // so strip the backslashes to keep clean newlines.
     md = md.replace(/\\\n/g, "\n");
+    // prosemirror-markdown's esc() backslash-escapes markdown special characters
+    // (` * \ ~ [ ] _) in text nodes to prevent them from being interpreted as
+    // formatting. Since our messages ARE rendered as markdown, we want to
+    // preserve the user's original characters so code fences, bold, etc. work.
+    md = md.replace(/\\([`*\\~[\]_])/g, "$1");
     return md;
   }
   // Fallback: plain text
