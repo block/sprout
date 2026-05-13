@@ -12,6 +12,7 @@ import {
 import type * as React from "react";
 
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
+import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import { cn } from "@/shared/lib/cn";
 import { useSidebar } from "@/shared/ui/sidebar";
 
@@ -118,7 +119,10 @@ export function ChatHeader({
         </div>
       </div>
 
-      {actions ? <div className="shrink-0">{actions}</div> : null}
+      <div className="flex shrink-0 items-center gap-1">
+        <UpdateIndicator />
+        {actions ? <div className="shrink-0">{actions}</div> : null}
+      </div>
     </header>
   );
 }

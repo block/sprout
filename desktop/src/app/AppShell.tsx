@@ -61,7 +61,6 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/shared/ui/sidebar";
-import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 
 type AppView =
   | "home"
@@ -598,11 +597,6 @@ export function AppShell() {
                   >
                     <ChevronRight className="h-3 w-3" />
                   </Button>
-                </div>
-                <div className="fixed right-[16px] top-[8px] z-50">
-                  <UpdateIndicator
-                    onOpenUpdates={() => handleOpenSettings("updates")}
-                  />
                 </div>
                 <AppSidebar
                   activeWorkspace={workspacesHook.activeWorkspace}
