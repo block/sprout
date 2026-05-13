@@ -6,6 +6,7 @@ import {
   listManagedAgents,
   startManagedAgent,
   stopManagedAgent,
+  updateManagedAgent,
   uploadMediaBytes,
 } from "@/shared/api/tauri";
 import type {
@@ -311,8 +312,25 @@ export async function createChannelManagedAgent(
       context.channelMemberPubkeys,
     );
     if (reusable) {
+      // Apply the caller's respondTo settings so the user's permission
+      // choice in the dialog is always honored, even when reusing.
+      const needsRespondToUpdate =
+        input.respondTo && input.respondTo !== "owner-only";
+      const updatedAgent = needsRespondToUpdate
+        ? (
+            await updateManagedAgent({
+              pubkey: reusable.pubkey,
+              respondTo: input.respondTo,
+              respondToAllowlist:
+                input.respondTo === "allowlist"
+                  ? input.respondToAllowlist
+                  : undefined,
+            })
+          ).agent
+        : reusable;
+
       const attached = await attachManagedAgentToChannel(channelId, {
-        agent: reusable,
+        agent: updatedAgent,
         role,
         ensureRunning,
       });

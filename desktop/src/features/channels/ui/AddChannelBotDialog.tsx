@@ -403,10 +403,17 @@ export function AddChannelBotDialog({
     }
   }
 
+  // Allowlist mode requires at least one entry, mirroring the harness's own
+  // validation. If we let it through empty, the agent crash-loops at startup
+  // with a config error.
+  const respondToValid =
+    respondTo !== "allowlist" || respondToAllowlist.length > 0;
+
   const canSubmit =
     selectedProvider !== null &&
     selectedCount > 0 &&
     (!includeGeneric || customName.trim().length > 0) &&
+    respondToValid &&
     !(isProviderMode && !probedProvider) &&
     providerConfigComplete &&
     !providersLoading &&
