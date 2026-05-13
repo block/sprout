@@ -90,7 +90,7 @@ export function ChatHeader({
   return (
     <header
       className={cn(
-        "relative z-30 flex min-h-[44px] min-w-0 shrink-0 cursor-default select-none items-center gap-[10px] bg-background/70 py-[6px] pl-[16px] pr-[8px] shadow-[0_4px_24px_rgba(0,0,0,0.06)] backdrop-blur-xl transition-[margin,padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 dark:shadow-[0_4px_24px_rgba(0,0,0,0.25)] sm:pl-[24px] sm:pr-[12px]",
+        "relative z-30 flex min-h-[44px] min-w-0 shrink-0 cursor-default select-none items-center gap-[10px] bg-background/70 py-[6px] pl-[16px] pr-[8px] backdrop-blur-xl transition-[margin,padding] duration-200 ease-linear supports-[backdrop-filter]:bg-background/55 sm:pl-[24px] sm:pr-[12px]",
         overlaysContent && "-mb-[44px]",
         reserveGlobalControls && "md:pl-[160px]",
       )}
