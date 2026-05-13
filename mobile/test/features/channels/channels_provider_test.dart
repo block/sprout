@@ -192,17 +192,26 @@ void main() {
       final refreshed = container.read(channelsProvider).value!;
       expect(refreshed.single.isArchived, isTrue);
 
+      // Take a fresh baseline AFTER the refresh — the refresh itself issues a
+      // `kinds:[39000], #d:[id]` query as part of channel metadata refetch and
+      // we must not count that toward our invalidation assertion. Only the
+      // fetch triggered by the second `channelDetailsProvider` read should be
+      // attributed to invalidation.
+      final detailsFiltersAfterRefresh = session.historyFilters
+          .where((f) => f.kinds.contains(39000) && f.tags['#d'] != null)
+          .length;
+
       // Reading the details provider again must trigger a fresh fetch — proving
       // the prior cache was invalidated by the archive transition. Without
       // invalidation, Riverpod would return the cached pre-archive details and
       // no new `kinds:[39000], #d:[id]` filter would be sent.
       await container.read(channelDetailsProvider(_channelA).future);
-      final detailsFetchesAfterArchive =
+      final detailsFetchesFromInvalidation =
           session.historyFilters
               .where((f) => f.kinds.contains(39000) && f.tags['#d'] != null)
               .length -
-          detailsFiltersBefore;
-      expect(detailsFetchesAfterArchive, greaterThan(detailsFetchesAfterPrime));
+          detailsFiltersAfterRefresh;
+      expect(detailsFetchesFromInvalidation, greaterThan(0));
     },
   );
 
