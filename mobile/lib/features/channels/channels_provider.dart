@@ -6,6 +6,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../shared/relay/relay.dart';
 import '../../shared/utils/string_utils.dart';
 import 'channel.dart';
+import 'channel_management_provider.dart' show channelDetailsProvider;
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
@@ -131,9 +132,11 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         isMember: true,
         displayNames: displayNames,
       );
-      if (!channel.isEphemeral) {
-        channels.add(channel);
-      }
+      // Ephemeral (TTL) channels are surfaced in the list with an
+      // `_EphemeralBadge` rendered in `channels_page.dart` — they shouldn't be
+      // hidden. Desktop shows them too. Previously dropped here unconditionally,
+      // which made TTL channels invisible on iOS even when the user was a member.
+      channels.add(channel);
     }
 
     channels.sort((left, right) {
@@ -144,6 +147,26 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       // Case-insensitive to match desktop's `localeCompare` ordering.
       return left.name.toLowerCase().compareTo(right.name.toLowerCase());
     });
+
+    // Invalidate `channelDetailsProvider` entries whose archived state flipped
+    // since the last fetch. Required because `channelDetailsProvider` is a
+    // separate Riverpod cache and `Channel.mergeDetails(details)` overwrites
+    // archivedAt from the cached details — so an active-then-archived channel
+    // (e.g. TTL auto-archive by the relay reaper) could keep showing compose
+    // and manage actions in the detail view until the cache expired naturally.
+    //
+    // Scoped narrowly to the archived flip — broader metadata staleness
+    // (renames, topic changes, etc.) is a separate, pre-existing concern that
+    // already affects this provider for other reasons.
+    final prevById = <String, Channel>{
+      for (final c in state.value ?? const <Channel>[]) c.id: c,
+    };
+    for (final channel in channels) {
+      final prev = prevById[channel.id];
+      if (prev != null && prev.isArchived != channel.isArchived) {
+        ref.invalidate(channelDetailsProvider(channel.id));
+      }
+    }
 
     if (subscribeLive) {
       await _subscribeLive(channels);
@@ -182,6 +205,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       ),
       memberCount: 0,
       lastMessageAt: null,
+      // `archivedAt` doubles as both the archived-state flag and the timestamp.
+      // The kind:39000 metadata only carries `["archived", "true"]`, not the
+      // moment of archival, so we stamp the event's `createdAt` — that's when
+      // the relay republished the metadata, which is the closest signal we have.
+      archivedAt: data.isArchived
+          ? DateTime.fromMillisecondsSinceEpoch(
+              event.createdAt * 1000,
+              isUtc: true,
+            )
+          : null,
       participants: participants,
       participantPubkeys: data.participantPubkeys,
       isMember: isMember,
