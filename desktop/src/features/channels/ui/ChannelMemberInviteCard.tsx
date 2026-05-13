@@ -74,7 +74,10 @@ export function ChannelMemberInviteCard({
   );
   const userSearchQuery = useUserSearchQuery(deferredInviteQuery, {
     enabled: open && deferredInviteQuery.length > 0,
-    limit: 8,
+    // The backend clamps at 50. Asking for more here gives users a real
+    // chance of finding people whose names share a prefix with many others
+    // on the relay (the old limit of 8 routinely hid valid matches).
+    limit: 25,
   });
   const inviteSearchResults = React.useMemo(
     () =>

@@ -184,10 +184,17 @@ pub async fn search_users(
         return Ok(SearchUsersResponse { users: Vec::new() });
     }
 
-    // Fetch all kind:0 profiles and filter client-side. The old REST endpoint
-    // used a DB ILIKE query; this is equivalent for small-to-medium relays.
-    // NIP-50 search doesn't work well for user lookup because Typesense indexes
-    // raw JSON content and short names don't tokenize at JSON boundaries.
+    // Fetch all kind:0 profiles and filter+rank client-side. The old REST
+    // endpoint used a DB ILIKE query; this is equivalent for small-to-medium
+    // relays. NIP-50 search doesn't work well for user lookup because
+    // Typesense indexes raw JSON content and short names don't tokenize at
+    // JSON boundaries.
+    //
+    // Important: we must score *every* matching event before truncating to
+    // `max`, otherwise relay return order silently hides users whose match
+    // happens to appear after `max` earlier matches. Ranking lives in
+    // `nostr_convert::filter_and_rank_user_search` and mirrors the ORDER BY
+    // in the sprout-db `search_users` SQL.
     let events = query_relay(
         &state,
         &[serde_json::json!({
@@ -197,31 +204,7 @@ pub async fn search_users(
     )
     .await?;
 
-    let mut users = Vec::new();
-    for ev in &events {
-        let pubkey_hex = ev.pubkey.to_hex();
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.content) {
-            let display_name = v
-                .get("display_name")
-                .and_then(|v| v.as_str())
-                .or_else(|| v.get("name").and_then(|v| v.as_str()))
-                .unwrap_or("");
-            let nip05 = v.get("nip05").and_then(|v| v.as_str()).unwrap_or("");
-
-            let matches = display_name.to_lowercase().contains(&q)
-                || nip05.to_lowercase().contains(&q)
-                || pubkey_hex.starts_with(&q);
-
-            if matches {
-                users.push(nostr_convert::user_search_result_from_event(ev));
-                if users.len() >= max {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(SearchUsersResponse { users })
+    Ok(nostr_convert::filter_and_rank_user_search(&events, &q, max))
 }
 
 #[tauri::command]

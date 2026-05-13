@@ -333,6 +333,134 @@ pub fn search_users_from_events(events: &[Event]) -> SearchUsersResponse {
     SearchUsersResponse { users }
 }
 
+/// Filter and rank kind:0 events against a search query.
+///
+/// `query` is matched case-insensitively against `display_name`/`name`,
+/// `nip05`, and the lowercase hex pubkey. Results are ranked so the most
+/// obviously-relevant match for the user appears first, then truncated to
+/// `limit`. Ranking (lower is better):
+///
+/// | rank | meaning                                      |
+/// |------|----------------------------------------------|
+/// | 0    | exact match on display name                  |
+/// | 1    | exact match on nip05 handle                  |
+/// | 2    | exact match on pubkey hex                    |
+/// | 3    | display name starts with query               |
+/// | 4    | nip05 handle starts with query               |
+/// | 5    | pubkey hex starts with query                 |
+/// | 6    | substring match anywhere                     |
+///
+/// Ties are broken by display_name, then nip05, then pubkey, ascending.
+/// This mirrors the ORDER BY in `crates/sprout-db/src/user::search_users`
+/// so the Tauri-relay path and the DB path stay consistent.
+///
+/// Because kind:0 is replaceable (NIP-01), events are first deduped to the
+/// latest one per pubkey (max `created_at`, tiebreak min event id) before
+/// ranking — so a stale historical profile cannot outrank the user's
+/// current live profile.
+///
+/// `query` is expected pre-trimmed/lowercased; the caller should also reject
+/// empty queries before calling.
+pub fn filter_and_rank_user_search(
+    events: &[Event],
+    query: &str,
+    limit: usize,
+) -> SearchUsersResponse {
+    if query.is_empty() || limit == 0 {
+        return SearchUsersResponse { users: Vec::new() };
+    }
+
+    // kind:0 is a replaceable event (NIP-01) — there is exactly one live
+    // profile per pubkey, the latest by `created_at` (tiebreak: event id,
+    // ascending, matching what the relay would replace to). Dedupe to the
+    // latest event per pubkey *before* ranking; otherwise an older profile
+    // whose stale content happens to match the query better can win over
+    // the user's current profile.
+    let mut latest: HashMap<String, &Event> = HashMap::new();
+    for ev in events {
+        let pk = ev.pubkey.to_hex();
+        let take = match latest.get(&pk) {
+            None => true,
+            Some(prev) => {
+                ev.created_at > prev.created_at
+                    || (ev.created_at == prev.created_at && ev.id < prev.id)
+            }
+        };
+        if take {
+            latest.insert(pk, ev);
+        }
+    }
+
+    let mut scored: Vec<(u8, String, UserSearchResultInfo)> = Vec::new();
+
+    for ev in latest.values() {
+        let v: Value = match serde_json::from_str(&ev.content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let display_name_raw = v
+            .get("display_name")
+            .and_then(Value::as_str)
+            .or_else(|| v.get("name").and_then(Value::as_str))
+            .unwrap_or("");
+        let nip05_raw = v.get("nip05").and_then(Value::as_str).unwrap_or("");
+        let pubkey_hex = ev.pubkey.to_hex();
+
+        let display_name_lc = display_name_raw.to_lowercase();
+        let nip05_lc = nip05_raw.to_lowercase();
+        // pubkey hex is already lowercase via to_hex, but be defensive.
+        let pubkey_lc = pubkey_hex.to_lowercase();
+
+        let rank: Option<u8> = if display_name_lc == query {
+            Some(0)
+        } else if nip05_lc == query {
+            Some(1)
+        } else if pubkey_lc == query {
+            Some(2)
+        } else if display_name_lc.starts_with(query) {
+            Some(3)
+        } else if nip05_lc.starts_with(query) {
+            Some(4)
+        } else if pubkey_lc.starts_with(query) {
+            Some(5)
+        } else if display_name_lc.contains(query)
+            || nip05_lc.contains(query)
+            || pubkey_lc.contains(query)
+        {
+            Some(6)
+        } else {
+            None
+        };
+
+        let Some(rank) = rank else { continue };
+
+        // Sort key for tie-breaking: prefer non-empty display name, then
+        // nip05, then pubkey. Use the lowercase form so ordering is stable
+        // and case-insensitive.
+        let tiebreak = if !display_name_lc.is_empty() {
+            display_name_lc.clone()
+        } else if !nip05_lc.is_empty() {
+            nip05_lc.clone()
+        } else {
+            pubkey_lc.clone()
+        };
+
+        scored.push((rank, tiebreak, user_search_result_from_event(ev)));
+    }
+
+    scored.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.pubkey.cmp(&b.2.pubkey))
+    });
+
+    let users: Vec<UserSearchResultInfo> =
+        scored.into_iter().take(limit).map(|(_, _, u)| u).collect();
+
+    SearchUsersResponse { users }
+}
+
 // ── kind:1 (notes) ──────────────────────────────────────────────────────────
 
 /// Convert kind:1 events to [`UserNotesResponse`].
@@ -853,5 +981,181 @@ mod tests {
         assert_eq!(timestamp_to_iso(1_609_459_200), "2021-01-01T00:00:00Z");
         // Epoch
         assert_eq!(timestamp_to_iso(0), "1970-01-01T00:00:00Z");
+    }
+
+    // ── filter_and_rank_user_search ─────────────────────────────────────────
+
+    #[test]
+    fn search_ranks_exact_over_prefix_over_substring() {
+        // Three users whose display names all contain "ali":
+        //   "ali"     -> exact
+        //   "alice"   -> prefix
+        //   "salim"   -> substring only
+        let exact = ev(0, r#"{"display_name":"ali"}"#, vec![]);
+        let prefix = ev(0, r#"{"display_name":"alice"}"#, vec![]);
+        let substring = ev(0, r#"{"display_name":"salim"}"#, vec![]);
+
+        // Pass in a deliberately unhelpful order.
+        let r = filter_and_rank_user_search(&[substring, prefix, exact], "ali", 10);
+
+        assert_eq!(r.users.len(), 3);
+        assert_eq!(r.users[0].display_name.as_deref(), Some("ali"));
+        assert_eq!(r.users[1].display_name.as_deref(), Some("alice"));
+        assert_eq!(r.users[2].display_name.as_deref(), Some("salim"));
+    }
+
+    #[test]
+    fn search_does_not_drop_late_matches_under_limit() {
+        // Regression for the bug where the old impl broke out of the loop as
+        // soon as it had `limit` matches in arrival order. Here the only
+        // valid match is the LAST event; the earlier ones are non-matching
+        // filler. Limit is small (2), but a single match must come through.
+        let filler = || ev(0, r#"{"display_name":"zzz"}"#, vec![]);
+        let target = ev(0, r#"{"display_name":"Bob"}"#, vec![]);
+
+        let events: Vec<_> = (0..20).map(|_| filler()).chain([target]).collect();
+        let r = filter_and_rank_user_search(&events, "bob", 2);
+
+        assert_eq!(r.users.len(), 1);
+        assert_eq!(r.users[0].display_name.as_deref(), Some("Bob"));
+    }
+
+    #[test]
+    fn search_prefers_better_rank_when_truncating_to_limit() {
+        // Demonstrates the core fix: a high-quality match that appears LAST
+        // in the event list still beats earlier low-quality matches when the
+        // limit forces truncation.
+        let weak1 = ev(0, r#"{"display_name":"xxbobxx"}"#, vec![]); // substring
+        let weak2 = ev(0, r#"{"display_name":"yybobyy"}"#, vec![]); // substring
+        let strong = ev(0, r#"{"display_name":"bob"}"#, vec![]); // exact
+
+        let r = filter_and_rank_user_search(&[weak1, weak2, strong], "bob", 1);
+
+        assert_eq!(r.users.len(), 1);
+        assert_eq!(r.users[0].display_name.as_deref(), Some("bob"));
+    }
+
+    #[test]
+    fn search_matches_nip05_and_pubkey_prefix() {
+        let by_nip05 = ev(
+            0,
+            r#"{"display_name":"Carol","nip05":"carol@example.com"}"#,
+            vec![],
+        );
+        let pk_prefix_event = ev(0, r#"{"display_name":"Dan"}"#, vec![]);
+        let pk_hex = pk_prefix_event.pubkey.to_hex();
+        let prefix = &pk_hex[..10];
+
+        // nip05 substring
+        let r = filter_and_rank_user_search(&[by_nip05.clone()], "example.com", 5);
+        assert_eq!(r.users.len(), 1);
+        assert_eq!(r.users[0].display_name.as_deref(), Some("Carol"));
+
+        // pubkey prefix
+        let r = filter_and_rank_user_search(&[pk_prefix_event], prefix, 5);
+        assert_eq!(r.users.len(), 1);
+        assert_eq!(r.users[0].pubkey, pk_hex);
+    }
+
+    #[test]
+    fn search_dedupes_same_pubkey_keeping_latest_kind0() {
+        // kind:0 is a replaceable event — when the relay returns multiple
+        // events for one author, the latest by created_at is the live
+        // profile. The ranker must dedupe to that one *before* scoring,
+        // not pick whichever historical variant happens to rank best.
+        let keys = nostr::Keys::generate();
+        let old_profile = EventBuilder::new(Kind::from_u16(0), r#"{"display_name":"bob"}"#)
+            .custom_created_at(nostr::Timestamp::from(1_000))
+            .sign_with_keys(&keys)
+            .unwrap();
+        let new_profile = EventBuilder::new(Kind::from_u16(0), r#"{"display_name":"bobby"}"#)
+            .custom_created_at(nostr::Timestamp::from(2_000))
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        // Query "bob": old has exact rank-0 match, new has rank-3 prefix
+        // match. The live profile (new) must win regardless of rank.
+        let r = filter_and_rank_user_search(&[old_profile, new_profile], "bob", 5);
+
+        assert_eq!(r.users.len(), 1, "same pubkey must dedupe");
+        assert_eq!(
+            r.users[0].display_name.as_deref(),
+            Some("bobby"),
+            "must keep the latest kind:0, not the older better-ranked one"
+        );
+    }
+
+    #[test]
+    fn search_dedupes_preserves_match_when_stale_did_not_match() {
+        // Mirror case: the stale profile does not match the query at all,
+        // but the live one does. Must still surface the live profile.
+        let keys = nostr::Keys::generate();
+        let old_profile = EventBuilder::new(Kind::from_u16(0), r#"{"display_name":"zoltan"}"#)
+            .custom_created_at(nostr::Timestamp::from(1_000))
+            .sign_with_keys(&keys)
+            .unwrap();
+        let new_profile = EventBuilder::new(Kind::from_u16(0), r#"{"display_name":"bob"}"#)
+            .custom_created_at(nostr::Timestamp::from(2_000))
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let r = filter_and_rank_user_search(&[old_profile, new_profile], "bob", 5);
+        assert_eq!(r.users.len(), 1);
+        assert_eq!(r.users[0].display_name.as_deref(), Some("bob"));
+    }
+
+    #[test]
+    fn search_dedupes_drops_pubkey_when_only_stale_matched() {
+        // Opposite mirror: stale event matched the query, but the live
+        // profile no longer does. The user has chosen to no longer be
+        // discoverable by that string, so we must respect that and drop
+        // them from results.
+        let keys = nostr::Keys::generate();
+        let old_profile = EventBuilder::new(Kind::from_u16(0), r#"{"display_name":"bob"}"#)
+            .custom_created_at(nostr::Timestamp::from(1_000))
+            .sign_with_keys(&keys)
+            .unwrap();
+        let new_profile = EventBuilder::new(Kind::from_u16(0), r#"{"display_name":"zoltan"}"#)
+            .custom_created_at(nostr::Timestamp::from(2_000))
+            .sign_with_keys(&keys)
+            .unwrap();
+
+        let r = filter_and_rank_user_search(&[old_profile, new_profile], "bob", 5);
+        assert!(
+            r.users.is_empty(),
+            "stale match must not surface when live profile no longer matches"
+        );
+    }
+
+    #[test]
+    fn search_empty_query_returns_empty() {
+        let e = ev(0, r#"{"display_name":"anything"}"#, vec![]);
+        let r = filter_and_rank_user_search(&[e], "", 10);
+        assert!(r.users.is_empty());
+    }
+
+    #[test]
+    fn search_zero_limit_returns_empty() {
+        let e = ev(0, r#"{"display_name":"bob"}"#, vec![]);
+        let r = filter_and_rank_user_search(&[e], "bob", 0);
+        assert!(r.users.is_empty());
+    }
+
+    #[test]
+    fn search_skips_invalid_content_json() {
+        let bad = ev(0, "not json {{{", vec![]);
+        let good = ev(0, r#"{"display_name":"bob"}"#, vec![]);
+        let r = filter_and_rank_user_search(&[bad, good], "bob", 5);
+        assert_eq!(r.users.len(), 1);
+        assert_eq!(r.users[0].display_name.as_deref(), Some("bob"));
+    }
+
+    #[test]
+    fn search_is_case_insensitive() {
+        let e = ev(0, r#"{"display_name":"BoB","nip05":"User@Ex.Com"}"#, vec![]);
+        let r1 = filter_and_rank_user_search(&[e.clone()], "bob", 5);
+        let r2 = filter_and_rank_user_search(&[e], "user@ex.com", 5);
+        assert_eq!(r1.users.len(), 1);
+        assert_eq!(r2.users.len(), 1);
     }
 }
