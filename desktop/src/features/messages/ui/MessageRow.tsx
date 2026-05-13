@@ -132,14 +132,37 @@ export const MessageRow = React.memo(
       ? "rounded-md"
       : "rounded-xl";
 
+    const respondToDotColor =
+      message.respondTo === "anyone"
+        ? "bg-emerald-500"
+        : message.respondTo === "allowlist"
+          ? "bg-amber-500"
+          : null;
+
     const avatarNode = (
-      <UserAvatar
-        accent={message.accent}
-        avatarUrl={message.avatarUrl ?? null}
-        className={cn("shrink-0", avatarSizeClass)}
-        displayName={message.author}
-        testId="message-avatar"
-      />
+      <div className="relative shrink-0">
+        <UserAvatar
+          accent={message.accent}
+          avatarUrl={message.avatarUrl ?? null}
+          className={cn("shrink-0", avatarSizeClass)}
+          displayName={message.author}
+          testId="message-avatar"
+        />
+        {respondToDotColor && !isThreadReplyLayout ? (
+          <span
+            className={cn(
+              "absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-background",
+            )}
+            title={
+              message.respondTo === "anyone"
+                ? "Responds to anyone"
+                : "Responds to allowlist"
+            }
+          >
+            <span className={cn("h-2 w-2 rounded-full", respondToDotColor)} />
+          </span>
+        ) : null}
+      </div>
     );
 
     const authorNode = message.pubkey ? (

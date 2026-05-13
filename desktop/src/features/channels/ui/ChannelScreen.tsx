@@ -45,6 +45,7 @@ import type {
   Identity,
   Profile,
   RelayEvent,
+  RespondToMode,
 } from "@/shared/api/types";
 import { useChannelFind } from "@/features/search/useChannelFind";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
@@ -112,7 +113,6 @@ export function ChannelScreen({
 
     markChannelRead(activeChannelId, activeReadAt);
   }, [activeChannel?.isMember, activeChannelId, activeReadAt, markChannelRead]);
-
   const {
     activeChannelTitle,
     activeDmPresenceStatus,
@@ -218,20 +218,20 @@ export function ChannelScreen({
   const channelMembersQuery = useChannelMembersQuery(activeChannel?.id ?? null);
   const channelMembers = channelMembersQuery.data;
   const personasQuery = usePersonasQuery();
-  const personaLookup = React.useMemo(() => {
+  const { personaLookup, respondToLookup } = React.useMemo(() => {
     const agents = managedAgentsQuery.data ?? [];
-    const personas = personasQuery.data ?? [];
-    const personaById = new Map(personas.map((p) => [p.id, p.displayName]));
-    const lookup = new Map<string, string>();
+    const personaById = new Map(
+      (personasQuery.data ?? []).map((p) => [p.id, p.displayName]),
+    );
+    const pLookup = new Map<string, string>();
+    const rLookup = new Map<string, RespondToMode>();
     for (const agent of agents) {
-      if (agent.personaId) {
-        const personaName = personaById.get(agent.personaId);
-        if (personaName) {
-          lookup.set(agent.pubkey.toLowerCase(), personaName);
-        }
-      }
+      const key = agent.pubkey.toLowerCase();
+      rLookup.set(key, agent.respondTo);
+      const pName = agent.personaId ? personaById.get(agent.personaId) : null;
+      if (pName) pLookup.set(key, pName);
     }
-    return lookup;
+    return { personaLookup: pLookup, respondToLookup: rLookup };
   }, [managedAgentsQuery.data, personasQuery.data]);
   const timelineMessages = React.useMemo(
     () =>
@@ -243,6 +243,7 @@ export function ChannelScreen({
         messageProfiles,
         channelMembers,
         personaLookup,
+        respondToLookup,
       ),
     [
       activeChannel,
@@ -251,6 +252,7 @@ export function ChannelScreen({
       currentPubkey,
       messageProfiles,
       personaLookup,
+      respondToLookup,
       resolvedMessages,
     ],
   );
@@ -258,7 +260,6 @@ export function ChannelScreen({
     channelId: activeChannelId,
     messages: timelineMessages,
   });
-
   const directReplyIdsByParentId = React.useMemo(() => {
     const map = new Map<string, string[]>();
     for (const message of timelineMessages) {

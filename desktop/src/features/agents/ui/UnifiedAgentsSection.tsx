@@ -6,7 +6,6 @@ import {
   OctagonX,
   Plus,
   Trash2,
-  Upload,
 } from "lucide-react";
 
 import { isPersonaActive } from "@/features/agents/lib/catalog";
@@ -446,7 +445,6 @@ function SectionHeader({
               disabled={isPersonasPending}
               onClick={onCreatePersona}
             >
-              <Plus className="h-4 w-4" />
               Persona
             </DropdownMenuItem>
             {canChooseCatalog ? (
@@ -462,7 +460,6 @@ function SectionHeader({
               Custom Agent
             </DropdownMenuItem>
             <DropdownMenuItem onClick={openFilePicker}>
-              <Upload className="h-4 w-4" />
               Import persona file
             </DropdownMenuItem>
           </DropdownMenuContent>
