@@ -13,12 +13,17 @@ import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useInboxThreadContext } from "@/features/home/useInboxThreadContext";
 import { InboxDetailPane } from "@/features/home/ui/InboxDetailPane";
 import { InboxListPane } from "@/features/home/ui/InboxListPane";
-import { useChannelMessagesQuery } from "@/features/messages/hooks";
+import {
+  useChannelMessagesQuery,
+  useToggleReactionMutation,
+} from "@/features/messages/hooks";
+import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
 import type { HomeFeedResponse, RelayEvent } from "@/shared/api/types";
+import { KIND_REACTION } from "@/shared/constants/kinds";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
@@ -82,6 +87,17 @@ function getContextMessageDepth(
   return depth;
 }
 
+function getReactionTargetId(tags: string[][]) {
+  for (let index = tags.length - 1; index >= 0; index -= 1) {
+    const tag = tags[index];
+    if (tag?.[0] === "e" && typeof tag[1] === "string") {
+      return tag[1];
+    }
+  }
+
+  return null;
+}
+
 type HomeViewProps = {
   feed?: HomeFeedResponse;
   isLoading?: boolean;
@@ -140,6 +156,7 @@ export function HomeView({
   }, [channels, selectedChannelIdCandidate]);
 
   const channelMessagesQuery = useChannelMessagesQuery(selectedChannel);
+  const toggleReactionMutation = useToggleReactionMutation();
   const channelMessages = channelMessagesQuery.data;
   const threadContext = useInboxThreadContext(
     selectedFeedItem,
@@ -151,10 +168,13 @@ export function HomeView({
       ...new Set([
         ...feedItems.map((item) => item.pubkey),
         ...threadContext.events.map((event) => event.pubkey),
+        ...(channelMessages ?? [])
+          .filter((event) => event.kind === KIND_REACTION)
+          .map((event) => event.pubkey),
         ...(currentPubkey ? [currentPubkey] : []),
       ]),
     ],
-    [currentPubkey, feedItems, threadContext.events],
+    [channelMessages, currentPubkey, feedItems, threadContext.events],
   );
   const feedProfilesQuery = useUsersBatchQuery(feedProfilePubkeys, {
     enabled: feedProfilePubkeys.length > 0,
@@ -182,23 +202,49 @@ export function HomeView({
     const eventById = new Map(
       threadContext.events.map((event) => [event.id, event]),
     );
+    const contextEventIds = new Set(eventById.keys());
+    const reactionEvents = (channelMessages ?? []).filter((event) => {
+      if (event.kind !== KIND_REACTION) {
+        return false;
+      }
 
-    return threadContext.events.map((event) => ({
-      id: event.id,
-      authorLabel: resolveUserLabel({
-        pubkey: event.pubkey,
-        currentPubkey,
-        profiles: feedProfiles,
-        preferResolvedSelfLabel: true,
-      }),
-      avatarUrl: feedProfiles?.[event.pubkey.toLowerCase()]?.avatarUrl ?? null,
-      content: event.content,
-      depth: getContextMessageDepth(event, eventById),
-      fullTimestampLabel: formatInboxFullTimestamp(event.created_at),
-      isSelected: event.id === selectedItem.id,
-      mentionNames: resolveMentionNames(event.tags, feedProfiles) ?? [],
-    }));
-  }, [currentPubkey, feedProfiles, selectedItem, threadContext.events]);
+      const targetId = getReactionTargetId(event.tags);
+      return Boolean(targetId && contextEventIds.has(targetId));
+    });
+    const currentUserAvatarUrl = currentPubkey
+      ? (feedProfiles?.[currentPubkey.toLowerCase()]?.avatarUrl ?? null)
+      : null;
+    const timelineMessages = formatTimelineMessages(
+      [...threadContext.events, ...reactionEvents],
+      selectedChannel,
+      currentPubkey,
+      currentUserAvatarUrl,
+      feedProfiles,
+    );
+
+    return timelineMessages.map((message) => {
+      const event = eventById.get(message.id);
+      return {
+        id: message.id,
+        authorLabel: message.author,
+        avatarUrl: message.avatarUrl ?? null,
+        content: message.body,
+        depth: event ? getContextMessageDepth(event, eventById) : message.depth,
+        fullTimestampLabel: formatInboxFullTimestamp(message.createdAt),
+        isSelected: message.id === selectedItem.id,
+        mentionNames:
+          resolveMentionNames(message.tags ?? [], feedProfiles) ?? [],
+        reactions: message.reactions,
+      };
+    });
+  }, [
+    channelMessages,
+    currentPubkey,
+    feedProfiles,
+    selectedChannel,
+    selectedItem,
+    threadContext.events,
+  ]);
   const selectedItemReplies = React.useMemo<InboxReply[]>(() => {
     if (!selectedItem) return [];
     const localReplies = localRepliesByItemId[selectedItem.id] ?? [];
@@ -382,6 +428,19 @@ export function HomeView({
               handleToggleDone(selectedItem.id);
             }
           }}
+          onToggleReaction={
+            canReply
+              ? async (message, emoji, remove) => {
+                  await toggleReactionMutation.mutateAsync({
+                    emoji,
+                    eventId: message.id,
+                    remove,
+                  });
+                  await channelMessagesQuery.refetch();
+                  onRefresh();
+                }
+              : undefined
+          }
         />
       </div>
     </div>

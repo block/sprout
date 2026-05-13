@@ -30,7 +30,7 @@ export function InboxListPane({
 }: InboxListPaneProps) {
   return (
     <section className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-border/70 bg-background">
-      <div className="border-b border-border/70 px-4 pb-3 pt-3">
+      <div className="px-4 pb-3 pt-3">
         <div className="flex flex-wrap gap-1.5">
           {FILTER_OPTIONS.map((option) => (
             <Button

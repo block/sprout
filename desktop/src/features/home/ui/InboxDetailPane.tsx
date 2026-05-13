@@ -56,6 +56,11 @@ type InboxDetailPaneProps = {
     parentEventId: string;
   }) => Promise<void>;
   onToggleDone: () => void;
+  onToggleReaction?: (
+    message: TimelineMessage,
+    emoji: string,
+    remove: boolean,
+  ) => Promise<void>;
 };
 
 type InboxDisplayMessage = InboxContextMessage & {
@@ -70,7 +75,7 @@ function toActionBarMessage(message: InboxDisplayMessage): TimelineMessage {
     body: message.content,
     createdAt: 0,
     depth: message.depth,
-    reactions: [],
+    reactions: message.reactions ?? [],
     time: message.fullTimestampLabel,
   };
 }
@@ -91,6 +96,7 @@ export function InboxDetailPane({
   onOpenChannel,
   onSendReply,
   onToggleDone,
+  onToggleReaction,
 }: InboxDetailPaneProps) {
   const detailPaneRef = React.useRef<HTMLElement | null>(null);
   const [replyTargetId, setReplyTargetId] = React.useState<string | null>(null);
@@ -180,7 +186,7 @@ export function InboxDetailPane({
       data-testid="home-inbox-detail"
       ref={detailPaneRef}
     >
-      <div className="border-b border-border/70 px-6 py-4">
+      <div className="px-6 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <UserAvatar
@@ -330,14 +336,37 @@ export function InboxDetailPane({
                         <p className="ml-auto text-xs text-muted-foreground">
                           {message.fullTimestampLabel}
                         </p>
-                        {canReply ? (
+                        {canReply || onToggleReaction ? (
                           <div className="relative ml-1">
                             <div className="absolute right-0 top-1/2 -translate-y-1/2">
                               <MessageActionBar
                                 activeReplyTargetId={replyTargetId}
                                 message={toActionBarMessage(message)}
-                                onReply={() => handleSelectReplyTarget(message)}
-                                reactions={[]}
+                                onReactionSelect={
+                                  onToggleReaction
+                                    ? (emoji) => {
+                                        const actionBarMessage =
+                                          toActionBarMessage(message);
+                                        const remove =
+                                          actionBarMessage.reactions?.some(
+                                            (reaction) =>
+                                              reaction.emoji === emoji &&
+                                              reaction.reactedByCurrentUser,
+                                          ) ?? false;
+                                        return onToggleReaction(
+                                          actionBarMessage,
+                                          emoji,
+                                          remove,
+                                        );
+                                      }
+                                    : undefined
+                                }
+                                onReply={
+                                  canReply
+                                    ? () => handleSelectReplyTarget(message)
+                                    : undefined
+                                }
+                                reactions={message.reactions ?? []}
                               />
                             </div>
                           </div>

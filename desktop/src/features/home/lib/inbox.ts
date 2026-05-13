@@ -3,6 +3,7 @@ import {
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
 import { getThreadReference } from "@/features/messages/lib/threading";
+import type { TimelineReaction } from "@/features/messages/types";
 import type {
   FeedItem,
   FeedItemCategory,
@@ -43,6 +44,7 @@ export type InboxReply = {
   fullTimestampLabel: string;
   id: string;
   parentId?: string | null;
+  reactions?: TimelineReaction[];
   rootId?: string | null;
 };
 
