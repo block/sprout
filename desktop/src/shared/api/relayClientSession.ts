@@ -276,13 +276,13 @@ export class RelayClient {
       {
         kinds: [KIND_TYPING_INDICATOR],
         "#h": [channelId],
-        limit: 10,
+        limit: 0,
+        since: Math.floor(Date.now() / 1_000),
       },
       onEvent,
     );
   }
 
-  /** Subscribe to kind:20001 presence events (live only, no backfill). */
   async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
     return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
   }

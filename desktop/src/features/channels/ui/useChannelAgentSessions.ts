@@ -1,15 +1,29 @@
 import * as React from "react";
 
 import type { TimelineMessage } from "@/features/messages/types";
-import type { Channel, ChannelMember, ManagedAgent } from "@/shared/api/types";
+import type {
+  Channel,
+  ChannelMember,
+  ManagedAgent,
+  RelayAgent,
+} from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
+
+export type ChannelAgentSessionAgent = Pick<
+  ManagedAgent,
+  "pubkey" | "name" | "status"
+> & {
+  canInterruptTurn: boolean;
+  channelIds?: string[];
+  channels?: string[];
+};
 
 type UseChannelAgentSessionsOptions = {
   activeChannel: Channel | null;
   activeChannelId: string | null;
   channelMembers?: ChannelMember[];
   handleOpenThread: (message: TimelineMessage) => void;
-  managedAgents: ManagedAgent[];
+  managedAgents: ChannelAgentSessionAgent[];
   setExpandedThreadReplyIds: (value: Set<string>) => void;
   setOpenThreadHeadId: (value: string | null) => void;
   setProfilePanelPubkey: (value: string | null) => void;
@@ -18,6 +32,99 @@ type UseChannelAgentSessionsOptions = {
   targetMessageId: string | null;
   timelineMessages: TimelineMessage[];
 };
+
+function relayStatusToManagedStatus(
+  status: RelayAgent["status"],
+): ManagedAgent["status"] {
+  return status === "offline" ? "stopped" : "deployed";
+}
+
+export function buildChannelAgentSessionCandidates({
+  channelMembers,
+  managedAgents,
+  relayAgents,
+}: {
+  channelMembers?: ChannelMember[];
+  managedAgents: ManagedAgent[];
+  relayAgents: RelayAgent[];
+}): ChannelAgentSessionAgent[] {
+  const byPubkey = new Map<string, ChannelAgentSessionAgent>();
+
+  for (const agent of relayAgents) {
+    byPubkey.set(normalizePubkey(agent.pubkey), {
+      pubkey: agent.pubkey,
+      name: agent.name,
+      status: relayStatusToManagedStatus(agent.status),
+      canInterruptTurn: false,
+      channelIds: agent.channelIds,
+      channels: agent.channels,
+    });
+  }
+
+  for (const agent of managedAgents) {
+    const key = normalizePubkey(agent.pubkey);
+    const existing = byPubkey.get(key);
+    byPubkey.set(key, {
+      pubkey: agent.pubkey,
+      name: agent.name,
+      status: agent.status,
+      canInterruptTurn: true,
+      channelIds: existing?.channelIds,
+      channels: existing?.channels,
+    });
+  }
+
+  for (const member of channelMembers ?? []) {
+    const key = normalizePubkey(member.pubkey);
+    if (member.role !== "bot" || byPubkey.has(key)) {
+      continue;
+    }
+
+    byPubkey.set(key, {
+      pubkey: member.pubkey,
+      name: member.displayName ?? member.pubkey.slice(0, 8),
+      status: "deployed",
+      canInterruptTurn: false,
+    });
+  }
+
+  return [...byPubkey.values()];
+}
+
+export function getChannelAgentSessionAgents({
+  activeChannel,
+  activeChannelId,
+  agents,
+  channelMembers,
+}: {
+  activeChannel: Channel | null;
+  activeChannelId: string | null;
+  agents: ChannelAgentSessionAgent[];
+  channelMembers?: ChannelMember[];
+}): ChannelAgentSessionAgent[] {
+  if (channelMembers) {
+    const memberPubkeys = new Set(
+      channelMembers.map((member) => normalizePubkey(member.pubkey)),
+    );
+
+    return agents.filter((agent) =>
+      memberPubkeys.has(normalizePubkey(agent.pubkey)),
+    );
+  }
+
+  if (!activeChannelId || !activeChannel) {
+    return [];
+  }
+
+  return agents.filter((agent) => {
+    const channelIds = agent.channelIds ?? [];
+    const channels = agent.channels ?? [];
+    return (
+      channelIds.includes(activeChannelId) ||
+      channels.includes(activeChannel.name)
+    );
+  });
+}
 
 export function useChannelAgentSessions({
   activeChannel,
@@ -38,21 +145,16 @@ export function useChannelAgentSessions({
   >(null);
   const handledThreadTargetIdRef = React.useRef<string | null>(null);
 
-  const channelAgentSessionAgents = React.useMemo<ManagedAgent[]>(() => {
-    if (!channelMembers) {
-      return [];
-    }
-
-    const memberPubkeys = new Set(
-      channelMembers.map((member) => normalizePubkey(member.pubkey)),
-    );
-
-    return managedAgents.filter(
-      (agent) =>
-        agent.backend.type === "local" &&
-        memberPubkeys.has(normalizePubkey(agent.pubkey)),
-    );
-  }, [channelMembers, managedAgents]);
+  const channelAgentSessionAgents = React.useMemo(
+    () =>
+      getChannelAgentSessionAgents({
+        activeChannel,
+        activeChannelId,
+        agents: managedAgents,
+        channelMembers,
+      }),
+    [activeChannel, activeChannelId, channelMembers, managedAgents],
+  );
 
   const closeAgentSession = React.useCallback(() => {
     setOpenAgentSessionPubkey(null);
@@ -165,7 +267,9 @@ export function useChannelAgentSessions({
     if (
       openAgentSessionPubkey &&
       !channelAgentSessionAgents.some(
-        (agent) => agent.pubkey === openAgentSessionPubkey,
+        (agent) =>
+          normalizePubkey(agent.pubkey) ===
+          normalizePubkey(openAgentSessionPubkey),
       )
     ) {
       setOpenAgentSessionPubkey(null);

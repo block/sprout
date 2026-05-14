@@ -13,12 +13,13 @@ import {
   BotActivityComposerAction,
   type BotActivityAgent,
 } from "@/features/channels/ui/BotActivityBar";
+import type { ChannelAgentSessionAgent } from "@/features/channels/ui/useChannelAgentSessions";
 import { Button } from "@/shared/ui/button";
 import type { useChannelFind } from "@/features/search/useChannelFind";
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
-import type { Channel, ManagedAgent } from "@/shared/api/types";
+import type { Channel } from "@/shared/api/types";
 
 const THREAD_PANEL_DEFAULT_WIDTH_PX = 380;
 const THREAD_PANEL_MIN_WIDTH_PX = 320;
@@ -57,7 +58,7 @@ function getInitialThreadPanelWidth(): number {
 type ChannelPaneProps = {
   activeChannel: Channel | null;
   activityAgents?: BotActivityAgent[];
-  agentSessionAgents: ManagedAgent[];
+  agentSessionAgents: ChannelAgentSessionAgent[];
   botTypingEntries: TypingIndicatorEntry[];
   channelFind: ReturnType<typeof useChannelFind>;
   currentPubkey?: string;
@@ -250,6 +251,10 @@ export const ChannelPane = React.memo(function ChannelPane({
   const composerBotTypingPubkeys = React.useMemo(() => {
     const pubkeys: string[] = [];
     for (const entry of botTypingEntries) {
+      if (entry.threadHeadId !== null) {
+        continue;
+      }
+
       if (
         !pubkeys.some(
           (pubkey) => pubkey.toLowerCase() === entry.pubkey.toLowerCase(),
@@ -473,6 +478,7 @@ export const ChannelPane = React.memo(function ChannelPane({
         <AgentSessionThreadPanel
           agent={selectedAgent}
           canResetWidth={canResetThreadPanelWidth}
+          canInterruptTurn={selectedAgent.canInterruptTurn}
           channel={activeChannel}
           isWorking={botTypingEntries.some(
             (entry) =>
