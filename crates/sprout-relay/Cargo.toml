@@ -1,5 +1,6 @@
 [package]
 name = "sprout-relay"
+default-run = "sprout-relay"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
