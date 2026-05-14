@@ -352,6 +352,20 @@ pub struct CliArgs {
     )]
     pub no_memory: bool,
 
+    /// Disable the [Base] platform-context section prepended to every prompt.
+    /// When set, agents receive only the persona [System] prompt with no Sprout orientation.
+    #[arg(long, env = "SPROUT_ACP_NO_BASE_PROMPT")]
+    pub no_base_prompt: bool,
+
+    /// Path to a custom base prompt file. Overrides the compiled-in default.
+    /// Mutually exclusive with --no-base-prompt.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_BASE_PROMPT_FILE",
+        conflicts_with = "no_base_prompt"
+    )]
+    pub base_prompt_file: Option<PathBuf>,
+
     /// Desired LLM model ID. Applied to every new ACP session after creation.
     /// Use `sprout-acp models` to discover available model IDs.
     #[arg(long, env = "SPROUT_ACP_MODEL")]
@@ -461,6 +475,10 @@ pub struct Config {
     /// Agent owner pubkey (hex). Used for `--respond-to=owner-only` gate.
     /// Replaces the old REST-based owner lookup.
     pub agent_owner: Option<String>,
+    /// Disable the [Base] platform-context section prepended to every prompt.
+    pub no_base_prompt: bool,
+    /// Path to a custom base prompt file that overrides the compiled-in default.
+    pub base_prompt_file: Option<PathBuf>,
 }
 
 /// Validate and deduplicate allowlist entries: each must be exactly 64 hex chars.
@@ -798,6 +816,8 @@ impl Config {
             persona_env_vars,
             relay_observer: args.relay_observer,
             agent_owner: args.agent_owner.map(|s| s.trim().to_ascii_lowercase()),
+            no_base_prompt: args.no_base_prompt,
+            base_prompt_file: args.base_prompt_file,
         };
 
         Ok(config)
@@ -1161,6 +1181,8 @@ mod tests {
             persona_env_vars: vec![],
             relay_observer: false,
             agent_owner: None,
+            no_base_prompt: false,
+            base_prompt_file: None,
         }
     }
 

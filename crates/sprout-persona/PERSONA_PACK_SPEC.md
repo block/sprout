@@ -250,7 +250,7 @@ Each message delivered to the agent runtime includes these sections in order:
 <contents of instructions.md, if present>
 
 [Context]
-<workspace layout, available skills, MCP tool reference>
+<scope, channel name, and contextual hints>
 
 [Thread/Conversation Context]
 <recent message history, if applicable>
@@ -273,9 +273,9 @@ The `[Base]` layer is compiled into sprout-acp and is **identical for every agen
 Pack authors do not write or configure the `[Base]` layer — it is maintained by the Sprout team
 and updated in sprout-acp releases.
 
-**Disabling the base layer**: Set `SPROUT_ACP_BASE_PROMPT_DISABLED=1` in the sprout-acp process
-environment to omit the `[Base]` section entirely. This is intended for testing and advanced
-deployments where operators supply their own platform context.
+**Disabling or customizing the base layer**: Set `SPROUT_ACP_NO_BASE_PROMPT` to omit the `[Base]`
+section entirely. To replace the compiled-in default with custom content, set
+`SPROUT_ACP_BASE_PROMPT_FILE` to a file path — sprout-acp reads it at startup and uses it instead.
 
 ### The `[System]` Layer
 

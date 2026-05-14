@@ -192,7 +192,7 @@ pub struct PromptContext {
     pub dedup_mode: DedupMode,
     pub system_prompt: Option<String>,
     pub heartbeat_prompt: Option<String>,
-    pub base_prompt: Option<String>,
+    pub base_prompt: Option<&'static str>,
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
@@ -804,11 +804,16 @@ pub async fn run_prompt_task(
                 target: "pool::session",
                 "sending initial_message to session {session_id} for channel {cid}"
             );
+            // Prepend base prompt to initial_message for platform orientation.
+            let init_msg = match ctx.base_prompt {
+                Some(bp) => format!("[Base]\n{}\n\n{initial_msg}", bp.trim_end()),
+                None => initial_msg.to_string(),
+            };
             let init_result = agent
                 .acp
                 .session_prompt_with_idle_timeout(
                     &session_id,
-                    initial_msg,
+                    &init_msg,
                     ctx.idle_timeout,
                     ctx.max_turn_duration,
                 )
@@ -932,12 +937,14 @@ pub async fn run_prompt_task(
         let agent_core_section = agent.state.core_sections.get(&b.channel_id).cloned();
         crate::queue::format_prompt(
             b,
-            ctx.base_prompt.as_deref(),
-            ctx.system_prompt.as_deref(),
-            agent_core_section.as_deref(),
-            channel_info.as_ref(),
-            conversation_context.as_ref(),
-            profile_lookup.as_ref(),
+            &crate::queue::FormatPromptArgs {
+                base_prompt: ctx.base_prompt,
+                system_prompt: ctx.system_prompt.as_deref(),
+                agent_core: agent_core_section.as_deref(),
+                channel_info: channel_info.as_ref(),
+                conversation_context: conversation_context.as_ref(),
+                profile_lookup: profile_lookup.as_ref(),
+            },
         )
     } else {
         // Should not happen — batch is None only for heartbeats which have prompt_text.

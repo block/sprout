@@ -1076,10 +1076,15 @@ async fn tokio_main() -> Result<()> {
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
-        base_prompt: if std::env::var("SPROUT_ACP_BASE_PROMPT_DISABLED").is_ok() {
+        base_prompt: if config.no_base_prompt {
             None
+        } else if let Some(ref path) = config.base_prompt_file {
+            let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                panic!("failed to read base prompt file {}: {e}", path.display())
+            });
+            Some(Box::leak(content.into_boxed_str()))
         } else {
-            Some(include_str!("base_prompt.md").to_string())
+            Some(include_str!("base_prompt.md"))
         },
         heartbeat_prompt: config.heartbeat_prompt.clone(),
         cwd: std::env::current_dir()
@@ -2319,6 +2324,10 @@ fn dispatch_heartbeat(
         .heartbeat_prompt
         .clone()
         .unwrap_or_else(default_heartbeat_prompt);
+    let prompt_text = match ctx.base_prompt {
+        Some(bp) => format!("[Base]\n{}\n\n{prompt_text}", bp.trim_end()),
+        None => prompt_text,
+    };
     let result_tx = pool.result_tx();
     let ctx_clone = Arc::clone(ctx);
     let agent_index = agent.index;
@@ -2813,6 +2822,8 @@ mod build_mcp_servers_tests {
             persona_env_vars: vec![],
             relay_observer: false,
             agent_owner: None,
+            no_base_prompt: false,
+            base_prompt_file: None,
         }
     }
 
