@@ -1,12 +1,12 @@
-use nostr::{EventId, PublicKey};
+use nostr::PublicKey;
 use sprout_sdk::{DiffMeta, ThreadRef, VoteDirection};
 use uuid::Uuid;
 
 use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::{
-    infer_language, read_or_stdin, truncate_diff, validate_content_size, validate_hex64,
-    validate_uuid, MAX_DIFF_BYTES,
+    infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
+    validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
 use sprout_sdk::mentions::{
     extract_at_names, match_names_to_profiles, merge_mentions, normalize_mention_pubkeys,
@@ -16,16 +16,6 @@ use sprout_sdk::mentions::{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Parse a 64-char hex string into a nostr::EventId.
-fn parse_event_id(hex: &str) -> Result<EventId, CliError> {
-    EventId::parse(hex).map_err(|e| CliError::Usage(format!("invalid event ID: {e}")))
-}
-
-/// Parse a UUID string into uuid::Uuid.
-fn parse_uuid(s: &str) -> Result<Uuid, CliError> {
-    Uuid::parse_str(s).map_err(|e| CliError::Usage(format!("invalid channel UUID: {e}")))
-}
 
 /// Extract the thread root event ID from a Nostr tag array.
 ///

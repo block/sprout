@@ -1,14 +1,8 @@
-use nostr::EventId;
 use serde::Deserialize;
 
 use crate::client::SproutClient;
 use crate::error::CliError;
-use crate::validate::validate_hex64;
-
-/// Per-module helper.
-fn parse_event_id(hex: &str) -> Result<EventId, CliError> {
-    EventId::parse(hex).map_err(|e| CliError::Usage(format!("invalid event ID: {e}")))
-}
+use crate::validate::{parse_event_id, validate_hex64};
 
 /// A single contact entry (CLI-local, not from sprout-sdk).
 #[derive(Debug, Deserialize)]
