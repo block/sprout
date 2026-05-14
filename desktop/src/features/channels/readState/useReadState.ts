@@ -4,6 +4,7 @@ import type { RelayClient } from "@/shared/api/relayClientSession";
 
 const noopGetTimestamp = () => null;
 const noopMarkRead = () => {};
+const noopMarkUnread = () => {};
 
 /**
  * React hook that creates and manages a ReadStateManager instance.
@@ -86,7 +87,7 @@ export function useReadState(
       getEffectiveTimestamp: noopGetTimestamp,
       isReady: false,
       markContextRead: noopMarkRead,
-      markContextUnread: noopMarkRead,
+      markContextUnread: noopMarkUnread,
       seedContextRead: noopMarkRead,
       readStateVersion: 0,
     };
