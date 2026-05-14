@@ -52,63 +52,6 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
-async function sendMockChannelMessage(
-  page: import("@playwright/test").Page,
-  {
-    channelName,
-    content,
-    kind,
-    mentionPubkeys,
-  }: {
-    channelName: string;
-    content: string;
-    kind?: number | null;
-    mentionPubkeys?: string[] | null;
-  },
-) {
-  await page.evaluate(
-    async ({
-      channelName: targetChannelName,
-      content,
-      kind,
-      mentionPubkeys,
-    }) => {
-      const tauriWindow = window as Window & {
-        __TAURI_INTERNALS__?: {
-          invoke: (
-            command: string,
-            payload?: Record<string, unknown>,
-          ) => Promise<unknown>;
-        };
-      };
-
-      const invoke = tauriWindow.__TAURI_INTERNALS__?.invoke;
-      if (!invoke) {
-        throw new Error("Tauri invoke bridge is unavailable.");
-      }
-
-      const channels = (await invoke("get_channels")) as Array<{
-        id: string;
-        name: string;
-      }>;
-      const channel = channels.find(({ name }) => name === targetChannelName);
-      if (!channel) {
-        throw new Error(`Channel not found: ${targetChannelName}`);
-      }
-
-      await invoke("send_channel_message", {
-        channelId: channel.id,
-        content,
-        kind: kind ?? null,
-        mediaTags: null,
-        mentionPubkeys: mentionPubkeys ?? null,
-        parentEventId: null,
-      });
-    },
-    { channelName, content, kind, mentionPubkeys },
-  );
-}
-
 async function openMemberMenu(
   page: import("@playwright/test").Page,
   pubkey: string,
@@ -631,12 +574,19 @@ test("sidebar shows unread indicator for newly active channels", async ({
   await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
   await waitForMockLiveSubscription(page, "random");
 
-  await sendMockChannelMessage(page, {
-    channelName: "random",
-    content: "Unread update for #random",
-    kind: 40002,
-    mentionPubkeys: [MOCK_IDENTITY_PUBKEY],
-  });
+  // The unread tracker ignores the current user's own messages, so emit as
+  // alice — simulating a real "another user posted while I was elsewhere".
+  await page.evaluate(
+    ({ pubkey }) => {
+      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "random",
+        content: "Unread update for #random",
+        kind: 40002,
+        pubkey,
+      });
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey },
+  );
 
   await expect(page.getByTestId("channel-unread-random")).toBeVisible();
 
@@ -654,11 +604,18 @@ test("sidebar shows unread indicator for new forum posts", async ({ page }) => {
   await expect(page.getByTestId("channel-unread-watercooler")).toHaveCount(0);
   await waitForMockLiveSubscription(page, "watercooler");
 
-  await sendMockChannelMessage(page, {
-    channelName: "watercooler",
-    content: "Unread update for the forum",
-    kind: 45001,
-  });
+  // Emit as alice — the unread tracker ignores self-authored messages.
+  await page.evaluate(
+    ({ pubkey }) => {
+      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "watercooler",
+        content: "Unread update for the forum",
+        kind: 45001,
+        pubkey,
+      });
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey },
+  );
 
   await expect(page.getByTestId("channel-unread-watercooler")).toBeVisible();
 

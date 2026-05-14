@@ -432,6 +432,7 @@ declare global {
       content: string;
       parentEventId?: string | null;
       pubkey?: string;
+      kind?: number;
     }) => RelayEvent;
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
@@ -1716,9 +1717,16 @@ function emitMockChannelMessage(
   content: string,
   parentEventId?: string | null,
   pubkey?: string,
+  kind?: number,
 ) {
+  const eventKind = kind ?? 9;
   if (!parentEventId) {
-    const event = createMockEvent(9, content, [["h", channelId]], pubkey);
+    const event = createMockEvent(
+      eventKind,
+      content,
+      [["h", channelId]],
+      pubkey,
+    );
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     return event;
@@ -1736,7 +1744,7 @@ function emitMockChannelMessage(
   const rootEventId = parentThread.rootEventId ?? parentEventId;
   const authorPubkey = pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey;
   const event = createMockEvent(
-    9,
+    eventKind,
     content,
     buildReplyMessageTags(
       channelId,
@@ -4501,6 +4509,7 @@ export function maybeInstallE2eTauriMocks() {
     content,
     parentEventId,
     pubkey,
+    kind,
   }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
@@ -4509,7 +4518,13 @@ export function maybeInstallE2eTauriMocks() {
       throw new Error(`Mock channel ${channelName} not found.`);
     }
 
-    return emitMockChannelMessage(channel.id, content, parentEventId, pubkey);
+    return emitMockChannelMessage(
+      channel.id,
+      content,
+      parentEventId,
+      pubkey,
+      kind,
+    );
   };
   window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
     const channel = mockChannels.find(

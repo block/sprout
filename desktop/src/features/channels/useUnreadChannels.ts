@@ -5,7 +5,7 @@ import {
 } from "@/features/channels/useLiveChannelUpdates";
 import { useReadState } from "@/features/channels/readState/useReadState";
 import type { RelayClient } from "@/shared/api/relayClientSession";
-import type { Channel } from "@/shared/api/types";
+import type { Channel, RelayEvent } from "@/shared/api/types";
 
 type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions & {
   pubkey?: string;
@@ -50,51 +50,115 @@ export function useUnreadChannels(
     seedContextRead,
   } = useReadState(pubkey, relayClient);
 
+  // In-session "latest message at" per channel (unix seconds), driven by the
+  // live subscription. The backend doesn't populate Channel.lastMessageAt, so
+  // unread state cannot rely on it; this map is the authoritative source for
+  // sidebar badges. Monotonic: only advances. Reset when the identity or
+  // relay changes. Stale entries for channels the user has left are silently
+  // ignored by the memo (it iterates the current channels list, not the map).
+  const latestByChannelRef = React.useRef(new Map<string, number>());
+
+  // Channels manually marked unread this session (e.g., right-click → "mark
+  // unread"). Tracked separately from latestByChannelRef so we don't have to
+  // synthesise a "latest message" timestamp and risk the corresponding read
+  // marker becoming sticky. Cleared when the user opens the channel.
+  const forcedUnreadRef = React.useRef(new Set<string>());
+
+  const [latestVersion, bumpLatestVersion] = React.useReducer(
+    (x: number) => x + 1,
+    0,
+  );
+
   // Track whether channels have been initialized (for first-load seeding)
   const hasInitializedChannelsRef = React.useRef(false);
+
+  // Reset the in-session state when the identity or relay changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pubkey/relayClient are intentional reset signals
+  React.useEffect(() => {
+    latestByChannelRef.current = new Map();
+    forcedUnreadRef.current = new Set();
+    hasInitializedChannelsRef.current = false;
+    bumpLatestVersion();
+  }, [pubkey, relayClient]);
 
   const markChannelRead = React.useCallback(
     (channelId: string, readAt: string | null | undefined) => {
       const unixSeconds = toUnixSeconds(readAt);
       if (unixSeconds === null) return;
+      // Reading clears any prior manual mark-unread.
+      if (forcedUnreadRef.current.delete(channelId)) {
+        bumpLatestVersion();
+      }
       markContextRead(channelId, unixSeconds);
     },
     [markContextRead],
   );
 
+  // Manually mark a channel unread (e.g., right-click → "mark unread"). Sets
+  // the in-session forced-unread flag so the sidebar badge appears immediately
+  // without us inventing a synthetic latest-message timestamp, and rolls the
+  // NIP-RS read marker back so the unread state syncs across devices. The
+  // forced flag is cleared when the user opens the channel (markChannelRead).
   const markChannelUnread = React.useCallback(
     (channelId: string, lastMessageAt: string | null | undefined) => {
+      if (!forcedUnreadRef.current.has(channelId)) {
+        forcedUnreadRef.current.add(channelId);
+        bumpLatestVersion();
+      }
       const unixSeconds = toUnixSeconds(lastMessageAt);
-      if (unixSeconds === null) return;
-      markContextUnread(channelId, unixSeconds);
+      if (unixSeconds !== null) {
+        markContextUnread(channelId, unixSeconds);
+      }
     },
     [markContextUnread],
   );
 
-  // Seed new channels so they don't flash as unread on first load.
-  // For channels the user hasn't read yet, initialize read-at to the
-  // channel's current lastMessageAt so they appear as "read."
+  // Opportunistic backfill: if Channel.lastMessageAt is ever populated by the
+  // backend (today it isn't), seed the in-session map. Strict max — never
+  // overwrites a more recent live value.
+  React.useEffect(() => {
+    if (channels.length === 0) return;
+    let didAdvance = false;
+    for (const channel of channels) {
+      const seedUnix = toUnixSeconds(channel.lastMessageAt);
+      if (seedUnix === null) continue;
+      const current = latestByChannelRef.current.get(channel.id) ?? 0;
+      if (seedUnix > current) {
+        latestByChannelRef.current.set(channel.id, seedUnix);
+        didAdvance = true;
+      }
+    }
+    if (didAdvance) bumpLatestVersion();
+  }, [channels]);
+
+  // Seed read state on first load so existing channels don't flash as unread
+  // when the backend reports a non-null Channel.lastMessageAt. We deliberately
+  // seed from the backend-provided value (not from the live map), so a live
+  // event that races ahead of NIP-RS readiness can't be silently swallowed as
+  // already-read. Today the backend always returns null and this is a no-op;
+  // it becomes meaningful once last_message_at is wired up server-side.
   React.useEffect(() => {
     if (!isReadStateReady) return;
     if (channels.length === 0) return;
+    if (hasInitializedChannelsRef.current) return;
 
     for (const channel of channels) {
       const existing = getEffectiveTimestamp(channel.id);
       if (existing !== null) continue;
 
-      // Only seed on first initialization, not when new channels appear later
-      if (hasInitializedChannelsRef.current) continue;
-
-      const lastMsgUnix = toUnixSeconds(channel.lastMessageAt);
-      if (lastMsgUnix !== null) {
-        seedContextRead(channel.id, lastMsgUnix);
+      const seedUnix = toUnixSeconds(channel.lastMessageAt);
+      if (seedUnix !== null) {
+        seedContextRead(channel.id, seedUnix);
       }
     }
 
     hasInitializedChannelsRef.current = true;
   }, [channels, getEffectiveTimestamp, isReadStateReady, seedContextRead]);
 
-  // Mark the active channel as read when it changes or new messages arrive
+  // Mark the active channel as read when it changes or new messages arrive.
+  // Honours the caller's contract that a null activeReadAt suppresses
+  // read-marking until the timeline reports a real position. Manual
+  // mark-unread state is cleared inside markChannelRead, not here.
   React.useEffect(() => {
     if (!isReadStateReady) return;
     if (!activeChannelId) return;
@@ -106,14 +170,31 @@ export function useUnreadChannels(
     markChannelRead,
   ]);
 
-  // Keep live channel updates (drives channel.lastMessageAt cache updates)
-  useLiveChannelUpdates(channels, activeChannelId, liveUpdateOptions);
+  // Feed the in-session "latest message at" map from live channel events.
+  // Composes with any caller-supplied onChannelMessage handler.
+  const callerOnChannelMessage = liveUpdateOptions.onChannelMessage;
+  const handleChannelMessage = React.useCallback(
+    (channelId: string, event: RelayEvent) => {
+      const current = latestByChannelRef.current.get(channelId) ?? 0;
+      if (event.created_at > current) {
+        latestByChannelRef.current.set(channelId, event.created_at);
+        bumpLatestVersion();
+      }
+      callerOnChannelMessage?.(channelId, event);
+    },
+    [callerOnChannelMessage],
+  );
 
-  // Compute unread channel IDs by comparing channel.lastMessageAt against
-  // the NIP-RS effective timestamp.
-  // readStateVersion is intentionally included to force recomputation when
-  // cross-device state arrives (getEffectiveTimestamp is referentially stable).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion is an intentional invalidation signal
+  useLiveChannelUpdates(channels, activeChannelId, {
+    ...liveUpdateOptions,
+    onChannelMessage: handleChannelMessage,
+  });
+
+  // Unread = channels (excluding active) that have either been manually
+  // marked unread this session, or whose in-session latest message timestamp
+  // is strictly newer than their NIP-RS read marker.
+  // readStateVersion and latestVersion are intentional invalidation signals.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion and latestVersion are intentional invalidation signals
   const unreadChannelIds = React.useMemo(() => {
     if (!isReadStateReady) {
       return new Set<string>();
@@ -123,11 +204,12 @@ export function useUnreadChannels(
       channels
         .filter((channel) => channel.id !== activeChannelId)
         .filter((channel) => {
-          const lastMsgUnix = toUnixSeconds(channel.lastMessageAt);
-          if (lastMsgUnix === null) return false;
+          if (forcedUnreadRef.current.has(channel.id)) return true;
+          const latest = latestByChannelRef.current.get(channel.id);
+          if (latest === undefined) return false;
 
           const readAt = getEffectiveTimestamp(channel.id);
-          return readAt === null || lastMsgUnix > readAt;
+          return readAt === null || latest > readAt;
         })
         .map((channel) => channel.id),
     );
@@ -136,6 +218,7 @@ export function useUnreadChannels(
     channels,
     getEffectiveTimestamp,
     isReadStateReady,
+    latestVersion,
     readStateVersion,
   ]);
 
