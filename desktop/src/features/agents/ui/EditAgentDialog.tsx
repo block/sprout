@@ -1,6 +1,8 @@
 import * as React from "react";
+import { toast } from "sonner";
 
 import { useUpdateManagedAgentMutation } from "@/features/agents/hooks";
+import { useAgentProviderSettingsStateQuery } from "@/features/settings/hooks/useAgentProviderSettings";
 import type {
   ManagedAgent,
   RespondToMode,
@@ -20,6 +22,7 @@ import {
   CreateAgentRuntimeFields,
 } from "./CreateAgentDialogSections";
 import { CreateAgentRespondToField } from "./RespondToField";
+import { SproutAgentProfilePicker } from "./SproutAgentProfilePicker";
 
 export function EditAgentDialog({
   agent,
@@ -56,6 +59,9 @@ export function EditAgentDialog({
   const [respondToAllowlist, setRespondToAllowlist] = React.useState<string[]>(
     agent.respondToAllowlist,
   );
+  const [providerProfileId, setProviderProfileId] = React.useState<
+    string | null
+  >(agent.providerProfileId);
 
   // Reset form state only when the dialog opens or when switching to a different
   // agent. Omitting the full agent object and its array fields from deps prevents
@@ -76,6 +82,7 @@ export function EditAgentDialog({
       setSystemPrompt(agent.systemPrompt ?? "");
       setRespondTo(agent.respondTo);
       setRespondToAllowlist(agent.respondToAllowlist);
+      setProviderProfileId(agent.providerProfileId);
       updateMutation.reset();
     }
   }, [open, agent.pubkey]);
@@ -94,6 +101,35 @@ export function EditAgentDialog({
   );
   const isSproutAgent = resolvedProviderId === "sprout-agent";
 
+  // If the agent is pinned to a provider profile that no longer exists in
+  // the saved settings AND there's a valid default profile to fall back
+  // to, treat any save as an implicit normalization to null (use default).
+  //
+  // We *don't* auto-clear when there is no valid default: that would
+  // silently turn "missing profile (spawn will fail)" into "use default
+  // (spawn will also fail, but with a less honest UI)". In that case the
+  // user has to explicitly pick a profile in the picker, and the missing
+  // warning stays visible.
+  //
+  // We also only act when the settings query is `ok` — a transient load
+  // error / identity mismatch must not clobber a pin.
+  const settingsStateQuery = useAgentProviderSettingsStateQuery();
+  const pinnedProfileIsMissing = React.useMemo(() => {
+    if (!isSproutAgent) return false;
+    if (providerProfileId === null) return false;
+    const data = settingsStateQuery.data;
+    if (!data || data.status !== "ok") return false;
+    return !data.profiles.some((p) => p.id === providerProfileId);
+  }, [isSproutAgent, providerProfileId, settingsStateQuery.data]);
+  const validDefaultExists = React.useMemo(() => {
+    const data = settingsStateQuery.data;
+    if (!data || data.status !== "ok") return false;
+    const id = data.defaultProfileId;
+    if (id === null) return false;
+    return data.profiles.some((p) => p.id === id);
+  }, [settingsStateQuery.data]);
+  const autoClearPinOnSave = pinnedProfileIsMissing && validDefaultExists;
+
   const parallelismValid =
     parallelism.trim() === "" ||
     !Number.isNaN(Number.parseInt(parallelism, 10));
@@ -111,6 +147,28 @@ export function EditAgentDialog({
   const respondToValid =
     respondTo !== "allowlist" || respondToAllowlist.length > 0;
 
+  // Block save when the row would be a known-unstartable sprout-agent: any
+  // case where we can't resolve a profile at spawn time. That's both the
+  // "pin missing AND no valid default" branch and the "no pin AND no valid
+  // default" branch (the latter mirrors CreateAgentDialog's gate). Edit
+  // would otherwise silently persist a config that can never spawn.
+  //
+  // Only fires when settings are `ok` — load/error/identity-mismatch are
+  // transient and shouldn't wedge unrelated edits.
+  const providerPinValid = React.useMemo(() => {
+    if (!isSproutAgent) return true;
+    const data = settingsStateQuery.data;
+    if (!data || data.status !== "ok") return true;
+    if (providerProfileId === null) return validDefaultExists;
+    return !pinnedProfileIsMissing || validDefaultExists;
+  }, [
+    isSproutAgent,
+    pinnedProfileIsMissing,
+    providerProfileId,
+    settingsStateQuery.data,
+    validDefaultExists,
+  ]);
+
   const canSubmit =
     name.trim().length > 0 &&
     parallelismValid &&
@@ -118,6 +176,7 @@ export function EditAgentDialog({
     acpCommandValid &&
     mcpCommandValid &&
     respondToValid &&
+    providerPinValid &&
     !updateMutation.isPending;
 
   async function handleSubmit() {
@@ -185,11 +244,28 @@ export function EditAgentDialog({
           respondToAllowlist.join(",") !== agent.respondToAllowlist.join(",")
             ? respondToAllowlist
             : undefined,
+        // Tri-state: only meaningful for sprout-agent rows. For non-sprout
+        // agents we never send it (the backend ignores it but it's noise).
+        // Normalize a dangling pin (referenced profile was deleted) to
+        // `null` on any save, so editing an unrelated field doesn't leave
+        // the agent permanently broken at spawn.
+        providerProfileId: isSproutAgent
+          ? autoClearPinOnSave
+            ? null
+            : providerProfileId !== agent.providerProfileId
+              ? providerProfileId
+              : undefined
+          : undefined,
       };
 
       const result = await updateMutation.mutateAsync(input);
       if (result.profileSyncError) {
         console.warn("Relay profile sync failed:", result.profileSyncError);
+      }
+      if (autoClearPinOnSave) {
+        toast.warning(
+          "Cleared a pinned profile that no longer exists. This agent now uses the default.",
+        );
       }
       handleOpenChange(false);
       onUpdated?.(result.agent);
@@ -248,6 +324,13 @@ export function EditAgentDialog({
               systemPrompt={systemPrompt}
               turnTimeoutSeconds={turnTimeoutSeconds}
             />
+
+            {isSproutAgent ? (
+              <SproutAgentProfilePicker
+                onChange={setProviderProfileId}
+                value={providerProfileId}
+              />
+            ) : null}
 
             {updateMutation.error instanceof Error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

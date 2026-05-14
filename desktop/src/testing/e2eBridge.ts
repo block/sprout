@@ -26,28 +26,39 @@ type MockCommandAvailability = {
   resolvedPath?: string | null;
 };
 
+type MockAgentProviderProfileView = {
+  provider: "anthropic" | "openai";
+  model: string;
+  baseUrl: string;
+  anthropicApiVersion: string | null;
+  systemPrompt: string | null;
+  maxRounds: number | null;
+  maxOutputTokens: number | null;
+  llmTimeoutSecs: number | null;
+  toolTimeoutSecs: number | null;
+  maxHistoryBytes: number | null;
+  detectedProviderId: string;
+  detectionOverridden: boolean;
+  apiKeyPresent: boolean;
+  apiKeyPreview: string | null;
+};
+
+type MockAgentProviderProfile = {
+  id: string;
+  label: string;
+  createdAt: number;
+  updatedAt: number;
+  view: MockAgentProviderProfileView;
+};
+
 type MockAgentProviderSettingsRecord = {
   // Stored "envelope" key — pubkey the encrypted record was written for.
   // Drives the identity_mismatch path when the active identity differs.
   storedPubkey: string;
-  // What the IPC view returns. The mock bridge stores this directly — the
-  // real Tauri command decrypts in Rust and returns a redacted view.
-  view: {
-    provider: "anthropic" | "openai";
-    model: string;
-    baseUrl: string;
-    anthropicApiVersion: string | null;
-    systemPrompt: string | null;
-    maxRounds: number | null;
-    maxOutputTokens: number | null;
-    llmTimeoutSecs: number | null;
-    toolTimeoutSecs: number | null;
-    maxHistoryBytes: number | null;
-    detectedProviderId: string;
-    detectionOverridden: boolean;
-    apiKeyPresent: boolean;
-    apiKeyPreview: string | null;
-  };
+  // Profiles + default. The mock bridge stores these directly — the real
+  // Tauri command decrypts in Rust and returns a redacted view.
+  defaultProfileId: string | null;
+  profiles: MockAgentProviderProfile[];
 };
 
 type MockAgentProviderEnvPresence = {
@@ -75,6 +86,10 @@ type E2eConfig = {
     agentProviderSettingsLoadError?: string;
     // Booleans returned by `get_agent_provider_env_presence`. Defaults to all-false.
     agentProviderEnvPresence?: MockAgentProviderEnvPresence;
+    // Artificial delay (ms) applied to `get_agent_provider_profile`. Used by
+    // e2e tests to widen the profile-hydration race window so we can assert
+    // that the edit dialog blocks Save until the target profile loads.
+    agentProviderProfileReadDelayMs?: number;
   };
   relayHttpUrl?: string;
   relayWsUrl?: string;
@@ -340,6 +355,7 @@ type RawManagedAgent = {
   backend_agent_id: string | null;
   respond_to: "owner-only" | "allowlist" | "anyone";
   respond_to_allowlist: string[];
+  provider_profile_id?: string | null;
 };
 
 type RawCreateManagedAgentResponse = {
@@ -716,6 +732,7 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
     respond_to_allowlist: agent.respond_to_allowlist
       ? [...agent.respond_to_allowlist]
       : [],
+    provider_profile_id: agent.provider_profile_id ?? null,
   };
 }
 
@@ -3850,6 +3867,7 @@ async function handleCreateManagedAgent(args: {
       | { type: "provider"; id: string; config: Record<string, unknown> };
     respondTo?: "owner-only" | "allowlist" | "anyone";
     respondToAllowlist?: string[];
+    providerProfileId?: string | null;
   };
 }): Promise<RawCreateManagedAgentResponse> {
   if (args.input.personaId) {
@@ -3894,6 +3912,7 @@ async function handleCreateManagedAgent(args: {
     backend_agent_id: null,
     respond_to: args.input.respondTo ?? "owner-only",
     respond_to_allowlist: args.input.respondToAllowlist ?? [],
+    provider_profile_id: args.input.providerProfileId ?? null,
     private_key_nsec: `nsec1mock${pubkey.slice(0, 20)}`,
     log_lines: [
       `sprout-acp starting: relay=${args.input.relayUrl ?? DEFAULT_RELAY_WS_URL} agent_pubkey=${pubkey} parallelism=${args.input.parallelism ?? 1}`,
@@ -4010,6 +4029,7 @@ async function handleUpdateManagedAgent(args: {
     systemPrompt?: string | null;
     respondTo?: "owner-only" | "allowlist" | "anyone";
     respondToAllowlist?: string[];
+    providerProfileId?: string | null;
   };
 }): Promise<{ agent: RawManagedAgent; profile_sync_error: string | null }> {
   const agent = getMockManagedAgent(args.input.pubkey);
@@ -4027,6 +4047,9 @@ async function handleUpdateManagedAgent(args: {
   }
   if (args.input.respondToAllowlist !== undefined) {
     agent.respond_to_allowlist = args.input.respondToAllowlist;
+  }
+  if (args.input.providerProfileId !== undefined) {
+    agent.provider_profile_id = args.input.providerProfileId;
   }
   agent.updated_at = new Date().toISOString();
   return { agent: cloneManagedAgent(agent), profile_sync_error: null };
@@ -4970,16 +4993,12 @@ export function maybeInstallE2eTauriMocks() {
       case "plugin:event|listen":
         // Tauri event system (pairing, huddle) — no-op in e2e, return unlisten fn ID
         return Math.floor(Math.random() * 1_000_000);
-      case "get_agent_provider_settings": {
+      case "get_agent_provider_settings_state": {
         const loadError = config?.mock?.agentProviderSettingsLoadError;
         if (loadError) {
-          throw new Error(loadError);
+          return { status: "error", message: loadError };
         }
         const activePubkey = (identity ?? DEFAULT_MOCK_IDENTITY).pubkey;
-        // The real backend reads the on-disk envelope and dispatches by the
-        // envelope's pubkey; we walk the map (it holds 0 or 1 entries) so
-        // tests can plant a record under a different pubkey to drive the
-        // identity_mismatch path.
         const first = mockAgentProviderSettings.values().next();
         if (first.done) return { status: "none" };
         const record = first.value;
@@ -4989,13 +5008,101 @@ export function maybeInstallE2eTauriMocks() {
             storedPubkey: record.storedPubkey,
           };
         }
-        return { status: "ok", view: record.view };
+        return {
+          status: "ok",
+          defaultProfileId: record.defaultProfileId,
+          profiles: record.profiles.map((p) => ({
+            id: p.id,
+            label: p.label,
+            createdAt: p.createdAt,
+            updatedAt: p.updatedAt,
+            provider: p.view.provider,
+            model: p.view.model,
+            baseUrl: p.view.baseUrl,
+            detectedProviderId: p.view.detectedProviderId,
+            apiKeyPresent: p.view.apiKeyPresent,
+            apiKeyPreview: p.view.apiKeyPreview,
+          })),
+        };
       }
-      case "save_agent_provider_settings": {
+      case "get_agent_provider_profile": {
+        const delayMs = config?.mock?.agentProviderProfileReadDelayMs ?? 0;
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, delayMs);
+          });
+        }
+        const activePubkey = (identity ?? DEFAULT_MOCK_IDENTITY).pubkey;
+        const { profileId } = payload as { profileId: string };
+        const first = mockAgentProviderSettings.values().next();
+        if (first.done) return { status: "none" };
+        const record = first.value;
+        if (record.storedPubkey !== activePubkey) {
+          return {
+            status: "identity_mismatch",
+            storedPubkey: record.storedPubkey,
+          };
+        }
+        const profile = record.profiles.find((p) => p.id === profileId);
+        if (!profile) return { status: "none" };
+        // Real backend includes `label` on the view; mirror that so the
+        // edit dialog hydrates label + form in one effect.
+        return {
+          status: "ok",
+          view: { label: profile.label, ...profile.view },
+        };
+      }
+      case "set_default_agent_provider_profile": {
+        const activePubkey = (identity ?? DEFAULT_MOCK_IDENTITY).pubkey;
+        const { profileId } = payload as { profileId: string | null };
+        const first = mockAgentProviderSettings.values().next();
+        if (first.done) {
+          throw new Error("No saved settings — add a profile first");
+        }
+        const record = first.value;
+        if (record.storedPubkey !== activePubkey) {
+          throw new Error(
+            "Saved settings were encrypted for a different identity",
+          );
+        }
+        if (profileId !== null) {
+          if (!record.profiles.some((p) => p.id === profileId)) {
+            throw new Error(`unknown profile id ${profileId}`);
+          }
+        }
+        record.defaultProfileId = profileId;
+        return null;
+      }
+      case "delete_agent_provider_profile": {
+        const activePubkey = (identity ?? DEFAULT_MOCK_IDENTITY).pubkey;
+        const { profileId } = payload as { profileId: string };
+        const first = mockAgentProviderSettings.values().next();
+        if (first.done) {
+          throw new Error("No saved settings");
+        }
+        const record = first.value;
+        if (record.storedPubkey !== activePubkey) {
+          throw new Error(
+            "Saved settings were encrypted for a different identity",
+          );
+        }
+        const before = record.profiles.length;
+        record.profiles = record.profiles.filter((p) => p.id !== profileId);
+        if (record.profiles.length === before) {
+          throw new Error(`unknown profile id ${profileId}`);
+        }
+        if (record.defaultProfileId === profileId) {
+          record.defaultProfileId = null;
+        }
+        return null;
+      }
+      case "save_agent_provider_profile": {
         const activePubkey = (identity ?? DEFAULT_MOCK_IDENTITY).pubkey;
         const input = (
           payload as {
             input: {
+              profileId: string | null;
+              label: string;
               provider: "anthropic" | "openai";
               apiKey: string | null;
               model: string;
@@ -5012,32 +5119,56 @@ export function maybeInstallE2eTauriMocks() {
             };
           }
         ).input;
-        // Find existing record under any key — if it's under the active
-        // pubkey, we may be preserving the previous api key; if it's under
-        // a different pubkey (identity mismatch state), saving overwrites
-        // with the new identity (same atomic-rename semantics as Rust).
-        const existing = (() => {
-          for (const value of mockAgentProviderSettings.values()) {
-            return value;
-          }
-          return null;
-        })();
-        // Validate matching the Rust contract.
+
+        const label = input.label.trim();
+        if (label.length === 0 || label.length > 64) {
+          throw new Error("Label must be 1–64 characters");
+        }
         if (input.apiKey === "") {
           throw new Error("API key cannot be empty");
         }
-        if (input.apiKey === null) {
-          if (!existing) {
-            throw new Error("API key required");
+
+        // Find or create the per-identity record.
+        let record = mockAgentProviderSettings.get(activePubkey);
+        if (!record) {
+          // Tolerate a stale record under a different pubkey only when
+          // creating fresh with an api_key (matches Rust behavior).
+          mockAgentProviderSettings.clear();
+          record = {
+            storedPubkey: activePubkey,
+            defaultProfileId: null,
+            profiles: [],
+          };
+          mockAgentProviderSettings.set(activePubkey, record);
+        }
+
+        const isUpdate = input.profileId !== null;
+        const existing = isUpdate
+          ? record.profiles.find((p) => p.id === input.profileId)
+          : undefined;
+        if (isUpdate && !existing) {
+          throw new Error(`unknown profile id ${input.profileId}`);
+        }
+
+        // Resolve the api key for the slot.
+        let apiKey: string | null = input.apiKey;
+        let apiKeyPreview: string | null;
+        if (apiKey === null) {
+          if (!isUpdate) {
+            throw new Error("API key required when creating a new profile");
           }
-          // For "preserve key" the existing record must match on
-          // (provider, detected_provider_id, base-URL origin).
-          const sameProvider = existing.view.provider === input.provider;
-          const sameDetected =
-            existing.view.detectedProviderId === input.detectedProviderId;
-          const sameOrigin = (() => {
+          // Reuse: validate provider/detected/origin match.
+          // biome-ignore lint/style/noNonNullAssertion: isUpdate ⇒ existing was checked above
+          const prev = existing!.view;
+          if (prev.provider !== input.provider) {
+            throw new Error("Provider changed — re-enter API key");
+          }
+          if (prev.detectedProviderId !== input.detectedProviderId) {
+            throw new Error("Issuer changed — re-enter API key");
+          }
+          const originEq = (() => {
             try {
-              const a = new URL(existing.view.baseUrl);
+              const a = new URL(prev.baseUrl);
               const b = new URL(input.baseUrl);
               return (
                 a.protocol === b.protocol &&
@@ -5049,46 +5180,65 @@ export function maybeInstallE2eTauriMocks() {
               return false;
             }
           })();
-          if (!sameProvider || !sameDetected || !sameOrigin) {
-            throw new Error(
-              "Provider, issuer, or base URL changed — re-enter API key",
-            );
+          if (!originEq) {
+            throw new Error("Base URL origin changed — re-enter API key");
           }
+          apiKey = null; // unchanged
+          apiKeyPreview = prev.apiKeyPreview;
+        } else {
+          apiKeyPreview = apiKey.length >= 8 ? apiKey.slice(-4) : null;
         }
-        // Mirror the Rust `compute_preview` contract: suppress the preview
-        // entirely for keys shorter than 8 chars (never return the full
-        // key). Drift from the real backend was a codex review #2 finding
-        // because it masked preview regressions in Playwright runs.
-        const apiKey = input.apiKey;
-        const apiKeyPreview =
-          apiKey === null
-            ? (existing?.view.apiKeyPreview ?? null)
-            : apiKey.length >= 8
-              ? apiKey.slice(-4)
-              : null;
-        // Overwrite: clear any record under a stale pubkey (identity-mismatch
-        // recovery) and write under the active pubkey.
-        mockAgentProviderSettings.clear();
-        mockAgentProviderSettings.set(activePubkey, {
-          storedPubkey: activePubkey,
-          view: {
-            provider: input.provider,
-            model: input.model,
-            baseUrl: input.baseUrl,
-            anthropicApiVersion: input.anthropicApiVersion,
-            systemPrompt: input.systemPrompt,
-            maxRounds: input.maxRounds,
-            maxOutputTokens: input.maxOutputTokens,
-            llmTimeoutSecs: input.llmTimeoutSecs,
-            toolTimeoutSecs: input.toolTimeoutSecs,
-            maxHistoryBytes: input.maxHistoryBytes,
-            detectedProviderId: input.detectedProviderId,
-            detectionOverridden: input.detectionOverridden,
-            apiKeyPresent: true,
-            apiKeyPreview,
-          },
-        });
-        return null;
+
+        const now = Math.floor(Date.now() / 1000);
+        const view: MockAgentProviderProfileView = {
+          provider: input.provider,
+          model: input.model,
+          baseUrl: input.baseUrl,
+          anthropicApiVersion: input.anthropicApiVersion,
+          systemPrompt: input.systemPrompt,
+          maxRounds: input.maxRounds,
+          maxOutputTokens: input.maxOutputTokens,
+          llmTimeoutSecs: input.llmTimeoutSecs,
+          toolTimeoutSecs: input.toolTimeoutSecs,
+          maxHistoryBytes: input.maxHistoryBytes,
+          detectedProviderId: input.detectedProviderId,
+          detectionOverridden: input.detectionOverridden,
+          apiKeyPresent: true,
+          apiKeyPreview,
+        };
+
+        let resultId: string;
+        if (isUpdate && existing) {
+          existing.label = label;
+          existing.updatedAt = now;
+          existing.view = view;
+          resultId = existing.id;
+        } else {
+          const newId = crypto.randomUUID();
+          record.profiles.push({
+            id: newId,
+            label,
+            createdAt: now,
+            updatedAt: now,
+            view,
+          });
+          resultId = newId;
+        }
+
+        // Auto-default: if no default after save (either because we just
+        // created the first profile or because it had been cleared), set
+        // to the touched id.
+        let setAsDefault = false;
+        const currentDefault = record.defaultProfileId;
+        const hasValidDefault =
+          currentDefault !== null &&
+          record.profiles.some((p) => p.id === currentDefault);
+        if (!hasValidDefault) {
+          record.defaultProfileId = resultId;
+          setAsDefault = true;
+        }
+
+        return { profileId: resultId, setAsDefault };
       }
       case "delete_agent_provider_settings":
         mockAgentProviderSettings.clear();

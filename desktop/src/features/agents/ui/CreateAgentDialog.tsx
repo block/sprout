@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { useAgentProviderSettingsStateQuery } from "@/features/settings/hooks/useAgentProviderSettings";
 import {
   CreateAgentBasicsFields,
   CreateAgentOptionToggles,
@@ -34,6 +35,7 @@ import {
   ProviderConfigFields,
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
+import { SproutAgentProfilePicker } from "./SproutAgentProfilePicker";
 import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
@@ -73,6 +75,10 @@ export function CreateAgentDialog({
   const [respondToAllowlist, setRespondToAllowlist] = React.useState<string[]>(
     [],
   );
+  // Sprout-agent profile pin (ignored for other agents). null = use default.
+  const [providerProfileId, setProviderProfileId] = React.useState<
+    string | null
+  >(null);
 
   // ── Backend provider ("Run on") state ──────────────────────────────────────
   const [runOn, setRunOn] = React.useState<"local" | string>("local");
@@ -222,6 +228,7 @@ export function CreateAgentDialog({
     setProbeError(null);
     setRespondTo("owner-only");
     setRespondToAllowlist([]);
+    setProviderProfileId(null);
     createMutation.reset();
   }
 
@@ -277,6 +284,35 @@ export function CreateAgentDialog({
   const respondToValid =
     respondTo !== "allowlist" || respondToAllowlist.length > 0;
 
+  // For sprout-agent rows: a known-unstartable config (no pinned profile AND
+  // no valid default) must not be created. Mirrors EditAgentDialog's gate.
+  // Only blocks when settings are `ok` — during load/error we trust the user
+  // to retry rather than wedging Create.
+  //
+  // The query is cheap (cached at AppRoot and invalidated only on writes)
+  // and the Create dialog is a transient modal, so we read it
+  // unconditionally rather than splitting into a sprout-only child.
+  const isSproutAgentRow = isSproutAgentPath({
+    selectedProviderId,
+    agentCommand: agentCommand.trim(),
+  });
+  const settingsStateQuery = useAgentProviderSettingsStateQuery();
+  const sproutProfileValid = React.useMemo(() => {
+    if (isProviderMode || !isSproutAgentRow) return true;
+    const data = settingsStateQuery.data;
+    if (!data || data.status !== "ok") return true;
+    if (providerProfileId !== null) {
+      return data.profiles.some((p) => p.id === providerProfileId);
+    }
+    const defaultId = data.defaultProfileId;
+    return defaultId !== null && data.profiles.some((p) => p.id === defaultId);
+  }, [
+    isProviderMode,
+    isSproutAgentRow,
+    providerProfileId,
+    settingsStateQuery.data,
+  ]);
+
   const canSubmit =
     name.trim().length > 0 &&
     !isDiscoveryPending &&
@@ -291,6 +327,7 @@ export function CreateAgentDialog({
     !(isProviderMode && !probedProvider) &&
     providerConfigComplete &&
     respondToValid &&
+    sproutProfileValid &&
     !createMutation.isPending;
 
   async function handleSubmit() {
@@ -359,6 +396,14 @@ export function CreateAgentDialog({
             })
               ? undefined
               : systemPrompt.trim() || undefined,
+            // Only carry the profile pin for sprout-agent rows. Other agents
+            // ignore it server-side, but sending null adds noise on the wire.
+            providerProfileId: isSproutAgentPath({
+              selectedProviderId,
+              agentCommand: agentCommand.trim(),
+            })
+              ? providerProfileId
+              : undefined,
             spawnAfterCreate,
             startOnAppLaunch,
             backend: { type: "local" },
@@ -449,6 +494,23 @@ export function CreateAgentDialog({
                 providersLoading={providersQuery.isLoading}
                 selectedProvider={selectedProvider}
                 selectedProviderId={selectedProviderId}
+              />
+            ) : null}
+
+            {/*
+              Sprout-agent profile pin lives next to the runtime selector —
+              it is the single most consequential setting for this provider,
+              so it must not be hidden inside Advanced. Other agents don't
+              see this control.
+             */}
+            {!isProviderMode &&
+            isSproutAgentPath({
+              selectedProviderId,
+              agentCommand: agentCommand.trim(),
+            }) ? (
+              <SproutAgentProfilePicker
+                onChange={setProviderProfileId}
+                value={providerProfileId}
               />
             ) : null}
 

@@ -53,3 +53,4 @@ doc/
 identity.key
 **/identity.key
 .review-logs/
+/.review/

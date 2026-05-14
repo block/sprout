@@ -165,8 +165,17 @@ pub fn import_identity(
     let key_path = data_dir.join("identity.key");
     crate::app_state::save_key_file(&key_path, &keys)?;
 
-    // Update in-memory keys
+    // Update in-memory keys.
+    //
+    // Lock order: `agent_provider_settings_lock` BEFORE `state.keys`. A
+    // settings save in flight under the old identity must serialize against
+    // this swap, otherwise the next read could see a v3 envelope encrypted
+    // for a no-longer-current pubkey. See `AppState::agent_provider_settings_lock`.
     let pubkey = keys.public_key();
+    let _settings_guard = state
+        .agent_provider_settings_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
     *state.keys.lock().map_err(|e| e.to_string())? = keys;
 
     let pubkey_hex = pubkey.to_hex();

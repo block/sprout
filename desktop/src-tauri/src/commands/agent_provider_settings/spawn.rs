@@ -56,6 +56,9 @@ use tauri::AppHandle;
 use zeroize::Zeroize;
 
 use super::storage::{decrypt_settings, read_envelope, settings_path, validate_stored};
+use super::storage_profiles::{
+    parse_or_migrate_plaintext, write_profiles_envelope, ParseError, ParsedPlaintext,
+};
 use super::{StoredSettings, OWNED_AGENT_ENV_VARS, PROVIDER_ANTHROPIC, PROVIDER_OPENAI};
 use crate::app_state::AppState;
 
@@ -128,11 +131,30 @@ pub enum LoadForSpawn {
 
 /// Load + decrypt the saved settings and translate them into the env-var
 /// pairs sprout-agent expects.
-pub fn load_for_spawn(app: &AppHandle, state: &AppState) -> LoadForSpawn {
+///
+/// `profile_id`:
+/// - `Some(id)` — pick the named profile with exactly this id. Unknown id
+///   ⇒ `Error` (no silent fallback to default).
+/// - `None` — pick `default_profile_id`. If unset (no default) ⇒ `Error`.
+///
+/// The caller is `managed_agents::runtime::build_agent_command`, gated by
+/// `known_acp_provider(...).id == "sprout-agent"`. We hold the
+/// `agent_provider_settings_lock` across read+migrate-write so a settings
+/// save in flight cannot land a newer envelope between our read and our
+/// best-effort migration write.
+pub fn load_for_spawn(app: &AppHandle, state: &AppState, profile_id: Option<&str>) -> LoadForSpawn {
     let path = match settings_path(app) {
         Ok(p) => p,
         Err(e) => return LoadForSpawn::Error(e),
     };
+
+    // Lock order: settings_lock BEFORE state.keys (matches the global lock
+    // order documented on AppState::agent_provider_settings_lock).
+    let _settings_guard = match state.agent_provider_settings_lock.lock() {
+        Ok(g) => g,
+        Err(e) => return LoadForSpawn::Error(format!("settings lock poisoned: {e}")),
+    };
+
     let envelope = match read_envelope(&path) {
         Ok(Some(e)) => e,
         Ok(None) => return LoadForSpawn::None,
@@ -150,34 +172,115 @@ pub fn load_for_spawn(app: &AppHandle, state: &AppState) -> LoadForSpawn {
         Ok(p) => p,
         Err(e) => return LoadForSpawn::Error(e),
     };
+
+    let parsed = match parse_or_migrate_plaintext(&plain, &envelope.pubkey) {
+        Ok(p) => p,
+        // Cross-check failure (wrapper/legacy owner_pubkey vs envelope)
+        // surfaces as IdentityMismatch — same threat model as today's
+        // envelope.pubkey check (a swapped-in envelope from another id).
+        Err(ParseError::IdentityMismatch) => return LoadForSpawn::IdentityMismatch,
+        Err(ParseError::Other(msg)) => {
+            return LoadForSpawn::Error(format!("parse profiles plaintext: {msg}"));
+        }
+    };
+
+    // Best-effort migration write (spawn path is non-fatal per plan §4):
+    // if the write fails (read-only fs, disk full), still proceed with the
+    // in-memory wrapper so an agent boot isn't blocked. Read commands DO
+    // surface this error — see commands.rs.
+    let wrapper = match parsed {
+        ParsedPlaintext::Current(w) => w,
+        ParsedPlaintext::Migrated(w) => {
+            if let Err(e) = write_profiles_envelope(&path, &keys, &w) {
+                eprintln!(
+                    "sprout-desktop: agent-provider settings migration write failed (spawn \
+                     proceeds with in-memory profile): {e}"
+                );
+            }
+            w
+        }
+    };
     drop(keys);
 
-    let stored: StoredSettings = match serde_json::from_str(&plain) {
-        Ok(s) => s,
-        Err(e) => return LoadForSpawn::Error(format!("parse stored settings: {e}")),
-    };
-    // Defense-in-depth: if the plaintext carries its own owner pubkey (v2+),
-    // it must match the envelope's pubkey. Mismatch ⇒ envelope was swapped
-    // for a same-identity-encrypted blob from a different state; refuse to
-    // inject anything and fall through to "no settings".
-    if stored.schema_version >= 2
-        && !stored.owner_pubkey.is_empty()
-        && stored.owner_pubkey != current_pubkey
-    {
+    // Wrapper-level owner cross-check redundant with parse_or_migrate_plaintext,
+    // but cheap and defensive.
+    if wrapper.owner_pubkey != envelope.pubkey || wrapper.owner_pubkey != current_pubkey {
         return LoadForSpawn::IdentityMismatch;
     }
+
+    let chosen = match resolve_target_profile(&wrapper, profile_id, &current_pubkey) {
+        Ok(p) => p,
+        Err(load) => return load,
+    };
+
     // Fail closed if the decrypted plaintext would not pass save-time
-    // validation. This catches envelopes written by older builds (before
-    // the current control-char / non-loopback-HTTP / size-cap checks
-    // existed) and protects against a rollback attack where an attacker
-    // restores a pre-validation envelope to redirect the API key to an
-    // unsafe URL. Treated as `Error` so the runtime removes the owned
-    // env vars and surfaces a clean "missing required env" instead of
-    // silently using shell exports.
-    if let Err(e) = validate_stored(&stored) {
+    // validation. Catches envelopes written by older builds (before the
+    // current control-char / non-loopback-HTTP / size-cap checks existed).
+    if let Err(e) = validate_stored(&chosen.settings) {
         return LoadForSpawn::Error(format!("stored settings failed validation: {e}"));
     }
-    LoadForSpawn::Ok(EnvPairs::new(stored_to_env_pairs(&stored)))
+    LoadForSpawn::Ok(EnvPairs::new(stored_to_env_pairs(&chosen.settings)))
+}
+
+/// Pure wrapper→profile selector. Split out of `load_for_spawn` so it's
+/// directly unit-testable without faking `AppHandle`/`AppState`.
+///
+/// Resolution policy:
+/// - `profile_id = Some(id)` → must exist; unknown id ⇒ `Error` (no silent
+///   fallback to default).
+/// - `profile_id = None` → use `wrapper.default_profile_id`; missing default
+///   or default points at unknown id ⇒ `Error`.
+///
+/// Per-profile owner cross-check runs on the chosen profile (plan §6 step 7):
+/// catches a tampered wrapper that shuffled an old-identity `NamedProfile`
+/// into a current-identity wrapper. NIP-44 authenticates the outer
+/// ciphertext, not the inner per-profile bytes, so the per-profile owner
+/// hash needs to be re-verified against the wrapper and the current
+/// identity. Mismatch ⇒ `IdentityMismatch`.
+pub(super) fn resolve_target_profile<'w>(
+    wrapper: &'w super::ProfilesPlaintext,
+    profile_id: Option<&str>,
+    current_pubkey: &str,
+) -> Result<&'w super::NamedProfile, LoadForSpawn> {
+    let chosen = match profile_id {
+        Some(id) => wrapper
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| {
+                LoadForSpawn::Error(format!(
+                    "agent references profile id {id} which is not in saved settings"
+                ))
+            })?,
+        None => match wrapper.default_profile_id.as_deref() {
+            Some(default_id) => wrapper
+                .profiles
+                .iter()
+                .find(|p| p.id == default_id)
+                .ok_or_else(|| {
+                    LoadForSpawn::Error(
+                        "default_profile_id references a profile that does not exist".into(),
+                    )
+                })?,
+            None => {
+                return Err(LoadForSpawn::Error(
+                    "no default provider profile is set; pick one in Sprout Settings → \
+                     Agent Provider, or assign a profile to this agent"
+                        .into(),
+                ));
+            }
+        },
+    };
+
+    if chosen.settings.schema_version >= 2
+        && !chosen.settings.owner_pubkey.is_empty()
+        && (chosen.settings.owner_pubkey != wrapper.owner_pubkey
+            || chosen.settings.owner_pubkey != current_pubkey)
+    {
+        return Err(LoadForSpawn::IdentityMismatch);
+    }
+
+    Ok(chosen)
 }
 
 pub(super) fn stored_to_env_pairs(s: &StoredSettings) -> Vec<(String, String)> {

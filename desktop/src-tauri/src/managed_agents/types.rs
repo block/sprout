@@ -128,6 +128,12 @@ pub struct ManagedAgentRecord {
     /// Preserved across mode toggles so users don't lose state.
     #[serde(default)]
     pub respond_to_allowlist: Vec<String>,
+    /// Provider-profile ID this agent uses when spawning, only meaningful
+    /// for sprout-agent rows. `None` ⇒ use the panel's default profile.
+    /// Other agents (goose, codex, …) ignore this field; they bring their
+    /// own provider config.
+    #[serde(default)]
+    pub provider_profile_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -167,6 +173,9 @@ pub struct ManagedAgentSummary {
     pub log_path: String,
     pub respond_to: RespondTo,
     pub respond_to_allowlist: Vec<String>,
+    /// Provider-profile ID this agent uses when spawning. Only meaningful
+    /// for sprout-agent rows. `None` ⇒ use the panel's default profile.
+    pub provider_profile_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +210,10 @@ pub struct CreateManagedAgentRequest {
     /// before being written to the record.
     #[serde(default)]
     pub respond_to_allowlist: Vec<String>,
+    /// Provider-profile ID to associate with this agent. Only meaningful
+    /// for sprout-agent rows; other agents ignore it.
+    #[serde(default)]
+    pub provider_profile_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -318,6 +331,10 @@ pub struct UpdateManagedAgentRequest {
     /// normalized server-side).
     #[serde(default)]
     pub respond_to_allowlist: Option<Vec<String>>,
+    /// Absent = don't touch. null = clear (use panel default). "id" = set
+    /// to a specific profile. Tri-state matches `model` / `system_prompt`.
+    #[serde(default)]
+    pub provider_profile_id: Option<Option<String>>,
 }
 
 #[derive(Debug, Serialize)]

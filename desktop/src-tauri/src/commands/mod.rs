@@ -25,8 +25,9 @@ mod workspace;
 pub use agent_discovery::*;
 pub use agent_models::*;
 pub use agent_provider_settings::{
-    delete_agent_provider_settings, get_agent_provider_env_presence, get_agent_provider_settings,
-    save_agent_provider_settings,
+    delete_agent_provider_profile, delete_agent_provider_settings, get_agent_provider_env_presence,
+    get_agent_provider_profile, get_agent_provider_settings_state, save_agent_provider_profile,
+    set_default_agent_provider_profile,
 };
 pub use agent_settings::*;
 pub use agents::*;

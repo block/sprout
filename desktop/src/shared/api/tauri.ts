@@ -230,6 +230,9 @@ export type RawManagedAgent = {
   // `"owner-only"` / `[]` in `fromRawManagedAgent`.
   respond_to?: ManagedAgent["respondTo"];
   respond_to_allowlist?: string[];
+  // Multi-provider profiles: present on real records, defaulted to `null`
+  // in `fromRawManagedAgent` for pre-feature mocks/fixtures.
+  provider_profile_id?: string | null;
 };
 
 type RawCreateManagedAgentResponse = {
@@ -841,6 +844,7 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     // Real agent records always include them (defaulted server-side).
     respondTo: agent.respond_to ?? "owner-only",
     respondToAllowlist: agent.respond_to_allowlist ?? [],
+    providerProfileId: agent.provider_profile_id ?? null,
   };
 }
 
@@ -955,6 +959,7 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         backend: input.backend,
         respondTo: input.respondTo,
         respondToAllowlist: input.respondToAllowlist,
+        providerProfileId: input.providerProfileId,
       },
     },
   );

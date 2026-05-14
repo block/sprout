@@ -156,14 +156,113 @@ fn default_detected_provider_id() -> String {
     "custom".into()
 }
 
+// ─── Profiles wrapper (plaintext schema_version >= 3) ───────────────────────
+
+/// Schema dispatch probe. Decryption produces `Zeroizing<String>`; we
+/// `serde_json::from_str` into this small struct (which carries no
+/// secret-bearing fields) to decide whether to parse the plaintext as a
+/// legacy single `StoredSettings` (v1/v2) or the multi-profile wrapper (v3+).
+///
+/// Using a probe instead of `serde_json::Value` keeps API key bytes out of
+/// a generic JSON tree where they'd be hard to zeroize.
+#[derive(Deserialize)]
+pub(crate) struct SchemaProbe {
+    #[serde(default)]
+    pub(crate) schema_version: u32,
+}
+
+/// v3 plaintext: many named profiles, one optionally marked as the default.
+///
+/// `owner_pubkey` is the wrapper-level integrity check (matches
+/// envelope.pubkey). Each `NamedProfile.settings` still carries its own
+/// `owner_pubkey` (v2 defense-in-depth); the spawn path cross-checks both.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct ProfilesPlaintext {
+    pub(crate) schema_version: u32, // == 3
+    pub(crate) owner_pubkey: String,
+    #[serde(default)]
+    pub(crate) default_profile_id: Option<String>,
+    #[serde(default)]
+    pub(crate) profiles: Vec<NamedProfile>,
+}
+
+/// One slot in `ProfilesPlaintext.profiles`. `settings` is exactly today's
+/// per-profile plaintext shape; it carries the secret-bearing `api_key`,
+/// which is zeroized on drop via `StoredSettings::Drop`.
+///
+/// `Debug` is intentionally not derived (same reason as `StoredSettings`).
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct NamedProfile {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) created_at: u64,
+    pub(crate) updated_at: u64,
+    pub(crate) settings: StoredSettings,
+}
+
+/// Plaintext-schema version we write to disk. v1/v2 are legacy and only
+/// produced by older builds; we read them through `migrate_to_profiles`.
+pub(crate) const CURRENT_PLAINTEXT_SCHEMA: u32 = 3;
+
+/// Highest plaintext schema we know how to parse. Reading a higher value
+/// is an error (the user downgraded sprout-desktop after running a newer
+/// version) — we'd rather fail visibly than silently strip newer fields.
+pub(crate) const MAX_KNOWN_PLAINTEXT_SCHEMA: u32 = 3;
+
 // ─── IPC types ──────────────────────────────────────────────────────────────
 
-/// Result of a load attempt. Three variants — `None`, `Ok`, and
-/// `IdentityMismatch` — let the UI render the right state without ever seeing
-/// the API key.
+/// Result of `get_agent_provider_settings_state`. Multi-profile aware:
+/// `Ok` carries the full list + which one is default.
+///
+/// Four variants:
+/// - `None` — settings file is absent.
+/// - `Ok` — settings file present, decrypted, parsed. `profiles` may be
+///   empty (last-profile-deleted state).
+/// - `IdentityMismatch` — envelope was encrypted under a different nsec;
+///   no plaintext returned, UI must prompt user to clear or re-key.
+/// - `Error` — file present but unreadable (corrupt, decrypt fail,
+///   migration write failure, etc.). Preserves today's load-error banner.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
-pub enum LoadStatus {
+pub enum SettingsStateResponse {
+    None,
+    #[serde(rename_all = "camelCase")]
+    Ok {
+        default_profile_id: Option<String>,
+        profiles: Vec<ProfileSummary>,
+    },
+    #[serde(rename_all = "camelCase")]
+    IdentityMismatch {
+        stored_pubkey: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// One row in the profile list. Identifies a profile and shows its
+/// non-secret metadata + key preview for picker UI. **Never** carries
+/// the full API key.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileSummary {
+    pub id: String,
+    pub label: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub detected_provider_id: String,
+    pub api_key_present: bool,
+    pub api_key_preview: Option<String>,
+}
+
+/// Status returned by `get_agent_provider_profile(id)` for a single
+/// profile's full view (used by the edit dialog to prefill).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum ProfileLoadStatus {
     None,
     Ok {
         view: AgentProviderSettingsView,
@@ -172,11 +271,18 @@ pub enum LoadStatus {
     IdentityMismatch {
         stored_pubkey: String,
     },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentProviderSettingsView {
+    /// Human-readable profile label. Included here so the edit dialog
+    /// hydrates label + form atomically from a single response (no
+    /// initialLabel prop, no two-effect hydration race).
+    pub label: String,
     pub provider: String,
     pub model: String,
     pub base_url: String,
@@ -202,10 +308,19 @@ pub struct AgentProviderSettingsView {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentProviderSettingsInput {
+    /// `None` = create a fresh profile (server generates the id). `Some(id)`
+    /// = update an existing profile in place. An unknown id is rejected.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Human-readable label. Required for create; for update, an empty/
+    /// whitespace-only value is rejected. Trimmed, control-chars rejected,
+    /// max 64 chars (see `validate_label`).
+    pub label: String,
     pub provider: String,
     /// `None` = preserve the previously stored key (only valid when an existing
     /// record has the same provider, detected_provider_id, and base-URL origin).
     /// `Some(s)` = use this key. `Some("")` is rejected.
+    /// **Create with `None` is rejected** — there's no previous key to reuse.
     #[serde(default)]
     pub api_key: Option<String>,
     pub model: String,
@@ -248,18 +363,42 @@ pub struct AgentProviderEnvPresence {
     pub openai_compat_api_key: bool,
 }
 
+/// Return value of `save_agent_provider_profile` — gives the UI the id of
+/// the (possibly newly created) profile so it can re-select it after
+/// invalidation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProfileResponse {
+    pub profile_id: String,
+    /// True when this save also set the default (first-profile auto-default
+    /// per §5 of the plan).
+    pub set_as_default: bool,
+}
+
 // ─── Submodules ─────────────────────────────────────────────────────────────
 
 mod commands;
+mod commands_write;
 mod spawn;
 mod storage;
+mod storage_profiles;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_profiles;
+#[cfg(test)]
+mod tests_spawn;
 
 pub use commands::{
-    delete_agent_provider_settings, get_agent_provider_env_presence, get_agent_provider_settings,
-    save_agent_provider_settings,
+    get_agent_provider_env_presence, get_agent_provider_profile, get_agent_provider_settings_state,
+};
+// crate-local: agents.rs / agent_models.rs use this to defensively
+// validate a pinned profile id before persisting an agent record.
+pub(crate) use commands::{check_provider_profile_id, ProfileIdCheck};
+pub use commands_write::{
+    delete_agent_provider_profile, delete_agent_provider_settings, save_agent_provider_profile,
+    set_default_agent_provider_profile,
 };
 pub use spawn::{apply_to_command, load_for_spawn};
 // `LoadForSpawn` and `EnvPairs` are re-exported test-only so the

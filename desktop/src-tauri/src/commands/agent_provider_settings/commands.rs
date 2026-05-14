@@ -1,255 +1,182 @@
-//! Tauri command entrypoints — the public IPC surface for the Settings →
-//! Agent Provider panel.
-
-use std::time::{SystemTime, UNIX_EPOCH};
+//! Tauri command entrypoints — the public IPC surface for the
+//! Settings → Agent Provider panel.
+//!
+//! All commands that touch the envelope file hold
+//! `AppState::agent_provider_settings_lock` across the read-modify-write to
+//! serialize against concurrent saves and identity rotation. Lock order is
+//! invariant: **settings lock → keys lock** (see `app_state.rs`).
+//!
+//! ## Multi-profile semantics
+//!
+//! The file is one NIP-44-self-encrypted envelope containing a
+//! `ProfilesPlaintext` wrapper with N named profiles. The "current default"
+//! is `wrapper.default_profile_id` (Option). Agents may pin a specific
+//! profile via `ManagedAgentRecord.provider_profile_id`; if `None`, the
+//! agent uses the default at spawn.
 
 use tauri::{AppHandle, State};
-use zeroize::Zeroizing;
 
-use super::storage::{
-    decrypt_settings, encrypt_settings, normalize_origin, read_envelope, settings_path,
-    validate_input, write_envelope,
+use super::storage::{decrypt_settings, read_envelope, settings_path};
+use super::storage_profiles::{
+    parse_or_migrate_plaintext, write_profiles_envelope, ParseError, ParsedPlaintext,
 };
 use super::{
-    AgentProviderEnvPresence, AgentProviderSettingsInput, AgentProviderSettingsView, LoadStatus,
-    SettingsEnvelope, StoredSettings, ENVELOPE_ALG, ENVELOPE_VERSION,
+    AgentProviderEnvPresence, AgentProviderSettingsView, NamedProfile, ProfileLoadStatus,
+    ProfileSummary, ProfilesPlaintext, SettingsStateResponse,
 };
 use crate::app_state::AppState;
 
-#[tauri::command]
-pub fn get_agent_provider_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<LoadStatus, String> {
-    let path = settings_path(&app)?;
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+/// Read + decrypt + parse-or-migrate the envelope under the settings lock.
+/// On a Migrated outcome we persist to disk and **fail loudly** on write
+/// error — read-path commands must not return a generated-but-unpersisted
+/// profile id (plan §4 R3 MED).
+///
+/// Returns:
+/// - `Ok(Some(wrapper))` when the envelope is present and readable.
+/// - `Ok(None)` when the envelope file is absent.
+fn read_wrapper_locked(app: &AppHandle, state: &AppState) -> Result<ReadResult, String> {
+    let path = settings_path(app)?;
     let envelope = match read_envelope(&path)? {
         Some(e) => e,
-        None => return Ok(LoadStatus::None),
+        None => return Ok(ReadResult::None),
     };
-
     let keys = state.keys.lock().map_err(|e| e.to_string())?;
     let current_pubkey = keys.public_key().to_hex();
     if envelope.pubkey != current_pubkey {
-        return Ok(LoadStatus::IdentityMismatch {
+        return Ok(ReadResult::IdentityMismatch {
             stored_pubkey: envelope.pubkey,
         });
     }
-
     let plain = decrypt_settings(&keys, &envelope.ciphertext)?;
-    drop(keys);
-
-    let stored: StoredSettings =
-        serde_json::from_str(&plain).map_err(|e| format!("parse stored settings: {e}"))?;
-
-    // Defense-in-depth: NIP-44 v2 authenticates the ciphertext to the same
-    // identity that encrypted it, but the envelope's `pubkey` field is
-    // unauthenticated metadata. If schema_version >= 2, the plaintext
-    // contains its own owner_pubkey; cross-check against the envelope.
-    // Mismatch means the envelope was tampered with or schema_version was
-    // hand-edited; treat like an identity mismatch (no plaintext returned).
-    if stored.schema_version >= 2
-        && !stored.owner_pubkey.is_empty()
-        && stored.owner_pubkey != envelope.pubkey
-    {
-        return Ok(LoadStatus::IdentityMismatch {
-            stored_pubkey: envelope.pubkey,
-        });
-    }
-
-    let api_key_present = !stored.api_key.is_empty();
-    let api_key_preview = compute_preview(&stored.api_key);
-
-    // `StoredSettings` implements `Drop` to zeroize the api_key, which blocks
-    // by-value field moves. Clone the non-secret strings out; the api_key
-    // itself never leaves this function — the view only carries metadata +
-    // last-4 preview. When `stored` is dropped at end-of-scope its api_key
-    // is zeroized.
-    let view = AgentProviderSettingsView {
-        provider: stored.provider.clone(),
-        model: stored.model.clone(),
-        base_url: stored.base_url.clone(),
-        anthropic_api_version: stored.anthropic_api_version.clone(),
-        system_prompt: stored.system_prompt.clone(),
-        max_rounds: stored.max_rounds,
-        max_output_tokens: stored.max_output_tokens,
-        llm_timeout_secs: stored.llm_timeout_secs,
-        tool_timeout_secs: stored.tool_timeout_secs,
-        max_history_bytes: stored.max_history_bytes,
-        detected_provider_id: stored.detected_provider_id.clone(),
-        detection_overridden: stored.detection_overridden,
-        api_key_present,
-        api_key_preview,
+    let parsed = match parse_or_migrate_plaintext(&plain, &envelope.pubkey) {
+        Ok(p) => p,
+        // Embedded owner_pubkey mismatch ⇒ same threat as envelope.pubkey
+        // mismatch; surface to UI as IdentityMismatch.
+        Err(ParseError::IdentityMismatch) => {
+            return Ok(ReadResult::IdentityMismatch {
+                stored_pubkey: envelope.pubkey,
+            });
+        }
+        Err(ParseError::Other(msg)) => {
+            return Err(format!("parse profiles plaintext: {msg}"));
+        }
     };
-    Ok(LoadStatus::Ok { view })
+    let wrapper = match parsed {
+        ParsedPlaintext::Current(w) => w,
+        ParsedPlaintext::Migrated(w) => {
+            // Read-path: write or fail loudly. Otherwise the UI would
+            // edit/delete a profile id that does not survive the next call.
+            write_profiles_envelope(&path, &keys, &w)
+                .map_err(|e| format!("settings migration write failed: {e}"))?;
+            w
+        }
+    };
+    drop(keys);
+    Ok(ReadResult::Ok { wrapper })
 }
 
+enum ReadResult {
+    None,
+    Ok { wrapper: ProfilesPlaintext },
+    IdentityMismatch { stored_pubkey: String },
+}
+
+fn profile_to_summary(profile: &NamedProfile) -> ProfileSummary {
+    ProfileSummary {
+        id: profile.id.clone(),
+        label: profile.label.clone(),
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+        provider: profile.settings.provider.clone(),
+        model: profile.settings.model.clone(),
+        base_url: profile.settings.base_url.clone(),
+        detected_provider_id: profile.settings.detected_provider_id.clone(),
+        api_key_present: !profile.settings.api_key.is_empty(),
+        api_key_preview: compute_preview(&profile.settings.api_key),
+    }
+}
+
+fn profile_to_view(profile: &NamedProfile) -> AgentProviderSettingsView {
+    let s = &profile.settings;
+    AgentProviderSettingsView {
+        label: profile.label.clone(),
+        provider: s.provider.clone(),
+        model: s.model.clone(),
+        base_url: s.base_url.clone(),
+        anthropic_api_version: s.anthropic_api_version.clone(),
+        system_prompt: s.system_prompt.clone(),
+        max_rounds: s.max_rounds,
+        max_output_tokens: s.max_output_tokens,
+        llm_timeout_secs: s.llm_timeout_secs,
+        tool_timeout_secs: s.tool_timeout_secs,
+        max_history_bytes: s.max_history_bytes,
+        detected_provider_id: s.detected_provider_id.clone(),
+        detection_overridden: s.detection_overridden,
+        api_key_present: !s.api_key.is_empty(),
+        api_key_preview: compute_preview(&s.api_key),
+    }
+}
+
+// ─── IPC commands ───────────────────────────────────────────────────────────
+
+/// Return the full settings state: list of profiles + which is default,
+/// or a discriminated error (none / identity-mismatch / error).
 #[tauri::command]
-pub fn save_agent_provider_settings(
-    mut input: AgentProviderSettingsInput,
+pub fn get_agent_provider_settings_state(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    // Trim whitespace from secret-bearing and identifier fields before
-    // validation/storage. A trailing newline from paste-from-terminal is the
-    // common case and would otherwise be persisted and shipped to the
-    // provider verbatim (breaking auth). System prompt is intentionally NOT
-    // trimmed here — the UI already does that, and trimming long prose is
-    // not our call from this layer.
-    input.model = input.model.trim().to_owned();
-    input.base_url = input.base_url.trim().to_owned();
-    input.detected_provider_id = input.detected_provider_id.trim().to_owned();
-    if let Some(v) = input.anthropic_api_version.as_mut() {
-        *v = v.trim().to_owned();
+) -> Result<SettingsStateResponse, String> {
+    let _settings_guard = state
+        .agent_provider_settings_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    match read_wrapper_locked(&app, &state) {
+        Ok(ReadResult::None) => Ok(SettingsStateResponse::None),
+        Ok(ReadResult::IdentityMismatch { stored_pubkey }) => {
+            Ok(SettingsStateResponse::IdentityMismatch { stored_pubkey })
+        }
+        Ok(ReadResult::Ok { wrapper, .. }) => {
+            let profiles = wrapper.profiles.iter().map(profile_to_summary).collect();
+            Ok(SettingsStateResponse::Ok {
+                default_profile_id: wrapper.default_profile_id,
+                profiles,
+            })
+        }
+        Err(message) => Ok(SettingsStateResponse::Error { message }),
     }
-    // SECURITY: Take the api_key out by value into a Zeroizing wrapper so
-    // the un-trimmed plaintext on the heap is wiped when we drop it, rather
-    // than left for whoever realloc()s that page next.
-    if let Some(raw) = input.api_key.take() {
-        let zeroized_raw: Zeroizing<String> = Zeroizing::new(raw);
-        let trimmed = zeroized_raw.trim();
-        if trimmed.is_empty() {
-            // Caller-supplied whitespace-only key. The TS/Rust contract is
-            // "empty string is invalid" — silently coercing to `None` would
-            // trigger the reuse path and could be surprising (user thinks
-            // they typed a new key; we keep the old one). Reject loudly.
-            return Err("API key cannot be empty".into());
-        }
-        input.api_key = Some(trimmed.to_owned());
-        // zeroized_raw drops here, wiping the original buffer.
-    }
-
-    validate_input(&input)?;
-
-    let path = settings_path(&app)?;
-    // Tolerate an unreadable / corrupt existing envelope when the user is
-    // providing a fresh api_key — we'll overwrite it cleanly. If api_key is
-    // None (key-reuse intent), the corrupt envelope MUST surface as an error
-    // because there's no recovering the previously stored key.
-    let existing_envelope = match read_envelope(&path) {
-        Ok(env) => env,
-        Err(e) => {
-            if input.api_key.is_some() {
-                None
-            } else {
-                return Err(format!(
-                    "Existing settings unreadable ({e}); enter the API key again to overwrite."
-                ));
-            }
-        }
-    };
-
-    let keys = state.keys.lock().map_err(|e| e.to_string())?;
-    let current_pubkey = keys.public_key().to_hex();
-
-    // If api_key is None, we want to preserve the previously stored key.
-    // Requirements: existing settings must exist AND have been encrypted for
-    // this identity AND have the same provider AND the same detected_provider_id
-    // AND the same normalized base-URL origin. This prevents silent
-    // cross-issuer key reuse when switching between OpenAI-compatible
-    // providers that share `provider: "openai"`.
-    let resolved_api_key: Zeroizing<String> = match input.api_key.take() {
-        Some(k) if k.is_empty() => return Err("API key cannot be empty".into()),
-        Some(k) => Zeroizing::new(k),
-        None => {
-            let env = existing_envelope.as_ref().ok_or_else(|| {
-                "API key required (no previously saved settings to reuse)".to_owned()
-            })?;
-            if env.pubkey != current_pubkey {
-                return Err(
-                    "Saved settings were encrypted for a different identity — re-enter API key"
-                        .into(),
-                );
-            }
-            let prev_plain = decrypt_settings(&keys, &env.ciphertext)?;
-            let mut prev: StoredSettings = serde_json::from_str(&prev_plain)
-                .map_err(|e| format!("parse stored settings: {e}"))?;
-            // v2 defense-in-depth: even if the envelope says it was
-            // encrypted for the current pubkey, the encrypted plaintext
-            // carries its own `owner_pubkey`. Treat a mismatch as identity
-            // mismatch — refuse reuse rather than silently lifting a key
-            // out of a tampered envelope. v1 settings have `owner_pubkey:
-            // ""` (default) and are accepted here for backward compat;
-            // they were already gated by the envelope-level pubkey check.
-            if !prev.owner_pubkey.is_empty() && prev.owner_pubkey != current_pubkey {
-                return Err("Saved settings owner mismatch — re-enter API key".into());
-            }
-            if prev.provider != input.provider {
-                return Err("Provider changed — re-enter API key".into());
-            }
-            if prev.detected_provider_id != input.detected_provider_id {
-                return Err("Issuer changed — re-enter API key".into());
-            }
-            let prev_origin = normalize_origin(&prev.base_url)?;
-            let new_origin = normalize_origin(&input.base_url)?;
-            if prev_origin != new_origin {
-                return Err("Base URL origin changed — re-enter API key".into());
-            }
-            if prev.api_key.is_empty() {
-                return Err("No previously stored API key to reuse".into());
-            }
-            // `StoredSettings: Drop` blocks `prev.api_key` move. Swap it out
-            // with an empty `String`; the now-empty `prev` will drop and
-            // zeroize an empty buffer (harmless), and the lifted key is
-            // wrapped in `Zeroizing` immediately.
-            Zeroizing::new(std::mem::take(&mut prev.api_key))
-        }
-    };
-
-    // `AgentProviderSettingsInput: Drop` blocks by-value moves of its
-    // fields (Drop wipes the optional api_key). Use `std::mem::take` to
-    // lift each owned field out — leaves a `String::new()` / `None` behind,
-    // which the eventual Drop wipes harmlessly.
-    let to_store = StoredSettings {
-        // v2 adds `owner_pubkey` inside the encrypted plaintext for
-        // defense-in-depth against envelope tampering. The loader treats
-        // a v2 plaintext whose owner_pubkey disagrees with the envelope's
-        // pubkey as an identity mismatch.
-        schema_version: 2,
-        owner_pubkey: current_pubkey.clone(),
-        provider: std::mem::take(&mut input.provider),
-        api_key: resolved_api_key.to_string(),
-        model: std::mem::take(&mut input.model),
-        base_url: std::mem::take(&mut input.base_url),
-        anthropic_api_version: input.anthropic_api_version.take(),
-        system_prompt: input.system_prompt.take(),
-        max_rounds: input.max_rounds,
-        max_output_tokens: input.max_output_tokens,
-        llm_timeout_secs: input.llm_timeout_secs,
-        tool_timeout_secs: input.tool_timeout_secs,
-        max_history_bytes: input.max_history_bytes,
-        detected_provider_id: std::mem::take(&mut input.detected_provider_id),
-        detection_overridden: input.detection_overridden,
-    };
-
-    let plaintext = Zeroizing::new(
-        serde_json::to_string(&to_store)
-            .map_err(|e| format!("serialize plaintext settings: {e}"))?,
-    );
-    let ciphertext = encrypt_settings(&keys, &plaintext)?;
-    drop(plaintext);
-    drop(keys);
-
-    let envelope = SettingsEnvelope {
-        version: ENVELOPE_VERSION,
-        alg: ENVELOPE_ALG.into(),
-        pubkey: current_pubkey,
-        ciphertext,
-        updated_at: now_unix(),
-    };
-    write_envelope(&path, &envelope)?;
-    Ok(())
 }
 
+/// Return the full editable view of a single profile (no secret).
 #[tauri::command]
-pub fn delete_agent_provider_settings(app: AppHandle) -> Result<(), String> {
-    let path = settings_path(&app)?;
-    match std::fs::remove_file(&path) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("delete settings file: {e}")),
+pub fn get_agent_provider_profile(
+    profile_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ProfileLoadStatus, String> {
+    let _settings_guard = state
+        .agent_provider_settings_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    match read_wrapper_locked(&app, &state) {
+        Ok(ReadResult::None) => Ok(ProfileLoadStatus::None),
+        Ok(ReadResult::IdentityMismatch { stored_pubkey }) => {
+            Ok(ProfileLoadStatus::IdentityMismatch { stored_pubkey })
+        }
+        Ok(ReadResult::Ok { wrapper, .. }) => {
+            match wrapper.profiles.iter().find(|p| p.id == profile_id) {
+                Some(profile) => Ok(ProfileLoadStatus::Ok {
+                    view: profile_to_view(profile),
+                }),
+                None => Ok(ProfileLoadStatus::None),
+            }
+        }
+        Err(message) => Ok(ProfileLoadStatus::Error { message }),
     }
 }
-
 #[tauri::command]
 pub fn get_agent_provider_env_presence() -> Result<AgentProviderEnvPresence, String> {
     Ok(AgentProviderEnvPresence {
@@ -259,11 +186,51 @@ pub fn get_agent_provider_env_presence() -> Result<AgentProviderEnvPresence, Str
     })
 }
 
+/// Result of a defensive check that a specific profile id exists in the
+/// current encrypted settings. Used by the agent create/update IPC paths
+/// to harden the "stale picker value" attack surface: even if the UI
+/// fails to clear a dangling pin, the backend refuses to persist it.
+pub(crate) enum ProfileIdCheck {
+    /// The id resolves to a profile in the wrapper.
+    Ok,
+    /// The wrapper is present and readable but does NOT contain this id.
+    Unknown,
+    /// The settings file does not exist, can't be read, or is bound to a
+    /// different identity. We do not block the agent save in this state:
+    /// the user can have a pinned id from an earlier readable wrapper,
+    /// and a transient read failure shouldn't block unrelated edits. The
+    /// spawn path still fails closed for the actual sprout-agent run.
+    Indeterminate,
+}
+
+/// Validate that `id` resolves to a currently-saved profile. Takes the
+/// settings lock briefly. Lock order: caller must NOT already hold the
+/// agents store lock (settings → keys → agents-store).
+pub(crate) fn check_provider_profile_id(
+    app: &AppHandle,
+    state: &AppState,
+    id: &str,
+) -> Result<ProfileIdCheck, String> {
+    let _guard = state
+        .agent_provider_settings_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
+    match read_wrapper_locked(app, state) {
+        Ok(ReadResult::Ok { wrapper }) => {
+            if wrapper.profiles.iter().any(|p| p.id == id) {
+                Ok(ProfileIdCheck::Ok)
+            } else {
+                Ok(ProfileIdCheck::Unknown)
+            }
+        }
+        Ok(ReadResult::None) | Ok(ReadResult::IdentityMismatch { .. }) | Err(_) => {
+            Ok(ProfileIdCheck::Indeterminate)
+        }
+    }
+}
+
 /// Compute the UI preview for a saved API key. Returns the last 4 chars
-/// when the key is long enough to be safely truncated; otherwise `None`.
-/// The minimum is `PREVIEW_LEN * 2` so the preview never reveals more than
-/// half the key. Real provider keys are >> 8 chars; the short-key branch
-/// is defense against test fixtures or pasted garbage.
+/// when the key is long enough; otherwise `None`. Never the full key.
 pub(super) fn compute_preview(api_key: &str) -> Option<String> {
     const PREVIEW_LEN: usize = 4;
     const MIN_KEY_LEN_FOR_PREVIEW: usize = PREVIEW_LEN * 2; // 8
@@ -275,11 +242,4 @@ pub(super) fn compute_preview(api_key: &str) -> Option<String> {
         return None;
     }
     Some(api_key.chars().skip(len - PREVIEW_LEN).collect())
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }

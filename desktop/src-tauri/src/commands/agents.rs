@@ -2,6 +2,7 @@ use nostr::{Keys, ToBech32};
 use nostr_compat;
 use tauri::{AppHandle, State};
 
+use crate::commands::agent_provider_settings::{check_provider_profile_id, ProfileIdCheck};
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -143,7 +144,7 @@ pub fn list_managed_agents(
 
 #[tauri::command]
 pub async fn create_managed_agent(
-    input: CreateManagedAgentRequest,
+    mut input: CreateManagedAgentRequest,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CreateManagedAgentResponse, String> {
@@ -175,6 +176,36 @@ pub async fn create_managed_agent(
         return Err(
             "respond-to mode 'allowlist' requires at least one pubkey in the allowlist".to_string(),
         );
+    }
+
+    // Normalize the provided pin: trim, then collapse empty to None so
+    // the record never carries a whitespace-only id that the spawn path
+    // would reject. Direct IPC callers can no longer slip `Some("")` or
+    // `Some("   ")` past the UI layer.
+    input.provider_profile_id = input
+        .provider_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // Defense-in-depth: if the caller pinned a specific provider profile,
+    // make sure that id resolves in the encrypted settings *now*, before
+    // we persist an agent record that the spawn path will later refuse to
+    // start. Indeterminate (settings missing / unreadable / identity
+    // mismatch) is NOT a hard error — the spawn path still fails closed
+    // for that case, and blocking unrelated agent edits over a transient
+    // read failure would be worse UX than the worst-case startup-time
+    // failure mode.
+    if let Some(pinned) = input.provider_profile_id.as_deref() {
+        if matches!(
+            check_provider_profile_id(&app, &state, pinned)?,
+            ProfileIdCheck::Unknown
+        ) {
+            return Err(format!(
+                "provider profile {pinned} no longer exists in Settings → Agent Provider"
+            ));
+        }
     }
 
     // Snapshot the workspace owner pubkey for the legacy-record auth_tag
@@ -382,6 +413,7 @@ pub async fn create_managed_agent(
             last_error: None,
             respond_to: input.respond_to,
             respond_to_allowlist: respond_to_allowlist.clone(),
+            provider_profile_id: input.provider_profile_id.clone(),
         };
 
         records.push(record);

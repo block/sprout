@@ -49,24 +49,39 @@ type MockCommandAvailability = {
   resolvedPath?: string | null;
 };
 
+type MockAgentProviderProfileView = {
+  provider: "anthropic" | "openai";
+  model: string;
+  baseUrl: string;
+  anthropicApiVersion: string | null;
+  systemPrompt: string | null;
+  maxRounds: number | null;
+  maxOutputTokens: number | null;
+  llmTimeoutSecs: number | null;
+  toolTimeoutSecs: number | null;
+  maxHistoryBytes: number | null;
+  detectedProviderId: string;
+  detectionOverridden: boolean;
+  apiKeyPresent: boolean;
+  apiKeyPreview: string | null;
+};
+
+type MockAgentProviderProfile = {
+  id: string;
+  label: string;
+  createdAt: number;
+  updatedAt: number;
+  view: MockAgentProviderProfileView;
+};
+
+// Multi-profile shape: a record holds N named profiles + an optional default
+// pointer, all encrypted under one stored pubkey. The mock bridge in
+// `src/testing/e2eBridge.ts` consumes this shape directly; the legacy
+// single-`view` shape from PR #576 is gone.
 type MockAgentProviderSettingsRecord = {
   storedPubkey: string;
-  view: {
-    provider: "anthropic" | "openai";
-    model: string;
-    baseUrl: string;
-    anthropicApiVersion: string | null;
-    systemPrompt: string | null;
-    maxRounds: number | null;
-    maxOutputTokens: number | null;
-    llmTimeoutSecs: number | null;
-    toolTimeoutSecs: number | null;
-    maxHistoryBytes: number | null;
-    detectedProviderId: string;
-    detectionOverridden: boolean;
-    apiKeyPresent: boolean;
-    apiKeyPreview: string | null;
-  };
+  defaultProfileId: string | null;
+  profiles: MockAgentProviderProfile[];
 };
 
 type MockAgentProviderEnvPresence = {
@@ -87,6 +102,7 @@ type MockBridgeOptions = {
   agentProviderSettings?: MockAgentProviderSettingsRecord | null;
   agentProviderSettingsLoadError?: string;
   agentProviderEnvPresence?: MockAgentProviderEnvPresence;
+  agentProviderProfileReadDelayMs?: number;
 };
 
 type BridgeOptions = {

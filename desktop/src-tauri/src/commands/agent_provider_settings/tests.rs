@@ -54,6 +54,8 @@ fn stored_anthropic(api_key: &str) -> StoredSettings {
 
 fn make_input_anthropic(api_key: Option<String>) -> AgentProviderSettingsInput {
     AgentProviderSettingsInput {
+        profile_id: None,
+        label: "Default".into(),
         provider: PROVIDER_ANTHROPIC.into(),
         api_key,
         model: "claude-sonnet-4-5".into(),
@@ -683,6 +685,8 @@ fn save_trims_api_key_whitespace() {
     // whitespace and asserting validate accepts it after we trim the way
     // the real command path does.
     let mut inp = AgentProviderSettingsInput {
+        profile_id: None,
+        label: "Default".into(),
         provider: PROVIDER_ANTHROPIC.into(),
         api_key: Some("  sk-ant-trim-me  \n".into()),
         model: "  claude-sonnet-4-5  ".into(),

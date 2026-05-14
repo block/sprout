@@ -47,6 +47,14 @@ pub fn apply_workspace(
     }
 
     if let Some(keys) = parsed_keys {
+        // Lock order: `agent_provider_settings_lock` BEFORE `state.keys`.
+        // See `AppState::agent_provider_settings_lock` — serializes against
+        // in-flight settings reads/writes so they never observe a partial
+        // identity rotation.
+        let _settings_guard = state
+            .agent_provider_settings_lock
+            .lock()
+            .map_err(|e| e.to_string())?;
         let mut keys_guard = state.keys.lock().map_err(|e| e.to_string())?;
         *keys_guard = keys;
     }

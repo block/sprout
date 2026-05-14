@@ -15,6 +15,7 @@ import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
+import { useAgentProviderSettingsBroadcastSync } from "@/features/settings/hooks/useAgentProviderSettings";
 import { createSproutQueryClient } from "@/shared/api/queryClient";
 import { listenForDeepLinks } from "@/shared/deep-link";
 
@@ -36,11 +37,22 @@ function AppLoadingGate() {
   );
 }
 
+function AgentProviderCrossWindowSync() {
+  // Mounted purely for its effect: subscribe to backend-broadcast
+  // settings-changed events and invalidate the relevant queries so a
+  // second open Sprout window sees writes from this one.
+  useAgentProviderSettingsBroadcastSync();
+  return null;
+}
+
 function WorkspaceQueryProvider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(createSproutQueryClient);
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <AgentProviderCrossWindowSync />
+      {children}
+    </QueryClientProvider>
   );
 }
 

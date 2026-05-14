@@ -18,6 +18,16 @@ pub struct AppState {
     pub relay_url_override: Mutex<Option<String>>,
     pub managed_agents_store_lock: Mutex<()>,
     pub channel_templates_store_lock: Mutex<()>,
+    /// Serializes read-modify-write of the encrypted agent-provider
+    /// settings envelope (file: `agent-provider-settings.json`).
+    ///
+    /// **Lock order: this mutex BEFORE `state.keys`.** All three
+    /// post-boot paths that swap `state.keys` (resolve_persisted_identity,
+    /// import_identity, apply_workspace) acquire this lock first, so a
+    /// settings save in flight under the old pubkey never races with an
+    /// identity rotation. Settings read/write commands also hold this
+    /// lock across the read-modify-write of the envelope file.
+    pub agent_provider_settings_lock: Mutex<()>,
     pub managed_agent_processes: Mutex<HashMap<String, ManagedAgentProcess>>,
     pub huddle_state: Mutex<HuddleState>,
     /// Tauri app handle — stored after setup so huddle commands can emit
@@ -70,6 +80,7 @@ pub fn build_app_state() -> AppState {
         relay_url_override: Mutex::new(None),
         managed_agents_store_lock: Mutex::new(()),
         channel_templates_store_lock: Mutex::new(()),
+        agent_provider_settings_lock: Mutex::new(()),
         managed_agent_processes: Mutex::new(HashMap::new()),
         huddle_state: Mutex::new(HuddleState::default()),
         app_handle: Mutex::new(None),
@@ -142,6 +153,13 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
                     "sprout-desktop: persisted identity pubkey {}",
                     keys.public_key().to_hex()
                 );
+                // Lock order: agent_provider_settings_lock BEFORE state.keys.
+                // Any in-flight settings read-modify-write will see a
+                // consistent pubkey across its read+write.
+                let _settings_guard = state
+                    .agent_provider_settings_lock
+                    .lock()
+                    .map_err(|e| e.to_string())?;
                 *state.keys.lock().map_err(|e| e.to_string())? = keys;
                 return Ok(());
             }
@@ -172,6 +190,11 @@ pub fn resolve_persisted_identity(app: &AppHandle, state: &AppState) -> Result<(
         "sprout-desktop: generated and saved identity pubkey {}",
         keys.public_key().to_hex()
     );
+    // Lock order: agent_provider_settings_lock BEFORE state.keys (see above).
+    let _settings_guard = state
+        .agent_provider_settings_lock
+        .lock()
+        .map_err(|e| e.to_string())?;
     *state.keys.lock().map_err(|e| e.to_string())? = keys;
     Ok(())
 }

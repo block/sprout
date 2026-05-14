@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use nostr::Keys;
 use tauri::{AppHandle, State};
 
+use crate::commands::agent_provider_settings::{check_provider_profile_id, ProfileIdCheck};
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -105,10 +106,40 @@ pub async fn get_agent_models(
 /// Name changes are synced to the relay immediately via a kind:0 re-publish.
 #[tauri::command]
 pub async fn update_managed_agent(
-    input: UpdateManagedAgentRequest,
+    mut input: UpdateManagedAgentRequest,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<UpdateManagedAgentResponse, String> {
+    // Normalize the pin patch: an inner `Some("")` or whitespace-only
+    // id becomes `Some(None)` (explicit clear), so a stray direct-IPC
+    // value can't slip past the UI layer and end up as a record field
+    // that the spawn path will later reject.
+    if let Some(inner) = input.provider_profile_id.as_mut() {
+        if let Some(s) = inner.as_deref() {
+            let trimmed = s.trim();
+            *inner = if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            };
+        }
+    }
+
+    // Defense-in-depth: if the caller is setting a specific provider
+    // profile id (Some(Some(id))), make sure it resolves now. Clear
+    // (Some(None)) and untouched (None) are always allowed. See
+    // `check_provider_profile_id` for the Indeterminate policy.
+    if let Some(Some(pinned)) = input.provider_profile_id.as_ref() {
+        if matches!(
+            check_provider_profile_id(&app, &state, pinned)?,
+            ProfileIdCheck::Unknown,
+        ) {
+            return Err(format!(
+                "provider profile {pinned} no longer exists in Settings → Agent Provider"
+            ));
+        }
+    }
+
     // Phase 1: local save (synchronous, under lock)
     let (summary, sync_params) = {
         let _store_guard = state
@@ -193,6 +224,12 @@ pub async fn update_managed_agent(
         // when the caller explicitly supplied a new list.
         if input.respond_to_allowlist.is_some() {
             record.respond_to_allowlist = prospective_allowlist;
+        }
+
+        // Tri-state: None = don't touch, Some(None) = clear, Some(Some(id)) = set.
+        // Mirrors how `model` / `system_prompt` flow above.
+        if let Some(profile_update) = input.provider_profile_id {
+            record.provider_profile_id = profile_update;
         }
 
         record.updated_at = now_iso();

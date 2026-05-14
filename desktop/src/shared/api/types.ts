@@ -297,6 +297,12 @@ export type ManagedAgent = {
    * `"allowlist"`. Preserved across mode toggles.
    */
   respondToAllowlist: string[];
+  /**
+   * For sprout-agent rows: pinned provider-profile ID, or `null` to use the
+   * Agent Provider panel's default. Ignored for other agents (goose, codex,
+   * …) — they bring their own provider config.
+   */
+  providerProfileId: string | null;
 };
 
 /**
@@ -345,6 +351,11 @@ export type CreateManagedAgentInput = {
    * normalized server-side (must be 64 hex chars each).
    */
   respondToAllowlist?: string[];
+  /**
+   * Pin this sprout-agent to a specific provider profile. `null` ⇒ use the
+   * panel's default. Ignored for other agents.
+   */
+  providerProfileId?: string | null;
 };
 
 export type CreateManagedAgentResponse = {
@@ -417,6 +428,16 @@ export type UpdateManagedAgentInput = {
    * (validated & normalized server-side).
    */
   respondToAllowlist?: string[];
+  /**
+   * Tri-state for the agent's provider-profile pin:
+   * - Absent (`undefined`) = don't touch.
+   * - `null` = clear (use panel default).
+   * - `string` = pin to this profile id.
+   *
+   * Encoded as `Option<Option<String>>` server-side, matching how `model` /
+   * `systemPrompt` already flow.
+   */
+  providerProfileId?: string | null;
 };
 export type AgentPersona = {
   id: string;

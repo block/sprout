@@ -17,6 +17,7 @@ import { toast } from "sonner";
 
 import { useAppShell } from "@/app/AppShellContext";
 import { isSproutAgent } from "@/features/agents/lib/resolveAcpProviderId";
+import { SproutProfileLabel } from "./SproutProfileLabel";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { Badge } from "@/shared/ui/badge";
 import type {
@@ -336,6 +337,12 @@ function RuntimeBlock({
             >
               Model managed in Settings &rsaquo; Agent Provider
             </span>
+          ) : null}
+          {isSprout ? (
+            <SproutProfileLabel
+              pinnedProfileId={agent.providerProfileId}
+              pubkey={agent.pubkey}
+            />
           ) : null}
         </div>
       ) : null}

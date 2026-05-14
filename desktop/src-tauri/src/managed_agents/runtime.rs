@@ -429,6 +429,7 @@ pub fn build_managed_agent_summary(
         log_path,
         respond_to: record.respond_to,
         respond_to_allowlist: record.respond_to_allowlist.clone(),
+        provider_profile_id: record.provider_profile_id.clone(),
     })
 }
 
@@ -749,7 +750,14 @@ pub fn build_agent_command(
     if known_acp_provider(&record.agent_command).is_some_and(|p| p.id == "sprout-agent") {
         use crate::commands::agent_provider_settings;
         let state = app.state::<crate::app_state::AppState>();
-        let load = agent_provider_settings::load_for_spawn(app, &*state);
+        // record.provider_profile_id pins the agent to a specific profile;
+        // None falls back to the panel's default profile (or fails closed if
+        // no default is set — see spawn.rs::load_for_spawn).
+        let load = agent_provider_settings::load_for_spawn(
+            app,
+            &*state,
+            record.provider_profile_id.as_deref(),
+        );
         agent_provider_settings::apply_to_command(&mut command, load, &record.name);
     }
 
@@ -1146,6 +1154,7 @@ mod tests {
             last_error: None,
             respond_to,
             respond_to_allowlist: allowlist,
+            provider_profile_id: None,
         }
     }
 
