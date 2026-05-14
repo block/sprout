@@ -1,9 +1,8 @@
-use nostr::{EventBuilder, Kind, Tag};
 use sha2::{Digest, Sha256};
 
 use crate::client::SproutClient;
 use crate::error::CliError;
-use crate::validate::{read_or_stdin, validate_uuid};
+use crate::validate::{parse_uuid, read_or_stdin, validate_uuid};
 
 // ---------------------------------------------------------------------------
 // Read commands — POST /query
@@ -61,17 +60,13 @@ pub async fn cmd_create_workflow(
     channel_id: &str,
     yaml: &str,
 ) -> Result<(), CliError> {
-    validate_uuid(channel_id)?;
+    let channel_uuid = parse_uuid(channel_id)?;
     let yaml_definition = read_or_stdin(yaml)?;
 
     // Generate a unique d-tag for this workflow
     let workflow_id = uuid::Uuid::new_v4().to_string();
-    let tags = vec![
-        Tag::parse(&["d", &workflow_id]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
-        Tag::parse(&["h", channel_id]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
-    ];
-
-    let builder = EventBuilder::new(Kind::Custom(30620), &yaml_definition, tags);
+    let builder = sprout_sdk::build_workflow_def(channel_uuid, &workflow_id, &yaml_definition)
+        .map_err(|e| CliError::Other(format!("build_workflow_def failed: {e}")))?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -88,11 +83,8 @@ pub async fn cmd_update_workflow(
     validate_uuid(workflow_id)?;
     let yaml_definition = read_or_stdin(yaml)?;
 
-    let tags =
-        vec![Tag::parse(&["d", workflow_id])
-            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
-
-    let builder = EventBuilder::new(Kind::Custom(30620), &yaml_definition, tags);
+    let builder = sprout_sdk::build_workflow_update(workflow_id, &yaml_definition)
+        .map_err(|e| CliError::Other(format!("build_workflow_update failed: {e}")))?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -105,14 +97,8 @@ pub async fn cmd_delete_workflow(client: &SproutClient, workflow_id: &str) -> Re
     validate_uuid(workflow_id)?;
     let keys = client.keys();
 
-    // NIP-09 deletion targeting the parameterized replaceable event
-    let tags = vec![Tag::parse(&[
-        "a",
-        &format!("30620:{}:{}", keys.public_key().to_hex(), workflow_id),
-    ])
-    .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
-
-    let builder = EventBuilder::new(Kind::Custom(5), "", tags);
+    let builder = sprout_sdk::build_workflow_delete(&keys.public_key().to_hex(), workflow_id)
+        .map_err(|e| CliError::Other(format!("build_workflow_delete failed: {e}")))?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -127,11 +113,8 @@ pub async fn cmd_trigger_workflow(
 ) -> Result<(), CliError> {
     validate_uuid(workflow_id)?;
 
-    let tags =
-        vec![Tag::parse(&["d", workflow_id])
-            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
-
-    let builder = EventBuilder::new(Kind::Custom(46020), "", tags);
+    let builder = sprout_sdk::build_workflow_trigger(workflow_id)
+        .map_err(|e| CliError::Other(format!("build_workflow_trigger failed: {e}")))?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
@@ -148,16 +131,12 @@ pub async fn cmd_approve_step(
 ) -> Result<(), CliError> {
     validate_uuid(approval_token)?;
 
-    let kind = if approved { 46030 } else { 46031 };
     let content = note.unwrap_or("");
 
     // The relay expects d-tag = hex(SHA256(token)), not the raw token UUID.
     let token_hash = hex::encode(Sha256::digest(approval_token.as_bytes()));
-    let tags =
-        vec![Tag::parse(&["d", &token_hash])
-            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
-
-    let builder = EventBuilder::new(Kind::Custom(kind), content, tags);
+    let builder = sprout_sdk::build_workflow_approval(&token_hash, approved, content)
+        .map_err(|e| CliError::Other(format!("build_workflow_approval failed: {e}")))?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;

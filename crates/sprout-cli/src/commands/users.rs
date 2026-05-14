@@ -1,5 +1,3 @@
-use nostr::{EventBuilder, Kind, Tag};
-
 use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::validate_hex64;
@@ -220,22 +218,8 @@ pub async fn cmd_get_presence(client: &SproutClient, pubkeys_csv: &str) -> Resul
 /// This will fail until the CLI gains a WS publish path. The kind is correct
 /// per the protocol spec (KIND_PRESENCE_UPDATE = 20001).
 pub async fn cmd_set_presence(client: &SproutClient, status: &str) -> Result<(), CliError> {
-    match status {
-        "online" | "away" | "offline" => {}
-        _ => {
-            return Err(CliError::Usage(format!(
-                "--status must be one of: online, away, offline (got: {status})"
-            )))
-        }
-    }
-
-    let tags =
-        vec![Tag::parse(&["status", status])
-            .map_err(|e| CliError::Other(format!("tag error: {e}")))?];
-
-    // KIND_PRESENCE_UPDATE (20001) — ephemeral, WS-only. HTTP bridge will reject this
-    // until the CLI gains a WebSocket publish path.
-    let builder = EventBuilder::new(Kind::Custom(20001), "", tags);
+    let builder = sprout_sdk::build_presence_update(status)
+        .map_err(|e| CliError::Other(format!("build_presence_update failed: {e}")))?;
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;

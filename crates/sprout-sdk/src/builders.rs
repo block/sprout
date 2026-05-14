@@ -5,7 +5,11 @@
 
 use nostr::{EventBuilder, Kind, Tag};
 use sprout_core::{
-    kind::{KIND_AGENT_OBSERVER_FRAME, KIND_GIT_REPO_ANNOUNCEMENT},
+    kind::{
+        KIND_AGENT_OBSERVER_FRAME, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_DELETION,
+        KIND_DM_ADD_MEMBER, KIND_DM_OPEN, KIND_GIT_REPO_ANNOUNCEMENT, KIND_PRESENCE_UPDATE,
+        KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    },
     observer::{
         content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
         OBSERVER_FRAME_TELEMETRY,
@@ -891,6 +895,149 @@ pub fn build_repo_announcement(
 
     Ok(EventBuilder::new(
         Kind::Custom(KIND_GIT_REPO_ANNOUNCEMENT as u16),
+        "",
+        tags,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Workflow builders
+// ---------------------------------------------------------------------------
+
+/// Build a workflow definition event (kind 30620).
+///
+/// - `channel_id`: the channel this workflow belongs to (h-tag)
+/// - `workflow_id`: unique d-tag identifier for this workflow
+/// - `yaml`: workflow YAML definition as content
+pub fn build_workflow_def(
+    channel_id: Uuid,
+    workflow_id: &str,
+    yaml: &str,
+) -> Result<EventBuilder, SdkError> {
+    let tags = vec![
+        tag(&["d", workflow_id])?,
+        tag(&["h", &channel_id.to_string()])?,
+    ];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_WORKFLOW_DEF as u16),
+        yaml,
+        tags,
+    ))
+}
+
+/// Build a workflow update event (kind 30620) for an existing workflow.
+///
+/// Updates an existing workflow definition in-place via the parameterized
+/// replaceable event mechanism — same d-tag overwrites the previous version.
+pub fn build_workflow_update(workflow_id: &str, yaml: &str) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["d", workflow_id])?];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_WORKFLOW_DEF as u16),
+        yaml,
+        tags,
+    ))
+}
+
+/// Build a NIP-09 deletion event targeting a workflow definition (kind 5).
+///
+/// The `a`-tag addresses the parameterized replaceable event `30620:<pubkey>:<workflow_id>`.
+pub fn build_workflow_delete(
+    author_pubkey: &str,
+    workflow_id: &str,
+) -> Result<EventBuilder, SdkError> {
+    let pk = check_pubkey_hex(author_pubkey, "author_pubkey")?;
+    let tags = vec![tag(&["a", &format!("30620:{pk}:{workflow_id}")])?];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_DELETION as u16),
+        "",
+        tags,
+    ))
+}
+
+/// Build a workflow trigger event (kind 46020).
+pub fn build_workflow_trigger(workflow_id: &str) -> Result<EventBuilder, SdkError> {
+    let tags = vec![tag(&["d", workflow_id])?];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_WORKFLOW_TRIGGER as u16),
+        "",
+        tags,
+    ))
+}
+
+/// Build a workflow approval event — kind 46030 (grant) or 46031 (deny).
+///
+/// - `token_hash`: hex-encoded SHA-256 of the approval token UUID (d-tag)
+/// - `approved`: `true` emits kind 46030 (grant), `false` emits kind 46031 (deny)
+/// - `note`: optional human-readable note as event content
+pub fn build_workflow_approval(
+    token_hash: &str,
+    approved: bool,
+    note: &str,
+) -> Result<EventBuilder, SdkError> {
+    let kind = if approved {
+        KIND_APPROVAL_GRANT
+    } else {
+        KIND_APPROVAL_DENY
+    };
+    let tags = vec![tag(&["d", token_hash])?];
+    Ok(EventBuilder::new(Kind::Custom(kind as u16), note, tags))
+}
+
+// ---------------------------------------------------------------------------
+// DM builders
+// ---------------------------------------------------------------------------
+
+/// Build a DM open event (kind 41010).
+///
+/// `pubkeys` must be 1-8 hex-encoded pubkeys to include in the DM conversation.
+pub fn build_dm_open(pubkeys: &[&str]) -> Result<EventBuilder, SdkError> {
+    if pubkeys.is_empty() || pubkeys.len() > 8 {
+        return Err(SdkError::InvalidInput(
+            "dm open requires 1-8 pubkeys".into(),
+        ));
+    }
+    let mut tags = Vec::with_capacity(pubkeys.len());
+    for pk in pubkeys {
+        let validated = check_pubkey_hex(pk, "pubkey")?;
+        tags.push(tag(&["p", &validated])?);
+    }
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_DM_OPEN as u16),
+        "",
+        tags,
+    ))
+}
+
+/// Build a DM add-member event (kind 41011).
+pub fn build_dm_add_member(channel_id: Uuid, pubkey: &str) -> Result<EventBuilder, SdkError> {
+    let pk = check_pubkey_hex(pubkey, "pubkey")?;
+    let tags = vec![tag(&["h", &channel_id.to_string()])?, tag(&["p", &pk])?];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_DM_ADD_MEMBER as u16),
+        "",
+        tags,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Presence builder
+// ---------------------------------------------------------------------------
+
+/// Build a presence update event (kind 20001).
+///
+/// `status` must be one of: `"online"`, `"away"`, `"offline"`.
+pub fn build_presence_update(status: &str) -> Result<EventBuilder, SdkError> {
+    match status {
+        "online" | "away" | "offline" => {}
+        _ => {
+            return Err(SdkError::InvalidInput(format!(
+                "status must be online, away, or offline (got: {status})"
+            )))
+        }
+    }
+    let tags = vec![tag(&["status", status])?];
+    Ok(EventBuilder::new(
+        Kind::Custom(KIND_PRESENCE_UPDATE as u16),
         "",
         tags,
     ))
