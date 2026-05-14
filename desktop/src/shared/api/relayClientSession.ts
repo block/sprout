@@ -276,8 +276,8 @@ export class RelayClient {
       {
         kinds: [KIND_TYPING_INDICATOR],
         "#h": [channelId],
-        limit: 0,
-        since: Math.floor(Date.now() / 1_000),
+        limit: 10,
+        since: Math.floor(Date.now() / 1_000) - 10,
       },
       onEvent,
     );

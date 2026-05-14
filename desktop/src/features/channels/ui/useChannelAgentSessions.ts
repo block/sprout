@@ -13,6 +13,7 @@ export type ChannelAgentSessionAgent = Pick<
   ManagedAgent,
   "pubkey" | "name" | "status"
 > & {
+  agentSource: "managed" | "member-bot" | "relay";
   canInterruptTurn: boolean;
   channelIds?: string[];
   channels?: string[];
@@ -55,6 +56,7 @@ export function buildChannelAgentSessionCandidates({
       pubkey: agent.pubkey,
       name: agent.name,
       status: relayStatusToManagedStatus(agent.status),
+      agentSource: "relay",
       canInterruptTurn: false,
       channelIds: agent.channelIds,
       channels: agent.channels,
@@ -68,6 +70,7 @@ export function buildChannelAgentSessionCandidates({
       pubkey: agent.pubkey,
       name: agent.name,
       status: agent.status,
+      agentSource: "managed",
       canInterruptTurn: true,
       channelIds: existing?.channelIds,
       channels: existing?.channels,
@@ -84,6 +87,7 @@ export function buildChannelAgentSessionCandidates({
       pubkey: member.pubkey,
       name: member.displayName ?? member.pubkey.slice(0, 8),
       status: "deployed",
+      agentSource: "member-bot",
       canInterruptTurn: false,
     });
   }
@@ -102,26 +106,45 @@ export function getChannelAgentSessionAgents({
   agents: ChannelAgentSessionAgent[];
   channelMembers?: ChannelMember[];
 }): ChannelAgentSessionAgent[] {
-  if (channelMembers) {
-    const memberPubkeys = new Set(
-      channelMembers.map((member) => normalizePubkey(member.pubkey)),
-    );
-
-    return agents.filter((agent) =>
-      memberPubkeys.has(normalizePubkey(agent.pubkey)),
-    );
-  }
-
   if (!activeChannelId || !activeChannel) {
     return [];
   }
 
+  const memberPubkeys = channelMembers
+    ? new Set(channelMembers.map((member) => normalizePubkey(member.pubkey)))
+    : null;
+  const botMemberPubkeys = channelMembers
+    ? new Set(
+        channelMembers
+          .filter((member) => member.role === "bot")
+          .map((member) => normalizePubkey(member.pubkey)),
+      )
+    : null;
+
   return agents.filter((agent) => {
+    const normalizedPubkey = normalizePubkey(agent.pubkey);
     const channelIds = agent.channelIds ?? [];
     const channels = agent.channels ?? [];
-    return (
+    const hasDeclaredChannelScope =
+      channelIds.length > 0 || channels.length > 0;
+    const matchesDeclaredChannel =
       channelIds.includes(activeChannelId) ||
-      channels.includes(activeChannel.name)
+      channels.includes(activeChannel.name);
+
+    if (agent.agentSource === "member-bot") {
+      return botMemberPubkeys?.has(normalizedPubkey) ?? matchesDeclaredChannel;
+    }
+
+    if (agent.agentSource === "managed") {
+      return memberPubkeys?.has(normalizedPubkey) ?? matchesDeclaredChannel;
+    }
+
+    if (matchesDeclaredChannel) {
+      return true;
+    }
+
+    return (
+      !hasDeclaredChannelScope && Boolean(memberPubkeys?.has(normalizedPubkey))
     );
   });
 }
