@@ -752,8 +752,8 @@ pub enum ReposCmd {
         /// Web browsing URL
         #[arg(long)]
         web: Option<String>,
-        /// Preferred relay(s) — can be specified multiple times
-        #[arg(long = "relay")]
+        /// Preferred Nostr relay(s) for repo discovery — can be specified multiple times
+        #[arg(long = "nostr-relay")]
         relays: Vec<String>,
     },
     /// Get a repository announcement
