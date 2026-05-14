@@ -154,7 +154,7 @@ export const MessageRow = React.memo(
         {respondToIcon ? (
           <span
             className={cn(
-              "absolute -right-0.5 flex items-center justify-center rounded-full bg-background text-muted-foreground",
+              "absolute -left-0.5 flex items-center justify-center rounded-full bg-background text-muted-foreground",
               isSmall ? "-top-0.5 h-3 w-3" : "-top-0.5 h-3.5 w-3.5",
             )}
             title={respondToIcon.title}

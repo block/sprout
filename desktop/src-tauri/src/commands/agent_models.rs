@@ -7,7 +7,7 @@ use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
-        load_managed_agents, managed_agent_avatar_url, missing_command_message,
+        load_managed_agents, load_personas, managed_agent_avatar_url, missing_command_message,
         normalize_agent_args, resolve_command, save_managed_agents, sync_managed_agent_processes,
         AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest, UpdateManagedAgentResponse,
     },
@@ -213,7 +213,15 @@ pub async fn update_managed_agent(
                 .map_err(|e| format!("failed to parse agent keys: {e}"))?;
             let relay_url = record.relay_url.clone();
             let display_name = record.name.clone();
-            let avatar_url = managed_agent_avatar_url(&record.agent_command);
+            let avatar_url = record
+                .persona_id
+                .as_deref()
+                .and_then(|pid| {
+                    let personas = load_personas(&app).ok()?;
+                    let persona = personas.iter().find(|p| p.id == pid)?;
+                    persona.avatar_url.clone()
+                })
+                .or_else(|| managed_agent_avatar_url(&record.agent_command));
             let auth_tag = record.auth_tag.clone();
             let respond_to = record.respond_to.as_str().to_string();
             Some((
