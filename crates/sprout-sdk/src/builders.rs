@@ -68,7 +68,7 @@ fn thread_tags(thread_ref: &ThreadRef, tags: &mut Vec<Tag>) -> Result<(), SdkErr
 
 /// Deduplicate and cap mentions, emitting p-tags.
 fn mention_tags(mentions: &[&str], tags: &mut Vec<Tag>) -> Result<(), SdkError> {
-    if mentions.len() > 50 {
+    if mentions.len() > crate::mentions::MENTION_CAP {
         return Err(SdkError::TooManyMentions);
     }
     let mut seen = std::collections::HashSet::new();

@@ -1,12 +1,16 @@
-use nostr::EventId;
+use nostr::{EventId, PublicKey};
 use sprout_sdk::{DiffMeta, ThreadRef, VoteDirection};
 use uuid::Uuid;
 
 use crate::client::SproutClient;
 use crate::error::CliError;
 use crate::validate::{
-    extract_at_names, infer_language, merge_mentions, normalize_mention_pubkeys, read_or_stdin,
-    truncate_diff, validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
+    infer_language, read_or_stdin, truncate_diff, validate_content_size, validate_hex64,
+    validate_uuid, MAX_DIFF_BYTES,
+};
+use sprout_sdk::mentions::{
+    extract_at_names, match_names_to_profiles, merge_mentions, normalize_mention_pubkeys,
+    MentionProfile, MENTION_CAP,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,8 +134,13 @@ async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uui
     )))
 }
 
-/// Resolve @names in content against channel members (queried from channel metadata).
-/// Returns matching pubkeys. On any error, returns empty vec — never blocks a send.
+/// Resolve `@name` mentions in `content` against this channel's members.
+///
+/// Mirrors the MCP implementation: queries kind 39002 (channel members),
+/// then kind 0 (profiles for those members), and delegates parsing and
+/// case-insensitive matching to [`sprout_sdk::mentions`]. On any I/O or
+/// parse failure, returns an empty vec — auto-tagging is best-effort and
+/// must never block a send.
 async fn resolve_content_mentions(
     client: &SproutClient,
     channel_id: &str,
@@ -141,27 +150,82 @@ async fn resolve_content_mentions(
     if names.is_empty() {
         return vec![];
     }
-    // Query channel metadata to get member list from p-tags
-    let filter = serde_json::json!({
+    // 1. Membership list (kind 39002 is parameterized-replaceable, addressed by `d` tag).
+    let members_filter = serde_json::json!({
         "kinds": [39002],
-        "#h": [channel_id]
+        "#d": [channel_id],
+        "limit": 1,
     });
-    let raw = client.query(&filter).await.unwrap_or_default();
-    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
-    // Channel metadata is returned as an array of events
-    let Some(events) = parsed.as_array() else {
-        return vec![];
+    let member_pubkeys = match fetch_member_pubkeys(client, &members_filter).await {
+        Some(pks) if !pks.is_empty() => pks,
+        _ => return vec![],
     };
-    let Some(event) = events.first() else {
-        return vec![];
+
+    // 2. Profiles for those members (kind 0).
+    let profiles_filter = serde_json::json!({
+        "kinds": [0],
+        "authors": member_pubkeys,
+        "limit": member_pubkeys.len(),
+    });
+    let profile_events = match fetch_events(client, &profiles_filter).await {
+        Some(v) => v,
+        None => return vec![],
     };
+
+    // 3. Hand the parsed profile content + pubkey to the shared matcher.
+    let entries: Vec<MentionProfile<'_>> = profile_events
+        .iter()
+        .filter_map(|e| {
+            let pubkey = e.get("pubkey")?.as_str()?;
+            let content_json = e.get("content")?.as_str()?;
+            Some(MentionProfile {
+                pubkey,
+                content_json,
+            })
+        })
+        .collect();
+    match_names_to_profiles(&names, &entries)
+}
+
+/// Fetch raw events for `filter` via the relay's `/query` endpoint.
+/// Returns `None` on any I/O or parse failure.
+async fn fetch_events(
+    client: &SproutClient,
+    filter: &serde_json::Value,
+) -> Option<Vec<serde_json::Value>> {
+    let raw = client.query(filter).await.ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    parsed.as_array().cloned()
+}
+
+/// Extract member pubkeys (the `p` tag values) from a single 39002 event.
+async fn fetch_member_pubkeys(
+    client: &SproutClient,
+    filter: &serde_json::Value,
+) -> Option<Vec<String>> {
+    let events = fetch_events(client, filter).await?;
+    Some(parse_member_pubkeys(events.first()?))
+}
+
+/// Parse member pubkeys from a kind 39002 event JSON value.
+///
+/// Filters and canonicalizes via `nostr::PublicKey::from_hex` — matching
+/// MCP's typed-Nostr behavior so both surfaces accept exactly the same
+/// pubkeys. Pure helper, split out for testing.
+fn parse_member_pubkeys(event: &serde_json::Value) -> Vec<String> {
     let Some(tags) = event.get("tags").and_then(|t| t.as_array()) else {
         return vec![];
     };
-    // p-tags contain member pubkeys; we can't resolve display names without profiles
-    // For now, return empty — @mention resolution requires profile lookup
-    let _ = (tags, names);
-    vec![]
+    tags.iter()
+        .filter_map(|t| {
+            let arr = t.as_array()?;
+            if arr.first()?.as_str()? != "p" {
+                return None;
+            }
+            let pk = arr.get(1)?.as_str()?;
+            PublicKey::from_hex(pk).ok().map(|k| k.to_hex())
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -301,10 +365,12 @@ pub async fn cmd_send_message(client: &SproutClient, p: SendMessageParams) -> Re
         None
     };
 
-    // Normalize explicit mentions, then merge auto-resolved up to SDK cap of 50.
-    let mut merged: Vec<String> = normalize_mention_pubkeys(&p.mentions, "");
-    let auto_resolved = resolve_content_mentions(client, &p.channel_id, &final_content).await;
-    merge_mentions(&mut merged, &auto_resolved, 50);
+    // Normalize explicit mentions, then merge auto-resolved up to the SDK mention cap.
+    // Auto-resolution scans the author-written body only — not the media markdown we
+    // append above, which is derived from upload metadata and can't carry `@names`.
+    let mut merged: Vec<String> = normalize_mention_pubkeys(&p.mentions, None);
+    let auto_resolved = resolve_content_mentions(client, &p.channel_id, &p.content).await;
+    merge_mentions(&mut merged, &auto_resolved, MENTION_CAP);
     let mention_refs: Vec<&str> = merged.iter().map(|s| s.as_str()).collect();
 
     let builder = sprout_sdk::build_message(
@@ -489,12 +555,19 @@ pub async fn cmd_vote_on_post(
 
 #[cfg(test)]
 mod tests {
-    use super::find_root_from_tags;
+    use super::{find_root_from_tags, parse_member_pubkeys};
     use serde_json::json;
+    use sprout_sdk::mentions::{extract_at_names, match_names_to_profiles, MentionProfile};
 
     const ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const PUBKEY: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    // Three real pubkeys (lowercase 64-char hex) used by parse_member_pubkeys tests.
+    // See the test's own comment on what `PublicKey::from_hex` actually validates.
+    const PK_VALID_A: &str = "35c18ae273fccfaf80d629e20e7f8721b90499379addff533054acc2504c12b4";
+    const PK_VALID_B: &str = "c6237ef84fa537c78dcee78efd2d4e59f728859c7f194da42ac51ededfa0be05";
+    const PK_VALID_C: &str = "f4a42a97e594b77bdbd8ee35191c8b28a94a4cb871d96f32921558275421fb68";
 
     #[test]
     fn root_marker_wins_over_reply_marker() {
@@ -560,5 +633,104 @@ mod tests {
     fn non_array_input_returns_none() {
         assert!(find_root_from_tags(&json!({})).is_none());
         assert!(find_root_from_tags(&json!(null)).is_none());
+    }
+
+    // ── @mention resolution pipeline ────────────────────────────────────
+    //
+    // These tests don't hit the network — they prove that *given* the
+    // events the relay returns, the CLI's parse + match wiring produces
+    // the right pubkeys. The async I/O wrapper around them is one
+    // straight line; the pure stages it composes are exercised here and
+    // in sprout-sdk.
+
+    /// End-to-end (sans I/O): body text → extracted names → matched
+    /// member pubkeys, using realistic 39002 + kind:0 event JSON.
+    /// This is the regression guard for the previous stub that always
+    /// returned `vec![]`.
+    #[test]
+    fn cli_pipeline_resolves_body_at_names_to_member_pubkeys() {
+        // kind 39002 channel-members event with three members.
+        let members_event = json!({
+            "kind": 39002,
+            "tags": [
+                ["d", "00000000-0000-0000-0000-000000000000"],
+                ["p", PK_VALID_A, "", "member"],
+                ["p", PK_VALID_B, "", "member"],
+                ["p", PK_VALID_C, "", "member"],
+            ],
+            "content": "",
+        });
+        assert_eq!(
+            parse_member_pubkeys(&members_event),
+            vec![PK_VALID_A, PK_VALID_B, PK_VALID_C]
+        );
+
+        // Three kind:0 profile events.
+        let entries = vec![
+            MentionProfile {
+                pubkey: PK_VALID_A,
+                content_json: r#"{"display_name":"Alice"}"#,
+            },
+            MentionProfile {
+                pubkey: PK_VALID_B,
+                content_json: r#"{"display_name":"Bob"}"#,
+            },
+            MentionProfile {
+                pubkey: PK_VALID_C,
+                content_json: r#"{"name":"Carol"}"#,
+            },
+        ];
+
+        // Body mentions Alice and Carol (display_name fallback to `name`).
+        let names = extract_at_names("hello @alice and @CAROL");
+        let resolved = match_names_to_profiles(&names, &entries);
+        assert_eq!(resolved, vec![PK_VALID_A, PK_VALID_C]);
+    }
+
+    #[test]
+    fn cli_pipeline_returns_empty_when_no_at_names() {
+        // Sanity: no `@names` in body → no profile match attempt needed.
+        let names = extract_at_names("plain message, no mentions");
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn parse_member_pubkeys_ignores_non_p_tags() {
+        let event = json!({
+            "tags": [
+                ["d", "channel-id"],
+                ["p", PK_VALID_A],
+                ["h", "channel-id"],
+                ["e", "some-event"],
+                ["p", PK_VALID_B, "wss://relay", "member"],
+            ],
+        });
+        assert_eq!(parse_member_pubkeys(&event), vec![PK_VALID_A, PK_VALID_B]);
+    }
+
+    #[test]
+    fn parse_member_pubkeys_handles_malformed_event() {
+        assert!(parse_member_pubkeys(&json!({})).is_empty());
+        assert!(parse_member_pubkeys(&json!({"tags": "not an array"})).is_empty());
+        assert!(parse_member_pubkeys(&json!({"tags": [["p"]]})).is_empty());
+    }
+
+    #[test]
+    fn parse_member_pubkeys_filters_invalid_hex() {
+        // `PublicKey::from_hex` rejects non-hex and wrong-length inputs and
+        // canonicalizes hex case. (Note: it accepts any 64-char x-only hex
+        // whose integer value is in field; it does not verify the point is
+        // actually on the curve — same as MCP's behavior.)
+        let pk_uppercase: String = PK_VALID_A.to_ascii_uppercase();
+        let event = json!({
+            "tags": [
+                ["p", PK_VALID_A],       // valid, lowercase
+                ["p", pk_uppercase],     // valid hex, canonicalized to lowercase
+                ["p", "too-short"],      // length fail
+                ["p", "z".repeat(64)],   // non-hex chars
+                ["p", "a".repeat(63)],   // off-by-one length
+            ],
+        });
+        assert_eq!(parse_member_pubkeys(&event), vec![PK_VALID_A, PK_VALID_A]);
     }
 }
