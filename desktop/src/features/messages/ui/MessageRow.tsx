@@ -12,6 +12,7 @@ import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext"
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
+import { Globe, Users } from "lucide-react";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
@@ -132,11 +133,11 @@ export const MessageRow = React.memo(
       ? "rounded-md"
       : "rounded-xl";
 
-    const respondToDotColor =
+    const respondToIcon =
       message.respondTo === "anyone"
-        ? "bg-emerald-500"
+        ? { Icon: Globe, title: "Responds to anyone" }
         : message.respondTo === "allowlist"
-          ? "bg-amber-500"
+          ? { Icon: Users, title: "Responds to select users" }
           : null;
 
     const avatarNode = (
@@ -148,18 +149,12 @@ export const MessageRow = React.memo(
           displayName={message.author}
           testId="message-avatar"
         />
-        {respondToDotColor && !isThreadReplyLayout ? (
+        {respondToIcon && !isThreadReplyLayout ? (
           <span
-            className={cn(
-              "absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-background",
-            )}
-            title={
-              message.respondTo === "anyone"
-                ? "Responds to anyone"
-                : "Responds to allowlist"
-            }
+            className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-background text-muted-foreground"
+            title={respondToIcon.title}
           >
-            <span className={cn("h-2 w-2 rounded-full", respondToDotColor)} />
+            <respondToIcon.Icon className="h-2.5 w-2.5" />
           </span>
         ) : null}
       </div>
