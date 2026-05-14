@@ -624,9 +624,10 @@ pub enum WorkflowsCmd {
     },
     /// Update a workflow's YAML definition
     Update {
-        /// Workflow UUID
+        /// Channel UUID the workflow belongs to
         #[arg(long)]
         channel: String,
+        /// Workflow UUID
         #[arg(long)]
         workflow: String,
         /// Updated workflow YAML definition
