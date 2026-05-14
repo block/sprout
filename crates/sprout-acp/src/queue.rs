@@ -928,12 +928,14 @@ fn format_conversation_context(
 /// Format a [`FlushBatch`] into a prompt string for the agent.
 ///
 /// Produces a stable prompt with these sections (in order):
-/// 1. `[System]` — system prompt (if configured)
-/// 2. `[Context]` — scope, channel name, structural hints
+/// 0. `[Base]\n{base_prompt}` — platform orientation (if configured)
+/// 1. `[System]\n{system_prompt}` — if system prompt is set
+/// 2. `[Context]` — scope, channel name, and contextual hints for the agent
 /// 3. `[Thread Context]` or `[Conversation Context]` — if fetched
 /// 4. `[Event]` / `[Sprout events]` — the triggering event(s)
 pub fn format_prompt(
     batch: &FlushBatch,
+    base_prompt: Option<&str>,
     system_prompt: Option<&str>,
     agent_core: Option<&str>,
     channel_info: Option<&PromptChannelInfo>,
@@ -956,7 +958,12 @@ pub fn format_prompt(
         .map(|ci| ci.channel_type == "dm")
         .unwrap_or(false);
 
-    let mut sections: Vec<String> = Vec::with_capacity(4);
+    let mut sections: Vec<String> = Vec::with_capacity(5);
+
+    // 0. Base prompt (platform-level, always first).
+    if let Some(bp) = base_prompt {
+        sections.push(format!("[Base]\n{bp}"));
+    }
 
     // 1. System prompt.
     if let Some(sp) = system_prompt {
@@ -1392,6 +1399,7 @@ mod tests {
 
         let prompt = format_prompt(
             &batch,
+            None,
             Some("You are a triage bot."),
             None,
             None,
@@ -1417,7 +1425,7 @@ mod tests {
             cancelled_events: vec![],
         };
         let core = "[Agent Memory — core]\nbe helpful";
-        let prompt = format_prompt(&batch, Some("sys"), Some(core), None, None, None);
+        let prompt = format_prompt(&batch, None, Some("sys"), Some(core), None, None, None);
         assert!(
             prompt.contains("[System]\nsys\n\n[Agent Memory — core]\nbe helpful"),
             "expected core block after [System]; got: {prompt}"
@@ -1438,10 +1446,47 @@ mod tests {
             cancelled_events: vec![],
         };
         let core = "[Agent Memory — core]\nbe helpful";
-        let prompt = format_prompt(&batch, None, Some(core), None, None, None);
+        let prompt = format_prompt(&batch, None, None, Some(core), None, None, None);
         assert!(prompt.starts_with("[Agent Memory — core]\nbe helpful\n\n[Context]"));
     }
 
+    // ── Test 11c: base prompt prepended before system prompt ─────────────────
+
+    #[test]
+    fn test_format_prompt_with_base_prompt() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello");
+
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+        };
+
+        // Both base_prompt and system_prompt: [Base] comes first, then [System].
+        let prompt = format_prompt(
+            &batch,
+            Some("Platform base."),
+            Some("Role prompt."),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(prompt.starts_with("[Base]\nPlatform base.\n\n[System]\nRole prompt."));
+
+        // Only base_prompt (no system_prompt): [Base] comes first, then [Context].
+        let prompt = format_prompt(&batch, Some("Platform base."), None, None, None, None, None);
+        assert!(prompt.starts_with("[Base]\nPlatform base.\n\n[Context]"));
+
+        // No base_prompt: no [Base] section emitted.
+        let prompt = format_prompt(&batch, None, None, None, None, None, None);
+        assert!(!prompt.contains("[Base]"));
+    }
     // ── Test 12: drop mode discards in-flight channel events ─────────────────
 
     #[test]

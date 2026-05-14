@@ -192,6 +192,7 @@ pub struct PromptContext {
     pub dedup_mode: DedupMode,
     pub system_prompt: Option<String>,
     pub heartbeat_prompt: Option<String>,
+    pub base_prompt: Option<String>,
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
@@ -931,6 +932,7 @@ pub async fn run_prompt_task(
         let agent_core_section = agent.state.core_sections.get(&b.channel_id).cloned();
         crate::queue::format_prompt(
             b,
+            ctx.base_prompt.as_deref(),
             ctx.system_prompt.as_deref(),
             agent_core_section.as_deref(),
             channel_info.as_ref(),

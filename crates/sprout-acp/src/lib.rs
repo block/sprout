@@ -1076,6 +1076,11 @@ async fn tokio_main() -> Result<()> {
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
         dedup_mode: config.dedup_mode,
         system_prompt: config.system_prompt.clone(),
+        base_prompt: if std::env::var("SPROUT_ACP_BASE_PROMPT_DISABLED").is_ok() {
+            None
+        } else {
+            Some(include_str!("base_prompt.md").to_string())
+        },
         heartbeat_prompt: config.heartbeat_prompt.clone(),
         cwd: std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("/"))
