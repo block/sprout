@@ -6,9 +6,9 @@
 //!
 //! Idempotent: existing files and directories are never overwritten.
 
-use super::{
-    load_managed_agents, load_personas, BackendKind, ManagedAgentRecord, PersonaRecord, RespondTo,
-};
+use super::{load_managed_agents, load_personas, ManagedAgentRecord, PersonaRecord};
+#[cfg(test)]
+use super::{BackendKind, RespondTo};
 use crate::app_state::AppState;
 use crate::relay::relay_ws_url_with_override;
 use std::fs;
