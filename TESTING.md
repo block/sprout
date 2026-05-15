@@ -72,20 +72,31 @@ The relay starts in dev mode (`SPROUT_REQUIRE_AUTH_TOKEN=false`). The startup
 log emits a WARN about this — that's expected for local testing. See the env
 vars table at the bottom if you need to lock it down.
 
-> **Already running Sprout Desktop (or another relay) on `:3000` / `:8080`?**
-> Export these *before* launching the relay, and use the matching verify
-> commands instead of the ones above:
+> **Already running Sprout Desktop (or another relay) on `:3000` / `:8080` /
+> `:9102`?** Sprout binds three ports — main, health, metrics — and any of
+> them can collide. Use a separate terminal per role and export the right
+> vars in each:
+>
+> **In the relay terminal** (before launching `sprout-relay`):
 > ```bash
-> export SPROUT_BIND_ADDR=0.0.0.0:3030 SPROUT_HEALTH_PORT=8088 SPROUT_METRICS_PORT=9202
-> export RELAY_URL=ws://localhost:3030             # advertised in NIP-42 challenges
-> export SPROUT_RELAY_URL=http://localhost:3030    # CLI target for steps 4+
-> # verify on the overridden ports:
+> export SPROUT_BIND_ADDR=0.0.0.0:3030
+> export SPROUT_HEALTH_PORT=8088
+> export SPROUT_METRICS_PORT=9202
+> export RELAY_URL=ws://localhost:3030     # advertised in NIP-42 challenges
+> sprout-relay
+> ```
+>
+> **In your working / CLI terminal** (for steps 4+ and the ACP harness):
+> ```bash
+> export SPROUT_RELAY_URL=http://localhost:3030    # CLI target
+> # verify the relay on the overridden ports:
 > curl -s http://localhost:3030/health             # → ok
 > curl -s http://localhost:8088/_readiness         # → {"status":"ready"}
 > ```
-> Every subsequent snippet in this doc assumes the defaults — when you see
-> `localhost:3000` / `:8080`, mentally substitute your overrides, or the CLI
-> will end up talking to Sprout Desktop's relay.
+>
+> Every snippet later in this doc shows the defaults. When you see
+> `localhost:3000` / `:8080` in a code block, mentally substitute your
+> overrides — or the CLI will end up talking to Sprout Desktop's relay.
 
 > **Heads up:** if your shell already has `SPROUT_AUTH_TAG` set (e.g. from a
 > staging relay config), `unset SPROUT_AUTH_TAG` before testing. The local
@@ -184,6 +195,7 @@ sprout channels add-member --channel "$CHANNEL" --pubkey "$AGENT_PUBKEY" --role 
 export SPROUT_PRIVATE_KEY="$AGENT_SK"
 export SPROUT_RELAY_URL=ws://localhost:3000   # match step 3 (e.g. ws://localhost:3030 if overridden)
 export SPROUT_ACP_RESPOND_TO=anyone           # default is owner-only; opens the gate for testing
+export SPROUT_ACP_MCP_COMMAND="$PWD/target/release/sprout-mcp-server"  # explicit path beats $PATH
 export GOOSE_MODE=auto                        # must be 'auto' or goose hangs on prompts
 
 sprout-acp                                    # foreground; logs to stdout (run in a separate terminal)
