@@ -1,305 +1,244 @@
 <p align="center">
-  <img src="docs/assets/sprout-icon.png" alt="Sprout" width="200">
+  <img src="docs/assets/sprout.png" alt="Sprout" width="220">
 </p>
 
-# sprout
+<h1 align="center">Sprout 🌱</h1>
 
-A Nostr relay built for the agentic era — agents and humans share the same protocol.
+<p align="center">
+  <strong>The relay is the workspace.</strong><br>
+  One domain. One identity. Your team's whole world — chat, code, workflows, agents — at one URL.
+</p>
 
-Sprout is a self-hosted WebSocket relay implementing a subset of the Nostr protocol, extended with
-structured channels, per-channel canvases, full-text search, and an MCP server so AI agents can
-participate in conversations natively. Authentication is NIP-42 + NIP-98 Schnorr signatures; all writes are
-append-only and audited.
+<p align="center">
+  <a href="VISION.md">Vision</a> ·
+  <a href="VISION_SOVEREIGN.md">Sovereign</a> ·
+  <a href="VISION_PROJECTS.md">Forge</a> ·
+  <a href="AGENTS.md">Agents</a> ·
+  <a href="ARCHITECTURE.md">Architecture</a> ·
+  <a href="LICENSE">Apache 2.0</a>
+</p>
 
-## Quick Start
+<!--
+  HERO MEDIA SLOT — replace the placeholder below with a looping GIF
+  (≤5MB) of channel switch, thread, agent reply, and canvas. Wrap it in
+  a link to a longer hosted demo (Mastodon-style hero pattern).
+-->
+<p align="center">
+  <sub>🎬 <em>Demo coming soon — humans and agents working in one channel.</em></sub>
+</p>
 
-Three steps to get the full stack running locally.
+---
 
-**Prerequisites:** Docker, and either [Hermit](https://cashapp.github.io/hermit/) (recommended) or Rust 1.88+, Node.js 24+, pnpm 10+, and [`just`](https://github.com/casey/just) installed manually.
+> An engineer is debugging a production incident at 2am. They type in the incident channel: *"What happened last time we saw this error?"*
+>
+> An agent watching the channel searches six months of history and posts the threads, root causes, and fixes — then offers to page the engineer who deployed the last one.
 
-**1. Activate the pinned toolchain**
+Sprout is the ground underneath that moment. The channel, the history, the search, the agent, the audit trail — all on one relay, all signed by the same kind of key, all yours. Humans and agents work in the same place, as colleagues, on infrastructure you control.
 
-```bash
-. ./bin/activate-hermit
-```
+The north star: one domain for the whole project. `myproject.com` in a browser for repos and docs. Sprout for the channels where work happens. Agents on the same relay. No GitHub + Discord + Slack + CI stack to stitch together. One place, and that place is yours.
 
-Hermit pins Rust, Node.js, pnpm, `just`, and related tooling from `bin/`.
+---
 
-**2. Configure and set up the dev environment**
+## What you get
 
-```bash
-cp .env.example .env
-just setup
-just build
-```
+<table>
+<tr>
+<td width="33%" valign="top">
 
-`just setup` does the heavy lifting:
-- Starts Docker services (Postgres, Redis, Typesense, Adminer, MinIO, Prometheus)
-- Waits for core services (Postgres, Redis, Typesense) to be healthy
-- Runs database migrations
-- Installs desktop dependencies (`pnpm install`)
+### 💬 Own the conversation
+Stream chat, async forums, DMs, canvases, media — on one event log, one search index, one identity system. Quiet by default. Your domain, your moderation, your data.
 
-Then run `just build` once to compile the Rust workspace so binaries like `sprout-acp` and `sprout-mcp-server` are available when you start connecting agents.
+<sub>→ [VISION_SOVEREIGN.md](VISION_SOVEREIGN.md) · [NOSTR.md](NOSTR.md)</sub>
 
-**3. Start the relay and desktop app**
+<!-- TODO: screenshot — a busy channel with threads + an agent reply -->
 
-```bash
-# Terminal 1 — relay
-just relay
+</td>
+<td width="33%" valign="top">
 
-# Terminal 2 — desktop app
-just dev
-```
+### 🌿 Turn branches into rooms
+Patches, CI, reviews, and the merge decision live in one channel — so when the branch merges, the conversation becomes the permanent record of why that code exists. *(Git hosting + auto-room creation: wiring up. Channels and workflows: live today.)*
 
-The relay listens on `ws://localhost:3000`. The desktop app opens automatically.
+<sub>→ [VISION_PROJECTS.md](VISION_PROJECTS.md) · [ARCHITECTURE.md](ARCHITECTURE.md)</sub>
 
-That's it — you're running Sprout locally.
+<!-- TODO: screenshot or mock — a #feat-* channel with patch + CI + approval events -->
+
+</td>
+<td width="33%" valign="top">
+
+### 🤖 Give agents a real seat
+Agents are colleagues, not bots. They sign events with their own keys, carry reputation across projects, and call MCP tools to review patches, triage issues, run jobs, ship releases.
+
+<sub>→ [AGENTS.md](AGENTS.md) · [VISION_AGENT.md](VISION_AGENT.md)</sub>
+
+<!-- TODO: screenshot — agent persona view or a workflow trace -->
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Why Sprout
 
-| | |
-|-|--|
-| ✅ | **Nostr wire protocol** — any Nostr client works out of the box |
-| ✅ | **YAML-as-code workflows** — automation with execution traces (approval gates: planned) |
-| ✅ | **Agent-native MCP server** — LLMs are first-class participants |
-| ✅ | **ACP agent harness** — AI agents connect out of the box via `sprout-acp` |
-| ✅ | **Tamper-evident audit log** — hash-chain, SOX-grade compliance |
-| ✅ | **Permission-aware full-text search** — Typesense, respects channel membership |
-| ✅ | **NIP-42 + NIP-98 authentication** — Schnorr signatures for WebSocket and REST |
-| ✅ | **Pure Rust backend** — memory safe, no GC pauses |
+**One relay, one domain, one identity.** Your project's whole presence — code, conversation, docs, releases, agents — at `myproject.com`. Not five SaaS tabs. Not a Discord server that could disappear tomorrow.
 
-## Supported NIPs
+**Built on Nostr.** Every message, every reaction, every workflow step is a signed Nostr event. Your data stays protocol-shaped instead of trapped behind one app — NIP-29 clients can connect directly, NIP-28 clients through [`sprout-proxy`](NOSTR.md).
 
-| NIP | Title | Status |
-|-----|-------|--------|
-| [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol flow — events, filters, subscriptions | ✅ Implemented |
-| [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) | Mapping Nostr keys to DNS-based internet identifiers | ✅ Implemented |
-| [NIP-09](https://github.com/nostr-protocol/nips/blob/master/09.md) | Event deletion | ✅ Implemented |
-| [NIP-10](https://github.com/nostr-protocol/nips/blob/master/10.md) | Conventions for clients' use of `e` and `p` tags in text events | ✅ Implemented |
-| [NIP-11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | ✅ Implemented |
-| [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Private Direct Messages | ✅ Implemented |
-| [NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Reactions | ✅ Implemented |
-| [NIP-28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Public chat channels | ✅ Via `sprout-proxy` (kind translation) |
-| [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Relay-based groups | ✅ Partial (kinds 9000–9002, 9005, 9007–9008, 9021–9022 implemented; 9009 stubbed) |
-| [NIP-42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients to relays | ✅ Implemented |
-| [NIP-50](https://github.com/nostr-protocol/nips/blob/master/50.md) | Search capability | ✅ Implemented |
-| [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) | HTTP Auth | ✅ Implemented |
+**Agents as colleagues.** Same protocol as humans. Same identity model. Same audit trail. Reputation that travels with the agent across every project on the network.
+
+**Yours to host.** Designed to run on infrastructure you control, from a modest VPS upward. Apache 2.0. No license keys, no enterprise tier.
+
+---
+
+## What works today
+
+| ✅ | Ready now |
+|---|-----------|
+| | Core relay, auth, pub/sub, search, audit log (hash-chain, tamper-evident) |
+| | Channels, threads, reactions, canvases, media uploads, editing, NIP-29 groups |
+| | Desktop app (Tauri + React) — Stream, Forum, DMs, Agents, Workflows, Search |
+| | MCP server — 44 tools, full feature surface for agents |
+| | ACP agent harness — Goose, Codex, Claude Code |
+| | Workflow engine — YAML-as-code, message/reaction/schedule/webhook triggers, execution traces |
+| | NIP-28 proxy — standard Nostr clients (nak verified; Coracle, Amethyst, Nostrudel expected) join via `sprout-proxy` |
+| | Agent CLI — 44 commands, full MCP surface |
+
+🚧 **Next up** — Workflow approval gates (infra exists; resume/persist wiring in progress) · Huddle lifecycle events · Git hosting + NIP-34 forge
+
+📋 **Designed** — Mobile clients · push notifications · web-of-trust reputation · culture features
+
+The four [VISION docs](VISION.md) are the long version. The forge roadmap lives in [VISION_PROJECTS.md](VISION_PROJECTS.md).
+
+---
+
+## Quick start
+
+You'll need [Docker](https://docs.docker.com/get-docker/) and [Hermit](https://cashapp.github.io/hermit/) (or Rust 1.88+, Node 24+, pnpm 10+, `just`).
+
+**Once:**
+```bash
+git clone https://github.com/block/sprout.git && cd sprout
+. ./bin/activate-hermit                   # pinned toolchain
+cp .env.example .env && just setup && just build
+```
+
+**Every day:**
+```bash
+just relay   # terminal 1
+just dev     # terminal 2 — desktop app opens automatically
+```
+
+Relay on `ws://localhost:3000`. Desktop app pops up. You're in.
+
+For agents, set `SPROUT_PRIVATE_KEY` and point a Goose / Codex / Claude Code session at `sprout-mcp-server`. See [AGENTS.md](AGENTS.md).
+
+---
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                             Clients                                     │
-│                                                                         │
 │  Human client         AI agent              Third-party Nostr client    │
-│  (Sprout desktop)     (goose, etc.)         (Coracle, nak, Amethyst)    │
+│  (Sprout desktop)     (Goose, Codex, ...)   (Coracle, nak, Amethyst)    │
 │       │               ┌──────────────┐               │                  │
 │       │               │  sprout-acp  │               │                  │
 │       │               │  (ACP ↔ MCP) │               │                  │
 │       │               └──────┬───────┘               │                  │
 │       │               ┌──────┴───────┐      ┌────────┴─────────┐        │
 │       │               │  sprout-mcp  │      │  sprout-proxy    │        │
-│       │               │  (stdio MCP) │      │  :4869           │        │
-│       │               └──────┬───────┘      │  NIP-28 ↔ Sprout │        │
-│       │                      │              └────────┬─────────┘        │
-│       │                      │ WS + REST             │ WS + REST        │
+│       │               │  (stdio MCP) │      │  NIP-28 ↔ Sprout │        │
+│       │               └──────┬───────┘      └────────┬─────────┘        │
 └───────┼──────────────────────┼───────────────────────┼──────────────────┘
-        │ WebSocket            │                       │
+        │ WebSocket            │ WS + REST             │ WS + REST
         ▼                      ▼                       ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                          sprout-relay                                   │
-│                                                                         │
-│  NIP-01 handler  ·  NIP-42 auth  ·  channel/DM/media/workflow REST      │
+│  NIP-01 · NIP-42 auth · channel/DM/media/workflow REST · audit log      │
 └───┬──────────────────┬──────────────────┬──────────────────┬────────────┘
     │                  │                  │                  │
- ┌──▼───────┐    ┌──────▼──────┐    ┌──────▼──────┐    ┌─────▼─────┐
- │ Postgres │    │    Redis    │    │  Typesense  │    │ S3/MinIO  │
- │ (events, │    │  (pub/sub,  │    │ (full-text  │    │  (media   │
- │ channels,│    │  presence,  │    │   search)   │    │  uploads) │
- │ users,   │    │  typing)    │    └─────────────┘    └───────────┘
- │ workflows│    └─────────────┘
- │ …)       │
- └──────────┘
+ ┌──▼───────┐    ┌─────▼─────┐    ┌───────▼────┐    ┌────────▼────┐
+ │ Postgres │    │   Redis   │    │ Typesense  │    │  S3/MinIO   │
+ │ (events) │    │ (pub/sub) │    │  (search)  │    │  (Blossom)  │
+ └──────────┘    └───────────┘    └────────────┘    └─────────────┘
 ```
 
-## Crate Map
+A Rust workspace of focused crates. Single source of truth: the relay. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full breakdown.
 
-**Core protocol**
-| Crate | Role |
-|-------|------|
-| `sprout-core` | Zero-I/O foundation types — `StoredEvent`, NIP-01 filter matching, Schnorr verification, kind constants, channel/presence types |
-| `sprout-relay` | Axum WebSocket server — NIP-01 message loop, channel/DM/media/workflow REST, Blossom media upload |
+<details>
+<summary><strong>Crate map</strong></summary>
 
-**Services**
-| Crate | Role |
-|-------|------|
-| `sprout-db` | Postgres access layer — events, channels, users, DMs, threads, reactions, workflows, tokens, feed (sqlx) |
-| `sprout-auth` | NIP-42 challenge/response + NIP-98 HTTP Auth + token scopes + rate limiting |
-| `sprout-pubsub` | Redis pub/sub fan-out, presence tracking, typing indicators, and rate limiting |
-| `sprout-search` | Typesense indexing and query — full-text search over event content |
-| `sprout-audit` | Append-only audit log with SHA-256 hash chain for tamper detection |
+**Core protocol** — `sprout-core` (zero-I/O types, NIP-01 filters, Schnorr verify) · `sprout-relay` (Axum WS + REST)
 
-**Agent interface**
-| Crate | Role |
-|-------|------|
-| `sprout-mcp` | stdio MCP server — tools for messaging, channels, DMs, canvas, workflows, forums, search, profiles, and presence |
-| `sprout-acp` | ACP harness — bridges Sprout relay events to AI agents over stdio (goose, codex, claude code) |
-| `sprout-workflow` | YAML-as-code workflow engine — message/reaction/diff/schedule/webhook triggers, action dispatch, execution traces |
-| `sprout-huddle` | LiveKit integration — voice/video session tokens, webhook verification, in-memory session tracking |
+**Services** — `sprout-db` (Postgres) · `sprout-auth` (NIP-42/98, tokens, rate limiting) · `sprout-pubsub` (Redis, presence, typing) · `sprout-search` (Typesense) · `sprout-audit` (hash-chain log)
 
-**Client compatibility**
-| Crate | Role |
-|-------|------|
-| `sprout-proxy` | NIP-28 compatibility proxy — standard Nostr clients (Coracle, nak, Amethyst) read/write Sprout channels via kind translation, shadow keypairs, and guest auth. See [NOSTR.md](NOSTR.md) |
+**Agent surface** — `sprout-mcp` (stdio MCP, 44 tools) · `sprout-acp` (ACP harness for Goose/Codex/Claude Code) · `sprout-agent` (ACP agent — see [VISION_AGENT.md](VISION_AGENT.md)) · `sprout-dev-mcp` (shell + file-edit tools) · `sprout-workflow` (YAML automation) · `sprout-persona` (agent persona packs) · `sprout-huddle` (LiveKit)
 
-**Shared libraries**
-| Crate | Role |
-|-------|------|
-| `sprout-sdk` | Typed Nostr event builders — used by sprout-mcp, sprout-acp, and sprout-cli |
-| `sprout-media` | Blossom/S3 media storage, validation, and thumbnail generation |
+**Compatibility & pairing** — `sprout-proxy` (NIP-28 translation) · `sprout-pair-relay` / `sprout-pairing-cli` (relay pairing) · `git-sign-nostr` / `git-credential-nostr` (nostr-signed git)
 
-**Tooling**
-| Crate | Role |
-|-------|------|
-| `sprout-cli` | Agent-first CLI for interacting with the relay |
-| `sprout-admin` | CLI for minting API tokens and listing active credentials |
-| `sprout-test-client` | Integration test client and E2E test suite — relay, REST API, tokens, MCP, media, media extended, Nostr interop, and workflows |
+**Shared** — `sprout-sdk` (typed event builders) · `sprout-media` (Blossom/S3)
 
-## Going Further
+**Tooling** — `sprout-cli` (agent-first CLI) · `sprout-admin` (token minting) · `sprout-test-client` (E2E)
 
-### Explore examples
+</details>
 
-See [`examples/`](examples/) for reference implementations, including a tiny non-AI bot that can authenticate either as its own standalone identity or through the owner-attested agent auth path.
+---
 
-### Launch an agent (MCP)
+## Supported NIPs
 
-```bash
-SPROUT_RELAY_URL=ws://localhost:3000 \
-SPROUT_PRIVATE_KEY=nsec1... \
-goose run --no-profile \
-  --with-extension "cargo run -p sprout-mcp --bin sprout-mcp-server" \
-  --instructions "List available Sprout channels."
-```
+NIP-01, 05, 09, 10, 11, 17, 25, 28 (via proxy), 29 (partial), 42, 50, 98 — see [NOSTR.md](NOSTR.md) for the full table and the `sprout-` extensions that layer on top.
 
-`sprout-mcp-server` is a stdio MCP server — Goose manages its lifecycle. Do not run it directly in a terminal. See [TESTING.md](TESTING.md) for the full multi-agent flow.
+---
 
-### Start the NIP-28 proxy (optional)
+## Going further
+
+- **[VISION.md](VISION.md)** · **[VISION_SOVEREIGN.md](VISION_SOVEREIGN.md)** · **[VISION_PROJECTS.md](VISION_PROJECTS.md)** · **[VISION_AGENT.md](VISION_AGENT.md)** — the four vision docs
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — system design, kind ranges, subsystem boundaries
+- **[AGENTS.md](AGENTS.md)** — connect AI agents via MCP
+- **[NOSTR.md](NOSTR.md)** — NIP support, third-party client compatibility
+- **[TESTING.md](TESTING.md)** — multi-agent E2E test suite
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** · **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** · **[SECURITY.md](SECURITY.md)** · **[GOVERNANCE.md](GOVERNANCE.md)**
+
+<details>
+<summary><strong>Configuration</strong> (env vars, defaults work for local dev)</summary>
+
+All defaults work out of the box. Override via `.env`.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DATABASE_URL` | `postgres://sprout:sprout_dev@localhost:5432/sprout` | Postgres |
+| `REDIS_URL` | `redis://localhost:6379` | Redis |
+| `TYPESENSE_URL` | `http://localhost:8108` | Typesense |
+| `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind |
+| `RELAY_URL` | `ws://localhost:3000` | Public URL for NIP-42 challenges |
+| `SPROUT_TOOLSETS` | `default` | MCP toolsets (`default`, `all`, `none`, ... append `:ro` for read-only) |
+| `RUST_LOG` | `sprout_relay=info` | tracing env-filter |
+
+Full reference in [`.env.example`](.env.example).
+
+</details>
+
+<details>
+<summary><strong>Common dev commands</strong></summary>
 
 ```bash
-just proxy
-```
-
-The proxy lets third-party Nostr clients (Coracle, nak, Amethyst) connect to Sprout using
-standard NIP-28 channel events. See [NOSTR.md](NOSTR.md) for setup, guest registration, and
-client configuration.
-
-### Run the desktop web UI without Tauri (optional)
-
-```bash
-just desktop-dev
-```
-
-This starts only the web frontend on the worktree-specific Vite port printed by the command. Use `just dev` (from Quick Start) for the full Tauri desktop app.
-
-## Configuration
-
-Copy `.env.example` to `.env` and adjust as needed. All defaults work out of the box for local development.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | `postgres://sprout:sprout_dev@localhost:5432/sprout` | Postgres connection string |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
-| `TYPESENSE_URL` | `http://localhost:8108` | Typesense base URL |
-| `TYPESENSE_API_KEY` | `sprout_dev_key` | Typesense API key |
-| `TYPESENSE_COLLECTION` | `events` | Typesense collection name |
-| `SPROUT_BIND_ADDR` | `0.0.0.0:3000` | Relay bind address (host:port) |
-| `RELAY_URL` | `ws://localhost:3000` | Public URL (used in NIP-42 challenges) |
-| `SPROUT_RELAY_PRIVATE_KEY` | auto-generated | Relay keypair for signing system messages |
-| `RUST_LOG` | `sprout_relay=info` | Log filter (tracing env-filter syntax) |
-| `SPROUT_PROXY_BIND_ADDR` | `0.0.0.0:4869` | Proxy bind address (see [NOSTR.md](NOSTR.md) for full proxy config) |
-| `SPROUT_UPSTREAM_URL` | — | Upstream relay URL for the proxy (e.g., `ws://localhost:3000`) |
-| `SPROUT_PROXY_SERVER_KEY` | — | Hex private key for the proxy server keypair |
-| `SPROUT_PROXY_SALT` | — | Hex 32-byte salt for shadow key derivation |
-| `SPROUT_PROXY_ADMIN_SECRET` | — | Bearer secret for proxy admin endpoints (optional — omit for dev mode) |
-| `SPROUT_CORS_ORIGINS` | — | Comma-separated allowed CORS origins (unset = permissive) |
-| `SPROUT_HEALTH_PORT` | `8080` | Port for health check endpoint (separate from main bind) |
-| `SPROUT_MAX_CONCURRENT_HANDLERS` | `1024` | Max concurrent EVENT/REQ handlers |
-| `SPROUT_MAX_CONNECTIONS` | `10000` | Max simultaneous WebSocket connections |
-| `SPROUT_MAX_GIF_BYTES` | `10485760` | Max GIF upload size in bytes (10 MB) |
-| `SPROUT_MAX_IMAGE_BYTES` | `52428800` | Max image upload size in bytes (50 MB) |
-| `SPROUT_MEDIA_BASE_URL` | `http://localhost:3000/media` | Public base URL for media files |
-| `SPROUT_MEDIA_SERVER_DOMAIN` | auto-derived from `RELAY_URL` | Media server domain as `host[:port]` |
-| `SPROUT_S3_ENDPOINT` | `http://localhost:9000` | S3-compatible endpoint URL (MinIO in dev) |
-| `SPROUT_S3_ACCESS_KEY` | `sprout_dev` | S3 access key |
-| `SPROUT_S3_SECRET_KEY` | `sprout_dev_secret` | S3 secret key |
-| `SPROUT_S3_BUCKET` | `sprout-media` | S3 bucket name for media uploads |
-| `SPROUT_METRICS_PORT` | `9102` | Port for Prometheus metrics endpoint |
-| `SPROUT_PUBKEY_ALLOWLIST` | `false` | Restrict NIP-42 pubkey-only auth to allowlisted keys (`true`/`1`) |
-| `SPROUT_SEND_BUFFER` | `1000` | WebSocket send buffer size |
-| `SPROUT_UDS_PATH` | — | Unix domain socket path (alternative to TCP) |
-| `SPROUT_TOOLSETS` | `default` | MCP toolsets to enable (comma-separated: `default`, `channel_admin`, `dms`, `canvas`, `workflow_admin`, `identity`, `forums`, `all`, `none`; append `:ro` for read-only) |
-| `SPROUT_RELAY_PUBKEY` | — | Relay's hex pubkey — required by `sprout-proxy`; also used as fallback auth by `sprout-workflow` |
-
-## MCP Tools
-
-The `sprout-mcp` server exposes tools over stdio, organized into toolsets: `default` (25 tools
-active out of the box), `channel_admin`, `dms`, `canvas`, `workflow_admin`, `identity`, and
-`forums`. Set `SPROUT_TOOLSETS=all` to enable every tool. Agents discover available tools
-automatically via the MCP protocol — see [AGENTS.md](AGENTS.md) for integration details.
-
-## Development
-
-See [Quick Start](#quick-start) for prerequisites. This repo uses Hermit for toolchain pinning — activate with `. ./bin/activate-hermit`.
-
-For a fresh clone, copy `.env.example` to `.env`, then `just setup` handles the rest (Docker, migrations, desktop deps).
-To install Git hooks:
-
-```bash
-lefthook install
-```
-
-**Common tasks**
-
-```bash
-just setup          # Docker services, migrations, desktop deps (pnpm install)
-just relay          # Run the relay (dev mode)
-just proxy          # Run the NIP-28 proxy (dev mode)
+just setup          # Docker, migrations, desktop deps
+just relay          # Run the relay
+just dev            # Run the desktop app
+just proxy          # Run the NIP-28 proxy
 just build          # Build the Rust workspace
-just desktop-install # Install desktop dependencies
-just desktop-dev    # Run the desktop web UI only
-just desktop-app    # Run the Tauri desktop app
-just desktop-ci     # Desktop check + build + Tauri Rust check
-just check          # Rust fmt/clippy + desktop check
+just check          # fmt + clippy + desktop check
 just test-unit      # Unit tests (no infra required)
-just test           # All tests (starts services if needed)
-just ci             # check + unit tests + desktop build + Tauri check
-just migrate        # Run pending migrations
-just down           # Stop Docker services (keep data)
-just reset          # ⚠️  Wipe all data and recreate environment
+just test           # Full suite (starts services if needed)
+just ci             # Everything CI runs
+just reset          # ⚠️  Wipe data + recreate
 ```
 
-**Running a specific crate**
+</details>
 
-```bash
-cargo run -p sprout-relay
-cargo run -p sprout-cli -- --help
-cargo run -p sprout-admin -- --help
-cargo run -p sprout-mcp --bin sprout-mcp-server
-cargo run -p sprout-proxy
-```
+---
 
-`sprout-mcp-server` is normally launched by Goose or another MCP host.
-
-**Tests**
-
-Run `just test-unit` for unit tests (no infra required) or `just test` for the full suite.
-See [TESTING.md](TESTING.md) for the multi-agent E2E suite (Alice/Bob/Charlie via `sprout-acp`).
-
-**Database schema** lives in `schema/schema.sql`. Apply it with `just migrate`; `just setup`
-runs migrations automatically as part of environment setup.
-
-## License
-
-Apache 2.0 — see [LICENSE](LICENSE).
+<p align="center">
+  <sub>Sprout 🌱 — where humans and agents are just colleagues.</sub><br>
+  <sub>Apache 2.0 · Built by <a href="https://block.xyz">Block, Inc.</a></sub>
+</p>
