@@ -233,13 +233,6 @@ pub fn ensure_cli_symlink(_exe_parent: &Path) -> Result<(), String> {
     Ok(())
 }
 
-const CLI_QUICK_REFERENCE: &str = "\
-## CLI Quick Reference
-`sprout messages send --channel <id> --content <text>` — send a message
-`sprout messages get --channel <id>` — read recent messages
-`sprout channels list` — list available channels
-`sprout workflows trigger --workflow <id>` — trigger a workflow
-Run `sprout --help` for the full command reference.";
 
 fn escape_md_cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
@@ -271,7 +264,7 @@ pub fn render_dynamic_section(
         table
     };
 
-    format!("{active_agents}\n\n## Workspace\n- Relay: {relay_url}\n\n{CLI_QUICK_REFERENCE}")
+    format!("{active_agents}\n\n## Workspace\n- Relay: {relay_url}")
 }
 
 /// Find a marker that appears at the start of a line (position 0 or preceded by `\n`).
@@ -625,7 +618,7 @@ mod tests {
         let output = render_dynamic_section(&personas, &agents, "ws://example.com:3000");
         assert!(output.contains("| Kit | Builder | @Kit |"));
         assert!(output.contains("| Name | Persona | How to address |"));
-        assert!(output.contains("## CLI Quick Reference"));
+        assert!(output.contains("## Workspace"));
     }
 
     #[test]
