@@ -33,7 +33,28 @@ cp .env.example .env             # one-time
 just setup                       # start Docker services, run migrations
 ```
 
-`just reset` wipes all local data and starts over.
+> **Already running Sprout Desktop?** Desktop uses the same Docker container
+> names (`sprout-postgres`, `sprout-redis`, `sprout-typesense`) and the same
+> default ports (`:5432`, `:6379`, `:8108`). `just setup` will reuse those
+> services, so **your test relay writes into Desktop's database**. That's
+> fine for read/write smoke tests, but: `just reset` wipes Desktop's data
+> along with yours. If you need isolation, stop Desktop first or run the
+> dev stack on a different Compose project
+> (`COMPOSE_PROJECT_NAME=sprout-dev docker compose …`).
+
+`just reset` wipes all local data and starts over — **including Sprout
+Desktop's data** if its services are sharing your dev stack (see callout
+above).
+
+> **Heads up — scrub stale env first.** If your shell inherits any of
+> `SPROUT_AUTH_TAG`, `SPROUT_RELAY_URL`, or `SPROUT_PRIVATE_KEY` from a
+> prior session (or a staging config), `unset` them before continuing.
+> A stale `SPROUT_AUTH_TAG` fails the **local dev relay** with
+> `auth_error: signature verification failed` on the first CLI write —
+> it is *not* tolerated.
+> ```bash
+> unset SPROUT_AUTH_TAG SPROUT_RELAY_URL SPROUT_PRIVATE_KEY
+> ```
 
 ### 2. Build the binaries
 
@@ -98,10 +119,14 @@ vars table at the bottom if you need to lock it down.
 > `localhost:3000` / `:8080` in a code block, mentally substitute your
 > overrides — or the CLI will end up talking to Sprout Desktop's relay.
 
-> **Heads up:** if your shell already has `SPROUT_AUTH_TAG` set (e.g. from a
-> staging relay config), `unset SPROUT_AUTH_TAG` before testing. The local
-> dev relay tolerates it, but a stale tag will trip you up the moment you
-> point the CLI at a membership-gated relay.
+> **Ignore `just setup`'s "Next steps" banner.** It still prints
+> `just relay` (a debug build). Use `sprout-relay` from step 2 here —
+> step 2 already built the release binary.
+
+When you're done, stop the relay (Ctrl-C in its terminal). If it's
+backgrounded or you lost the terminal: `pkill -f sprout-relay`. Leaving
+it running will collide with the next reviewer who follows this doc on
+the same machine.
 
 ### 4. Smoke test the CLI against the relay
 
@@ -130,12 +155,17 @@ CHANNEL=$(sprout channels list --member \
 echo "channel: $CHANNEL"
 
 # Send a message and read it back
-sprout messages send --channel "$CHANNEL" --content "hello from smoke test"
+SEND=$(sprout messages send --channel "$CHANNEL" --content "hello from smoke test")
+EVENT_ID=$(echo "$SEND" | jq -r '.event_id')
 sprout messages get --channel "$CHANNEL" --limit 5 | jq .
+
+# Fetch the reply chain for a specific message (empty array on a leaf — that's fine)
+sprout messages thread --channel "$CHANNEL" --event "$EVENT_ID" | jq .
 ```
 
 A successful run prints `{"event_id":"…","accepted":true,"message":""}` for
-the send, and the message body in the `get` output.
+the send, and the message body in the `get` output. `thread` returns `[]`
+for a leaf message — populated only after a reply comes in (see §5).
 
 ### 5. Going deeper
 
@@ -199,6 +229,10 @@ export SPROUT_ACP_MCP_COMMAND="$PWD/target/release/sprout-mcp-server"  # explici
 export GOOSE_MODE=auto                        # must be 'auto' or goose hangs on prompts
 
 sprout-acp                                    # foreground; logs to stdout (run in a separate terminal)
+
+# Optional: turn on per-turn tracing if the default log is too quiet.
+# Both crates honour RUST_LOG via tracing_subscriber's EnvFilter.
+# RUST_LOG=sprout_acp=debug,sprout_mcp=debug sprout-acp
 ```
 
 > **Using a different ACP agent?** The default recipe assumes `goose` is on
@@ -270,8 +304,9 @@ CLI-side, only two matter for testing:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `relay error 500` or `400: restricted: not a channel member` after a code change | Stale binary | Rebuild and re-export `PATH`; or `cargo run` directly |
-| `Address already in use` on relay start (os error 48 on macOS, 98 on Linux) | Another relay (or stale process) holding `:3000` / `:8080` / `:9102` | `lsof -iTCP:3000 -sTCP:LISTEN`; kill the offender, or use the port-override block in step 3 |
+| `Address already in use` on relay start (os error 48 on macOS, 98 on Linux) | Another relay (or stale process) holding `:3000` / `:8080` / `:9102` (or your override ports) | The panic line names the failing port — read it first. Then `lsof -iTCP:3000,8080,9102 -sTCP:LISTEN` (or your override equivalents). Kill the offender (`pkill -f sprout-relay`) or use the port-override block in step 3. If you already overrode and *still* collide, a prior reviewer left a relay running on the same alt ports — kill it or pick fresh ports |
 | `auth_error: SPROUT_PRIVATE_KEY is required` | Env not exported into the CLI's shell | `export SPROUT_PRIVATE_KEY=...` (or pass `--private-key`) |
+| `auth_error: SPROUT_AUTH_TAG verification failed … signature verification failed` | A stale `SPROUT_AUTH_TAG` inherited from a parent shell. The local dev relay rejects it. | `unset SPROUT_AUTH_TAG` (see the scrub block in step 1) |
 | `auth-required: verification failed` on a closed relay | NIP-OA attestation needed | Set `SPROUT_AUTH_TAG` to the owner-issued JSON, or relax `SPROUT_REQUIRE_RELAY_MEMBERSHIP` |
 | `channels list` empty after `channels create` | The CLI doesn't echo the channel UUID; use the filter shown in step 4 | Or `POST /query` with `{"kinds":[39002]}` |
 | ACP agent ignores all events | `SPROUT_ACP_RESPOND_TO=owner-only` (default) with no owner configured | Set `SPROUT_ACP_RESPOND_TO=anyone` for testing |
