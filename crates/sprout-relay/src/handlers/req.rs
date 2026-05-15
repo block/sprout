@@ -90,11 +90,38 @@ pub async fn handle_req(
 
     let channel_id = extract_channel_id_from_filters(&filters);
 
-    // ── NIP-50 search: intercept BEFORE #p gating ────────────────────────────
-    // Search filters are one-shot (not registered as persistent subscriptions).
-    // They never deliver gift wraps (not indexed) or membership notifications
-    // (global, no channel_id), so the #p gate below is irrelevant for them.
-    // Intercepting here lets clients send `{"search":"foo"}` without `kinds`.
+    // ── #p / engram gating for globally-stored sensitive kinds ───────────────
+    // Applied BEFORE the NIP-50 search branch so that an authenticated member
+    // cannot use `{"search":"...","kinds":[30174]}` (or similar for p-gated
+    // kinds) to harvest indexed-but-globally-stored sensitive events. Search
+    // hits are looked up by event id and returned without the per-filter
+    // post-check the historical-delivery branch applies, so the gate must run
+    // here, up front. Only applies to GLOBAL subscriptions (channel_id = None):
+    // channel-scoped subs can never receive globally-stored events because of
+    // the fan_out() invariant in subscription.rs.
+    if channel_id.is_none() {
+        let authed_pubkey_hex = hex::encode(&pubkey_bytes);
+        if !p_gated_filters_authorized(&filters, &authed_pubkey_hex) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: p-gated events require #p matching your pubkey",
+            ));
+            return;
+        }
+        if !engram_filters_authorized(&filters, &authed_pubkey_hex) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: agent-engram reads require authors=[self] or #p=[self]",
+            ));
+            return;
+        }
+    }
+
+    // ── NIP-50 search: one-shot, no persistent subscription ──────────────────
+    // Search filters hit Typesense and return historical hits, then EOSE.
+    // They are not registered for fan-out. The sensitive-kind gates above
+    // already ran, so an authed member cannot use search to bypass author/#p
+    // rules for kind:30174 or other globally-stored gated kinds.
     let has_search = filters.iter().any(|f| f.search.is_some());
     if has_search {
         if filters.iter().any(|f| f.search.is_none()) {
@@ -114,28 +141,6 @@ pub async fn handle_req(
         )
         .await;
         return;
-    }
-
-    // ── #p gating for globally-stored sensitive kinds ─────────────────────────
-    // Only applies to GLOBAL subscriptions (channel_id = None). Channel-scoped
-    // subscriptions can never receive globally-stored events — the fan_out()
-    // invariant in subscription.rs prevents it.
-    if channel_id.is_none() {
-        let authed_pubkey_hex = hex::encode(&pubkey_bytes);
-        if !p_gated_filters_authorized(&filters, &authed_pubkey_hex) {
-            conn.send(RelayMessage::closed(
-                &sub_id,
-                "restricted: p-gated events require #p matching your pubkey",
-            ));
-            return;
-        }
-        if !engram_filters_authorized(&filters, &authed_pubkey_hex) {
-            conn.send(RelayMessage::closed(
-                &sub_id,
-                "restricted: agent-engram reads require authors=[self] or #p=[self]",
-            ));
-            return;
-        }
     }
 
     // Check channel access BEFORE registering the subscription.
@@ -1051,5 +1056,53 @@ mod tests {
                 nostr::PublicKey::from_hex(&other).unwrap(),
             ]);
         assert!(!engram_filters_authorized(&[f], &agent));
+    }
+
+    // ── NIP-50 search bypass regressions ─────────────────────────────────
+    // These filters are the shape an authenticated relay member would send
+    // to try to harvest indexed engram envelopes via the search path. The
+    // gate must reject them regardless of the presence of `search`.
+
+    #[test]
+    fn engram_gate_rejects_bare_kind_search_filter() {
+        // {"search":"*", "kinds":[30174]} — exactly the bypass codex found.
+        let (agent, _, _) = three_pubkeys();
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
+            .search("*");
+        assert!(!engram_filters_authorized(&[f], &agent));
+    }
+
+    #[test]
+    fn engram_gate_rejects_wildcard_kind_search_filter() {
+        // {"search":"foo"} — no `kinds` field at all matches engrams too.
+        let (agent, _, _) = three_pubkeys();
+        let f = Filter::new().search("foo");
+        assert!(!engram_filters_authorized(&[f], &agent));
+    }
+
+    #[test]
+    fn engram_gate_allows_authored_engram_search() {
+        // Agent searching their own engrams by content keyword is legitimate.
+        let (agent, _, _) = three_pubkeys();
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
+            .author(nostr::PublicKey::from_hex(&agent).unwrap())
+            .search("foo");
+        assert!(engram_filters_authorized(&[f], &agent));
+    }
+
+    #[test]
+    fn p_gate_rejects_bare_kind_search_filter_for_gift_wrap() {
+        // P-gated kinds (observer frames, member notifications) are indexed
+        // too. Same bypass shape: {"search":"x","kinds":[<p-gated kind>]}.
+        // Use KIND_AGENT_OBSERVER_FRAME — globally stored, p-gated, indexed.
+        let (agent, _, _) = three_pubkeys();
+        let f = Filter::new()
+            .kind(nostr::Kind::Custom(
+                sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
+            ))
+            .search("x");
+        assert!(!p_gated_filters_authorized(&[f], &agent));
     }
 }
