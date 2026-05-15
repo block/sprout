@@ -34,7 +34,6 @@ impl Llm {
                 let v = post(&self.http, &url, &body, |r| {
                     r.header("x-api-key", &cfg.api_key)
                         .header("anthropic-version", &cfg.anthropic_api_version)
-                        .header("content-type", "application/json")
                 })
                 .await?;
                 parse_anthropic(v)
@@ -42,11 +41,7 @@ impl Llm {
             Provider::OpenAi => {
                 let body = openai_body(cfg, history, tools);
                 let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-                let v = post(&self.http, &url, &body, |r| {
-                    r.bearer_auth(&cfg.api_key)
-                        .header("content-type", "application/json")
-                })
-                .await?;
+                let v = post(&self.http, &url, &body, |r| r.bearer_auth(&cfg.api_key)).await?;
                 parse_openai(v)
             }
         }
@@ -74,7 +69,6 @@ impl Llm {
                 let v = post(&self.http, &url, &body, |r| {
                     r.header("x-api-key", &cfg.api_key)
                         .header("anthropic-version", &cfg.anthropic_api_version)
-                        .header("content-type", "application/json")
                 })
                 .await?;
                 Ok(parse_anthropic(v)?.text)
@@ -83,18 +77,14 @@ impl Llm {
                 let body = json!({
                     "model": cfg.model,
                     "stream": false,
-                    "max_tokens": max_output_tokens,
+                    "max_completion_tokens": max_output_tokens,
                     "messages": [
                         { "role": "system", "content": system_prompt },
                         { "role": "user", "content": user_prompt },
                     ],
                 });
                 let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-                let v = post(&self.http, &url, &body, |r| {
-                    r.bearer_auth(&cfg.api_key)
-                        .header("content-type", "application/json")
-                })
-                .await?;
+                let v = post(&self.http, &url, &body, |r| r.bearer_auth(&cfg.api_key)).await?;
                 Ok(parse_openai(v)?.text)
             }
         }
@@ -193,8 +183,8 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
             "parameters": t.input_schema } })
         })
         .collect();
-    let mut body = json!({ "model": cfg.model, "stream": false, "max_tokens": cfg.max_output_tokens,
-        "messages": messages });
+    let mut body = json!({ "model": cfg.model, "stream": false,
+        "max_completion_tokens": cfg.max_output_tokens, "messages": messages });
     if !tools_json.is_empty() {
         body["tools"] = Value::Array(tools_json);
         body["tool_choice"] = json!("auto");
@@ -338,8 +328,17 @@ async fn post<F>(http: &Client, url: &str, body: &Value, apply: F) -> Result<Val
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
+    let body_bytes =
+        serde_json::to_vec(body).map_err(|e| AgentError::Llm(format!("serialize: {e}")))?;
     for attempt in 0..MAX_RETRIES {
-        let resp = match apply(http.post(url).json(body)).send().await {
+        let resp = match apply(
+            http.post(url)
+                .header("content-type", "application/json")
+                .body(body_bytes.clone()),
+        )
+        .send()
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 if attempt + 1 < MAX_RETRIES && (e.is_timeout() || e.is_connect()) {
