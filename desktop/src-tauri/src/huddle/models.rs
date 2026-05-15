@@ -685,9 +685,9 @@ impl ModelManager {
 
         // Best-effort cleanup of the previous default STT model dir (Moonshine
         // Tiny, ~70 MB). Runs only after the new install reaches Ready, so a
-        // failed download never deletes a working fallback. The same cleanup
-        // also runs from `start_stt_download` to cover users who already have
-        // the new model installed.
+        // failed download never removes the previous on-disk model during
+        // migration. The same cleanup also runs from `start_stt_download` to
+        // cover users who already have the new model installed.
         cleanup_legacy_moonshine_dir(&self.models_dir).await;
 
         eprintln!(
