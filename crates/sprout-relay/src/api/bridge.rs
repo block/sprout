@@ -200,6 +200,12 @@ pub async fn query_events(
             "restricted: p-gated kinds require #p tag matching your pubkey",
         ));
     }
+    if !crate::handlers::req::engram_filters_authorized(&filters, &authed_pubkey_hex) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "restricted: agent-engram reads require authors=[self] or #p=[self]",
+        ));
+    }
 
     // Get channels this user can access — same enforcement as WS REQ handler.
     let accessible_channels = state
@@ -292,6 +298,12 @@ pub async fn count_events(
         return Err(api_error(
             StatusCode::FORBIDDEN,
             "restricted: p-gated kinds require #p tag matching your pubkey",
+        ));
+    }
+    if !crate::handlers::req::engram_filters_authorized(&filters, &authed_pubkey_hex) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "restricted: agent-engram reads require authors=[self] or #p=[self]",
         ));
     }
 
