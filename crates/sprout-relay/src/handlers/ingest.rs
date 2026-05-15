@@ -818,11 +818,92 @@ fn validate_engram_envelope(event: &Event) -> Result<(), String> {
         return Err("agent-engram `d` tag must be 64 lowercase hex chars".to_string());
     }
     let p = p_tags[0];
-    if p.len() != 64 || !p.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("agent-engram `p` tag must be a 64-hex pubkey".to_string());
+    // Lowercase-only: readers query `#p` with `owner.to_hex()` (lowercase) and
+    // Nostr tag matching is byte-exact. Accepting uppercase here would let a
+    // submitter replace the lowercase head with an event that subsequent
+    // lowercase-`#p` queries cannot see — silently bricking the slug.
+    if p.len() != 64
+        || !p
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err("agent-engram `p` tag must be 64 lowercase hex chars (pubkey)".to_string());
     }
-    if event.content.is_empty() {
+    // Content must be a syntactically plausible NIP-44 v2 payload. We do not
+    // (and cannot) verify the MAC at the relay, but we can reject obvious
+    // garbage so a malformed event cannot supersede a valid head via NIP-33
+    // replacement and then be silently discarded by readers.
+    validate_engram_nip44_content(&event.content)?;
+    Ok(())
+}
+
+/// Validate that `content` is a syntactically plausible NIP-44 v2 ciphertext.
+///
+/// Checks:
+/// - Non-empty.
+/// - Standard base64 alphabet only (A-Z, a-z, 0-9, +, /, =), with padding only
+///   at the end and total length a multiple of 4.
+/// - Decoded length >= 99 bytes (1 version + 32 nonce + 32 MAC + minimum 34
+///   bytes of length-prefixed padded ciphertext required by NIP-44 v2).
+/// - First decoded byte is `0x02` (NIP-44 version 2).
+///
+/// This is an envelope sanity check, not full validation: the MAC and actual
+/// decryption happen at the reader. The intent is to refuse obvious junk so a
+/// malformed event cannot win NIP-33 replacement against a valid head and then
+/// be silently skipped by `validate_and_decrypt`. Mirrors the validator in
+/// `sprout-pair-relay::validate_nip44_content`.
+fn validate_engram_nip44_content(content: &str) -> Result<(), String> {
+    if content.is_empty() {
         return Err("agent-engram content must not be empty (NIP-44 ciphertext)".to_string());
+    }
+    let bytes = content.as_bytes();
+    let len = bytes.len();
+    if !len.is_multiple_of(4) {
+        return Err("agent-engram content is not valid base64 (length)".to_string());
+    }
+    let mut pad_count = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' => {
+                if pad_count > 0 {
+                    return Err("agent-engram content is not valid base64".to_string());
+                }
+            }
+            b'=' => {
+                if i < len - 2 {
+                    return Err("agent-engram content is not valid base64".to_string());
+                }
+                pad_count += 1;
+                if pad_count > 2 {
+                    return Err("agent-engram content is not valid base64".to_string());
+                }
+            }
+            _ => return Err("agent-engram content is not valid base64".to_string()),
+        }
+    }
+    let decoded_len = (len / 4) * 3 - pad_count;
+    if decoded_len < 99 {
+        return Err("agent-engram content too short for NIP-44 v2".to_string());
+    }
+    let b64_val = |c: u8| -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let v0 =
+        b64_val(bytes[0]).ok_or_else(|| "agent-engram content is not valid base64".to_string())?;
+    let v1 =
+        b64_val(bytes[1]).ok_or_else(|| "agent-engram content is not valid base64".to_string())?;
+    let first_byte = (v0 << 2) | (v1 >> 4);
+    if first_byte != 0x02 {
+        return Err(
+            "agent-engram content is not NIP-44 v2 (expected 0x02 version prefix)".to_string(),
+        );
     }
     Ok(())
 }
@@ -1916,18 +1997,29 @@ mod tests {
         make_event_with_tags(KIND_AGENT_ENGRAM, content, tags)
     }
 
+    /// Minimal syntactically-plausible NIP-44 v2 payload (99 zero-filled bytes
+    /// with the 0x02 version prefix). Real ciphertexts are larger and have real
+    /// MACs; the relay only checks shape, not authenticity.
+    fn fake_nip44_v2() -> String {
+        // base64(b"\x02" + b"\x00" * 98) — 132 chars, decoded length 99,
+        // first byte 0x02.
+        let mut s = String::from("Ag");
+        s.push_str(&"A".repeat(130));
+        s
+    }
+
     #[test]
     fn engram_envelope_accepts_canonical() {
         let d = "a".repeat(64);
         let p = "b".repeat(64);
-        let ev = make_engram(&[&["d", &d], &["p", &p]], "ciphertext");
+        let ev = make_engram(&[&["d", &d], &["p", &p]], &fake_nip44_v2());
         assert!(validate_engram_envelope(&ev).is_ok());
     }
 
     #[test]
     fn engram_envelope_rejects_missing_p() {
         let d = "a".repeat(64);
-        let ev = make_engram(&[&["d", &d]], "ciphertext");
+        let ev = make_engram(&[&["d", &d]], &fake_nip44_v2());
         let err = validate_engram_envelope(&ev).unwrap_err();
         assert!(err.contains("`p` tag"), "got: {err}");
     }
@@ -1936,7 +2028,7 @@ mod tests {
     fn engram_envelope_rejects_duplicate_p() {
         let d = "a".repeat(64);
         let p = "b".repeat(64);
-        let ev = make_engram(&[&["d", &d], &["p", &p], &["p", &p]], "ciphertext");
+        let ev = make_engram(&[&["d", &d], &["p", &p], &["p", &p]], &fake_nip44_v2());
         let err = validate_engram_envelope(&ev).unwrap_err();
         assert!(err.contains("`p` tag"), "got: {err}");
     }
@@ -1944,7 +2036,7 @@ mod tests {
     #[test]
     fn engram_envelope_rejects_short_d() {
         let p = "b".repeat(64);
-        let ev = make_engram(&[&["d", "abcd"], &["p", &p]], "ciphertext");
+        let ev = make_engram(&[&["d", "abcd"], &["p", &p]], &fake_nip44_v2());
         let err = validate_engram_envelope(&ev).unwrap_err();
         assert!(err.contains("`d` tag"), "got: {err}");
     }
@@ -1954,9 +2046,29 @@ mod tests {
         let p = "b".repeat(64);
         // 64 chars but uppercase — spec mandates lowercase hex.
         let d = "A".repeat(64);
-        let ev = make_engram(&[&["d", &d], &["p", &p]], "ciphertext");
+        let ev = make_engram(&[&["d", &d], &["p", &p]], &fake_nip44_v2());
         let err = validate_engram_envelope(&ev).unwrap_err();
         assert!(err.contains("`d` tag"), "got: {err}");
+    }
+
+    /// Regression: uppercase `p` tag must be rejected at ingest. Readers query
+    /// `#p` lowercase; an uppercase-tagged event that wins NIP-33 replacement
+    /// becomes invisible to readers, silently bricking the slug.
+    #[test]
+    fn engram_envelope_rejects_uppercase_p() {
+        let d = "a".repeat(64);
+        let p = "B".repeat(64);
+        let ev = make_engram(&[&["d", &d], &["p", &p]], &fake_nip44_v2());
+        let err = validate_engram_envelope(&ev).unwrap_err();
+        assert!(err.contains("`p` tag"), "got: {err}");
+    }
+
+    #[test]
+    fn engram_envelope_rejects_short_p() {
+        let d = "a".repeat(64);
+        let ev = make_engram(&[&["d", &d], &["p", "abcd"]], &fake_nip44_v2());
+        let err = validate_engram_envelope(&ev).unwrap_err();
+        assert!(err.contains("`p` tag"), "got: {err}");
     }
 
     #[test]
@@ -1966,5 +2078,59 @@ mod tests {
         let ev = make_engram(&[&["d", &d], &["p", &p]], "");
         let err = validate_engram_envelope(&ev).unwrap_err();
         assert!(err.contains("content"), "got: {err}");
+    }
+
+    /// Regression: non-base64 content must be rejected. Otherwise a signed
+    /// event with `content="x"` wins NIP-33 replacement against a valid head,
+    /// and the new head is then skipped by `validate_and_decrypt` — making the
+    /// slug appear absent to readers.
+    #[test]
+    fn engram_envelope_rejects_non_base64_content() {
+        let d = "a".repeat(64);
+        let p = "b".repeat(64);
+        let ev = make_engram(&[&["d", &d], &["p", &p]], "x");
+        let err = validate_engram_envelope(&ev).unwrap_err();
+        assert!(
+            err.contains("base64") || err.contains("too short"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn engram_envelope_rejects_wrong_nip44_version() {
+        // 99 bytes of valid base64 alphabet, but first byte decodes to 0x00,
+        // not the NIP-44 v2 prefix 0x02. Length OK (132 chars / 99 decoded).
+        let d = "a".repeat(64);
+        let p = "b".repeat(64);
+        let bad = "A".repeat(132);
+        let ev = make_engram(&[&["d", &d], &["p", &p]], &bad);
+        let err = validate_engram_envelope(&ev).unwrap_err();
+        assert!(
+            err.contains("NIP-44 v2") || err.contains("0x02"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn engram_envelope_rejects_short_content() {
+        // Base64 of "Ag==" decodes to 1 byte — version prefix correct but
+        // way under the 99-byte floor.
+        let d = "a".repeat(64);
+        let p = "b".repeat(64);
+        let ev = make_engram(&[&["d", &d], &["p", &p]], "Ag==");
+        let err = validate_engram_envelope(&ev).unwrap_err();
+        assert!(err.contains("too short"), "got: {err}");
+    }
+
+    #[test]
+    fn engram_envelope_rejects_bad_base64_alphabet() {
+        let d = "a".repeat(64);
+        let p = "b".repeat(64);
+        // Contains '!' which is not in the standard base64 alphabet. Length is
+        // a multiple of 4 to defeat the length check.
+        let bad = format!("Ag!!{}", "A".repeat(128));
+        let ev = make_engram(&[&["d", &d], &["p", &p]], &bad);
+        let err = validate_engram_envelope(&ev).unwrap_err();
+        assert!(err.contains("base64"), "got: {err}");
     }
 }
