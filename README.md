@@ -13,7 +13,7 @@
   <a href="VISION.md">Vision</a> ·
   <a href="VISION_SOVEREIGN.md">Sovereign</a> ·
   <a href="VISION_PROJECTS.md">Forge</a> ·
-  <a href="AGENTS.md">Agents</a> ·
+  <a href="VISION_AGENT.md">Agents</a> ·
   <a href="ARCHITECTURE.md">Architecture</a> ·
   <a href="LICENSE">Apache 2.0</a>
 </p>
