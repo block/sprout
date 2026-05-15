@@ -104,6 +104,7 @@ type HomeViewProps = {
   errorMessage?: string;
   currentPubkey?: string;
   availableChannelIds: ReadonlySet<string>;
+  onOpenContext: (channelId: string, messageId: string) => void;
   onRefresh: () => void;
 };
 
@@ -113,6 +114,7 @@ export function HomeView({
   errorMessage,
   currentPubkey,
   availableChannelIds,
+  onOpenContext,
   onRefresh,
 }: HomeViewProps) {
   const [filter, setFilter] = React.useState<InboxFilter>("all");
@@ -355,6 +357,7 @@ export function HomeView({
           item={selectedItem}
           messages={contextMessages}
           replies={selectedItemReplies}
+          contextChannelName={selectedChannel?.name ?? null}
           onDelete={() => {
             if (!selectedItem || !canDelete) {
               return;
@@ -369,6 +372,7 @@ export function HomeView({
                 setIsDeletingMessage(false);
               });
           }}
+          onOpenContext={onOpenContext}
           onSendReply={async ({
             content,
             mediaTags,

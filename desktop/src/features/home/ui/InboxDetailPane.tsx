@@ -44,7 +44,9 @@ type InboxDetailPaneProps = {
   item: InboxItem | null;
   messages?: InboxContextMessage[];
   replies?: InboxReply[];
+  contextChannelName?: string | null;
   onDelete: () => void;
+  onOpenContext?: (channelId: string, messageId: string) => void;
   onSendReply: (input: {
     content: string;
     mediaTags?: string[][];
@@ -88,7 +90,9 @@ export function InboxDetailPane({
   item,
   messages = [],
   replies = [],
+  contextChannelName = null,
   onDelete,
+  onOpenContext,
   onSendReply,
   onToggleDone,
   onToggleReaction,
@@ -179,6 +183,11 @@ export function InboxDetailPane({
           id: replyTarget.id,
         }
       : null;
+  const channelContextName = contextChannelName ?? item.channelLabel;
+  const contextLabel = channelContextName
+    ? `#${channelContextName}`
+    : item.categoryLabel;
+  const contextChannelId = item.item.channelId;
 
   const handleSelectReplyTarget = (message: InboxDisplayMessage) => {
     setReplyTargetId((currentReplyTargetId) =>
@@ -193,76 +202,60 @@ export function InboxDetailPane({
       data-testid="home-inbox-detail"
       ref={detailPaneRef}
     >
-      {!canOpenChannel ? (
-        <div className="px-6 pb-4 pt-14">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <UserAvatar
-                avatarUrl={item.avatarUrl}
-                className="h-8 w-8 rounded-xl"
-                displayName={item.senderLabel}
-                size="md"
-              />
-              <div className="min-w-0">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <p className="truncate text-base font-semibold">
-                    {item.senderLabel}
-                  </p>
-                  <span
-                    className={cn(
-                      "inline-flex items-center text-[10px] font-semibold uppercase tracking-[0.14em]",
-                      item.isActionRequired
-                        ? "text-amber-600 dark:text-amber-300"
-                        : "text-primary",
-                    )}
-                  >
-                    {item.categoryLabel}
-                  </span>
-                  {item.channelLabel ? (
-                    <span className="inline-flex items-center text-[11px] font-medium text-muted-foreground">
-                      #{item.channelLabel}
-                    </span>
-                  ) : null}
-                </div>
-
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                  <span>{item.fullTimestampLabel}</span>
-                  <span>Inbox only</span>
-                </div>
-              </div>
+      <div className="px-6 pb-1 pt-14">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {canOpenChannel && contextChannelId && onOpenContext ? (
+                <button
+                  className="truncate text-left text-sm font-semibold text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  onClick={() => onOpenContext(contextChannelId, item.id)}
+                  type="button"
+                >
+                  {contextLabel}
+                </button>
+              ) : (
+                <p className="truncate text-sm font-semibold text-foreground">
+                  {contextLabel}
+                </p>
+              )}
             </div>
 
-            <div className="flex shrink-0 items-center gap-4">
-              <TooltipProvider delayDuration={200}>
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-0.5">
-                    <HeaderIconAction
-                      label={isDone ? "Mark unread" : "Mark done"}
-                      onClick={onToggleDone}
-                      icon={
-                        isDone ? (
-                          <MailOpen className="h-4 w-4" />
-                        ) : (
-                          <CheckCheck className="h-4 w-4" />
-                        )
-                      }
-                    />
-                  </div>
-                  {canDelete ? (
-                    <HeaderMoreMenu
-                      isDeletingMessage={isDeletingMessage}
-                      onDelete={onDelete}
-                    />
-                  ) : null}
-                </div>
-              </TooltipProvider>
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{item.fullTimestampLabel}</span>
             </div>
           </div>
+
+          <div className="flex shrink-0 items-center gap-4">
+            <TooltipProvider delayDuration={200}>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-0.5">
+                  <HeaderIconAction
+                    label={isDone ? "Mark unread" : "Mark done"}
+                    onClick={onToggleDone}
+                    icon={
+                      isDone ? (
+                        <MailOpen className="h-4 w-4" />
+                      ) : (
+                        <CheckCheck className="h-4 w-4" />
+                      )
+                    }
+                  />
+                </div>
+                {canDelete ? (
+                  <HeaderMoreMenu
+                    isDeletingMessage={isDeletingMessage}
+                    onDelete={onDelete}
+                  />
+                ) : null}
+              </div>
+            </TooltipProvider>
+          </div>
         </div>
-      ) : null}
+      </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <div className="absolute inset-0 overflow-y-auto overscroll-contain pb-32 pt-14">
+        <div className="absolute inset-0 overflow-y-auto overscroll-contain pb-32 pt-1">
           <div>
             {isThreadContextLoading ? (
               <div className="px-6 pb-3 text-[11px] text-muted-foreground">
