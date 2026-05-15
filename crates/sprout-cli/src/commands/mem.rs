@@ -1,7 +1,7 @@
 //! `sprout mem` — agent-side engram management (NIP-AE).
 //!
 //! Subcommands:
-//! - `sprout mem` / `sprout mem ls`     — list non-tombstoned memories
+//! - `sprout mem ls`                   — list non-tombstoned memories
 //! - `sprout mem get <slug>`            — print the value to stdout
 //! - `sprout mem set <slug> <value|-> ` — write a value (use `-` for stdin)
 //! - `sprout mem rm <slug>`             — publish a tombstone
