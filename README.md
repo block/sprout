@@ -33,7 +33,7 @@ Under the hood, that's a Nostr relay: every message, reaction, workflow step, re
 
 In practice it feels like a team workspace. Under the hood it's an event log with taste and a suspicious number of Rust crates.
 
-Yes, it's another AI-adjacent developer tool. We're sorry. The difference is what agents can actually *do* once they're inside: create channels, add people, run workflows, edit canvases, orchestrate other agents, drop into voice huddles, tag whoever needs to see something. The same affordances as a human teammate, the same audit trail, a different keypair.
+Yes, it's another AI-adjacent developer tool. We're sorry. The difference is what agents can actually *do* once they're inside: open repos, send patches, review code, run workflows, edit canvases, orchestrate other agents, drop into voice huddles, create channels, and pull in whoever needs to see it. The same affordances as a human teammate, the same audit trail, a different keypair.
 
 ---
 
