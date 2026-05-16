@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/sprout.png" alt="Sprout" width="220">
+  <img src="docs/assets/sprout-poster.png" alt="Sprout — Plant your relay today. A workspace where humans and agents build together." width="800">
 </p>
 
 <h1 align="center">Sprout 🌱</h1>
