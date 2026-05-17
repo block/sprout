@@ -73,6 +73,13 @@ pub struct Config {
     /// Anthropic`. Set via `OPENAI_COMPAT_API`; defaults to auto-select
     /// based on `base_url`.
     pub openai_api: OpenAiApi,
+    /// `true` when `openai_api` was resolved by auto-detection (i.e.
+    /// `OPENAI_COMPAT_API` was unset or `auto`). When `true` and the
+    /// resolved value is `ChatCompletions`, `Llm` may upgrade to
+    /// `Responses` once after observing a specific "use /v1/responses"
+    /// error from the provider. `false` means the operator pinned the
+    /// choice and the auto-upgrade path is disabled.
+    pub openai_api_auto: bool,
 }
 
 impl Config {
@@ -82,19 +89,43 @@ impl Config {
             "openai" | "openai-compat" => Provider::OpenAi,
             o => return Err(format!("config: SPROUT_AGENT_PROVIDER={o} not supported")),
         };
-        let (api_key, model, base_url) = match provider {
+        let (api_key, model, base_url, openai_api, openai_api_auto) = match provider {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
                 req("ANTHROPIC_MODEL")?,
                 env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+                // Unused for Anthropic. A placeholder value keeps `Config`
+                // sized and avoids `Option`/`unwrap` plumbing in the hot
+                // path. We intentionally do NOT parse `OPENAI_COMPAT_API`
+                // here — a stray invalid value in an Anthropic-only env
+                // must not break startup.
+                OpenAiApi::ChatCompletions,
+                false,
             ),
-            Provider::OpenAi => (
-                req("OPENAI_COMPAT_API_KEY")?,
-                req("OPENAI_COMPAT_MODEL")?,
-                env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
-            ),
+            Provider::OpenAi => {
+                let base_url = env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1");
+                let raw = env("OPENAI_COMPAT_API");
+                // "auto" (or unset/empty) means we may upgrade chat→responses
+                // on a specific error from the provider. An explicit value
+                // pins the choice.
+                let openai_api_auto = matches!(
+                    raw.as_deref()
+                        .unwrap_or("auto")
+                        .trim()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "auto" | ""
+                );
+                let openai_api = parse_openai_api(raw.as_deref(), &base_url)?;
+                (
+                    req("OPENAI_COMPAT_API_KEY")?,
+                    req("OPENAI_COMPAT_MODEL")?,
+                    base_url,
+                    openai_api,
+                    openai_api_auto,
+                )
+            }
         };
-        let openai_api = parse_openai_api_env(&base_url)?;
         let system_prompt = match (env("SPROUT_AGENT_SYSTEM_PROMPT"), env("SPROUT_AGENT_SYSTEM_PROMPT_FILE")) {
             (Some(_), Some(_)) => return Err(
                 "config: SPROUT_AGENT_SYSTEM_PROMPT and SPROUT_AGENT_SYSTEM_PROMPT_FILE are mutually exclusive".into()),
@@ -110,6 +141,7 @@ impl Config {
             base_url,
             anthropic_api_version: env_or("ANTHROPIC_API_VERSION", "2023-06-01"),
             openai_api,
+            openai_api_auto,
             max_rounds: parse_env("SPROUT_AGENT_MAX_ROUNDS", 0)?,
             max_output_tokens: parse_env("SPROUT_AGENT_MAX_OUTPUT_TOKENS", 32_768)?,
             llm_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_LLM_TIMEOUT_SECS", 120)?),
@@ -203,9 +235,15 @@ fn req(k: &str) -> Result<String, String> {
 /// Parse `OPENAI_COMPAT_API` and, on `auto` (or unset), pick a default
 /// from `base_url`. Official OpenAI gets Responses; everything else gets
 /// Chat Completions.
-fn parse_openai_api_env(base_url: &str) -> Result<OpenAiApi, String> {
-    let raw = env("OPENAI_COMPAT_API").unwrap_or_else(|| "auto".into());
-    match raw.to_ascii_lowercase().as_str() {
+///
+/// Only called when `provider = OpenAi`. We deliberately don't read this
+/// env when `provider = Anthropic` so a stray invalid value cannot break
+/// an Anthropic-only deployment.
+///
+/// The pure parser takes `raw` as a parameter so tests can drive the
+/// full input matrix without touching process env.
+fn parse_openai_api(raw: Option<&str>, base_url: &str) -> Result<OpenAiApi, String> {
+    match raw.unwrap_or("auto").trim().to_ascii_lowercase().as_str() {
         "chat" | "chat_completions" | "chat-completions" => Ok(OpenAiApi::ChatCompletions),
         "responses" => Ok(OpenAiApi::Responses),
         "auto" | "" => Ok(auto_openai_api(base_url)),
@@ -429,6 +467,45 @@ mod tests {
                 "expected Chat Completions for {url}"
             );
         }
+    }
+
+    #[test]
+    fn parse_openai_api_unset_defaults_to_auto() {
+        assert_eq!(
+            parse_openai_api(None, "https://api.openai.com/v1").unwrap(),
+            OpenAiApi::Responses,
+        );
+        assert_eq!(
+            parse_openai_api(None, "http://localhost:11434/v1").unwrap(),
+            OpenAiApi::ChatCompletions,
+        );
+    }
+
+    #[test]
+    fn parse_openai_api_accepts_explicit_values() {
+        let url = "http://example.invalid";
+        assert_eq!(
+            parse_openai_api(Some("chat"), url).unwrap(),
+            OpenAiApi::ChatCompletions
+        );
+        assert_eq!(
+            parse_openai_api(Some("chat-completions"), url).unwrap(),
+            OpenAiApi::ChatCompletions
+        );
+        assert_eq!(
+            parse_openai_api(Some("RESPONSES"), url).unwrap(),
+            OpenAiApi::Responses
+        );
+        assert_eq!(
+            parse_openai_api(Some("  auto  "), "https://api.openai.com").unwrap(),
+            OpenAiApi::Responses
+        );
+    }
+
+    #[test]
+    fn parse_openai_api_rejects_garbage() {
+        let err = parse_openai_api(Some("nope"), "http://example.invalid").unwrap_err();
+        assert!(err.contains("OPENAI_COMPAT_API=nope"));
     }
 
     #[test]
