@@ -1,7 +1,9 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use crate::config::{Config, OpenAiApi, Provider};
+use crate::config::{is_openai_host, Config, OpenAiApi, Provider};
 use crate::types::{
     AgentError, HistoryItem, LlmResponse, ProviderStop, ToolCall, ToolDef, ToolResultContent,
 };
@@ -9,15 +11,17 @@ use crate::types::{
 const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LLM_ERROR_BODY_BYTES: usize = 4 * 1024;
 
+/// Parser for an OpenAI-family JSON response. Per-endpoint pair lives
+/// alongside its `_body` serializer.
+type OpenAiParse = fn(Value) -> Result<LlmResponse, AgentError>;
+
 pub struct Llm {
     http: Client,
-    /// One-shot sticky flag: once we observe a "use /v1/responses" /
-    /// "Responses API required" error from a provider while
-    /// `cfg.openai_api_auto` is set, we flip this to `true` and route
-    /// every subsequent OpenAI request to the Responses endpoint for
-    /// the lifetime of the process. The agent loop will then retry the
-    /// failed turn, which succeeds the second time around.
-    auto_upgraded_to_responses: std::sync::atomic::AtomicBool,
+    /// One-shot sticky flag: set when a Chat Completions request comes
+    /// back with a "use /v1/responses" provider error while `cfg.openai_api
+    /// == Auto`. Subsequent OpenAI calls then go straight to Responses
+    /// for the lifetime of the process.
+    auto_upgraded: AtomicBool,
 }
 
 impl Llm {
@@ -29,40 +33,8 @@ impl Llm {
             .map_err(|e| AgentError::Llm(format!("http: {e}")))?;
         Ok(Self {
             http,
-            auto_upgraded_to_responses: std::sync::atomic::AtomicBool::new(false),
+            auto_upgraded: AtomicBool::new(false),
         })
-    }
-
-    /// Effective OpenAI API for this call, accounting for one-shot
-    /// auto-upgrade. `Responses` if the operator pinned it OR if we've
-    /// already upgraded; otherwise `ChatCompletions`.
-    fn effective_openai_api(&self, cfg: &Config) -> OpenAiApi {
-        if cfg.openai_api == OpenAiApi::Responses
-            || self
-                .auto_upgraded_to_responses
-                .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            OpenAiApi::Responses
-        } else {
-            OpenAiApi::ChatCompletions
-        }
-    }
-
-    /// Should we look for a "use Responses API" hint in this error body?
-    /// Only when the operator left `OPENAI_COMPAT_API=auto` AND we haven't
-    /// already upgraded.
-    fn should_try_auto_upgrade(&self, cfg: &Config) -> bool {
-        cfg.openai_api_auto
-            && !self
-                .auto_upgraded_to_responses
-                .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Latch the upgrade. Returns the previous value so the caller can log
-    /// once per process.
-    fn latch_responses_upgrade(&self) -> bool {
-        self.auto_upgraded_to_responses
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn complete(
@@ -73,94 +45,28 @@ impl Llm {
     ) -> Result<LlmResponse, AgentError> {
         match cfg.provider {
             Provider::Anthropic => {
-                let body = anthropic_body(cfg, history, tools);
-                let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-                let v = post(&self.http, &url, &body, |r| {
-                    r.header("x-api-key", &cfg.api_key)
-                        .header("anthropic-version", &cfg.anthropic_api_version)
-                })
-                .await?;
+                let v = self
+                    .post_anthropic(cfg, &anthropic_body(cfg, history, tools))
+                    .await?;
                 parse_anthropic(v)
             }
-            Provider::OpenAi => self.openai_complete(cfg, history, tools).await,
-        }
-    }
-
-    /// OpenAI dispatch with one-shot auto-upgrade. When `cfg.openai_api_auto`
-    /// is set and a Chat Completions request comes back with a "use the
-    /// Responses API" signal from the provider, we latch a process-wide
-    /// upgrade and re-issue the call against `/v1/responses`. Subsequent
-    /// calls skip the chat attempt entirely.
-    async fn openai_complete(
-        &self,
-        cfg: &Config,
-        history: &[HistoryItem],
-        tools: &[ToolDef],
-    ) -> Result<LlmResponse, AgentError> {
-        if self.effective_openai_api(cfg) == OpenAiApi::Responses {
-            return self.openai_responses(cfg, history, tools).await;
-        }
-        // Chat Completions, with possible upgrade-then-retry.
-        match self.openai_chat(cfg, history, tools).await {
-            Ok(r) => Ok(r),
-            Err(e) if self.try_upgrade_on_error(cfg, &e) => {
-                // Latched. Re-issue the same request on Responses.
-                self.openai_responses(cfg, history, tools).await
+            Provider::OpenAi => {
+                self.openai_request(cfg, |use_responses| {
+                    if use_responses {
+                        (
+                            responses_body(cfg, history, tools),
+                            parse_responses as OpenAiParse,
+                        )
+                    } else {
+                        (
+                            openai_body(cfg, history, tools),
+                            parse_openai as OpenAiParse,
+                        )
+                    }
+                })
+                .await
             }
-            Err(e) => Err(e),
         }
-    }
-
-    async fn openai_chat(
-        &self,
-        cfg: &Config,
-        history: &[HistoryItem],
-        tools: &[ToolDef],
-    ) -> Result<LlmResponse, AgentError> {
-        let body = openai_body(cfg, history, tools);
-        let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-        let v = post(&self.http, &url, &body, |r| r.bearer_auth(&cfg.api_key)).await?;
-        parse_openai(v)
-    }
-
-    async fn openai_responses(
-        &self,
-        cfg: &Config,
-        history: &[HistoryItem],
-        tools: &[ToolDef],
-    ) -> Result<LlmResponse, AgentError> {
-        let body = responses_body(cfg, history, tools);
-        let url = format!("{}/responses", cfg.base_url.trim_end_matches('/'));
-        let v = post(&self.http, &url, &body, |r| r.bearer_auth(&cfg.api_key)).await?;
-        parse_responses(v)
-    }
-
-    /// Inspect a failed OpenAI Chat Completions error. If we're in `auto`
-    /// mode and the provider message asks us to use the Responses API,
-    /// latch the upgrade so subsequent requests go there. Returns `true`
-    /// iff we just upgraded (caller should re-issue once).
-    fn try_upgrade_on_error(&self, cfg: &Config, err: &AgentError) -> bool {
-        if !self.should_try_auto_upgrade(cfg) {
-            return false;
-        }
-        let body = match err {
-            AgentError::Llm(s) => s.as_str(),
-            // Auth errors are not "use the other endpoint" errors.
-            _ => return false,
-        };
-        if !is_responses_required_error(body) {
-            return false;
-        }
-        let already = self.latch_responses_upgrade();
-        if !already {
-            tracing::warn!(
-                provider_message = body,
-                "openai chat-completions endpoint reported that this model requires \
-                 the Responses API; auto-upgrading subsequent OpenAI calls to /v1/responses \
-                 for the rest of this process"
-            );
-        }
-        true
     }
 
     pub async fn summarize(
@@ -181,62 +87,106 @@ impl Llm {
                         "content": [{ "type": "text", "text": user_prompt }],
                     }],
                 });
-                let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-                let v = post(&self.http, &url, &body, |r| {
-                    r.header("x-api-key", &cfg.api_key)
-                        .header("anthropic-version", &cfg.anthropic_api_version)
-                })
-                .await?;
-                Ok(parse_anthropic(v)?.text)
+                Ok(parse_anthropic(self.post_anthropic(cfg, &body).await?)?.text)
             }
             Provider::OpenAi => {
-                self.openai_summarize(cfg, system_prompt, user_prompt, max_output_tokens)
-                    .await
+                let r = self
+                    .openai_request(cfg, |use_responses| {
+                        if use_responses {
+                            (
+                                json!({
+                                    "model": cfg.model,
+                                    "max_output_tokens": max_output_tokens,
+                                    "instructions": system_prompt,
+                                    "input": user_prompt,
+                                }),
+                                parse_responses as OpenAiParse,
+                            )
+                        } else {
+                            (
+                                json!({
+                                    "model": cfg.model,
+                                    "stream": false,
+                                    "max_completion_tokens": max_output_tokens,
+                                    "messages": [
+                                        { "role": "system", "content": system_prompt },
+                                        { "role": "user", "content": user_prompt },
+                                    ],
+                                }),
+                                parse_openai as OpenAiParse,
+                            )
+                        }
+                    })
+                    .await?;
+                Ok(r.text)
             }
         }
     }
 
-    async fn openai_summarize(
-        &self,
-        cfg: &Config,
-        system_prompt: &str,
-        user_prompt: &str,
-        max_output_tokens: u32,
-    ) -> Result<String, AgentError> {
-        let chat = || async {
-            let body = json!({
-                "model": cfg.model,
-                "stream": false,
-                "max_completion_tokens": max_output_tokens,
-                "messages": [
-                    { "role": "system", "content": system_prompt },
-                    { "role": "user", "content": user_prompt },
-                ],
-            });
-            let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-            let v = post(&self.http, &url, &body, |r| r.bearer_auth(&cfg.api_key)).await?;
-            Ok::<_, AgentError>(parse_openai(v)?.text)
-        };
-        let responses = || async {
-            let body = json!({
-                "model": cfg.model,
-                "max_output_tokens": max_output_tokens,
-                "instructions": system_prompt,
-                "input": user_prompt,
-            });
-            let url = format!("{}/responses", cfg.base_url.trim_end_matches('/'));
-            let v = post(&self.http, &url, &body, |r| r.bearer_auth(&cfg.api_key)).await?;
-            Ok::<_, AgentError>(parse_responses(v)?.text)
-        };
+    async fn post_anthropic(&self, cfg: &Config, body: &Value) -> Result<Value, AgentError> {
+        let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
+        post(&self.http, &url, body, |r| {
+            r.header("x-api-key", &cfg.api_key)
+                .header("anthropic-version", &cfg.anthropic_api_version)
+        })
+        .await
+    }
 
-        if self.effective_openai_api(cfg) == OpenAiApi::Responses {
-            return responses().await;
+    /// OpenAI dispatch: resolve endpoint (pinned > sticky-upgraded > auto by
+    /// host), POST, and on `auto` retry once on Responses if the provider
+    /// asks for it. `build` is called with `use_responses` so callers
+    /// only construct the body actually needed.
+    async fn openai_request<F>(&self, cfg: &Config, mut build: F) -> Result<LlmResponse, AgentError>
+    where
+        F: FnMut(bool) -> (Value, OpenAiParse) + Send,
+    {
+        let use_responses = self.auto_upgraded.load(Ordering::Relaxed)
+            || matches!(cfg.openai_api, OpenAiApi::Responses)
+            || matches!(cfg.openai_api, OpenAiApi::Auto) && is_openai_host(&cfg.base_url);
+
+        if use_responses {
+            let (b, p) = build(true);
+            return p(self.post_openai(cfg, "/responses", &b).await?);
         }
-        match chat().await {
-            Ok(t) => Ok(t),
-            Err(e) if self.try_upgrade_on_error(cfg, &e) => responses().await,
+        let (b, p) = build(false);
+        match self.post_openai(cfg, "/chat/completions", &b).await {
+            Ok(v) => p(v),
+            Err(e) if cfg.openai_api == OpenAiApi::Auto && self.try_upgrade(&e) => {
+                let (b, p) = build(true);
+                p(self.post_openai(cfg, "/responses", &b).await?)
+            }
             Err(e) => Err(e),
         }
+    }
+
+    async fn post_openai(
+        &self,
+        cfg: &Config,
+        path: &str,
+        body: &Value,
+    ) -> Result<Value, AgentError> {
+        let url = format!("{}{}", cfg.base_url.trim_end_matches('/'), path);
+        post(&self.http, &url, body, |r| r.bearer_auth(&cfg.api_key)).await
+    }
+
+    /// If `err` names `/v1/responses` / "use the Responses API", latch a
+    /// sticky upgrade so subsequent OpenAI calls hit Responses. Logged once.
+    fn try_upgrade(&self, err: &AgentError) -> bool {
+        let body = match err {
+            AgentError::Llm(s) => s.as_str(),
+            _ => return false, // auth/transport aren't "use the other endpoint" signals
+        };
+        if !is_responses_required_error(body) {
+            return false;
+        }
+        if !self.auto_upgraded.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                provider_message = body,
+                "openai: provider asked for the Responses API; \
+                 routing subsequent OpenAI calls to /v1/responses for this process"
+            );
+        }
+        true
     }
 }
 
@@ -389,32 +339,12 @@ fn openai_image_user_content(content: &[ToolResultContent]) -> Vec<Value> {
 }
 
 // ── OpenAI Responses API ───────────────────────────────────────────────────
+// Spec: https://platform.openai.com/docs/api-reference/responses
 //
-// Wire shape (model-facing, see https://platform.openai.com/docs/api-reference/responses):
-//
-//   {
-//     "model": "...",
-//     "instructions": "<system prompt>",
-//     "max_output_tokens": N,
-//     "input": [<input_item>, ...],
-//     "tools": [<tool>, ...]    // flat schema, no nested `function: {…}`
-//   }
-//
-// `input_item` is one of:
-//   { "role": "user"|"assistant", "content": [{"type":"input_text"|"output_text", "text": …}] }
-//   { "type": "function_call", "call_id": …, "name": …, "arguments": "<json string>" }
-//   { "type": "function_call_output", "call_id": …, "output": "<text>" }
-//
-// On replay (next turn) the prior assistant `function_call` items **must**
-// precede their `function_call_output`s, otherwise the API rejects with
-// "No tool call found for call_id ...". The serializer below emits them in
-// the order they appear in `history`, which matches the order the agent
-// loop produced them.
-//
-// Image tool results: Responses accepts image parts on user messages
-// (`{type: "input_image", image_url: "data:..."}`), so we attach them on a
-// trailing user message after the textual `function_call_output`, mirroring
-// the Chat Completions branch.
+// Replay invariant: each assistant `function_call` input item **must**
+// precede its matching `function_call_output`, or the API rejects with
+// "No tool call found for call_id ...". `HistoryItem` ordering already
+// guarantees this.
 
 fn responses_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
     let mut input: Vec<Value> = Vec::with_capacity(history.len());
@@ -447,9 +377,20 @@ fn responses_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
                     "call_id": r.provider_id,
                     "output": openai_tool_text_content(&r.content),
                 }));
-                let image_content = responses_image_user_content(&r.content);
-                if !image_content.is_empty() {
-                    input.push(json!({ "role": "user", "content": image_content }));
+                // Responses takes images as `input_image` parts on a user message.
+                let images: Vec<Value> = r
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        ToolResultContent::Image { data, mime_type } => Some(json!({
+                            "type": "input_image",
+                            "image_url": format!("data:{mime_type};base64,{data}"),
+                        })),
+                        ToolResultContent::Text(_) => None,
+                    })
+                    .collect();
+                if !images.is_empty() {
+                    input.push(json!({ "role": "user", "content": images }));
                 }
             }
         }
@@ -480,36 +421,15 @@ fn responses_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
     body
 }
 
-/// Detect an "endpoint mismatch" signal in a provider error body. The
-/// match is intentionally narrow — we only act on phrases that explicitly
-/// name `/v1/responses` or the Responses API, so we don't get fooled by
-/// generic 4xx bodies that happen to mention those terms.
-///
-/// Known signals: the literal string `/v1/responses` (e.g. the Databricks
-/// GPT-5.5 message: "Function tools with reasoning_effort are not supported
-/// for gpt-5.5 in /v1/chat/completions. Please use /v1/responses instead.");
-/// or the prose phrases "use the Responses API" / "Responses API instead"
-/// as a forward-compat slot for OpenAI proper saying the same thing without
-/// the URL.
+/// Narrow matcher for "you should be on the Responses API" provider errors,
+/// the signal we use to auto-upgrade. Triggers on the literal path
+/// `/v1/responses` (Databricks GPT-5.5 phrasing) or the prose
+/// "use the Responses API" / "Responses API instead".
 fn is_responses_required_error(body: &str) -> bool {
-    // Lower-case once; the body is already capped at MAX_LLM_ERROR_BODY_BYTES.
     let b = body.to_ascii_lowercase();
     b.contains("/v1/responses")
         || b.contains("responses api instead")
         || b.contains("use the responses api")
-}
-
-fn responses_image_user_content(content: &[ToolResultContent]) -> Vec<Value> {
-    content
-        .iter()
-        .filter_map(|c| match c {
-            ToolResultContent::Image { data, mime_type } => Some(json!({
-                "type": "input_image",
-                "image_url": format!("data:{mime_type};base64,{data}"),
-            })),
-            ToolResultContent::Text(_) => None,
-        })
-        .collect()
 }
 
 fn parse_responses(v: Value) -> Result<LlmResponse, AgentError> {
@@ -517,86 +437,73 @@ fn parse_responses(v: Value) -> Result<LlmResponse, AgentError> {
     let mut tool_calls = Vec::new();
     let mut saw_function_call = false;
 
-    if let Some(items) = v.get("output").and_then(Value::as_array) {
-        for item in items {
-            match item.get("type").and_then(Value::as_str) {
-                Some("message") => {
-                    if let Some(parts) = item.get("content").and_then(Value::as_array) {
-                        for p in parts {
-                            // Responses uses "output_text" for assistant text.
-                            // Also accept "text" as a forward-compat fallback.
-                            if matches!(
-                                p.get("type").and_then(Value::as_str),
-                                Some("output_text" | "text")
-                            ) {
-                                if let Some(t) = p.get("text").and_then(Value::as_str) {
-                                    text.push_str(t);
-                                }
-                            }
+    for item in v
+        .get("output")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                for p in item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    // Responses emits "output_text"; accept "text" forward-compat.
+                    if matches!(
+                        p.get("type").and_then(Value::as_str),
+                        Some("output_text" | "text")
+                    ) {
+                        if let Some(t) = p.get("text").and_then(Value::as_str) {
+                            text.push_str(t);
                         }
                     }
                 }
-                Some("function_call") => {
-                    saw_function_call = true;
-                    let raw = item
-                        .get("arguments")
-                        .and_then(Value::as_str)
-                        .unwrap_or("{}");
-                    let args: Value = serde_json::from_str(raw).map_err(|e| {
-                        AgentError::Llm(format!("function_call.arguments not valid JSON: {e}"))
-                    })?;
-                    tool_calls.push(make_tool_call(
-                        str_field(item, "call_id"),
-                        str_field(item, "name"),
-                        args,
-                    )?);
-                }
-                // Reasoning items are model-internal. Sprout's flow is
-                // stateless across turns and we have no use for the (opaque)
-                // reasoning summary, so we skip them.
-                Some("reasoning") => {}
-                // Unknown item types are ignored for forward compatibility.
-                _ => {}
             }
+            Some("function_call") => {
+                saw_function_call = true;
+                let raw = item
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}");
+                let args: Value = serde_json::from_str(raw).map_err(|e| {
+                    AgentError::Llm(format!("function_call.arguments not valid JSON: {e}"))
+                })?;
+                tool_calls.push(make_tool_call(
+                    str_field(item, "call_id"),
+                    str_field(item, "name"),
+                    args,
+                )?);
+            }
+            // Reasoning items are opaque/internal; we don't replay them.
+            // Unknown types ignored for forward-compat.
+            _ => {}
         }
     }
 
-    let stop = responses_stop(&v, saw_function_call);
-    Ok(LlmResponse {
-        text,
-        tool_calls,
-        stop,
-    })
-}
-
-/// Map a Responses API result to our `ProviderStop`.
-///
-/// Status `incomplete` with `reason == "max_output_tokens"` → `MaxTokens`.
-/// Status `completed` with one or more `function_call` items → `ToolUse`.
-/// Status `completed` otherwise → `EndTurn`. Anything else (`failed`,
-/// `cancelled`, …) → `Other`.
-fn responses_stop(v: &Value, saw_function_call: bool) -> ProviderStop {
-    match v.get("status").and_then(Value::as_str) {
+    let stop = match v.get("status").and_then(Value::as_str) {
         Some("incomplete") => {
             let reason = v
                 .get("incomplete_details")
                 .and_then(|d| d.get("reason"))
                 .and_then(Value::as_str);
-            if matches!(reason, Some("max_output_tokens")) {
+            if reason == Some("max_output_tokens") {
                 ProviderStop::MaxTokens
             } else {
                 ProviderStop::Other
             }
         }
-        Some("completed") => {
-            if saw_function_call {
-                ProviderStop::ToolUse
-            } else {
-                ProviderStop::EndTurn
-            }
-        }
+        Some("completed") if saw_function_call => ProviderStop::ToolUse,
+        Some("completed") => ProviderStop::EndTurn,
         _ => ProviderStop::Other,
-    }
+    };
+    Ok(LlmResponse {
+        text,
+        tool_calls,
+        stop,
+    })
 }
 
 fn map_stop(s: Option<&str>) -> ProviderStop {
@@ -828,8 +735,7 @@ mod tests {
             model: "model".into(),
             base_url: "http://example.invalid".into(),
             anthropic_api_version: "2023-06-01".into(),
-            openai_api: OpenAiApi::ChatCompletions,
-            openai_api_auto: false,
+            openai_api: OpenAiApi::Chat,
         }
     }
 
@@ -1053,37 +959,19 @@ mod tests {
     }
 
     #[test]
-    fn is_responses_required_error_matches_databricks_signal() {
-        // The exact body shape we saw from Databricks (paraphrased; the
-        // signal is the URL path mention).
-        let body = "{\"error_code\":\"BAD_REQUEST\",\"message\":\
-                    \"Function tools with reasoning_effort are not supported \
-                    for gpt-5.5 in /v1/chat/completions. Please use \
-                    /v1/responses instead.\"}";
-        assert!(is_responses_required_error(body));
-    }
-
-    #[test]
-    fn is_responses_required_error_matches_openai_prose() {
-        // Forward-compat slot for OpenAI proper phrasing this without
-        // the URL.
-        assert!(is_responses_required_error(
-            "This model requires the Responses API. Please use the Responses API instead."
-        ));
-        assert!(is_responses_required_error(
-            "ERROR: use the Responses API for this model."
-        ));
-    }
-
-    #[test]
-    fn is_responses_required_error_ignores_unrelated_4xx() {
-        assert!(!is_responses_required_error(
-            "{\"error\":\"invalid_api_key\",\"message\":\"Incorrect API key provided\"}"
-        ));
-        assert!(!is_responses_required_error(
-            "{\"error\":\"unsupported_parameter\",\"message\":\"max_tokens is not supported with this model\"}"
-        ));
-        assert!(!is_responses_required_error(""));
+    fn is_responses_required_error_matrix() {
+        for (body, want) in [
+            // Databricks GPT-5.5 (the actual case we observed).
+            ("Function tools with reasoning_effort are not supported for gpt-5.5 in /v1/chat/completions. Please use /v1/responses instead.", true),
+            // Forward-compat: OpenAI saying the same thing in prose.
+            ("This model requires the Responses API. Please use the Responses API instead.", true),
+            // Negatives — must NOT trigger on unrelated 4xx.
+            ("{\"error\":\"invalid_api_key\"}", false),
+            ("max_tokens is not supported with this model", false),
+            ("", false),
+        ] {
+            assert_eq!(is_responses_required_error(body), want, "body={body:?}");
+        }
     }
 
     #[test]

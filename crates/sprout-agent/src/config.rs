@@ -28,16 +28,16 @@ pub enum Provider {
     OpenAi,
 }
 
-/// Which OpenAI-family HTTP API to call when `provider = OpenAi`.
-///
-/// `Auto` (the default) picks per `base_url`: official OpenAI gets the
-/// Responses API (`/v1/responses`), everything else (vLLM, Ollama, llama.cpp,
-/// OpenRouter, etc.) gets Chat Completions (`/chat/completions`). Operators
-/// can pin the choice with `OPENAI_COMPAT_API={chat,responses,auto}`.
+/// Which OpenAI-family HTTP API to call. Set via `OPENAI_COMPAT_API`
+/// (`auto|chat|responses`); ignored when `provider = Anthropic`. `Auto`
+/// picks Responses for `*.openai.com`, Chat Completions otherwise, and
+/// permits a one-shot chat→responses upgrade on a "use /v1/responses"
+/// provider error.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OpenAiApi {
-    ChatCompletions,
+    Chat,
     Responses,
+    Auto,
 }
 
 #[derive(Debug, Clone)]
@@ -69,17 +69,8 @@ pub struct Config {
     pub model: String,
     pub base_url: String,
     pub anthropic_api_version: String,
-    /// Which OpenAI-family HTTP API to call. Ignored when `provider =
-    /// Anthropic`. Set via `OPENAI_COMPAT_API`; defaults to auto-select
-    /// based on `base_url`.
+    /// OpenAI endpoint selection. See [`OpenAiApi`].
     pub openai_api: OpenAiApi,
-    /// `true` when `openai_api` was resolved by auto-detection (i.e.
-    /// `OPENAI_COMPAT_API` was unset or `auto`). When `true` and the
-    /// resolved value is `ChatCompletions`, `Llm` may upgrade to
-    /// `Responses` once after observing a specific "use /v1/responses"
-    /// error from the provider. `false` means the operator pinned the
-    /// choice and the auto-upgrade path is disabled.
-    pub openai_api_auto: bool,
 }
 
 impl Config {
@@ -89,42 +80,21 @@ impl Config {
             "openai" | "openai-compat" => Provider::OpenAi,
             o => return Err(format!("config: SPROUT_AGENT_PROVIDER={o} not supported")),
         };
-        let (api_key, model, base_url, openai_api, openai_api_auto) = match provider {
+        // OPENAI_COMPAT_API is only read when provider=openai, so a stray
+        // bad value can't break an Anthropic-only deployment.
+        let (api_key, model, base_url, openai_api) = match provider {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
                 req("ANTHROPIC_MODEL")?,
                 env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-                // Unused for Anthropic. A placeholder value keeps `Config`
-                // sized and avoids `Option`/`unwrap` plumbing in the hot
-                // path. We intentionally do NOT parse `OPENAI_COMPAT_API`
-                // here — a stray invalid value in an Anthropic-only env
-                // must not break startup.
-                OpenAiApi::ChatCompletions,
-                false,
+                OpenAiApi::Auto, // unused for Anthropic
             ),
-            Provider::OpenAi => {
-                let base_url = env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1");
-                let raw = env("OPENAI_COMPAT_API");
-                // "auto" (or unset/empty) means we may upgrade chat→responses
-                // on a specific error from the provider. An explicit value
-                // pins the choice.
-                let openai_api_auto = matches!(
-                    raw.as_deref()
-                        .unwrap_or("auto")
-                        .trim()
-                        .to_ascii_lowercase()
-                        .as_str(),
-                    "auto" | ""
-                );
-                let openai_api = parse_openai_api(raw.as_deref(), &base_url)?;
-                (
-                    req("OPENAI_COMPAT_API_KEY")?,
-                    req("OPENAI_COMPAT_MODEL")?,
-                    base_url,
-                    openai_api,
-                    openai_api_auto,
-                )
-            }
+            Provider::OpenAi => (
+                req("OPENAI_COMPAT_API_KEY")?,
+                req("OPENAI_COMPAT_MODEL")?,
+                env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
+                parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
+            ),
         };
         let system_prompt = match (env("SPROUT_AGENT_SYSTEM_PROMPT"), env("SPROUT_AGENT_SYSTEM_PROMPT_FILE")) {
             (Some(_), Some(_)) => return Err(
@@ -141,7 +111,6 @@ impl Config {
             base_url,
             anthropic_api_version: env_or("ANTHROPIC_API_VERSION", "2023-06-01"),
             openai_api,
-            openai_api_auto,
             max_rounds: parse_env("SPROUT_AGENT_MAX_ROUNDS", 0)?,
             max_output_tokens: parse_env("SPROUT_AGENT_MAX_OUTPUT_TOKENS", 32_768)?,
             llm_timeout: Duration::from_secs(parse_env("SPROUT_AGENT_LLM_TIMEOUT_SECS", 120)?),
@@ -232,51 +201,33 @@ fn req(k: &str) -> Result<String, String> {
     env(k).ok_or_else(|| format!("config: {k} required"))
 }
 
-/// Parse `OPENAI_COMPAT_API` and, on `auto` (or unset), pick a default
-/// from `base_url`. Official OpenAI gets Responses; everything else gets
-/// Chat Completions.
-///
-/// Only called when `provider = OpenAi`. We deliberately don't read this
-/// env when `provider = Anthropic` so a stray invalid value cannot break
-/// an Anthropic-only deployment.
-///
-/// The pure parser takes `raw` as a parameter so tests can drive the
-/// full input matrix without touching process env.
-fn parse_openai_api(raw: Option<&str>, base_url: &str) -> Result<OpenAiApi, String> {
+/// Parse `OPENAI_COMPAT_API`. Pure (env-free) for testability; the
+/// caller hands in the raw value.
+fn parse_openai_api(raw: Option<&str>) -> Result<OpenAiApi, String> {
     match raw.unwrap_or("auto").trim().to_ascii_lowercase().as_str() {
-        "chat" | "chat_completions" | "chat-completions" => Ok(OpenAiApi::ChatCompletions),
+        "chat" | "chat-completions" | "chat_completions" => Ok(OpenAiApi::Chat),
         "responses" => Ok(OpenAiApi::Responses),
-        "auto" | "" => Ok(auto_openai_api(base_url)),
+        "auto" | "" => Ok(OpenAiApi::Auto),
         other => Err(format!(
             "config: OPENAI_COMPAT_API={other} not supported (use auto|chat|responses)"
         )),
     }
 }
 
-/// Auto-selection rule. Hosts on `*.openai.com` get Responses; anything
-/// else (vLLM, Ollama, llama.cpp, OpenRouter, Block Gateway, …) gets
-/// Chat Completions, which remains the broadly-supported wire format
-/// across the OpenAI-compatible ecosystem.
-fn auto_openai_api(base_url: &str) -> OpenAiApi {
-    if base_url_host(base_url)
-        .map(|h| h == "api.openai.com" || h.ends_with(".openai.com"))
-        .unwrap_or(false)
-    {
-        OpenAiApi::Responses
-    } else {
-        OpenAiApi::ChatCompletions
-    }
-}
-
-/// Cheap host extractor for `http(s)://host[:port]/...` style URLs.
-/// Returns `None` for malformed input — caller treats that as "not
-/// official OpenAI" which falls back to Chat Completions.
-fn base_url_host(base_url: &str) -> Option<&str> {
-    let rest = base_url
+/// `true` when `base_url` is an official OpenAI host. Hosts on
+/// `*.openai.com` get Responses under `Auto`; everything else (vLLM,
+/// Ollama, OpenRouter, Block Gateway, …) gets Chat Completions.
+/// Lookalike-safe: `api.openai.com.evil.example` returns `false`.
+pub fn is_openai_host(base_url: &str) -> bool {
+    let rest = match base_url
         .strip_prefix("https://")
-        .or_else(|| base_url.strip_prefix("http://"))?;
-    let end = rest.find(['/', ':']).unwrap_or(rest.len());
-    Some(&rest[..end])
+        .or_else(|| base_url.strip_prefix("http://"))
+    {
+        Some(r) => r,
+        None => return false,
+    };
+    let host = &rest[..rest.find(['/', ':']).unwrap_or(rest.len())];
+    host == "api.openai.com" || host.ends_with(".openai.com")
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, String>
@@ -436,85 +387,38 @@ mod tests {
     }
 
     #[test]
-    fn auto_openai_api_picks_responses_for_official_openai() {
-        assert_eq!(
-            auto_openai_api("https://api.openai.com/v1"),
-            OpenAiApi::Responses
-        );
-        assert_eq!(
-            auto_openai_api("https://api.openai.com"),
-            OpenAiApi::Responses
-        );
-    }
-
-    #[test]
-    fn auto_openai_api_picks_chat_for_third_parties() {
-        // OpenAI-compatible servers: vLLM, Ollama, llama.cpp, OpenRouter,
-        // Block Gateway, Databricks, anything self-hosted. They mostly do
-        // not implement /v1/responses, so Chat Completions is the safe
-        // default.
-        for url in [
-            "http://localhost:11434/v1",           // Ollama
-            "http://127.0.0.1:8000/v1",            // vLLM / llama.cpp
-            "https://openrouter.ai/api/v1",        // OpenRouter
-            "https://gateway.block.example/v1",    // Block Gateway
-            "https://my-vllm.k8s.example.com:443", // self-hosted vLLM
-            "not a url",                           // malformed → safe fallback
+    fn parse_openai_api_values() {
+        use OpenAiApi::*;
+        for (raw, want) in [
+            (None, Ok(Auto)),
+            (Some("auto"), Ok(Auto)),
+            (Some("  AUTO  "), Ok(Auto)),
+            (Some(""), Ok(Auto)),
+            (Some("chat"), Ok(Chat)),
+            (Some("chat-completions"), Ok(Chat)),
+            (Some("Responses"), Ok(Responses)),
         ] {
-            assert_eq!(
-                auto_openai_api(url),
-                OpenAiApi::ChatCompletions,
-                "expected Chat Completions for {url}"
-            );
+            assert_eq!(parse_openai_api(raw), want, "raw={raw:?}");
         }
+        let err = parse_openai_api(Some("nope")).unwrap_err();
+        assert!(err.contains("OPENAI_COMPAT_API=nope"), "{err}");
     }
 
     #[test]
-    fn parse_openai_api_unset_defaults_to_auto() {
-        assert_eq!(
-            parse_openai_api(None, "https://api.openai.com/v1").unwrap(),
-            OpenAiApi::Responses,
-        );
-        assert_eq!(
-            parse_openai_api(None, "http://localhost:11434/v1").unwrap(),
-            OpenAiApi::ChatCompletions,
-        );
-    }
-
-    #[test]
-    fn parse_openai_api_accepts_explicit_values() {
-        let url = "http://example.invalid";
-        assert_eq!(
-            parse_openai_api(Some("chat"), url).unwrap(),
-            OpenAiApi::ChatCompletions
-        );
-        assert_eq!(
-            parse_openai_api(Some("chat-completions"), url).unwrap(),
-            OpenAiApi::ChatCompletions
-        );
-        assert_eq!(
-            parse_openai_api(Some("RESPONSES"), url).unwrap(),
-            OpenAiApi::Responses
-        );
-        assert_eq!(
-            parse_openai_api(Some("  auto  "), "https://api.openai.com").unwrap(),
-            OpenAiApi::Responses
-        );
-    }
-
-    #[test]
-    fn parse_openai_api_rejects_garbage() {
-        let err = parse_openai_api(Some("nope"), "http://example.invalid").unwrap_err();
-        assert!(err.contains("OPENAI_COMPAT_API=nope"));
-    }
-
-    #[test]
-    fn auto_openai_api_does_not_match_lookalike_hosts() {
-        // Defense against host-suffix mistakes: api.openai.com.evil.com
-        // is NOT openai.com.
-        assert_eq!(
-            auto_openai_api("https://api.openai.com.evil.example/v1"),
-            OpenAiApi::ChatCompletions
-        );
+    fn is_openai_host_matrix() {
+        // Lookalike-safe: `api.openai.com.evil.example` and malformed URLs
+        // are treated as non-OpenAI (which falls back to Chat Completions).
+        for (url, want) in [
+            ("https://api.openai.com/v1", true),
+            ("https://api.openai.com", true),
+            ("http://eu.api.openai.com/v1", true),
+            ("http://localhost:11434/v1", false),
+            ("https://openrouter.ai/api/v1", false),
+            ("https://gateway.block.example/v1", false),
+            ("https://api.openai.com.evil.example/v1", false),
+            ("not a url", false),
+        ] {
+            assert_eq!(is_openai_host(url), want, "url={url}");
+        }
     }
 }
