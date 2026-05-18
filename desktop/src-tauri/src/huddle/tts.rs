@@ -70,9 +70,24 @@ const TARGET_PEAK: f32 = 0.501_187_2; // 10f32.powf(-6.0 / 20.0)
 /// still catching pathological near-silent buffers.
 const MAX_GAIN: f32 = 8.0;
 
-/// Fade in/out length in samples (8ms at 24kHz ≈ 192 samples).
-/// Eliminates clicks/pops at sentence boundaries.
-const FADE_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.008) as usize;
+/// Fade-out length in samples (8 ms at 24 kHz ≈ 192 samples).
+///
+/// Applied only at the *end* of each synthesised sentence to eliminate the
+/// click that would otherwise occur when a non-zero waveform terminates
+/// abruptly. **No fade-in is applied** — see `apply_fade_out` for the
+/// rationale and `examples/pocket_onset_probe.rs` for the measurement that
+/// motivated removing the leading fade.
+const FADE_OUT_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.008) as usize;
+
+/// Length of the zero-sample cushion prepended to the very first audio
+/// buffer of an utterance, so the OS audio device / rodio mixer has a
+/// fully-quiet ramp-up window before the real onset hits.
+///
+/// Applied at the `first_append` site only — *not* per sentence — so it
+/// doesn't stack on top of `INTER_SENTENCE_SILENCE` at sentence boundaries.
+/// 20 ms ≈ 480 samples is enough to cover a CoreAudio buffer turnover
+/// without being audible as latency.
+const FIRST_APPEND_LEAD_IN_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.020) as usize;
 
 /// Sentence-by-sentence synthesis — keeps first-sentence latency low and lets
 /// playback of sentence N overlap with synthesis of sentence N+1 (see the
@@ -385,7 +400,19 @@ fn tts_worker(
             match engine.synth_chunk(text, "en", &style, SYNTH_STEPS, SYNTH_SPEED) {
                 Ok(samples) if !samples.is_empty() => {
                     let mut boosted = normalize_for_playback(samples);
-                    apply_fades(&mut boosted);
+                    // Fade-out only — fading-in would attenuate the consonant
+                    // onset (see `apply_fade_out` docstring + the
+                    // 2026-05-18 "first little sound is missing" regression).
+                    apply_fade_out(&mut boosted);
+                    if first_append {
+                        // Pre-pad the very first buffer of an utterance with
+                        // a brief silence so the OS audio device / rodio
+                        // mixer has a fully-quiet ramp-up window before the
+                        // first real sample. Applied once per utterance —
+                        // sentence boundaries use INTER_SENTENCE_SILENCE.
+                        let lead_in = vec![0.0f32; FIRST_APPEND_LEAD_IN_SAMPLES];
+                        player.append(SamplesBuffer::new(channels, rate, lead_in));
+                    }
                     player.append(SamplesBuffer::new(channels, rate, boosted));
                     // Insert inter-sentence silence after each synthesized chunk.
                     player.append(SamplesBuffer::new(channels, rate, silence_buf.clone()));
@@ -474,18 +501,31 @@ fn normalize_for_playback(samples: Vec<f32>) -> Vec<f32> {
         .collect()
 }
 
-/// Apply a short linear fade-in at the start and fade-out at the end of `samples`.
+/// Apply a short linear fade-out at the *end* of `samples`.
 ///
-/// Uses `FADE_SAMPLES` (8ms) or half the buffer length, whichever is smaller.
-/// Eliminates clicks/pops at sentence boundaries.
-fn apply_fades(samples: &mut Vec<f32>) {
+/// Uses `FADE_OUT_SAMPLES` (8 ms) or half the buffer length, whichever is
+/// smaller. Eliminates the click that occurs when a non-zero waveform
+/// terminates abruptly at a sentence boundary.
+///
+/// # Why no fade-in
+///
+/// An earlier revision (pre 2026-05) symmetrically faded *in* over the same
+/// 8 ms window. That swallowed the leading consonant attack on every
+/// sentence — Pocket TTS produces real audio energy inside the first
+/// millisecond (RMS ≈ 0.02, peak ≈ 0.03 measured across four prompts in
+/// `examples/pocket_onset_probe.rs`), and a linear 0→1 ramp over 192 samples
+/// scales those onset samples by ≤50 % for the first ~4 ms. The result was
+/// the "first little sound or two is missing" regression heard on
+/// 2026-05-18.
+///
+/// The first sample of Pocket output measures ≈ 0.0018 (≈ −54 dBFS) — well
+/// below the threshold at which a DC-jump would be audible as a click — so
+/// no fade-in is needed. The OS audio device gets its quiet ramp-up window
+/// from `FIRST_APPEND_LEAD_IN_SAMPLES` instead, applied once per utterance
+/// at the `first_append` site.
+fn apply_fade_out(samples: &mut [f32]) {
     let len = samples.len();
-    let fade = FADE_SAMPLES.min(len / 2);
-    // Fade in: ramp from 0 → 1 over `fade` samples.
-    for i in 0..fade {
-        samples[i] *= i as f32 / fade as f32;
-    }
-    // Fade out: ramp from 1 → 0 over the last `fade` samples.
+    let fade = FADE_OUT_SAMPLES.min(len / 2);
     for i in 0..fade {
         samples[len - 1 - i] *= i as f32 / fade as f32;
     }
@@ -1036,29 +1076,63 @@ mod tests {
         );
     }
 
-    // ── apply_fades tests ─────────────────────────────────────────────────────
+    // ── apply_fade_out tests ──────────────────────────────────────────────────
 
+    /// The fade-out half of the old `apply_fades`: last sample is silenced
+    /// and the ramp is monotonic. Mid-buffer must be untouched.
     #[test]
-    fn apply_fades_short_buffer() {
+    fn apply_fade_out_short_buffer() {
         let mut samples = vec![1.0f32; 10];
-        apply_fades(&mut samples);
-        assert_eq!(samples[0], 0.0);
-        assert_eq!(samples[9], 0.0);
-        assert!(samples[5] > 0.5);
+        apply_fade_out(&mut samples);
+        assert_eq!(samples[9], 0.0, "last sample should be silenced");
+        assert!(samples[5] > 0.5, "mid-buffer should be near-untouched");
+    }
+
+    /// REGRESSION (2026-05-18): the *first* samples must NOT be attenuated.
+    /// An earlier `apply_fades` symmetrically faded in over 8 ms which
+    /// swallowed the consonant onset of every sentence.
+    /// Lock in: samples[0..FADE_OUT_SAMPLES] are byte-equal to input.
+    #[test]
+    fn apply_fade_out_does_not_touch_leading_samples() {
+        // Input long enough that fade window doesn't overlap (≫ 2× fade).
+        let n = FADE_OUT_SAMPLES * 4;
+        let input: Vec<f32> = (0..n).map(|i| 0.5 + (i as f32) * 1e-4).collect();
+        let mut samples = input.clone();
+        apply_fade_out(&mut samples);
+        for i in 0..FADE_OUT_SAMPLES {
+            assert_eq!(
+                samples[i], input[i],
+                "leading sample {i} must not be attenuated (was {} → {})",
+                input[i], samples[i]
+            );
+        }
+        // And the trailing fade still works.
+        assert_eq!(samples[n - 1], 0.0);
     }
 
     #[test]
-    fn apply_fades_empty_buffer() {
+    fn apply_fade_out_empty_buffer() {
         let mut samples: Vec<f32> = vec![];
-        apply_fades(&mut samples);
+        apply_fade_out(&mut samples);
         assert!(samples.is_empty());
     }
 
     #[test]
-    fn apply_fades_single_sample() {
+    fn apply_fade_out_single_sample() {
+        // fade = min(FADE_OUT_SAMPLES, len/2) = 0, so nothing changes.
         let mut samples = vec![1.0f32];
-        apply_fades(&mut samples);
+        apply_fade_out(&mut samples);
         assert_eq!(samples[0], 1.0);
+    }
+
+    /// Sanity-check the first-append cushion length: 20 ms at 24 kHz must
+    /// land at exactly 480 samples. This is a const computation, so the
+    /// real value of this test is documenting *why* 20 ms was chosen — it
+    /// covers a typical CoreAudio buffer turnover (256–1024 samples)
+    /// without being audible as user-facing latency.
+    #[test]
+    fn first_append_lead_in_is_sane() {
+        assert_eq!(FIRST_APPEND_LEAD_IN_SAMPLES, 480, "20 ms × 24 kHz");
     }
 
     // ── normalize_for_playback tests ──────────────────────────────────────────
