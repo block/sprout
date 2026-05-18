@@ -65,12 +65,27 @@ pub async fn ws_audio_handler(
 
 // ── Auth message shape ────────────────────────────────────────────────────────
 
+/// Highest huddle audio protocol version this relay understands. Clients are
+/// allowed to negotiate any version in `1..=CURRENT_PROTOCOL_VERSION`; older
+/// versions stay supported indefinitely for staged rollouts.
+const CURRENT_PROTOCOL_VERSION: u8 = 2;
+
 #[derive(Deserialize)]
 struct AuthMsg {
     #[serde(rename = "type")]
     msg_type: String,
     event: nostr::Event,
     parent_channel_id: Option<Uuid>,
+    /// Huddle audio protocol version requested by the client. Defaults to 1
+    /// when missing so existing clients keep working without recompile. A
+    /// room is pinned to whichever version its first peer requested; later
+    /// peers must match or get `upgrade_required`.
+    #[serde(default = "default_protocol_version")]
+    protocol_version: u8,
+}
+
+fn default_protocol_version() -> u8 {
+    1
 }
 
 // ── Core connection lifecycle ─────────────────────────────────────────────────
@@ -208,16 +223,81 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
         Ok(_) => {} // Channel exists and is not archived — proceed.
     }
 
-    let (peer_id, peer_index, audio_rx, peer_ctrl_rx) = match room.add_peer(pubkey_hex.clone()) {
-        Some(v) => v,
-        None => {
+    // Reject unsupported future versions up-front so we don't accidentally
+    // pin a room to a version we can't speak. Versions 1..=CURRENT are OK.
+    let requested_version = auth_msg.protocol_version;
+    if requested_version == 0 || requested_version > CURRENT_PROTOCOL_VERSION {
+        warn!(
+            channel_id = %channel_id,
+            pubkey = %pubkey_hex,
+            requested_version,
+            current = CURRENT_PROTOCOL_VERSION,
+            "audio: client requested unsupported protocol version"
+        );
+        let _ = ws_send
+            .send(WsMessage::Text(
+                serde_json::json!({
+                    "type": "error",
+                    "code": "unsupported_version",
+                    "message": format!(
+                        "huddle audio protocol v{requested_version} not supported; relay max is v{CURRENT_PROTOCOL_VERSION}"
+                    ),
+                    "current_version": CURRENT_PROTOCOL_VERSION,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await;
+        return;
+    }
+
+    let (peer_id, peer_index, audio_rx, peer_ctrl_rx) = match room
+        .add_peer(pubkey_hex.clone(), requested_version)
+    {
+        Ok(v) => v,
+        Err(crate::audio::room::AdmissionError::Full) => {
             warn!(channel_id = %channel_id, "audio room full (255 peers exhausted)");
             let _ = ws_send
-                .send(WsMessage::Text(
-                    serde_json::json!({"type":"error","code":"room_full","message":"peer index space exhausted"})
-                        .to_string().into(),
-                ))
-                .await;
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type":"error","code":"room_full","message":"peer index space exhausted"})
+                            .to_string().into(),
+                    ))
+                    .await;
+            return;
+        }
+        Err(crate::audio::room::AdmissionError::Ended) => {
+            debug!(channel_id = %channel_id, "room ended before admission");
+            let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({"type":"error","code":"room_ended","message":"huddle has ended"})
+                            .to_string().into(),
+                    ))
+                    .await;
+            return;
+        }
+        Err(crate::audio::room::AdmissionError::VersionMismatch { pinned, requested }) => {
+            info!(
+                channel_id = %channel_id,
+                pubkey = %pubkey_hex,
+                pinned,
+                requested,
+                "audio: protocol version mismatch — upgrade required"
+            );
+            let _ = ws_send
+                    .send(WsMessage::Text(
+                        serde_json::json!({
+                            "type": "error",
+                            "code": "upgrade_required",
+                            "message": format!(
+                                "this huddle is using audio protocol v{pinned}; your client requested v{requested}"
+                            ),
+                            "pinned_version": pinned,
+                            "requested_version": requested,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
             return;
         }
     };

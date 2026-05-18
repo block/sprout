@@ -35,6 +35,7 @@ pub mod relay_api;
 pub mod state;
 pub mod stt;
 pub mod tts;
+pub mod wire;
 
 // ── Shared utilities ──────────────────────────────────────────────────────────
 

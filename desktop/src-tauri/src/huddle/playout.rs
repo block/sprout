@@ -30,8 +30,9 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 use tokio_util::sync::CancellationToken;
 
-use super::jitter::{PeerJitterBuffer, FRAME_TIMESTAMP_DELTA, SAMPLE_RATE_HZ};
+use super::jitter::{PeerJitterBuffer, SAMPLE_RATE_HZ};
 use super::relay_api::{WsStream, REMOTE_SPEECH_THRESHOLD};
+use super::wire::{FrameHeader, FLAG_DTX, V2_HEADER_LEN};
 
 /// Speaker-tick window for emitting `huddle-active-speakers`. Active set is
 /// cleared each tick — peers that didn't send a frame in the last window are
@@ -42,18 +43,15 @@ const FRAME_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 /// Playout clock: NetEq emits 10 ms frames, so we tick at 10 ms.
 const PLAYOUT_TICK_MS: u64 = 10;
 
-/// One remote peer's slot: jitter buffer, dedicated rodio Player, and the
-/// synthesized seq/timestamp pair we feed NetEq for v1 wire frames.
+/// One remote peer's slot: jitter buffer + dedicated rodio Player.
 ///
-/// On v1 wire (this commit) the protocol carries no per-frame seq/ts, so we
-/// generate them locally. The WebSocket is over TCP — frames arrive in order
-/// end-to-end — so monotonic-on-arrival is a safe approximation. Protocol v2
-/// (next commit) replaces these with sender-authored values.
+/// Per-frame seq/timestamp come from the v2 wire header (sender-authored).
+/// The relay forwards `peer_index | header | opus_bytes` opaquely; we parse
+/// the header here and pass the sender's own monotonic seq + 48 kHz media
+/// timestamp into NetEq.
 struct PeerSlot {
     jitter: PeerJitterBuffer,
     player: rodio::Player,
-    seq: u16,
-    ts_48k: u32,
 }
 
 impl PeerSlot {
@@ -62,8 +60,6 @@ impl PeerSlot {
             Ok(jitter) => Some(Self {
                 jitter,
                 player: rodio::Player::connect_new(sink_mixer),
-                seq: 0,
-                ts_48k: 0,
             }),
             Err(e) => {
                 eprintln!("sprout-desktop: jitter buffer init peer {peer_idx}: {e}");
@@ -144,11 +140,28 @@ pub(crate) async fn run_playout_recv_loop(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(WsMsg::Binary(data))) => {
-                        if data.len() < 2 {
+                        // Wire shape (v2): [peer_index: u8][header: 8 bytes][opus payload...]
+                        // The minimum size is 1 (peer_index) + 8 (header) + ≥1 Opus byte.
+                        if data.len() <= 1 + V2_HEADER_LEN {
                             continue;
                         }
                         let peer_idx = data[0];
-                        let opus_bytes = &data[1..];
+                        let after_idx = &data[1..];
+                        let Some((header, opus_bytes)) = FrameHeader::parse(after_idx)
+                        else {
+                            // Malformed v2 frame: header parse only fails when
+                            // the slice is too short, which `if data.len() <= ...`
+                            // already guards. Defensive log + drop.
+                            eprintln!(
+                                "sprout-desktop: dropping malformed audio frame from peer {peer_idx} ({} bytes)",
+                                data.len(),
+                            );
+                            continue;
+                        };
+                        if opus_bytes.is_empty() {
+                            continue;
+                        }
+                        let is_dtx = (header.flags & FLAG_DTX) != 0;
                         active_indices.insert(peer_idx);
 
                         // TTS interrupt frame counter — reset on TTS rising edge.
@@ -170,18 +183,22 @@ pub(crate) async fn run_playout_recv_loop(
                             }
                         };
 
+                        // Sender-authored seq/ts: NetEq can detect real
+                        // packet reordering & loss, not just arrival jitter.
                         if let Err(err) =
-                            slot.jitter.insert_packet(slot.seq, slot.ts_48k, opus_bytes)
+                            slot.jitter
+                                .insert_packet(header.seq, header.ts_48k, opus_bytes)
                         {
                             eprintln!(
                                 "sprout-desktop: jitter insert peer {peer_idx}: {err}"
                             );
-                        } else {
-                            slot.seq = slot.seq.wrapping_add(1);
-                            slot.ts_48k = slot.ts_48k.wrapping_add(FRAME_TIMESTAMP_DELTA);
                         }
 
-                        if tts_now {
+                        // Count remote-speech frame arrivals for the TTS
+                        // interrupt. DTX/comfort frames don't count — they
+                        // mean the peer is silent, just keeping the codec
+                        // state alive.
+                        if tts_now && !is_dtx {
                             if last_frame_reset.elapsed() >= FRAME_WINDOW {
                                 frame_counts.clear();
                                 last_frame_reset = tokio::time::Instant::now();

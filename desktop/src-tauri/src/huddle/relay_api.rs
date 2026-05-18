@@ -109,6 +109,12 @@ pub(crate) async fn connect_audio_relay(
         "type": "auth",
         "event": event_json,
         "parent_channel_id": parent_channel_id,
+        // Negotiate huddle audio protocol v2 (8-byte sender-authored header
+        // per Opus frame: seq | ts_48k | level_dbov | flags). See
+        // huddle::wire for the layout. The relay pins the first joiner's
+        // version per-room and rejects mismatched joiners with
+        // `upgrade_required`.
+        "protocol_version": super::wire::PROTOCOL_VERSION,
     });
     ws_tx
         .send(WsMsg::Text(auth_msg.to_string().into()))
@@ -226,9 +232,15 @@ async fn audio_relay_pipeline(
     let cancel_send = cancel.clone();
 
     let send_task = tokio::spawn(async move {
+        use super::wire::{audio_level_dbov, FrameHeader, V2_HEADER_LEN};
         let mut encoder = encoder; // Move encoder into task.
         const FRAME_SAMPLES: usize = 960;
         let mut out_buf = vec![0u8; 4000];
+        // Per-frame wire-protocol state. We send v2 frames now: each Opus
+        // payload is preceded by an 8-byte header carrying our own seq +
+        // 48 kHz timestamp + audio level + flags.
+        let mut seq: u16 = 0;
+        let mut ts_48k: u32 = 0;
 
         loop {
             let pcm_bytes = {
@@ -252,6 +264,10 @@ async fn audio_relay_pipeline(
 
             let mut tx = ws_tx_send.lock().await;
             for chunk in samples.chunks(FRAME_SAMPLES) {
+                // dBov is computed from the pre-encode PCM. Opus DTX may
+                // produce a 1-2 byte comfort packet; computing level from
+                // the encoded payload would be meaningless.
+                let level = audio_level_dbov(chunk);
                 let encode_result = if chunk.len() == FRAME_SAMPLES {
                     encoder.encode_float(chunk, &mut out_buf)
                 } else {
@@ -267,14 +283,28 @@ async fn audio_relay_pipeline(
                     }
                 };
                 if n > 0 {
-                    // Send raw Opus bytes — the relay prepends the peer_index.
-                    if tx
-                        .send(WsMsg::Binary(out_buf[..n].to_vec().into()))
-                        .await
-                        .is_err()
-                    {
+                    // Opus DTX packets are very small (≤2 bytes). Flag them
+                    // explicitly so the receiver can elide DTX from speaker
+                    // detection without re-parsing the Opus payload.
+                    let flags = if n <= 2 { super::wire::FLAG_DTX } else { 0 };
+                    let header = FrameHeader {
+                        seq,
+                        ts_48k,
+                        level_dbov: level,
+                        flags,
+                    }
+                    .encode();
+
+                    // Build the v2 wire frame: 8-byte header + Opus payload.
+                    let mut frame = Vec::with_capacity(V2_HEADER_LEN + n);
+                    frame.extend_from_slice(&header);
+                    frame.extend_from_slice(&out_buf[..n]);
+                    if tx.send(WsMsg::Binary(frame.into())).await.is_err() {
                         return; // WS closed.
                     }
+
+                    seq = seq.wrapping_add(1);
+                    ts_48k = ts_48k.wrapping_add(super::jitter::FRAME_TIMESTAMP_DELTA);
                 }
             }
         }
