@@ -5,6 +5,7 @@
 #   SPROUT_RELAY_PORT, SPROUT_RELAY_URL
 #   SPROUT_INSTANCE_SLUG, SPROUT_WORKTREE_LABEL, VITE_DEV_BRANCH (worktrees only)
 #   SPROUT_TAURI_CONFIG
+#   SPROUT_PRIVATE_KEY (worktrees only, when SPROUT_SHARE_IDENTITY=1)
 
 WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
@@ -43,7 +44,9 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
         if [[ "${SPROUT_SHARE_IDENTITY:-0}" == "1" ]]; then
             CANONICAL_KEY="$HOME/Library/Application Support/xyz.block.sprout.app.dev/identity.key"
             if [[ -f "$CANONICAL_KEY" ]]; then
-                export SPROUT_PRIVATE_KEY=$(cat "$CANONICAL_KEY")
+                export SPROUT_PRIVATE_KEY="$(cat "$CANONICAL_KEY")"
+            else
+                echo "⚠ SPROUT_SHARE_IDENTITY=1 but no identity found at $CANONICAL_KEY — run Sprout from repo root first" >&2
             fi
         fi
 
