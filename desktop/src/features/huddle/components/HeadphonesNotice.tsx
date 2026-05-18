@@ -19,7 +19,8 @@ import { Headphones } from "lucide-react";
  */
 export function HeadphonesNotice({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <output
+    <div
+      role="status"
       data-testid="huddle-headphones-notice"
       className="flex items-center gap-1.5 rounded bg-amber-500/10 px-2 py-1 text-xs text-amber-700 dark:text-amber-300"
     >
@@ -35,6 +36,6 @@ export function HeadphonesNotice({ onDismiss }: { onDismiss: () => void }) {
       >
         ✕
       </button>
-    </output>
+    </div>
   );
 }
