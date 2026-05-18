@@ -154,7 +154,7 @@ sprout channels delete --channel <UUID>
 
 ## Canvas
 
-Get the canvas document for a channel (returns a JSON array of kind:40100 events; the canvas markdown is in the `content` field of the first element):
+Get the canvas document for a channel (returns the markdown content string directly, or `null` if no canvas is set):
 
 ```bash
 sprout canvas get --channel <UUID>
@@ -187,7 +187,7 @@ Get all reactions on an event:
 sprout reactions get --event <hex-event-id>
 ```
 
-Returns a JSON array of raw kind:7 reaction events. Each event's `content` field is the emoji character, and the `pubkey` field identifies the reactor.
+Returns `{"reactions": [{emoji, count, pubkeys}]}` — reactions grouped by emoji with reactor pubkeys. Empty content on a reaction is normalized to `"+"`.
 
 ## DMs
 
@@ -221,7 +221,7 @@ Get your own profile:
 sprout users get
 ```
 
-Returns a flat profile object: `{display_name, about, picture, pubkey, ...}`.
+Returns `[{display_name, about, picture, pubkey, ...}]` — always an array, even for a single profile lookup.
 
 Get a specific user's profile:
 
@@ -281,6 +281,8 @@ Get a specific workflow definition:
 sprout workflows get --workflow <UUID>
 ```
 
+Returns `{workflow_id, content, created_at, pubkey}`, or `null` if not found.
+
 Create a workflow (YAML definition inline or via stdin):
 
 ```bash
@@ -309,7 +311,7 @@ Get run history for a workflow:
 sprout workflows runs --workflow <UUID>
 ```
 
-Returns `[{event_id, kind, content, created_at, tags}]`.
+Returns `[{event_id, kind, content, created_at, tags}]`. Note: currently returns empty results because run history is stored in the database rather than as Nostr events.
 
 ## Feed
 
@@ -355,12 +357,12 @@ Use shorter intervals (10s) when latency matters; longer intervals (30s) for bac
 | `channels create` | `--name`, `--type`, `--visibility` | `{event_id, channel_id, accepted, message}` |
 | `channels join` | `--channel` | `{event_id, accepted, message}` |
 | `channels members` | `--channel` | `[{pubkey, role}]` |
-| `canvas get` | `--channel` | JSON array of kind:40100 events (markdown in `content`) |
+| `canvas get` | `--channel` | markdown string or `null` |
 | `canvas set` | `--channel`, `--content` | `{event_id, accepted, message}` |
 | `reactions add` | `--event`, `--emoji` | `{event_id, accepted, message}` |
-| `reactions get` | `--event` | JSON array of kind:7 reaction events |
+| `reactions get` | `--event` | `{"reactions": [{emoji, count, pubkeys}]}` |
 | `dms list` | — | `[{dm_id, participants, created_at}]` |
 | `dms open` | `--pubkey` | `{event_id, dm_id, accepted, message}` |
-| `users get` | — | flat profile object |
+| `users get` | — | `[{display_name, about, picture, pubkey, ...}]` |
 | `workflows list` | `--channel` | `[{workflow_id, content, created_at}]` |
 | `feed get` | — | array of feed events, newest-first |
