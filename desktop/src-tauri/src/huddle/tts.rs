@@ -88,15 +88,18 @@ const MAX_GAIN: f32 = 8.0;
 /// motivated removing the leading fade.
 const FADE_OUT_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.008) as usize;
 
-/// Length of the zero-sample cushion prepended to the very first audio
-/// buffer of an utterance, so the OS audio device / rodio mixer has a
-/// fully-quiet ramp-up window before the real onset hits.
+/// Length of the zero-sample cushion prepended before each synthesized
+/// sentence chunk, so the OS audio device / rodio mixer has a fully-quiet
+/// ramp-up window before the real onset hits.
 ///
-/// Applied at the `first_append` site only — *not* per sentence — so it
-/// doesn't stack on top of `INTER_SENTENCE_SILENCE` at sentence boundaries.
-/// 20 ms ≈ 480 samples is enough to cover a CoreAudio buffer turnover
-/// without being audible as latency.
-const FIRST_APPEND_LEAD_IN_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.020) as usize;
+/// This used to be applied only before the first sentence of a whole response.
+/// That still left later sentence chunks vulnerable to first-syllable clipping
+/// when their first phoneme was soft (notably `I'm` / `I've`) and rodio crossed
+/// from an explicit silence buffer straight into non-zero speech. 20 ms ≈ 480
+/// samples is enough to cover a CoreAudio buffer turnover without being audible
+/// as latency. At sentence boundaries this lead-in is budgeted out of the
+/// existing inter-sentence pause, so it does not lengthen multi-sentence gaps.
+const SENTENCE_LEAD_IN_SAMPLES: usize = (SAMPLE_RATE as f64 * 0.020) as usize;
 
 /// Sentence-by-sentence synthesis — keeps first-sentence latency low and lets
 /// playback of sentence N overlap with synthesis of sentence N+1 (see the
@@ -414,12 +417,11 @@ fn tts_worker(
                     // 2026-05-18 "first little sound is missing" regression).
                     apply_fade_out(&mut boosted);
 
-                    // Decide what to append, including the one-shot lead-in
-                    // pad on the first sentence. Centralised in
-                    // `build_sentence_append_plan` so the "lead-in fires
-                    // exactly once per utterance" invariant is testable
-                    // without a rodio mock. See its docstring + the
-                    // `lead_in_pad_fires_exactly_once_per_utterance` test.
+                    // Decide what to append, including the short lead-in pad
+                    // before this sentence chunk. Centralised in
+                    // `build_sentence_append_plan` so the "each chunk gets a
+                    // device cushion" invariant is testable without a rodio
+                    // mock. See its docstring and regression tests below.
                     let was_first = first_append;
                     let plan =
                         build_sentence_append_plan(&mut first_append, boosted, silence_buf.len());
@@ -530,8 +532,8 @@ fn normalize_for_playback(samples: Vec<f32>) -> Vec<f32> {
 /// The first sample of Pocket output measures ≈ 0.0018 (≈ −54 dBFS) — well
 /// below the threshold at which a DC-jump would be audible as a click — so
 /// no fade-in is needed. The OS audio device gets its quiet ramp-up window
-/// from `FIRST_APPEND_LEAD_IN_SAMPLES` instead, applied once per utterance
-/// at the `first_append` site.
+/// from `SENTENCE_LEAD_IN_SAMPLES` instead, inserted as pure silence before
+/// each sentence buffer.
 fn apply_fade_out(samples: &mut [f32]) {
     let len = samples.len();
     let fade = FADE_OUT_SAMPLES.min(len / 2);
@@ -541,32 +543,35 @@ fn apply_fade_out(samples: &mut [f32]) {
 }
 
 /// Build the ordered list of buffers to append to the rodio `Player` for one
-/// synthesised sentence, including the one-shot lead-in pad on the *first*
-/// sentence of an utterance.
+/// synthesised sentence.
 ///
-/// Returns either three buffers (lead-in pad + audio + inter-sentence
-/// silence) on the first call of an utterance, or two buffers (audio +
-/// inter-sentence silence) on every subsequent call. Flips
-/// `*first_append` from `true` → `false` after producing the lead-in.
+/// Every sentence chunk gets a short lead-in pad immediately before its audio.
+/// This matters for chunks that start with soft first phonemes (`I'm`, `I've`):
+/// the sacrificial-prefix trim intentionally returns audio whose first sample is
+/// already speech, so the playback layer must provide the device/mixer cushion.
+/// To keep the audible gap unchanged, the trailing silence after this chunk is
+/// shortened by the same amount (`silence_buf_len - SENTENCE_LEAD_IN_SAMPLES`):
+/// sentence N contributes 80 ms of post-speech silence and sentence N+1
+/// contributes the remaining 20 ms of pre-speech cushion.
 ///
-/// Extracted from the worker loop so the "lead-in fires exactly once per
-/// utterance" invariant is testable without mocking rodio. See
-/// `lead_in_pad_fires_exactly_once_per_utterance` for the regression test
-/// that catches the only-bad-version of this pad: accidentally moving it
-/// inside the per-sentence loop and stacking on top of
-/// `INTER_SENTENCE_SILENCE` at every sentence boundary.
+/// `first_append` is still accepted and flipped on the first call because the
+/// worker uses it to decide when actual playback has been queued and when it is
+/// safe to set `tts_active` for echo gating.
 fn build_sentence_append_plan(
     first_append: &mut bool,
     boosted: Vec<f32>,
     silence_buf_len: usize,
 ) -> Vec<Vec<f32>> {
     let mut plan = Vec::with_capacity(3);
+    plan.push(vec![0.0f32; SENTENCE_LEAD_IN_SAMPLES]);
     if *first_append {
-        plan.push(vec![0.0f32; FIRST_APPEND_LEAD_IN_SAMPLES]);
         *first_append = false;
     }
     plan.push(boosted);
-    plan.push(vec![0.0f32; silence_buf_len]);
+    plan.push(vec![
+        0.0f32;
+        silence_buf_len.saturating_sub(SENTENCE_LEAD_IN_SAMPLES)
+    ]);
     plan
 }
 
@@ -1164,28 +1169,27 @@ mod tests {
         assert_eq!(samples[0], 1.0);
     }
 
-    /// Sanity-check the first-append cushion length: 20 ms at 24 kHz must
+    /// Sanity-check the per-sentence cushion length: 20 ms at 24 kHz must
     /// land at exactly 480 samples. This is a const computation, so the
     /// real value of this test is documenting *why* 20 ms was chosen — it
     /// covers a typical CoreAudio buffer turnover (256–1024 samples)
     /// without being audible as user-facing latency.
     #[test]
-    fn first_append_lead_in_is_sane() {
-        assert_eq!(FIRST_APPEND_LEAD_IN_SAMPLES, 480, "20 ms × 24 kHz");
+    fn sentence_lead_in_is_sane() {
+        assert_eq!(SENTENCE_LEAD_IN_SAMPLES, 480, "20 ms × 24 kHz");
     }
 
     // ── build_sentence_append_plan tests ──────────────────────────────────────
 
-    /// REGRESSION (Max, 2026-05-18 review): the lead-in pad must fire
-    /// **exactly once per utterance**, never per sentence. Catches the
-    /// only-bad-version of this pad — accidentally moving the
-    /// `if first_append` check inside the per-sentence loop, which would
-    /// stack 20 ms of silence on top of `INTER_SENTENCE_SILENCE` at every
-    /// sentence boundary and audibly slow down multi-sentence utterances.
+    /// REGRESSION (Tyler, 2026-05-18): a response can contain later sentence
+    /// chunks that begin with soft first phonemes like `I'm` / `I've`. The
+    /// sacrificial-prefix trimmer returns those chunks with speech at sample 0,
+    /// so every appended sentence needs its own playback cushion, not just the
+    /// first sentence of the response.
     #[test]
-    fn lead_in_pad_fires_exactly_once_per_utterance() {
+    fn lead_in_pad_fires_for_every_sentence_chunk() {
         const SENTENCE_AUDIO_LEN: usize = 1000;
-        const SILENCE_BUF_LEN: usize = 240; // arbitrary; matches a 10 ms inter-sentence buffer
+        const SILENCE_BUF_LEN: usize = 2400; // 100 ms at 24 kHz, like production
         const N_SENTENCES: usize = 5;
 
         let mut first = true;
@@ -1193,45 +1197,37 @@ mod tests {
         let mut total_audio_buffers = 0;
         let mut total_inter_silence_buffers = 0;
 
-        for i in 0..N_SENTENCES {
+        for _ in 0..N_SENTENCES {
             let plan = build_sentence_append_plan(
                 &mut first,
                 vec![0.5_f32; SENTENCE_AUDIO_LEN],
                 SILENCE_BUF_LEN,
             );
 
-            if i == 0 {
-                assert_eq!(
-                    plan.len(),
-                    3,
-                    "first sentence emits [lead-in, audio, inter-silence]"
-                );
-                assert_eq!(plan[0].len(), FIRST_APPEND_LEAD_IN_SAMPLES);
-                assert!(
-                    plan[0].iter().all(|&s| s == 0.0),
-                    "lead-in pad must be pure silence"
-                );
-                assert_eq!(plan[1].len(), SENTENCE_AUDIO_LEN);
-                assert_eq!(plan[2].len(), SILENCE_BUF_LEN);
-                total_lead_in_buffers += 1;
-                total_audio_buffers += 1;
-                total_inter_silence_buffers += 1;
-            } else {
-                assert_eq!(
-                    plan.len(),
-                    2,
-                    "subsequent sentences emit [audio, inter-silence] only"
-                );
-                assert_eq!(plan[0].len(), SENTENCE_AUDIO_LEN);
-                assert_eq!(plan[1].len(), SILENCE_BUF_LEN);
-                total_audio_buffers += 1;
-                total_inter_silence_buffers += 1;
-            }
+            assert_eq!(
+                plan.len(),
+                3,
+                "every sentence emits [lead-in, audio, inter-silence]"
+            );
+            assert_eq!(plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
+            assert!(
+                plan[0].iter().all(|&s| s == 0.0),
+                "lead-in pad must be pure silence"
+            );
+            assert_eq!(plan[1].len(), SENTENCE_AUDIO_LEN);
+            assert_eq!(
+                plan[2].len(),
+                SILENCE_BUF_LEN - SENTENCE_LEAD_IN_SAMPLES,
+                "trailing silence is shortened so lead-in + tail keeps the existing sentence gap"
+            );
+            total_lead_in_buffers += 1;
+            total_audio_buffers += 1;
+            total_inter_silence_buffers += 1;
         }
 
         assert_eq!(
-            total_lead_in_buffers, 1,
-            "lead-in must fire exactly once per utterance, not {} times",
+            total_lead_in_buffers, N_SENTENCES,
+            "lead-in must fire for every sentence chunk, not {} times",
             total_lead_in_buffers
         );
         assert_eq!(total_audio_buffers, N_SENTENCES);
@@ -1240,17 +1236,18 @@ mod tests {
     }
 
     /// The plan flips `first_append` from true → false on the very first
-    /// call, so subsequent calls produce no lead-in even if called with the
-    /// same mutable flag.
+    /// call so the worker still knows exactly when it has queued the first
+    /// playable audio and can set `tts_active` for echo gating.
     #[test]
     fn build_sentence_append_plan_flips_first_append() {
         let mut first = true;
         let _ = build_sentence_append_plan(&mut first, vec![0.5; 100], 24);
         assert!(!first, "first call must flip the flag");
 
-        // Subsequent call: no lead-in, flag stays false.
+        // Subsequent call: still has a per-sentence lead-in, flag stays false.
         let plan = build_sentence_append_plan(&mut first, vec![0.5; 100], 24);
-        assert_eq!(plan.len(), 2);
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
         assert!(!first);
     }
 
@@ -1261,12 +1258,35 @@ mod tests {
     #[test]
     fn first_sentence_leading_silence_is_exactly_lead_in() {
         let mut first = true;
-        let plan = build_sentence_append_plan(&mut first, vec![0.5; 100], 240);
-        // First buffer is lead-in pad, exactly FIRST_APPEND_LEAD_IN_SAMPLES.
-        assert_eq!(plan[0].len(), FIRST_APPEND_LEAD_IN_SAMPLES);
+        let plan = build_sentence_append_plan(&mut first, vec![0.5; 100], 2400);
+        // First buffer is lead-in pad, exactly SENTENCE_LEAD_IN_SAMPLES.
+        assert_eq!(plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
         // Second buffer is the audio (non-silent), so total leading silence
         // before any audio is heard is exactly the lead-in.
         assert!(plan[1].iter().any(|&s| s != 0.0));
+    }
+
+    /// The per-sentence lead-in is budgeted out of the existing trailing
+    /// silence, so `audio + tail silence + next lead-in + next audio` keeps
+    /// the same 100 ms inter-sentence pause while still cushioning the next
+    /// onset.
+    #[test]
+    fn sentence_gap_budget_is_preserved() {
+        let mut first = true;
+        let silence_buf_len = 2400;
+        let first_plan = build_sentence_append_plan(&mut first, vec![0.5; 100], silence_buf_len);
+        let second_plan = build_sentence_append_plan(&mut first, vec![0.5; 100], silence_buf_len);
+
+        assert_eq!(
+            first_plan[2].len(),
+            silence_buf_len - SENTENCE_LEAD_IN_SAMPLES
+        );
+        assert_eq!(second_plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
+        assert_eq!(
+            first_plan[2].len() + second_plan[0].len(),
+            silence_buf_len,
+            "post-speech tail plus next lead-in should preserve total sentence gap"
+        );
     }
 
     // ── normalize_for_playback tests ──────────────────────────────────────────

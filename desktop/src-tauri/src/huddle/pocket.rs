@@ -422,10 +422,9 @@ pub(crate) fn prepare_pocket_prompt(input: &str) -> Option<PreparedPrompt> {
 ///      fallback is to play the slightly-degraded raw audio rather than
 ///      delete real speech.
 ///   4. Otherwise, drop the leading samples up to the end of the silence
-///      run. We don't insert a zero lead-in here — `tts.rs` already adds
-///      `FIRST_APPEND_LEAD_IN_SAMPLES` of zeros on the first append of an
-///      utterance, and subsequent sentences are buffered by
-///      `INTER_SENTENCE_SILENCE`.
+///      run. We don't insert a zero lead-in here — `tts.rs` owns playback
+///      cushioning by prepending `SENTENCE_LEAD_IN_SAMPLES` of zeros before
+///      each appended sentence chunk.
 ///
 /// If the scan never finds a long-enough gap (≈1% of generations in the
 /// production-config probe), the function is a no-op — the model trajectory
