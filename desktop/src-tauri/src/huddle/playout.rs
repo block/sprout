@@ -84,10 +84,20 @@ impl PeerSlot {
 
     /// Whether this peer is still actively sending — used by the playout tick
     /// to gate the rodio append so disconnected peers don't pump silence
-    /// indefinitely. Window is generous compared to typical DTX comfort-noise
-    /// cadence (≤400 ms) so normal speech gaps still flow through NetEq.
+    /// indefinitely.
+    ///
+    /// The gate is `recent packet OR jitter buffer not empty`. The recent-
+    /// packet half covers the common case: brief speech gaps and DTX cadence
+    /// (≤400 ms) stay inside the [`IDLE_PEER_GRACE`] window so PLC/expand
+    /// frames keep flowing. The buffer-not-empty half is a safety net for
+    /// the edge case Mari called out: a peer who sends a burst then
+    /// disconnects has real audio queued in NetEq that should still play
+    /// out, even if `last_packet_at` ages past the grace before the buffer
+    /// finishes draining. The grace alone is enough today because NetEq's
+    /// `max_delay_ms` (200 ms) is well inside the grace (500 ms), but the
+    /// OR keeps the invariant robust against future config tuning.
     fn is_active(&self) -> bool {
-        self.last_packet_at.elapsed() < IDLE_PEER_GRACE
+        self.last_packet_at.elapsed() < IDLE_PEER_GRACE || !self.jitter.is_empty()
     }
 }
 

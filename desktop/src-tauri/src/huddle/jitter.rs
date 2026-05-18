@@ -186,12 +186,14 @@ impl PeerJitterBuffer {
         Ok((frame.samples, vad))
     }
 
-    /// True when NetEq's buffer has no packets queued and it would emit
-    /// expand/silence on `get_audio` — useful to skip mixing for peers that
-    /// haven't sent in a while. Currently only exercised by tests; the
-    /// playout loop always pulls a frame regardless to keep NetEq's clock
-    /// advancing.
-    #[allow(dead_code)]
+    /// True when NetEq's buffer has no packets queued and the next
+    /// `get_audio` call would emit expand/silence. Used by
+    /// `huddle::playout` as part of the idle-peer gate — if a peer has
+    /// gone quiet (`last_packet_at` is stale) *and* there's nothing
+    /// buffered to drain, we stop appending frames to that peer's rodio
+    /// Player. The check is conservative: a peer who just sent a burst
+    /// then disconnected may have buffered audio that should still play
+    /// out, so this method drives that decision.
     pub fn is_empty(&self) -> bool {
         self.neteq.is_empty()
     }
