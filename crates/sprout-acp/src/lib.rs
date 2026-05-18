@@ -1089,7 +1089,15 @@ async fn tokio_main() -> Result<()> {
         agent_owner_pubkey: startup_owner
             .as_deref()
             .and_then(|hex| nostr::PublicKey::from_hex(hex).ok()),
+        memory_enabled: config.memory_enabled,
     });
+
+    if !config.memory_enabled {
+        tracing::info!(
+            target: "engram::core",
+            "NIP-AE core memory injection disabled (--no-memory / SPROUT_ACP_NO_MEMORY)"
+        );
+    }
 
     // ── Step 6: Heartbeat timer ───────────────────────────────────────────────
     let mut heartbeat = if config.heartbeat_interval_secs > 0 {
@@ -2753,6 +2761,7 @@ mod build_mcp_servers_tests {
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
+            memory_enabled: true,
             model: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,

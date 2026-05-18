@@ -209,6 +209,12 @@ pub struct PromptContext {
     /// Owner pubkey (hex), if resolved at startup. When unset, NIP-AE core
     /// injection is skipped entirely (no owner = no `(agent, owner)` pair).
     pub agent_owner_pubkey: Option<nostr::PublicKey>,
+    /// Whether NIP-AE agent core memory injection is enabled. When false,
+    /// the per-session core engram fetch is skipped and `core_sections`
+    /// remains empty for every channel, so `format_prompt` renders no
+    /// `[Agent Memory — core]` section. Driven by `--no-memory` /
+    /// `SPROUT_ACP_NO_MEMORY`.
+    pub memory_enabled: bool,
 }
 
 // ── AgentPool impl ────────────────────────────────────────────────────────────
@@ -767,7 +773,13 @@ pub async fn run_prompt_task(
     // Per Tyler's locked spec: NO mid-session refreshes. Re-fetch only
     // happens when a session is invalidated and recreated (see
     // `SessionState::invalidate_channel`).
-    if is_new_session {
+    //
+    // Operator opt-out: `--no-memory` / `SPROUT_ACP_NO_MEMORY` disables the
+    // entire NIP-AE injection path. We skip the fetch outright and leave
+    // `state.core_sections` empty, so `format_prompt` renders no core
+    // section. The `sprout mem` CLI and the relay's acceptance of
+    // kind:30174 engrams are unaffected.
+    if is_new_session && ctx.memory_enabled {
         if let (PromptSource::Channel(cid), Some(owner_pk)) =
             (&source, ctx.agent_owner_pubkey.as_ref())
         {
