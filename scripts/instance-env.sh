@@ -36,16 +36,15 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
         export SPROUT_WORKTREE_LABEL="${BRANCH_NAME##*/}"
         export SPROUT_INSTANCE_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
 
-        # SPROUT_SHARE_IDENTITY=1: reuse the base dev identity and data dir so
-        # worktrees skip onboarding and use the same Nostr key as the main checkout.
+        # SPROUT_SHARE_IDENTITY=1: reuse the main dev checkout's Nostr key so
+        # worktrees skip onboarding and share the same identity. The per-worktree
+        # identifier is kept so concurrent instances don't collide on
+        # tauri-plugin-single-instance or the app data directory.
         if [[ "${SPROUT_SHARE_IDENTITY:-0}" == "1" ]]; then
             CANONICAL_KEY="$HOME/Library/Application Support/xyz.block.sprout.app.dev/identity.key"
             if [[ -f "$CANONICAL_KEY" ]]; then
                 export SPROUT_PRIVATE_KEY=$(cat "$CANONICAL_KEY")
             fi
-            WORKTREE_IDENTIFIER="xyz.block.sprout.app.dev"
-        else
-            WORKTREE_IDENTIFIER="xyz.block.sprout.app.dev.${SPROUT_INSTANCE_SLUG}"
         fi
 
         ICON_DIR="$(pwd)/src-tauri/target/dev-icons"
@@ -55,7 +54,7 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
         if swift ../scripts/generate-dev-icon.swift src-tauri/icons/icon.icns "$DEV_ICON" "$SPROUT_WORKTREE_LABEL"; then
             echo "🌳 Worktree: ${SPROUT_WORKTREE_LABEL}"
             export VITE_DEV_BRANCH="$SPROUT_WORKTREE_LABEL"
-            SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"${WORKTREE_IDENTIFIER}\",\"productName\":\"Sprout Dev (${SPROUT_WORKTREE_LABEL})\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
+            SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"xyz.block.sprout.app.dev.${SPROUT_INSTANCE_SLUG}\",\"productName\":\"Sprout Dev (${SPROUT_WORKTREE_LABEL})\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
         fi
     fi
 fi
