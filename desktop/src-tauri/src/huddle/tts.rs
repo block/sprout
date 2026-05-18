@@ -417,17 +417,15 @@ fn tts_worker(
                     // 2026-05-18 "first little sound is missing" regression).
                     apply_fade_out(&mut boosted);
 
-                    // Decide what to append, including the short lead-in pad
-                    // before this sentence chunk. Centralised in
-                    // `build_sentence_append_plan` so the "each chunk gets a
-                    // device cushion" invariant is testable without a rodio
-                    // mock. See its docstring and regression tests below.
+                    // Build one contiguous buffer per synthesized sentence:
+                    // lead-in cushion + audio + trailing gap. Keeping this as
+                    // a single rodio source preserves the original queue/drain
+                    // semantics (one append per sentence) while still giving
+                    // every chunk a quiet device warm-up window.
                     let was_first = first_append;
-                    let plan =
-                        build_sentence_append_plan(&mut first_append, boosted, silence_buf.len());
-                    for buf in plan {
-                        player.append(SamplesBuffer::new(channels, rate, buf));
-                    }
+                    let buf =
+                        build_sentence_append_buffer(&mut first_append, boosted, silence_buf.len());
+                    player.append(SamplesBuffer::new(channels, rate, buf));
                     if was_first {
                         tts_active.store(true, Ordering::Release);
                     }
@@ -542,8 +540,8 @@ fn apply_fade_out(samples: &mut [f32]) {
     }
 }
 
-/// Build the ordered list of buffers to append to the rodio `Player` for one
-/// synthesised sentence.
+/// Build the single buffer appended to the rodio `Player` for one synthesised
+/// sentence.
 ///
 /// Every sentence chunk gets a short lead-in pad immediately before its audio.
 /// This matters for chunks that start with soft first phonemes (`I'm`, `I've`):
@@ -554,25 +552,30 @@ fn apply_fade_out(samples: &mut [f32]) {
 /// sentence N contributes 80 ms of post-speech silence and sentence N+1
 /// contributes the remaining 20 ms of pre-speech cushion.
 ///
+/// The lead-in, audio, and trailing silence are concatenated into one
+/// `SamplesBuffer` before appending. This keeps rodio's queue shape at one
+/// tracked source per synthesized sentence, avoiding source-boundary/drain
+/// regressions from enqueueing the lead-in, audio, and tail as separate sounds.
+///
 /// `first_append` is still accepted and flipped on the first call because the
 /// worker uses it to decide when actual playback has been queued and when it is
 /// safe to set `tts_active` for echo gating.
-fn build_sentence_append_plan(
+fn build_sentence_append_buffer(
     first_append: &mut bool,
     boosted: Vec<f32>,
     silence_buf_len: usize,
-) -> Vec<Vec<f32>> {
-    let mut plan = Vec::with_capacity(3);
-    plan.push(vec![0.0f32; SENTENCE_LEAD_IN_SAMPLES]);
+) -> Vec<f32> {
     if *first_append {
         *first_append = false;
     }
-    plan.push(boosted);
-    plan.push(vec![
-        0.0f32;
-        silence_buf_len.saturating_sub(SENTENCE_LEAD_IN_SAMPLES)
-    ]);
-    plan
+
+    let trailing_silence_len = silence_buf_len.saturating_sub(SENTENCE_LEAD_IN_SAMPLES);
+    let mut buf =
+        Vec::with_capacity(SENTENCE_LEAD_IN_SAMPLES + boosted.len() + trailing_silence_len);
+    buf.extend(std::iter::repeat_n(0.0_f32, SENTENCE_LEAD_IN_SAMPLES));
+    buf.extend(boosted);
+    buf.extend(std::iter::repeat_n(0.0_f32, trailing_silence_len));
+    buf
 }
 
 // drain_until_shutdown lives in super (huddle/mod.rs) — shared with stt.rs.
@@ -1179,113 +1182,96 @@ mod tests {
         assert_eq!(SENTENCE_LEAD_IN_SAMPLES, 480, "20 ms × 24 kHz");
     }
 
-    // ── build_sentence_append_plan tests ──────────────────────────────────────
+    // ── build_sentence_append_buffer tests ───────────────────────────────────
 
-    /// REGRESSION (Tyler, 2026-05-18): a response can contain later sentence
-    /// chunks that begin with soft first phonemes like `I'm` / `I've`. The
-    /// sacrificial-prefix trimmer returns those chunks with speech at sample 0,
-    /// so every appended sentence needs its own playback cushion, not just the
-    /// first sentence of the response.
+    /// REGRESSION: every chunk needs an onset cushion; trimmed short chunks
+    /// can start with speech at sample 0.
     #[test]
-    fn lead_in_pad_fires_for_every_sentence_chunk() {
+    fn lead_in_pad_is_present_for_every_sentence_chunk() {
         const SENTENCE_AUDIO_LEN: usize = 1000;
         const SILENCE_BUF_LEN: usize = 2400; // 100 ms at 24 kHz, like production
         const N_SENTENCES: usize = 5;
 
         let mut first = true;
-        let mut total_lead_in_buffers = 0;
-        let mut total_audio_buffers = 0;
-        let mut total_inter_silence_buffers = 0;
 
         for _ in 0..N_SENTENCES {
-            let plan = build_sentence_append_plan(
+            let buf = build_sentence_append_buffer(
                 &mut first,
                 vec![0.5_f32; SENTENCE_AUDIO_LEN],
                 SILENCE_BUF_LEN,
             );
 
-            assert_eq!(
-                plan.len(),
-                3,
-                "every sentence emits [lead-in, audio, inter-silence]"
-            );
-            assert_eq!(plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
+            assert_eq!(buf.len(), SENTENCE_AUDIO_LEN + SILENCE_BUF_LEN);
             assert!(
-                plan[0].iter().all(|&s| s == 0.0),
+                buf[..SENTENCE_LEAD_IN_SAMPLES].iter().all(|&s| s == 0.0),
                 "lead-in pad must be pure silence"
             );
-            assert_eq!(plan[1].len(), SENTENCE_AUDIO_LEN);
-            assert_eq!(
-                plan[2].len(),
-                SILENCE_BUF_LEN - SENTENCE_LEAD_IN_SAMPLES,
-                "trailing silence is shortened so lead-in + tail keeps the existing sentence gap"
+            assert!(
+                buf[SENTENCE_LEAD_IN_SAMPLES..SENTENCE_LEAD_IN_SAMPLES + SENTENCE_AUDIO_LEN]
+                    .iter()
+                    .all(|&s| s == 0.5),
+                "sentence audio must immediately follow the lead-in"
             );
-            total_lead_in_buffers += 1;
-            total_audio_buffers += 1;
-            total_inter_silence_buffers += 1;
+            assert!(
+                buf[SENTENCE_LEAD_IN_SAMPLES + SENTENCE_AUDIO_LEN..]
+                    .iter()
+                    .all(|&s| s == 0.0),
+                "trailing gap must be pure silence"
+            );
         }
 
-        assert_eq!(
-            total_lead_in_buffers, N_SENTENCES,
-            "lead-in must fire for every sentence chunk, not {} times",
-            total_lead_in_buffers
-        );
-        assert_eq!(total_audio_buffers, N_SENTENCES);
-        assert_eq!(total_inter_silence_buffers, N_SENTENCES);
         assert!(!first, "first_append flag must be cleared after first call");
     }
 
-    /// The plan flips `first_append` from true → false on the very first
-    /// call so the worker still knows exactly when it has queued the first
-    /// playable audio and can set `tts_active` for echo gating.
+    /// `first_append` still flips on the first call for `tts_active` gating.
     #[test]
-    fn build_sentence_append_plan_flips_first_append() {
+    fn build_sentence_append_buffer_flips_first_append() {
         let mut first = true;
-        let _ = build_sentence_append_plan(&mut first, vec![0.5; 100], 24);
+        let _ = build_sentence_append_buffer(&mut first, vec![0.5; 100], 2400);
         assert!(!first, "first call must flip the flag");
 
         // Subsequent call: still has a per-sentence lead-in, flag stays false.
-        let plan = build_sentence_append_plan(&mut first, vec![0.5; 100], 24);
-        assert_eq!(plan.len(), 3);
-        assert_eq!(plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
+        let buf = build_sentence_append_buffer(&mut first, vec![0.5; 100], 2400);
+        assert!(buf[..SENTENCE_LEAD_IN_SAMPLES].iter().all(|&s| s == 0.0));
         assert!(!first);
     }
 
-    /// Total leading silence on the first sentence is *exactly* the lead-in
-    /// pad — it does NOT double-count the inter-sentence silence at the
-    /// start of the plan. Inter-sentence silence is emitted *after* audio,
-    /// never before. (Max's [12] concern.)
+    /// Leading silence is exactly the lead-in; no pre-audio gap is double-counted.
     #[test]
     fn first_sentence_leading_silence_is_exactly_lead_in() {
         let mut first = true;
-        let plan = build_sentence_append_plan(&mut first, vec![0.5; 100], 2400);
-        // First buffer is lead-in pad, exactly SENTENCE_LEAD_IN_SAMPLES.
-        assert_eq!(plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
-        // Second buffer is the audio (non-silent), so total leading silence
-        // before any audio is heard is exactly the lead-in.
-        assert!(plan[1].iter().any(|&s| s != 0.0));
+        let buf = build_sentence_append_buffer(&mut first, vec![0.5; 100], 2400);
+        assert!(buf[..SENTENCE_LEAD_IN_SAMPLES].iter().all(|&s| s == 0.0));
+        assert_eq!(buf[SENTENCE_LEAD_IN_SAMPLES], 0.5);
     }
 
-    /// The per-sentence lead-in is budgeted out of the existing trailing
-    /// silence, so `audio + tail silence + next lead-in + next audio` keeps
-    /// the same 100 ms inter-sentence pause while still cushioning the next
-    /// onset.
+    /// Tail silence plus the next lead-in preserves the 100 ms sentence gap.
     #[test]
     fn sentence_gap_budget_is_preserved() {
         let mut first = true;
         let silence_buf_len = 2400;
-        let first_plan = build_sentence_append_plan(&mut first, vec![0.5; 100], silence_buf_len);
-        let second_plan = build_sentence_append_plan(&mut first, vec![0.5; 100], silence_buf_len);
+        let first_buf = build_sentence_append_buffer(&mut first, vec![0.5; 100], silence_buf_len);
+        let second_buf = build_sentence_append_buffer(&mut first, vec![0.5; 100], silence_buf_len);
 
-        assert_eq!(
-            first_plan[2].len(),
-            silence_buf_len - SENTENCE_LEAD_IN_SAMPLES
-        );
-        assert_eq!(second_plan[0].len(), SENTENCE_LEAD_IN_SAMPLES);
-        assert_eq!(
-            first_plan[2].len() + second_plan[0].len(),
-            silence_buf_len,
-            "post-speech tail plus next lead-in should preserve total sentence gap"
+        let first_tail = &first_buf[SENTENCE_LEAD_IN_SAMPLES + 100..];
+        let second_lead = &second_buf[..SENTENCE_LEAD_IN_SAMPLES];
+        assert_eq!(first_tail.len(), silence_buf_len - SENTENCE_LEAD_IN_SAMPLES);
+        assert_eq!(second_lead.len(), SENTENCE_LEAD_IN_SAMPLES);
+        assert_eq!(first_tail.len() + second_lead.len(), silence_buf_len);
+    }
+
+    /// Regression guard: one contiguous rodio source per synthesized sentence.
+    #[test]
+    fn sentence_append_buffer_is_one_contiguous_source() {
+        let mut first = true;
+        let buf = build_sentence_append_buffer(&mut first, vec![0.5; 100], 2400);
+
+        assert_eq!(buf.len(), 2400 + 100);
+        assert!(buf[..SENTENCE_LEAD_IN_SAMPLES].iter().all(|&s| s == 0.0));
+        assert!(
+            buf[SENTENCE_LEAD_IN_SAMPLES..SENTENCE_LEAD_IN_SAMPLES + 100]
+                .iter()
+                .all(|&s| s == 0.5)
         );
     }
 
