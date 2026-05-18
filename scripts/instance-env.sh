@@ -24,12 +24,29 @@ unset VITE_DEV_BRANCH
 
 # In worktrees, extract a label from the branch name and derive a unique app
 # identity and icon so multiple local desktop instances can run side by side.
+#
+# Worktree detection: compare --git-dir to --git-common-dir. In the main
+# working tree these are identical; in any worktree (whether under .worktrees/,
+# .claude/worktrees/, or elsewhere on disk) they differ.
 if git rev-parse --is-inside-work-tree &>/dev/null; then
     GIT_DIR=$(git rev-parse --git-dir)
-    if [[ "$GIT_DIR" == *".git/worktrees/"* ]]; then
+    GIT_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null)
+    if [[ -n "$GIT_COMMON_DIR" && "$GIT_DIR" != "$GIT_COMMON_DIR" ]]; then
         BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
         export SPROUT_WORKTREE_LABEL="${BRANCH_NAME##*/}"
         export SPROUT_INSTANCE_SLUG=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
+
+        # SPROUT_SHARE_IDENTITY=1: reuse the base dev identity and data dir so
+        # worktrees skip onboarding and use the same Nostr key as the main checkout.
+        if [[ "${SPROUT_SHARE_IDENTITY:-0}" == "1" ]]; then
+            CANONICAL_KEY="$HOME/Library/Application Support/xyz.block.sprout.app.dev/identity.key"
+            if [[ -f "$CANONICAL_KEY" ]]; then
+                export SPROUT_PRIVATE_KEY=$(cat "$CANONICAL_KEY")
+            fi
+            WORKTREE_IDENTIFIER="xyz.block.sprout.app.dev"
+        else
+            WORKTREE_IDENTIFIER="xyz.block.sprout.app.dev.${SPROUT_INSTANCE_SLUG}"
+        fi
 
         ICON_DIR="$(pwd)/src-tauri/target/dev-icons"
         mkdir -p "$ICON_DIR"
@@ -38,7 +55,7 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
         if swift ../scripts/generate-dev-icon.swift src-tauri/icons/icon.icns "$DEV_ICON" "$SPROUT_WORKTREE_LABEL"; then
             echo "🌳 Worktree: ${SPROUT_WORKTREE_LABEL}"
             export VITE_DEV_BRANCH="$SPROUT_WORKTREE_LABEL"
-            SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"xyz.block.sprout.app.dev.${SPROUT_INSTANCE_SLUG}\",\"productName\":\"Sprout Dev (${SPROUT_WORKTREE_LABEL})\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
+            SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"${WORKTREE_IDENTIFIER}\",\"productName\":\"Sprout Dev (${SPROUT_WORKTREE_LABEL})\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
         fi
     fi
 fi
