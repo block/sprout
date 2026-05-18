@@ -22,9 +22,15 @@
 //!   cargo run --release --example prod_probe
 //!   cargo run --release --example prod_probe /path/to/pocket-tts
 //!
-//! Output: /tmp/prod_<label>_s<seed>.wav. The "no sacrificial" variants
-//! show what production produced before the fix; the "_sac" variants show
-//! the new path. Listen back with `afplay`.
+//! Output (per (label, seed) pair):
+//!   /tmp/prod_<label>_s<seed>_raw.wav      — raw engine output
+//!   /tmp/prod_<label>_s<seed>_trimmed.wav  — post-trim (what production
+//!                                            ships, for `_sac` labels)
+//!
+//! The "no sacrificial" variants have no trim applied (just _raw); they
+//! show what production produces for long prompts. The "_sac" variants
+//! show both raw and trimmed, which is what `huddle::pocket::synth_chunk`
+//! returns for short prompts. Listen back with `afplay`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -36,6 +42,40 @@ use sherpa_onnx::{
 
 const SAMPLE_RATE: u32 = 24_000;
 const SHORT_PROMPT_MAX_FRAMES: i32 = 100;
+
+// Mirror of huddle::pocket trim constants so the probe stays in sync with
+// production. If you change either side, change both.
+const TRIM_SCAN_START_SAMPLES: usize = (SAMPLE_RATE as usize * 30) / 1000;
+const TRIM_SILENCE_THRESHOLD: f32 = 0.02;
+const TRIM_MIN_GAP_SAMPLES: usize = (SAMPLE_RATE as usize * 50) / 1000;
+const TRIM_MAX_DROP_SAMPLES: usize = (SAMPLE_RATE as usize * 1200) / 1000;
+
+/// Mirror of `huddle::pocket::trim_leading_cold_start` — keep in sync.
+fn trim_leading_cold_start(samples: &mut Vec<f32>) {
+    if samples.len() <= TRIM_SCAN_START_SAMPLES {
+        return;
+    }
+    let mut silence_run_start: Option<usize> = None;
+    let mut gap_end: Option<usize> = None;
+    for (i, sample) in samples.iter().enumerate().skip(TRIM_SCAN_START_SAMPLES) {
+        if sample.abs() < TRIM_SILENCE_THRESHOLD {
+            silence_run_start.get_or_insert(i);
+        } else if let Some(start) = silence_run_start {
+            if i - start >= TRIM_MIN_GAP_SAMPLES {
+                gap_end = Some(i);
+                break;
+            }
+            silence_run_start = None;
+        }
+    }
+    let Some(end) = gap_end else {
+        return;
+    };
+    if end > TRIM_MAX_DROP_SAMPLES {
+        return;
+    }
+    samples.drain(..end);
+}
 
 // (label, raw_text_before_prep, sacrificial_prefix_to_add_after_pad)
 const TESTS: &[(&str, &str, &str)] = &[
@@ -84,10 +124,10 @@ fn main() {
     let seeds: &[i32] = &[42, 1337, 99999, 7, 314159];
 
     println!(
-        "{:18} | {:>6} | {:>7} | gap_search (50ms,0.02) | path",
-        "test", "seed", "len_ms"
+        "{:18} | {:>6} | {:>5} | {:>7} | gap_search (50ms,0.02) | path",
+        "test", "seed", "kind", "len_ms"
     );
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(110));
 
     for (label, raw_text, sacrificial) in TESTS {
         // Mirror huddle::pocket::prepare_pocket_prompt:
@@ -99,6 +139,9 @@ fn main() {
         let is_short = word_count <= 4;
         let pad = if is_short { "        " } else { "" };
         let prompt = format!("{pad}{sacrificial}{cleaned}");
+        // Only short prompts get the post-synth trim in production; long
+        // prompts pass through unmodified.
+        let trim_in_production = is_short && !sacrificial.is_empty();
 
         for seed in seeds {
             let mut extra: HashMap<String, serde_json::Value> = HashMap::new();
@@ -121,15 +164,32 @@ fn main() {
             let audio = engine
                 .generate_with_config(&prompt, &gen, None::<fn(&[f32], f32) -> bool>)
                 .expect("synth");
-            let samples = audio.samples();
-            let len_ms = samples.len() as f32 / SAMPLE_RATE as f32 * 1000.0;
-            let gap = find_gap(samples, SAMPLE_RATE, 0.02, 50);
-            let path = format!("/tmp/prod_{}_s{}.wav", label, seed);
-            sherpa_onnx::write(&path, samples, SAMPLE_RATE as i32);
+
+            // Raw output (what the engine returned).
+            let raw_samples = audio.samples().to_vec();
+            let raw_ms = raw_samples.len() as f32 / SAMPLE_RATE as f32 * 1000.0;
+            let raw_gap = find_gap(&raw_samples, SAMPLE_RATE, 0.02, 50);
+            let raw_path = format!("/tmp/prod_{}_s{}_raw.wav", label, seed);
+            sherpa_onnx::write(&raw_path, &raw_samples, SAMPLE_RATE as i32);
             println!(
-                "{:18} | {:>6} | {:>5.0}ms | {:>22} | {}",
-                label, seed, len_ms, gap, path
+                "{:18} | {:>6} | {:>5} | {:>5.0}ms | {:>22} | {}",
+                label, seed, "raw", raw_ms, raw_gap, raw_path
             );
+
+            // Trimmed output — what synth_chunk actually returns to tts.rs
+            // for short prompts. For long prompts the engine output is
+            // returned untrimmed, so we skip writing a separate file.
+            if trim_in_production {
+                let mut trimmed = raw_samples;
+                trim_leading_cold_start(&mut trimmed);
+                let trimmed_ms = trimmed.len() as f32 / SAMPLE_RATE as f32 * 1000.0;
+                let trimmed_path = format!("/tmp/prod_{}_s{}_trimmed.wav", label, seed);
+                sherpa_onnx::write(&trimmed_path, &trimmed, SAMPLE_RATE as i32);
+                println!(
+                    "{:18} | {:>6} | {:>5} | {:>5.0}ms | {:>22} | {}",
+                    label, seed, "trim", trimmed_ms, "(post-trim)", trimmed_path
+                );
+            }
         }
         println!();
     }
