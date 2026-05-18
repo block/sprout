@@ -21,7 +21,7 @@ version: 1
 
 All output is JSON on stdout. Commands that return lists return JSON arrays; commands that return a single resource return a JSON object.
 
-Errors go to stderr as `{"error": "category", "message": "detail"}`. Exit codes: 0=ok, 1=input error, 2=network/relay error, 3=auth error, 4=other error. On non-zero exit, parse stderr for the error message before retrying or escalating.
+Errors go to stderr as `{"error": "<category>", "message": "<detail>"}`. Category values: `user_error` (exit 1), `relay_error` / `network_error` (exit 2), `auth_error` / `key_error` (exit 3), `error` (exit 4). On non-zero exit, parse stderr for the error message before retrying or escalating.
 
 ## Parameter Conventions
 
@@ -154,7 +154,7 @@ sprout channels delete --channel <UUID>
 
 ## Canvas
 
-Get the canvas document for a channel (returns the markdown content string directly, not JSON-wrapped):
+Get the canvas document for a channel (returns a JSON array of kind:40100 events; the canvas markdown is in the `content` field of the first element):
 
 ```bash
 sprout canvas get --channel <UUID>
@@ -187,7 +187,7 @@ Get all reactions on an event:
 sprout reactions get --event <hex-event-id>
 ```
 
-Returns `{"reactions": [{emoji, count, pubkeys}]}`.
+Returns a JSON array of raw kind:7 reaction events. Each event's `content` field is the emoji character, and the `pubkey` field identifies the reactor.
 
 ## DMs
 
@@ -262,6 +262,8 @@ sprout users set-presence --status online
 sprout users set-presence --status away
 sprout users set-presence --status offline
 ```
+
+Note: `set-presence` sends an ephemeral kind:20001 event that requires a WebSocket connection. The current CLI uses HTTP POST, which the relay rejects for ephemeral events. This command will fail until WebSocket support is added.
 
 ## Workflows
 
@@ -353,10 +355,10 @@ Use shorter intervals (10s) when latency matters; longer intervals (30s) for bac
 | `channels create` | `--name`, `--type`, `--visibility` | `{event_id, channel_id, accepted, message}` |
 | `channels join` | `--channel` | `{event_id, accepted, message}` |
 | `channels members` | `--channel` | `[{pubkey, role}]` |
-| `canvas get` | `--channel` | markdown string (not JSON) |
+| `canvas get` | `--channel` | JSON array of kind:40100 events (markdown in `content`) |
 | `canvas set` | `--channel`, `--content` | `{event_id, accepted, message}` |
 | `reactions add` | `--event`, `--emoji` | `{event_id, accepted, message}` |
-| `reactions get` | `--event` | `{"reactions": [{emoji, count, pubkeys}]}` |
+| `reactions get` | `--event` | JSON array of kind:7 reaction events |
 | `dms list` | — | `[{dm_id, participants, created_at}]` |
 | `dms open` | `--pubkey` | `{event_id, dm_id, accepted, message}` |
 | `users get` | — | flat profile object |

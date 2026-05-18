@@ -47,10 +47,12 @@ pub fn ensure_nest() -> Result<(), String> {
 ///
 /// - Creates the root directory and all subdirectories.
 /// - Writes `AGENTS.md` only if it doesn't already exist.
-/// - Sets 700 permissions on the root and all subdirectories (Unix).
+/// - Writes `.claude/skills/sprout-cli/SKILL.md` only if it doesn't already exist.
+/// - Sets 700 permissions on the root, all subdirectories, and the skill
+///   directory tree (Unix).
 ///
 /// Idempotent: safe to call on every launch. Existing files are never
-/// overwritten — users can freely edit AGENTS.md and it will persist.
+/// overwritten — users can freely edit AGENTS.md or SKILL.md and they persist.
 ///
 /// Rejects symlinks at the root path to prevent redirect attacks.
 ///
@@ -143,14 +145,22 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
                     .map_err(|e| format!("set permissions on {}: {e}", path.display()))?;
             }
         }
-        // Skill directory also gets 700 permissions.
-        let is_symlink = skill_dir
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        if !is_symlink {
-            fs::set_permissions(&skill_dir, perms.clone())
-                .map_err(|e| format!("set permissions on {}: {e}", skill_dir.display()))?;
+        // Skill directory and its intermediate parents inside root get 700.
+        // create_dir_all creates .claude/ and .claude/skills/ with umask
+        // defaults — lock them down the same way we do NEST_DIRS.
+        for dir in [
+            root.join(".claude"),
+            root.join(".claude/skills"),
+            skill_dir.clone(),
+        ] {
+            let is_symlink = dir
+                .symlink_metadata()
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if !is_symlink {
+                fs::set_permissions(&dir, perms.clone())
+                    .map_err(|e| format!("set permissions on {}: {e}", dir.display()))?;
+            }
         }
     }
 
@@ -327,9 +337,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join(".sprout");
         ensure_nest_at(&root).unwrap();
-        let skill_dir = root.join(".claude/skills/sprout-cli");
-        let mode = fs::metadata(&skill_dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "skill dir should be 700");
+        // All three dirs in the skill path should be locked down.
+        for dir in [".claude", ".claude/skills", ".claude/skills/sprout-cli"] {
+            let path = root.join(dir);
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{dir} should be 700");
+        }
     }
 
     #[cfg(unix)]
