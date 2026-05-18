@@ -52,6 +52,28 @@ const PLAYOUT_TICK_MS: u64 = 10;
 /// NetEq's PLC/expand path normally.
 const IDLE_PEER_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
+/// Drift bound on per-peer rodio `Player` queue depth.
+///
+/// The playout pipeline has two clocks: the producer is a `tokio` 10 ms
+/// interval (this loop) that pulls from NetEq and appends to each peer's
+/// `Player`; the consumer is the `cpal` audio callback that pulls samples
+/// from the device `Mixer` at hardware sample rate. NetEq does rate-adapt
+/// (accelerate / expand) but only to its own input pattern — it cannot
+/// see the actual device-side consumption rate.
+///
+/// In steady state producer ≈ consumer, but scheduler jitter or small
+/// clock skew can leave the producer slightly ahead, and rodio's
+/// `Player` queue is an unbounded MPSC under the hood. Over a long call
+/// that drift would accumulate as monotonic added latency (and eventually
+/// memory).
+///
+/// We bound it explicitly: before each append, if the queue is already
+/// at or above this threshold, drop the oldest queued frame with
+/// `Player::skip_one()` so the new frame replaces it. 4 frames × 10 ms
+/// = 40 ms, far below NetEq's `max_delay_ms = 200 ms`, so the audible
+/// effect is negligible while the worst-case latency stays bounded.
+const PLAYOUT_QUEUE_HIGH_WATER: usize = 4;
+
 /// One remote peer's slot: jitter buffer + dedicated rodio Player.
 ///
 /// Per-frame seq/timestamp come from the v2 wire header (sender-authored).
@@ -165,6 +187,19 @@ pub(crate) async fn run_playout_recv_loop(
                     }
                     match slot.jitter.get_audio() {
                         Ok((samples, _vad)) => {
+                            // Bound producer-vs-device-clock drift. If our
+                            // tokio tick has gotten ahead of the audio
+                            // callback's actual consumption rate, drop the
+                            // oldest queued frame rather than letting the
+                            // queue grow without bound.
+                            if slot.player.len() >= PLAYOUT_QUEUE_HIGH_WATER {
+                                eprintln!(
+                                    "sprout-desktop: playout queue high-water for peer {peer_idx} \
+                                     (depth={}) — dropping oldest frame",
+                                    slot.player.len(),
+                                );
+                                slot.player.skip_one();
+                            }
                             slot.player.append(SamplesBuffer::new(channels, rate, samples));
                         }
                         Err(e) => {

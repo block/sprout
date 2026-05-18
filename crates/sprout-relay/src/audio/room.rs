@@ -85,9 +85,15 @@ struct AdmissionGuard {
     /// into a v2 room would silently corrupt v2 peers' decode (they'd see
     /// no header where one is expected, and vice versa).
     ///
-    /// Pin only clears when the room empties out (`mark_ended` is called
-    /// with `peers.is_empty() == true`); a new generation of joiners can
-    /// then negotiate a new version.
+    /// Pin is per-`Room`-instance and clears when the manager evicts the
+    /// Room via [`AudioRoomManager::cleanup_if_empty`] — the next
+    /// `get_or_create` for the same channel id then constructs a fresh
+    /// `Room` with a fresh `AdmissionGuard` (and therefore `None` pin),
+    /// so a new generation of joiners can negotiate a new version.
+    /// A momentarily-empty-but-not-yet-cleaned-up Room keeps its pin so
+    /// reconnecting peers don't accidentally renegotiate mid-call. See
+    /// `version_pin_persists_across_peer_churn` for the test that pins
+    /// this behavior.
     pinned_version: Option<u8>,
 }
 
@@ -166,26 +172,31 @@ impl Room {
     /// pins the room to that version; later admits must match the pin or
     /// they receive [`AdmissionError::VersionMismatch`].
     ///
-    /// The version check, ended check, index allocation, and peer insert all
-    /// happen under the admission guard lock — mutually exclusive with
-    /// `mark_ended`.
+    /// The cap check, ended check, version pin, index allocation, and peer
+    /// insert all happen under the admission guard lock — mutually exclusive
+    /// with `mark_ended` and with any concurrent `add_peer` that might race
+    /// the version pin.
+    ///
+    /// Error precedence is deliberate: `Ended` > `Full` > `VersionMismatch`.
+    /// A "no seat available" error wins over version mismatch because a
+    /// client that couldn't join either way shouldn't learn the room's
+    /// pinned protocol version — that's a (mild) information leak. The cap
+    /// check lives inside the lock so two concurrent joiners can't both
+    /// pass it; the per-room index space (255) plus the soft cap
+    /// (`MAX_PEERS_PER_ROOM`) is then a single, race-free invariant.
     pub fn add_peer(
         &self,
         pubkey: String,
         requested_version: u8,
     ) -> Result<(Uuid, u8, mpsc::Receiver<Bytes>, mpsc::Receiver<PeerCtrl>), AdmissionError> {
-        if self.peers.len() >= MAX_PEERS_PER_ROOM {
-            return Err(AdmissionError::Full);
-        }
-        // Hold the guard across ended check + version pin + index alloc +
-        // peer insert. This makes add_peer mutually exclusive with both
-        // mark_ended and a concurrent admission that might race the version
-        // pin.
         let mut g = self.guard.lock().map_err(
             |_| AdmissionError::Ended, /* poisoned ≈ shutting down */
         )?;
         if g.ended {
             return Err(AdmissionError::Ended);
+        }
+        if self.peers.len() >= MAX_PEERS_PER_ROOM {
+            return Err(AdmissionError::Full);
         }
         if let Some(pinned) = g.pinned_version {
             if pinned != requested_version {
@@ -465,5 +476,31 @@ mod tests {
                 requested: 1
             }
         ));
+    }
+
+    /// Per Sami/Perci's review: when a room is both at-capacity AND the
+    /// joiner's protocol version doesn't match the pin, the error must be
+    /// `Full` — not `VersionMismatch`. A client that couldn't get a seat
+    /// either way shouldn't learn the room's pinned protocol version.
+    /// This also pins the in-lock cap check (the old code's outside-lock
+    /// cap check meant the version error could win in a race).
+    #[test]
+    fn admit_full_wins_over_version_mismatch() {
+        let room = fresh_room();
+        // Fill the room with v=2 peers right up to the soft cap.
+        for i in 0..MAX_PEERS_PER_ROOM {
+            room.add_peer(format!("peer-{i}"), 2)
+                .expect("seed admit must succeed");
+        }
+        // Next joiner is BOTH over the cap AND requests the wrong version.
+        let err = room
+            .add_peer("over-cap-and-wrong-version".to_string(), 1)
+            .expect_err("over-cap + wrong-version joiner must be rejected");
+        assert!(
+            matches!(err, AdmissionError::Full),
+            "expected Full to win over VersionMismatch, got {err:?}",
+        );
+        // And the room state must be unchanged.
+        assert_eq!(room.peers.len(), MAX_PEERS_PER_ROOM);
     }
 }
