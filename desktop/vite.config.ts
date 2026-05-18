@@ -22,9 +22,26 @@ export default defineConfig(async () => ({
     react(),
   ],
   resolve: {
-    alias: {
-      "@": "/src",
-    },
+    // Use array form so we control match order: the longer
+    // "@/features/huddle" prefix must be evaluated before the bare "@"
+    // alias, otherwise Vite resolves @-paths via the broader rule first.
+    // When VITE_SPROUT_HUDDLE=0 (desktop-light build), point the huddle
+    // module at a no-op shim that exposes the same exports as
+    // src/features/huddle/index.ts (HuddleProvider, useHuddle, HuddleBar,
+    // HuddleIndicator, ParticipantList, setupAudioWorklet). Pairs with
+    // the `huddle` Cargo feature in desktop/src-tauri/Cargo.toml.
+    alias: [
+      // @ts-expect-error process is a nodejs global
+      ...(process.env.VITE_SPROUT_HUDDLE === "0"
+        ? [
+            {
+              find: /^@\/features\/huddle$/,
+              replacement: "/src/features/huddle/index.light.ts",
+            },
+          ]
+        : []),
+      { find: "@", replacement: "/src" },
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

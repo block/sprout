@@ -1,8 +1,7 @@
 import { Plus, Settings2, Users } from "lucide-react";
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useHuddle } from "@/features/huddle";
-import { HuddleIndicator } from "@/features/huddle/components/HuddleIndicator";
+import { HuddleIndicator, useHuddle } from "@/features/huddle";
 import {
   useAcpProvidersQuery,
   useBackendProvidersQuery,
