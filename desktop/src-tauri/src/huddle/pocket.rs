@@ -13,11 +13,15 @@
 //! - **Mimi neural codec**: Kyutai, bundled in the same release. CC-BY-4.0.
 //! - **ONNX export**: KevinAHM —
 //!   <https://huggingface.co/KevinAHM/pocket-tts-onnx>. CC-BY-4.0.
-//!   Provides the reference voice WAV (`reference_sample.wav`).
 //! - **sherpa-onnx repackage**: csukuangfj / k2-fsa —
 //!   <https://huggingface.co/csukuangfj2/sherpa-onnx-pocket-tts-int8-2026-01-26>.
 //!   Repackages KevinAHM's export with the file layout sherpa-onnx's
 //!   `OfflineTtsPocketModelConfig` expects. CC-BY-4.0.
+//! - **Reference voice WAV** (`reference_sample.wav`): the "Mary
+//!   (f, conversation)" preset from the Kyutai TTS demo
+//!   (<https://kyutai.org/tts>), which maps to `vctk/p333_023_enhanced.wav`
+//!   in <https://huggingface.co/kyutai/tts-voices>. CC-BY-4.0, base recording
+//!   from the VCTK corpus, enhanced by ai-coustics.
 //!
 //! Sprout ships these files unmodified; see the on-disk `MODEL_LICENSE.txt`
 //! sidecar written by `huddle::models` during install for the canonical
@@ -109,7 +113,7 @@ pub struct VoiceStyle {
 ///
 /// Accepts any sample rate sherpa-onnx's `Wave::read` can decode — Pocket TTS
 /// resamples internally using `reference_sample_rate`. The bundled
-/// `reference_sample.wav` is 16 kHz mono.
+/// `reference_sample.wav` ("Mary" — VCTK p333, enhanced) is 32 kHz mono.
 pub fn load_voice_style(path: &Path) -> Result<VoiceStyle, String> {
     let path_str = path
         .to_str()

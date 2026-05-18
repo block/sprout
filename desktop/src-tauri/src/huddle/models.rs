@@ -45,10 +45,17 @@ const STT_ARCHIVE_SHA256: &str = "17f945007b52ccd8b7200ffc7c5652e9e8e961dfdf479c
 const POCKET_HF_BASE: &str =
     "https://huggingface.co/csukuangfj2/sherpa-onnx-pocket-tts-int8-2026-01-26/resolve/e715955cf50d18d919d37231513c0e914b83661a";
 
-/// Reference voice WAV from KevinAHM's Pocket TTS ONNX export, pinned to
-/// commit 58a6d00cf13d239b6748cb0769f35c580a8f606c.
+/// Reference voice WAV: "Mary (f, conversation)" from the Kyutai TTS demo
+/// voice set — VCTK speaker p333, ai-coustics-enhanced. Pinned to
+/// kyutai/tts-voices commit 323332d33f997de8394f24a193e1a76df720e01a.
+///
+/// Mapping comes from the speaker dropdown on <https://kyutai.org/tts>:
+/// the Pocket TTS preset "Mary (f, conversation)" maps to
+/// `vctk/p333_023_enhanced.wav`. We rename to `reference_sample.wav` on disk
+/// so the rest of the engine code stays voice-agnostic; the friendly label
+/// only matters for attribution and PR-body docs.
 const POCKET_REFERENCE_WAV_URL: &str =
-    "https://huggingface.co/KevinAHM/pocket-tts-onnx/resolve/58a6d00cf13d239b6748cb0769f35c580a8f606c/reference_sample.wav";
+    "https://huggingface.co/kyutai/tts-voices/resolve/323332d33f997de8394f24a193e1a76df720e01a/vctk/p333_023_enhanced.wav";
 
 /// SHA-256 hashes for individual Pocket TTS model files.
 /// Computed from known-good pinned downloads. Update when upgrading model versions.
@@ -62,7 +69,7 @@ const TTS_FILE_HASHES: &[(&str, &str)] = &[
     ("vocab.json",            "6fb646346cf931016f70c4921aab0900ce7a304b893cb02135c74e294abfea01"),
     ("token_scores.json",     "5be2f278caf9b9800741f0fd82bff677f4943ec764c356f907213434b622d958"),
     ("LICENSE",               "fe7b4ce83b8381cc5b216bbb4af73c570688d1b819c73bbaed8ca401f4677cd6"),
-    ("reference_sample.wav",  "88fbb0d31ec26674e97e531a71758cabe4e0e4e5b5a18dafa783021a7f5c9366"),
+    ("reference_sample.wav",  "a35b0468382218e9f37a9a7494d1e4b74deaf18d7ced22265b4e325bb55c183f"),
 ];
 
 // ── Model versioning ──────────────────────────────────────────────────────────
@@ -79,7 +86,12 @@ const TTS_FILE_HASHES: &[(&str, &str)] = &[
 const STT_MODEL_VERSION: &str = "2";
 
 /// Model manifest version for Pocket TTS. Increment when upgrading model files.
-const TTS_MODEL_VERSION: &str = "1";
+/// Bumped "1" → "2" when the bundled reference voice changed from KevinAHM's
+/// anonymous 16 kHz sample to Mary (VCTK p333, 32 kHz, ai-coustics-enhanced)
+/// from kyutai/tts-voices. The hash mismatch on `reference_sample.wav` would
+/// fail readiness on its own, but the manifest bump makes the re-download
+/// reason explicit and skips the failing-then-re-fetching transient state.
+const TTS_MODEL_VERSION: &str = "2";
 
 /// Filename for the version manifest written alongside model files.
 const MANIFEST_FILENAME: &str = ".sprout-model-manifest";
@@ -146,7 +158,8 @@ const TTS_MODEL_DIR_NAME: &str = "pocket-tts";
 /// Attribution sidecar written next to the Pocket TTS model files.
 const TTS_LICENSE_FILE_NAME: &str = "MODEL_LICENSE.txt";
 
-/// CC-BY-4.0 §3(a)(1) attribution block for Pocket TTS and its ONNX packaging.
+/// CC-BY-4.0 §3(a)(1) attribution block for Pocket TTS, its ONNX packaging,
+/// and the bundled reference voice WAV.
 const TTS_LICENSE_TEXT: &str = "\
 Pocket TTS
 © Kyutai.
@@ -162,7 +175,16 @@ ONNX export by KevinAHM: https://huggingface.co/KevinAHM/pocket-tts-onnx
 Sherpa-onnx repackage by csukuangfj / k2-fsa:
 https://huggingface.co/csukuangfj2/sherpa-onnx-pocket-tts-int8-2026-01-26
 
-Sprout ships the ONNX/model artifacts and reference_sample.wav unmodified,
+Bundled reference voice (reference_sample.wav):
+\"Mary (f, conversation)\" preset from the Kyutai TTS demo voice catalogue
+(https://kyutai.org/tts), distributed via
+https://huggingface.co/kyutai/tts-voices as `vctk/p333_023_enhanced.wav`.
+Original recording from the Voice Cloning Toolkit (VCTK) corpus, speaker p333:
+https://datashare.ed.ac.uk/handle/10283/3443 (CC-BY-4.0).
+Recording enhancement (denoise/dereverb) by ai-coustics:
+https://ai-coustics.com/
+
+Sprout ships all ONNX/model artifacts and the reference voice WAV unmodified,
 renamed only by placement in the local model directory.
 
 Provided \"AS IS\", without warranty of any kind, express or implied. See the
