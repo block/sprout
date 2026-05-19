@@ -53,6 +53,15 @@ type Segment =
       pmAt: number;
       textFrom: number;
       textTo: number;
+    }
+  // The interior of an empty leaf block — a zero-width "content slot"
+  // at PM position `pmAt` and text offset `textAt`. Lets cursor / range
+  // endpoints land inside empty paragraphs (paste, draft restore) and
+  // round-trip correctly through the mapping.
+  | {
+      kind: "emptyBlockContent";
+      pmAt: number;
+      textAt: number;
     };
 
 /**
@@ -129,6 +138,20 @@ export function buildPlainTextProjection(
           cursorText += 1;
         }
         sawLeafBlock = true;
+
+        // If the leaf block is empty, no text/hardBreak segment will be
+        // recorded inside it — but we still need a target for the
+        // *interior* PM position so cursor / range endpoints sitting
+        // inside the empty block round-trip correctly. Record a
+        // zero-width content slot at `pos + 1` (= the position right
+        // after this block's opening token).
+        if (node.content.size === 0) {
+          segments.push({
+            kind: "emptyBlockContent",
+            pmAt: pos + 1,
+            textAt: cursorText,
+          });
+        }
       }
       return true; // descend into block children
     }
@@ -150,9 +173,12 @@ export function buildPlainTextProjection(
       } else if (seg.kind === "hardBreak") {
         if (pm <= seg.pmFrom) return seg.textFrom;
         if (pm <= seg.pmTo) return seg.textTo;
-      } else {
-        // blockBoundary at pmAt: zero PM-width.
+      } else if (seg.kind === "blockBoundary") {
+        // Zero PM-width.
         if (pm <= seg.pmAt) return seg.textFrom;
+      } else {
+        // emptyBlockContent — interior of an empty leaf block.
+        if (pm <= seg.pmAt) return seg.textAt;
       }
     }
     return text.length;
@@ -160,17 +186,23 @@ export function buildPlainTextProjection(
 
   function mapTextOffsetToPM(offset: number): number {
     if (offset <= 0) {
+      // Position right inside the first content-carrying location.
       const first = segments.find(
-        (s) => s.kind === "text" || s.kind === "hardBreak",
+        (s) =>
+          s.kind === "text" ||
+          s.kind === "hardBreak" ||
+          s.kind === "emptyBlockContent",
       );
-      if (first) return first.pmFrom;
-      // No content nodes: position 1 (inside the first block) if any, else 0.
+      if (first) {
+        return first.kind === "emptyBlockContent" ? first.pmAt : first.pmFrom;
+      }
       return doc.content.size > 0 ? 1 : 0;
     }
     // Iterate segments; an offset that falls *exactly* at the right edge
     // of a separator segment (hardBreak / blockBoundary) is interpreted
     // as "start of the next content node" and so falls through to be
-    // claimed by the next segment.
+    // claimed by the next segment (a text segment, or an
+    // emptyBlockContent slot if the next leaf-block is empty).
     for (const seg of segments) {
       if (seg.kind === "text") {
         if (offset <= seg.textTo) {
@@ -181,21 +213,23 @@ export function buildPlainTextProjection(
           // Anywhere before the right edge of the `\n` → before the break.
           return seg.pmFrom;
         }
-        // offset === seg.textTo → falls through; the next text segment
-        // (whose textFrom == this textTo) will claim it and return pmTo.
-      } else {
-        // blockBoundary — zero PM-width.
+        // offset === seg.textTo → fall through to the next segment.
+      } else if (seg.kind === "blockBoundary") {
+        // Zero PM-width.
         // offset <  textTo → "end of previous block" → pmAt
-        // offset === textTo → "start of next block" → falls through; the
-        //                     next content segment returns its pmFrom
-        //                     (= pmAt + 1).
+        // offset === textTo → "start of next block" → fall through.
         if (offset < seg.textTo) return seg.pmAt;
+      } else {
+        // emptyBlockContent — interior of an empty leaf block.
+        // offset === textAt → land inside the empty block at pmAt.
+        if (offset <= seg.textAt) return seg.pmAt;
       }
     }
     // Beyond all content → end-of-doc text position.
     const last = segments[segments.length - 1];
     if (!last) return doc.content.size > 0 ? 1 : 0;
     if (last.kind === "text" || last.kind === "hardBreak") return last.pmTo;
+    if (last.kind === "emptyBlockContent") return last.pmAt;
     return last.pmAt;
   }
 

@@ -196,13 +196,68 @@ test("empty paragraph: empty text, mappings clamp safely", () => {
   assert.equal(p.mapTextOffsetToPM(0), 1);
 });
 
+// ── Empty leaf blocks (paste / draft restore can produce these) ─────
+
+test("empty paragraph after text: trailing \\n preserved", () => {
+  const d = doc(para(t("a")), para());
+  const p = buildPlainTextProjection(d);
+  assert.equal(p.text, "a\n");
+  assertMatchesTextBetween(d, p);
+});
+
+test("empty paragraph after text: offset round-trips into the empty block", () => {
+  // PM: p1=0..2 (size 3: <p>1 + "a"1 + </p>1), text "a" at 1..2
+  //     p2=3..4 (size 2: <p>1 + </p>1), empty interior at PM=4
+  const d = doc(para(t("a")), para());
+  const p = buildPlainTextProjection(d);
+  // offset 2 (right after the `\n`) → PM=4 (inside empty p2) → back to 2
+  assert.equal(p.mapTextOffsetToPM(2), 4);
+  assert.equal(p.mapPMToTextOffset(4), 2);
+});
+
+test("empty paragraph before text: leading \\n preserved", () => {
+  const d = doc(para(), para(t("a")));
+  const p = buildPlainTextProjection(d);
+  assert.equal(p.text, "\na");
+  assertMatchesTextBetween(d, p);
+});
+
+test("empty paragraph before text: offset 0 lands inside the empty block", () => {
+  // PM: p1=0..1 (size 2: <p>1 + </p>1), empty interior at PM=1
+  //     p2=2..4 (size 3), "a" at PM=3
+  const d = doc(para(), para(t("a")));
+  const p = buildPlainTextProjection(d);
+  assert.equal(p.mapTextOffsetToPM(0), 1);
+  assert.equal(p.mapPMToTextOffset(1), 0);
+});
+
+test("two empty paragraphs: single \\n separator, both interiors reachable", () => {
+  const d = doc(para(), para());
+  const p = buildPlainTextProjection(d);
+  assert.equal(p.text, "\n");
+  assertMatchesTextBetween(d, p);
+  // PM: p1=0..1 (size 2), interior=1. p2=2..3 (size 2), interior=3.
+  assert.equal(p.mapTextOffsetToPM(0), 1);
+  assert.equal(p.mapTextOffsetToPM(1), 3);
+  assert.equal(p.mapPMToTextOffset(1), 0);
+  assert.equal(p.mapPMToTextOffset(3), 1);
+});
+
+test("empty list item: interior reachable, separators preserved", () => {
+  const d = doc(ul(li(para()), li(para(t("x")))));
+  const p = buildPlainTextProjection(d);
+  assert.equal(p.text, "\nx");
+  assertMatchesTextBetween(d, p);
+});
+
 // ── Property: round-trip ─────────────────────────────────────────────
 
 test("round-trip: text offset → PM → text offset is identity", () => {
   const d = doc(
     para(t("line1"), br(), t("line2")),
-    para(t("para2")),
-    ul(li(para(t("item-a"))), li(para(t("item-b")))),
+    para(),
+    para(t("para3")),
+    ul(li(para(t("item-a"))), li(para()), li(para(t("item-c")))),
   );
   const p = buildPlainTextProjection(d);
   for (let offset = 0; offset <= p.text.length; offset++) {
