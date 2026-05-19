@@ -85,6 +85,7 @@ function ProfileName({
           "rounded-md bg-primary/15 px-1 py-0.5 font-medium text-primary hover:bg-primary/25 hover:text-primary/90",
       )}
     >
+      {highlight ? "@" : null}
       {children}
     </span>
   );
