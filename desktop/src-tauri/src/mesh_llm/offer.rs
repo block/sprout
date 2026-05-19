@@ -75,10 +75,15 @@ impl ComputeSharingPrefs {
     /// Builds the kind:31990 offer envelope to publish. Returns `None` if
     /// sharing is disabled; the publisher should then *delete* any prior
     /// offer rather than calling this.
+    ///
+    /// `expires_at` is the unix-seconds deadline after which consumers will
+    /// drop this offer. Callers pass `now + OFFER_TTL_SECS` so an
+    /// unannounced publisher crash naturally reaps the stale offer.
     pub fn build_offer(
         &self,
         endpoint_id: &str,
         iroh_relay_url: &str,
+        expires_at: u64,
     ) -> Option<MeshLlmOffer> {
         if !self.enabled {
             return None;
@@ -88,12 +93,18 @@ impl ComputeSharingPrefs {
             d_tag: self.d_tag.clone(),
             endpoint_id: endpoint_id.to_string(),
             iroh_relay_url: iroh_relay_url.to_string(),
+            expires_at,
             caps: self.caps.clone(),
             models: self.models.clone(),
             extra: None,
         })
     }
 }
+
+/// Default offer TTL: 15 minutes. Publishers republish on each prefs
+/// change *and* should heartbeat at ~`OFFER_TTL_SECS/3` so a one-missed
+/// heartbeat still leaves the offer visible.
+pub const OFFER_TTL_SECS: u64 = 15 * 60;
 
 fn prefs_path(app: &AppHandle) -> Result<PathBuf, OfferPrefsError> {
     let data_dir = app
@@ -149,7 +160,7 @@ mod tests {
         let prefs = ComputeSharingPrefs::default();
         assert!(
             prefs
-                .build_offer("endpoint", "https://relay/iroh")
+                .build_offer("endpoint", "https://relay/iroh", 2_000_000_000)
                 .is_none()
         );
     }
@@ -161,10 +172,15 @@ mod tests {
             ..Default::default()
         };
         let offer = prefs
-            .build_offer("endpoint-id-hex", "https://relay.example.com/iroh")
+            .build_offer(
+                "endpoint-id-hex",
+                "https://relay.example.com/iroh",
+                2_000_000_000,
+            )
             .expect("offer");
         assert_eq!(offer.endpoint_id, "endpoint-id-hex");
         assert_eq!(offer.iroh_relay_url, "https://relay.example.com/iroh");
+        assert_eq!(offer.expires_at, 2_000_000_000);
         assert!(offer.is_publishable());
     }
 

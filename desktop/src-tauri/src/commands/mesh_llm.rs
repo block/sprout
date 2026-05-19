@@ -119,8 +119,17 @@ pub async fn mesh_publish_offer(
     let d_tag_tag = Tag::parse(["d", &d_tag]).map_err(|e| format!("d tag: {e}"))?;
 
     let (content, published_offer) = if prefs.enabled {
+        // expires_at = now + OFFER_TTL_SECS. The frontend hook re-invokes
+        // mesh_publish_offer on a heartbeat well before the deadline; if
+        // the publisher crashes before the next heartbeat, consumers reap
+        // the offer once `now > expires_at` (see MeshLlmOffer::is_expired).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("system clock: {e}"))?
+            .as_secs();
+        let expires_at = now + mesh_llm::offer::OFFER_TTL_SECS;
         let offer = prefs
-            .build_offer(&endpoint_id_str, &iroh_relay_url)
+            .build_offer(&endpoint_id_str, &iroh_relay_url, expires_at)
             .ok_or_else(|| {
                 "build_offer returned None despite enabled=true (logic bug)".to_string()
             })?;

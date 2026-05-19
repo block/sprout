@@ -61,20 +61,35 @@ pub struct MeshLlmOffer {
 
     /// Iroh endpoint id (ed25519 public key, base32 z-base form as iroh
     /// renders it) of the offering node's iroh endpoint. Consumers dial
-    /// this through an iroh `NodeAddr`.
+    /// this through an iroh `EndpointAddr` constructed from
+    /// `(endpoint_id, iroh_relay_url)`.
     pub endpoint_id: String,
 
     /// Iroh relay URL through which the offering endpoint is reachable.
     ///
     /// This is the *Sprout-hosted* iroh-relay URL — copied verbatim from
-    /// the publisher's view of NIP-11 `iroh_relay_url`. If multiple Sprout
-    /// relays are bridged into the same membership scope in the future,
-    /// this lets a consumer reach an offer behind a different host.
+    /// the publisher's view of NIP-11 `iroh_relay_url`. The field is
+    /// preserved for future cross-relay bridging, but **v1 consumers MUST
+    /// ignore offers whose `iroh_relay_url` doesn't match the current
+    /// relay's NIP-11 `iroh_relay_url`** (see [`Self::matches_local_relay`]).
+    /// This keeps "one relay = one mesh boundary" as an enforced invariant
+    /// until cross-relay membership is explicitly designed.
     pub iroh_relay_url: String,
+
+    /// Unix-seconds timestamp at which this offer becomes stale. Consumers
+    /// MUST ignore offers where `expires_at <= now` (publishers SHOULD
+    /// republish a fresh offer well before this deadline to act as a
+    /// heartbeat). Because crashed publishers cannot send the NIP-33
+    /// delete-by-replace tombstone, this TTL is the only thing that
+    /// removes their offers from the consumer view.
+    pub expires_at: u64,
 
     /// Resource caps the offering side promises to honour for any single
     /// consumer at a time. The publisher should re-publish (replacing the
-    /// previous event) whenever these change materially.
+    /// previous event) whenever these change materially. **These are
+    /// claims/UI hints, not authority** — the provider runtime must
+    /// enforce its own caps locally; the consumer cannot rely on the
+    /// publisher to honour them at admission time.
     pub caps: ResourceCaps,
 
     /// Models this node is willing to serve. Empty list = "negotiate at
@@ -157,12 +172,83 @@ impl MeshLlmOffer {
     ///
     /// This is a *publisher-side* sanity check; consumers should be
     /// permissive in what they accept as long as serde-deserialization
-    /// succeeds.
+    /// succeeds (modulo the [`Self::is_expired`] and
+    /// [`Self::matches_local_relay`] filters below).
     pub fn is_publishable(&self) -> bool {
         self.v == 1
             && Self::is_valid_d_tag(&self.d_tag)
             && !self.endpoint_id.is_empty()
             && !self.iroh_relay_url.is_empty()
+            && self.expires_at > 0
+    }
+
+    /// Consumer-side TTL check. Returns `true` when `expires_at <= now`,
+    /// in which case the offer must be ignored (crashed publishers can't
+    /// send a delete-by-replace tombstone; the TTL is the only reaper).
+    ///
+    /// `now` is unix-seconds — callers in this crate pass `Timestamp::now()`
+    /// or a test clock to avoid pulling `std::time::SystemTime` into the
+    /// trust path.
+    pub fn is_expired(&self, now: u64) -> bool {
+        self.expires_at <= now
+    }
+
+    /// Consumer-side same-relay filter for v1 discovery. Returns `true`
+    /// when the offer's advertised `iroh_relay_url` matches `current_relay`
+    /// after canonicalisation (lower-case scheme/host, trailing slash on
+    /// path collapsed, query/fragment dropped).
+    ///
+    /// **v1 consumers MUST ignore offers where this returns `false`.** The
+    /// invariant is "one relay = one mesh boundary"; cross-relay bridging
+    /// is reserved for a future explicit design.
+    pub fn matches_local_relay(&self, current_relay: &str) -> bool {
+        canonical_relay_url(&self.iroh_relay_url) == canonical_relay_url(current_relay)
+    }
+}
+
+/// Lightweight URL canonicaliser used only for the same-relay filter. Not
+/// to be confused with [`sprout_auth::nip98_canonical_url`], which has a
+/// different job (computing the `u`-tag value); this one just strips
+/// query/fragment, lower-cases scheme/host, and collapses one trailing
+/// slash so users who paste `https://r.example.com/iroh/` see it match
+/// `https://r.example.com/iroh`.
+fn canonical_relay_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // Split off query + fragment. Compose the splits in two steps so the
+    // second split operates on the result of the first, not on `trimmed`.
+    let no_query = match trimmed.split_once('?') {
+        Some((h, _)) => h,
+        None => trimmed,
+    };
+    let no_frag = match no_query.split_once('#') {
+        Some((h, _)) => h,
+        None => no_query,
+    };
+    let head = if let Some(stripped) = no_frag.strip_suffix('/') {
+        // Only strip *one* trailing slash — don't collapse repeated
+        // slashes (those are real path components).
+        stripped
+    } else {
+        no_frag
+    };
+
+    // Lower-case the scheme+authority portion; leave the path case-sensitive.
+    if let Some(idx) = head.find("://") {
+        let (scheme, rest) = head.split_at(idx);
+        // rest starts with "://"; authority ends at next '/'.
+        let after_proto = &rest[3..];
+        let (authority, path) = match after_proto.find('/') {
+            Some(p) => after_proto.split_at(p),
+            None => (after_proto, ""),
+        };
+        format!(
+            "{}://{}{}",
+            scheme.to_ascii_lowercase(),
+            authority.to_ascii_lowercase(),
+            path,
+        )
+    } else {
+        head.to_string()
     }
 }
 
@@ -176,6 +262,7 @@ mod tests {
             d_tag: "node-1".to_string(),
             endpoint_id: "1234abcd".to_string(),
             iroh_relay_url: "https://relay.example.com/iroh".to_string(),
+            expires_at: 2_000_000_000, // far-future fixture
             caps: ResourceCaps {
                 max_vram_mb: Some(24_000),
                 max_ram_mb: Some(64_000),
@@ -205,6 +292,7 @@ mod tests {
             "d_tag": "x",
             "endpoint_id": "abc",
             "iroh_relay_url": "https://r/",
+            "expires_at": 2000000000,
             "caps": {}
         }"#;
         let offer: MeshLlmOffer = serde_json::from_str(s).expect("deserialise minimal");
@@ -222,6 +310,7 @@ mod tests {
             "d_tag": "x",
             "endpoint_id": "abc",
             "iroh_relay_url": "https://r",
+            "expires_at": 2000000000,
             "caps": {},
             "wat": "lol"
         }"#;
@@ -235,9 +324,58 @@ mod tests {
             "d_tag": "x",
             "endpoint_id": "abc",
             "iroh_relay_url": "https://r",
+            "expires_at": 2000000000,
             "caps": { "wat": 7 }
         }"#;
         assert!(serde_json::from_str::<MeshLlmOffer>(s).is_err());
+    }
+
+    #[test]
+    fn expires_at_required() {
+        // expires_at has no serde default; missing it is a hard error
+        // (consumers depend on TTL for correctness).
+        let s = r#"{
+            "v": 1,
+            "d_tag": "x",
+            "endpoint_id": "abc",
+            "iroh_relay_url": "https://r",
+            "caps": {}
+        }"#;
+        assert!(serde_json::from_str::<MeshLlmOffer>(s).is_err());
+    }
+
+    #[test]
+    fn is_expired_filter() {
+        let mut offer = sample();
+        offer.expires_at = 1_000;
+        assert!(offer.is_expired(2_000), "now > expires_at must expire");
+        assert!(offer.is_expired(1_000), "now == expires_at must expire");
+        assert!(!offer.is_expired(999), "now < expires_at must not expire");
+    }
+
+    #[test]
+    fn matches_local_relay_canonicalises() {
+        let mut offer = sample();
+        offer.iroh_relay_url = "https://relay.example.com/iroh".to_string();
+        // exact match
+        assert!(offer.matches_local_relay("https://relay.example.com/iroh"));
+        // trailing slash on one side
+        assert!(offer.matches_local_relay("https://relay.example.com/iroh/"));
+        // upper-case host
+        assert!(offer.matches_local_relay("HTTPS://Relay.Example.COM/iroh"));
+        // query/fragment stripped
+        assert!(offer.matches_local_relay("https://relay.example.com/iroh?x=1#y"));
+        // different host -> reject
+        assert!(!offer.matches_local_relay("https://other.example.com/iroh"));
+        // different path -> reject (different mesh boundary)
+        assert!(!offer.matches_local_relay("https://relay.example.com/other"));
+    }
+
+    #[test]
+    fn is_publishable_rejects_zero_expires_at() {
+        let mut offer = sample();
+        offer.expires_at = 0;
+        assert!(!offer.is_publishable());
     }
 
     #[test]
