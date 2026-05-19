@@ -1095,7 +1095,7 @@ async fn tokio_main() -> Result<()> {
     if !config.memory_enabled {
         tracing::info!(
             target: "engram::core",
-            "NIP-AE core memory injection disabled (--no-memory / SPROUT_ACP_NO_MEMORY)"
+            "NIP-AE core memory injection disabled by default (enable with --memory / SPROUT_ACP_MEMORY)"
         );
     }
 
@@ -2761,7 +2761,7 @@ mod build_mcp_servers_tests {
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
-            memory_enabled: true,
+            memory_enabled: false,
             model: None,
             permission_mode: config::PermissionMode::BypassPermissions,
             respond_to: config::RespondTo::Anyone,

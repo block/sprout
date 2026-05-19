@@ -328,15 +328,28 @@ pub struct CliArgs {
     #[arg(long, env = "SPROUT_ACP_NO_TYPING")]
     pub no_typing: bool,
 
+    /// Enable NIP-AE agent core memory injection.
+    ///
+    /// Memory injection is off by default for now. When enabled, the harness
+    /// fetches the agent's per-session core engram and renders it as an
+    /// `[Agent Memory — core]` prompt section (or renders the onboarding nudge
+    /// when the relay confirms no core engram exists). The `sprout mem` CLI
+    /// and the relay's acceptance of kind:30174 engrams are unaffected — this
+    /// flag controls prompt-time injection in the ACP harness only.
+    #[arg(long, env = "SPROUT_ACP_MEMORY", conflicts_with = "no_memory")]
+    pub memory: bool,
+
     /// Disable NIP-AE agent core memory injection.
     ///
-    /// When set, the harness skips the per-session core engram fetch and
-    /// renders prompts with no `[Agent Memory — core]` section, regardless of
-    /// whether a core engram exists on the relay. The `sprout mem` CLI and
-    /// the relay's acceptance of kind:30174 engrams are unaffected — this
-    /// flag is purely an opt-out for prompt-time injection in the ACP
-    /// harness.
-    #[arg(long, env = "SPROUT_ACP_NO_MEMORY")]
+    /// Deprecated compatibility alias for the previous default-on behavior.
+    /// The flag/env var is still accepted, but memory injection is already off
+    /// unless `--memory` / `SPROUT_ACP_MEMORY=true` is provided.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_NO_MEMORY",
+        conflicts_with = "memory",
+        hide = true
+    )]
     pub no_memory: bool,
 
     /// Desired LLM model ID. Applied to every new ACP session after creation.
@@ -429,8 +442,8 @@ pub struct Config {
     pub typing_enabled: bool,
     /// Whether NIP-AE agent core memory injection is enabled. When false,
     /// the harness skips the per-session core engram fetch and renders no
-    /// `[Agent Memory — core]` section. Mirrors the `--no-memory` /
-    /// `SPROUT_ACP_NO_MEMORY` opt-out.
+    /// `[Agent Memory — core]` section. Mirrors the `--memory` /
+    /// `SPROUT_ACP_MEMORY` opt-in.
     pub memory_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
@@ -777,7 +790,7 @@ impl Config {
             max_turns_per_session: args.max_turns_per_session,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
-            memory_enabled: !args.no_memory,
+            memory_enabled: args.memory && !args.no_memory,
             model,
             permission_mode: args.permission_mode,
             respond_to: args.respond_to,
@@ -1140,7 +1153,7 @@ mod tests {
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
-            memory_enabled: true,
+            memory_enabled: false,
             model: None,
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
@@ -1724,35 +1737,35 @@ channels = "ALL"
         );
     }
 
-    // ── no-memory toggle ────────────────────────────────────────────────────
+    // ── memory toggle ───────────────────────────────────────────────────────
 
     #[test]
-    fn test_memory_enabled_default_true() {
+    fn test_memory_enabled_default_false() {
         let config = test_config(SubscribeMode::Mentions);
         assert!(
-            config.memory_enabled,
-            "memory_enabled should default to true"
+            !config.memory_enabled,
+            "memory_enabled should default to false"
         );
     }
 
     #[test]
-    fn test_summary_includes_memory_enabled() {
+    fn test_summary_includes_memory_disabled() {
         let config = test_config(SubscribeMode::Mentions);
-        let s = config.summary();
-        assert!(
-            s.contains("memory=true"),
-            "summary should include memory=true by default, got: {s}"
-        );
-    }
-
-    #[test]
-    fn test_summary_reflects_memory_disabled() {
-        let mut config = test_config(SubscribeMode::Mentions);
-        config.memory_enabled = false;
         let s = config.summary();
         assert!(
             s.contains("memory=false"),
-            "summary should include memory=false when disabled, got: {s}"
+            "summary should include memory=false by default, got: {s}"
+        );
+    }
+
+    #[test]
+    fn test_summary_reflects_memory_enabled() {
+        let mut config = test_config(SubscribeMode::Mentions);
+        config.memory_enabled = true;
+        let s = config.summary();
+        assert!(
+            s.contains("memory=true"),
+            "summary should include memory=true when enabled, got: {s}"
         );
     }
 
