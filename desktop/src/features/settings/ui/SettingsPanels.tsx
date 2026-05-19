@@ -3,6 +3,7 @@ import {
   BellRing,
   Bot,
   Check,
+  Cpu,
   Download,
   Keyboard,
   LayoutTemplate,
@@ -31,6 +32,7 @@ import { SYNTAX_THEMES, isLightTheme } from "@/shared/theme/theme-loader";
 import { ChannelTemplatesSettingsCard } from "./ChannelTemplatesSettingsCard";
 import { DoctorSettingsPanel } from "./DoctorSettingsPanel";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
+import { MeshComputeSettingsCard } from "./MeshComputeSettingsCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { PreventSleepSettingsCard } from "./PreventSleepSettingsCard";
@@ -41,6 +43,7 @@ export type SettingsSection =
   | "profile"
   | "notifications"
   | "agents"
+  | "compute"
   | "channel-templates"
   | "appearance"
   | "shortcuts"
@@ -86,6 +89,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "agents",
     label: "Agents",
     icon: Bot,
+  },
+  {
+    value: "compute",
+    label: "Share compute",
+    icon: Cpu,
   },
   {
     value: "channel-templates",
@@ -282,6 +290,8 @@ export function renderSettingsSection(
       );
     case "agents":
       return <PreventSleepSettingsCard />;
+    case "compute":
+      return <MeshComputeSettingsCard />;
     case "channel-templates":
       return <ChannelTemplatesSettingsCard />;
     case "appearance":
