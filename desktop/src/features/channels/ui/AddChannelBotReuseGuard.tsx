@@ -19,51 +19,27 @@ export function AddChannelBotReuseGuard({
       : "stopped";
 
   return (
-    <div className="space-y-2 rounded-2xl border border-border/70 bg-card/70 p-4">
-      <div className="text-sm font-medium">Existing agent found</div>
+    <div className="space-y-2">
+      <label className="text-sm font-medium" htmlFor="agent-instance-mode">
+        Agent instance
+      </label>
+      <select
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+        disabled={disabled}
+        id="agent-instance-mode"
+        onChange={(e) => onForceNewChange(e.target.value === "new")}
+        value={forceNew ? "new" : "reuse"}
+      >
+        <option value="reuse">Reuse existing agent</option>
+        <option value="new">Create new instance</option>
+      </select>
       <p className="text-xs text-muted-foreground">
         <span className="font-medium text-foreground">
           {reusableAgent.name}
         </span>{" "}
-        is already {statusLabel}. You can reuse it in this channel or create a
-        separate instance with its own identity.
+        is already {statusLabel}. Reusing adds it to this channel without
+        creating a duplicate keypair.
       </p>
-      <div className="mt-3 space-y-2">
-        <label
-          className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
-            !forceNew
-              ? "border-primary/40 bg-primary/5"
-              : "border-border/50 bg-transparent"
-          } ${disabled ? "pointer-events-none opacity-50" : ""}`}
-        >
-          <input
-            checked={!forceNew}
-            className="accent-primary"
-            disabled={disabled}
-            name="agent-reuse-choice"
-            onChange={() => onForceNewChange(false)}
-            type="radio"
-          />
-          <span>Add to this channel (reuse existing agent)</span>
-        </label>
-        <label
-          className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
-            forceNew
-              ? "border-primary/40 bg-primary/5"
-              : "border-border/50 bg-transparent"
-          } ${disabled ? "pointer-events-none opacity-50" : ""}`}
-        >
-          <input
-            checked={forceNew}
-            className="accent-primary"
-            disabled={disabled}
-            name="agent-reuse-choice"
-            onChange={() => onForceNewChange(true)}
-            type="radio"
-          />
-          <span>Create new instance (separate identity &amp; keypair)</span>
-        </label>
-      </div>
     </div>
   );
 }
