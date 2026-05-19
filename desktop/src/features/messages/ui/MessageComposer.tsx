@@ -135,6 +135,15 @@ export function MessageComposer({
     emojiAutocomplete.isEmojiAutocompleteOpen;
 
   const submitMessageRef = React.useRef<() => void>(() => {});
+  const composerScrollRef = React.useRef<HTMLDivElement>(null);
+
+  const scrollComposerToBottom = React.useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const scrollElement = composerScrollRef.current;
+      if (!scrollElement) return;
+      scrollElement.scrollTop = scrollElement.scrollHeight;
+    });
+  }, []);
 
   const computedPlaceholder = editTarget
     ? "Edit your message"
@@ -522,6 +531,7 @@ export function MessageComposer({
                 { type: "paragraph" },
               ])
               .run();
+            scrollComposerToBottom();
             return true;
           }
 
@@ -551,11 +561,16 @@ export function MessageComposer({
             return true;
           }
 
+          const plainText = event.clipboardData?.getData("text/plain") ?? "";
+          if (plainText.includes("\n")) {
+            scrollComposerToBottom();
+          }
+
           return false;
         },
       },
     });
-  }, [richText.editor]);
+  }, [richText.editor, scrollComposerToBottom]);
 
   // ── Send button state ───────────────────────────────────────────────
   const sendDisabled = React.useMemo(
@@ -700,6 +715,8 @@ export function MessageComposer({
           {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
           <div
             className="rich-text-composer max-h-32 overflow-y-auto"
+            data-testid="message-input-scroll"
+            ref={composerScrollRef}
             onKeyDown={handleEditorKeyDown}
           >
             <EditorContent editor={richText.editor} />

@@ -213,32 +213,10 @@ function createMarkdownComponents(
       </blockquote>
     ),
     br: () => <br />,
-    code: ({
-      children,
-      className,
-      inline,
-      ...props
-    }: React.ComponentProps<"code"> & { inline?: boolean }) => {
+    code: ({ children, className, ...props }: React.ComponentProps<"code">) => {
       const code = String(children).replace(/\n$/, "");
       const isFencedCodeBlock =
         typeof className === "string" && className.includes("language-");
-      const isMultilineInlineCode = inline === true && code.includes("\n");
-
-      const codeElement = (
-        <code
-          {...props}
-          className={cn(
-            "block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground",
-            className,
-          )}
-        >
-          {code}
-        </code>
-      );
-
-      if (isMultilineInlineCode) {
-        return <MarkdownCodeBlock>{codeElement}</MarkdownCodeBlock>;
-      }
 
       if (isFencedCodeBlock || code.includes("\n")) {
         return (
