@@ -21,6 +21,7 @@ import {
 } from "@/features/messages/lib/normalizeMentionClipboard";
 import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { useTypingBroadcast } from "@/features/messages/useTypingBroadcast";
+import { getSproutCodeBlockClipboardText } from "@/shared/lib/codeBlockClipboard";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { ChannelAutocomplete } from "./ChannelAutocomplete";
@@ -495,6 +496,32 @@ export function MessageComposer({
             if (file) {
               void uploadFileRef.current(file);
             }
+            return true;
+          }
+
+          // --- Sprout code-block paste ---
+          // The code block copy button writes a small Sprout marker alongside
+          // plain text. Use it to paste back as a literal code block so Markdown
+          // parsing cannot reshape indentation, fence markers, or headings.
+          const codeBlockText = getSproutCodeBlockClipboardText(
+            event.clipboardData,
+          );
+          if (codeBlockText !== null) {
+            event.preventDefault();
+            richText.editor
+              ?.chain()
+              .focus()
+              .insertContent([
+                {
+                  type: "codeBlock",
+                  content:
+                    codeBlockText.length > 0
+                      ? [{ type: "text", text: codeBlockText }]
+                      : [],
+                },
+                { type: "paragraph" },
+              ])
+              .run();
             return true;
           }
 
