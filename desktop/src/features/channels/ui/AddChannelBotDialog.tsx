@@ -610,12 +610,14 @@ export function AddChannelBotDialog({
         ) : null}
 
         {reusableAgent ? (
-          <AddChannelBotReuseGuard
-            disabled={createBotsMutation.isPending}
-            forceNew={forceNewInstance}
-            onForceNewChange={setForceNewInstance}
-            reusableAgent={reusableAgent}
-          />
+          <div className="pt-2">
+            <AddChannelBotReuseGuard
+              disabled={createBotsMutation.isPending}
+              forceNew={forceNewInstance}
+              onForceNewChange={setForceNewInstance}
+              reusableAgent={reusableAgent}
+            />
+          </div>
         ) : null}
 
         {selectedCount > 0 ? (

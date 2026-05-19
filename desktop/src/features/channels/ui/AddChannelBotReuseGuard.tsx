@@ -19,7 +19,7 @@ export function AddChannelBotReuseGuard({
       : "stopped";
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-testid="agent-instance-mode">
       <label className="text-sm font-medium" htmlFor="agent-instance-mode">
         Agent instance
       </label>
