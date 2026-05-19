@@ -5,6 +5,21 @@ import type {
 import type { TimelineMessage } from "@/features/messages/types";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
+function formatRelativeTime(unixSeconds: number): string {
+  const now = Date.now() / 1_000;
+  const diff = now - unixSeconds;
+
+  if (diff < 60) return "just now";
+  if (diff < 3_600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86_400) return `${Math.floor(diff / 3_600)}h`;
+  if (diff < 604_800) return `${Math.floor(diff / 86_400)}d`;
+
+  return new Date(unixSeconds * 1_000).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 function ParticipantAvatar({
   participant,
   index,
@@ -71,7 +86,7 @@ export function MessageThreadSummaryRow({
       ) : null}
 
       <button
-        className="inline-flex w-fit max-w-full items-center gap-1 rounded-full border border-border/70 bg-muted/70 py-0.5 pl-0.5 pr-2 text-left text-xs font-medium text-foreground/90 transition-colors hover:bg-accent hover:text-accent-foreground"
+        className="group inline-flex w-fit max-w-full items-center gap-1 text-left text-xs font-medium text-muted-foreground"
         data-thread-head-id={message.id}
         data-testid="message-thread-summary"
         onClick={() => onOpenThread(message)}
@@ -89,10 +104,15 @@ export function MessageThreadSummaryRow({
         </div>
         <div className="min-w-0">
           <div className="font-medium">
-            <span>
+            <span className="transition-colors group-hover:text-foreground">
               {summary.replyCount}{" "}
               {summary.replyCount === 1 ? "reply" : "replies"}
             </span>
+            {summary.lastReplyAt ? (
+              <span className="ml-1 text-muted-foreground/70">
+                last {formatRelativeTime(summary.lastReplyAt)}
+              </span>
+            ) : null}
           </div>
         </div>
       </button>

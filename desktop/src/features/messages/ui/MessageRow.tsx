@@ -10,7 +10,10 @@ import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
-import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
+import {
+  resolveMentionNames,
+  resolveMentionPubkeysByName,
+} from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 import { MessageActionBar } from "./MessageActionBar";
 import { MessageTimestamp } from "./MessageTimestamp";
@@ -62,6 +65,10 @@ export const MessageRow = React.memo(
     } = useReactionHandler(message, onToggleReaction);
     const mentionNames = React.useMemo(
       () => resolveMentionNames(message.tags, profiles),
+      [profiles, message.tags],
+    );
+    const mentionPubkeysByName = React.useMemo(
+      () => resolveMentionPubkeysByName(message.tags, profiles),
       [profiles, message.tags],
     );
 
@@ -119,6 +126,7 @@ export const MessageRow = React.memo(
               content={message.body}
               imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
+              mentionPubkeysByName={mentionPubkeysByName}
               searchQuery={searchQuery}
               tight
             />
