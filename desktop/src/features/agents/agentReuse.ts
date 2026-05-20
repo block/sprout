@@ -1,5 +1,9 @@
-import { normalizePubkey } from "@/shared/lib/pubkey";
 import type { ManagedAgent } from "@/shared/api/types";
+
+/** Inline normalization — avoids runtime dependency on @/shared/lib/pubkey. */
+function normalizePubkey(pubkey: string): string {
+  return pubkey.trim().toLowerCase();
+}
 
 function commandBasename(command: string) {
   const normalized = command.trim().replace(/\\/g, "/");
