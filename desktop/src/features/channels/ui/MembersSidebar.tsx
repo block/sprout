@@ -5,13 +5,7 @@ import {
   useAddChannelMembersMutation,
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
-import {
-  useAcpProvidersQuery,
-  useBackendProvidersQuery,
-  useManagedAgentsQuery,
-  useRelayAgentsQuery,
-  useUpdateManagedAgentMutation,
-} from "@/features/agents/hooks";
+import { useUpdateManagedAgentMutation } from "@/features/agents/hooks";
 import { CreateAgentRespondToField } from "@/features/agents/ui/RespondToField";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import {
@@ -48,7 +42,6 @@ import { MembersSidebarAgentControls } from "./MembersSidebarAgentControls";
 import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
 import { useMembersSidebarActions } from "./useMembersSidebarActions";
-import { AddChannelBotDialog } from "./AddChannelBotDialog";
 import { QuickAddAgentPopover } from "./QuickAddAgentPopover";
 
 type MembersSidebarProps = {
@@ -56,6 +49,7 @@ type MembersSidebarProps = {
   currentPubkey?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onOpenAddBotDialog?: () => void;
   onViewActivity?: (pubkey: string) => void;
 };
 
@@ -64,37 +58,13 @@ export function MembersSidebar({
   currentPubkey,
   open,
   onOpenChange,
+  onOpenAddBotDialog,
   onViewActivity,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
   const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
-  const providersQuery = useAcpProvidersQuery();
-  const backendProvidersQuery = useBackendProvidersQuery();
-  const sidebarManagedAgentsQuery = useManagedAgentsQuery();
-  const sidebarRelayAgentsQuery = useRelayAgentsQuery();
-  const sidebarProviders = React.useMemo(
-    () =>
-      [...(providersQuery.data ?? [])].sort((left, right) => {
-        const leftPriority = left.id === "goose" ? 0 : 1;
-        const rightPriority = right.id === "goose" ? 0 : 1;
-        if (leftPriority !== rightPriority) {
-          return leftPriority - rightPriority;
-        }
-        return left.label.localeCompare(right.label);
-      }),
-    [providersQuery.data],
-  );
-  const sidebarDialogErrorMessage =
-    providersQuery.error instanceof Error
-      ? providersQuery.error.message
-      : sidebarManagedAgentsQuery.error instanceof Error
-        ? sidebarManagedAgentsQuery.error.message
-        : sidebarRelayAgentsQuery.error instanceof Error
-          ? sidebarRelayAgentsQuery.error.message
-          : null;
-
   const changeRoleMutation = useMutation({
     mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
       if (!channelId) throw new Error("No channel selected.");
@@ -138,8 +108,6 @@ export function MembersSidebar({
     (channel?.visibility === "open" || canManageMembers);
 
   const [isSidebarQuickAddOpen, setIsSidebarQuickAddOpen] =
-    React.useState(false);
-  const [isSidebarFullDialogOpen, setIsSidebarFullDialogOpen] =
     React.useState(false);
 
   const managedAgentByPubkey = React.useMemo(
@@ -347,7 +315,10 @@ export function MembersSidebar({
                   channelId={channelId}
                   open={isSidebarQuickAddOpen}
                   onOpenChange={setIsSidebarQuickAddOpen}
-                  onMoreOptions={() => setIsSidebarFullDialogOpen(true)}
+                  onMoreOptions={() => {
+                    setIsSidebarQuickAddOpen(false);
+                    onOpenAddBotDialog?.();
+                  }}
                 >
                   <Button
                     aria-label="Add agent to channel"
@@ -383,18 +354,6 @@ export function MembersSidebar({
         }}
         open={editRespondToAgent !== null}
       />
-      {canAddAgents ? (
-        <AddChannelBotDialog
-          backendProviders={backendProvidersQuery.data ?? []}
-          backendProvidersLoading={backendProvidersQuery.isLoading}
-          channelId={channelId}
-          onOpenChange={setIsSidebarFullDialogOpen}
-          open={isSidebarFullDialogOpen}
-          providers={sidebarProviders}
-          providersErrorMessage={sidebarDialogErrorMessage}
-          providersLoading={providersQuery.isLoading}
-        />
-      ) : null}
     </>
   );
 }

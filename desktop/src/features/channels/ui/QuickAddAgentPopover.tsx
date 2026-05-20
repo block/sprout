@@ -17,22 +17,38 @@ import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { cn } from "@/shared/lib/cn";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/shared/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Spinner } from "@/shared/ui/spinner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type QuickAddAgentItem = {
-  kind: "running-available" | "running-in-channel" | "persona";
-  agent?: ManagedAgent;
-  persona?: AgentPersona;
+type RunningAvailableItem = {
+  kind: "running-available";
+  agent: ManagedAgent;
+  persona: AgentPersona | null;
   label: string;
   avatarUrl: string | null;
 };
+
+type RunningInChannelItem = {
+  kind: "running-in-channel";
+  agent: ManagedAgent;
+  persona: AgentPersona | null;
+  label: string;
+  avatarUrl: string | null;
+};
+
+type PersonaItem = {
+  kind: "persona";
+  persona: AgentPersona;
+  label: string;
+  avatarUrl: string | null;
+};
+
+type QuickAddAgentItem =
+  | RunningAvailableItem
+  | RunningInChannelItem
+  | PersonaItem;
 
 type QuickAddAgentPopoverProps = {
   channelId: string | null;
@@ -41,6 +57,27 @@ type QuickAddAgentPopoverProps = {
   onMoreOptions: () => void;
   children: React.ReactNode;
 };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function getItemKey(item: QuickAddAgentItem): string {
+  switch (item.kind) {
+    case "persona":
+      return `persona:${item.persona.id}`;
+    case "running-available":
+    case "running-in-channel":
+      return `agent:${item.agent.pubkey}`;
+  }
+}
+
+function safeBotName(persona: AgentPersona, usedNames: Set<string>): string {
+  const pool = persona.namePool ?? [];
+  const name = pickBotName(pool, usedNames);
+  // pickBotName always returns a string from the universal pool fallback,
+  // but guard defensively in case of edge cases.
+  if (name && name.trim().length > 0) return name;
+  return persona.displayName || "Agent";
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -51,10 +88,16 @@ export function QuickAddAgentPopover({
   onMoreOptions,
   children,
 }: QuickAddAgentPopoverProps) {
+  // Gate channel members query to only fire when the popover is open.
+  // Managed agents, personas, and providers are globally cached by
+  // ChannelMembersBar (always mounted), so no extra fetch cost here.
   const managedAgentsQuery = useManagedAgentsQuery();
   const personasQuery = usePersonasQuery();
   const providersQuery = useAcpProvidersQuery();
-  const membersQuery = useChannelMembersQuery(channelId, open);
+  const membersQuery = useChannelMembersQuery(
+    channelId,
+    open && channelId !== null,
+  );
   const attachMutation = useAttachManagedAgentToChannelMutation(channelId);
   const createMutation = useCreateChannelManagedAgentMutation(channelId);
   const { recentIds, pushRecent } = useBotRecents();
@@ -94,8 +137,7 @@ export function QuickAddAgentPopover({
         channelMemberPubkeys.has(normalizePubkey(agent.pubkey)),
     );
 
-    // Personas that don't have a running agent yet (configured but not running)
-    // Exclude personas whose agent is already in the channel
+    // Personas whose agent is already in the channel (exclude from "available" list)
     const personaIdsInChannel = new Set(
       managedAgents
         .filter((agent) =>
@@ -113,12 +155,8 @@ export function QuickAddAgentPopover({
 
     // Sort running-available by recency
     const sortedRunningAvailable = [...runningAvailable].sort((a, b) => {
-      const aPersonaIdx = a.personaId
-        ? recentIds.indexOf(a.personaId)
-        : -1;
-      const bPersonaIdx = b.personaId
-        ? recentIds.indexOf(b.personaId)
-        : -1;
+      const aPersonaIdx = a.personaId ? recentIds.indexOf(a.personaId) : -1;
+      const bPersonaIdx = b.personaId ? recentIds.indexOf(b.personaId) : -1;
       const aScore = aPersonaIdx >= 0 ? aPersonaIdx : 999;
       const bScore = bPersonaIdx >= 0 ? bPersonaIdx : 999;
       return aScore - bScore;
@@ -126,8 +164,8 @@ export function QuickAddAgentPopover({
 
     for (const agent of sortedRunningAvailable) {
       const persona = agent.personaId
-        ? personas.find((p) => p.id === agent.personaId)
-        : undefined;
+        ? (personas.find((p) => p.id === agent.personaId) ?? null)
+        : null;
       result.push({
         kind: "running-available",
         agent,
@@ -139,8 +177,8 @@ export function QuickAddAgentPopover({
 
     for (const agent of runningInChannel) {
       const persona = agent.personaId
-        ? personas.find((p) => p.id === agent.personaId)
-        : undefined;
+        ? (personas.find((p) => p.id === agent.personaId) ?? null)
+        : null;
       result.push({
         kind: "running-in-channel",
         agent,
@@ -170,12 +208,7 @@ export function QuickAddAgentPopover({
     }
 
     return result;
-  }, [
-    managedAgents,
-    personas,
-    channelMemberPubkeys,
-    recentIds,
-  ]);
+  }, [managedAgents, personas, channelMemberPubkeys, recentIds]);
 
   // Reset state when popover closes
   React.useEffect(() => {
@@ -186,6 +219,7 @@ export function QuickAddAgentPopover({
   }, [open]);
 
   async function handleAddRunningAgent(agent: ManagedAgent) {
+    if (!channelId) return;
     const key = `agent:${agent.pubkey}`;
     setPendingKey(key);
     setErrorMessage(null);
@@ -203,6 +237,7 @@ export function QuickAddAgentPopover({
   }
 
   async function handleAddPersona(persona: AgentPersona) {
+    if (!channelId) return;
     const key = `persona:${persona.id}`;
     setPendingKey(key);
     setErrorMessage(null);
@@ -219,9 +254,8 @@ export function QuickAddAgentPopover({
       return;
     }
 
-    // Pick a name from the persona's pool
     const usedNames = new Set(managedAgents.map((a) => a.name));
-    const instanceName = pickBotName(persona.namePool, usedNames);
+    const instanceName = safeBotName(persona, usedNames);
 
     try {
       await createMutation.mutateAsync({
@@ -245,10 +279,11 @@ export function QuickAddAgentPopover({
   function handleItemClick(item: QuickAddAgentItem) {
     if (item.kind === "running-in-channel") return;
     if (pendingKey) return;
+    if (!channelId) return;
 
-    if (item.kind === "running-available" && item.agent) {
+    if (item.kind === "running-available") {
       void handleAddRunningAgent(item.agent);
-    } else if (item.kind === "persona" && item.persona) {
+    } else {
       void handleAddPersona(item.persona);
     }
   }
@@ -258,15 +293,43 @@ export function QuickAddAgentPopover({
     personasQuery.isLoading ||
     providersQuery.isLoading;
 
+  // Don't render the popover content when there's no channel
+  if (!channelId) {
+    return <>{children}</>;
+  }
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="w-72 p-0"
-        sideOffset={6}
-      >
-        <div className="flex max-h-80 flex-col">
+      <PopoverContent align="end" className="w-72 p-0" sideOffset={6}>
+        <div
+          className="flex max-h-80 flex-col"
+          role="listbox"
+          aria-label="Available agents"
+          onKeyDown={(e) => {
+            const container = e.currentTarget;
+            const buttons = Array.from(
+              container.querySelectorAll<HTMLButtonElement>(
+                "[data-quick-add-item]:not([disabled])",
+              ),
+            );
+            if (buttons.length === 0) return;
+            const focused = document.activeElement as HTMLElement | null;
+            const currentIdx = focused
+              ? buttons.indexOf(focused as HTMLButtonElement)
+              : -1;
+
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              const next = currentIdx < buttons.length - 1 ? currentIdx + 1 : 0;
+              buttons[next]?.focus();
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              const prev = currentIdx > 0 ? currentIdx - 1 : buttons.length - 1;
+              buttons[prev]?.focus();
+            }
+          }}
+        >
           <div className="border-b px-3 py-2">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Add agent
@@ -285,15 +348,13 @@ export function QuickAddAgentPopover({
             ) : (
               <div className="py-1">
                 {items.map((item) => {
-                  const itemKey =
-                    item.kind === "persona"
-                      ? `persona:${item.persona?.id}`
-                      : `agent:${item.agent?.pubkey}`;
+                  const itemKey = getItemKey(item);
                   const isInChannel = item.kind === "running-in-channel";
                   const isItemPending = pendingKey === itemKey;
 
                   return (
                     <button
+                      aria-selected={isInChannel}
                       className={cn(
                         "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm transition-colors",
                         isInChannel
@@ -301,9 +362,12 @@ export function QuickAddAgentPopover({
                           : "cursor-pointer hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
                         isItemPending && "pointer-events-none opacity-60",
                       )}
+                      data-quick-add-item
                       disabled={isInChannel || Boolean(pendingKey)}
                       key={itemKey}
                       onClick={() => handleItemClick(item)}
+                      role="option"
+                      tabIndex={isInChannel ? -1 : 0}
                       type="button"
                     >
                       <QuickAddAgentAvatar
@@ -340,6 +404,8 @@ export function QuickAddAgentPopover({
           <div className="border-t">
             <button
               className="flex w-full items-center gap-2 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              data-quick-add-item
+              data-testid="quick-add-more-options"
               onClick={() => {
                 onOpenChange(false);
                 onMoreOptions();

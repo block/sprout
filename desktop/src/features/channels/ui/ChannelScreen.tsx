@@ -85,6 +85,7 @@ export function ChannelScreen({
     string | null
   >(null);
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
+  const [isAddBotDialogOpen, setIsAddBotDialogOpen] = React.useState(false);
   const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
     null,
   );
@@ -436,7 +437,9 @@ export function ChannelScreen({
           activeChannelTitle={activeChannelTitle}
           activeDmPresenceStatus={activeDmPresenceStatus}
           currentPubkey={currentPubkey}
+          isAddBotDialogOpen={isAddBotDialogOpen}
           isJoining={joinChannelMutation.isPending}
+          onAddBotDialogOpenChange={setIsAddBotDialogOpen}
           onJoinChannel={joinChannelMutation.mutateAsync}
           onManageChannel={openChannelManagement}
           onToggleMembers={() => setIsMembersSidebarOpen((prev) => !prev)}
@@ -530,6 +533,7 @@ export function ChannelScreen({
           currentPubkey={currentPubkey}
           open={isMembersSidebarOpen}
           onOpenChange={setIsMembersSidebarOpen}
+          onOpenAddBotDialog={() => setIsAddBotDialogOpen(true)}
           onViewActivity={handleOpenAgentSession}
         />
       </ProfilePanelProvider>

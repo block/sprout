@@ -9,6 +9,7 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { sortProviders } from "@/features/agents/lib/sortProviders";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -19,6 +20,8 @@ import { QuickAddAgentPopover } from "./QuickAddAgentPopover";
 type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
+  isAddBotDialogOpen?: boolean;
+  onAddBotDialogOpenChange?: (open: boolean) => void;
   onManageChannel: () => void;
   onToggleMembers: () => void;
 };
@@ -26,10 +29,15 @@ type ChannelMembersBarProps = {
 export function ChannelMembersBar({
   channel,
   currentPubkey,
+  isAddBotDialogOpen,
+  onAddBotDialogOpenChange,
   onManageChannel,
   onToggleMembers,
 }: ChannelMembersBarProps) {
-  const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
+  // Dialog state: controlled externally if props provided, otherwise local.
+  const [localIsAddBotOpen, setLocalIsAddBotOpen] = React.useState(false);
+  const isAddBotOpen = isAddBotDialogOpen ?? localIsAddBotOpen;
+  const setIsAddBotOpen = onAddBotDialogOpenChange ?? setLocalIsAddBotOpen;
   const [isQuickAddOpen, setIsQuickAddOpen] = React.useState(false);
   const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const queryClient = useQueryClient();
@@ -41,16 +49,7 @@ export function ChannelMembersBar({
   const members = membersQuery.data ?? [];
   const memberCount = membersQuery.data?.length ?? channel.memberCount;
   const providers = React.useMemo(
-    () =>
-      [...(providersQuery.data ?? [])].sort((left, right) => {
-        const leftPriority = left.id === "goose" ? 0 : 1;
-        const rightPriority = right.id === "goose" ? 0 : 1;
-        if (leftPriority !== rightPriority) {
-          return leftPriority - rightPriority;
-        }
-
-        return left.label.localeCompare(right.label);
-      }),
+    () => sortProviders(providersQuery.data ?? []),
     [providersQuery.data],
   );
   const normalizedCurrentPubkey = currentPubkey
@@ -76,7 +75,7 @@ export function ChannelMembersBar({
     previousChannelIdRef.current = channel.id;
     setIsAddBotOpen(false);
     setIsQuickAddOpen(false);
-  }, [channel.id]);
+  }, [channel.id, setIsAddBotOpen]);
 
   const dialogErrorMessage =
     providersQuery.error instanceof Error
