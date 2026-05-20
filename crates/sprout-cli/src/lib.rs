@@ -831,10 +831,51 @@ pub enum MemCmd {
         #[arg(long)]
         owner: Option<String>,
     },
+    /// Print sha256(value) in hex (use as `--base-hash` for `mem patch`).
+    Hash {
+        slug: String,
+        #[arg(long)]
+        owner: Option<String>,
+    },
     /// Set a slug's value. Pass `-` to read the value from stdin.
     Set {
         slug: String,
         value: String,
+        #[arg(long)]
+        owner: Option<String>,
+        /// Allow committing an empty value. Without this, a zero-byte stdin
+        /// read is rejected to prevent silent data loss from upstream
+        /// pipeline failures.
+        #[arg(long, default_value_t = false)]
+        allow_empty: bool,
+    },
+    /// Apply a unified diff to a slug's current value (safer than set).
+    ///
+    /// Reads the diff from stdin or `--patch-file`. Refuses to apply if the
+    /// slug has changed since `--base-hash` was captured, and refuses
+    /// hunks whose context doesn't match the current value verbatim.
+    Patch {
+        slug: String,
+        /// Read the patch from a file instead of stdin.
+        #[arg(long)]
+        patch_file: Option<String>,
+        /// sha256 hex digest (lowercase) of the value the patch was generated
+        /// against. Hashes the exact UTF-8 bytes returned by `sprout mem get`,
+        /// not normalized lines. Run `sprout mem hash <slug>` to capture this
+        /// before editing.
+        #[arg(long)]
+        base_hash: Option<String>,
+        /// Skip the base-hash check. Unsafe if concurrent edits are possible —
+        /// the patch will be applied against whatever the current value is,
+        /// even if another agent rewrote it after the patch was generated.
+        #[arg(long, default_value_t = false)]
+        no_base_hash: bool,
+        /// Echo the input patch + resulting sha256 and exit without writing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Allow committing an empty result.
+        #[arg(long, default_value_t = false)]
+        allow_empty: bool,
         #[arg(long)]
         owner: Option<String>,
     },
