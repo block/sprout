@@ -1,10 +1,17 @@
+import { Plus } from "lucide-react";
 import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useAddChannelMembersMutation,
   useChannelMembersQuery,
 } from "@/features/channels/hooks";
-import { useUpdateManagedAgentMutation } from "@/features/agents/hooks";
+import {
+  useAcpProvidersQuery,
+  useBackendProvidersQuery,
+  useManagedAgentsQuery,
+  useRelayAgentsQuery,
+  useUpdateManagedAgentMutation,
+} from "@/features/agents/hooks";
 import { CreateAgentRespondToField } from "@/features/agents/ui/RespondToField";
 import { useClassifiedMembers } from "@/features/channels/lib/useClassifiedMembers";
 import {
@@ -41,6 +48,8 @@ import { MembersSidebarAgentControls } from "./MembersSidebarAgentControls";
 import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
 import { useMembersSidebarActions } from "./useMembersSidebarActions";
+import { AddChannelBotDialog } from "./AddChannelBotDialog";
+import { QuickAddAgentPopover } from "./QuickAddAgentPopover";
 
 type MembersSidebarProps = {
   channel: Channel | null;
@@ -61,6 +70,31 @@ export function MembersSidebar({
   const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channelId, open);
   const addMembersMutation = useAddChannelMembersMutation(channelId);
+  const providersQuery = useAcpProvidersQuery();
+  const backendProvidersQuery = useBackendProvidersQuery();
+  const sidebarManagedAgentsQuery = useManagedAgentsQuery();
+  const sidebarRelayAgentsQuery = useRelayAgentsQuery();
+  const sidebarProviders = React.useMemo(
+    () =>
+      [...(providersQuery.data ?? [])].sort((left, right) => {
+        const leftPriority = left.id === "goose" ? 0 : 1;
+        const rightPriority = right.id === "goose" ? 0 : 1;
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
+        return left.label.localeCompare(right.label);
+      }),
+    [providersQuery.data],
+  );
+  const sidebarDialogErrorMessage =
+    providersQuery.error instanceof Error
+      ? providersQuery.error.message
+      : sidebarManagedAgentsQuery.error instanceof Error
+        ? sidebarManagedAgentsQuery.error.message
+        : sidebarRelayAgentsQuery.error instanceof Error
+          ? sidebarRelayAgentsQuery.error.message
+          : null;
+
   const changeRoleMutation = useMutation({
     mutationFn: async ({ pubkey, role }: { pubkey: string; role: string }) => {
       if (!channelId) throw new Error("No channel selected.");
@@ -98,6 +132,16 @@ export function MembersSidebar({
     selfMember?.role === "owner" || selfMember?.role === "admin";
   const isArchived =
     channel?.archivedAt !== null && channel?.archivedAt !== undefined;
+  const canAddAgents =
+    channel?.channelType !== "dm" &&
+    !isArchived &&
+    (channel?.visibility === "open" || canManageMembers);
+
+  const [isSidebarQuickAddOpen, setIsSidebarQuickAddOpen] =
+    React.useState(false);
+  const [isSidebarFullDialogOpen, setIsSidebarFullDialogOpen] =
+    React.useState(false);
+
   const managedAgentByPubkey = React.useMemo(
     () =>
       new Map(
@@ -298,6 +342,26 @@ export function MembersSidebar({
                   </p>
                 )}
               </div>
+              {canAddAgents ? (
+                <QuickAddAgentPopover
+                  channelId={channelId}
+                  open={isSidebarQuickAddOpen}
+                  onOpenChange={setIsSidebarQuickAddOpen}
+                  onMoreOptions={() => setIsSidebarFullDialogOpen(true)}
+                >
+                  <Button
+                    aria-label="Add agent to channel"
+                    className="mt-2 h-8 w-full justify-start gap-2 text-xs text-muted-foreground"
+                    data-testid="sidebar-add-agent-trigger"
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add agent
+                  </Button>
+                </QuickAddAgentPopover>
+              ) : null}
             </section>
 
             {changeRoleError ? (
@@ -319,6 +383,18 @@ export function MembersSidebar({
         }}
         open={editRespondToAgent !== null}
       />
+      {canAddAgents ? (
+        <AddChannelBotDialog
+          backendProviders={backendProvidersQuery.data ?? []}
+          backendProvidersLoading={backendProvidersQuery.isLoading}
+          channelId={channelId}
+          onOpenChange={setIsSidebarFullDialogOpen}
+          open={isSidebarFullDialogOpen}
+          providers={sidebarProviders}
+          providersErrorMessage={sidebarDialogErrorMessage}
+          providersLoading={providersQuery.isLoading}
+        />
+      ) : null}
     </>
   );
 }

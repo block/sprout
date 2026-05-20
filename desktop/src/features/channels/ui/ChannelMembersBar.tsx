@@ -14,6 +14,7 @@ import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
+import { QuickAddAgentPopover } from "./QuickAddAgentPopover";
 
 type ChannelMembersBarProps = {
   channel: Channel;
@@ -29,6 +30,7 @@ export function ChannelMembersBar({
   onToggleMembers,
 }: ChannelMembersBarProps) {
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
+  const [isQuickAddOpen, setIsQuickAddOpen] = React.useState(false);
   const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channel.id);
@@ -73,6 +75,7 @@ export function ChannelMembersBar({
 
     previousChannelIdRef.current = channel.id;
     setIsAddBotOpen(false);
+    setIsQuickAddOpen(false);
   }, [channel.id]);
 
   const dialogErrorMessage =
@@ -87,20 +90,24 @@ export function ChannelMembersBar({
   return (
     <React.Fragment>
       <div className="flex items-center gap-1">
-        <Button
-          aria-label="Add agent"
-          className="h-7 w-7 rounded-full"
-          data-testid="channel-add-bot-trigger"
-          disabled={!canAddAgents}
-          onClick={() => {
-            setIsAddBotOpen(true);
-          }}
-          size="icon"
-          type="button"
-          variant="outline"
+        <QuickAddAgentPopover
+          channelId={channel.id}
+          open={isQuickAddOpen}
+          onOpenChange={setIsQuickAddOpen}
+          onMoreOptions={() => setIsAddBotOpen(true)}
         >
-          <Plus className="h-3 w-3" />
-        </Button>
+          <Button
+            aria-label="Add agent"
+            className="h-7 w-7 rounded-full"
+            data-testid="channel-add-bot-trigger"
+            disabled={!canAddAgents}
+            size="icon"
+            type="button"
+            variant="outline"
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        </QuickAddAgentPopover>
 
         <HuddleIndicator
           className="h-7 w-7"
