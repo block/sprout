@@ -16,35 +16,13 @@ import { useRichTextEditor } from "@/features/messages/lib/useRichTextEditor";
 import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import { MessageComposerToolbar } from "@/features/messages/ui/MessageComposerToolbar";
-import type { ChannelMember } from "@/shared/api/types";
-import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
+import type { ForumComposerProps } from "./ForumComposer.types";
 import { ForumComposerAutocompletes } from "./ForumComposerAutocompletes";
 import { ForumComposerCompactLayout } from "./ForumComposerCompactLayout";
 import { ForumComposerMediaStatus } from "./ForumComposerMediaStatus";
-
-type ForumComposerProps = {
-  channelId?: string | null;
-  /** Override mention source when no channel is available (e.g. Pulse). */
-  members?: ChannelMember[];
-  className?: string;
-  placeholder: string;
-  disabled?: boolean;
-  header?: React.ReactNode;
-  isSending?: boolean;
-  onCancel?: () => void;
-  onSubmit: (
-    content: string,
-    mentionPubkeys: string[],
-    mediaTags?: string[][],
-  ) => undefined | Promise<unknown>;
-  /** Render as a single-line composer until the user focuses it. */
-  compact?: boolean;
-  /** When true, autocomplete renders below the input (for top-of-view composers). */
-  autocompleteBelow?: boolean;
-  profiles?: UserProfileLookup;
-};
+import { useCompactComposerInteractions } from "./useCompactComposerInteractions";
 
 export function ForumComposer({
   channelId = null,
@@ -72,10 +50,19 @@ export function ForumComposer({
     if (pressed) setIsEmojiPickerOpen(false);
     setIsFormattingOpen(pressed);
   }, []);
+  const expandCompactComposer = React.useCallback(() => {
+    if (compact) setIsCompactExpanded(true);
+  }, [compact]);
 
   const mentions = useMentions(channelId, members, profiles);
   const channelLinks = useChannelLinks();
   const media = useMediaUpload();
+  const { handlePaperclipClick, handleToolbarMouseDown, shouldIgnoreBlur } =
+    useCompactComposerInteractions({
+      compact,
+      onExpand: expandCompactComposer,
+      onPaperclip: media.handlePaperclip,
+    });
 
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
@@ -338,12 +325,6 @@ export function ForumComposer({
       (content.trim().length === 0 && media.pendingImeta.length === 0),
     [disabled, content, media.pendingImeta.length],
   );
-  const handlePaperclipClick = React.useCallback(() => {
-    void media.handlePaperclip();
-  }, [media.handlePaperclip]);
-  const expandCompactComposer = React.useCallback(() => {
-    if (compact) setIsCompactExpanded(true);
-  }, [compact]);
   const hasComposerContent =
     content.trim().length > 0 ||
     media.pendingImeta.length > 0 ||
@@ -369,6 +350,9 @@ export function ForumComposer({
       ) {
         return;
       }
+      if (shouldIgnoreBlur()) {
+        return;
+      }
 
       const hasDraft =
         contentRef.current.trim().length > 0 ||
@@ -387,6 +371,7 @@ export function ForumComposer({
       media.isUploading,
       media.pendingImetaRef,
       media.uploadState.status,
+      shouldIgnoreBlur,
     ],
   );
   const wasCompactExpandedRef = React.useRef(isCompactExpanded);
@@ -484,7 +469,7 @@ export function ForumComposer({
             isFormattingOpen={isFormattingOpen}
             isSending={isSending ?? false}
             isUploading={media.isUploading}
-            onCaptureSelection={() => {}}
+            onCaptureSelection={handleToolbarMouseDown}
             onEmojiPickerOpenChange={setIsEmojiPickerOpen}
             onEmojiSelect={insertEmoji}
             onFormattingToggle={handleFormattingToggle}

@@ -51,7 +51,7 @@ export function AgentActivityCard({
   const summaryNote = group.notes[0];
 
   return (
-    <div className="rounded-2xl px-1 py-4 transition-colors hover:bg-muted/20 sm:px-2">
+    <div className="rounded-2xl px-1 py-4 sm:px-2">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="relative shrink-0 pt-1">

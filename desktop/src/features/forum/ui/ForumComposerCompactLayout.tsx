@@ -1,7 +1,7 @@
 import type * as React from "react";
 
 import { EditorContent, type Editor } from "@tiptap/react";
-import { ArrowUp } from "lucide-react";
+import { Plus } from "lucide-react";
 
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -35,11 +35,14 @@ export function ForumComposerCompactLayout({
       </div>
       <Button
         aria-label={isSending ? "Sending" : "Send message"}
-        className={cn("h-9 w-9 shrink-0 rounded-full")}
+        className={cn(
+          "h-7 w-7 shrink-0 rounded-full border border-border/70 bg-transparent p-0 text-muted-foreground shadow-none hover:bg-transparent hover:text-foreground",
+        )}
         data-testid="send-message"
         disabled={sendDisabled || isSending}
         size="icon"
         type="submit"
+        variant="ghost"
       >
         {isSending ? (
           <span
@@ -47,7 +50,7 @@ export function ForumComposerCompactLayout({
             className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent"
           />
         ) : (
-          <ArrowUp aria-hidden className="h-3.5 w-3.5" />
+          <Plus aria-hidden className="h-3.5 w-3.5" />
         )}
       </Button>
     </div>
