@@ -2101,6 +2101,7 @@ fn handle_prompt_result(
                 tracing::warn!(
                     agent = agent_index,
                     outcome = outcome_label,
+                    error = %e,
                     "transport/protocol error — respawning agent"
                 );
                 let index = result.agent.index;
@@ -2119,9 +2120,10 @@ fn handle_prompt_result(
                     return LoopAction::Exit;
                 }
             } else {
-                tracing::debug!(
+                tracing::warn!(
                     agent = agent_index,
                     outcome = outcome_label,
+                    error = %e,
                     "agent_returned (application error — pipe intact)"
                 );
                 pool.return_agent(result.agent);
