@@ -184,3 +184,98 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ARCHIVE_PATH: ${{ steps.artifacts.outputs.archive }}
           SIG_PATH: ${{ steps.artifacts.outputs.sig }}
+
+  release-linux:
+    name: Release Linux
+    runs-on: ubuntu-latest
+    needs: release
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install Tauri dependencies (Linux)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 \
+            build-essential \
+            curl \
+            file \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+
+      - name: Install desktop dependencies
+        run: just desktop-install-ci
+
+      - name: Patch version
+        run: |
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
+          cd src-tauri && cargo update --workspace
+
+      - name: Build sidecars
+        run: |
+          cargo build --release -p sprout-acp -p sprout-mcp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
+          ./scripts/bundle-sidecars.sh
+
+      - name: Build Linux Tauri app
+        run: cd desktop && pnpm tauri build --verbose --ci --bundles deb,appimage
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+      - name: Locate Linux build artifacts
+        id: linux-artifacts
+        run: |
+          BUNDLE_DIR="desktop/src-tauri/target/release/bundle"
+
+          DEB=$(find "$BUNDLE_DIR/deb" -name '*.deb' -type f | head -1)
+          if [[ -z "$DEB" ]]; then
+            echo "::error::No DEB found in $BUNDLE_DIR/deb"
+            exit 1
+          fi
+          echo "deb=$DEB" >> "$GITHUB_OUTPUT"
+
+          APPIMAGE=$(find "$BUNDLE_DIR/appimage" -name '*.AppImage' -type f | head -1)
+          if [[ -z "$APPIMAGE" ]]; then
+            echo "::error::No AppImage found in $BUNDLE_DIR/appimage"
+            exit 1
+          fi
+          echo "appimage=$APPIMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Linux artifacts to versioned GitHub release
+        run: |
+          gh release upload "v${VERSION}" \
+            "$DEB_PATH" \
+            "$APPIMAGE_PATH" \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEB_PATH: ${{ steps.linux-artifacts.outputs.deb }}
+          APPIMAGE_PATH: ${{ steps.linux-artifacts.outputs.appimage }}
