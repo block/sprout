@@ -321,6 +321,8 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     ) : (
       visibleNotes.map((note) => (
         <NoteCard
+          currentUserDisplayName={currentDisplayName}
+          currentUserProfile={currentProfile}
           isAgent={agentPubkeySet.has(note.pubkey)}
           isFollowing={followingSet.has(note.pubkey)}
           isOwnNote={note.pubkey === currentPubkey}
@@ -342,7 +344,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
       >
         {/* Tab bar */}
-        <div className="shrink-0 px-4 pt-11 sm:px-6">
+        <div className="relative z-40 shrink-0 px-4 pt-2 sm:px-6">
           <div className="relative mx-auto flex w-full max-w-2xl items-center justify-center">
             <div className="flex items-center">
               <TabsList className="h-8 gap-0.5 rounded-full border border-border/50 bg-muted/40 p-0.5">
@@ -392,12 +394,16 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
           forceMount
           className="mt-0 min-h-0 flex-1 overflow-y-auto"
         >
-          <div className="mx-auto flex w-full max-w-2xl flex-col px-4 pb-10 pt-7 sm:px-6">
+          <div
+            className={`mx-auto flex w-full max-w-2xl flex-col px-4 pb-10 sm:px-6 ${
+              activeTab !== "search" && activeTab !== "agents" ? "pt-0" : "pt-7"
+            }`}
+          >
             {activeTab === "search" ? (
-              <div className="flex min-h-[56vh] items-center justify-center">
+              <div className="flex min-h-[calc(100vh-96px)] items-center justify-center">
                 <div className="relative flex w-full max-w-xl flex-col items-center px-2">
                   <h2 className="mb-5 text-center text-2xl font-semibold tracking-tight text-foreground">
-                    Search Pulse
+                    What are you looking for?
                   </h2>
                   <div className="relative w-full max-w-lg">
                     <div className="relative rounded-full border border-foreground/10 bg-background/80 p-1 shadow-[0_12px_48px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_16px_70px_rgba(0,0,0,0.55)]">
@@ -422,7 +428,11 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
                 </div>
               </div>
             ) : activeTab !== "agents" ? (
-              <div className="mb-7">
+              <div className="sticky top-0 z-10 mb-7 pb-3 pt-7">
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-x-0 top-[-1px] h-8 bg-background"
+                />
                 {publishMutation.isError && (
                   <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
                     {publishMutation.error instanceof Error
@@ -432,7 +442,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
                 )}
                 <ForumComposer
                   autocompleteBelow
-                  className="pulse-composer rounded-xl border-border/60 bg-muted/30 p-2 shadow-none"
+                  className="pulse-composer overflow-hidden rounded-2xl border-border/50 bg-background/70 p-2 shadow-none backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
                   compact
                   header={
                     <div className="flex min-w-0 items-center gap-2">
@@ -462,7 +472,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
             ) : null}
 
             {activeTab !== "search" ? (
-              <div className="space-y-1">{renderTimeline()}</div>
+              <div className="space-y-4">{renderTimeline()}</div>
             ) : null}
           </div>
         </TabsContent>
