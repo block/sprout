@@ -1,15 +1,18 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
-  "recreateWhen": "never",
+  "prCreation": "immediate",
+  "automerge": false,
+  "recreateWhen": "always",
   "separateMinorPatch": true,
+  "postUpdateOptions": ["cargo:updateLockfile"],
   "packageRules": [
     {
-      "description": "Keep Rust crate updates isolated because 0.x minor releases often contain breaking changes.",
+      "description": "Keep Rust crate updates isolated because 0.x minor releases often contain breaking changes. Group all minor updates per crate (don't split by individual version).",
       "matchManagers": ["cargo"],
       "groupName": null,
       "separateMinorPatch": true,
-      "separateMultipleMinor": true
+      "separateMultipleMinor": false
     }
   ]
 }
