@@ -474,7 +474,7 @@ async fn publish_relay_observer_event(
         }
     };
     if let Err(error) = publisher.publish_event(signed).await {
-        tracing::debug!("relay observer event dropped: {error}");
+        tracing::warn!("relay observer event dropped: {error}");
     }
 }
 
@@ -2032,6 +2032,24 @@ fn handle_prompt_result(
     };
     let agent_index = result.agent.index;
 
+    let channel_id = match &result.source {
+        PromptSource::Channel(ch) => Some(*ch),
+        PromptSource::Heartbeat => None,
+    };
+    let emit_turn_error = |error_msg: &str| {
+        if let Some(ref observer) = observer {
+            observer.emit(
+                "turn_error",
+                Some(agent_index),
+                &observer::context_for(channel_id, None, None),
+                serde_json::json!({
+                    "outcome": outcome_label,
+                    "error": error_msg,
+                }),
+            );
+        }
+    };
+
     match result.outcome {
         // Successful prompt — return agent to pool.
         PromptOutcome::Ok(_) => {
@@ -2044,11 +2062,15 @@ fn handle_prompt_result(
         }
         // Fatal outcomes: the agent subprocess is dead or poisoned — respawn it.
         PromptOutcome::AgentExited | PromptOutcome::Timeout => {
-            tracing::debug!(
+            tracing::warn!(
                 agent = agent_index,
                 outcome = outcome_label,
                 "agent_returned — respawning"
             );
+            emit_turn_error(match outcome_label {
+                "exited" => "Agent process exited unexpectedly",
+                _ => "Agent timed out",
+            });
             let index = result.agent.index;
             let slot_history = &mut crash_history[index];
             if !spawn_respawn_task(
@@ -2104,6 +2126,7 @@ fn handle_prompt_result(
                     error = %e,
                     "transport/protocol error — respawning agent"
                 );
+                emit_turn_error(&e.to_string());
                 let index = result.agent.index;
                 let slot_history = &mut crash_history[index];
                 if !spawn_respawn_task(
@@ -2126,6 +2149,7 @@ fn handle_prompt_result(
                     error = %e,
                     "agent_returned (application error — pipe intact)"
                 );
+                emit_turn_error(&e.to_string());
                 pool.return_agent(result.agent);
             }
         }
@@ -2178,6 +2202,18 @@ fn recover_panicked_agent(
     } else {
         *heartbeat_in_flight = false;
         tracing::warn!("cleared wedged heartbeat_in_flight from panicked agent {i}");
+    }
+
+    if let Some(ref observer) = observer {
+        observer.emit(
+            "agent_panic",
+            Some(i),
+            &observer::context_for(meta.channel_id, None, None),
+            serde_json::json!({
+                "outcome": "panic",
+                "error": format!("Agent task panicked: {join_error}"),
+            }),
+        );
     }
 
     // Panics count as crashes for the circuit breaker.

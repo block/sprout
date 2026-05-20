@@ -82,7 +82,7 @@ pub async fn process_upload(
             uploaded_at,
         )),
         Err(e) => {
-            tracing::warn!(sha256 = %sha256, "metadata generation failed; orphan blob left for GC");
+            tracing::warn!(sha256 = %sha256, error = %e, "metadata generation failed; orphan blob left for GC");
             Err(e)
         }
     }

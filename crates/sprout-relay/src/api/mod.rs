@@ -34,7 +34,7 @@ pub(crate) fn not_found(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
 /// `git/transport.rs`, and `audio/handler.rs`.
 pub mod relay_members {
     use axum::{http::StatusCode, response::Json};
-    use tracing::debug;
+    use tracing::{debug, info};
 
     use crate::state::AppState;
 
@@ -95,7 +95,7 @@ pub mod relay_members {
                         }
                     }
                     Err(e) => {
-                        debug!(agent = %pubkey_hex, "NIP-OA auth tag invalid: {e}");
+                        info!(agent = %pubkey_hex, "NIP-OA auth tag invalid: {e}");
                     }
                 }
             }
@@ -126,7 +126,7 @@ pub mod relay_members {
         match sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
             Ok(owner) => Some(owner),
             Err(e) => {
-                debug!("extract_nip_oa_owner: invalid auth tag: {e}");
+                info!("extract_nip_oa_owner: invalid auth tag: {e}");
                 None
             }
         }

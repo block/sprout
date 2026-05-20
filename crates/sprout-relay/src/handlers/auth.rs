@@ -118,8 +118,8 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             .await
             {
                 Ok(owner) => owner,
-                Err(_) => {
-                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "not a relay member");
+                Err(e) => {
+                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = ?e, "not a relay member");
                     metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
                         .increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;

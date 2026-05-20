@@ -286,6 +286,21 @@ export function processTranscriptEvent(
       event.timestamp,
       channelId,
     );
+  } else if (event.kind === "turn_error" || event.kind === "agent_panic") {
+    const payload = asRecord(event.payload);
+    const outcome = asString(payload.outcome) ?? "error";
+    const error = asString(payload.error) ?? "Unknown error";
+    const title =
+      event.kind === "agent_panic" ? "Agent error (crash)" : "Turn error";
+    upsertTextItem(
+      d,
+      `${event.kind}:${ch}:${event.turnId ?? event.seq}`,
+      "lifecycle",
+      title,
+      `${outcome}: ${error}`,
+      event.timestamp,
+      channelId,
+    );
   } else if (event.kind === "acp_read" || event.kind === "acp_write") {
     const payload = asRecord(event.payload);
     const method = asString(payload.method);

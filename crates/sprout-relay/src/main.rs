@@ -261,7 +261,7 @@ async fn main() -> anyhow::Result<()> {
                 {
                     Ok(()) => {}
                     Err(e) => {
-                        tracing::debug!(error = %e, "channel reconciliation attempt failed");
+                        tracing::warn!(error = %e, "channel reconciliation attempt failed");
                     }
                 }
             }

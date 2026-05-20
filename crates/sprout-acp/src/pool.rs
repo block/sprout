@@ -1945,14 +1945,14 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
     let builder = match sprout_sdk::build_reaction(target_id, emoji) {
         Ok(b) => b,
         Err(e) => {
-            tracing::debug!(event_id, emoji, "reaction add: build failed: {e}");
+            tracing::warn!(event_id, emoji, "reaction add: build failed: {e}");
             return;
         }
     };
     let event = match builder.sign_with_keys(&rest.keys) {
         Ok(e) => e,
         Err(e) => {
-            tracing::debug!(event_id, emoji, "reaction add: sign failed: {e}");
+            tracing::warn!(event_id, emoji, "reaction add: sign failed: {e}");
             return;
         }
     };
@@ -2026,14 +2026,14 @@ pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &
     let builder = match sprout_sdk::build_remove_reaction(target_id) {
         Ok(b) => b,
         Err(e) => {
-            tracing::debug!(event_id, emoji, "reaction remove: build failed: {e}");
+            tracing::warn!(event_id, emoji, "reaction remove: build failed: {e}");
             return;
         }
     };
     let event = match builder.sign_with_keys(&rest.keys) {
         Ok(e) => e,
         Err(e) => {
-            tracing::debug!(event_id, emoji, "reaction remove: sign failed: {e}");
+            tracing::warn!(event_id, emoji, "reaction remove: sign failed: {e}");
             return;
         }
     };

@@ -1472,10 +1472,16 @@ async fn handle_standard_deletion_event(
                                 0,
                             )
                             .unwrap_or_else(chrono::Utc::now);
-                            let _ = state
+                            if let Err(e) = state
                                 .db
                                 .remove_reaction(&react_target_id, react_target_ts, &actor, emoji)
-                                .await;
+                                .await
+                            {
+                                tracing::warn!(
+                                    error = %e,
+                                    "failed to remove reaction from DB during NIP-09 deletion"
+                                );
+                            }
                         }
                     }
                 }
@@ -1763,7 +1769,7 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         ("uploadpack.allowTipSHA1InWant", "true"),
         ("uploadpack.allowReachableSHA1InWant", "true"),
     ] {
-        let _ = Command::new("git")
+        match Command::new("git")
             .args(["config", "--file"])
             .arg(repo_dir.join("config"))
             .args([key, value])
@@ -1773,7 +1779,26 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("HOME", "/dev/null")
             .output()
-            .await;
+            .await
+        {
+            Ok(output) if !output.status.success() => {
+                tracing::warn!(
+                    key,
+                    value,
+                    status = %output.status,
+                    "git config failed for bare repo"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    key,
+                    value,
+                    error = %e,
+                    "git config command failed for bare repo"
+                );
+            }
+            _ => {}
+        }
     }
 
     // Install pre-receive hook for permission enforcement.
@@ -1938,7 +1963,7 @@ pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<(
     for channel in &channels {
         // Check if kind:39000 event already exists for this channel.
         let channel_id_str = channel.id.to_string();
-        let existing = state
+        let existing = match state
             .db
             .query_events(&EventQuery {
                 kinds: Some(vec![39000]),
@@ -1947,12 +1972,22 @@ pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<(
                 ..Default::default()
             })
             .await
-            .unwrap_or_default();
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    channel_id = %channel.id,
+                    error = %e,
+                    "reconcile: failed to query existing discovery events"
+                );
+                continue;
+            }
+        };
 
         if existing.is_empty() {
             // No discovery event — emit one.
             if let Err(e) = emit_group_discovery_events(state, channel.id).await {
-                tracing::debug!(
+                tracing::warn!(
                     channel_id = %channel.id,
                     error = %e,
                     "reconcile: failed to emit discovery events"
