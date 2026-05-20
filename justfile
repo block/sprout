@@ -199,6 +199,7 @@ staging *ARGS: _ensure-sidecar-stubs
     # Replace the 0-byte sidecar stub with the real CLI binary so tauri dev picks it up.
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
     cp target/release/sprout "desktop/src-tauri/binaries/sprout-${TARGET}"
+    chmod +x "desktop/src-tauri/binaries/sprout-${TARGET}"
     cd {{desktop_dir}}
     source ../scripts/instance-env.sh
     export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
