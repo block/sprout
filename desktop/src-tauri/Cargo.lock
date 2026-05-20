@@ -1454,12 +1454,9 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "earshot"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d393a8f23619412e0502df1b94cd148e34855a50a4143d365cc6336cc338b4f4"
-dependencies = [
- "libm",
-]
+checksum = "7984231f8b4c72eb3b88c70040dc1e4ff6803fa9169e93c0ac465942d74fa36a"
 
 [[package]]
 name = "embed-resource"
@@ -5250,7 +5247,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "sprout"
+name = "sprout-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "hmac 0.13.0",
+ "nostr 0.36.0",
+ "percent-encoding",
+ "rand 0.10.1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "sprout-desktop"
 version = "0.1.0"
 dependencies = [
  "atomic-write-file",
@@ -5303,26 +5320,6 @@ dependencies = [
  "windows-sys 0.61.2",
  "zeroize",
  "zip 2.4.2",
-]
-
-[[package]]
-name = "sprout-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hex",
- "hmac 0.13.0",
- "nostr 0.36.0",
- "percent-encoding",
- "rand 0.10.1",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "subtle",
- "thiserror 2.0.18",
- "url",
- "uuid",
- "zeroize",
 ]
 
 [[package]]
