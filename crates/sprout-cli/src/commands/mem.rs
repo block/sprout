@@ -377,13 +377,23 @@ fn verify_hunks_at_declared_position(
             .collect();
 
         // Pure insertion at start of empty file: `@@ -0,0 +1,M @@`.
+        //
+        // Known limitation: a pure-insertion hunk into a non-empty value
+        // (`@@ -N,0 +N,M @@` with `N > 0`) is currently rejected. With no
+        // preimage lines there's nothing to position-check against, and the
+        // safe-default for a strict mode is "refuse" rather than "land at an
+        // unverified position." `diff -u` includes context lines by default,
+        // so users hit this only if they hand-author a no-context insertion.
+        // Failure mode is rejection, not corruption — see PR #627 review.
         if preimage.is_empty() {
             if hunk.old_range().start() == 0 {
                 continue;
             }
             return Err(format!(
-                "hunk #{} has empty preimage but declared start line {} \
-                 (expected 0 for pure insertion)",
+                "hunk #{} has empty preimage at line {}; \
+                 pure no-context insertions into non-empty values are not \
+                 supported (regenerate the patch with `diff -u` to include \
+                 surrounding context)",
                 i + 1,
                 hunk.old_range().start()
             ));
