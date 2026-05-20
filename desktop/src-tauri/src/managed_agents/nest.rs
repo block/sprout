@@ -106,8 +106,7 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
 
     // Write sprout-cli skill alongside AGENTS.md (same idempotent pattern).
     let skill_dir = root.join(".claude/skills/sprout-cli");
-    fs::create_dir_all(&skill_dir)
-        .map_err(|e| format!("create {}: {e}", skill_dir.display()))?;
+    fs::create_dir_all(&skill_dir).map_err(|e| format!("create {}: {e}", skill_dir.display()))?;
 
     let skill_md = root.join(".claude/skills/sprout-cli/SKILL.md");
     match fs::OpenOptions::new()
@@ -324,10 +323,7 @@ mod tests {
         let skill = root.join(".claude/skills/sprout-cli/SKILL.md");
         fs::write(&skill, "custom skill content").unwrap();
         ensure_nest_at(&root).unwrap();
-        assert_eq!(
-            fs::read_to_string(&skill).unwrap(),
-            "custom skill content"
-        );
+        assert_eq!(fs::read_to_string(&skill).unwrap(), "custom skill content");
     }
 
     #[cfg(unix)]
