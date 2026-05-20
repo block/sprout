@@ -20,7 +20,10 @@ import {
   useOpenDmMutation,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
-import { useHomeFeedNotifications } from "@/features/notifications/hooks";
+import {
+  useHomeFeedNotifications,
+  useHomeFeedNotificationState,
+} from "@/features/notifications/hooks";
 import {
   listenForDesktopNotificationActions,
   revealDesktopAppWindow,
@@ -201,11 +204,8 @@ export function AppShell() {
     deferredPubkey ? [deferredPubkey] : [],
   );
   const setUserStatusMutation = useSetUserStatusMutation(deferredPubkey);
-  const { homeBadgeCount, homeFeedQuery, notificationSettings } =
-    useHomeFeedNotifications(
-      identityQuery.data?.pubkey,
-      selectedView === "home",
-    );
+  const { feedProfilesQuery, homeFeedQuery, notificationSettings } =
+    useHomeFeedNotifications(identityQuery.data?.pubkey);
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
@@ -264,21 +264,42 @@ export function AppShell() {
     [channels, selectedChannelId],
   );
 
-  const { markChannelRead, markChannelUnread, unreadChannelIds } =
-    useUnreadChannels(
-      channels,
-      activeChannel,
-      // Wait for ChannelScreen to report the latest loaded message before
-      // advancing unread state for the active channel.
-      null,
-      {
-        pubkey: identityQuery.data?.pubkey,
-        relayClient,
-        currentPubkey: identityQuery.data?.pubkey,
-        onDmMessage: handleDmNotification,
-        onLiveMention: refetchHomeFeedOnLiveMention,
-      },
-    );
+  const {
+    markChannelRead,
+    markChannelUnread,
+    unreadChannelIds,
+    getEffectiveTimestamp: getChannelReadAt,
+    readStateVersion,
+  } = useUnreadChannels(
+    channels,
+    activeChannel,
+    // Wait for ChannelScreen to report the latest loaded message before
+    // advancing unread state for the active channel.
+    null,
+    {
+      pubkey: identityQuery.data?.pubkey,
+      relayClient,
+      currentPubkey: identityQuery.data?.pubkey,
+      onDmMessage: handleDmNotification,
+      onLiveMention: refetchHomeFeedOnLiveMention,
+    },
+  );
+
+  // Badge count is computed here (rather than inside useHomeFeedNotifications)
+  // so it can consume the NIP-RS read-state lifted from the single
+  // ReadStateManager mounted via useUnreadChannels above. Channel-backed
+  // feed items contribute to the badge iff strictly newer than that
+  // channel's read marker; non-channel items keep their seen-set fallback.
+  const homeBadgeCount = useHomeFeedNotificationState(
+    homeFeedQuery.data,
+    identityQuery.data?.pubkey,
+    notificationSettings.settings,
+    notificationSettings.setDesktopEnabled,
+    selectedView === "home",
+    getChannelReadAt,
+    readStateVersion,
+    feedProfilesQuery.data?.profiles,
+  );
 
   const createChannelMutation = useCreateChannelMutation();
   const createForumMutation = useCreateChannelMutation();
@@ -565,6 +586,8 @@ export function AppShell() {
             openChannelManagement: () => {
               setIsChannelManagementOpen(true);
             },
+            getChannelReadAt,
+            readStateVersion,
           }}
         >
           <HuddleProvider>

@@ -259,6 +259,15 @@ export function useHomeFeedNotificationState(
   settings: NotificationSettings,
   setDesktopEnabled: (enabled: boolean) => Promise<boolean>,
   isHomeActive: boolean,
+  // NIP-RS read marker lookup, shared with the sidebar via AppShell. When
+  // provided, channel-backed feed items are treated as read iff their
+  // createdAt is at-or-below the channel's read marker; the local
+  // seen-set is reserved for items with no channel context. Pass
+  // `() => null` to keep the legacy local-only behaviour.
+  getChannelReadAt: (channelId: string) => number | null,
+  // Invalidation signal for the channel-marker projection; bump triggers
+  // recompute. Pass 0 to opt out.
+  readStateVersion: number,
   profiles?: UserProfileLookup,
 ) {
   useFeedDesktopNotifications(
@@ -272,14 +281,13 @@ export function useHomeFeedNotificationState(
   const [seenFeedIds, setSeenFeedIds] = React.useState<string[]>(() =>
     readStoredSeenFeedIds(normalizedPubkey),
   );
-  const currentFeedIds = React.useMemo(
-    () =>
-      feed
-        ? [...feed.feed.mentions, ...feed.feed.needsAction].map(
-            (item) => item.id,
-          )
-        : [],
+  const currentFeedItems = React.useMemo(
+    () => (feed ? [...feed.feed.mentions, ...feed.feed.needsAction] : []),
     [feed],
+  );
+  const currentFeedIds = React.useMemo(
+    () => currentFeedItems.map((item) => item.id),
+    [currentFeedItems],
   );
 
   React.useEffect(() => {
@@ -303,24 +311,39 @@ export function useHomeFeedNotificationState(
     markCurrentFeedSeen();
   }, [currentFeedIds, isHomeActive, normalizedPubkey]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion invalidates getChannelReadAt
   return React.useMemo(() => {
     if (!settings.homeBadgeEnabled || isHomeActive) {
       return 0;
     }
 
-    if (currentFeedIds.length === 0) {
+    if (currentFeedItems.length === 0) {
       return 0;
     }
 
     const seenFeedIdSet = new Set(seenFeedIds);
-    return currentFeedIds.filter((id) => !seenFeedIdSet.has(id)).length;
-  }, [currentFeedIds, isHomeActive, seenFeedIds, settings.homeBadgeEnabled]);
+    return currentFeedItems.filter((item) => {
+      if (item.channelId) {
+        // Channel-backed items: unread iff strictly newer than the NIP-RS
+        // read marker. No fallback to seenFeedIds — reading in-channel is
+        // the authoritative signal.
+        const readAt = getChannelReadAt(item.channelId);
+        return readAt === null || item.createdAt > readAt;
+      }
+      // No channel context: fall back to the local seen-set.
+      return !seenFeedIdSet.has(item.id);
+    }).length;
+  }, [
+    currentFeedItems,
+    getChannelReadAt,
+    isHomeActive,
+    readStateVersion,
+    seenFeedIds,
+    settings.homeBadgeEnabled,
+  ]);
 }
 
-export function useHomeFeedNotifications(
-  pubkey: string | undefined,
-  isHomeActive: boolean,
-) {
+export function useHomeFeedNotifications(pubkey: string | undefined) {
   const notificationSettings = useNotificationSettings(pubkey);
   const homeFeedQuery = useHomeFeedQuery();
   const refetchHomeFeedForE2e = React.useEffectEvent(() => {
@@ -364,17 +387,8 @@ export function useHomeFeedNotifications(
     { enabled: feedItems.length > 0 },
   );
 
-  const homeBadgeCount = useHomeFeedNotificationState(
-    homeFeedQuery.data,
-    pubkey,
-    notificationSettings.settings,
-    notificationSettings.setDesktopEnabled,
-    isHomeActive,
-    feedProfilesQuery.data?.profiles,
-  );
-
   return {
-    homeBadgeCount,
+    feedProfilesQuery,
     homeFeedQuery,
     notificationSettings,
   };

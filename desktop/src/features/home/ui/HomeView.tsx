@@ -1,6 +1,7 @@
 import * as React from "react";
 import { RefreshCcw } from "lucide-react";
 
+import { useAppShell } from "@/app/AppShellContext";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import {
   type InboxFilter,
@@ -10,6 +11,7 @@ import {
   formatInboxFullTimestamp,
 } from "@/features/home/lib/inbox";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
+import { useHomeInboxReadState } from "@/features/home/useHomeInboxReadState";
 import { useInboxThreadContext } from "@/features/home/useInboxThreadContext";
 import { useResizableInboxListWidth } from "@/features/home/useResizableInboxListWidth";
 import { InboxDetailPane } from "@/features/home/ui/InboxDetailPane";
@@ -134,6 +136,12 @@ export function HomeView({
     inboxListWidthPx,
   } = useResizableInboxListWidth();
   const { doneSet, markDone, undoDone } = useFeedItemState(currentPubkey);
+  const {
+    getChannelReadAt,
+    markChannelRead,
+    markChannelUnread,
+    readStateVersion,
+  } = useAppShell();
   const feedItems = React.useMemo(
     () =>
       feed
@@ -196,6 +204,17 @@ export function HomeView({
       }),
     [currentPubkey, feed, feedProfiles],
   );
+  const { effectiveDoneSet, markItemRead, markItemUnread } =
+    useHomeInboxReadState({
+      items: inboxItems,
+      getChannelReadAt,
+      readStateVersion,
+      localDoneSet: doneSet,
+      markChannelRead,
+      markChannelUnread,
+      markDoneLocal: markDone,
+      undoDoneLocal: undoDone,
+    });
   const filteredItems = React.useMemo(() => {
     return inboxItems.filter((item) => matchesInboxFilter(item, filter));
   }, [filter, inboxItems]);
@@ -277,14 +296,14 @@ export function HomeView({
 
   const handleToggleDone = React.useCallback(
     (itemId: string) => {
-      if (doneSet.has(itemId)) {
-        undoDone(itemId);
+      if (effectiveDoneSet.has(itemId)) {
+        markItemUnread(itemId);
         return;
       }
 
-      markDone(itemId);
+      markItemRead(itemId);
     },
-    [doneSet, markDone, undoDone],
+    [effectiveDoneSet, markItemRead, markItemUnread],
   );
 
   if (isLoading && !feed) {
@@ -345,13 +364,13 @@ export function HomeView({
         }
       >
         <InboxListPane
-          doneSet={doneSet}
+          doneSet={effectiveDoneSet}
           filter={filter}
           items={filteredItems}
           onFilterChange={setFilter}
           onSelect={(itemId) => {
             setSelectedItemId(itemId);
-            markDone(itemId);
+            markItemRead(itemId);
           }}
           selectedId={selectedItemId}
         />
@@ -383,7 +402,7 @@ export function HomeView({
           )}
           canReply={canReply}
           disabledReplyReason={disabledReplyReason}
-          isDone={selectedItem ? doneSet.has(selectedItem.id) : false}
+          isDone={selectedItem ? effectiveDoneSet.has(selectedItem.id) : false}
           isDeletingMessage={isDeletingMessage}
           isSendingReply={isSendingReply}
           isThreadContextLoading={threadContext.isLoading}
