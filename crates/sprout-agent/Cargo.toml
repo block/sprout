@@ -28,6 +28,7 @@ path = "tests/bin/fake_mcp.rs"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time", "net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "form"] }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process"] }
 arc-swap = "1"
