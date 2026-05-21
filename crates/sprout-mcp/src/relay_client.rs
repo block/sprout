@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Filter, Keys, Kind, RelayUrl, Tag, Url};
+use nostr::{Event, EventBuilder, Filter, Keys, Kind, RelayUrl, Tag};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};

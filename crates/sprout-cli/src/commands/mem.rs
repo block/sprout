@@ -252,7 +252,7 @@ pub async fn cmd_ls(
                 listings.push(Listing {
                     slug: slug.clone(),
                     event_id: head.id.to_hex(),
-                    created_at: head.created_at.as_u64(),
+                    created_at: head.created_at.as_secs(),
                 });
             }
         }
@@ -359,7 +359,7 @@ pub async fn cmd_set(
     };
     let agent_pubkey = client.keys().public_key();
     let (head, _) = fetch_head(client, &agent_pubkey, &owner, &slug).await?;
-    let prior_created_at = head.map(|e| e.created_at.as_u64());
+    let prior_created_at = head.map(|e| e.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
     let agent = client.keys();
@@ -685,7 +685,7 @@ pub async fn cmd_patch(
             value: Some(new_value.clone()),
         }
     };
-    let prior_created_at = Some(head.created_at.as_u64());
+    let prior_created_at = Some(head.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
     let agent = client.keys();
@@ -722,7 +722,7 @@ pub async fn cmd_rm(
     };
     let agent_pubkey = client.keys().public_key();
     let (head, _) = fetch_head(client, &agent_pubkey, &owner, &slug).await?;
-    let prior_created_at = head.map(|e| e.created_at.as_u64());
+    let prior_created_at = head.map(|e| e.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
     let agent = client.keys();

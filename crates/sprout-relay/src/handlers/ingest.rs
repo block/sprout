@@ -499,7 +499,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
     }
 
     let parent_created =
-        chrono::DateTime::from_timestamp(parent_event.event.created_at.as_u64() as i64, 0)
+        chrono::DateTime::from_timestamp(parent_event.event.created_at.as_secs() as i64, 0)
             .unwrap_or_else(Utc::now);
 
     let client_root_bytes =
@@ -516,7 +516,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
             }
             let root_ts = if let Ok(Some(root_ev)) = state.db.get_event_by_id(&effective_root).await
             {
-                chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
                     .unwrap_or(parent_created)
             } else {
                 parent_created
@@ -558,7 +558,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
             let depth = if parent_root == parent_bytes { 1 } else { 2 };
             let root_created = if parent_root != parent_bytes {
                 if let Ok(Some(root_ev)) = state.db.get_event_by_id(&parent_root).await {
-                    chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                    chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
                         .unwrap_or(parent_created)
                 } else {
                     parent_created
@@ -575,7 +575,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
         parts.len() >= 2 && parts[0] == "broadcast" && parts[1] == "1"
     });
 
-    let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_u64() as i64, 0)
+    let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_secs() as i64, 0)
         .unwrap_or_else(Utc::now);
 
     Ok(Some(ThreadMetadataOwned {
@@ -988,7 +988,7 @@ pub async fn ingest_event(
     if !auth.has_proxy_scope() {
         const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900; // ±15 minutes
         let now = chrono::Utc::now().timestamp();
-        let event_ts = event.created_at.as_u64() as i64;
+        let event_ts = event.created_at.as_secs() as i64;
         if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
             return Err(IngestError::Rejected(
                 "invalid: event timestamp too far from server time".into(),
@@ -1182,7 +1182,7 @@ pub async fn ingest_event(
 
         // Freshness check: reject events outside ±120s of now (same as admin commands).
         {
-            let event_ts = event.created_at.as_u64() as i64;
+            let event_ts = event.created_at.as_secs() as i64;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -1530,7 +1530,7 @@ pub async fn ingest_event(
             })?;
 
         let target_created_at =
-            chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
+            chrono::DateTime::from_timestamp(target_event.event.created_at.as_secs() as i64, 0)
                 .unwrap_or_else(chrono::Utc::now);
 
         let actor_bytes = effective_message_author(&event, &state.relay_keypair.public_key());
@@ -2032,8 +2032,10 @@ mod tests {
 
     fn make_event_with_tags(kind: u32, content: &str, tags: &[&[&str]]) -> Event {
         let keys = nostr::Keys::generate();
-        let nostr_tags: Vec<nostr::Tag> =
-            tags.iter().map(|t| nostr::Tag::parse(t).unwrap()).collect();
+        let nostr_tags: Vec<nostr::Tag> = tags
+            .iter()
+            .map(|t| nostr::Tag::parse(t.iter().copied()).unwrap())
+            .collect();
         nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content)
             .tags(nostr_tags)
             .sign_with_keys(&keys)

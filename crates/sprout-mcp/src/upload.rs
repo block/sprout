@@ -186,7 +186,7 @@ pub async fn upload_file(
     let sha256 = hex::encode(Sha256::digest(&bytes));
 
     // 6. Sign Blossom auth event (kind:24242)
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let expiry = if mime.starts_with("video/") {
         3600
     } else {

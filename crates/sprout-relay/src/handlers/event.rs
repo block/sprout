@@ -515,7 +515,7 @@ async fn handle_agent_observer_event(
 
     // Freshness check: reject observer frames with stale/future timestamps
     let now = chrono::Utc::now().timestamp();
-    let event_ts = event.created_at.as_u64() as i64;
+    let event_ts = event.created_at.as_secs() as i64;
     if (event_ts - now).unsigned_abs() > 300 {
         conn.send(RelayMessage::ok(
             event_id_hex,

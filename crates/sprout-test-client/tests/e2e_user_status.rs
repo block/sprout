@@ -234,7 +234,7 @@ async fn test_user_status_stale_write_rejected() {
         let tags = vec![Tag::parse(["d", &d_tag]).unwrap()];
         EventBuilder::new(Kind::Custom(KIND_USER_STATUS), "Newer status")
             .tags(tags)
-            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() + 100))
+            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_secs() + 100))
             .sign_with_keys(&keys)
             .unwrap()
     };
@@ -247,7 +247,7 @@ async fn test_user_status_stale_write_rejected() {
         let tags = vec![Tag::parse(["d", &d_tag]).unwrap()];
         EventBuilder::new(Kind::Custom(KIND_USER_STATUS), "Older status")
             .tags(tags)
-            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() - 100))
+            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_secs() - 100))
             .sign_with_keys(&keys)
             .unwrap()
     };

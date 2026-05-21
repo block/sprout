@@ -2038,9 +2038,9 @@ Initial commit"
 
     /// Helper: sign a payload and return the armored signature
     fn sign_payload(secret_hex: &str, payload: &[u8], t: u64) -> String {
-        let keypair = Keypair::from_seckey_str(&SECP256K1, secret_hex).unwrap();
+        let keypair = Keypair::from_seckey_str(SECP256K1, secret_hex).unwrap();
         let (xonly, _) = keypair.x_only_public_key();
-        let pk_hex = hex::encode(xonly.to_bytes());
+        let pk_hex = hex::encode(xonly.serialize());
         let hash = compute_signing_hash(t, None, payload);
         let message = Message::from_digest(hash);
         let sig = SECP256K1.sign_schnorr(&message, &keypair);
@@ -2071,9 +2071,9 @@ Initial commit"
         let message = Message::from_digest(hash);
         let sig_bytes = hex::decode(&envelope.sig).map_err(|_| "bad sig hex")?;
         let sig = Signature::from_slice(&sig_bytes).map_err(|_| "bad sig")?;
-        let xonly: &XOnlyPublicKey = &pk;
+        let xonly = pk.xonly().map_err(|_| "xonly conversion failed")?;
         SECP256K1
-            .verify_schnorr(&sig, &message, xonly)
+            .verify_schnorr(&sig, &message, &xonly)
             .map_err(|_| "signature verification failed")?;
         Ok(envelope)
     }
@@ -2119,9 +2119,9 @@ Initial commit"
     fn test_verify_rejects_non_canonical_json() {
         // Build a valid signature but with extra whitespace in JSON
         let secret = "0000000000000000000000000000000000000000000000000000000000000003";
-        let keypair = Keypair::from_seckey_str(&SECP256K1, secret).unwrap();
+        let keypair = Keypair::from_seckey_str(SECP256K1, secret).unwrap();
         let (xonly, _) = keypair.x_only_public_key();
-        let pk_hex = hex::encode(xonly.to_bytes());
+        let pk_hex = hex::encode(xonly.serialize());
         let payload = test_payload();
         let hash = compute_signing_hash(1700000000, None, &payload);
         let message = Message::from_digest(hash);

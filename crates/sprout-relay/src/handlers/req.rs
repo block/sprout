@@ -346,10 +346,10 @@ async fn handle_search_req(
             }
         }
         if let Some(since) = filter.since {
-            filter_parts.push(format!("created_at:>={}", since.as_u64()));
+            filter_parts.push(format!("created_at:>={}", since.as_secs()));
         }
         if let Some(until) = filter.until {
-            filter_parts.push(format!("created_at:<={}", until.as_u64()));
+            filter_parts.push(format!("created_at:<={}", until.as_secs()));
         }
 
         let filter_by = filter_parts.join(" && ");
@@ -557,10 +557,10 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
 
     let since = filter
         .since
-        .and_then(|s| chrono::DateTime::from_timestamp(s.as_u64() as i64, 0));
+        .and_then(|s| chrono::DateTime::from_timestamp(s.as_secs() as i64, 0));
     let until = filter
         .until
-        .and_then(|u| chrono::DateTime::from_timestamp(u.as_u64() as i64, 0));
+        .and_then(|u| chrono::DateTime::from_timestamp(u.as_secs() as i64, 0));
     let limit = filter
         .limit
         .map(|l| (l as i64).min(MAX_HISTORICAL_LIMIT))
@@ -791,7 +791,7 @@ mod tests {
     fn filter_with_channel(channel_id: uuid::Uuid) -> Filter {
         Filter::new().custom_tag(
             SingleLetterTag::lowercase(Alphabet::H),
-            [channel_id.to_string()],
+            channel_id.to_string(),
         )
     }
 

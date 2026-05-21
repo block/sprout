@@ -573,7 +573,7 @@ async fn test_nip17_gift_wrap_recipient_receives() {
     let sid_b = sub_id("nip17-recv-b");
     let filter_b = Filter::new().kind(Kind::Custom(1059)).custom_tag(
         SingleLetterTag::lowercase(Alphabet::P),
-        [b_pubkey_hex.as_str()],
+        b_pubkey_hex.as_str(),
     );
 
     client_b
@@ -662,7 +662,7 @@ async fn test_dm_discovery_events_emitted() {
     // We'll subscribe with #p = A's pubkey for membership notifications.
     let membership_filter = Filter::new().kind(Kind::Custom(44100)).custom_tag(
         SingleLetterTag::lowercase(Alphabet::P),
-        [a_pubkey_hex.as_str()],
+        a_pubkey_hex.as_str(),
     );
 
     client_a
@@ -679,10 +679,9 @@ async fn test_dm_discovery_events_emitted() {
     let channel_id = create_dm(&keys_a, &b_pubkey_hex).await;
 
     // Subscribe to 39000 discovery events for this specific DM channel.
-    let discovery_filter = Filter::new().kind(Kind::Custom(39000)).custom_tag(
-        SingleLetterTag::lowercase(Alphabet::D),
-        [channel_id.as_str()],
-    );
+    let discovery_filter = Filter::new()
+        .kind(Kind::Custom(39000))
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), channel_id.as_str());
 
     client_a
         .subscribe(&sid_discovery, vec![discovery_filter])

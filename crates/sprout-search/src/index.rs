@@ -77,7 +77,7 @@ pub fn event_to_document(event: &StoredEvent) -> Result<Value, SearchError> {
         "kind":       event_kind_i32(nostr_event),
         "pubkey":     nostr_event.pubkey.to_string(),
         "channel_id": channel_id_val,
-        "created_at": nostr_event.created_at.as_u64() as i64,
+        "created_at": nostr_event.created_at.as_secs() as i64,
         "tags_flat":  tags_flat,
     });
 

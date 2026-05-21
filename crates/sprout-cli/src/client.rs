@@ -328,7 +328,7 @@ impl SproutClient {
 
         // 5. Sign Blossom auth event (kind:24242)
         use nostr::Timestamp;
-        let now = Timestamp::now().as_u64();
+        let now = Timestamp::now().as_secs();
         let expiry = if mime.starts_with("video/") {
             3600
         } else {

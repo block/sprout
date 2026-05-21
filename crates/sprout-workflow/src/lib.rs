@@ -688,7 +688,7 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
             .channel_id
             .map(|id| id.to_string())
             .unwrap_or_default(),
-        timestamp: event.event.created_at.as_u64().to_string(),
+        timestamp: event.event.created_at.as_secs().to_string(),
         emoji,
         message_id,
         webhook_fields: HashMap::new(),
@@ -1095,7 +1095,7 @@ steps:
         assert_eq!(ctx.text, "hello world");
         assert_eq!(ctx.author, stored.event.pubkey.to_hex());
         assert_eq!(ctx.channel_id, stored.channel_id.unwrap().to_string());
-        assert_eq!(ctx.timestamp, stored.event.created_at.as_u64().to_string());
+        assert_eq!(ctx.timestamp, stored.event.created_at.as_secs().to_string());
         assert_eq!(ctx.message_id, stored.event.id.to_hex());
         // Non-reaction events have empty emoji.
         assert_eq!(ctx.emoji, "");

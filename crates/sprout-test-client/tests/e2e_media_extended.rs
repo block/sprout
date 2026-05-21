@@ -27,7 +27,7 @@ fn http_client() -> Client {
 }
 
 fn sign_blossom_auth(keys: &Keys, sha256: &str) -> nostr::Event {
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let tags = vec![
         Tag::parse(["t", "upload"]).unwrap(),
         Tag::parse(["x", sha256]).unwrap(),
@@ -229,7 +229,7 @@ async fn test_auth_wrong_kind() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         27235,
@@ -252,7 +252,7 @@ async fn test_auth_missing_t_tag() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
@@ -295,7 +295,7 @@ async fn test_auth_expired_token() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
@@ -318,7 +318,7 @@ async fn test_auth_empty_content() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
@@ -341,7 +341,7 @@ async fn test_auth_server_tag_mismatch() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
@@ -365,7 +365,7 @@ async fn test_auth_server_tag_correct() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,

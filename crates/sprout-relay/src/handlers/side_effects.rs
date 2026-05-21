@@ -542,7 +542,7 @@ async fn emit_addressable_discovery_event(
             .unwrap_or_default();
         existing
             .first()
-            .map(|e| e.event.created_at.as_u64() + 1)
+            .map(|e| e.event.created_at.as_secs() + 1)
             .unwrap_or(now)
     };
     let ts = now.max(min_ts);
@@ -1511,7 +1511,7 @@ async fn handle_standard_deletion_event(
                             state.db.get_event_by_id(&react_target_id).await
                         {
                             let react_target_ts = chrono::DateTime::from_timestamp(
-                                react_target_event.event.created_at.as_u64() as i64,
+                                react_target_event.event.created_at.as_secs() as i64,
                                 0,
                             )
                             .unwrap_or_else(chrono::Utc::now);

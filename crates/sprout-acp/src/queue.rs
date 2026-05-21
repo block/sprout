@@ -755,9 +755,9 @@ fn format_event_block(
     let hex = be.event.pubkey.to_hex();
     let npub = be.event.pubkey.to_bech32().unwrap_or_else(|_| hex.clone());
 
-    let time = chrono::DateTime::from_timestamp(be.event.created_at.as_u64() as i64, 0)
+    let time = chrono::DateTime::from_timestamp(be.event.created_at.as_secs() as i64, 0)
         .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| be.event.created_at.as_u64().to_string());
+        .unwrap_or_else(|| be.event.created_at.as_secs().to_string());
 
     let kind = be.event.kind.as_u16() as u32;
     let event_id = be.event.id.to_hex();
@@ -1868,7 +1868,7 @@ mod tests {
             .iter()
             .map(|t| {
                 let strs: Vec<&str> = t.iter().map(|s| s.as_str()).collect();
-                nostr::Tag::parse(&strs).unwrap()
+                nostr::Tag::parse(strs).unwrap()
             })
             .collect();
         EventBuilder::new(Kind::Custom(9), content)

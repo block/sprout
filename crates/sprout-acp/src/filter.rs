@@ -49,7 +49,7 @@ impl FilterContext {
             author: event.pubkey.to_hex(),
             kind: event.kind.as_u16() as u32,
             channel_id: channel_id.to_string(),
-            timestamp: event.created_at.as_u64(),
+            timestamp: event.created_at.as_secs(),
         }
     }
 }
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(ctx.author, event.pubkey.to_hex());
         assert_eq!(ctx.kind, 9);
         assert_eq!(ctx.channel_id, channel_id.to_string());
-        assert_eq!(ctx.timestamp, event.created_at.as_u64());
+        assert_eq!(ctx.timestamp, event.created_at.as_secs());
     }
 
     // ── evaluate_filter ───────────────────────────────────────────────────────

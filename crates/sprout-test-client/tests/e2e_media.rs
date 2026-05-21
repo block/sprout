@@ -39,7 +39,7 @@ fn http_client() -> Client {
 
 /// Sign a kind:24242 Blossom upload auth event for the given sha256.
 fn sign_blossom_auth(keys: &Keys, sha256: &str) -> nostr::Event {
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let exp_str = (now + 300).to_string();
     let tags = vec![
         Tag::parse(["t", "upload"]).expect("t tag"),

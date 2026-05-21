@@ -1349,7 +1349,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                             "pubkey": e.pubkey.to_hex(),
                             "kind": e.kind.as_u16(),
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                             "tags": e.tags.iter().map(|t| t.as_slice()).collect::<Vec<_>>(),
                         })
                     })
@@ -1403,7 +1403,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                             "channel_id": channel_id,
                             "name": content.get("name").and_then(|v| v.as_str()).unwrap_or(""),
                             "description": content.get("about").and_then(|v| v.as_str()).unwrap_or(""),
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                         })
                     })
                     .collect();
@@ -1552,7 +1552,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                         serde_json::json!({
                             "workflow_id": d_tag,
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                             "pubkey": e.pubkey.to_hex(),
                         })
                     })
@@ -1714,7 +1714,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                             "event_id": e.id.to_hex(),
                             "kind": e.kind.as_u16(),
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                             "tags": e.tags.iter().map(|t| t.as_slice()).collect::<Vec<_>>(),
                         })
                     })
@@ -1799,7 +1799,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                             "pubkey": e.pubkey.to_hex(),
                             "kind": e.kind.as_u16(),
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                             "tags": e.tags.iter().map(|t| t.as_slice()).collect::<Vec<_>>(),
                         })
                     })
@@ -2025,7 +2025,7 @@ are not returned — use `get_thread` to fetch the full reply tree for a specifi
                         "channel_id": p.channel_id,
                         "name": content.get("name").and_then(|v| v.as_str()).unwrap_or(""),
                         "description": content.get("about").and_then(|v| v.as_str()).unwrap_or(""),
-                        "created_at": event.created_at.as_u64(),
+                        "created_at": event.created_at.as_secs(),
                         "pubkey": event.pubkey.to_hex(),
                     })
                     .to_string()
@@ -2251,7 +2251,7 @@ with kind:45003 comments)."
                             "pubkey": e.pubkey.to_hex(),
                             "kind": e.kind.as_u16(),
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                             "tags": e.tags.iter().map(|t| t.as_slice()).collect::<Vec<_>>(),
                         })
                     })
@@ -2371,7 +2371,7 @@ with kind:45003 comments)."
                         serde_json::json!({
                             "dm_id": dm_id,
                             "participants": participants,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                         })
                     })
                     .collect();
@@ -2672,7 +2672,7 @@ with kind:45003 comments)."
                             "pubkey": e.pubkey.to_hex(),
                             "kind": e.kind.as_u16(),
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                             "tags": e.tags.iter().map(|t| t.as_slice()).collect::<Vec<_>>(),
                         })
                     })
@@ -2714,7 +2714,7 @@ with kind:45003 comments)."
                         serde_json::json!({
                             "pubkey": e.pubkey.to_hex(),
                             "status": e.content,
-                            "updated_at": e.created_at.as_u64(),
+                            "updated_at": e.created_at.as_secs(),
                         })
                     })
                     .collect();
@@ -2999,7 +2999,7 @@ with kind:45003 comments)."
                             "id": e.id.to_hex(),
                             "pubkey": e.pubkey.to_hex(),
                             "content": e.content,
-                            "created_at": e.created_at.as_u64(),
+                            "created_at": e.created_at.as_secs(),
                         })
                     })
                     .collect();

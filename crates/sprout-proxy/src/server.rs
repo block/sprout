@@ -236,8 +236,8 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
 
                 // FIX 4: Timestamp recency check — must be within 10 minutes of now.
                 let time_diff = Timestamp::now()
-                    .as_u64()
-                    .abs_diff(auth_event.created_at.as_u64());
+                    .as_secs()
+                    .abs_diff(auth_event.created_at.as_secs());
                 if time_diff >= 600 {
                     let _ = send_relay_msg(
                         &mut socket,

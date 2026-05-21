@@ -507,7 +507,7 @@ fn handle_relay_observer_control_event(
 
     // Freshness: reject stale/replayed frames outside ±5 minute window.
     let now = chrono::Utc::now().timestamp();
-    let event_ts = event.created_at.as_u64() as i64;
+    let event_ts = event.created_at.as_secs() as i64;
     if (event_ts - now).unsigned_abs() > OBSERVER_CONTROL_FRESHNESS_SECS as u64 {
         tracing::warn!(
             event_ts,
@@ -1352,7 +1352,7 @@ async fn tokio_main() -> Result<()> {
                                 || kind_u32 == KIND_MEMBER_REMOVED_NOTIFICATION
                             {
                                 let ch = sprout_event.channel_id;
-                                let ts = sprout_event.event.created_at.as_u64();
+                                let ts = sprout_event.event.created_at.as_secs();
                                 let eid = sprout_event.event.id.to_hex();
 
                                 // Two-layer membership dedup:

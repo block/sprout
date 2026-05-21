@@ -482,10 +482,10 @@ async fn handle_bridge_search(
             }
         }
         if let Some(since) = filter.since {
-            filter_parts.push(format!("created_at:>={}", since.as_u64()));
+            filter_parts.push(format!("created_at:>={}", since.as_secs()));
         }
         if let Some(until) = filter.until {
-            filter_parts.push(format!("created_at:<={}", until.as_u64()));
+            filter_parts.push(format!("created_at:<={}", until.as_secs()));
         }
 
         let filter_by = filter_parts.join(" && ");

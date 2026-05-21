@@ -268,7 +268,7 @@ async fn test_long_form_stale_write_rejected() {
         ];
         EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Newer content.")
             .tags(tags)
-            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() + 100))
+            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_secs() + 100))
             .sign_with_keys(&keys)
             .unwrap()
     };
@@ -284,7 +284,7 @@ async fn test_long_form_stale_write_rejected() {
         ];
         EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Older content.")
             .tags(tags)
-            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() - 100))
+            .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_secs() - 100))
             .sign_with_keys(&keys)
             .unwrap()
     };

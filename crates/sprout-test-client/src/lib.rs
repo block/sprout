@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Filter, Keys, Kind, RelayUrl, Tag, Url};
+use nostr::{Event, EventBuilder, Filter, Keys, Kind, RelayUrl, Tag};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::time::timeout;
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn auth_event_has_relay_and_challenge_tags() {
         let keys = Keys::generate();
-        let relay_url: Url = "ws://localhost:3000".parse().unwrap();
+        let relay_url: RelayUrl = "ws://localhost:3000".parse().unwrap();
         let event = EventBuilder::auth("test-challenge", relay_url)
             .sign_with_keys(&keys)
             .unwrap();

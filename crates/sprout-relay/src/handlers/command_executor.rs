@@ -101,7 +101,7 @@ async fn persist_command_event(
     let tags_json = serde_json::to_value(&event.tags)
         .map_err(|e| IngestError::Internal(format!("error: serialize tags: {e}")))?;
     let kind_i32 = event.kind.as_u16() as i32;
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0).ok_or_else(|| {
         IngestError::Rejected(format!("invalid: bad timestamp {created_at_secs}"))
     })?;

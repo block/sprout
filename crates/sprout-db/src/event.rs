@@ -120,7 +120,7 @@ pub async fn insert_event(
     let tags_json = serde_json::to_value(&event.tags)?;
     // Cast chain: nostr Kind (u16) → i32 (Postgres INT column). Safe: all Sprout kinds fit in i32.
     let kind_i32 = event_kind_i32(event);
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
@@ -837,7 +837,7 @@ pub async fn insert_event_with_thread_metadata(
     let sig_bytes = event.sig.serialize();
     let tags_json = serde_json::to_value(&event.tags)?;
     let kind_i32 = event_kind_i32(event);
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();

@@ -124,7 +124,7 @@ impl ActionSink for RelayActionSink {
             let kind_u32 = KIND_STREAM_MESSAGE;
 
             let event_created_at = {
-                let ts = event.created_at.as_u64() as i64;
+                let ts = event.created_at.as_secs() as i64;
                 chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
             };
 

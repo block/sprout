@@ -62,7 +62,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 use std::time::Instant;
 
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag, Url as NostrUrl};
+use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag};
 use serde_json::{json, Value};
 use sprout_core::kind::{
     KIND_AGENT_OBSERVER_FRAME, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
@@ -933,7 +933,7 @@ impl BgState {
         }
 
         // Update last_seen timestamp.
-        let ts = event.created_at.as_u64();
+        let ts = event.created_at.as_secs();
         self.last_seen
             .entry(channel_id)
             .and_modify(|t| *t = (*t).max(ts))
@@ -1618,7 +1618,7 @@ async fn handle_ws_message(
                             );
                             return true;
                         }
-                        let ts = event.created_at.as_u64();
+                        let ts = event.created_at.as_secs();
                         let sprout_event = SproutEvent {
                             channel_id: channel_uuid,
                             event: *event,
@@ -1659,7 +1659,7 @@ async fn handle_ws_message(
                             Err(mpsc::error::TrySendError::Closed(_)) => return false,
                         }
                     } else if let Some(channel_id) = channel_id_from_sub_id(&subscription_id) {
-                        let ts = event.created_at.as_u64();
+                        let ts = event.created_at.as_secs();
                         let event_id_hex = event.id.to_hex();
                         if state.record_event(channel_id, &event) {
                             let sprout_event = SproutEvent {

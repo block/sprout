@@ -471,7 +471,7 @@ async fn test_auth_event_kind_rejected() {
         .await
         .expect("connect");
 
-    let relay_url_parsed: nostr::Url = url.replace("ws://", "http://").parse().unwrap();
+    let relay_url_parsed: nostr::RelayUrl = url.parse().unwrap();
     let auth_event = nostr::EventBuilder::auth("fake-challenge", relay_url_parsed)
         .sign_with_keys(&keys)
         .expect("sign");
@@ -1118,10 +1118,9 @@ async fn test_nip29_standard_client_flow() {
 
     // 2. Subscribe to channel messages (kind:9 + h tag).
     let msg_sid = sub_id("messages");
-    let msg_filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
-        SingleLetterTag::lowercase(Alphabet::H),
-        [channel_id.as_str()],
-    );
+    let msg_filter = Filter::new()
+        .kind(Kind::Custom(9))
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), channel_id.as_str());
     client
         .subscribe(&msg_sid, vec![msg_filter])
         .await
@@ -1268,7 +1267,7 @@ async fn test_membership_notification_emitted_on_add() {
         .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
         .custom_tag(
             SingleLetterTag::lowercase(Alphabet::P),
-            [agent_pubkey_hex.as_str()],
+            agent_pubkey_hex.as_str(),
         )
         .since(nostr::Timestamp::now() - 5u64);
 
@@ -1476,7 +1475,7 @@ async fn test_membership_notification_requires_own_p_filter() {
         .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
         .custom_tag(
             SingleLetterTag::lowercase(Alphabet::P),
-            [keys_b_pubkey_hex.as_str()],
+            keys_b_pubkey_hex.as_str(),
         );
 
     client
@@ -1542,7 +1541,7 @@ async fn test_membership_notification_emitted_on_remove() {
         .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
         .custom_tag(
             SingleLetterTag::lowercase(Alphabet::P),
-            [agent_pubkey_hex.as_str()],
+            agent_pubkey_hex.as_str(),
         )
         .since(nostr::Timestamp::now() - 5u64);
 
@@ -1687,7 +1686,7 @@ async fn test_membership_notification_multi_p_rejected() {
     // The relay must reject this because not all #p values match the authenticated pubkey.
     let filter = Filter::new()
         .kinds(vec![Kind::Custom(44100), Kind::Custom(44101)])
-        .custom_tag(
+        .custom_tags(
             SingleLetterTag::lowercase(Alphabet::P),
             [keys_a_pubkey_hex.as_str(), keys_b_pubkey_hex.as_str()],
         );
@@ -1746,10 +1745,9 @@ async fn test_membership_notification_mixed_filter_rejected() {
 
     let sid = sub_id("mixed-filter");
     // Filter 1: has #h + membership kinds (would skip per-filter #h check)
-    let filter1 = Filter::new().kinds(vec![Kind::Custom(44100)]).custom_tag(
-        SingleLetterTag::lowercase(Alphabet::H),
-        [channel_id.as_str()],
-    );
+    let filter1 = Filter::new()
+        .kinds(vec![Kind::Custom(44100)])
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), channel_id.as_str());
     // Filter 2: global filter (no #h) — makes the subscription globally scoped.
     // No kinds = wildcard, no #p = should trigger rejection.
     let filter2 = Filter::new().authors(vec![keys.public_key()]);

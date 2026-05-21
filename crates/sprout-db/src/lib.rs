@@ -72,7 +72,7 @@ pub async fn insert_mentions(
     }
 
     let event_id_bytes = event.id.as_bytes();
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(crate::error::DbError::InvalidTimestamp(created_at_secs))?;
     let kind = event.kind.as_u16() as u32;
@@ -1451,7 +1451,7 @@ impl Db {
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = sprout_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
-        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at_secs = event.created_at.as_secs() as i64;
         let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
             .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
 
@@ -1605,7 +1605,7 @@ impl Db {
     ) -> Result<(StoredEvent, bool)> {
         let kind_i32 = sprout_core::kind::event_kind_i32(event);
         let pubkey_bytes = event.pubkey.to_bytes();
-        let created_at_secs = event.created_at.as_u64() as i64;
+        let created_at_secs = event.created_at.as_secs() as i64;
         let created_at = chrono::DateTime::from_timestamp(created_at_secs, 0)
             .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
 
