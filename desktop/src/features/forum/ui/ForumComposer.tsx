@@ -314,13 +314,7 @@ export function ForumComposer({
           if (html && hasMentionClipboardHtml(html)) {
             const cleanHtml = normalizeMentionClipboardHtml(html);
             event.preventDefault();
-            richText.editor
-              ?.chain()
-              .focus()
-              .insertContent(cleanHtml, {
-                parseOptions: { preserveWhitespace: "full" },
-              })
-              .run();
+            _view.pasteHTML(cleanHtml);
             return true;
           }
 

@@ -549,24 +549,15 @@ export function MessageComposer({
 
           // --- Mention / channel-link normalization ---
           // When copying from the chat area the browser puts styled HTML
-          // on the clipboard. TipTap's DOMParser doesn't understand our
-          // custom `data-mention` / `data-channel-link` spans, so the
-          // pasted text can arrive with stale formatting and without the
-          // `@` / `#` prefix.  Detect this case, strip the mention/
-          // channel-link wrapper styling (which would confuse Tiptap's
-          // Bold extension due to font-weight: 600) but preserve all
-          // other formatting (bold, italic, line breaks, etc.).
+          // on the clipboard. The mention/channel-link wrappers have
+          // font-weight:600 which Tiptap's Bold extension misinterprets
+          // as bold. Strip those wrappers and use ProseMirror's pasteHTML
+          // to parse the cleaned HTML into proper rich content nodes.
           const html = event.clipboardData?.getData("text/html");
           if (html && hasMentionClipboardHtml(html)) {
             const cleanHtml = normalizeMentionClipboardHtml(html);
             event.preventDefault();
-            richText.editor
-              ?.chain()
-              .focus()
-              .insertContent(cleanHtml, {
-                parseOptions: { preserveWhitespace: "full" },
-              })
-              .run();
+            _view.pasteHTML(cleanHtml);
             return true;
           }
 
