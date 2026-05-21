@@ -312,15 +312,15 @@ export function ForumComposer({
 
           const html = event.clipboardData?.getData("text/html");
           if (html && hasMentionClipboardHtml(html)) {
-            const cleanText = normalizeMentionClipboardHtml(html);
+            const cleanHtml = normalizeMentionClipboardHtml(html);
             event.preventDefault();
-            _view.dispatch(
-              _view.state.tr.insertText(
-                cleanText,
-                _view.state.selection.from,
-                _view.state.selection.to,
-              ),
-            );
+            richText.editor
+              ?.chain()
+              .focus()
+              .insertContent(cleanHtml, {
+                parseOptions: { preserveWhitespace: "full" },
+              })
+              .run();
             return true;
           }
 

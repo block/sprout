@@ -552,24 +552,21 @@ export function MessageComposer({
           // on the clipboard. TipTap's DOMParser doesn't understand our
           // custom `data-mention` / `data-channel-link` spans, so the
           // pasted text can arrive with stale formatting and without the
-          // `@` / `#` prefix.  Detect this case, flatten the HTML to
-          // plain text and insert directly — bypassing TipTap's Bold
-          // extension which would otherwise wrap the mention in `**`.
-          // NOTE: This flattens *all* formatting in the pasted fragment
-          // when mentions are present. Acceptable for the primary use
-          // case (pasting a mention chip); a future refinement could
-          // preserve non-mention formatting.
+          // `@` / `#` prefix.  Detect this case, strip the mention/
+          // channel-link wrapper styling (which would confuse Tiptap's
+          // Bold extension due to font-weight: 600) but preserve all
+          // other formatting (bold, italic, line breaks, etc.).
           const html = event.clipboardData?.getData("text/html");
           if (html && hasMentionClipboardHtml(html)) {
-            const cleanText = normalizeMentionClipboardHtml(html);
+            const cleanHtml = normalizeMentionClipboardHtml(html);
             event.preventDefault();
-            _view.dispatch(
-              _view.state.tr.insertText(
-                cleanText,
-                _view.state.selection.from,
-                _view.state.selection.to,
-              ),
-            );
+            richText.editor
+              ?.chain()
+              .focus()
+              .insertContent(cleanHtml, {
+                parseOptions: { preserveWhitespace: "full" },
+              })
+              .run();
             return true;
           }
 
