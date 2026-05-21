@@ -288,7 +288,6 @@ pub async fn cmd_get_thread(
     client: &SproutClient,
     channel_id: &str,
     event_id: &str,
-    _depth_limit: Option<u32>,
     limit: Option<u32>,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
@@ -701,9 +700,8 @@ pub async fn dispatch(
         MessagesCmd::Thread {
             channel,
             event,
-            depth_limit,
             limit,
-        } => cmd_get_thread(client, &channel, &event, depth_limit, limit, format).await,
+        } => cmd_get_thread(client, &channel, &event, limit, format).await,
         MessagesCmd::Search { query, limit } => cmd_search(client, &query, limit, format).await,
         MessagesCmd::Vote { event, direction } => {
             cmd_vote_on_post(client, &event, &direction).await

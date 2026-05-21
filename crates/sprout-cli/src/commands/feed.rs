@@ -8,7 +8,6 @@ pub async fn cmd_get_feed(
     client: &SproutClient,
     since: Option<i64>,
     limit: Option<u32>,
-    _types: Option<&str>,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     let my_pk = client.keys().public_key().to_hex();
@@ -60,10 +59,6 @@ pub async fn dispatch(
 ) -> Result<(), CliError> {
     use crate::FeedCmd;
     match cmd {
-        FeedCmd::Get {
-            since,
-            limit,
-            types,
-        } => cmd_get_feed(client, since, limit, types.as_deref(), format).await,
+        FeedCmd::Get { since, limit } => cmd_get_feed(client, since, limit, format).await,
     }
 }

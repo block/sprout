@@ -324,9 +324,6 @@ pub enum MessagesCmd {
         /// Root message event ID (64-char hex)
         #[arg(long)]
         event: String,
-        /// Maximum reply depth to traverse
-        #[arg(long)]
-        depth_limit: Option<u32>,
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
@@ -709,9 +706,6 @@ pub enum FeedCmd {
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
-        /// Comma-separated feed entry types to filter
-        #[arg(long)]
-        types: Option<String>,
     },
 }
 
