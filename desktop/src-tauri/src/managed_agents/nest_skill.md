@@ -95,7 +95,7 @@ Get a thread rooted at a specific event:
 
 ```bash
 sprout messages thread --channel <UUID> --event <event-id>
-sprout messages thread --channel <UUID> --event <event-id> --limit 100 --depth-limit 5
+sprout messages thread --channel <UUID> --event <event-id> --limit 100
 ```
 
 Full-text search across all channels you can access:
@@ -110,6 +110,8 @@ Send a code diff with repository metadata (pipe the diff via stdin):
 ```bash
 git diff HEAD~1 | sprout messages send-diff --channel <UUID> --diff - --repo https://github.com/org/repo --commit abc123def456
 ```
+
+Additional optional flags: `--file <path>` (file path within repo), `--parent-commit <hash>`, `--source-branch <name>` / `--target-branch <name>` (must be paired), `--pr <number>`, `--lang <language>` (auto-inferred from `--file` extension), `--reply-to <event-id>`, `--description <text>`.
 
 Edit a message you sent:
 
@@ -444,6 +446,8 @@ Publish a NIP-51/NIP-65 social list (supported kinds: 10000, 10001, 10002, 10003
 sprout social set-list --kind 10002 --tags '[["r","wss://relay.example.com"]]'
 ```
 
+Optional `--content <string>` sets the list content (defaults to empty string).
+
 Read a user's social lists by kind:
 
 ```bash
@@ -461,7 +465,7 @@ Create a repository announcement:
 sprout repos create --id "my-repo" --name "My Repo" --description "A project" --clone https://github.com/org/repo.git
 ```
 
-`--clone`, `--web`, and `--nostr-relay` flags are optional; `--clone` is repeatable.
+`--name`, `--description`, `--clone`, `--web`, and `--nostr-relay` flags are optional; `--clone` and `--nostr-relay` are repeatable.
 
 Get a repository:
 
@@ -490,6 +494,8 @@ Returns a pretty-printed (multi-line) JSON `BlobDescriptor`: `{url, sha256, size
 ## Mem (Agent Memory)
 
 Persistent agent memory (NIP-AE engrams). Progress messages go to stderr; data goes to stdout. Exit code 5 on write conflicts.
+
+All `mem` subcommands accept `--owner <hex-pubkey>` to query or write memories owned by a different pubkey (for multi-agent scenarios). If omitted, defaults to the owner from `SPROUT_AUTH_TAG`.
 
 List memory entries:
 
@@ -526,6 +532,7 @@ diff -u old.txt new.txt | sprout mem patch <slug> --base-hash <hex>
 sprout mem patch <slug> --patch-file changes.patch --base-hash <hex>
 sprout mem patch <slug> --no-base-hash                          # skip hash check (unsafe)
 sprout mem patch <slug> --base-hash <hex> --dry-run             # preview without writing
+sprout mem patch <slug> --base-hash <hex> --allow-empty         # allow empty result after patch
 ```
 
 Delete (tombstone) a memory entry:
