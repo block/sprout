@@ -58,7 +58,7 @@ sprout-sdk = { path = "../../crates/sprout-sdk" }
 base64 = "0.22"
 sha2 = "0.11"
 tar = "0.4"
-bzip2 = "0.5"
+bzip2 = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2.3.3"

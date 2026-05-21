@@ -30,28 +30,16 @@ import { RelayStallWatchdog } from "@/shared/api/relayStallWatchdog";
 import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 
 const RECONNECT_BASE_DELAY_MS = 1_000,
-  RECONNECT_MAX_DELAY_MS = 30_000;
-const RECONNECT_REPLAY_SKEW_SECS = 5,
+  RECONNECT_MAX_DELAY_MS = 30_000,
+  RECONNECT_REPLAY_SKEW_SECS = 5,
   EVENT_BATCH_MS = 16;
 
 /**
- * Application-level liveness probe.
- *
- * Tungstenite auto-pongs and the OS keeps the TCP socket open, so a
- * half-open WS (Warp's orange-icon state, an asleep VPN, etc.) presents as
- * "fully connected" to the WS layer indefinitely — no Close, no Error.
- *
- * We work around that by periodically sending a cheap NIP-01 `REQ` with
- * `limit: 0` and waiting for the matching `EOSE`. A single missed probe
- * (no EOSE within `STALL_PROBE_TIMEOUT_MS`) — or a send-side failure on the
- * probe itself — flips state to `stalled` and force-resets the socket so
- * the existing reconnect path runs.
- *
- * The filter intentionally matches nothing real so the relay only ever
- * answers with EOSE.
+ * Passive liveness check. The relay sends heartbeat pings every 30s; if no
+ * inbound frame arrives for two heartbeat windows, treat the socket as stalled.
  */
-const STALL_PROBE_INTERVAL_MS = 20_000;
-const STALL_PROBE_TIMEOUT_MS = 10_000;
+const STALL_CHECK_INTERVAL_MS = 10_000;
+const STALL_IDLE_TIMEOUT_MS = 60_000;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -74,6 +62,7 @@ export class RelayClient {
   private hasConnectedOnce = false;
   private notifyReconnectListeners = false;
   private onMessageChannel: Channel<unknown> | null = null;
+  private connectionGeneration = 0;
 
   /**
    * Sticky terminal flag. Set when `resetConnection` is called with
@@ -89,9 +78,8 @@ export class RelayClient {
 
   private connectionStateEmitter = new RelayConnectionStateEmitter("idle");
   private stallWatchdog = new RelayStallWatchdog({
-    intervalMs: STALL_PROBE_INTERVAL_MS,
-    probeTimeoutMs: STALL_PROBE_TIMEOUT_MS,
-    sendRaw: (payload) => this.sendRaw(payload),
+    intervalMs: STALL_CHECK_INTERVAL_MS,
+    idleTimeoutMs: STALL_IDLE_TIMEOUT_MS,
     onStall: (error) => {
       this.connectionStateEmitter.set("stalled");
       this.resetConnection(error);
@@ -111,6 +99,7 @@ export class RelayClient {
       this.reconnectTimeout = null;
     }
     this.stallWatchdog.stop();
+    this.connectionGeneration++;
     this.keepAliveRequested = false;
     this.relayUrl = null;
     this.hasConnectedOnce = false;
@@ -460,8 +449,9 @@ export class RelayClient {
       this.relayUrl = await getRelayWsUrl();
     }
 
+    const generation = ++this.connectionGeneration;
     this.onMessageChannel = new Channel<unknown>((message) => {
-      void this.handleWsMessage(message);
+      void this.handleWsMessage(message, generation);
     });
 
     this.wsId = await invoke<number>("plugin:websocket|connect", {
@@ -687,7 +677,10 @@ export class RelayClient {
     });
   }
 
-  private async handleWsMessage(message: unknown) {
+  private async handleWsMessage(message: unknown, generation: number) {
+    if (generation !== this.connectionGeneration) return;
+    this.stallWatchdog.recordInbound();
+
     if (
       typeof message === "object" &&
       message !== null &&
@@ -726,10 +719,9 @@ export class RelayClient {
 
     const [type, ...rest] = data;
     if (type === "AUTH" && typeof rest[0] === "string") {
-      await this.handleAuthChallenge(rest[0]);
+      await this.handleAuthChallenge(rest[0], generation);
       return;
     }
-
     if (type === "EVENT" && typeof rest[0] === "string" && rest[1]) {
       this.handleEvent(rest[0], rest[1] as RelayEvent);
       return;
@@ -753,7 +745,7 @@ export class RelayClient {
     }
   }
 
-  private async handleAuthChallenge(challenge: string) {
+  private async handleAuthChallenge(challenge: string, generation: number) {
     if (!this.relayUrl) {
       this.relayUrl = await getRelayWsUrl();
     }
@@ -763,7 +755,7 @@ export class RelayClient {
       relayUrl: this.relayUrl,
     });
 
-    if (!this.authRequest) {
+    if (generation !== this.connectionGeneration || !this.authRequest) {
       return;
     }
 
@@ -809,12 +801,6 @@ export class RelayClient {
   }
 
   private handleEose(subId: string) {
-    if (this.stallWatchdog.handleEose(subId)) {
-      // Probe round-trip succeeded — silently CLOSE the sub.
-      void this.closeSubscription(subId).catch(() => {});
-      return;
-    }
-
     const subscription = this.subscriptions.get(subId);
     if (!subscription) {
       return;
@@ -971,6 +957,7 @@ export class RelayClient {
   ) {
     this.onMessageChannel = null;
     this.stallWatchdog.stop();
+    this.connectionGeneration++;
     if (this.flushTimeout !== null) window.clearTimeout(this.flushTimeout);
     this.flushTimeout = null;
     this.eventBuffer = [];

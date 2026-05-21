@@ -33,12 +33,13 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/personas.rs", 900], // built-in persona system prompts (Solo + Kit + Scout) + persona pack import/uninstall/list + uninstall safety check
   ["src-tauri/src/managed_agents/teams.rs", 580], // built-in team registry (Kit & Scout) + merge_teams + validate_team_deletion + JSON export/import + tests
   ["src-tauri/src/managed_agents/persona_card.rs", 970], // PNG/ZIP/MD persona card codec + pack-zip detection + nested root finder + provider/model/namePool fields + 27 unit tests
-  ["src/app/AppShell.tsx", 800], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + projects view + memory-leak safeguards
+  ["src/app/AppShell.tsx", 815], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + projects view + memory-leak safeguards + home-badge state lifted here so it consumes the same NIP-RS read-state as the sidebar (single ReadStateManager)
   ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/channels/ui/ChannelPane.tsx", 520], // composer/timeline/sidebar orchestration + anchored agent activity footers
   ["src/features/channels/ui/ChannelScreen.tsx", 550], // profile panel state + mutual exclusion wiring + ProfilePanelProvider context + agent typing classification
   ["src/features/notifications/hooks.ts", 535], // notification settings + feed notification lifecycle + profile batch resolution + truncated-pubkey guard + badge state
+  ["src/features/home/ui/HomeView.tsx", 505], // inbox/feed orchestration + thread context + reply/delete flow + NIP-RS read-state projection wiring (useHomeInboxReadState)
   ["src/features/messages/hooks.ts", 500], // message query/mutation hooks + optimistic updates
   ["src/features/messages/ui/MessageComposer.tsx", 760], // media upload handlers (paste, drop, dialog) + channelId reset effect + edit mode (pre-fill, save, cancel, escape) + composer autofocus (#572) + Sprout code-block paste branch (round-trips copy-button output as a literal codeBlock so Markdown can't reshape it) + scroll-to-bottom on multi-line paste (#619)
   ["src/features/settings/ui/SettingsView.tsx", 600],

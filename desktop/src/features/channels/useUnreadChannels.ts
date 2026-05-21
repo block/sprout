@@ -318,5 +318,11 @@ export function useUnreadChannels(
     unreadChannelIds,
     markChannelRead,
     markChannelUnread,
+    // Exposed so other surfaces (e.g. Home) can project per-item read state
+    // off the same NIP-RS read marker without instantiating a second
+    // ReadStateManager. readStateVersion is the invalidation signal callers
+    // should include in memo deps.
+    getEffectiveTimestamp,
+    readStateVersion,
   };
 }

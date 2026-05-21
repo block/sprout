@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -26,6 +26,10 @@ const DEFAULT_SYSTEM_PROMPT: &str =
 pub enum Provider {
     Anthropic,
     OpenAi,
+    /// Databricks model serving. Routes to `{base_url}/serving-endpoints/{model}/invocations`
+    /// with a dynamically-acquired bearer (OAuth 2.0 PKCE, or static `DATABRICKS_TOKEN`).
+    /// Wire format is OpenAI-chat-compatible — reuses the same body builder and parser.
+    Databricks,
 }
 
 /// Which OpenAI-family HTTP API to call. Set via `OPENAI_COMPAT_API`
@@ -75,13 +79,22 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let provider = match req("SPROUT_AGENT_PROVIDER")?.to_ascii_lowercase().as_str() {
-            "anthropic" => Provider::Anthropic,
-            "openai" | "openai-compat" => Provider::OpenAi,
-            o => return Err(format!("config: SPROUT_AGENT_PROVIDER={o} not supported")),
-        };
+        let goose_databricks = GooseDatabricksConfig::load_default();
+        let databricks_host = env("DATABRICKS_HOST").or_else(|| goose_databricks.host.clone());
+        let databricks_model = env("DATABRICKS_MODEL").or_else(|| goose_databricks.model.clone());
+        let provider = resolve_provider(
+            env("SPROUT_AGENT_PROVIDER").as_deref(),
+            env("ANTHROPIC_API_KEY").as_deref(),
+            env("OPENAI_COMPAT_API_KEY").as_deref(),
+            databricks_host.as_deref(),
+            databricks_model.as_deref(),
+        )?;
         // OPENAI_COMPAT_API is only read when provider=openai, so a stray
         // bad value can't break an Anthropic-only deployment.
+        //
+        // Databricks borrows api_key as the *optional* `DATABRICKS_TOKEN` escape
+        // hatch — empty means "use OAuth PKCE." The model lives in the URL path,
+        // not the request body (see `EndpointStrategy::DatabricksServing`).
         let (api_key, model, base_url, openai_api) = match provider {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
@@ -94,6 +107,16 @@ impl Config {
                 req("OPENAI_COMPAT_MODEL")?,
                 env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
                 parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
+            ),
+            Provider::Databricks => (
+                env("DATABRICKS_TOKEN").unwrap_or_default(),
+                databricks_model.ok_or_else(|| {
+                    "config: DATABRICKS_MODEL required (or set GOOSE_MODEL in goose config with GOOSE_PROVIDER=databricks)".to_string()
+                })?,
+                databricks_host.ok_or_else(|| {
+                    "config: DATABRICKS_HOST required (or set DATABRICKS_HOST in goose config)".to_string()
+                })?,
+                OpenAiApi::Chat, // Databricks invocations is chat-shaped
             ),
         };
         let system_prompt = match (env("SPROUT_AGENT_SYSTEM_PROMPT"), env("SPROUT_AGENT_SYSTEM_PROMPT_FILE")) {
@@ -199,6 +222,121 @@ fn env_or(k: &str, d: &str) -> String {
 
 fn req(k: &str) -> Result<String, String> {
     env(k).ok_or_else(|| format!("config: {k} required"))
+}
+
+#[derive(Default)]
+struct GooseDatabricksConfig {
+    host: Option<String>,
+    model: Option<String>,
+}
+
+impl GooseDatabricksConfig {
+    fn load_default() -> Self {
+        goose_config_path()
+            .and_then(|p| Self::load_from_path(&p))
+            .unwrap_or_default()
+    }
+
+    fn load_from_path(path: &std::path::Path) -> Option<Self> {
+        let raw = std::fs::read_to_string(path).ok()?;
+        let map: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(&raw).ok()?;
+        Some(Self::from_map(&map))
+    }
+
+    fn from_map(map: &HashMap<String, serde_yaml::Value>) -> Self {
+        let host = yaml_string(map, "DATABRICKS_HOST");
+        let explicit_model = yaml_string(map, "DATABRICKS_MODEL");
+        let goose_provider = yaml_string(map, "GOOSE_PROVIDER");
+        let goose_model = yaml_string(map, "GOOSE_MODEL");
+        let goose_mode = yaml_string(map, "GOOSE_MODE");
+        let model = explicit_model.or_else(|| {
+            if goose_provider
+                .as_deref()
+                .is_some_and(|p| p.eq_ignore_ascii_case("databricks"))
+            {
+                goose_model.or(goose_mode)
+            } else {
+                None
+            }
+        });
+        Self { host, model }
+    }
+}
+
+fn yaml_string(map: &HashMap<String, serde_yaml::Value>, key: &str) -> Option<String> {
+    map.get(key)?
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn goose_config_path() -> Option<PathBuf> {
+    if let Ok(root) = std::env::var("GOOSE_PATH_ROOT") {
+        return Some(PathBuf::from(root).join("config").join("config.yaml"));
+    }
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("goose")
+            .join("config.yaml"),
+    )
+}
+
+fn present_nonempty(v: Option<&str>) -> bool {
+    v.map(str::trim).is_some_and(|s| !s.is_empty())
+}
+
+fn databricks_available(host: Option<&str>, model: Option<&str>) -> bool {
+    present_nonempty(host) && present_nonempty(model)
+}
+
+fn resolve_provider(
+    requested: Option<&str>,
+    anthropic_key: Option<&str>,
+    openai_key: Option<&str>,
+    databricks_host: Option<&str>,
+    databricks_model: Option<&str>,
+) -> Result<Provider, String> {
+    let databricks_ready = databricks_available(databricks_host, databricks_model);
+    match requested.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => {
+            let normalized = raw.to_ascii_lowercase();
+            match normalized.as_str() {
+                "anthropic" if present_nonempty(anthropic_key) => Ok(Provider::Anthropic),
+                "anthropic" if databricks_ready => {
+                    tracing::warn!(
+                        requested = raw,
+                        "API key missing for requested provider; falling back to Databricks OAuth"
+                    );
+                    Ok(Provider::Databricks)
+                }
+                "anthropic" => Err(
+                    "config: ANTHROPIC_API_KEY required (or set DATABRICKS_HOST and DATABRICKS_MODEL for Databricks OAuth fallback)".into(),
+                ),
+                "openai" | "openai-compat" if present_nonempty(openai_key) => Ok(Provider::OpenAi),
+                "openai" | "openai-compat" if databricks_ready => {
+                    tracing::warn!(
+                        requested = raw,
+                        "API key missing for requested provider; falling back to Databricks OAuth"
+                    );
+                    Ok(Provider::Databricks)
+                }
+                "openai" | "openai-compat" => Err(
+                    "config: OPENAI_COMPAT_API_KEY required (or set DATABRICKS_HOST and DATABRICKS_MODEL for Databricks OAuth fallback)".into(),
+                ),
+                "databricks" => Ok(Provider::Databricks),
+                _ => Err(format!(
+                    "config: SPROUT_AGENT_PROVIDER={raw} not supported"
+                )),
+            }
+        }
+        None if databricks_ready => Ok(Provider::Databricks),
+        None => Err(
+            "config: SPROUT_AGENT_PROVIDER required (or set DATABRICKS_HOST and DATABRICKS_MODEL for Databricks OAuth fallback)".into(),
+        ),
+    }
 }
 
 /// Parse `OPENAI_COMPAT_API`. Pure (env-free) for testability; the
@@ -402,6 +540,161 @@ mod tests {
         }
         let err = parse_openai_api(Some("nope")).unwrap_err();
         assert!(err.contains("OPENAI_COMPAT_API=nope"), "{err}");
+    }
+
+    #[test]
+    fn goose_databricks_config_reads_host_and_model() {
+        let map = HashMap::from([
+            (
+                "DATABRICKS_HOST".to_string(),
+                serde_yaml::Value::String("https://dbc.example".into()),
+            ),
+            (
+                "GOOSE_PROVIDER".to_string(),
+                serde_yaml::Value::String("databricks".into()),
+            ),
+            (
+                "GOOSE_MODEL".to_string(),
+                serde_yaml::Value::String("goose-claude-4-6-sonnet".into()),
+            ),
+        ]);
+        let cfg = GooseDatabricksConfig::from_map(&map);
+        assert_eq!(cfg.host.as_deref(), Some("https://dbc.example"));
+        assert_eq!(cfg.model.as_deref(), Some("goose-claude-4-6-sonnet"));
+    }
+
+    #[test]
+    fn goose_databricks_config_prefers_explicit_databricks_model() {
+        let map = HashMap::from([
+            (
+                "DATABRICKS_HOST".to_string(),
+                serde_yaml::Value::String("https://dbc.example".into()),
+            ),
+            (
+                "DATABRICKS_MODEL".to_string(),
+                serde_yaml::Value::String("explicit-db-model".into()),
+            ),
+            (
+                "GOOSE_PROVIDER".to_string(),
+                serde_yaml::Value::String("databricks".into()),
+            ),
+            (
+                "GOOSE_MODEL".to_string(),
+                serde_yaml::Value::String("goose-model".into()),
+            ),
+        ]);
+        let cfg = GooseDatabricksConfig::from_map(&map);
+        assert_eq!(cfg.model.as_deref(), Some("explicit-db-model"));
+    }
+
+    #[test]
+    fn goose_databricks_config_ignores_goose_model_for_other_provider() {
+        let map = HashMap::from([
+            (
+                "DATABRICKS_HOST".to_string(),
+                serde_yaml::Value::String("https://dbc.example".into()),
+            ),
+            (
+                "GOOSE_PROVIDER".to_string(),
+                serde_yaml::Value::String("anthropic".into()),
+            ),
+            (
+                "GOOSE_MODEL".to_string(),
+                serde_yaml::Value::String("claude".into()),
+            ),
+        ]);
+        let cfg = GooseDatabricksConfig::from_map(&map);
+        assert_eq!(cfg.host.as_deref(), Some("https://dbc.example"));
+        assert!(cfg.model.is_none());
+    }
+
+    #[test]
+    fn resolve_provider_keeps_requested_provider_when_token_present() {
+        assert_eq!(
+            resolve_provider(
+                Some("anthropic"),
+                Some("sk-ant"),
+                None,
+                Some("https://dbc.example"),
+                Some("db-model")
+            )
+            .unwrap(),
+            Provider::Anthropic
+        );
+        assert_eq!(
+            resolve_provider(
+                Some("openai"),
+                None,
+                Some("sk-openai"),
+                Some("https://dbc.example"),
+                Some("db-model")
+            )
+            .unwrap(),
+            Provider::OpenAi
+        );
+    }
+
+    #[test]
+    fn resolve_provider_falls_back_to_databricks_when_requested_token_missing() {
+        assert_eq!(
+            resolve_provider(
+                Some("anthropic"),
+                None,
+                None,
+                Some("https://dbc.example"),
+                Some("goose-claude-4-6-sonnet")
+            )
+            .unwrap(),
+            Provider::Databricks
+        );
+        assert_eq!(
+            resolve_provider(
+                Some("openai-compat"),
+                None,
+                Some("   "),
+                Some("https://dbc.example"),
+                Some("goose-claude-4-6-sonnet")
+            )
+            .unwrap(),
+            Provider::Databricks
+        );
+    }
+
+    #[test]
+    fn resolve_provider_can_auto_select_databricks_without_explicit_provider() {
+        assert_eq!(
+            resolve_provider(
+                None,
+                None,
+                None,
+                Some("https://dbc.example"),
+                Some("goose-claude-4-6-sonnet")
+            )
+            .unwrap(),
+            Provider::Databricks
+        );
+    }
+
+    #[test]
+    fn resolve_provider_requires_databricks_host_and_model_for_fallback() {
+        let err = resolve_provider(
+            Some("openai"),
+            None,
+            None,
+            Some("https://dbc.example"),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("OPENAI_COMPAT_API_KEY required"));
+        let err =
+            resolve_provider(None, None, None, Some("https://dbc.example"), None).unwrap_err();
+        assert!(err.contains("SPROUT_AGENT_PROVIDER required"));
+    }
+
+    #[test]
+    fn resolve_provider_unsupported_error_preserves_user_casing() {
+        let err = resolve_provider(Some("OpenAIish"), None, None, None, None).unwrap_err();
+        assert!(err.contains("SPROUT_AGENT_PROVIDER=OpenAIish"));
     }
 
     #[test]

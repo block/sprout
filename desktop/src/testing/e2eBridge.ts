@@ -37,6 +37,7 @@ type E2eConfig = {
     profileReadDelayMs?: number;
     profileReadError?: string;
     profileUpdateError?: string;
+    stallWebsocketSends?: boolean;
   };
   relayHttpUrl?: string;
   relayWsUrl?: string;
@@ -451,6 +452,7 @@ declare global {
       payload?: Record<string, unknown>,
     ) => Promise<unknown>;
     __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
+    __SPROUT_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
   }
 }
 
@@ -1088,6 +1090,7 @@ const mockChannels: MockChannel[] = [
 const mockMessages = new Map<string, RelayEvent[]>();
 let mockRelayMembers: RawRelayMember[] = [];
 const mockSockets = new Map<number, MockSocket>();
+let mockWebsocketSendMutexWedged = false;
 const realSockets = new Map<number, WebSocket>();
 let mockManagedAgents: MockManagedAgent[] = [];
 let mockPersonas: RawPersona[] = [];
@@ -4351,6 +4354,10 @@ async function connectRealSocket(args: { url?: string; onMessage: unknown }) {
 }
 
 async function connectMockSocket(args: { onMessage: unknown }) {
+  if (mockWebsocketSendMutexWedged) {
+    return new Promise<number>(() => {});
+  }
+
   const wsId = nextSocketId++;
   const handler = resolveHandler(args.onMessage);
 
@@ -4396,6 +4403,14 @@ function sendToMockSocket(args: {
   };
 }) {
   const socket = mockSockets.get(args.id);
+  if (
+    getConfig()?.mock?.stallWebsocketSends &&
+    args.message?.type !== "Close"
+  ) {
+    mockWebsocketSendMutexWedged = true;
+    return new Promise<void>(() => {});
+  }
+
   if (!socket || !args.message) {
     return;
   }
@@ -4531,6 +4546,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockPersonas();
   resetMockTeams();
   resetMockWorkflows();
+  mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
@@ -4584,6 +4600,12 @@ export function maybeInstallE2eTauriMocks() {
     mockFeedOverrides[category].unshift(item);
     window.dispatchEvent(new CustomEvent("sprout:e2e-home-feed-updated"));
     return item;
+  };
+  window.__SPROUT_E2E_SET_STALL_WEBSOCKET_SENDS__ = (stall) => {
+    const config = getConfig();
+    if (!config?.mock) return;
+    config.mock.stallWebsocketSends = stall;
+    if (!stall) mockWebsocketSendMutexWedged = false;
   };
   const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
