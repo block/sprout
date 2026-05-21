@@ -492,7 +492,7 @@ export function QuickAddAgentPopover({
           }}
         >
           {/* Header with animated title / team toggles */}
-          <div className="relative flex min-h-10 items-center border-b px-3">
+          <div className="relative flex min-h-10 items-center gap-2 border-b px-3 py-1.5">
             <AnimatePresence mode="wait">
               {selectMode ? (
                 <motion.div
@@ -506,7 +506,7 @@ export function QuickAddAgentPopover({
                   {usableTeams.map((team, index) => (
                     <motion.div
                       key={team.id}
-                      initial={{ opacity: 0, x: 12 }}
+                      initial={{ opacity: 0, x: index === 0 ? 0 : 12 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{
                         duration: 0.2,
@@ -544,7 +544,7 @@ export function QuickAddAgentPopover({
 
             {/* Right side: Select / Cancel button */}
             {usableTeams.length > 0 ? (
-              <div className="ml-auto flex shrink-0 items-center pl-2">
+              <div className="ml-auto flex shrink-0 items-center">
                 <Button
                   className={
                     selectMode
