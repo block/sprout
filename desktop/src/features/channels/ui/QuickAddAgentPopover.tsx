@@ -237,25 +237,26 @@ export function QuickAddAgentPopover({
   const displayItems = React.useMemo(() => {
     if (!open) return items;
     const liveMap = new Map(items.map((item) => [getItemKey(item), item]));
-    // Keep stable order, update each item with live data, add new items at end
-    const result: QuickAddAgentItem[] = [];
+    // Keep stable order, update each item with live data
+    const stable: QuickAddAgentItem[] = [];
     const seen = new Set<string>();
     for (const stableItem of stableItems) {
       const key = getItemKey(stableItem);
       const liveItem = liveMap.get(key);
       if (liveItem) {
-        result.push(liveItem);
+        stable.push(liveItem);
         seen.add(key);
       }
     }
-    // Append any new items that weren't in the snapshot
+    // Prepend any new items (e.g. newly created agents) at the top
+    const newItems: QuickAddAgentItem[] = [];
     for (const item of items) {
       const key = getItemKey(item);
       if (!seen.has(key)) {
-        result.push(item);
+        newItems.push(item);
       }
     }
-    return result;
+    return [...newItems, ...stable];
   }, [open, stableItems, items]);
 
   // Reset state when popover closes
