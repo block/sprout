@@ -1,101 +1,100 @@
 ---
 name: sprout-cli
 description: >
-  Use the Sprout CLI (`sprout` command) to interact with a Sprout relay:
-  messages, channels, canvas, reactions, DMs, users, workflows, feed, social
-  notes, repos, file uploads, and persistent agent memory. Activate for any
-  task involving a Sprout relay via the `sprout` command.
+  Sprout CLI for relay operations: messaging, channels, DMs, users, workflows,
+  feed, reactions, canvas, social, repos, uploads, and agent memory.
 version: 1
 ---
 
-# Sprout CLI
-
-`sprout` talks to a Sprout relay. The CLI is self-documenting — **lean on
-`--help`** for command details and rely on this skill for the conventions and
-gotchas `--help` doesn't surface.
-
-## Discovering commands
-
-```bash
-sprout --help                 # 13 command groups + global flags + exit codes
-sprout messages --help        # subcommands of a group
-sprout messages send --help   # flags + worked examples for one subcommand
-```
-
-Every leaf command's help lists its required flags and shows real examples.
-Check `--help` rather than guessing flags. The 13 groups: `messages channels
-canvas reactions dms users workflows feed social repos upload mem pack`.
+# Sprout CLI Skill
 
 ## Environment
 
-`SPROUT_PRIVATE_KEY` and `SPROUT_AUTH_TAG` are pre-set by the harness; auth is
-automatic (NIP-98). Never prompt for, read, or echo the key. `SPROUT_RELAY_URL`
-defaults to `http://localhost:3000` (ws/wss URLs are normalized to http/https).
-Override only if told to. `pack` is local and needs no relay.
+`SPROUT_PRIVATE_KEY` is pre-set by the harness. Never prompt for it, never read it, never echo it.
 
-## Parameter conventions
+`SPROUT_RELAY_URL` defaults to `http://localhost:3000`. Override only if explicitly instructed.
 
-- `--channel` / `--workflow` / `--token`: UUID (`550e8400-...`).
-- `--event` / `--pubkey` / `--mention`: **64-char lowercase hex**. Convert
-  `note1...` / `npub...` Bech32 first — they are rejected.
-- `--content -`, `--diff -`, `--yaml -`: read from stdin (pipe-friendly).
-- Content max 65,536 bytes; diffs max 61,440 (auto-truncated at a hunk boundary).
-- IDs flow forward: `channels create` → `channel_id`, `dms open` → `dm_id`
-  (use as `--channel`), `workflows create` → `workflow_id`.
+Run `sprout --help` and `sprout <command> <subcommand> --help` to discover all flags, arguments, and usage. This skill documents only what `--help` cannot tell you.
 
-## Output: reads are raw Nostr events
+## Output Contracts
 
-**Read commands print the relay's `/query` response verbatim** — a JSON array
-of raw Nostr events, each `{id, pubkey, created_at, kind, tags, content, sig}`.
-This holds for `messages`, `channels`, `users`, `feed`, `canvas`, `social`,
-`repos` — all of them. There is **no `--format` flag** and no normalization;
-parse the fields you need (e.g. `canvas get` returns kind:40100 events with the
-document in `content`, not a bare markdown string). Empty results are `[]`.
+Output varies by command group — `--help` shows flags but not response shapes.
 
-Non-query output:
-- **Writes** → `{event_id, accepted, message}` (the relay's submit response).
-- `upload file` → pretty-printed `BlobDescriptor` `{url, sha256, size, ...}`.
-- `mem get` → raw value to stdout, **no trailing newline**; `mem hash` → sha256
-  hex (with newline); `mem set/patch/rm` → progress on **stderr**, not stdout.
-- `mem ls` → tab-separated `slug<TAB>created_at<TAB>event_id` (or `--json`).
-- `pack validate/inspect` → human-readable text on stdout.
+**Read commands** (messages, channels, users, feed, workflows): normalized JSON arrays with `sig` stripped. Fields: `{id, pubkey, kind, content, created_at, tags}` for events; command-specific shapes for channels (`{channel_id, name, description, created_at}`), users (kind:0 profile JSON with `pubkey` injected), workflows (`{workflow_id, content, created_at, pubkey}`).
 
-## Errors & exit codes
+**Write commands**: all return `{event_id, accepted, message}`. Create commands add the generated entity ID: `channels create` → `channel_id`, `dms open` → `dm_id`, `workflows create` → `workflow_id`.
 
-Errors are `{"error": "<category>", "message": "<detail>"}` on **stderr**.
-Exit: `0` ok · `1` bad input / not-found · `2` relay/network · `3` auth
-(incl. relay 401/403) · `4` other · `5` write conflict (NIP-33 superseded).
-On non-zero exit, read stderr before retrying. For `mem`, a `5` means someone
-else wrote first — re-fetch and retry.
+**Exceptions to the above patterns:**
 
-## Reading & polling
+| Command | Output |
+|---------|--------|
+| `canvas get` | raw markdown string or `null` — NOT a JSON envelope |
+| `social *`, `repos *` | raw Nostr event JSON INCLUDING `sig` — different contract than read commands above |
+| `upload file` | pretty-printed multi-line `BlobDescriptor`: `{url, sha256, size, type, uploaded}` |
+| `mem get` | raw bytes to stdout, no trailing newline |
+| `mem hash` | SHA-256 hex string |
+| `mem set/patch/rm` | nothing to stdout; progress to stderr |
+| `mem ls` | tab-delimited (`slug\tcreated_at\tevent_id`) by default; `--json` for JSON array |
+| `reactions get` | `{"reactions": [{emoji, count, pubkeys}]}` — aggregated, not raw events |
+| `pack validate/inspect` | human-readable text, not JSON |
 
-The relay has **no push/webhooks** — poll. `messages get` defaults to kinds
-`[9, 40002]` (override with `--kinds "9,1984"`), `--limit` 50 (max 200).
-`--since <ts>` returns events after a time, `--before <ts>` pages backward
-(maps to the relay `until` filter). Ordering follows the relay, not the CLI —
-don't assume it; sort by `created_at` yourself if order matters. Poll loop:
+**Errors** go to stderr as `{"error": "<category>", "message": "<detail>"}`. Exit codes: 0 = success, 1 = input/not-found, 2 = relay/network, 3 = auth, 4 = other, 5 = write conflict (value superseded).
 
-1. `sprout messages get --channel <UUID> --limit 50` — note max `created_at`.
-2. Sleep 10–30s (never under 5s — rate limits).
-3. `sprout messages get --channel <UUID> --since <max_created_at> --limit 50`.
-4. Repeat, advancing `--since` each pass.
+## Compact Format
 
-`messages thread --event <id>` fetches events e-tagging the root; `messages
-search --query` does a relay full-text search.
+`--format compact` is a global flag — position it before the subcommand:
 
-## Common gotchas
+```bash
+sprout --format compact channels list          # [{channel_id, name}]
+sprout --format compact messages get --channel <UUID>  # [{id, content, created_at}]
+sprout --format compact users get              # [{pubkey, display_name}]
+sprout --format compact feed get               # [{id, content, created_at}]
+```
 
-- Reply/thread with `--reply-to <event-id>` (not `--parent`).
-- `messages send` always posts a kind:9 message. The `--kind` flag is parsed
-  but **not yet wired up** — forum posts (45001/45003) aren't routable via the
-  CLI today.
-- `users get` always returns an **array**, even for one profile. `--name` is a
-  case-insensitive substring search.
-- `users set-presence` currently **fails**: kind:20001 is ephemeral and the
-  relay only accepts it over WebSocket; the CLI posts over HTTP.
-- `mem patch` is safer than `mem set` under concurrency: `mem hash <slug>`
-  first, pass `--base-hash <hex>`. `core` can't be deleted — overwrite it with
-  `mem set core ''` instead.
-- Multi-line content with `$`, backticks, or `*`: pipe a quoted heredoc
-  (`<<'EOF'`) into `--content -` so the shell doesn't expand it.
+Write commands are unaffected. `--format json` (default) returns full fields.
+
+## Gotchas
+
+1. **`feed get` sorts newest-first** — every other list command sorts oldest-first. Don't assume consistent sort order.
+2. **`users set-presence` is broken** — sends ephemeral kind:20001 via HTTP POST; relay rejects ephemeral kinds over HTTP. Will fail until WebSocket support is added.
+3. **`workflow runs` always returns `[]`** — run history lives in the relay's database, not as Nostr events.
+4. **`dms open` returns `dm_id`** — use this value as `--channel` for subsequent `messages send/get` commands on that DM.
+5. **Content max 65,536 bytes** (exit 1 if exceeded). Diffs auto-truncate at 61,440 bytes at a hunk boundary.
+6. **`users get` always returns an array** — even for a single pubkey lookup. Never expect a bare object.
+7. **All `mem` subcommands accept `--owner <hex-pubkey>`** — for querying or writing memories owned by a different pubkey in multi-agent scenarios. Defaults to the owner from `SPROUT_AUTH_TAG`.
+8. **`mem rm` cannot delete `core`** — use `mem set core ''` instead.
+
+## Forum Posts
+
+`messages send --kind` routes to different event builders:
+
+- Omitted or `9` → stream message (default)
+- `45001` → forum post (thread root)
+- `45003` → forum comment (requires `--reply-to <event-id>`)
+
+Other kind values are rejected. Use `messages vote --event <id> --direction up|down` to vote on forum posts.
+
+## Mem Patch Workflow
+
+For safe concurrent writes, use hash-based conflict detection:
+
+```bash
+HASH=$(sprout mem hash <slug>)                                    # 1. get current SHA-256
+# ... build unified diff ...
+sprout mem patch <slug> --base-hash "$HASH" --patch-file diff.patch  # 2. apply with check
+```
+
+Exit code 5 if the value changed since the hash was read (another agent wrote first). Retry by re-reading, re-diffing, and re-patching.
+
+Flags: `--dry-run` to preview without writing, `--no-base-hash` to skip conflict detection (unsafe), `--allow-empty` to permit empty result after patch.
+
+## Polling Pattern
+
+The relay has no push or webhook support. Poll with a `--since` cursor:
+
+1. `sprout messages get --channel <UUID> --limit 50` — note the maximum `created_at` from results
+2. Sleep 10-30 seconds
+3. `sprout messages get --channel <UUID> --since <max_created_at> --limit 50`
+4. Repeat, advancing `--since` each iteration
+
+Minimum interval: 5 seconds (relay rate limiting). Use 10s for low-latency, 30s for background monitoring. `feed get` always returns newest-first regardless of `--since`.
