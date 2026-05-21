@@ -67,9 +67,9 @@ This document uses MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, and RECOMMENDED as d
 | `9036` | Unarchive Request | user / agent | policy-defined; MAY be stored | Ask relay to unarchive a target |
 | `8002` | Archived Identity | relay | regular | Relay-signed archive delta |
 | `8003` | Unarchived Identity | relay | regular | Relay-signed unarchive delta |
-| `13535` | Archived Identities List | relay | replaceable-by-convention | Current relay archive state |
+| `13535` | Archived Identities List | relay | replaceable | Current relay archive state |
 
-`kind:13535` is outside NIP-16's replaceable range. Relays implementing this NIP nevertheless MUST treat it as replaceable by convention for `(kind, relay_pubkey)`: only the latest valid `kind:13535` signed by the relay identity represents current state. This mirrors NIP-43's relay-membership snapshot shape and is intentionally relay-scoped rather than author-scoped user state. Relays without a stable NIP-11 `self` pubkey MUST NOT publish NIP-IA relay-signed state, because clients would have no stable key against which to verify it.
+`kind:13535` is replaceable per NIP-01 (`10000 <= n < 20000`). Clients use the latest valid `kind:13535` signed by the relay identity as current state. The snapshot is relay-scoped: it is signed by the relay identity advertised in NIP-11 `self`, mirroring NIP-43's relay-membership snapshot shape. Relays without a stable NIP-11 `self` pubkey MUST NOT publish NIP-IA relay-signed state, because clients would have no stable key against which to verify it.
 
 ## Event Formats
 
@@ -162,7 +162,7 @@ The `consent` tag's second element MUST be one of:
 
 - `self`: the target signed the request directly. The third element, if present, MUST equal the target.
 - `owner`: an owner signed the request and proved owner-of-agent authority with NIP-OA. The third element MUST be the owner pubkey.
-- `admin`: a relay owner/admin accepted the request under local policy. The third element MUST be the admin actor pubkey.
+- `admin`: an actor accepted by the relay's local admin policy. The third element MUST be the admin actor pubkey.
 - `relay`: the relay archived the identity by local policy without a user request. The third element SHOULD be omitted.
 
 If the delta was caused by a request event, the delta MUST include an `e` tag referencing that request event id. The request event SHOULD be retrievable from the relay for audit. If the relay archived an identity on its own initiative with no request event, the `e` tag MAY be omitted and the `consent` path MUST be `relay`.
@@ -210,7 +210,7 @@ Required tags:
 
 - exactly one NIP-70 `-` tag.
 
-The NIP-70 marker is intentional on the snapshot even though the snapshot is replaceable by convention. It tells generic relays and clients not to rebroadcast relay-authoritative administrative state outside the relay context where the signing key is meaningful.
+The NIP-70 marker is intentional on the snapshot even though the snapshot is replaceable. It tells generic relays and clients not to rebroadcast relay-authoritative administrative state outside the relay context where the signing key is meaningful.
 
 Each archived identity is represented by a bare `p` tag whose second element is the archived pubkey. Additional elements on `p` tags are not defined by this NIP and MUST be ignored for archive-state construction. Metadata such as reason, replacement pubkey, actor, and consent path belongs on the `kind:8002`/`kind:8003` deltas, not on the list.
 
@@ -222,7 +222,7 @@ A relay MAY accept or reject archive and unarchive requests according to local p
 
 ### Admin Requests
 
-A relay MAY accept `kind:9035` and `kind:9036` requests from actors that are relay owners or admins under the relay's NIP-43 membership state.
+A relay MAY accept `kind:9035` and `kind:9036` requests from actors authorized under the relay's local admin policy. NIP-IA does not define how admin authority is assigned; this is implementation-defined.
 
 Admin requests MAY target any pubkey. Accepted admin archive deltas MUST use `consent=admin` and identify the admin actor in the third element of the `consent` tag.
 
@@ -286,7 +286,7 @@ Clients SHOULD process live `kind:8002` and `kind:8003` deltas for immediate UI 
 
 ## Snapshot and Delta Consistency
 
-The latest valid `kind:13535` snapshot is authoritative. Deltas are an append-only explanation stream. Clients SHOULD track the highest `created_at` they have accepted per relay identity for `kind:13535` and reject older snapshots from the same relay identity, even if they arrive later over a subscription. This provides rollback resistance against stale snapshot replay. If two valid snapshots have the same `created_at`, clients SHOULD choose the lexicographically greater event id as a deterministic tie-breaker and SHOULD treat exact-timestamp replacement as an implementation anomaly worth refetching.
+The latest valid `kind:13535` snapshot is authoritative. Deltas are an append-only explanation stream. Clients SHOULD track the highest `created_at` they have accepted per relay identity for `kind:13535` and reject older snapshots from the same relay identity, even if they arrive later over a subscription. This provides rollback resistance against stale snapshot replay. Same-`created_at` resolution follows NIP-01: retain the event with the lowest id (first in lexical order).
 
 A client reconstructing state from scratch SHOULD:
 
@@ -488,7 +488,7 @@ The old agent disappears from active agent pickers on that relay. Its historical
 
 ### Admin archive plus NIP-43 ban
 
-A spammer should be hidden and barred from reconnecting. The relay owner removes the spammer with NIP-43 (`kind:9031`) and archives the same pubkey with NIP-IA (`kind:9035`).
+A spammer should be hidden and barred from reconnecting. A relay admin removes the spammer via NIP-43 member removal (`kind:8001`) and archives the same pubkey with NIP-IA (`kind:9035`).
 
 Clients hide the spammer because of NIP-IA. The relay denies access because of NIP-43. These are separate state transitions and remain separately auditable.
 
