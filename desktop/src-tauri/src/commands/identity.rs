@@ -38,6 +38,13 @@ pub fn get_default_relay_url() -> String {
 }
 
 #[tauri::command]
+pub fn is_shared_identity() -> bool {
+    std::env::var("SPROUT_SHARE_IDENTITY")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+#[tauri::command]
 pub fn get_relay_ws_url(state: State<'_, AppState>) -> String {
     relay_ws_url_with_override(&state)
 }

@@ -4,7 +4,7 @@ import { useQueryClient, type QueryStatus } from "@tanstack/react-query";
 import { channelsQueryKey } from "@/features/channels/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { getChannels, joinChannel } from "@/shared/api/tauri";
+import { getChannels, isSharedIdentity, joinChannel } from "@/shared/api/tauri";
 
 const DEFAULT_AUTO_JOIN_CHANNEL_NAME = "general";
 
@@ -36,6 +36,7 @@ type UseFirstRunOnboardingGateOptions = {
   hasExistingProfile: boolean;
   identityIsFetching: boolean;
   identityStatus: QueryStatus;
+  isSharedIdentity: boolean;
   profileStatus: QueryStatus;
 };
 
@@ -129,6 +130,7 @@ export function useFirstRunOnboardingGate({
   hasExistingProfile,
   identityIsFetching,
   identityStatus,
+  isSharedIdentity: isSharedIdentityProp,
   profileStatus,
 }: UseFirstRunOnboardingGateOptions) {
   const [gateState, setGateState] = React.useState<OnboardingGateState>(() =>
@@ -146,7 +148,7 @@ export function useFirstRunOnboardingGate({
   }, [currentPubkey]);
 
   React.useEffect(() => {
-    if (hasSettledCurrentPubkey || !currentPubkey) {
+    if ((hasSettledCurrentPubkey && !isSharedIdentityProp) || !currentPubkey) {
       return;
     }
 
@@ -161,6 +163,26 @@ export function useFirstRunOnboardingGate({
     }
 
     if (identityStatus !== "success") {
+      return;
+    }
+
+    // Shared identity worktrees have already onboarded in the main checkout.
+    // Skip unconditionally without waiting for the relay profile query.
+    if (isSharedIdentityProp) {
+      if (typeof window !== "undefined" && currentPubkey) {
+        window.localStorage.setItem(
+          onboardingCompletionStorageKey(currentPubkey),
+          "true",
+        );
+      }
+      setGateState((current) =>
+        updateActiveGateState(current, currentPubkey, (activeGateState) => ({
+          ...activeGateState,
+          hasCompletedCurrentPubkey: true,
+          hasSettledCurrentPubkey: true,
+          isOpen: false,
+        })),
+      );
       return;
     }
 
@@ -197,6 +219,7 @@ export function useFirstRunOnboardingGate({
     hasExistingProfile,
     hasSettledCurrentPubkey,
     identityStatus,
+    isSharedIdentityProp,
     profileStatus,
   ]);
 
@@ -252,11 +275,16 @@ export function useAppOnboardingState() {
   const identity = identityQuery.data;
   const currentPubkey = identity?.pubkey ?? null;
   const profileQuery = useProfileQuery();
+  const [sharedIdentity, setSharedIdentity] = React.useState(false);
+  React.useEffect(() => {
+    isSharedIdentity().then(setSharedIdentity).catch(() => {});
+  }, []);
   const onboardingGate = useFirstRunOnboardingGate({
     currentPubkey,
     hasExistingProfile: hasRealDisplayName(profileQuery.data?.displayName),
     identityIsFetching: identityQuery.fetchStatus === "fetching",
     identityStatus: identityQuery.status,
+    isSharedIdentity: sharedIdentity,
     profileStatus: profileQuery.status,
   });
   const gateComplete = onboardingGate.complete;

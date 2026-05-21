@@ -461,6 +461,7 @@ pub fn run() {
             get_presence,
             set_presence,
             get_default_relay_url,
+            is_shared_identity,
             get_relay_ws_url,
             get_relay_http_url,
             get_media_proxy_port,

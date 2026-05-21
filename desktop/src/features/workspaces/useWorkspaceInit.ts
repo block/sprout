@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
-import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
+import { applyWorkspace, getDefaultRelayUrl, getIdentity, isSharedIdentity } from "@/shared/api/tauri";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 
+import {
+  deriveWorkspaceName,
+  normalizeRelayUrl,
+  saveActiveWorkspaceId,
+  saveWorkspaces,
+} from "./workspaceStorage";
 import type { Workspace } from "./types";
 
 /**
@@ -60,9 +66,30 @@ export function useWorkspaceInit(
 
     async function init() {
       if (!activeWorkspace) {
-        // No workspace — need setup
         try {
-          const defaultRelayUrl = await getDefaultRelayUrl();
+          const [defaultRelayUrl, sharedIdentity] = await Promise.all([
+            getDefaultRelayUrl(),
+            isSharedIdentity(),
+          ]);
+
+          if (sharedIdentity) {
+            // Shared identity worktree: auto-create workspace from the
+            // default relay URL so the user skips WelcomeSetup entirely.
+            const identity = await getIdentity();
+            const normalizedUrl = normalizeRelayUrl(defaultRelayUrl);
+            const workspace: Workspace = {
+              id: crypto.randomUUID(),
+              name: deriveWorkspaceName(normalizedUrl),
+              relayUrl: normalizedUrl,
+              pubkey: identity.pubkey,
+              addedAt: new Date().toISOString(),
+            };
+            saveWorkspaces([workspace]);
+            saveActiveWorkspaceId(workspace.id);
+            window.location.reload();
+            return;
+          }
+
           if (!cancelled) {
             setResult({
               isReady: false,
