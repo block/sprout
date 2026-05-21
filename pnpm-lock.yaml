@@ -5,9 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  isomorphic-git:
-    hash: 5b43d4f88847fa3640b2babcef47638b012883aff16efacd3818d29bfa690cb1
-    path: patches/isomorphic-git.patch
+  isomorphic-git@1.38.1: e9b414a60d4cf1d8aa18f7a779483984e821989967c235662566e94ef0238d3f
 
 importers:
 
@@ -242,7 +240,7 @@ importers:
         version: 2.1.1
       isomorphic-git:
         specifier: ^1.37.6
-        version: 1.38.1(patch_hash=5b43d4f88847fa3640b2babcef47638b012883aff16efacd3818d29bfa690cb1)
+        version: 1.38.1(patch_hash=e9b414a60d4cf1d8aa18f7a779483984e821989967c235662566e94ef0238d3f)
       lucide-react:
         specifier: ^0.577.0
         version: 0.577.0(react@19.2.6)
@@ -1226,7 +1224,6 @@ packages:
     resolution: {integrity: sha512-J3Yh9PzzF1Ovah2At+lHiGQdsYgArxBbXv/zHfSyaiFQEqvNv7DcW98pCrmdjCZBrqBiKrKKe2V+aaSGWuBe/w==}
     cpu: [arm]
     os: [linux]
-    libc: [musl]
 
   '@rollup/rollup-linux-arm64-gnu@4.60.4':
     resolution: {integrity: sha512-BFDEZMYfUvLn37ONE1yMBojPxnMlTFsdyNoqncT0qFq1mAfllL+ATMMJd8TeuVMiX84s1KbcxcZbXInmcO2mRg==}
@@ -1238,7 +1235,6 @@ packages:
     resolution: {integrity: sha512-pc9EYOSlOgdQ2uPl1o9PF6/kLSgaUosia7gOuS8mB69IxJvlclko1MECXysjs5ryez1/5zjYqx3+xYU0TU6R1A==}
     cpu: [arm64]
     os: [linux]
-    libc: [musl]
 
   '@rollup/rollup-linux-loong64-gnu@4.60.4':
     resolution: {integrity: sha512-NxnomyxYerDh5n4iLrNa+sH+Z+U4BMEE46V2PgQ/hoB909i8gV1M5wPojWg9fk1jWpO3IQnOs20K4wyZuFLEFQ==}
@@ -1474,7 +1470,6 @@ packages:
     engines: {node: '>= 10'}
     cpu: [riscv64]
     os: [linux]
-    libc: [glibc]
 
   '@tauri-apps/cli-linux-x64-gnu@2.11.2':
     resolution: {integrity: sha512-Ru4gwJKPG0ctVGchRGpRup4Y4lW2SSfFnrbQcyHhCliKy4g8Qz97TrUgCur4CbWyAgKxvGh3SjrkA0LDYzDGiw==}
@@ -3029,7 +3024,7 @@ packages:
     engines: {node: '>= 0.4'}
 
   wrappy@1.0.2:
-    resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
+    resolution: {integrity: sha1-tSQ9jz7BqjXxNkYFvA0QNuMKtp8=}
 
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
@@ -4835,7 +4830,7 @@ snapshots:
 
   isbot@5.1.40: {}
 
-  isomorphic-git@1.38.1(patch_hash=5b43d4f88847fa3640b2babcef47638b012883aff16efacd3818d29bfa690cb1):
+  isomorphic-git@1.38.1(patch_hash=e9b414a60d4cf1d8aa18f7a779483984e821989967c235662566e94ef0238d3f):
     dependencies:
       async-lock: 1.4.1
       clean-git-ref: 2.0.1
