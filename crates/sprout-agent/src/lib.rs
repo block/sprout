@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod agent;
+pub mod auth;
 mod config;
 mod handoff;
 mod llm;

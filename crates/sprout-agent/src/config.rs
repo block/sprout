@@ -26,6 +26,10 @@ const DEFAULT_SYSTEM_PROMPT: &str =
 pub enum Provider {
     Anthropic,
     OpenAi,
+    /// Databricks model serving. Routes to `{base_url}/serving-endpoints/{model}/invocations`
+    /// with a dynamically-acquired bearer (OAuth 2.0 PKCE, or static `DATABRICKS_TOKEN`).
+    /// Wire format is OpenAI-chat-compatible — reuses the same body builder and parser.
+    Databricks,
 }
 
 /// Which OpenAI-family HTTP API to call. Set via `OPENAI_COMPAT_API`
@@ -78,10 +82,15 @@ impl Config {
         let provider = match req("SPROUT_AGENT_PROVIDER")?.to_ascii_lowercase().as_str() {
             "anthropic" => Provider::Anthropic,
             "openai" | "openai-compat" => Provider::OpenAi,
+            "databricks" => Provider::Databricks,
             o => return Err(format!("config: SPROUT_AGENT_PROVIDER={o} not supported")),
         };
         // OPENAI_COMPAT_API is only read when provider=openai, so a stray
         // bad value can't break an Anthropic-only deployment.
+        //
+        // Databricks borrows api_key as the *optional* `DATABRICKS_TOKEN` escape
+        // hatch — empty means "use OAuth PKCE." The model lives in the URL path,
+        // not the request body (see `EndpointStrategy::DatabricksServing`).
         let (api_key, model, base_url, openai_api) = match provider {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
@@ -94,6 +103,12 @@ impl Config {
                 req("OPENAI_COMPAT_MODEL")?,
                 env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
                 parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
+            ),
+            Provider::Databricks => (
+                env("DATABRICKS_TOKEN").unwrap_or_default(),
+                req("DATABRICKS_MODEL")?,
+                req("DATABRICKS_HOST")?,
+                OpenAiApi::Chat, // Databricks invocations is chat-shaped
             ),
         };
         let system_prompt = match (env("SPROUT_AGENT_SYSTEM_PROMPT"), env("SPROUT_AGENT_SYSTEM_PROMPT_FILE")) {

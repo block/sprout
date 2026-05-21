@@ -25,15 +25,23 @@ name = "fake-mcp"
 path = "tests/bin/fake_mcp.rs"
 
 [dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time", "net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls", "form"] }
 rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process"] }
 arc-swap = "1"
 getrandom = "0.2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# OAuth 2.0 PKCE for Databricks (and future browser-auth providers).
+async-trait = "0.1"
+axum = { workspace = true }
+base64 = "0.22"
+hex = { workspace = true }
+sha2 = { workspace = true }
+urlencoding = "2"
+webbrowser = "1"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
@@ -41,3 +49,8 @@ nix = { version = "0.31", default-features = false, features = ["signal", "proce
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread", "macros", "io-std", "io-util", "sync", "process", "time", "net"] }
 nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
+axum = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+tempfile = "3"

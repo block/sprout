@@ -1,12 +1,20 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use reqwest::Client;
 use serde_json::{json, Value};
 
+use crate::auth::{PkceOAuthConfig, PkceOAuthTokenSource, StaticTokenSource, TokenSource};
 use crate::config::{is_openai_host, Config, OpenAiApi, Provider};
 use crate::types::{
     AgentError, HistoryItem, LlmResponse, ProviderStop, ToolCall, ToolDef, ToolResultContent,
 };
+
+/// Databricks OAuth client_id — the public Databricks-published CLI client.
+/// PKCE-only, no secret. Same identifier goose uses, so a user's browser
+/// consent for `databricks-cli` covers sprout-agent too.
+const DATABRICKS_CLIENT_ID: &str = "databricks-cli";
+const DATABRICKS_OAUTH_SCOPES: &[&str] = &["all-apis", "offline_access"];
 
 const MAX_LLM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LLM_ERROR_BODY_BYTES: usize = 4 * 1024;
@@ -22,6 +30,12 @@ pub struct Llm {
     /// == Auto`. Subsequent OpenAI calls then go straight to Responses
     /// for the lifetime of the process.
     auto_upgraded: AtomicBool,
+    /// Bearer-token source for OpenAI-family requests. Static for OpenAI
+    /// (the `OPENAI_COMPAT_API_KEY` env var) and Databricks-with-token
+    /// (the `DATABRICKS_TOKEN` env var); a refreshable PKCE engine for
+    /// Databricks otherwise. Anthropic doesn't use this — it always
+    /// reads `cfg.api_key` directly because the API expects `x-api-key`.
+    auth: Arc<dyn TokenSource>,
 }
 
 impl Llm {
@@ -31,9 +45,11 @@ impl Llm {
             .timeout(cfg.llm_timeout)
             .build()
             .map_err(|e| AgentError::Llm(format!("http: {e}")))?;
+        let auth = build_token_source(cfg)?;
         Ok(Self {
             http,
             auto_upgraded: AtomicBool::new(false),
+            auth,
         })
     }
 
@@ -50,7 +66,7 @@ impl Llm {
                     .await?;
                 parse_anthropic(v)
             }
-            Provider::OpenAi => {
+            Provider::OpenAi | Provider::Databricks => {
                 self.openai_request(cfg, |use_responses| {
                     if use_responses {
                         (
@@ -89,7 +105,7 @@ impl Llm {
                 });
                 Ok(parse_anthropic(self.post_anthropic(cfg, &body).await?)?.text)
             }
-            Provider::OpenAi => {
+            Provider::OpenAi | Provider::Databricks => {
                 let r = self
                     .openai_request(cfg, |use_responses| {
                         if use_responses {
@@ -159,14 +175,35 @@ impl Llm {
         }
     }
 
+    /// POST to an OpenAI-family endpoint. For OpenAI-compat this is just
+    /// `{base_url}{path}` with the body untouched. For Databricks the URL
+    /// becomes `{base_url}/serving-endpoints/{model}/invocations` and the
+    /// `model` field is stripped from the body (Databricks rejects it —
+    /// the endpoint path already names the model).
     async fn post_openai(
         &self,
         cfg: &Config,
         path: &str,
         body: &Value,
     ) -> Result<Value, AgentError> {
-        let url = format!("{}{}", cfg.base_url.trim_end_matches('/'), path);
-        post(&self.http, &url, body, |r| r.bearer_auth(&cfg.api_key)).await
+        let bearer = self.auth.bearer().await?;
+        let (url, body_owned);
+        let body_ref: &Value = match cfg.provider {
+            Provider::Databricks => {
+                url = format!(
+                    "{}/serving-endpoints/{}/invocations",
+                    cfg.base_url.trim_end_matches('/'),
+                    cfg.model
+                );
+                body_owned = strip_model(body);
+                &body_owned
+            }
+            _ => {
+                url = format!("{}{}", cfg.base_url.trim_end_matches('/'), path);
+                body
+            }
+        };
+        post(&self.http, &url, body_ref, |r| r.bearer_auth(&bearer)).await
     }
 
     /// If `err` names `/v1/responses` / "use the Responses API", latch a
@@ -702,6 +739,55 @@ where
         return serde_json::from_slice(&buf).map_err(|e| AgentError::Llm(format!("json: {e}")));
     }
     Err(AgentError::Llm("exhausted retries".into()))
+}
+
+/// Build the `TokenSource` for the configured provider.
+///
+/// - `Provider::Anthropic`: a static source seeded from `cfg.api_key`. It's
+///   never read for Anthropic requests (those go through `post_anthropic` with
+///   `x-api-key`), but Llm holds one to keep the field non-`Option`.
+/// - `Provider::OpenAi`: a static source over `OPENAI_COMPAT_API_KEY`.
+/// - `Provider::Databricks`: if `DATABRICKS_TOKEN` is set, a static source.
+///   Otherwise a `PkceOAuthTokenSource` pointed at the workspace's OIDC
+///   discovery URL. First request without a cached token triggers a browser
+///   flow; subsequent requests use the cache + refresh transparently.
+fn build_token_source(cfg: &Config) -> Result<Arc<dyn TokenSource>, AgentError> {
+    match cfg.provider {
+        Provider::Anthropic | Provider::OpenAi => {
+            Ok(Arc::new(StaticTokenSource::new(cfg.api_key.clone())))
+        }
+        Provider::Databricks => {
+            if !cfg.api_key.is_empty() {
+                return Ok(Arc::new(StaticTokenSource::new(cfg.api_key.clone())));
+            }
+            let discovery_url = format!(
+                "{}/oidc/.well-known/oauth-authorization-server",
+                cfg.base_url.trim_end_matches('/')
+            );
+            let pkce = PkceOAuthConfig {
+                discovery_url,
+                client_id: DATABRICKS_CLIENT_ID.into(),
+                scopes: DATABRICKS_OAUTH_SCOPES.iter().map(|s| (*s).into()).collect(),
+                cache_namespace: "databricks".into(),
+                cache_dir_override: None,
+            };
+            Ok(PkceOAuthTokenSource::new(pkce)?)
+        }
+    }
+}
+
+/// Return a clone of `body` with any top-level `"model"` field removed.
+/// Used for Databricks model-serving, which encodes the model in the URL
+/// path and rejects the field in the body.
+fn strip_model(body: &Value) -> Value {
+    match body {
+        Value::Object(map) => {
+            let mut m = map.clone();
+            m.remove("model");
+            Value::Object(m)
+        }
+        other => other.clone(),
+    }
 }
 
 #[cfg(test)]
