@@ -534,7 +534,7 @@ export function QuickAddAgentPopover({
             {selectMode ? (
               <motion.div
                 key="team-row"
-                className="relative border-b px-3 py-2"
+                className="relative border-b px-3 py-1"
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
