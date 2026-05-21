@@ -121,7 +121,7 @@ function HexAvatar({
           aria-label={ariaLabel ?? `Participant ${pubkey.slice(0, 8)}`}
           role="img"
           className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-semibold shadow-sm",
+            "flex h-7 w-7 items-center justify-center rounded-lg text-[9px] font-semibold shadow-xs",
             isActive &&
               "ring-2 ring-green-500 ring-offset-1 ring-offset-background",
           )}

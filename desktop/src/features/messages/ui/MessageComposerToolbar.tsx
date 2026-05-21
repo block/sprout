@@ -94,7 +94,7 @@ export const MessageComposerToolbar = React.memo(
                         className={cn(
                           "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors",
                           "hover:bg-muted hover:text-foreground",
-                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                           "disabled:pointer-events-none disabled:opacity-50",
                           "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
                           isFormattingOpen
@@ -221,7 +221,7 @@ export const MessageComposerToolbar = React.memo(
                         className={cn(
                           "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors",
                           "hover:bg-muted hover:text-foreground",
-                          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                           "disabled:pointer-events-none disabled:opacity-50",
                           "[&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
                           isFormattingOpen

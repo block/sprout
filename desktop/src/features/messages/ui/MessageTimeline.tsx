@@ -169,7 +169,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
             {!isLoading && messages.length === 0 ? (
               <div
-                className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm"
+                className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-xs"
                 data-testid="message-empty"
               >
                 <p className="text-base font-semibold tracking-tight">
@@ -209,7 +209,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         {!isAtBottom ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-36 z-20 flex justify-center px-4">
             <Button
-              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
+              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
               data-testid="message-scroll-to-latest"
               onClick={() => {
                 scrollToBottom("smooth");

@@ -485,7 +485,7 @@ export function AddChannelBotDialog({
           <div className="space-y-1.5">
             <div className="text-sm font-medium">Run on</div>
             <select
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
               disabled={createBotsMutation.isPending}
               onChange={(e) => handleRunOnChange(e.target.value)}
               value={runOn}

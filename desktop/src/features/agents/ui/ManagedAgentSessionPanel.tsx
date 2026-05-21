@@ -76,7 +76,7 @@ export function ManagedAgentSessionPanel({
   return (
     <section
       className={cn(
-        "rounded-lg border border-border/70 bg-background/80 p-4 shadow-sm",
+        "rounded-lg border border-border/70 bg-background/80 p-4 shadow-xs",
         className,
       )}
     >

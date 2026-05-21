@@ -113,7 +113,7 @@ function ToolDetailBlocks({
   result: string;
 }) {
   return (
-    <div className="space-y-4 py-2 pl-5 text-popover-foreground outline-none">
+    <div className="space-y-4 py-2 pl-5 text-popover-foreground outline-hidden">
       {description ? (
         <p className="max-w-2xl text-xs leading-5 text-muted-foreground">
           {description}

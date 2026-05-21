@@ -64,7 +64,7 @@ export function WorkflowCard({
   return (
     <div
       className={`relative w-full rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/50 ${
-        isActive ? "border-primary/40 bg-primary/5 shadow-sm" : ""
+        isActive ? "border-primary/40 bg-primary/5 shadow-xs" : ""
       }`}
       data-testid={`workflow-card-${workflow.id}`}
     >

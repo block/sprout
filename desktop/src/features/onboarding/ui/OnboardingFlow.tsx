@@ -331,7 +331,7 @@ export function OnboardingFlow({
       className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.16),transparent_44%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.5))] px-4 py-8"
       data-testid="onboarding-gate"
     >
-      <div className="w-full max-w-xl rounded-[32px] border border-border/70 bg-background/94 p-6 shadow-2xl backdrop-blur sm:p-8">
+      <div className="w-full max-w-xl rounded-[32px] border border-border/70 bg-background/94 p-6 shadow-2xl backdrop-blur-sm sm:p-8">
         {currentPage === "profile" ? (
           <ProfileStep
             actions={{

@@ -160,7 +160,7 @@ export function BotActivityComposerAction({
         <button
           aria-label={`${triggerLabel}. View activity.`}
           className={cn(
-            "inline-flex items-center justify-center rounded-full border border-border/60 bg-background font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-primary/40 data-[state=open]:bg-primary/10 data-[state=open]:text-primary",
+            "inline-flex items-center justify-center rounded-full border border-border/60 bg-background font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/5 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-primary/40 data-[state=open]:bg-primary/10 data-[state=open]:text-primary",
             isInline
               ? "h-7 min-w-0 gap-2 border-transparent bg-transparent px-0 text-xs font-semibold leading-none shadow-none hover:border-transparent hover:bg-transparent data-[state=open]:border-transparent data-[state=open]:bg-transparent"
               : "h-9 min-w-9 gap-1.5 px-2 text-xs",
@@ -183,7 +183,7 @@ export function BotActivityComposerAction({
                 className={cn(
                   "rounded-full border border-background",
                   isInline
-                    ? "!h-[18px] !w-[18px] shadow-sm ring-1 ring-primary/25 text-[7px]"
+                    ? "!h-[18px] !w-[18px] shadow-xs ring-1 ring-primary/25 text-[7px]"
                     : "!h-5 !w-5 text-[8px]",
                 )}
                 displayName={agent.name}

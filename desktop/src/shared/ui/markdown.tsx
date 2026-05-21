@@ -86,7 +86,7 @@ function ImageContextMenu({
         >
           <button
             type="button"
-            className="flex w-full cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+            className="flex w-full cursor-default select-none items-center rounded-xs px-2 py-1.5 text-sm outline-hidden hover:bg-accent hover:text-accent-foreground"
             onClick={() => {
               setMenu(null);
               invokeTauri("download_image", { url: src }).catch(
@@ -151,14 +151,14 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
 
   return (
     <div className="group relative">
-      <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-sm">
+      <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
         {children}
       </pre>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             aria-label="Copy code block"
-            className="absolute right-2 top-2 h-7 w-7 bg-background/80 text-muted-foreground opacity-0 shadow-sm ring-1 ring-border/60 backdrop-blur transition-opacity hover:bg-background hover:text-foreground hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:opacity-60"
+            className="absolute right-2 top-2 h-7 w-7 bg-background/80 text-muted-foreground opacity-0 shadow-xs ring-1 ring-border/60 backdrop-blur-sm transition-opacity hover:bg-background hover:text-foreground hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:opacity-60"
             disabled={isCopying}
             onClick={handleCopy}
             size="icon"
@@ -313,7 +313,7 @@ function createMarkdownComponents(
                     onContextMenu={(e) => e.preventDefault()}
                   />
                 </ImageContextMenu>
-                <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
+                <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-white/30">
                   <svg
                     aria-hidden="true"
                     xmlns="http://www.w3.org/2000/svg"

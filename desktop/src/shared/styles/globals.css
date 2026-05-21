@@ -1,6 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+@config "../../../tailwind.config.js";
 
 /* ── Tiptap rich-text composer ──────────────────────────────────────── */
 .rich-text-composer .tiptap {

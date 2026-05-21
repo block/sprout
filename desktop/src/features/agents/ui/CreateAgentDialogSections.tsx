@@ -56,7 +56,7 @@ export function CreateAgentRuntimeProviderField({
         Agent runtime
       </label>
       <select
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
         id="agent-provider"
         onChange={(event) => onProviderChange(event.target.value)}
         value={selectedProviderId}

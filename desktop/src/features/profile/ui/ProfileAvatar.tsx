@@ -24,7 +24,7 @@ export function ProfileAvatar({
 
   return (
     <Avatar
-      className={cn("shrink-0 bg-primary/20 text-primary shadow-sm", className)}
+      className={cn("shrink-0 bg-primary/20 text-primary shadow-xs", className)}
       data-testid={testId}
     >
       {avatarUrl ? (

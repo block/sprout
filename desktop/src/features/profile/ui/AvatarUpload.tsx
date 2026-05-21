@@ -84,7 +84,7 @@ export function AvatarUpload({
           />
           {showClear && onClear ? (
             <button
-              className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-background bg-destructive text-destructive-foreground shadow-sm transition-colors hover:bg-destructive/80"
+              className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border border-background bg-destructive text-destructive-foreground shadow-xs transition-colors hover:bg-destructive/80"
               data-testid={`${testIdPrefix}-clear`}
               onClick={onClear}
               title="Remove photo"
@@ -93,7 +93,7 @@ export function AvatarUpload({
               <X className="h-3 w-3" />
             </button>
           ) : (
-            <div className="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full border border-background bg-primary text-primary-foreground shadow-sm">
+            <div className="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full border border-background bg-primary text-primary-foreground shadow-xs">
               <Camera className="h-4 w-4" />
             </div>
           )}

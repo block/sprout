@@ -77,7 +77,7 @@ export function WorkflowRunTrace({
 
         return (
           <div
-            className="rounded-xl border border-border/60 bg-background/80 p-3 shadow-sm"
+            className="rounded-xl border border-border/60 bg-background/80 p-3 shadow-xs"
             key={step.stepId}
           >
             <div className="flex flex-wrap items-center gap-2 text-sm">

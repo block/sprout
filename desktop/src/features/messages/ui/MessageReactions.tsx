@@ -135,7 +135,7 @@ function ReactionPill({
       ? "border-primary/40 bg-primary/10 text-primary"
       : "border-border/70 bg-muted/70 text-foreground/90",
     canToggle
-      ? "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      ? "hover:bg-accent hover:text-accent-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       : "cursor-default",
   );
 

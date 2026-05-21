@@ -67,7 +67,7 @@ export function NoteCard({
   const [replyDraft, setReplyDraft] = React.useState("");
   const replyInputRef = React.useRef<HTMLTextAreaElement>(null);
   const actionButtonClass =
-    "inline-flex min-w-7 items-center gap-1.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    "inline-flex min-w-7 items-center gap-1.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
   const activeActionClass = "text-foreground";
   const countPlaceholder = <span aria-hidden className="w-2.5" />;
   const currentUserAvatarUrl = currentUserProfile?.avatarUrl ?? null;
@@ -167,7 +167,7 @@ export function NoteCard({
             {!isOwnNote ? (
               isFollowing ? (
                 <button
-                  className="text-muted-foreground/60 transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="text-muted-foreground/60 transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => onUnfollow?.(note.pubkey)}
                   type="button"
                 >
@@ -175,7 +175,7 @@ export function NoteCard({
                 </button>
               ) : (
                 <button
-                  className="text-muted-foreground/60 transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="text-muted-foreground/60 transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => onFollow?.(note.pubkey)}
                   type="button"
                 >
@@ -208,7 +208,7 @@ export function NoteCard({
             />
             <div className="min-w-0 flex-1">
               <textarea
-                className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
+                className="min-h-16 w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-hidden"
                 onChange={(event) => setReplyDraft(event.target.value)}
                 placeholder="Post your reply"
                 ref={replyInputRef}
@@ -218,28 +218,28 @@ export function NoteCard({
                 <div className="flex items-center gap-1 text-muted-foreground">
                   <button
                     aria-label="Mention someone"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
                   >
                     <AtSign className="h-4 w-4" />
                   </button>
                   <button
                     aria-label="Attach media"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
                   >
                     <Paperclip className="h-4 w-4" />
                   </button>
                   <button
                     aria-label="Add emoji"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
                   >
                     <SmilePlus className="h-4 w-4" />
                   </button>
                   <button
                     aria-label="Formatting"
-                    className="inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-sm font-medium transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     type="button"
                   >
                     <ALargeSmall className="h-4 w-4" />
@@ -247,7 +247,7 @@ export function NoteCard({
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => {
                       setReplyDraft("");
                       setIsReplyComposerOpen(false);

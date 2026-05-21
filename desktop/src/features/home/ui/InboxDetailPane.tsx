@@ -215,7 +215,7 @@ export function InboxDetailPane({
           <div className="min-w-0">
             {canOpenChannel && contextChannelId && onOpenContext ? (
               <button
-                className="truncate text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="truncate text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 onClick={() => onOpenContext(contextChannelId, item.id)}
                 title={item.fullTimestampLabel}
                 type="button"

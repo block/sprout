@@ -29,7 +29,7 @@ function LoadingHeaderSkeleton() {
     >
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-[6px]">
-          <Skeleton className="h-3.5 w-3.5 rounded-sm" />
+          <Skeleton className="h-3.5 w-3.5 rounded-xs" />
           <Skeleton className="h-4 w-28 max-w-[50vw]" />
         </div>
         <Skeleton className="mt-2 h-4 w-full max-w-2xl" />

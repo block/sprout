@@ -318,7 +318,7 @@ export const MessageRow = React.memo(
                 >
                   <button
                     className={cn(
-                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                       avatarButtonRadiusClass,
                     )}
                     type="button"
@@ -338,7 +338,7 @@ export const MessageRow = React.memo(
                       botIdenticonValue={message.author}
                     >
                       <button
-                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="truncate rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         type="button"
                       >
                         {authorNode}
@@ -368,7 +368,7 @@ export const MessageRow = React.memo(
                 >
                   <button
                     className={cn(
-                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                       avatarButtonRadiusClass,
                     )}
                     type="button"
@@ -388,7 +388,7 @@ export const MessageRow = React.memo(
                       botIdenticonValue={message.author}
                     >
                       <button
-                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="truncate rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         type="button"
                       >
                         {authorNode}

@@ -157,7 +157,7 @@ export function WorkflowDetailPanel({
                       <div
                         className={`overflow-hidden rounded-xl border bg-card/70 transition-colors ${
                           isSelected
-                            ? "border-primary/40 bg-primary/5 shadow-sm"
+                            ? "border-primary/40 bg-primary/5 shadow-xs"
                             : "border-border/70 hover:bg-muted/20"
                         }`}
                         key={run.id}
