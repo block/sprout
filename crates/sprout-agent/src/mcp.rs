@@ -781,7 +781,7 @@ fn backoff(attempt: u32, base: Duration, max: Duration) -> Duration {
 
 fn jitter_percent() -> i64 {
     let mut buf = [0u8; 1];
-    let _ = getrandom::getrandom(&mut buf);
+    let _ = getrandom::fill(&mut buf);
     ((buf[0] as i64) % 41) - 20
 }
 

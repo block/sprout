@@ -403,6 +403,6 @@ async fn acquire_session(
 
 fn session_token() -> Result<String, String> {
     let mut b = [0u8; 8];
-    getrandom::getrandom(&mut b).map_err(|e| format!("rng: getrandom failed: {e}"))?;
+    getrandom::fill(&mut b).map_err(|e| format!("rng: getrandom failed: {e}"))?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }

@@ -666,7 +666,7 @@ async fn backoff_with_jitter(attempt: u32) {
         .min(MAX_BACKOFF_MS);
     let mut buf = [0u8; 8];
     let jitter_range = base / 2;
-    let delay = if jitter_range > 0 && getrandom::getrandom(&mut buf).is_ok() {
+    let delay = if jitter_range > 0 && getrandom::fill(&mut buf).is_ok() {
         let r = u64::from_le_bytes(buf) % jitter_range;
         base - jitter_range + r
     } else {

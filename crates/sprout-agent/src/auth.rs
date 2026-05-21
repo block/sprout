@@ -340,7 +340,7 @@ fn token_from_response(
 /// challenge (RFC 7636 §4.2).
 fn pkce_pair() -> Result<(String, String), AgentError> {
     let mut bytes = [0u8; 48];
-    getrandom::getrandom(&mut bytes).map_err(|e| AgentError::Llm(format!("pkce rng: {e}")))?;
+    getrandom::fill(&mut bytes).map_err(|e| AgentError::Llm(format!("pkce rng: {e}")))?;
     let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(sha2::Sha256::digest(verifier.as_bytes()));
@@ -349,7 +349,7 @@ fn pkce_pair() -> Result<(String, String), AgentError> {
 
 fn random_state() -> Result<String, AgentError> {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).map_err(|e| AgentError::Llm(format!("state rng: {e}")))?;
+    getrandom::fill(&mut bytes).map_err(|e| AgentError::Llm(format!("state rng: {e}")))?;
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
