@@ -983,7 +983,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfae6799b68a735270e4344ee3e834365f707c72da09c9a8bb89b45cc3351395"
 dependencies = [
  "deadpool",
- "redis",
+ "redis 0.27.6",
 ]
 
 [[package]]
@@ -1691,7 +1691,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2",
  "tokio",
  "tower-service",
  "tracing",
@@ -2849,7 +2849,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.3",
+ "socket2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2887,7 +2887,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -3024,10 +3024,8 @@ checksum = "09d8f99a4090c89cc489a94833c901ead69bfbf3877b4867d5482e321ee875bc"
 dependencies = [
  "arc-swap",
  "async-trait",
- "backon",
  "bytes",
  "combine",
- "futures",
  "futures-util",
  "itertools",
  "itoa",
@@ -3035,8 +3033,31 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "ryu",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "redis"
+version = "0.32.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "014cc767fefab6a3e798ca45112bccad9c6e0e218fbd49720042716c73cfef44"
+dependencies = [
+ "arc-swap",
+ "backon",
+ "bytes",
+ "cfg-if",
+ "combine",
+ "futures-channel",
+ "futures-util",
+ "itoa",
+ "num-bigint",
+ "percent-encoding",
+ "pin-project-lite",
+ "ryu",
  "sha1_smol",
- "socket2 0.5.10",
+ "socket2",
  "tokio",
  "tokio-util",
  "url",
@@ -3806,16 +3827,6 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
@@ -4184,7 +4195,7 @@ dependencies = [
  "deadpool-redis",
  "futures-util",
  "nostr",
- "redis",
+ "redis 0.32.7",
  "serde",
  "serde_json",
  "sprout-auth",
@@ -4215,7 +4226,7 @@ dependencies = [
  "moka",
  "nostr",
  "rand 0.10.1",
- "redis",
+ "redis 0.32.7",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4741,7 +4752,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.3",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
