@@ -317,3 +317,89 @@ async fn test_long_form_stale_write_rejected() {
 
     client.disconnect().await.expect("disconnect");
 }
+
+/// NIP-09 a-tag deletion: a kind:5 deletion targeting the addressable
+/// coordinate `30023:<pubkey>:<d-tag>` causes the live event row for that
+/// coordinate to be soft-deleted, so subsequent REQs no longer return it.
+///
+/// Regression test for issue #714 — before the fix,
+/// `handle_a_tag_deletion` only handled the workflow kind and silently
+/// no-op'd for kind:30023.
+#[tokio::test]
+#[ignore]
+async fn test_long_form_a_tag_deletion() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let mut client = SproutTestClient::connect(&url, &keys)
+        .await
+        .expect("connect");
+
+    // Publish a note.
+    let d_tag = format!("a-del-{}", uuid::Uuid::new_v4().simple());
+    let note = build_long_form_event(&keys, &d_tag, "Doomed Article", "Body.", vec![]);
+    let note_id = note.id;
+    let ok = client.send_event(note).await.expect("send note");
+    assert!(ok.accepted, "note should be accepted: {}", ok.message);
+
+    // Sanity check it's queryable before deletion.
+    let sid_pre = sub_id("a-del-pre");
+    let filter_pre = Filter::new()
+        .kind(Kind::Custom(KIND_LONG_FORM))
+        .author(keys.public_key())
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+    client
+        .subscribe(&sid_pre, vec![filter_pre])
+        .await
+        .expect("subscribe pre");
+    let pre = client
+        .collect_until_eose(&sid_pre, Duration::from_secs(5))
+        .await
+        .expect("collect pre");
+    assert!(
+        pre.iter().any(|e| e.id == note_id),
+        "note should be queryable before deletion"
+    );
+
+    // Build the addressable coordinate and emit a kind:5 deletion targeting it.
+    let a_coord = format!(
+        "{}:{}:{}",
+        KIND_LONG_FORM,
+        keys.public_key().to_hex(),
+        d_tag
+    );
+    let del = EventBuilder::new(
+        Kind::EventDeletion,
+        "",
+        vec![Tag::parse(&["a", &a_coord]).unwrap()],
+    )
+    .sign_with_keys(&keys)
+    .unwrap();
+    let ok_del = client.send_event(del).await.expect("send deletion");
+    assert!(
+        ok_del.accepted,
+        "a-tag deletion should be accepted: {}",
+        ok_del.message
+    );
+
+    // Query — should now be empty.
+    let sid_post = sub_id("a-del-post");
+    let filter_post = Filter::new()
+        .kind(Kind::Custom(KIND_LONG_FORM))
+        .author(keys.public_key())
+        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+    client
+        .subscribe(&sid_post, vec![filter_post])
+        .await
+        .expect("subscribe post");
+    let post = client
+        .collect_until_eose(&sid_post, Duration::from_secs(5))
+        .await
+        .expect("collect post");
+    assert!(
+        post.is_empty(),
+        "a-tag deletion should remove the note from REQ results (got {} events)",
+        post.len()
+    );
+
+    client.disconnect().await.expect("disconnect");
+}

@@ -7,9 +7,9 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, KIND_GIT_REPO_ANNOUNCEMENT, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
-    KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
+    event_kind_u32, is_parameterized_replaceable, KIND_GIT_REPO_ANNOUNCEMENT,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
+    KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -1380,11 +1380,53 @@ async fn handle_a_tag_deletion(event: &Event, state: &Arc<AppState>) -> anyhow::
                 }
             }
         }
+        // Generic NIP-33 (parameterized-replaceable) soft-delete by coordinate.
+        //
+        // Listed after the workflow branch so workflow's bespoke deletion
+        // (which doesn't soft-delete the `events` row by design — that's a
+        // separate concern) takes precedence. For every other addressable
+        // kind, including kind:30023 (NIP-23 long-form), we soft-delete the
+        // live row matching `(kind, pubkey, d_tag)` so REQs stop returning it.
+        // See https://github.com/block/sprout/issues/714.
+        k if is_parameterized_replaceable(k) => {
+            let pubkey_bytes = match hex::decode(pubkey_hex) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "invalid pubkey hex in a-tag {pubkey_hex}: {e}"
+                    ));
+                }
+            };
+            // Safe cast: NIP-33 kinds are 30000–39999, well within i32.
+            let kind_i32 = k as i32;
+            let deleted = state
+                .db
+                .soft_delete_by_coordinate(kind_i32, &pubkey_bytes, d_tag)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to soft-delete by coordinate {kind_i32}:{pubkey_hex}:{d_tag}: {e}"
+                    )
+                })?;
+            if deleted {
+                tracing::info!(
+                    kind = k,
+                    d_tag = d_tag,
+                    "NIP-09 a-tag deletion: soft-deleted addressable event by coordinate"
+                );
+            } else {
+                tracing::debug!(
+                    kind = k,
+                    d_tag = d_tag,
+                    "NIP-09 a-tag deletion: no live row matched coordinate"
+                );
+            }
+        }
         _ => {
             tracing::debug!(
                 kind = kind_num,
                 d_tag = d_tag,
-                "NIP-09 a-tag deletion for unhandled kind — no side effect"
+                "NIP-09 a-tag deletion for non-NIP-33 kind — no side effect"
             );
         }
     }
