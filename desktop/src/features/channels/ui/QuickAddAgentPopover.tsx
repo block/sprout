@@ -725,7 +725,7 @@ function QuickAddAgentAvatar({
     .toUpperCase();
 
   return (
-    <div className={cn("relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border/50 bg-muted/30", !isRunning && "opacity-50")}>
+    <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border/50 bg-muted/30">
       {avatarUrl ? (
         <img
           alt={label}
