@@ -1,5 +1,5 @@
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, type Transaction } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 
 export const mentionHighlightKey = new PluginKey("mentionHighlight");
@@ -36,14 +36,33 @@ export const MentionHighlightExtension = Extension.create({
             );
           },
           apply(tr, oldDecorations) {
-            if (tr.docChanged || tr.getMeta(mentionHighlightKey)) {
+            // Names/channels changed — full rebuild required.
+            if (tr.getMeta(mentionHighlightKey)) {
               return buildDecorations(
                 tr.doc,
                 extension.storage.names,
                 extension.storage.channelNames,
               );
             }
-            return oldDecorations;
+
+            if (!tr.docChanged) {
+              return oldDecorations;
+            }
+
+            // Check if the edit touches a mention boundary. If the changed
+            // ranges contain `@` or `#` (either before or after the edit),
+            // a mention may have been created, modified, or destroyed — do
+            // a full rebuild. Otherwise, just map existing decoration
+            // positions through the transaction mapping (cheap, no DOM churn).
+            if (editAffectsMentionBoundary(tr)) {
+              return buildDecorations(
+                tr.doc,
+                extension.storage.names,
+                extension.storage.channelNames,
+              );
+            }
+
+            return oldDecorations.map(tr.mapping, tr.doc);
           },
         },
         props: {
@@ -110,6 +129,58 @@ export function findHighlightMatches(
     }
   }
   return results;
+}
+
+/**
+ * Returns true if the transaction's changed ranges touch text that contains
+ * `@` or `#` — meaning a mention/channel-link boundary may have been
+ * created, modified, or destroyed and we need a full decoration rebuild.
+ *
+ * We check both the old content (in case a mention was deleted/split) and
+ * the new content (in case one was just typed). Uses a simple approach:
+ * iterate each step's changed ranges via the first stepMap (sufficient for
+ * the single-step transactions a chat composer produces on each keystroke).
+ */
+function editAffectsMentionBoundary(tr: Transaction): boolean {
+  const mentionChars = /[@#]/;
+
+  // For each step, check old and new text in the changed range.
+  // stepMap.forEach gives (oldFrom, oldTo, newFrom, newTo) where old
+  // positions are in the doc before that step and new positions are in
+  // the doc after that step.
+  for (let i = 0; i < tr.steps.length; i++) {
+    const map = tr.mapping.maps[i];
+
+    let found = false;
+    map.forEach((oldFrom, oldTo, newFrom, newTo) => {
+      if (found) return;
+
+      // Check new doc text in the affected range
+      const clampedNewTo = Math.min(newTo, tr.doc.content.size);
+      const clampedNewFrom = Math.min(newFrom, clampedNewTo);
+      if (clampedNewFrom < clampedNewTo) {
+        const newText = tr.doc.textBetween(clampedNewFrom, clampedNewTo, "\n", "\0");
+        if (mentionChars.test(newText)) {
+          found = true;
+          return;
+        }
+      }
+
+      // Check old doc text in the affected range
+      const clampedOldTo = Math.min(oldTo, tr.before.content.size);
+      const clampedOldFrom = Math.min(oldFrom, clampedOldTo);
+      if (clampedOldFrom < clampedOldTo) {
+        const oldText = tr.before.textBetween(clampedOldFrom, clampedOldTo, "\n", "\0");
+        if (mentionChars.test(oldText)) {
+          found = true;
+        }
+      }
+    });
+
+    if (found) return true;
+  }
+
+  return false;
 }
 
 function buildDecorations(
