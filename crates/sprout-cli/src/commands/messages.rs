@@ -382,13 +382,10 @@ pub async fn cmd_send_message(
     let mention_refs: Vec<&str> = merged.iter().map(|s| s.as_str()).collect();
 
     let builder = match p.kind {
-        Some(45001) => sprout_sdk::build_forum_post(
-            channel_uuid,
-            &final_content,
-            &mention_refs,
-            &media_tags,
-        )
-        .map_err(|e| CliError::Other(format!("build_forum_post failed: {e}")))?,
+        Some(45001) => {
+            sprout_sdk::build_forum_post(channel_uuid, &final_content, &mention_refs, &media_tags)
+                .map_err(|e| CliError::Other(format!("build_forum_post failed: {e}")))?
+        }
         Some(45003) => {
             let tr = thread_ref.as_ref().ok_or_else(|| {
                 CliError::Usage("--reply-to is required for forum comments (kind 45003)".into())

@@ -81,8 +81,7 @@ pub async fn cmd_list_channels(
                             tag.as_array()
                                 .map(|a| {
                                     a.len() == 1
-                                        && a.first().and_then(|v| v.as_str())
-                                            == Some(nip29_tag)
+                                        && a.first().and_then(|v| v.as_str()) == Some(nip29_tag)
                                 })
                                 .unwrap_or(false)
                         })
