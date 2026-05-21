@@ -42,11 +42,11 @@ fn build_long_form_event(
     extra_tags: Vec<Tag>,
 ) -> nostr::Event {
     let mut tags = vec![
-        Tag::parse(&["d", d_tag]).unwrap(),
-        Tag::parse(&["title", title]).unwrap(),
+        Tag::parse(["d", d_tag]).unwrap(),
+        Tag::parse(["title", title]).unwrap(),
     ];
     tags.extend(extra_tags);
-    EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content, tags)
+    EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content).tags( tags)
         .sign_with_keys(keys)
         .unwrap()
 }
@@ -147,7 +147,7 @@ async fn test_long_form_stray_h_tag_ignored() {
         &d_tag,
         "Stray H-Tag Article",
         "Should be stored globally despite h-tag.",
-        vec![Tag::parse(&["h", &fake_channel]).unwrap()],
+        vec![Tag::parse(["h", &fake_channel]).unwrap()],
     );
     let event_id = event.id;
 
@@ -222,7 +222,7 @@ async fn test_long_form_nip33_replacement() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
     client
         .subscribe(&sid, vec![filter])
         .await
@@ -262,10 +262,10 @@ async fn test_long_form_stale_write_rejected() {
     // Publish the "newer" event first (with a future-ish timestamp)
     let newer = {
         let tags = vec![
-            Tag::parse(&["d", &d_tag]).unwrap(),
-            Tag::parse(&["title", "Newer Article"]).unwrap(),
+            Tag::parse(["d", &d_tag]).unwrap(),
+            Tag::parse(["title", "Newer Article"]).unwrap(),
         ];
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Newer content.", tags)
+        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Newer content.").tags( tags)
             .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() + 100))
             .sign_with_keys(&keys)
             .unwrap()
@@ -277,10 +277,10 @@ async fn test_long_form_stale_write_rejected() {
     // Now try to publish an "older" event with the same d-tag but earlier timestamp
     let older = {
         let tags = vec![
-            Tag::parse(&["d", &d_tag]).unwrap(),
-            Tag::parse(&["title", "Older Article"]).unwrap(),
+            Tag::parse(["d", &d_tag]).unwrap(),
+            Tag::parse(["title", "Older Article"]).unwrap(),
         ];
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Older content.", tags)
+        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "Older content.").tags( tags)
             .custom_created_at(Timestamp::from(nostr::Timestamp::now().as_u64() - 100))
             .sign_with_keys(&keys)
             .unwrap()
@@ -294,7 +294,7 @@ async fn test_long_form_stale_write_rejected() {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_LONG_FORM))
         .author(keys.public_key())
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::D), [d_tag.as_str()]);
     client
         .subscribe(&sid, vec![filter])
         .await

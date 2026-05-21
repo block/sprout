@@ -95,20 +95,20 @@ fn sign_nip98(
     body: Option<&[u8]>,
 ) -> Result<String, CliError> {
     let mut tags = vec![
-        Tag::parse(&["u", url]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
-        Tag::parse(&["method", method]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        Tag::parse(["u", url]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        Tag::parse(["method", method]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
         // Nonce prevents replay rejection for rapid-fire requests with identical bodies.
-        Tag::parse(&["nonce", &uuid::Uuid::new_v4().to_string()])
+        Tag::parse(["nonce", &uuid::Uuid::new_v4().to_string()])
             .map_err(|e| CliError::Other(format!("tag error: {e}")))?,
     ];
     if let Some(b) = body {
         let hash = hex::encode(Sha256::digest(b));
         tags.push(
-            Tag::parse(&["payload", &hash])
+            Tag::parse(["payload", &hash])
                 .map_err(|e| CliError::Other(format!("tag error: {e}")))?,
         );
     }
-    let event = EventBuilder::new(Kind::Custom(27235), "", tags)
+    let event = EventBuilder::new(Kind::Custom(27235), "").tags( tags)
         .sign_with_keys(keys)
         .map_err(|e| CliError::Other(format!("NIP-98 signing failed: {e}")))?;
     let json = event.as_json();
@@ -179,7 +179,7 @@ impl SproutClient {
     /// before calling this method.
     pub fn sign_event(&self, builder: EventBuilder) -> Result<nostr::Event, CliError> {
         let builder = if let Some(ref tag) = self.auth_tag {
-            builder.add_tags([tag.clone()])
+            builder.tags([tag.clone()])
         } else {
             builder
         };
@@ -336,9 +336,9 @@ impl SproutClient {
         let exp_str = (now + expiry).to_string();
 
         let mut blossom_tags = vec![
-            Tag::parse(&["t", "upload"]).map_err(|e| CliError::Other(e.to_string()))?,
-            Tag::parse(&["x", &sha256]).map_err(|e| CliError::Other(e.to_string()))?,
-            Tag::parse(&["expiration", &exp_str]).map_err(|e| CliError::Other(e.to_string()))?,
+            Tag::parse(["t", "upload"]).map_err(|e| CliError::Other(e.to_string()))?,
+            Tag::parse(["x", &sha256]).map_err(|e| CliError::Other(e.to_string()))?,
+            Tag::parse(["expiration", &exp_str]).map_err(|e| CliError::Other(e.to_string()))?,
         ];
         // Extract server domain from relay URL for BUD-11 server tag
         if let Ok(parsed) = url::Url::parse(&self.relay_url) {
@@ -348,12 +348,12 @@ impl SproutClient {
                     None => host.to_string(),
                 };
                 blossom_tags.push(
-                    Tag::parse(&["server", &domain]).map_err(|e| CliError::Other(e.to_string()))?,
+                    Tag::parse(["server", &domain]).map_err(|e| CliError::Other(e.to_string()))?,
                 );
             }
         }
 
-        let auth_event = EventBuilder::new(Kind::from(24242), "Upload file", blossom_tags)
+        let auth_event = EventBuilder::new(Kind::from(24242), "Upload file").tags( blossom_tags)
             .sign_with_keys(&self.keys)
             .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
 

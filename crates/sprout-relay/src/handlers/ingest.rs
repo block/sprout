@@ -631,7 +631,7 @@ pub(crate) fn effective_message_author(event: &Event, relay_pubkey: &nostr::Publ
             }
         }
     }
-    event.pubkey.serialize().to_vec()
+    event.pubkey.to_bytes().to_vec()
 }
 
 /// Validate kind:40003 edit ownership — event.pubkey must match target's effective author.
@@ -676,7 +676,7 @@ async fn validate_edit_ownership(event: &Event, state: &AppState) -> Result<(), 
     }
 
     let author = effective_message_author(&target_event.event, &state.relay_keypair.public_key());
-    let actor = event.pubkey.serialize().to_vec();
+    let actor = event.pubkey.to_bytes().to_vec();
     if author != actor {
         return Err("must be event author to edit".to_string());
     }
@@ -1144,7 +1144,7 @@ pub async fn ingest_event(
     }
 
     // ── 8. Membership check ──────────────────────────────────────────────
-    let pubkey_bytes = auth.pubkey().serialize().to_vec();
+    let pubkey_bytes = auth.pubkey().to_bytes().to_vec();
     if let Some(ch_id) = channel_id {
         // kind:9021 (join) doesn't require prior membership.
         // kind:9007 (create) — channel doesn't exist yet; creator becomes owner in step 16.
@@ -1398,7 +1398,7 @@ pub async fn ingest_event(
 
             let ttl_seconds = super::resolve_ttl(&event, state.config.ephemeral_ttl_override);
 
-            let actor_bytes = event.pubkey.serialize().to_vec();
+            let actor_bytes = event.pubkey.to_bytes().to_vec();
             let (_, was_created) = state
                 .db
                 .create_channel_with_id(
@@ -2024,7 +2024,7 @@ mod tests {
 
     fn make_dummy_event() -> Event {
         let keys = nostr::Keys::generate();
-        nostr::EventBuilder::new(nostr::Kind::Custom(9), "", [])
+        nostr::EventBuilder::new(nostr::Kind::Custom(9), "").tags( [])
             .sign_with_keys(&keys)
             .unwrap()
     }
@@ -2033,7 +2033,7 @@ mod tests {
         let keys = nostr::Keys::generate();
         let nostr_tags: Vec<nostr::Tag> =
             tags.iter().map(|t| nostr::Tag::parse(t).unwrap()).collect();
-        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content, nostr_tags)
+        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content).tags( nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
     }

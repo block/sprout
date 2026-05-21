@@ -80,10 +80,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use chrono::DateTime;
-use nostr::bitcoin::hashes::sha256::Hash as Sha256Hash;
-use nostr::bitcoin::hashes::{Hash, HashEngine};
-use nostr::bitcoin::secp256k1::schnorr::Signature;
-use nostr::bitcoin::secp256k1::{Keypair, Message, XOnlyPublicKey};
+use nostr::hashes::sha256::Hash as Sha256Hash;
+use nostr::hashes::{Hash, HashEngine};
+use nostr::secp256k1::schnorr::Signature;
+use nostr::secp256k1::{Keypair, Message, XOnlyPublicKey};
 use nostr::{FromBech32, PublicKey, SecretKey, SECP256K1};
 use zeroize::Zeroize;
 
@@ -1236,8 +1236,14 @@ fn do_verify(sig_file: &str, status: &mut StatusWriter) -> Result<(), Error> {
     })?;
 
     // Verify BIP-340 signature
-    let xonly: &XOnlyPublicKey = &pk;
-    if SECP256K1.verify_schnorr(&sig, &message, xonly).is_err() {
+    let xonly = pk.xonly().map_err(|_| {
+        write_errsig(status, Some(&envelope.pk));
+        Error::VerifyFailed {
+            pk: Some(envelope.pk.clone()),
+            msg: "invalid public key xonly conversion".to_string(),
+        }
+    })?;
+    if SECP256K1.verify_schnorr(&sig, &message, &xonly).is_err() {
         status.write_line("NEWSIG");
         status.write_line(&format!("BADSIG {} {}", envelope.pk, envelope.pk));
         return Err(Error::VerifyFailed {
@@ -1543,8 +1549,14 @@ fn verify_oa(agent_pk_hex: &str, oa: &(String, String, String)) -> bool {
         }
     };
 
-    let xonly: &XOnlyPublicKey = &owner_pk;
-    if SECP256K1.verify_schnorr(&sig, &message, xonly).is_err() {
+    let xonly = match owner_pk.xonly() {
+        Ok(x) => x,
+        Err(_) => {
+            eprintln!("warning: oa owner pubkey conversion to xonly failed");
+            return false;
+        }
+    };
+    if SECP256K1.verify_schnorr(&sig, &message, &xonly).is_err() {
         eprintln!("warning: NIP-OA owner attestation signature verification failed");
         return false;
     }
@@ -2028,7 +2040,7 @@ Initial commit"
     fn sign_payload(secret_hex: &str, payload: &[u8], t: u64) -> String {
         let keypair = Keypair::from_seckey_str(&SECP256K1, secret_hex).unwrap();
         let (xonly, _) = keypair.x_only_public_key();
-        let pk_hex = hex::encode(xonly.serialize());
+        let pk_hex = hex::encode(xonly.to_bytes());
         let hash = compute_signing_hash(t, None, payload);
         let message = Message::from_digest(hash);
         let sig = SECP256K1.sign_schnorr(&message, &keypair);
@@ -2109,7 +2121,7 @@ Initial commit"
         let secret = "0000000000000000000000000000000000000000000000000000000000000003";
         let keypair = Keypair::from_seckey_str(&SECP256K1, secret).unwrap();
         let (xonly, _) = keypair.x_only_public_key();
-        let pk_hex = hex::encode(xonly.serialize());
+        let pk_hex = hex::encode(xonly.to_bytes());
         let payload = test_payload();
         let hash = compute_signing_hash(1700000000, None, &payload);
         let message = Message::from_digest(hash);

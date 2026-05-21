@@ -48,14 +48,13 @@ async fn create_test_channel(keys: &Keys) -> String {
 
     let event = EventBuilder::new(
         Kind::Custom(9007),
-        "",
+        "").tags(
         vec![
-            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
-            Tag::parse(&["name", &channel_name]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
+            Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(["name", &channel_name]).unwrap(),
+            Tag::parse(["channel_type", "stream"]).unwrap(),
+            Tag::parse(["visibility", "open"]).unwrap(),
+        ])
     .sign_with_keys(keys)
     .unwrap();
 
@@ -112,7 +111,7 @@ async fn test_send_event_and_receive_via_subscription() {
     let sid = sub_id("send-recv");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client_a
         .subscribe(&sid, vec![filter])
@@ -171,7 +170,7 @@ async fn test_subscription_filters_by_kind() {
     let sid = sub_id("filter-kind");
     let filter = Filter::new()
         .kind(Kind::Custom(target_kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -241,7 +240,7 @@ async fn test_close_subscription_stops_delivery() {
     let sid = sub_id("close-sub");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -334,7 +333,7 @@ async fn test_multiple_concurrent_clients() {
 
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     for (i, client) in clients.iter_mut().enumerate() {
         let sid = format!("multi-{i}");
@@ -397,7 +396,7 @@ async fn test_stored_events_returned_before_eose() {
     let sid = sub_id("stored");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -444,7 +443,7 @@ async fn test_ephemeral_event_not_stored() {
     let sid = sub_id("ephemeral");
     let filter = Filter::new()
         .kind(Kind::Custom(ephemeral_kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
 
     client
         .subscribe(&sid, vec![filter])
@@ -656,7 +655,7 @@ async fn test_eose_sent_for_empty_subscription() {
     let sid = sub_id("empty-eose");
     let filter = Filter::new()
         .kind(Kind::Custom(kind))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()])
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()])
         .since(nostr::Timestamp::now());
 
     client
@@ -718,7 +717,7 @@ async fn test_kind0_nip05_sync() {
     })
     .to_string();
 
-    let event = nostr::EventBuilder::new(Kind::Custom(0), kind0_content, [])
+    let event = nostr::EventBuilder::new(Kind::Custom(0), kind0_content).tags( [])
         .sign_with_keys(&keys)
         .expect("sign kind:0");
 
@@ -777,7 +776,7 @@ async fn test_kind0_nip05_sync() {
     })
     .to_string();
 
-    let event2 = nostr::EventBuilder::new(Kind::Custom(0), off_domain_content, [])
+    let event2 = nostr::EventBuilder::new(Kind::Custom(0), off_domain_content).tags( [])
         .sign_with_keys(&keys)
         .expect("sign kind:0 off-domain");
 
@@ -845,9 +844,9 @@ async fn test_nip29_put_user_default_policy_allows() {
         .expect("connect as channel_owner");
 
     // Build kind 9000 PUT_USER event: h = channel_id, p = agent pubkey.
-    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
-    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
-    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+    let h_tag = nostr::Tag::parse(["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "").tags( [h_tag, p_tag])
         .sign_with_keys(&channel_owner_keys)
         .expect("sign kind 9000");
 
@@ -895,9 +894,9 @@ async fn test_nip29_put_user_nobody_blocks() {
         .expect("connect as channel_owner");
 
     // Build kind 9000 PUT_USER event targeting the agent.
-    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
-    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
-    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+    let h_tag = nostr::Tag::parse(["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "").tags( [h_tag, p_tag])
         .sign_with_keys(&channel_owner_keys)
         .expect("sign kind 9000");
 
@@ -948,9 +947,9 @@ async fn test_nip29_put_user_self_add_bypasses_policy() {
         .expect("connect as agent");
 
     // Build kind 9000 PUT_USER event where agent targets ITSELF.
-    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
-    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
-    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+    let h_tag = nostr::Tag::parse(["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "").tags( [h_tag, p_tag])
         .sign_with_keys(&agent_keys)
         .expect("sign kind 9000");
 
@@ -998,9 +997,9 @@ async fn test_nip29_put_user_owner_only_blocks() {
         .expect("connect as channel_owner");
 
     // Build kind 9000 PUT_USER event targeting the agent.
-    let h_tag = nostr::Tag::parse(&["h", &channel_id]).expect("h tag");
-    let p_tag = nostr::Tag::parse(&["p", &agent_pubkey_hex]).expect("p tag");
-    let event = nostr::EventBuilder::new(Kind::Custom(9000), "", [h_tag, p_tag])
+    let h_tag = nostr::Tag::parse(["h", &channel_id]).expect("h tag");
+    let p_tag = nostr::Tag::parse(["p", &agent_pubkey_hex]).expect("p tag");
+    let event = nostr::EventBuilder::new(Kind::Custom(9000), "").tags( [h_tag, p_tag])
         .sign_with_keys(&channel_owner_keys)
         .expect("sign kind 9000");
 
@@ -1155,9 +1154,9 @@ async fn test_nip29_standard_client_flow() {
     };
 
     // 5. Send a kind:7 reaction targeting the message.
-    let h_tag = Tag::parse(&["h", &channel_id]).expect("h tag");
-    let e_tag = Tag::parse(&["e", &message_event_id]).expect("e tag");
-    let reaction_event = EventBuilder::new(Kind::Custom(7), "+", [h_tag, e_tag])
+    let h_tag = Tag::parse(["h", &channel_id]).expect("h tag");
+    let e_tag = Tag::parse(["e", &message_event_id]).expect("e tag");
+    let reaction_event = EventBuilder::new(Kind::Custom(7), "+").tags( [h_tag, e_tag])
         .sign_with_keys(&keys)
         .expect("sign reaction");
     let ok = client
@@ -1171,9 +1170,9 @@ async fn test_nip29_standard_client_flow() {
     );
 
     // 6. Send a kind:5 deletion targeting the message.
-    let h_tag2 = Tag::parse(&["h", &channel_id]).expect("h tag");
-    let e_tag2 = Tag::parse(&["e", &message_event_id]).expect("e tag");
-    let delete_event = EventBuilder::new(Kind::Custom(5), "test delete", [h_tag2, e_tag2])
+    let h_tag2 = Tag::parse(["h", &channel_id]).expect("h tag");
+    let e_tag2 = Tag::parse(["e", &message_event_id]).expect("e tag");
+    let delete_event = EventBuilder::new(Kind::Custom(5), "test delete").tags( [h_tag2, e_tag2])
         .sign_with_keys(&keys)
         .expect("sign deletion");
     let ok = client
@@ -1187,7 +1186,7 @@ async fn test_nip29_standard_client_flow() {
     );
 
     // 7. Verify kind:9 without h tag is rejected.
-    let no_h_event = EventBuilder::new(Kind::Custom(9), "no h tag", [])
+    let no_h_event = EventBuilder::new(Kind::Custom(9), "no h tag").tags( [])
         .sign_with_keys(&keys)
         .expect("sign no-h event");
     let ok = client
@@ -1212,9 +1211,9 @@ async fn test_membership_notification_kind_rejected() {
         .await
         .expect("connect");
 
-    let p_tag = Tag::parse(&["p", &keys.public_key().to_hex()]).expect("p tag");
-    let h_tag = Tag::parse(&["h", &channel_id]).expect("h tag");
-    let event = EventBuilder::new(Kind::Custom(44100), "", [p_tag, h_tag])
+    let p_tag = Tag::parse(["p", &keys.public_key().to_hex()]).expect("p tag");
+    let h_tag = Tag::parse(["h", &channel_id]).expect("h tag");
+    let event = EventBuilder::new(Kind::Custom(44100), "").tags( [p_tag, h_tag])
         .sign_with_keys(&keys)
         .expect("sign kind:44100");
 
@@ -1280,12 +1279,11 @@ async fn test_membership_notification_emitted_on_add() {
     let http_client = reqwest::Client::new();
     let add_event = EventBuilder::new(
         Kind::Custom(9000),
-        "",
+        "").tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&["p", &agent_pubkey_hex]).unwrap(),
-        ],
-    )
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["p", &agent_pubkey_hex]).unwrap(),
+        ])
     .sign_with_keys(&owner_keys)
     .unwrap();
     let resp = http_client
@@ -1559,12 +1557,11 @@ async fn test_membership_notification_emitted_on_remove() {
     // Add agent to the channel via signed kind:9000 event.
     let add_event = EventBuilder::new(
         Kind::Custom(9000),
-        "",
+        "").tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&["p", &agent_pubkey_hex]).unwrap(),
-        ],
-    )
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["p", &agent_pubkey_hex]).unwrap(),
+        ])
     .sign_with_keys(&owner_keys)
     .unwrap();
     let resp = http_client
@@ -1601,12 +1598,11 @@ async fn test_membership_notification_emitted_on_remove() {
     // Remove agent from the channel via signed kind:9001 event.
     let remove_event = EventBuilder::new(
         Kind::Custom(9001),
-        "",
+        "").tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&["p", &agent_pubkey_hex]).unwrap(),
-        ],
-    )
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["p", &agent_pubkey_hex]).unwrap(),
+        ])
     .sign_with_keys(&owner_keys)
     .unwrap();
     let resp = http_client

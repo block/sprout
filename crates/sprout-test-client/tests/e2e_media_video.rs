@@ -34,11 +34,11 @@ fn sign_blossom_auth(keys: &Keys, sha256: &str) -> nostr::Event {
     let now = Timestamp::now().as_u64();
     let exp_str = (now + 300).to_string();
     let tags = vec![
-        Tag::parse(&["t", "upload"]).expect("t tag"),
-        Tag::parse(&["x", sha256]).expect("x tag"),
-        Tag::parse(&["expiration", &exp_str]).expect("expiration tag"),
+        Tag::parse(["t", "upload"]).expect("t tag"),
+        Tag::parse(["x", sha256]).expect("x tag"),
+        Tag::parse(["expiration", &exp_str]).expect("expiration tag"),
     ];
-    EventBuilder::new(Kind::from(24242), "Upload test", tags)
+    EventBuilder::new(Kind::from(24242), "Upload test").tags( tags)
         .sign_with_keys(keys)
         .expect("sign blossom auth")
 }
@@ -483,14 +483,13 @@ async fn test_video_poster_imeta_accepted_via_ws() {
     let channel_id = channel_uuid.to_string();
     let create_event = EventBuilder::new(
         Kind::from(9007),
-        "",
+        "").tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&["name", &format!("video-poster-test-{channel_id}")]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["name", &format!("video-poster-test-{channel_id}")]).unwrap(),
+            Tag::parse(["channel_type", "stream"]).unwrap(),
+            Tag::parse(["visibility", "open"]).unwrap(),
+        ])
     .sign_with_keys(&keys)
     .unwrap();
     let resp = client
@@ -542,10 +541,10 @@ async fn test_video_poster_imeta_accepted_via_ws() {
     let base = relay_http_url();
     let event = EventBuilder::new(
         Kind::from(9),
-        format!("![video]({base}/media/{video_sha}.mp4)"),
+        format!("![video]({base}/media/{video_sha}.mp4)")).tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&[
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse([
                 "imeta",
                 &format!("url {base}/media/{video_sha}.mp4"),
                 "m video/mp4",
@@ -554,8 +553,7 @@ async fn test_video_poster_imeta_accepted_via_ws() {
                 &format!("image {base}/media/{poster_sha}.jpg"),
             ])
             .unwrap(),
-        ],
-    )
+        ])
     .sign_with_keys(&keys)
     .unwrap();
 
@@ -585,14 +583,13 @@ async fn test_video_poster_imeta_rejects_video_as_poster() {
     let channel_id = channel_uuid.to_string();
     let create_event = EventBuilder::new(
         Kind::from(9007),
-        "",
+        "").tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&["name", &format!("poster-reject-test-{channel_id}")]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse(["name", &format!("poster-reject-test-{channel_id}")]).unwrap(),
+            Tag::parse(["channel_type", "stream"]).unwrap(),
+            Tag::parse(["visibility", "open"]).unwrap(),
+        ])
     .sign_with_keys(&keys)
     .unwrap();
     let resp = client
@@ -630,10 +627,10 @@ async fn test_video_poster_imeta_rejects_video_as_poster() {
     let base = relay_http_url();
     let event = EventBuilder::new(
         Kind::from(9),
-        "bad poster",
+        "bad poster").tags(
         vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&[
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse([
                 "imeta",
                 &format!("url {base}/media/{video_sha}.mp4"),
                 "m video/mp4",
@@ -643,8 +640,7 @@ async fn test_video_poster_imeta_rejects_video_as_poster() {
                 &format!("image {base}/media/{video_sha}.mp4"),
             ])
             .unwrap(),
-        ],
-    )
+        ])
     .sign_with_keys(&keys)
     .unwrap();
 

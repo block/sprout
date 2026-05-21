@@ -187,7 +187,8 @@ impl PairingSession {
         self.peer_pubkey = Some(peer);
 
         // Compute ECDH and SAS. Zero the ECDH shared secret after derivation.
-        let mut ecdh = nostr::util::generate_shared_key(self.keys.secret_key(), &peer);
+        let mut ecdh = nostr::util::generate_shared_key(self.keys.secret_key(), &peer)
+            .map_err(|e| PairingError::SigningError(e.to_string()))?;
         let (code, sas_input) = derive_sas(&ecdh, &self.session_secret);
         ecdh.zeroize();
         self.sas_code = Some(code);
@@ -294,7 +295,8 @@ impl PairingSession {
 
         // Compute ECDH and SAS immediately (target knows source pubkey from QR).
         // Zero the ECDH shared secret after derivation.
-        let mut ecdh = nostr::util::generate_shared_key(keys.secret_key(), &qr.source_pubkey);
+        let mut ecdh = nostr::util::generate_shared_key(keys.secret_key(), &qr.source_pubkey)
+            .map_err(|e| PairingError::SigningError(e.to_string()))?;
         let (code, sas_input) = derive_sas(&ecdh, &qr.session_secret);
         ecdh.zeroize();
 
@@ -584,15 +586,14 @@ impl PairingSession {
 
         // NIP-AB §: Implementations SHOULD set created_at to the current time
         // minus a random value between 0 and 30 seconds for metadata privacy.
-        let now = nostr::Timestamp::now().as_u64();
+        let now = nostr::Timestamp::now().as_secs();
         let jitter = rand::random::<u64>() % 31; // 0-30s jitter per NIP-AB §Metadata Privacy
         let ts = nostr::Timestamp::from(now.saturating_sub(jitter));
 
         EventBuilder::new(
             Kind::Custom(PAIRING_KIND),
-            &encrypted,
-            [Tag::public_key(peer)],
-        )
+            &encrypted).tags(
+            [Tag::public_key(peer)])
         .custom_created_at(ts)
         .sign_with_keys(&self.keys)
         .map_err(|e| PairingError::SigningError(e.to_string()))
@@ -929,9 +930,8 @@ mod tests {
         .unwrap();
         let fake_abort = EventBuilder::new(
             Kind::Custom(crate::kind::KIND_PAIRING as u16),
-            &encrypted,
-            [Tag::public_key(source.pubkey())],
-        )
+            &encrypted).tags(
+            [Tag::public_key(source.pubkey())])
         .sign_with_keys(&rogue)
         .unwrap();
 
@@ -984,9 +984,8 @@ mod tests {
             .unwrap();
             EventBuilder::new(
                 Kind::Custom(crate::kind::KIND_PAIRING as u16),
-                &encrypted,
-                [Tag::public_key(source.pubkey())],
-            )
+                &encrypted).tags(
+                [Tag::public_key(source.pubkey())])
             .sign_with_keys(&keys)
             .unwrap()
         };
@@ -1044,9 +1043,8 @@ mod tests {
         .unwrap();
         let fake_event = EventBuilder::new(
             Kind::Custom(PAIRING_KIND),
-            &encrypted,
-            [Tag::public_key(target.pubkey())],
-        )
+            &encrypted).tags(
+            [Tag::public_key(target.pubkey())])
         .sign_with_keys(&rogue_keys)
         .unwrap();
 
@@ -1265,9 +1263,8 @@ mod tests {
         .unwrap();
         let wrong_event = EventBuilder::new(
             Kind::Custom(PAIRING_KIND),
-            &wrong_encrypted,
-            [Tag::public_key(target.pubkey())],
-        )
+            &wrong_encrypted).tags(
+            [Tag::public_key(target.pubkey())])
         .sign_with_keys(&source.keys)
         .unwrap();
 
@@ -1320,9 +1317,8 @@ mod tests {
         .unwrap();
         let fail_event = EventBuilder::new(
             Kind::Custom(PAIRING_KIND),
-            &fail_encrypted,
-            [Tag::public_key(source.pubkey())],
-        )
+            &fail_encrypted).tags(
+            [Tag::public_key(source.pubkey())])
         .sign_with_keys(&target.keys)
         .unwrap();
 

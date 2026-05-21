@@ -382,7 +382,7 @@ mod tests {
     }
 
     fn random_pubkey() -> Vec<u8> {
-        Keys::generate().public_key().serialize().to_vec()
+        Keys::generate().public_key().to_bytes().to_vec()
     }
 
     /// Setting an agent owner then reading back the policy should return
@@ -549,7 +549,7 @@ mod tests {
     #[ignore = "requires Postgres"]
     async fn test_set_channel_add_policy_rejects_invalid() {
         let db = setup_db().await;
-        let pubkey = nostr::Keys::generate().public_key().serialize().to_vec();
+        let pubkey = nostr::Keys::generate().public_key().to_bytes().to_vec();
         ensure_user(&db.pool, &pubkey).await.unwrap();
         let result = set_channel_add_policy(&db.pool, &pubkey, "invalid_policy").await;
         assert!(result.is_err(), "should reject invalid policy value");

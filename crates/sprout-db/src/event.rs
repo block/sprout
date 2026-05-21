@@ -988,7 +988,7 @@ mod tests {
 
     fn make_event_with_kind_and_tags(kind: u16, tags: Vec<Tag>) -> nostr::Event {
         let keys = Keys::generate();
-        EventBuilder::new(Kind::Custom(kind), "test", tags)
+        EventBuilder::new(Kind::Custom(kind), "test").tags( tags)
             .sign_with_keys(&keys)
             .expect("sign")
     }
@@ -997,7 +997,7 @@ mod tests {
     fn extract_d_tag_from_nip33_event() {
         let event = make_event_with_kind_and_tags(
             30023,
-            vec![Tag::parse(&["d", "my-article-slug"]).unwrap()],
+            vec![Tag::parse(["d", "my-article-slug"]).unwrap()],
         );
         assert_eq!(extract_d_tag(&event), Some("my-article-slug".to_string()));
     }
@@ -1007,8 +1007,8 @@ mod tests {
         let event = make_event_with_kind_and_tags(
             30023,
             vec![
-                Tag::parse(&["d", "first"]).unwrap(),
-                Tag::parse(&["d", "second"]).unwrap(),
+                Tag::parse(["d", "first"]).unwrap(),
+                Tag::parse(["d", "second"]).unwrap(),
             ],
         );
         assert_eq!(extract_d_tag(&event), Some("first".to_string()));
@@ -1018,13 +1018,13 @@ mod tests {
     fn extract_d_tag_missing_becomes_empty_string() {
         // NIP-33: "if there is no d tag, the d tag is considered to be ''"
         let event =
-            make_event_with_kind_and_tags(30023, vec![Tag::parse(&["p", "abc123"]).unwrap()]);
+            make_event_with_kind_and_tags(30023, vec![Tag::parse(["p", "abc123"]).unwrap()]);
         assert_eq!(extract_d_tag(&event), Some(String::new()));
     }
 
     #[test]
     fn extract_d_tag_empty_value_preserved() {
-        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", ""]).unwrap()]);
+        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(["d", ""]).unwrap()]);
         assert_eq!(extract_d_tag(&event), Some(String::new()));
     }
 
@@ -1033,7 +1033,7 @@ mod tests {
         // kind:1 (text note) — not parameterized replaceable
         let event = make_event_with_kind_and_tags(
             1,
-            vec![Tag::parse(&["d", "should-be-ignored"]).unwrap()],
+            vec![Tag::parse(["d", "should-be-ignored"]).unwrap()],
         );
         assert_eq!(extract_d_tag(&event), None);
     }
@@ -1042,33 +1042,33 @@ mod tests {
     fn extract_d_tag_nip29_group_metadata() {
         // kind:39000 is in the 30000–39999 range — d_tag should be extracted
         let event =
-            make_event_with_kind_and_tags(39000, vec![Tag::parse(&["d", "group-id"]).unwrap()]);
+            make_event_with_kind_and_tags(39000, vec![Tag::parse(["d", "group-id"]).unwrap()]);
         assert_eq!(extract_d_tag(&event), Some("group-id".to_string()));
     }
 
     #[test]
     fn extract_d_tag_boundary_kinds() {
         // kind:29999 — just below range
-        let below = make_event_with_kind_and_tags(29999, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let below = make_event_with_kind_and_tags(29999, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&below), None);
 
         // kind:30000 — lower bound
-        let lower = make_event_with_kind_and_tags(30000, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let lower = make_event_with_kind_and_tags(30000, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&lower), Some("val".to_string()));
 
         // kind:39999 — upper bound
-        let upper = make_event_with_kind_and_tags(39999, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let upper = make_event_with_kind_and_tags(39999, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&upper), Some("val".to_string()));
 
         // kind:40000 — just above range
-        let above = make_event_with_kind_and_tags(40000, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let above = make_event_with_kind_and_tags(40000, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&above), None);
     }
 
     #[test]
     fn extract_d_tag_single_element_d_tag_ignored() {
         // A d tag with only one element (no value) should not match — parts.len() < 2
-        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d"]).unwrap()]);
+        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(["d"]).unwrap()]);
         // No d tag with a value → empty string per NIP-33
         assert_eq!(extract_d_tag(&event), Some(String::new()));
     }
@@ -1078,7 +1078,7 @@ mod tests {
         // extract_d_tag returns the full value — length enforcement is at the ingest layer.
         let long_val = "x".repeat(2048);
         let event =
-            make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", &long_val]).unwrap()]);
+            make_event_with_kind_and_tags(30023, vec![Tag::parse(["d", &long_val]).unwrap()]);
         let result = extract_d_tag(&event).unwrap();
         assert_eq!(result.len(), 2048);
         assert_eq!(result, long_val);

@@ -170,7 +170,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         match &*auth {
             AuthState::Authenticated(ctx) => (
                 conn.conn_id,
-                ctx.pubkey.serialize().to_vec(),
+                ctx.pubkey.to_bytes().to_vec(),
                 ctx.pubkey,
                 ctx.scopes.clone(),
                 ctx.channel_ids.clone(),
@@ -550,8 +550,8 @@ async fn handle_agent_observer_event(
         }
     };
 
-    let agent_bytes = route.agent.serialize().to_vec();
-    let owner_bytes = route.owner.serialize().to_vec();
+    let agent_bytes = route.agent.to_bytes().to_vec();
+    let owner_bytes = route.owner.to_bytes().to_vec();
     let cache_key = (agent_bytes.clone(), owner_bytes.clone());
     let is_owner = if session_owner_match {
         true
@@ -780,13 +780,12 @@ mod tests {
         .expect("encrypt observer payload");
         let event = EventBuilder::new(
             Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
-            encrypted,
+            encrypted).tags(
             [
-                Tag::parse(&["p", &owner.public_key().to_hex()]).expect("p tag"),
-                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
-                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
-            ],
-        )
+                Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+                Tag::parse([OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
+            ])
         .sign_with_keys(&agent)
         .expect("sign event");
 
@@ -810,13 +809,12 @@ mod tests {
         .expect("encrypt observer payload");
         let event = EventBuilder::new(
             Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
-            encrypted,
+            encrypted).tags(
             [
-                Tag::parse(&["p", &agent.public_key().to_hex()]).expect("p tag"),
-                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
-                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).expect("frame tag"),
-            ],
-        )
+                Tag::parse(["p", &agent.public_key().to_hex()]).expect("p tag"),
+                Tag::parse([OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).expect("frame tag"),
+            ])
         .sign_with_keys(&owner)
         .expect("sign event");
 
@@ -834,13 +832,12 @@ mod tests {
         let owner = Keys::generate();
         let event = EventBuilder::new(
             Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
-            "not encrypted",
+            "not encrypted").tags(
             [
-                Tag::parse(&["p", &owner.public_key().to_hex()]).expect("p tag"),
-                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
-                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
-            ],
-        )
+                Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+                Tag::parse([OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
+            ])
         .sign_with_keys(&agent)
         .expect("sign event");
 

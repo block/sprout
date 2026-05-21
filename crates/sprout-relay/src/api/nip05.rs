@@ -7,7 +7,7 @@ use axum::{
     http::HeaderValue,
     response::{IntoResponse, Json, Response},
 };
-use nostr::util::hex as nostr_hex;
+use hex;
 use serde::Deserialize;
 
 use crate::state::AppState;
@@ -33,7 +33,7 @@ pub async fn nostr_nip05(
             let domain = extract_domain(&state.config.relay_url);
             match state.db.get_user_by_nip05(&name, &domain).await {
                 Ok(Some(user)) => {
-                    let hex_pubkey = nostr_hex::encode(&user.pubkey);
+                    let hex_pubkey = hex::encode(&user.pubkey);
                     let relay_url = state.config.relay_url.clone();
                     serde_json::json!({
                         "names": { (name): hex_pubkey.clone() },

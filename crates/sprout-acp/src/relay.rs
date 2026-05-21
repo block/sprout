@@ -62,7 +62,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 use std::time::Instant;
 
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Keys, Kind, Tag, Url as NostrUrl};
+use nostr::{Event, EventBuilder, Keys, Kind, RelayUrl, Tag, Url as NostrUrl};
 use serde_json::{json, Value};
 use sprout_core::kind::{
     KIND_AGENT_OBSERVER_FRAME, KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION,
@@ -130,23 +130,23 @@ impl RestClient {
         use base64::Engine;
         use sha2::{Digest, Sha256};
 
-        let u_tag = Tag::parse(&["u", url])
+        let u_tag = Tag::parse(["u", url])
             .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
-        let method_tag = Tag::parse(&["method", method])
+        let method_tag = Tag::parse(["method", method])
             .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
         // Nonce prevents replay rejection for rapid-fire requests with identical bodies.
-        let nonce_tag = Tag::parse(&["nonce", &uuid::Uuid::new_v4().to_string()])
+        let nonce_tag = Tag::parse(["nonce", &uuid::Uuid::new_v4().to_string()])
             .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
         let mut tags = vec![u_tag, method_tag, nonce_tag];
 
         if let Some(b) = body {
             let hash = hex::encode(Sha256::digest(b));
-            let payload_tag = Tag::parse(&["payload", &hash])
+            let payload_tag = Tag::parse(["payload", &hash])
                 .map_err(|e| RelayError::Http(format!("NIP-98 tag error: {e}")))?;
             tags.push(payload_tag);
         }
 
-        let event = EventBuilder::new(Kind::HttpAuth, "", tags)
+        let event = EventBuilder::new(Kind::HttpAuth, "").tags( tags)
             .sign_with_keys(&self.keys)
             .map_err(|e| RelayError::Http(format!("NIP-98 sign error: {e}")))?;
         let event_json = serde_json::to_string(&event)
@@ -522,7 +522,7 @@ impl HarnessRelay {
             .kind(Kind::Custom(
                 sprout_core::kind::KIND_NIP29_GROUP_MEMBERS as u16,
             ))
-            .custom_tag(p_tag, [pk_hex.as_str()]);
+            .custom_tags(p_tag, [pk_hex.as_str()]);
         let member_events = rest.query(&[member_filter]).await?;
 
         let member_arr = member_events
@@ -555,12 +555,11 @@ impl HarnessRelay {
         // Step 2: Fetch metadata (kind:39000) for discovered channels.
         let d_tag = SingleLetterTag::lowercase(Alphabet::D);
         let d_values: Vec<String> = channel_uuids.iter().map(|u| u.to_string()).collect();
-        let d_refs: Vec<&str> = d_values.iter().map(|s| s.as_str()).collect();
         let meta_filter = nostr::Filter::new()
             .kind(Kind::Custom(
                 sprout_core::kind::KIND_NIP29_GROUP_METADATA as u16,
             ))
-            .custom_tag(d_tag, d_refs);
+            .custom_tags(d_tag, d_values);
         let meta_events = rest.query(&[meta_filter]).await?;
 
         // Build UUID → (name, channel_type) from metadata events.
@@ -732,24 +731,24 @@ impl HarnessRelay {
         root_event_id: Option<&str>,
         parent_event_id: Option<&str>,
     ) -> Result<Event, RelayError> {
-        let h_tag = Tag::parse(&["h", &channel_id.to_string()])
+        let h_tag = Tag::parse(["h", &channel_id.to_string()])
             .map_err(|e| RelayError::AuthFailed(e.to_string()))?;
         let mut tags = vec![h_tag];
         if let Some(parent) = parent_event_id {
             if let Some(root) = root_event_id {
                 if root != parent {
                     tags.push(
-                        Tag::parse(&["e", root, "", "root"])
+                        Tag::parse(["e", root, "", "root"])
                             .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
                     );
                 }
             }
             tags.push(
-                Tag::parse(&["e", parent, "", "reply"])
+                Tag::parse(["e", parent, "", "reply"])
                     .map_err(|e| RelayError::AuthFailed(e.to_string()))?,
             );
         }
-        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "", tags)
+        let event = EventBuilder::new(Kind::Custom(KIND_TYPING_INDICATOR as u16), "").tags( tags)
             .sign_with_keys(&self.keys)?;
         Ok(event)
     }
@@ -2484,20 +2483,19 @@ async fn send_auth_response(
     keys: &Keys,
     auth_tag: Option<&nostr::Tag>,
 ) -> Result<(), RelayError> {
-    let relay_nostr_url: NostrUrl = relay_url
-        .parse()
-        .map_err(|e: url::ParseError| RelayError::Http(format!("invalid relay URL: {e}")))?;
+    let relay_nostr_url = RelayUrl::parse(relay_url)
+        .map_err(|e| RelayError::Http(format!("invalid relay URL: {e}")))?;
 
     let auth_event = if let Some(tag) = auth_tag {
         // Cannot use EventBuilder::auth() shortcut — it doesn't accept extra tags.
         let tags = vec![
-            nostr::Tag::parse(&["relay", relay_url])
+            nostr::Tag::parse(["relay", relay_url])
                 .map_err(|e| RelayError::Http(format!("tag parse error: {e}")))?,
-            nostr::Tag::parse(&["challenge", challenge])
+            nostr::Tag::parse(["challenge", challenge])
                 .map_err(|e| RelayError::Http(format!("tag parse error: {e}")))?,
             tag.clone(),
         ];
-        EventBuilder::new(nostr::Kind::Authentication, "", tags).sign_with_keys(keys)?
+        EventBuilder::new(nostr::Kind::Authentication, "").tags( tags).sign_with_keys(keys)?
     } else {
         EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?
     };
@@ -3077,7 +3075,7 @@ mod tests {
     /// control it, but we return it so callers can use it for dedup tests.
     fn make_test_event(keys: &nostr::Keys, created_at_secs: u64) -> Event {
         let ts = nostr::Timestamp::from(created_at_secs);
-        EventBuilder::new(nostr::Kind::TextNote, "test", [])
+        EventBuilder::new(nostr::Kind::TextNote, "test").tags( [])
             .custom_created_at(ts)
             .sign_with_keys(keys)
             .expect("signing should succeed")

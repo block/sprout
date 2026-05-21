@@ -179,7 +179,7 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
             .headers
             .get("x-auth-tag")
             .and_then(|v| v.to_str().ok());
-        if crate::api::relay_members::enforce_relay_membership(state, &pubkey.serialize(), auth_tag)
+        if crate::api::relay_members::enforce_relay_membership(state, pubkey.as_bytes(), auth_tag)
             .await
             .is_err()
         {
@@ -452,7 +452,7 @@ pub async fn receive_pack(
     body: Body,
 ) -> Result<Response, Response> {
     let repo_name = validate_repo_id(&params.owner, &params.repo)?;
-    let pusher_hex = hex::encode(auth.pubkey.serialize());
+    let pusher_hex = hex::encode(auth.pubkey.to_bytes());
     let _permit = acquire_git_permit(&state)?;
 
     // **No per-repo advisory lock — by design.** Writer serialization is

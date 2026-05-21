@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Keys, SecretKey, ToBech32};
+use nostr::{Event, EventBuilder, Keys, RelayUrl, SecretKey, ToBech32};
 use sprout_core::kind::KIND_PAIRING;
 use sprout_core::pairing::session::PairingSession;
 use sprout_core::pairing::{
@@ -367,7 +367,8 @@ fn cmd_test_vectors() -> Result<(), CliError> {
     // Derive all values.
     let session_id = derive_session_id(&session_secret);
     let ecdh_shared =
-        nostr::util::generate_shared_key(src_keys.secret_key(), &tgt_keys.public_key());
+        nostr::util::generate_shared_key(src_keys.secret_key(), &tgt_keys.public_key())
+            .map_err(|e| CliError::Other(e.to_string()))?;
     let (sas_code_u32, sas_input) = derive_sas(&ecdh_shared, &session_secret);
     let sas_code = format_sas(sas_code_u32);
     let transcript_hash = derive_transcript_hash(
@@ -463,8 +464,7 @@ where
     };
 
     // Build and send the NIP-42 auth response using the session's ephemeral keys.
-    let relay_url_parsed: url::Url = relay_url
-        .parse()
+    let relay_url_parsed = RelayUrl::parse(relay_url)
         .map_err(|e| CliError::Other(format!("invalid relay URL: {e}")))?;
     let auth_event = session
         .sign_event(EventBuilder::auth(challenge, relay_url_parsed))

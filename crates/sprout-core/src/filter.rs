@@ -91,7 +91,7 @@ mod tests {
 
     fn stored_with_tag(tag: Tag) -> StoredEvent {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "test", [tag])
+        let event = EventBuilder::new(Kind::TextNote, "test").tags( [tag])
             .sign_with_keys(&keys)
             .expect("sign");
         StoredEvent::with_received_at(event, Utc::now(), None, true)
@@ -173,9 +173,8 @@ mod tests {
         // Event with NO h-tag but with a stored channel_id.
         let reaction = EventBuilder::new(
             Kind::Reaction,
-            "👍",
-            [Tag::event(nostr::EventId::all_zeros())],
-        )
+            "👍").tags(
+            [Tag::event(nostr::EventId::all_zeros())])
         .sign_with_keys(&keys)
         .expect("sign");
         let stored = StoredEvent::with_received_at(reaction, Utc::now(), Some(channel_id), true);
@@ -205,9 +204,8 @@ mod tests {
         let other_channel = uuid::Uuid::new_v4();
         let msg_with_h = EventBuilder::new(
             Kind::Custom(9),
-            "hello",
-            [Tag::parse(&["h", &other_channel.to_string()]).unwrap()],
-        )
+            "hello").tags(
+            [Tag::parse(["h", &other_channel.to_string()]).unwrap()])
         .sign_with_keys(&keys)
         .expect("sign");
         // channel_id matches the filter, but the h-tag points elsewhere.

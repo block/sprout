@@ -18,8 +18,8 @@ use tracing::{debug, error, info, warn};
 /// Messages forwarded from the upstream relay to the server layer.
 #[derive(Debug, Clone)]
 pub enum UpstreamEvent {
-    /// A relay message to route to a downstream client.
-    RelayMessage(RelayMessage),
+    /// A relay message to route to a downstream client (raw JSON text).
+    RelayMessage(String),
     /// The upstream connection was lost (reconnect in progress).
     Disconnected,
     /// The upstream connection was (re)established and authenticated.
@@ -374,11 +374,7 @@ where
                                 event_id.to_hex()
                             );
                             if inbound_tx
-                                .send(UpstreamEvent::RelayMessage(RelayMessage::Ok {
-                                    event_id,
-                                    status: *status,
-                                    message: message.clone(),
-                                }))
+                                .send(UpstreamEvent::RelayMessage(text_str.to_string()))
                                 .await
                                 .is_err()
                             {
@@ -389,9 +385,9 @@ where
                     }
 
                     // ── All other messages → forward downstream ──────────────
-                    other => {
+                    _other => {
                         if inbound_tx
-                            .send(UpstreamEvent::RelayMessage(other))
+                            .send(UpstreamEvent::RelayMessage(text_str.to_string()))
                             .await
                             .is_err()
                         {
@@ -435,18 +431,17 @@ async fn respond_to_auth_challenge(
     inner: &Inner,
     write_tx: &mpsc::Sender<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let relay_tag = Tag::parse(&["relay", &inner.relay_url])
+    let relay_tag = Tag::parse(["relay", &inner.relay_url])
         .map_err(|e| crate::ProxyError::Auth(format!("relay tag: {e}")))?;
-    let challenge_tag = Tag::parse(&["challenge", challenge])
+    let challenge_tag = Tag::parse(["challenge", challenge])
         .map_err(|e| crate::ProxyError::Auth(format!("challenge tag: {e}")))?;
-    let token_tag = Tag::parse(&["auth_token", &inner.api_token])
+    let token_tag = Tag::parse(["auth_token", &inner.api_token])
         .map_err(|e| crate::ProxyError::Auth(format!("auth_token tag: {e}")))?;
 
     let auth_event = EventBuilder::new(
         Kind::Authentication, // kind:22242
-        "",
-        [relay_tag, challenge_tag, token_tag],
-    )
+        "").tags(
+        [relay_tag, challenge_tag, token_tag])
     .sign_with_keys(&inner.auth_keys)
     .map_err(|e| crate::ProxyError::Auth(format!("sign auth event: {e}")))?;
 
@@ -483,7 +478,7 @@ mod tests {
 
             // Queue an EVENT message.
             let keys = Keys::generate();
-            let event = EventBuilder::new(Kind::TextNote, "hello", [])
+            let event = EventBuilder::new(Kind::TextNote, "hello").tags( [])
                 .sign_with_keys(&keys)
                 .unwrap();
             let event_id = event.id;

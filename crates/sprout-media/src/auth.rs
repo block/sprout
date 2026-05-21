@@ -143,11 +143,11 @@ mod tests {
         let now = Timestamp::now().as_u64();
         let exp_str = (now + 300).to_string();
         let tags = vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", sha256]).unwrap(),
-            Tag::parse(&["expiration", &exp_str]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", sha256]).unwrap(),
+            Tag::parse(["expiration", &exp_str]).unwrap(),
         ];
-        EventBuilder::new(Kind::from(24242), "Upload sprout-media", tags)
+        EventBuilder::new(Kind::from(24242), "Upload sprout-media").tags( tags)
             .sign_with_keys(keys)
             .unwrap()
     }
@@ -187,11 +187,11 @@ mod tests {
         let now = Timestamp::now().as_u64();
         let exp_str = (now + 300).to_string();
         let tags = vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &exp_str]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &exp_str]).unwrap(),
         ];
-        let event = EventBuilder::new(Kind::from(27235), "wrong kind", tags)
+        let event = EventBuilder::new(Kind::from(27235), "wrong kind").tags( tags)
             .sign_with_keys(&keys)
             .unwrap();
         assert!(matches!(
@@ -208,12 +208,12 @@ mod tests {
         let now = Timestamp::now().as_u64();
         let exp_str = (now + 300).to_string();
         let tags = vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &other_hash]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &exp_str]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &other_hash]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &exp_str]).unwrap(),
         ];
-        let event = EventBuilder::new(Kind::from(24242), "Upload multi-x", tags)
+        let event = EventBuilder::new(Kind::from(24242), "Upload multi-x").tags( tags)
             .sign_with_keys(&keys)
             .unwrap();
         // Should pass because at least one x tag matches
@@ -227,12 +227,12 @@ mod tests {
         let now = Timestamp::now().as_u64();
         let exp_str = (now + 300).to_string();
         let tags = vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &exp_str]).unwrap(),
-            Tag::parse(&["server", "other.example.com"]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &exp_str]).unwrap(),
+            Tag::parse(["server", "other.example.com"]).unwrap(),
         ];
-        let event = EventBuilder::new(Kind::from(24242), "Upload scoped", tags)
+        let event = EventBuilder::new(Kind::from(24242), "Upload scoped").tags( tags)
             .sign_with_keys(&keys)
             .unwrap();
         // Should fail — server tag present but doesn't match our domain
@@ -267,12 +267,12 @@ mod tests {
         let now = Timestamp::now().as_u64();
         let exp_str = (now + 300).to_string();
         let tags = vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &exp_str]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &exp_str]).unwrap(),
         ];
         // Empty content — BUD-11 requires a human-readable string
-        let event = EventBuilder::new(Kind::from(24242), "", tags)
+        let event = EventBuilder::new(Kind::from(24242), "").tags( tags)
             .sign_with_keys(&keys)
             .unwrap();
         assert!(matches!(

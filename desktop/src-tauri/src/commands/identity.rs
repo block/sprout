@@ -1,5 +1,5 @@
 use nostr::{nips::nip44, EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp, ToBech32};
-use nostr_compat::{
+use nostr::{
     Event as CompatEvent, JsonUtil as CompatJsonUtil, Keys as CompatKeys,
     PublicKey as CompatPublicKey,
 };

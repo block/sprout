@@ -1202,7 +1202,7 @@ mod tests {
     }
 
     fn random_pubkey() -> Vec<u8> {
-        Keys::generate().public_key().serialize().to_vec()
+        Keys::generate().public_key().to_bytes().to_vec()
     }
 
     /// Agent owner (non-admin) can remove their own bot from a channel.

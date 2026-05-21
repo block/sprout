@@ -23,7 +23,7 @@ use crate::{ChannelKind, DiffMeta, MemberRole, SdkError, ThreadRef, Visibility, 
 
 /// Parse a tag slice, mapping errors to `SdkError::InvalidTag`.
 fn tag(parts: &[&str]) -> Result<Tag, SdkError> {
-    Tag::parse(parts).map_err(|e| SdkError::InvalidTag(e.to_string()))
+    Tag::parse(parts.iter().copied()).map_err(|e| SdkError::InvalidTag(e.to_string()))
 }
 
 /// Validate content byte length.
@@ -89,7 +89,7 @@ fn mention_tags(mentions: &[&str], tags: &mut Vec<Tag>) -> Result<(), SdkError> 
 fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), SdkError> {
     for mt in media_tags {
         let parts: Vec<&str> = mt.iter().map(String::as_str).collect();
-        tags.push(Tag::parse(&parts).map_err(|e| SdkError::InvalidTag(e.to_string()))?);
+        tags.push(Tag::parse(parts).map_err(|e| SdkError::InvalidTag(e.to_string()))?);
     }
     Ok(())
 }
@@ -122,7 +122,7 @@ pub fn build_message(
         tags.push(tag(&["broadcast", "1"])?);
     }
     imeta_tags(media_tags, &mut tags)?;
-    Ok(EventBuilder::new(Kind::Custom(9), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(9), content).tags( tags))
 }
 
 // ── Builder: build_agent_observer_frame ─────────────────────────────────────
@@ -159,9 +159,8 @@ pub fn build_agent_observer_frame(
 
     Ok(EventBuilder::new(
         Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
-        encrypted_content,
-        tags,
-    ))
+        encrypted_content).tags(
+        tags))
 }
 
 // ── Builder 2: build_forum_post ───────────────────────────────────────────────
@@ -177,7 +176,7 @@ pub fn build_forum_post(
     let mut tags = vec![tag(&["h", &channel_id.to_string()])?];
     mention_tags(mentions, &mut tags)?;
     imeta_tags(media_tags, &mut tags)?;
-    Ok(EventBuilder::new(Kind::Custom(45001), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(45001), content).tags( tags))
 }
 
 // ── Builder 3: build_forum_comment ───────────────────────────────────────────
@@ -195,7 +194,7 @@ pub fn build_forum_comment(
     thread_tags(thread_ref, &mut tags)?;
     mention_tags(mentions, &mut tags)?;
     imeta_tags(media_tags, &mut tags)?;
-    Ok(EventBuilder::new(Kind::Custom(45003), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(45003), content).tags( tags))
 }
 
 // ── Builder 4: build_diff_message ────────────────────────────────────────────
@@ -267,7 +266,7 @@ pub fn build_diff_message(
     if let Some(tr) = thread_ref {
         thread_tags(tr, &mut tags)?;
     }
-    Ok(EventBuilder::new(Kind::Custom(40008), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(40008), content).tags( tags))
 }
 
 // ── Builder 5: build_edit ────────────────────────────────────────────────────
@@ -283,7 +282,7 @@ pub fn build_edit(
         tag(&["h", &channel_id.to_string()])?,
         tag(&["e", &target_event_id.to_hex()])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(40003), new_content, tags))
+    Ok(EventBuilder::new(Kind::Custom(40003), new_content).tags( tags))
 }
 
 // ── Builder 6: build_delete_message ──────────────────────────────────────────
@@ -297,7 +296,7 @@ pub fn build_delete_message(
         tag(&["h", &channel_id.to_string()])?,
         tag(&["e", &target_event_id.to_hex()])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9005), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9005), "").tags( tags))
 }
 
 // ── Builder 7: build_delete_compat ───────────────────────────────────────────
@@ -305,7 +304,7 @@ pub fn build_delete_message(
 /// Build a NIP-09 compatible deletion event (kind 5).
 pub fn build_delete_compat(target_event_id: nostr::EventId) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["e", &target_event_id.to_hex()])?];
-    Ok(EventBuilder::new(Kind::Custom(5), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(5), "").tags( tags))
 }
 
 // ── Builder 8: build_vote ────────────────────────────────────────────────────
@@ -324,7 +323,7 @@ pub fn build_vote(
         tag(&["h", &channel_id.to_string()])?,
         tag(&["e", &target_event_id.to_hex()])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(45002), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(45002), content).tags( tags))
 }
 
 // ── Builder 9: build_reaction ────────────────────────────────────────────────
@@ -338,7 +337,7 @@ pub fn build_reaction(
         return Err(SdkError::EmojiTooLong);
     }
     let tags = vec![tag(&["e", &target_event_id.to_hex()])?];
-    Ok(EventBuilder::new(Kind::Custom(7), emoji, tags))
+    Ok(EventBuilder::new(Kind::Custom(7), emoji).tags( tags))
 }
 
 // ── Builder 10: build_remove_reaction ────────────────────────────────────────
@@ -346,7 +345,7 @@ pub fn build_reaction(
 /// Build a deletion event targeting a reaction (kind 5).
 pub fn build_remove_reaction(reaction_event_id: nostr::EventId) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["e", &reaction_event_id.to_hex()])?];
-    Ok(EventBuilder::new(Kind::Custom(5), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(5), "").tags( tags))
 }
 
 // ── Builder 11: build_set_canvas ─────────────────────────────────────────────
@@ -354,7 +353,7 @@ pub fn build_remove_reaction(reaction_event_id: nostr::EventId) -> Result<EventB
 /// Build a canvas update event (kind 40100).
 pub fn build_set_canvas(channel_id: Uuid, content: &str) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(40100), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(40100), content).tags( tags))
 }
 
 // ── Builder 12: build_profile ────────────────────────────────────────────────
@@ -386,7 +385,7 @@ pub fn build_profile(
         map.insert("nip05".into(), serde_json::Value::String(v.into()));
     }
     let content = serde_json::Value::Object(map).to_string();
-    Ok(EventBuilder::new(Kind::Custom(0), content, []))
+    Ok(EventBuilder::new(Kind::Custom(0), content).tags( []))
 }
 
 // ── Builder 13: build_add_member ─────────────────────────────────────────────
@@ -405,7 +404,7 @@ pub fn build_add_member(
     if let Some(r) = role {
         tags.push(tag(&["role", r.as_str()])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(9000), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9000), "").tags( tags))
 }
 
 // ── Builder 14: build_remove_member ──────────────────────────────────────────
@@ -420,7 +419,7 @@ pub fn build_remove_member(
         tag(&["h", &channel_id.to_string()])?,
         tag(&["p", &target_pubkey.to_ascii_lowercase()])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9001), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9001), "").tags( tags))
 }
 
 // ── Builder 15: build_leave ──────────────────────────────────────────────────
@@ -428,7 +427,7 @@ pub fn build_remove_member(
 /// Build a NIP-29 leave-request event (kind 9022).
 pub fn build_leave(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(9022), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9022), "").tags( tags))
 }
 
 // ── Builder 16: build_update_channel ─────────────────────────────────────────
@@ -451,7 +450,7 @@ pub fn build_update_channel(
     if let Some(a) = about {
         tags.push(tag(&["about", a])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "").tags( tags))
 }
 
 // ── Builder 17: build_set_topic ──────────────────────────────────────────────
@@ -462,7 +461,7 @@ pub fn build_set_topic(channel_id: Uuid, topic: &str) -> Result<EventBuilder, Sd
         tag(&["h", &channel_id.to_string()])?,
         tag(&["topic", topic])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "").tags( tags))
 }
 
 // ── Builder 18: build_set_purpose ────────────────────────────────────────────
@@ -473,7 +472,7 @@ pub fn build_set_purpose(channel_id: Uuid, purpose: &str) -> Result<EventBuilder
         tag(&["h", &channel_id.to_string()])?,
         tag(&["purpose", purpose])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "").tags( tags))
 }
 
 // ── Builder 19: build_create_channel ─────────────────────────────────────────
@@ -496,7 +495,7 @@ pub fn build_create_channel(
     if let Some(a) = about {
         tags.push(tag(&["about", a])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(9007), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9007), "").tags( tags))
 }
 
 // ── Builder 20: build_join ───────────────────────────────────────────────────
@@ -504,7 +503,7 @@ pub fn build_create_channel(
 /// Build a NIP-29 join-request event (kind 9021).
 pub fn build_join(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(9021), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9021), "").tags( tags))
 }
 
 // ── Builder 21: build_archive ────────────────────────────────────────────────
@@ -515,7 +514,7 @@ pub fn build_archive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
         tag(&["h", &channel_id.to_string()])?,
         tag(&["archived", "true"])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "").tags( tags))
 }
 
 // ── Builder 22: build_unarchive ──────────────────────────────────────────────
@@ -526,7 +525,7 @@ pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
         tag(&["h", &channel_id.to_string()])?,
         tag(&["archived", "false"])?,
     ];
-    Ok(EventBuilder::new(Kind::Custom(9002), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9002), "").tags( tags))
 }
 
 // ── Builder 23: build_delete_channel ─────────────────────────────────────────
@@ -534,7 +533,7 @@ pub fn build_unarchive(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
 /// Build a NIP-29 delete-group event (kind 9008).
 pub fn build_delete_channel(channel_id: Uuid) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["h", &channel_id.to_string()])?];
-    Ok(EventBuilder::new(Kind::Custom(9008), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(9008), "").tags( tags))
 }
 
 // ── Builder 24: build_note ───────────────────────────────────────────────────
@@ -554,7 +553,7 @@ pub fn build_note(
     if let Some(reply_id) = reply_to_event_id {
         tags.push(tag(&["e", &reply_id.to_hex(), "", "reply"])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(1), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(1), content).tags( tags))
 }
 
 // ── Builder 25: build_contact_list ───────────────────────────────────────────
@@ -619,7 +618,7 @@ pub fn build_contact_list(
             petname.unwrap_or(""),
         ])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(3), "", tags))
+    Ok(EventBuilder::new(Kind::Custom(3), "").tags( tags))
 }
 
 // ── Huddle shared helper ──────────────────────────────────────────────────────
@@ -649,7 +648,7 @@ fn build_huddle_event_sdk(
         map.insert((*k).into(), serde_json::Value::String(v.to_string()));
     }
     let content = serde_json::Value::Object(map).to_string();
-    Ok(EventBuilder::new(Kind::Custom(kind), content, tags))
+    Ok(EventBuilder::new(Kind::Custom(kind), content).tags( tags))
 }
 
 // ── Builder 26: build_huddle_started ─────────────────────────────────────────
@@ -895,9 +894,8 @@ pub fn build_repo_announcement(
 
     Ok(EventBuilder::new(
         Kind::Custom(KIND_GIT_REPO_ANNOUNCEMENT as u16),
-        "",
-        tags,
-    ))
+        "").tags(
+        tags))
 }
 
 // ── Builder 31: build_workflow_def ────────────────────────────────────────────
@@ -919,9 +917,8 @@ pub fn build_workflow_def(
     ];
     Ok(EventBuilder::new(
         Kind::Custom(KIND_WORKFLOW_DEF as u16),
-        yaml,
-        tags,
-    ))
+        yaml).tags(
+        tags))
 }
 
 // ── Builder 32: build_workflow_update ─────────────────────────────────────────
@@ -943,9 +940,8 @@ pub fn build_workflow_update(
     ];
     Ok(EventBuilder::new(
         Kind::Custom(KIND_WORKFLOW_DEF as u16),
-        yaml,
-        tags,
-    ))
+        yaml).tags(
+        tags))
 }
 
 // ── Builder 33: build_workflow_delete ─────────────────────────────────────────
@@ -965,9 +961,8 @@ pub fn build_workflow_delete(
     ])?];
     Ok(EventBuilder::new(
         Kind::Custom(KIND_DELETION as u16),
-        "",
-        tags,
-    ))
+        "").tags(
+        tags))
 }
 
 // ── Builder 34: build_workflow_trigger ────────────────────────────────────────
@@ -977,9 +972,8 @@ pub fn build_workflow_trigger(workflow_id: Uuid) -> Result<EventBuilder, SdkErro
     let tags = vec![tag(&["d", &workflow_id.to_string()])?];
     Ok(EventBuilder::new(
         Kind::Custom(KIND_WORKFLOW_TRIGGER as u16),
-        "",
-        tags,
-    ))
+        "").tags(
+        tags))
 }
 
 // ── Builder 35: build_workflow_approval ───────────────────────────────────────
@@ -1006,7 +1000,7 @@ pub fn build_workflow_approval(
         KIND_APPROVAL_DENY
     };
     let tags = vec![tag(&["d", token_hash])?];
-    Ok(EventBuilder::new(Kind::Custom(kind as u16), note, tags))
+    Ok(EventBuilder::new(Kind::Custom(kind as u16), note).tags( tags))
 }
 
 // ── Builder 36: build_dm_open ────────────────────────────────────────────────
@@ -1027,9 +1021,8 @@ pub fn build_dm_open(pubkeys: &[&str]) -> Result<EventBuilder, SdkError> {
     }
     Ok(EventBuilder::new(
         Kind::Custom(KIND_DM_OPEN as u16),
-        "",
-        tags,
-    ))
+        "").tags(
+        tags))
 }
 
 // ── Builder 37: build_dm_add_member ──────────────────────────────────────────
@@ -1040,9 +1033,8 @@ pub fn build_dm_add_member(channel_id: Uuid, pubkey: &str) -> Result<EventBuilde
     let tags = vec![tag(&["h", &channel_id.to_string()])?, tag(&["p", &pk])?];
     Ok(EventBuilder::new(
         Kind::Custom(KIND_DM_ADD_MEMBER as u16),
-        "",
-        tags,
-    ))
+        "").tags(
+        tags))
 }
 
 // ── Builder 38: build_presence_update ────────────────────────────────────────
@@ -1064,9 +1056,8 @@ pub fn build_presence_update(status: &str) -> Result<EventBuilder, SdkError> {
     let tags = vec![tag(&["status", status])?];
     Ok(EventBuilder::new(
         Kind::Custom(KIND_PRESENCE_UPDATE as u16),
-        status,
-        tags,
-    ))
+        status).tags(
+        tags))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1086,7 +1077,7 @@ mod tests {
 
     fn event_id() -> EventId {
         let k = keys();
-        EventBuilder::new(Kind::Custom(1), "x", [])
+        EventBuilder::new(Kind::Custom(1), "x").tags( [])
             .sign_with_keys(&k)
             .expect("sign")
             .id
@@ -1745,8 +1736,8 @@ mod tests {
     #[test]
     fn extract_channel_id_invalid_uuid() {
         // Build an event with a malformed h-tag value
-        let tags = vec![Tag::parse(&["h", "not-a-uuid"]).unwrap()];
-        let ev = EventBuilder::new(Kind::Custom(9), "x", tags)
+        let tags = vec![Tag::parse(["h", "not-a-uuid"]).unwrap()];
+        let ev = EventBuilder::new(Kind::Custom(9), "x").tags( tags)
             .sign_with_keys(&keys())
             .unwrap();
         assert_eq!(extract_channel_id(&ev), None);
@@ -1768,7 +1759,7 @@ mod tests {
     fn build_note_with_reply() {
         let keys = nostr::Keys::generate();
         // Create a dummy event to get a valid EventId
-        let dummy = EventBuilder::new(Kind::Custom(1), "dummy", vec![])
+        let dummy = EventBuilder::new(Kind::Custom(1), "dummy").tags( vec![])
             .sign_with_keys(&keys)
             .unwrap();
         let builder = build_note("reply text", Some(dummy.id)).unwrap();

@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Filter, Keys, Kind, Tag, Url};
+use nostr::{Event, EventBuilder, Filter, Keys, Kind, RelayUrl, Tag, Url};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::time::timeout;
@@ -125,10 +125,8 @@ impl SproutTestClient {
     pub async fn authenticate(&mut self, keys: &Keys) -> Result<(), TestClientError> {
         let challenge = self.wait_for_auth_challenge(Duration::from_secs(5)).await?;
 
-        let relay_url: Url = self
-            .relay_url
-            .parse()
-            .map_err(|e: url::ParseError| TestClientError::Url(e.to_string()))?;
+        let relay_url = RelayUrl::parse(&self.relay_url)
+            .map_err(|e| TestClientError::Url(e.to_string()))?;
 
         let auth_event = EventBuilder::auth(&challenge, relay_url).sign_with_keys(keys)?;
         let event_id = auth_event.id.to_hex();
@@ -159,9 +157,9 @@ impl SproutTestClient {
         content: &str,
         kind: u16,
     ) -> Result<OkResponse, TestClientError> {
-        let h_tag = Tag::parse(&["h", channel_id])
+        let h_tag = Tag::parse(["h", channel_id])
             .map_err(|e| TestClientError::EventBuilder(e.to_string()))?;
-        let event = EventBuilder::new(Kind::Custom(kind), content, [h_tag]).sign_with_keys(keys)?;
+        let event = EventBuilder::new(Kind::Custom(kind), content).tags( [h_tag]).sign_with_keys(keys)?;
         self.send_event(event).await
     }
 
@@ -537,8 +535,8 @@ mod tests {
     fn text_event_carries_h_tag() {
         let keys = Keys::generate();
         let channel_id = "my-channel-123";
-        let h_tag = Tag::parse(&["h", channel_id]).unwrap();
-        let event = EventBuilder::new(Kind::Custom(9), "hello", [h_tag])
+        let h_tag = Tag::parse(["h", channel_id]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(9), "hello").tags( [h_tag])
             .sign_with_keys(&keys)
             .unwrap();
 

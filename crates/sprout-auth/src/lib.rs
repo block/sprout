@@ -222,7 +222,7 @@ mod tests {
     #[tokio::test]
     async fn wrong_kind_rejected() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "not auth", [])
+        let event = EventBuilder::new(Kind::TextNote, "not auth").tags( [])
             .sign_with_keys(&keys)
             .expect("sign");
 

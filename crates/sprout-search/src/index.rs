@@ -301,7 +301,7 @@ mod tests {
 
     fn make_stored_event(content: &str, kind: Kind, channel_id: Option<Uuid>) -> StoredEvent {
         let keys = Keys::generate();
-        let event = EventBuilder::new(kind, content, [])
+        let event = EventBuilder::new(kind, content).tags( [])
             .sign_with_keys(&keys)
             .expect("signing failed");
         StoredEvent::new(event, channel_id)
@@ -459,8 +459,8 @@ mod tests {
     #[test]
     fn tag_flattening_uses_unit_separator() {
         let keys = Keys::generate();
-        let tag = nostr::Tag::parse(&["e", "abc123def456"]).expect("tag parse");
-        let event = EventBuilder::new(Kind::TextNote, "tagged", [tag])
+        let tag = nostr::Tag::parse(["e", "abc123def456"]).expect("tag parse");
+        let event = EventBuilder::new(Kind::TextNote, "tagged").tags( [tag])
             .sign_with_keys(&keys)
             .expect("sign");
         let stored = StoredEvent::new(event, None);
@@ -511,8 +511,8 @@ mod tests {
     fn tag_with_colon_value_not_ambiguous() {
         let keys = Keys::generate();
         // "r" tag with a URL value containing colons
-        let tag = nostr::Tag::parse(&["r", "wss://relay.example.com"]).expect("tag parse");
-        let event = EventBuilder::new(Kind::TextNote, "relay ref", [tag])
+        let tag = nostr::Tag::parse(["r", "wss://relay.example.com"]).expect("tag parse");
+        let event = EventBuilder::new(Kind::TextNote, "relay ref").tags( [tag])
             .sign_with_keys(&keys)
             .expect("sign");
         let stored = StoredEvent::new(event, None);

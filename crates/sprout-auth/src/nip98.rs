@@ -168,14 +168,14 @@ mod tests {
         use nostr::Tag;
 
         let mut tags = vec![
-            Tag::parse(&["u", url]).unwrap(),
-            Tag::parse(&["method", method]).unwrap(),
+            Tag::parse(["u", url]).unwrap(),
+            Tag::parse(["method", method]).unwrap(),
         ];
         if let Some(hex) = payload_hex {
-            tags.push(Tag::parse(&["payload", hex]).unwrap());
+            tags.push(Tag::parse(["payload", hex]).unwrap());
         }
 
-        let mut builder = EventBuilder::new(Kind::HttpAuth, "", tags);
+        let mut builder = EventBuilder::new(Kind::HttpAuth, "").tags( tags);
         if let Some(ts) = created_at {
             builder = builder.custom_created_at(ts);
         }
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn wrong_kind_rejected() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "", [])
+        let event = EventBuilder::new(Kind::TextNote, "").tags( [])
             .sign_with_keys(&keys)
             .expect("sign");
         let json = serde_json::to_string(&event).unwrap();

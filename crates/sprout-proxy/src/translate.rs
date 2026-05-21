@@ -234,7 +234,7 @@ impl Translator {
 
         let mut new_tags: Vec<Tag> = Vec::new();
         new_tags.push(
-            Tag::parse(&["e", &channel_info.kind40_event_id]).expect("e tag is always valid"),
+            Tag::parse(["e", &channel_info.kind40_event_id]).expect("e tag is always valid"),
         );
         for tag in event.tags.iter() {
             let slice = tag.as_slice();
@@ -262,9 +262,8 @@ impl Translator {
 
         let translated = EventBuilder::new(
             Kind::Custom(u16::try_from(standard_kind).expect("standard kind must fit in u16")),
-            content,
-            new_tags,
-        )
+            content).tags(
+            new_tags)
         .custom_created_at(event.created_at)
         .sign_with_keys(&shadow_keys)
         .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
@@ -333,8 +332,7 @@ impl Translator {
 
                 let mut parts = vec!["e".to_string(), external_target_id];
                 parts.extend(slice.iter().skip(2).cloned());
-                let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
-                new_tags.push(Tag::parse(&part_refs).map_err(|e| {
+                new_tags.push(Tag::parse(parts).map_err(|e| {
                     ProxyError::Upstream(format!("outbound tag build failed: {e}"))
                 })?);
                 saw_target = true;
@@ -351,7 +349,7 @@ impl Translator {
             .shadow_keys
             .get_or_create(&self.resolve_shadow_author_hex(event))?;
 
-        let translated = EventBuilder::new(kind, event.content.clone(), new_tags)
+        let translated = EventBuilder::new(kind, event.content.clone()).tags( new_tags)
             .custom_created_at(event.created_at)
             .sign_with_keys(&shadow_keys)
             .map_err(|e| ProxyError::Upstream(format!("outbound signing failed: {e}")))?;
@@ -476,7 +474,7 @@ impl Translator {
         let mut new_tags: Vec<Tag> = Vec::new();
         // SAFETY: ["h", <uuid_string>] is always a valid 2-element tag structure
         new_tags.push(
-            Tag::parse(&["h", &channel_info.uuid.to_string()])
+            Tag::parse(["h", &channel_info.uuid.to_string()])
                 .expect("SAFETY: [\"h\", uuid_string] is always a valid tag structure"),
         );
         for tag in event.tags.iter() {
@@ -508,9 +506,8 @@ impl Translator {
                 u16::try_from(sprout_kind)
                     .expect("SAFETY: sprout kind values (9, 40002, 40003) always fit in u16"),
             ),
-            &event.content,
-            new_tags,
-        )
+            &event.content).tags(
+            new_tags)
         .custom_created_at(event.created_at)
         .sign_with_keys(&shadow_keys)
         .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
@@ -607,7 +604,7 @@ impl Translator {
         // Build translated tag list: prepend #h, translate all #e values, drop
         // any client-supplied #h tags (prevent unauthorized channel injection).
         let mut new_tags: Vec<Tag> =
-            vec![Tag::parse(&["h", &channel_uuid.to_string()]).expect("h tag is always valid")];
+            vec![Tag::parse(["h", &channel_uuid.to_string()]).expect("h tag is always valid")];
         let mut saw_target = false;
 
         for tag in event.tags.iter() {
@@ -632,9 +629,8 @@ impl Translator {
                 })?;
                 let mut parts = vec!["e".to_string(), internal_id.to_string()];
                 parts.extend(slice.iter().skip(2).cloned());
-                let part_refs: Vec<&str> = parts.iter().map(String::as_str).collect();
                 new_tags.push(
-                    Tag::parse(&part_refs).map_err(|e| {
+                    Tag::parse(parts).map_err(|e| {
                         ProxyError::Upstream(format!("{label} tag build failed: {e}"))
                     })?,
                 );
@@ -652,7 +648,7 @@ impl Translator {
         }
 
         let shadow_keys = self.shadow_keys.get_or_create(external_pubkey)?;
-        let translated = EventBuilder::new(kind, &event.content, new_tags)
+        let translated = EventBuilder::new(kind, &event.content).tags( new_tags)
             .custom_created_at(event.created_at)
             .sign_with_keys(&shadow_keys)
             .map_err(|e| ProxyError::Upstream(format!("inbound signing failed: {e}")))?;
@@ -741,7 +737,7 @@ impl Translator {
             // Case 3: no #e filter, use full allowed scope
             allowed_channels.iter().map(|u| u.to_string()).collect()
         };
-        f = f.custom_tag(SingleLetterTag::lowercase(Alphabet::H), uuid_strings);
+        f = f.custom_tags(SingleLetterTag::lowercase(Alphabet::H), uuid_strings);
 
         f
     }
@@ -851,12 +847,11 @@ mod tests {
         let author_keys = Keys::generate();
 
         // Build a synthetic kind:9 event with an #h tag.
-        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
         let sprout_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE as u16),
-            "hello world",
-            [h_tag],
-        )
+            "hello world").tags(
+            [h_tag])
         .sign_with_keys(&author_keys)
         .unwrap();
 
@@ -905,8 +900,8 @@ mod tests {
         let external_pubkey = client_keys.public_key().to_hex();
 
         // Build a synthetic kind:42 event with an #e tag.
-        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
-        let nip28_event = EventBuilder::new(Kind::Custom(42), "hello from client", [e_tag])
+        let e_tag = Tag::parse(["e", &kind40_event_id]).unwrap();
+        let nip28_event = EventBuilder::new(Kind::Custom(42), "hello from client").tags( [e_tag])
             .sign_with_keys(&client_keys)
             .unwrap();
 
@@ -954,9 +949,9 @@ mod tests {
         let (translator, _) = make_translator();
         let author_keys = Keys::generate();
 
-        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
         let sprout_event =
-            EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "secret", [h_tag])
+            EventBuilder::new(Kind::Custom(KIND_STREAM_MESSAGE as u16), "secret").tags( [h_tag])
                 .sign_with_keys(&author_keys)
                 .unwrap();
 
@@ -979,8 +974,8 @@ mod tests {
         let client_keys = Keys::generate();
         let external_pubkey = client_keys.public_key().to_hex();
 
-        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
-        let nip28_event = EventBuilder::new(Kind::Custom(42), "sneaky", [e_tag])
+        let e_tag = Tag::parse(["e", &kind40_event_id]).unwrap();
+        let nip28_event = EventBuilder::new(Kind::Custom(42), "sneaky").tags( [e_tag])
             .sign_with_keys(&client_keys)
             .unwrap();
 
@@ -1002,12 +997,11 @@ mod tests {
         let author_keys = Keys::generate();
 
         let v2_content = r#"{"text":"hello v2","attachments":[]}"#;
-        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
         let sprout_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE_V2 as u16),
-            v2_content,
-            [h_tag],
-        )
+            v2_content).tags(
+            [h_tag])
         .sign_with_keys(&author_keys)
         .unwrap();
 
@@ -1085,7 +1079,7 @@ mod tests {
         let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
         let filter = Filter::new()
             .kind(Kind::Custom(42))
-            .custom_tag(e_tag_key, [kind40_event_id]);
+            .custom_tags(e_tag_key, [kind40_event_id]);
 
         let translated = translator.translate_filter_inbound(&filter, &allowed());
 
@@ -1129,7 +1123,7 @@ mod tests {
         let e_tag_key = SingleLetterTag::lowercase(Alphabet::E);
         let filter = Filter::new()
             .kind(Kind::Custom(42))
-            .custom_tag(e_tag_key, [unknown_event_id]);
+            .custom_tags(e_tag_key, [unknown_event_id]);
 
         let translated = translator.translate_filter_inbound(&filter, &allowed());
 
@@ -1171,14 +1165,13 @@ mod tests {
         // A reply event has two #e tags: one for the channel, one for the
         // message being replied to (NIP-10 threading).
         let reply_event_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let channel_e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
-        let reply_e_tag = Tag::parse(&["e", reply_event_id]).unwrap();
+        let channel_e_tag = Tag::parse(["e", &kind40_event_id]).unwrap();
+        let reply_e_tag = Tag::parse(["e", reply_event_id]).unwrap();
 
         let nip28_event = EventBuilder::new(
             Kind::Custom(42),
-            "replying to a message",
-            [channel_e_tag, reply_e_tag],
-        )
+            "replying to a message").tags(
+            [channel_e_tag, reply_e_tag])
         .sign_with_keys(&client_keys)
         .unwrap();
 
@@ -1226,14 +1219,13 @@ mod tests {
         let author_keys = Keys::generate();
 
         // An event with the channel #h tag AND an unrelated #h tag.
-        let channel_h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
-        let other_h_tag = Tag::parse(&["h", "some-other-value"]).unwrap();
+        let channel_h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
+        let other_h_tag = Tag::parse(["h", "some-other-value"]).unwrap();
 
         let sprout_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE as u16),
-            "message with extra h tag",
-            [channel_h_tag, other_h_tag],
-        )
+            "message with extra h tag").tags(
+            [channel_h_tag, other_h_tag])
         .sign_with_keys(&author_keys)
         .unwrap();
 
@@ -1304,8 +1296,8 @@ mod tests {
         let external_keys = Keys::generate();
 
         // Build a kind:41 event with #e referencing the channel.
-        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
-        let nip28_event = EventBuilder::new(Kind::ChannelMetadata, "updated metadata", [e_tag])
+        let e_tag = Tag::parse(["e", &kind40_event_id]).unwrap();
+        let nip28_event = EventBuilder::new(Kind::ChannelMetadata, "updated metadata").tags( [e_tag])
             .sign_with_keys(&external_keys)
             .unwrap();
 
@@ -1343,8 +1335,8 @@ mod tests {
         let (translator, kind40_event_id) = make_translator();
         let external_keys = Keys::generate();
 
-        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
-        let event = EventBuilder::new(Kind::Custom(9999), "nope", [e_tag])
+        let e_tag = Tag::parse(["e", &kind40_event_id]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(9999), "nope").tags( [e_tag])
             .sign_with_keys(&external_keys)
             .unwrap();
 
@@ -1362,12 +1354,11 @@ mod tests {
         let (translator, _) = make_translator();
         let author_keys = Keys::generate();
 
-        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
+        let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
         let sprout_event = EventBuilder::new(
             Kind::Custom(KIND_STREAM_MESSAGE_EDIT as u16),
-            "edited content",
-            [h_tag],
-        )
+            "edited content").tags(
+            [h_tag])
         .sign_with_keys(&author_keys)
         .unwrap();
 
@@ -1412,10 +1403,10 @@ mod tests {
         let external_keys = Keys::generate();
 
         // Client tries to inject an #h tag for an unauthorized channel.
-        let e_tag = Tag::parse(&["e", &kind40_event_id]).unwrap();
-        let injected_h = Tag::parse(&["h", "00000000-0000-0000-0000-000000000001"]).unwrap();
+        let e_tag = Tag::parse(["e", &kind40_event_id]).unwrap();
+        let injected_h = Tag::parse(["h", "00000000-0000-0000-0000-000000000001"]).unwrap();
         let nip28_event =
-            EventBuilder::new(Kind::Custom(42), "sneaky message", [e_tag, injected_h])
+            EventBuilder::new(Kind::Custom(42), "sneaky message").tags( [e_tag, injected_h])
                 .sign_with_keys(&external_keys)
                 .unwrap();
 
@@ -1449,8 +1440,8 @@ mod tests {
         let author_keys = Keys::generate();
 
         // A kind:9999 event (unknown Sprout kind) should be dropped.
-        let h_tag = Tag::parse(&["h", TEST_UUID]).unwrap();
-        let event = EventBuilder::new(Kind::Custom(9999), "internal stuff", [h_tag])
+        let h_tag = Tag::parse(["h", TEST_UUID]).unwrap();
+        let event = EventBuilder::new(Kind::Custom(9999), "internal stuff").tags( [h_tag])
             .sign_with_keys(&author_keys)
             .unwrap();
 

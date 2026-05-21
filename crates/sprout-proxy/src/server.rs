@@ -165,7 +165,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// Helper: serialize a [`RelayMessage`] and send it over the socket.
 /// Returns `true` if the send succeeded.
-async fn send_relay_msg(socket: &mut WebSocket, msg: RelayMessage) -> bool {
+async fn send_relay_msg(socket: &mut WebSocket, msg: RelayMessage<'_>) -> bool {
     let json = msg.as_json();
     socket.send(Message::Text(json.into())).await.is_ok()
 }
@@ -323,7 +323,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                 let _ = send_relay_msg(
                     &mut socket,
                     RelayMessage::closed(
-                        subscription_id,
+                        subscription_id.into_owned(),
                         "auth-required: authenticate before subscribing",
                     ),
                 )
@@ -450,7 +450,7 @@ async fn handle_ws(mut socket: WebSocket, state: ProxyState, token: String) {
                             }
                             // FIX 1: NOTICE messages from upstream contain operational details.
                             // Log them but do NOT forward to clients.
-                            Ok(RelayMessage::Notice { message: notice_msg }) => {
+                            Ok(RelayMessage::Notice(notice_msg)) => {
                                 debug!(notice = %notice_msg, "upstream notice (not forwarded to client)");
                             }
                             Ok(_other) => {
@@ -520,8 +520,8 @@ async fn handle_client_message(
             handle_req(
                 socket,
                 state,
-                subscription_id,
-                filters,
+                subscription_id.into_owned(),
+                filters.into_iter().map(|f| f.into_owned()).collect(),
                 allowed_channels,
                 conn_prefix,
                 active_subs,

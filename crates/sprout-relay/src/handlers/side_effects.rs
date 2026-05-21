@@ -156,7 +156,7 @@ pub async fn validate_admin_event(
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing or invalid h tag"))?;
 
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Reject mutations on archived channels — except kind:9002 with archived=false
     // (unarchive), which must be allowed through so the channel can be restored.
@@ -419,9 +419,9 @@ pub async fn emit_system_message(
     channel_id: Uuid,
     content: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let channel_tag = Tag::parse(&["h", &channel_id.to_string()])?;
+    let channel_tag = Tag::parse(["h", &channel_id.to_string()])?;
 
-    let event = EventBuilder::new(Kind::Custom(40099), content.to_string(), [channel_tag])
+    let event = EventBuilder::new(Kind::Custom(40099), content.to_string()).tags( [channel_tag])
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign system message: {e}"))?;
 
@@ -453,9 +453,9 @@ pub async fn emit_membership_notification(
     let actor_hex = hex::encode(actor_pubkey);
     let channel_id_str = channel_id.to_string();
 
-    let p_tag = Tag::parse(&["p", &target_hex])
+    let p_tag = Tag::parse(["p", &target_hex])
         .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?;
-    let h_tag = Tag::parse(&["h", &channel_id_str])
+    let h_tag = Tag::parse(["h", &channel_id_str])
         .map_err(|e| anyhow::anyhow!("failed to build h tag: {e}"))?;
 
     let event_type = match notification_kind {
@@ -477,9 +477,8 @@ pub async fn emit_membership_notification(
 
     let event = EventBuilder::new(
         Kind::Custom(notification_kind as u16),
-        content,
-        [p_tag, h_tag],
-    )
+        content).tags(
+        [p_tag, h_tag])
     .sign_with_keys(&state.relay_keypair)
     .map_err(|e| anyhow::anyhow!("failed to sign membership notification: {e}"))?;
 
@@ -549,7 +548,7 @@ async fn emit_addressable_discovery_event(
     };
     let ts = now.max(min_ts);
 
-    let event = EventBuilder::new(Kind::Custom(kind as u16), "", tags)
+    let event = EventBuilder::new(Kind::Custom(kind as u16), "").tags( tags)
         .custom_created_at(nostr::Timestamp::from(ts))
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
@@ -580,61 +579,61 @@ pub async fn emit_group_discovery_events(
     let channel = state.db.get_channel(channel_id).await?;
     let members = state.db.get_members(channel_id).await?;
 
-    let relay_pubkey_hex = hex::encode(state.relay_keypair.public_key().serialize());
+    let relay_pubkey_hex = hex::encode(state.relay_keypair.public_key().to_bytes());
     let group_id = channel_id.to_string();
 
     // ── kind:39000 group metadata ────────────────────────────────────────────
     {
-        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
-        tags.push(Tag::parse(&["name", &channel.name])?);
+        let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
+        tags.push(Tag::parse(["name", &channel.name])?);
         if let Some(ref desc) = channel.description {
             if !desc.is_empty() {
-                tags.push(Tag::parse(&["about", desc])?);
+                tags.push(Tag::parse(["about", desc])?);
             }
         }
         if channel.visibility == "private" {
-            tags.push(Tag::parse(&["private"])?);
+            tags.push(Tag::parse(["private"])?);
         } else {
             // Explicit "public" tag complements NIP-29's absence-of-"private" convention,
             // making channel visibility self-describing for clients.
-            tags.push(Tag::parse(&["public"])?);
+            tags.push(Tag::parse(["public"])?);
         }
         // NIP-29 hidden tag: hint to clients not to show DMs in public group lists.
         // Not a security boundary — access control is handled by channel-scoped storage.
         if channel.channel_type == "dm" {
-            tags.push(Tag::parse(&["hidden"])?);
+            tags.push(Tag::parse(["hidden"])?);
             // Include participant pubkeys in kind:39000 for DMs so clients can
             // resolve display names without a separate kind:39002 fetch.
             for m in &members {
                 let pubkey_hex = hex::encode(&m.pubkey);
-                tags.push(Tag::parse(&["p", &pubkey_hex])?);
+                tags.push(Tag::parse(["p", &pubkey_hex])?);
             }
         }
         // Sprout channels always require explicit membership
-        tags.push(Tag::parse(&["closed"])?);
+        tags.push(Tag::parse(["closed"])?);
         // Channel type tag so clients can distinguish stream/forum/dm without inference
-        tags.push(Tag::parse(&["t", &channel.channel_type])?);
+        tags.push(Tag::parse(["t", &channel.channel_type])?);
         // Optional topic / purpose for richer client UX
         if let Some(ref topic) = channel.topic {
             if !topic.is_empty() {
-                tags.push(Tag::parse(&["topic", topic])?);
+                tags.push(Tag::parse(["topic", topic])?);
             }
         }
         if let Some(ref purpose) = channel.purpose {
             if !purpose.is_empty() {
-                tags.push(Tag::parse(&["purpose", purpose])?);
+                tags.push(Tag::parse(["purpose", purpose])?);
             }
         }
         // Archived state — clients use this to hide channels from the sidebar.
         if channel.archived_at.is_some() {
-            tags.push(Tag::parse(&["archived", "true"])?);
+            tags.push(Tag::parse(["archived", "true"])?);
         }
         // Ephemeral channel TTL — clients use this to show countdown timers.
         if let Some(ttl) = channel.ttl_seconds {
-            tags.push(Tag::parse(&["ttl", &ttl.to_string()])?);
+            tags.push(Tag::parse(["ttl", &ttl.to_string()])?);
         }
         if let Some(ref deadline) = channel.ttl_deadline {
-            tags.push(Tag::parse(&["ttl_deadline", &deadline.to_rfc3339()])?);
+            tags.push(Tag::parse(["ttl_deadline", &deadline.to_rfc3339()])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -648,13 +647,13 @@ pub async fn emit_group_discovery_events(
 
     // ── kind:39001 group admins ──────────────────────────────────────────────
     {
-        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
         for m in members
             .iter()
             .filter(|m| m.role == "owner" || m.role == "admin")
         {
             let pubkey_hex = hex::encode(&m.pubkey);
-            tags.push(Tag::parse(&["p", &pubkey_hex, &m.role])?);
+            tags.push(Tag::parse(["p", &pubkey_hex, &m.role])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -668,12 +667,12 @@ pub async fn emit_group_discovery_events(
 
     // ── kind:39002 group members ─────────────────────────────────────────────
     {
-        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
         for m in &members {
             let pubkey_hex = hex::encode(&m.pubkey);
             // NIP-29 convention: ["p", pubkey, relay_url, role]. Empty relay_url
             // because the canonical relay is implicit (this event is signed by it).
-            tags.push(Tag::parse(&["p", &pubkey_hex, "", &m.role])?);
+            tags.push(Tag::parse(["p", &pubkey_hex, "", &m.role])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -721,7 +720,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
         .and_then(|raw| crate::api::nip05::canonicalize_nip05(raw, &state.config.relay_url).ok());
     let nip05_handle = nip05_owned.as_deref().unwrap_or("");
 
-    let pubkey_bytes = event.pubkey.serialize().to_vec();
+    let pubkey_bytes = event.pubkey.to_bytes().to_vec();
 
     state.db.ensure_user(&pubkey_bytes).await?;
 
@@ -743,7 +742,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
     if let Err(ref e) = result {
         let msg = format!("{e}");
         if msg.contains("duplicate key value") || msg.contains("23505") {
-            warn!(pubkey = %nostr::util::hex::encode(&pubkey_bytes),
+            warn!(pubkey = %hex::encode(&pubkey_bytes),
                 "kind:0 NIP-05 handle contested, syncing profile without it");
             state
                 .db
@@ -760,7 +759,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
         }
     }
 
-    info!(pubkey = %nostr::util::hex::encode(&pubkey_bytes), "kind:0 profile synced to users table");
+    info!(pubkey = %hex::encode(&pubkey_bytes), "kind:0 profile synced to users table");
     Ok(())
 }
 
@@ -775,7 +774,7 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid role: {role_str}"))?;
 
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     state
         .db
@@ -783,8 +782,8 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         .await?;
     state.invalidate_membership(channel_id, &target_pubkey);
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
-    let target_hex = nostr::util::hex::encode(&target_pubkey);
+    let actor_hex = hex::encode(&actor_bytes);
+    let target_hex = hex::encode(&target_pubkey);
     emit_system_message(
         state,
         channel_id,
@@ -820,7 +819,7 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
     let target_pubkey = extract_p_tag(event).ok_or_else(|| anyhow::anyhow!("missing p tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Guard: prevent last-owner orphaning on self-removal (kind 9001).
     if target_pubkey == actor_bytes {
@@ -843,8 +842,8 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
     state.invalidate_membership(channel_id, &target_pubkey);
     evict_live_channel_subscriptions(state, channel_id, &target_pubkey).await;
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
-    let target_hex = nostr::util::hex::encode(&target_pubkey);
+    let actor_hex = hex::encode(&actor_bytes);
+    let target_hex = hex::encode(&target_pubkey);
     let msg_type = if target_pubkey == actor_bytes {
         "member_left"
     } else {
@@ -883,8 +882,8 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
 async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
+    let actor_hex = hex::encode(&actor_bytes);
 
     for tag in event.tags.iter() {
         let key = tag.kind().to_string();
@@ -1047,7 +1046,7 @@ async fn handle_delete_event_side_effect(
         return Ok(()); // No-op: skip system message to avoid false audit records.
     }
 
-    let actor_hex = nostr::util::hex::encode(event.pubkey.serialize());
+    let actor_hex = hex::encode(event.pubkey.to_bytes());
     emit_system_message(
         state,
         channel_id,
@@ -1078,7 +1077,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid channel_type: {channel_type_str}"))?;
 
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
     let description = extract_tag_value(event, "about");
     let ttl_seconds = super::resolve_ttl(event, state.config.ephemeral_ttl_override);
 
@@ -1126,7 +1125,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         state.invalidate_all_accessible_channels();
     }
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel.id,
@@ -1159,7 +1158,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Soft-delete the channel.
     let deleted = state
@@ -1175,7 +1174,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     // Clean up NIP-29 discovery events for the deleted group.
     if let Err(e) = state
         .db
-        .soft_delete_discovery_events(channel_id, &state.relay_keypair.public_key().serialize())
+        .soft_delete_discovery_events(channel_id, state.relay_keypair.public_key().as_bytes())
         .await
     {
         warn!(channel = %channel_id, error = %e, "failed to clean up NIP-29 discovery events");
@@ -1185,7 +1184,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     // Stale is_member=true entries would bypass the DB's deleted_at guard.
     state.invalidate_channel_deleted();
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel_id,
@@ -1202,7 +1201,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Only open channels allow self-join via kind:9021.
     let channel = state
@@ -1235,7 +1234,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         .await?;
     state.invalidate_membership(channel_id, &actor_bytes);
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel_id,
@@ -1271,7 +1270,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
     // Kind 9022: functionally identical to self-remove via kind 9001
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Guard: prevent last-owner orphaning on leave.
     let members = state.db.get_members(channel_id).await?;
@@ -1292,7 +1291,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
     state.invalidate_membership(channel_id, &actor_bytes);
     evict_live_channel_subscriptions(state, channel_id, &actor_bytes).await;
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel_id,
@@ -1594,7 +1593,7 @@ fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> V
             }
         }
     }
-    event.pubkey.serialize().to_vec()
+    event.pubkey.to_bytes().to_vec()
 }
 
 /// True if the event carries any `e` tag at all, regardless of whether its
@@ -1673,7 +1672,7 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         ));
     }
 
-    let owner_hex = nostr::util::hex::encode(event.pubkey.serialize());
+    let owner_hex = hex::encode(event.pubkey.to_bytes());
 
     // The relay holds no persistent per-repo disk state: runtime reads and
     // writes hydrate an ephemeral bare repo from object storage per request
@@ -1935,16 +1934,16 @@ pub async fn publish_nip43_membership_list(state: &Arc<AppState>) -> anyhow::Res
     let mut tags: Vec<Tag> = Vec::with_capacity(members.len() + 1);
 
     // NIP-70 protected-event marker — prevents re-broadcasting by third parties.
-    tags.push(Tag::parse(&["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
+    tags.push(Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
 
     for member in &members {
         tags.push(
-            Tag::parse(&["member", &member.pubkey, &member.role])
+            Tag::parse(["member", &member.pubkey, &member.role])
                 .map_err(|e| anyhow::anyhow!("failed to build member tag: {e}"))?,
         );
     }
 
-    let event = EventBuilder::new(Kind::Custom(KIND_NIP43_MEMBERSHIP_LIST as u16), "", tags)
+    let event = EventBuilder::new(Kind::Custom(KIND_NIP43_MEMBERSHIP_LIST as u16), "").tags( tags)
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:13534: {e}"))?;
 
@@ -1984,12 +1983,12 @@ async fn publish_nip43_delta(
     let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
 
     let tags = vec![
-        Tag::parse(&["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
-        Tag::parse(&["p", target_pubkey_hex])
+        Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
+        Tag::parse(["p", target_pubkey_hex])
             .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
     ];
 
-    let event = EventBuilder::new(Kind::Custom(kind), "", tags)
+    let event = EventBuilder::new(Kind::Custom(kind), "").tags( tags)
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
 
