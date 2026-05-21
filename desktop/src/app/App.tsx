@@ -16,6 +16,7 @@ import { useWorkspaceInit } from "@/features/workspaces/useWorkspaceInit";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { WelcomeSetup } from "@/features/workspaces/ui/WelcomeSetup";
 import { createSproutQueryClient } from "@/shared/api/queryClient";
+import { isSharedIdentity as isSharedIdentityCmd } from "@/shared/api/tauri";
 import { listenForDeepLinks } from "@/shared/deep-link";
 
 function AppLoadingGate() {
@@ -44,8 +45,8 @@ function WorkspaceQueryProvider({ children }: { children: ReactNode }) {
   );
 }
 
-function AppReady() {
-  const onboarding = useAppOnboardingState();
+function AppReady({ isSharedIdentity }: { isSharedIdentity: boolean }) {
+  const onboarding = useAppOnboardingState(isSharedIdentity);
 
   if (onboarding.stage === "onboarding") {
     return (
@@ -69,6 +70,16 @@ export function App() {
     void getCurrentWindow().show();
   }, []);
 
+  const [sharedIdentity, setSharedIdentity] = useState<boolean | null>(null);
+  useEffect(() => {
+    isSharedIdentityCmd()
+      .then(setSharedIdentity)
+      .catch((err) => {
+        console.warn("is_shared_identity command failed:", err);
+        setSharedIdentity(false);
+      });
+  }, []);
+
   const {
     activeWorkspace,
     reinitKey,
@@ -90,13 +101,20 @@ export function App() {
   // Composite key: changes when workspace ID changes OR when
   // the active workspace's config is updated (relayUrl/token).
   const workspaceKey = `${activeWorkspace?.id ?? "none"}-${reinitKey}`;
-  const workspace = useWorkspaceInit(activeWorkspace, workspaceKey);
+  const workspace = useWorkspaceInit(activeWorkspace, workspaceKey, sharedIdentity ?? false);
 
   const handleSetupComplete = useCallback(() => {
     // Force a full reload so useWorkspaces re-initializes from localStorage.
     // This only runs once — during first-run setup when no workspace existed.
     window.location.reload();
   }, []);
+
+  // Wait for the shared-identity IPC call to resolve before rendering
+  // anything that depends on it. Without this gate, children briefly see
+  // isSharedIdentity=false and may flash WelcomeSetup or the onboarding flow.
+  if (sharedIdentity === null) {
+    return <AppLoadingGate />;
+  }
 
   // Show welcome setup for first-run users with no workspaces
   if (workspace.needsSetup) {
@@ -118,7 +136,7 @@ export function App() {
 
   return (
     <WorkspaceQueryProvider key={workspaceKey}>
-      <AppReady key={workspaceKey} />
+      <AppReady key={workspaceKey} isSharedIdentity={sharedIdentity} />
     </WorkspaceQueryProvider>
   );
 }

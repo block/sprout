@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
-import { applyWorkspace, getDefaultRelayUrl, getIdentity, isSharedIdentity } from "@/shared/api/tauri";
+import {
+  applyWorkspace,
+  getDefaultRelayUrl,
+  getIdentity,
+} from "@/shared/api/tauri";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 
-import {
-  deriveWorkspaceName,
-  normalizeRelayUrl,
-  saveActiveWorkspaceId,
-  saveWorkspaces,
-} from "./workspaceStorage";
+import { initFirstWorkspace } from "./workspaceStorage";
 import type { Workspace } from "./types";
 
 /**
@@ -49,6 +48,7 @@ type WorkspaceInitResult =
 export function useWorkspaceInit(
   activeWorkspace: Workspace | null,
   workspaceKey: string,
+  isSharedIdentity: boolean,
 ): WorkspaceInitResult {
   const [result, setResult] = useState<WorkspaceInitResult>({
     isReady: false,
@@ -67,26 +67,15 @@ export function useWorkspaceInit(
     async function init() {
       if (!activeWorkspace) {
         try {
-          const [defaultRelayUrl, sharedIdentity] = await Promise.all([
-            getDefaultRelayUrl(),
-            isSharedIdentity(),
-          ]);
+          const defaultRelayUrl = await getDefaultRelayUrl();
 
-          if (sharedIdentity) {
-            // Shared identity worktree: auto-create workspace from the
-            // default relay URL so the user skips WelcomeSetup entirely.
+          if (isSharedIdentity) {
             const identity = await getIdentity();
-            const normalizedUrl = normalizeRelayUrl(defaultRelayUrl);
-            const workspace: Workspace = {
-              id: crypto.randomUUID(),
-              name: deriveWorkspaceName(normalizedUrl),
-              relayUrl: normalizedUrl,
-              pubkey: identity.pubkey,
-              addedAt: new Date().toISOString(),
-            };
-            saveWorkspaces([workspace]);
-            saveActiveWorkspaceId(workspace.id);
-            window.location.reload();
+            if (cancelled) return;
+            initFirstWorkspace(defaultRelayUrl, identity.pubkey);
+            if (!cancelled) {
+              window.location.reload();
+            }
             return;
           }
 
@@ -163,6 +152,7 @@ export function useWorkspaceInit(
     activeWorkspace?.id,
     activeWorkspace?.relayUrl,
     activeWorkspace?.token,
+    isSharedIdentity,
     workspaceKey,
   ]);
 

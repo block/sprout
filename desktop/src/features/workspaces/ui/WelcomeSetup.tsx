@@ -4,12 +4,9 @@ import { getIdentity } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
-import type { Workspace } from "../types";
 import {
+  initFirstWorkspace,
   deriveWorkspaceName,
-  normalizeRelayUrl,
-  saveActiveWorkspaceId,
-  saveWorkspaces,
 } from "../workspaceStorage";
 
 const LOCAL_RELAY_URL = "ws://localhost:3000";
@@ -35,7 +32,6 @@ export function WelcomeSetup({
       return;
     }
 
-    const normalizedUrl = normalizeRelayUrl(trimmedUrl);
     setIsConnecting(true);
     setError(null);
 
@@ -44,17 +40,7 @@ export function WelcomeSetup({
       // labels, etc.). The private key lives on disk in `identity.key` and
       // is the single source of truth — never copied into localStorage.
       const identity = await getIdentity();
-
-      const workspace: Workspace = {
-        id: crypto.randomUUID(),
-        name: deriveWorkspaceName(normalizedUrl),
-        relayUrl: normalizedUrl,
-        pubkey: identity.pubkey,
-        addedAt: new Date().toISOString(),
-      };
-
-      saveWorkspaces([workspace]);
-      saveActiveWorkspaceId(workspace.id);
+      initFirstWorkspace(trimmedUrl, identity.pubkey);
 
       // The reload triggered by onComplete() will re-run useWorkspaceInit,
       // which calls applyWorkspace with the saved config. No need to apply here.

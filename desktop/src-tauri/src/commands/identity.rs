@@ -42,6 +42,10 @@ pub fn is_shared_identity() -> bool {
     std::env::var("SPROUT_SHARE_IDENTITY")
         .map(|v| v == "1")
         .unwrap_or(false)
+        && std::env::var("SPROUT_PRIVATE_KEY")
+            .ok()
+            .and_then(|k| Keys::parse(k.trim()).ok())
+            .is_some()
 }
 
 #[tauri::command]
