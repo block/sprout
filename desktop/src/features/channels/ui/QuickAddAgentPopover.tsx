@@ -659,12 +659,14 @@ export function QuickAddAgentPopover({
                         </motion.div>
                       ) : null}
                       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                        <QuickAddAgentAvatar
-                          avatarUrl={item.avatarUrl}
-                          label={item.label}
-                          isRunning={item.kind !== "persona"}
-                        />
-                        <span className="min-w-0 flex-1 truncate font-medium">
+                        <span className={cn("shrink-0", isInChannel && "opacity-70")}>
+                          <QuickAddAgentAvatar
+                            avatarUrl={item.avatarUrl}
+                            label={item.label}
+                            isRunning={item.kind !== "persona"}
+                          />
+                        </span>
+                        <span className={cn("min-w-0 flex-1 truncate font-medium", isInChannel && "opacity-70")}>
                           {item.label}
                         </span>
                         {isInChannel ? (
