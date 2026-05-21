@@ -235,10 +235,12 @@ export function MessageComposer({
   }, [editTarget?.id]);
 
   // ── Focus on reply ──────────────────────────────────────────────────
+  // Use focusPreserve so that re-renders (e.g. new messages arriving in
+  // a thread) don't yank the cursor to the end while the user is editing.
   React.useEffect(() => {
     if (!replyTarget || disabled) return;
-    richText.focus();
-  }, [disabled, replyTarget, richText.focus]);
+    richText.focusPreserve();
+  }, [disabled, replyTarget, richText.focusPreserve]);
 
   // ── Autofocus on mount / channel switch ─────────────────────────────
   useComposerAutofocus(richText.focus, effectiveDraftKey, disabled);
