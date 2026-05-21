@@ -83,7 +83,7 @@ use chrono::DateTime;
 use nostr::hashes::sha256::Hash as Sha256Hash;
 use nostr::hashes::{Hash, HashEngine};
 use nostr::secp256k1::schnorr::Signature;
-use nostr::secp256k1::{Keypair, Message, XOnlyPublicKey};
+use nostr::secp256k1::{Keypair, Message};
 use nostr::{FromBech32, PublicKey, SecretKey, SECP256K1};
 use zeroize::Zeroize;
 
@@ -957,7 +957,7 @@ fn do_sign(key_id: &str, status: &mut StatusWriter) -> Result<(), Error> {
 
     // Parse directly into SecretKey — avoids nostr::Keys which stores
     // non-zeroizable copies of the secret material internally.
-    let mut secret_key = match SecretKey::parse(&*raw_key) {
+    let mut secret_key = match SecretKey::parse(&raw_key) {
         Ok(k) => k,
         Err(e) => {
             raw_key.zeroize();
@@ -970,7 +970,7 @@ fn do_sign(key_id: &str, status: &mut StatusWriter) -> Result<(), Error> {
     // Drop secret_key immediately after creating the keypair so it doesn't
     // linger on the stack through the rest of the function.
     // Wrapped in KeypairGuard so non_secure_erase() runs on ALL exit paths.
-    let keypair = KeypairGuard::new(Keypair::from_secret_key(&SECP256K1, &secret_key));
+    let keypair = KeypairGuard::new(Keypair::from_secret_key(SECP256K1, &secret_key));
     // Explicitly zero the SecretKey stack slot before dropping. nostr::SecretKey's
     // Drop calls inner.non_secure_erase(), but that operates on the moved value.
     // This write_bytes targets our local copy to minimize residual secret material.
