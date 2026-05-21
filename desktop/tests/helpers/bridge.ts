@@ -58,6 +58,7 @@ type MockBridgeOptions = {
   profileReadDelayMs?: number;
   profileReadError?: string;
   profileUpdateError?: string;
+  stallWebsocketSends?: boolean;
 };
 
 type BridgeOptions = {

@@ -35,23 +35,11 @@ const RECONNECT_BASE_DELAY_MS = 1_000,
   EVENT_BATCH_MS = 16;
 
 /**
- * Application-level liveness probe.
- *
- * Tungstenite auto-pongs and the OS keeps the TCP socket open, so a
- * half-open WS (Warp's orange-icon state, an asleep VPN, etc.) presents as
- * "fully connected" to the WS layer indefinitely — no Close, no Error.
- *
- * We work around that by periodically sending a cheap NIP-01 `REQ` with
- * `limit: 0` and waiting for the matching `EOSE`. A single missed probe
- * (no EOSE within `STALL_PROBE_TIMEOUT_MS`) — or a send-side failure on the
- * probe itself — flips state to `stalled` and force-resets the socket so
- * the existing reconnect path runs.
- *
- * The filter intentionally matches nothing real so the relay only ever
- * answers with EOSE.
+ * Passive liveness check. The relay sends heartbeat pings every 30s; if no
+ * inbound frame arrives for two heartbeat windows, treat the socket as stalled.
  */
-const STALL_PROBE_INTERVAL_MS = 20_000;
-const STALL_PROBE_TIMEOUT_MS = 10_000;
+const STALL_CHECK_INTERVAL_MS = 10_000;
+const STALL_IDLE_TIMEOUT_MS = 60_000;
 
 export class RelayClient {
   private wsId: number | null = null;
@@ -90,9 +78,8 @@ export class RelayClient {
 
   private connectionStateEmitter = new RelayConnectionStateEmitter("idle");
   private stallWatchdog = new RelayStallWatchdog({
-    intervalMs: STALL_PROBE_INTERVAL_MS,
-    probeTimeoutMs: STALL_PROBE_TIMEOUT_MS,
-    sendRaw: (payload) => this.sendRaw(payload),
+    intervalMs: STALL_CHECK_INTERVAL_MS,
+    idleTimeoutMs: STALL_IDLE_TIMEOUT_MS,
     onStall: (error) => {
       this.connectionStateEmitter.set("stalled");
       this.resetConnection(error);
@@ -692,6 +679,7 @@ export class RelayClient {
 
   private async handleWsMessage(message: unknown, generation: number) {
     if (generation !== this.connectionGeneration) return;
+    this.stallWatchdog.recordInbound();
 
     if (
       typeof message === "object" &&
@@ -813,12 +801,6 @@ export class RelayClient {
   }
 
   private handleEose(subId: string) {
-    if (this.stallWatchdog.handleEose(subId)) {
-      // Probe round-trip succeeded — silently CLOSE the sub.
-      void this.closeSubscription(subId).catch(() => {});
-      return;
-    }
-
     const subscription = this.subscriptions.get(subId);
     if (!subscription) {
       return;
