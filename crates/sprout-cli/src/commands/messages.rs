@@ -222,6 +222,27 @@ fn parse_member_pubkeys(event: &serde_json::Value) -> Vec<String> {
 // Read commands — POST /query
 // ---------------------------------------------------------------------------
 
+fn format_events(normalized: &str, format: &crate::OutputFormat) -> String {
+    match format {
+        crate::OutputFormat::Compact => {
+            let events: Vec<serde_json::Value> =
+                serde_json::from_str(normalized).unwrap_or_default();
+            let compact: Vec<serde_json::Value> = events
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "id": e.get("id").cloned().unwrap_or_default(),
+                        "content": e.get("content").cloned().unwrap_or_default(),
+                        "created_at": e.get("created_at").cloned().unwrap_or_default(),
+                    })
+                })
+                .collect();
+            serde_json::to_string(&compact).unwrap_or_default()
+        }
+        crate::OutputFormat::Json => normalized.to_string(),
+    }
+}
+
 pub async fn cmd_get_messages(
     client: &SproutClient,
     channel_id: &str,
@@ -229,6 +250,7 @@ pub async fn cmd_get_messages(
     before: Option<i64>,
     since: Option<i64>,
     kinds: Option<&str>,
+    format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let limit = limit.unwrap_or(50).min(200);
@@ -257,7 +279,8 @@ pub async fn cmd_get_messages(
     let resp = client.query(&filter).await?;
     let mut events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
     events.sort_by_key(|e| e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0));
-    println!("{}", normalize_events(&events));
+    let normalized = normalize_events(&events);
+    println!("{}", format_events(&normalized, format));
     Ok(())
 }
 
@@ -267,6 +290,7 @@ pub async fn cmd_get_thread(
     event_id: &str,
     _depth_limit: Option<u32>,
     limit: Option<u32>,
+    format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     validate_hex64(event_id)?;
@@ -288,7 +312,8 @@ pub async fn cmd_get_thread(
     let resp = client.query_multi(&[reply_filter, root_filter]).await?;
     let mut events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
     events.sort_by_key(|e| e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0));
-    println!("{}", normalize_events(&events));
+    let normalized = normalize_events(&events);
+    println!("{}", format_events(&normalized, format));
     Ok(())
 }
 
@@ -296,6 +321,7 @@ pub async fn cmd_search(
     client: &SproutClient,
     query: &str,
     limit: Option<u32>,
+    format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     let limit = limit.unwrap_or(20).min(100);
     let filter = serde_json::json!({
@@ -305,7 +331,8 @@ pub async fn cmd_search(
     });
     let resp = client.query(&filter).await?;
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    println!("{}", normalize_events(&events));
+    let normalized = normalize_events(&events);
+    println!("{}", format_events(&normalized, format));
     Ok(())
 }
 
@@ -588,7 +615,11 @@ pub async fn cmd_vote_on_post(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::MessagesCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(
+    cmd: crate::MessagesCmd,
+    client: &SproutClient,
+    format: &crate::OutputFormat,
+) -> Result<(), CliError> {
     use crate::MessagesCmd;
     match cmd {
         MessagesCmd::Send {
@@ -655,14 +686,25 @@ pub async fn dispatch(cmd: crate::MessagesCmd, client: &SproutClient) -> Result<
             before,
             since,
             kinds,
-        } => cmd_get_messages(client, &channel, limit, before, since, kinds.as_deref()).await,
+        } => {
+            cmd_get_messages(
+                client,
+                &channel,
+                limit,
+                before,
+                since,
+                kinds.as_deref(),
+                format,
+            )
+            .await
+        }
         MessagesCmd::Thread {
             channel,
             event,
             depth_limit,
             limit,
-        } => cmd_get_thread(client, &channel, &event, depth_limit, limit).await,
-        MessagesCmd::Search { query, limit } => cmd_search(client, &query, limit).await,
+        } => cmd_get_thread(client, &channel, &event, depth_limit, limit, format).await,
+        MessagesCmd::Search { query, limit } => cmd_search(client, &query, limit, format).await,
         MessagesCmd::Vote { event, direction } => {
             cmd_vote_on_post(client, &event, &direction).await
         }

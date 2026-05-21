@@ -482,6 +482,27 @@ pub fn extract_d_tag(event: &serde_json::Value) -> String {
         .to_string()
 }
 
+/// Extract a named tag's value from a Nostr event JSON object.
+/// Finds the first tag whose first element matches `key` and returns the second element.
+pub fn extract_tag_value(event: &serde_json::Value, key: &str) -> String {
+    event
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .and_then(|tags| {
+            tags.iter().find(|t| {
+                t.as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    == Some(key)
+            })
+        })
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.get(1))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Extract all p-tags into [{pubkey, role}] from a Nostr event JSON object.
 pub fn extract_p_tags(event: &serde_json::Value) -> Vec<serde_json::Value> {
     event

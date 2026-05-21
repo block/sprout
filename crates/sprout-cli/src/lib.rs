@@ -83,6 +83,10 @@ struct Cli {
     #[arg(long, env = "SPROUT_AUTH_TAG")]
     auth_tag: Option<String>,
 
+    /// Output format: 'json' (default, full fields) or 'compact' (reduced fields).
+    #[arg(long, value_enum, default_value = "json")]
+    format: OutputFormat,
+
     #[command(subcommand)]
     command: Cmd,
 }
@@ -143,6 +147,18 @@ impl std::fmt::Display for PresenceStatus {
             Self::Offline => write!(f, "offline"),
         }
     }
+}
+
+/// Output format for read commands.
+#[derive(Clone, clap::ValueEnum, Default)]
+pub enum OutputFormat {
+    /// Full normalized JSON (default)
+    #[default]
+    #[value(name = "json")]
+    Json,
+    /// Reduced fields for agent scanning
+    #[value(name = "compact")]
+    Compact,
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +368,9 @@ pub enum ChannelsCmd {
         /// Only show channels where the current identity is a member
         #[arg(long, default_value_t = false)]
         member: bool,
+        /// Maximum number of channels to return [default: 500]
+        #[arg(long)]
+        limit: Option<u32>,
     },
     /// Get details for a single channel
     Get {
@@ -974,14 +993,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     let client = SproutClient::new(relay_url, keys, auth_tag, auth_tag_json)?;
 
     match cli.command {
-        Cmd::Messages(sub) => commands::messages::dispatch(sub, &client).await,
-        Cmd::Channels(sub) => commands::channels::dispatch(sub, &client).await,
+        Cmd::Messages(sub) => commands::messages::dispatch(sub, &client, &cli.format).await,
+        Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
         Cmd::Dms(sub) => commands::dms::dispatch(sub, &client).await,
-        Cmd::Users(sub) => commands::users::dispatch(sub, &client).await,
+        Cmd::Users(sub) => commands::users::dispatch(sub, &client, &cli.format).await,
         Cmd::Workflows(sub) => commands::workflows::dispatch(sub, &client).await,
-        Cmd::Feed(sub) => commands::feed::dispatch(sub, &client).await,
+        Cmd::Feed(sub) => commands::feed::dispatch(sub, &client, &cli.format).await,
         Cmd::Social(sub) => commands::social::dispatch(sub, &client).await,
         Cmd::Repos(sub) => commands::repos::dispatch(sub, &client).await,
         Cmd::Upload(sub) => commands::upload::dispatch(sub, &client).await,

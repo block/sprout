@@ -1,7 +1,8 @@
 use uuid::Uuid;
 
 use crate::client::{
-    extract_d_tag, extract_p_tags, normalize_write_response, print_create_response, SproutClient,
+    extract_d_tag, extract_p_tags, extract_tag_value, normalize_write_response,
+    print_create_response, SproutClient,
 };
 use crate::error::CliError;
 use crate::validate::{parse_uuid, read_or_stdin, validate_hex64, validate_uuid};
@@ -11,15 +12,10 @@ use crate::validate::{parse_uuid, read_or_stdin, validate_hex64, validate_uuid};
 // ---------------------------------------------------------------------------
 
 fn extract_channel_metadata(e: &serde_json::Value) -> serde_json::Value {
-    let content: serde_json::Value = e
-        .get("content")
-        .and_then(|c| c.as_str())
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or(serde_json::json!({}));
     serde_json::json!({
         "channel_id": extract_d_tag(e),
-        "name": content.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-        "description": content.get("about").and_then(|v| v.as_str()).unwrap_or(""),
+        "name": extract_tag_value(e, "name"),
+        "description": extract_tag_value(e, "about"),
         "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
     })
 }
@@ -28,14 +24,17 @@ pub async fn cmd_list_channels(
     client: &SproutClient,
     visibility: Option<&str>,
     member: Option<bool>,
+    limit: Option<u32>,
+    format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
+    let effective_limit = limit.unwrap_or(500);
     let raw = if member == Some(true) {
         // Step 1: find channel IDs where we're a member (kind:39002)
         let my_pk = client.keys().public_key().to_hex();
         let member_filter = serde_json::json!({
             "kinds": [39002],
             "#p": [my_pk],
-            "limit": 500
+            "limit": effective_limit
         });
         let member_resp = client.query(&member_filter).await?;
         let member_events: Vec<serde_json::Value> =
@@ -53,13 +52,13 @@ pub async fn cmd_list_channels(
         let metadata_filter = serde_json::json!({
             "kinds": [39000],
             "#d": channel_ids,
-            "limit": 500
+            "limit": effective_limit
         });
         client.query(&metadata_filter).await?
     } else {
         let filter = serde_json::json!({
             "kinds": [39000],
-            "limit": 500
+            "limit": effective_limit
         });
         client.query(&filter).await?
     };
@@ -93,7 +92,21 @@ pub async fn cmd_list_channels(
         })
         .map(extract_channel_metadata)
         .collect();
-    let output = serde_json::to_string(&channels).unwrap_or_default();
+    let output = match format {
+        crate::OutputFormat::Compact => {
+            let compact: Vec<serde_json::Value> = channels
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "channel_id": c.get("channel_id").cloned().unwrap_or_default(),
+                        "name": c.get("name").cloned().unwrap_or_default(),
+                    })
+                })
+                .collect();
+            serde_json::to_string(&compact).unwrap_or_default()
+        }
+        crate::OutputFormat::Json => serde_json::to_string(&channels).unwrap_or_default(),
+    };
     println!("{output}");
     Ok(())
 }
@@ -392,12 +405,20 @@ pub async fn cmd_set_canvas(
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub async fn dispatch(cmd: crate::ChannelsCmd, client: &SproutClient) -> Result<(), CliError> {
+pub async fn dispatch(
+    cmd: crate::ChannelsCmd,
+    client: &SproutClient,
+    format: &crate::OutputFormat,
+) -> Result<(), CliError> {
     use crate::ChannelsCmd;
     match cmd {
-        ChannelsCmd::List { visibility, member } => {
+        ChannelsCmd::List {
+            visibility,
+            member,
+            limit,
+        } => {
             let vis_str = visibility.as_ref().map(|v| v.to_string());
-            cmd_list_channels(client, vis_str.as_deref(), Some(member)).await
+            cmd_list_channels(client, vis_str.as_deref(), Some(member), limit, format).await
         }
         ChannelsCmd::Get { channel } => cmd_get_channel(client, &channel).await,
         ChannelsCmd::Create {
