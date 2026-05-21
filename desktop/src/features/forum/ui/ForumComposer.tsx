@@ -66,9 +66,11 @@ export function ForumComposer({
 
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
+  const isUploadingRef = React.useRef(media.isUploading);
   const onSubmitRef = React.useRef(onSubmit);
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
+  isUploadingRef.current = media.isUploading;
   onSubmitRef.current = onSubmit;
 
   const isAutocompleteOpenRef = React.useRef(false);
@@ -179,7 +181,8 @@ export function ForumComposer({
     if (
       (!trimmed && !hasMedia) ||
       disabledRef.current ||
-      isSendingRef.current
+      isSendingRef.current ||
+      isUploadingRef.current
     ) {
       return;
     }
@@ -309,15 +312,9 @@ export function ForumComposer({
 
           const html = event.clipboardData?.getData("text/html");
           if (html && hasMentionClipboardHtml(html)) {
-            const cleanText = normalizeMentionClipboardHtml(html);
+            const cleanHtml = normalizeMentionClipboardHtml(html);
             event.preventDefault();
-            _view.dispatch(
-              _view.state.tr.insertText(
-                cleanText,
-                _view.state.selection.from,
-                _view.state.selection.to,
-              ),
-            );
+            _view.pasteHTML(cleanHtml);
             return true;
           }
 
@@ -330,8 +327,9 @@ export function ForumComposer({
   const sendDisabled = React.useMemo(
     () =>
       disabled ||
+      media.isUploading ||
       (content.trim().length === 0 && media.pendingImeta.length === 0),
-    [disabled, content, media.pendingImeta.length],
+    [disabled, media.isUploading, content, media.pendingImeta.length],
   );
   const hasComposerContent =
     content.trim().length > 0 ||

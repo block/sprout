@@ -9,12 +9,12 @@ export function hasMentionClipboardHtml(html: string): boolean {
 /**
  * Normalize clipboard HTML that contains Sprout mention / channel-link
  * elements.  Replaces the styled `<span data-mention>` and
- * `<button data-channel-link>` wrappers with their plain text content so
- * the resulting string is free of formatting that would confuse TipTap's
- * Bold extension (which matches font-weight >= 500 as bold).
+ * `<button data-channel-link>` wrappers with unstyled text nodes so
+ * TipTap's Bold extension doesn't misinterpret their font-weight as bold.
  *
- * Returns the flattened plain-text string ready for insertion into the
- * editor.
+ * Returns cleaned HTML string that preserves surrounding formatting
+ * (bold, italic, line breaks, etc.) while stripping only the mention/
+ * channel-link styling.
  */
 export function normalizeMentionClipboardHtml(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -22,9 +22,29 @@ export function normalizeMentionClipboardHtml(html: string): string {
   for (const el of Array.from(
     doc.querySelectorAll("[data-mention], [data-channel-link]"),
   )) {
-    const text = doc.createTextNode(el.textContent ?? "");
-    el.replaceWith(text);
+    // Replace the styled wrapper with a plain <span> containing the text.
+    // This preserves the text content inline while stripping the
+    // font-weight/color styles that would confuse Tiptap's mark detection.
+    const span = doc.createElement("span");
+    span.textContent = el.textContent ?? "";
+    el.replaceWith(span);
   }
 
-  return doc.body.textContent ?? "";
+  // Also strip any inline font-weight styles on remaining elements that
+  // could be misinterpreted as bold by Tiptap (font-weight >= 500).
+  for (const el of Array.from(doc.querySelectorAll("[style]"))) {
+    if (el instanceof HTMLElement) {
+      const fw = el.style.fontWeight;
+      // Remove font-weight if it's the mention-highlight value (600)
+      // but not an intentional bold (700/bold).
+      if (fw === "600") {
+        el.style.removeProperty("font-weight");
+        if (!el.getAttribute("style")?.trim()) {
+          el.removeAttribute("style");
+        }
+      }
+    }
+  }
+
+  return doc.body.innerHTML;
 }

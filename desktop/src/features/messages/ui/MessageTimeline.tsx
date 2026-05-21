@@ -22,6 +22,9 @@ type MessageTimelineProps = {
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
+  /** Optional external ref to the scroll container — used by the parent to
+   *  observe scroll position or adjust padding dynamically. */
+  scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   isFetchingOlder?: boolean;
   messageFooters?: Record<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
@@ -65,13 +68,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onMarkUnread,
   onReply,
   onToggleReaction,
+  scrollContainerRef: externalScrollRef,
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
-  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const internalScrollRef = React.useRef<HTMLDivElement>(null);
+  const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
 
   const {
@@ -94,6 +99,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
   // Scroll to the active search match when it changes.
   const prevSearchActiveRef = React.useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scrollContainerRef is a stable React ref
   React.useEffect(() => {
     if (
       !searchActiveMessageId ||
@@ -134,10 +140,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
           onScroll={syncScrollState}
           ref={scrollContainerRef}
         >
-          <div
-            className="flex w-full flex-col gap-2 pb-10 pt-12"
-            ref={contentRef}
-          >
+          <div className="flex w-full flex-col gap-2 pt-12" ref={contentRef}>
             <div ref={topSentinelRef} aria-hidden className="h-px" />
 
             {isFetchingOlder ? (
