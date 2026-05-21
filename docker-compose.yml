@@ -8,6 +8,7 @@ services:
       POSTGRES_USER: sprout
       POSTGRES_PASSWORD: sprout_dev
       POSTGRES_DB: sprout
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "5432:5432"
     volumes:
