@@ -22,6 +22,9 @@ type MessageTimelineProps = {
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
+  /** Optional external ref to the scroll container — used by the parent to
+   *  observe scroll position or adjust padding dynamically. */
+  scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   isFetchingOlder?: boolean;
   messageFooters?: Record<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
@@ -65,13 +68,15 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onMarkUnread,
   onReply,
   onToggleReaction,
+  scrollContainerRef: externalScrollRef,
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
-  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const internalScrollRef = React.useRef<HTMLDivElement>(null);
+  const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
 
   const {

@@ -4,6 +4,7 @@ import { Hash, LogIn } from "lucide-react";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
@@ -175,6 +176,10 @@ export const ChannelPane = React.memo(function ChannelPane({
     () => getInitialThreadPanelWidth(),
   );
 
+  const timelineScrollRef = React.useRef<HTMLDivElement>(null);
+  const composerWrapperRef = React.useRef<HTMLDivElement>(null);
+  useComposerHeightPadding(timelineScrollRef, composerWrapperRef);
+
   React.useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -319,6 +324,7 @@ export const ChannelPane = React.memo(function ChannelPane({
         <MessageTimeline
           channelId={activeChannel?.id}
           activeReplyTargetId={openThreadHeadId}
+          scrollContainerRef={timelineScrollRef}
           currentPubkey={currentPubkey}
           fetchOlder={fetchOlder}
           hasOlderMessages={hasOlderMessages}
@@ -377,7 +383,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             </Button>
           </div>
         ) : (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10" ref={composerWrapperRef}>
             <div className="pointer-events-auto">
               <MessageComposer
                 channelId={activeChannel?.id ?? null}

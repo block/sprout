@@ -18,6 +18,7 @@ import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
+import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageThreadPanelProps = {
@@ -107,8 +108,10 @@ export function MessageThreadPanel({
   widthPx,
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
+  const threadComposerWrapperRef = React.useRef<HTMLDivElement>(null);
   const isOverlay = useIsThreadPanelOverlay();
   useEscapeKey(onClose, isOverlay);
+  useComposerHeightPadding(threadBodyRef, threadComposerWrapperRef);
 
   const threadHeadId = threadHead?.id ?? null;
 
@@ -302,7 +305,7 @@ export function MessageThreadPanel({
           </div>
         ) : null}
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10" ref={threadComposerWrapperRef}>
           <div className="pointer-events-auto">
             <MessageComposer
               channelId={channelId}
