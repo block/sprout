@@ -466,6 +466,8 @@ pub fn run() {
             get_relay_http_url,
             get_media_proxy_port,
             discover_acp_providers,
+            discover_all_acp_providers,
+            install_acp_runtime,
             discover_managed_agent_prereqs,
             sign_event,
             decrypt_observer_event,

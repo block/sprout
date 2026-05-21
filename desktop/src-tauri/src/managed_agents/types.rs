@@ -286,6 +286,49 @@ pub struct AcpProviderInfo {
     pub mcp_command: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AcpAvailabilityStatus {
+    Available,
+    AdapterMissing,
+    NotInstalled,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AcpProviderCatalogEntry {
+    pub id: String,
+    pub label: String,
+    pub avatar_url: String,
+    pub availability: AcpAvailabilityStatus,
+    pub command: Option<String>,
+    pub binary_path: Option<String>,
+    pub default_args: Vec<String>,
+    pub mcp_command: Option<String>,
+    pub install_hint: String,
+    pub install_instructions_url: String,
+    /// true when at least one automated install step is available
+    pub can_auto_install: bool,
+    pub underlying_cli_path: Option<String>,
+}
+
+/// Result of a single install step (CLI or adapter).
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallStepResult {
+    pub step: String,
+    pub command: String,
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+}
+
+/// Aggregate result of installing a runtime (may include CLI + adapter steps).
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallRuntimeResult {
+    pub success: bool,
+    pub steps: Vec<InstallStepResult>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandAvailabilityInfo {
     pub command: String,

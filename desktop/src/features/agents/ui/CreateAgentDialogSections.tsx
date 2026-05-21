@@ -1,4 +1,5 @@
 import type { AcpProvider, ManagedAgentPrereqs } from "@/shared/api/types";
+import { useAllAcpProvidersQuery } from "@/features/agents/hooks";
 import { cn } from "@/shared/lib/cn";
 import { Input } from "@/shared/ui/input";
 import { Textarea } from "@/shared/ui/textarea";
@@ -48,6 +49,11 @@ export function CreateAgentRuntimeProviderField({
   selectedProviderId: string;
   onProviderChange: (value: string) => void;
 }) {
+  const allProvidersQuery = useAllAcpProvidersQuery();
+  const unavailableCount = (allProvidersQuery.data ?? []).filter(
+    (p) => p.availability !== "available",
+  ).length;
+
   return (
     <div className="space-y-1.5">
       <label className="text-sm font-medium" htmlFor="agent-provider">
@@ -86,6 +92,14 @@ export function CreateAgentRuntimeProviderField({
           command in Advanced setup.
         </p>
       )}
+      {unavailableCount > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {unavailableCount} additional{" "}
+          {unavailableCount === 1 ? "runtime" : "runtimes"} available to
+          install. Visit Settings &gt; Doctor to set{" "}
+          {unavailableCount === 1 ? "it" : "them"} up.
+        </p>
+      ) : null}
     </div>
   );
 }

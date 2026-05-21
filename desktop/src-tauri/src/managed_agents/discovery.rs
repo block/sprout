@@ -3,7 +3,7 @@ use std::process::Command;
 
 use tauri::AppHandle;
 
-use crate::managed_agents::{AcpProviderInfo, CommandAvailabilityInfo};
+use crate::managed_agents::{AcpAvailabilityStatus, AcpProviderCatalogEntry, AcpProviderInfo, CommandAvailabilityInfo};
 
 pub(crate) struct KnownAcpProvider {
     pub id: &'static str,
@@ -15,6 +15,16 @@ pub(crate) struct KnownAcpProvider {
     pub mcp_command: Option<&'static str>,
     /// Whether to enable MCP hook tools (`_Stop`, `_PostCompact`) for this agent.
     pub mcp_hooks: bool,
+    /// CLI binary that indicates partial install (e.g. `"claude"` when `claude-agent-acp` is missing).
+    pub underlying_cli: Option<&'static str>,
+    /// Shell commands to install the runtime CLI itself (run sequentially).
+    pub cli_install_commands: &'static [&'static str],
+    /// Shell commands to install the ACP adapter (run sequentially, after CLI).
+    pub adapter_install_commands: &'static [&'static str],
+    /// Link to docs/repo for manual instructions.
+    pub install_instructions_url: &'static str,
+    /// Human-readable guidance for the UI.
+    pub install_hint: &'static str,
 }
 
 const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
@@ -54,6 +64,11 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         avatar_url: GOOSE_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
+        underlying_cli: None,
+        cli_install_commands: &[],
+        adapter_install_commands: &["curl -fsSL https://github.com/block-open-source/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash"],
+        install_instructions_url: "https://block.github.io/goose/",
+        install_hint: "Install Goose via the official install script.",
     },
     KnownAcpProvider {
         id: "claude",
@@ -63,6 +78,11 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         avatar_url: CLAUDE_CODE_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
+        underlying_cli: Some("claude"),
+        cli_install_commands: &["npm install -g @anthropic-ai/claude-code"],
+        adapter_install_commands: &["npm install -g @anthropic-ai/claude-agent-acp"],
+        install_instructions_url: "https://www.npmjs.com/package/@anthropic-ai/claude-agent-acp",
+        install_hint: "Install the Claude Code ACP adapter via npm.",
     },
     KnownAcpProvider {
         id: "codex",
@@ -72,6 +92,11 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         avatar_url: CODEX_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
+        underlying_cli: Some("codex"),
+        cli_install_commands: &[],
+        adapter_install_commands: &[],
+        install_instructions_url: "https://github.com/openai/codex",
+        install_hint: "The codex-acp adapter must be built from source. See the GitHub repo.",
     },
     KnownAcpProvider {
         id: "sprout-agent",
@@ -81,6 +106,11 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         avatar_url: SPROUT_AGENT_AVATAR_URL,
         mcp_command: Some("sprout-dev-mcp"),
         mcp_hooks: true,
+        underlying_cli: None,
+        cli_install_commands: &[],
+        adapter_install_commands: &[],
+        install_instructions_url: "https://github.com/block/sprout",
+        install_hint: "Ships with the Sprout desktop app.",
     },
 ];
 
@@ -219,15 +249,18 @@ fn resolve_workspace_command(command: &str, app: Option<&AppHandle>) -> Option<P
         .find(|candidate| candidate.exists())
 }
 
+fn resolve_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<PathBuf>>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// Resolve a command to an absolute path, caching results for the app lifetime.
 /// The cache eliminates redundant login-shell spawns when multiple agents share
 /// the same binaries (e.g. `npx`, `uvx`).
 pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = resolve_cache();
 
     // Fast path: return cached result without allocating a key.
     if let Ok(guard) = cache.lock() {
@@ -246,6 +279,12 @@ pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf
     }
 
     result
+}
+
+/// Clear the resolve_command cache so that newly-installed binaries are detected.
+pub fn clear_resolve_cache() {
+    let mut guard = resolve_cache().lock().unwrap_or_else(|e| e.into_inner());
+    guard.clear();
 }
 
 fn resolve_command_uncached(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
@@ -365,6 +404,63 @@ pub fn discover_local_acp_providers() -> Vec<AcpProviderInfo> {
                     default_args: normalize_agent_args(command, Vec::new()),
                     mcp_command: provider.mcp_command.map(str::to_string),
                 })
+        })
+        .collect()
+}
+
+pub fn discover_all_acp_providers() -> Vec<AcpProviderCatalogEntry> {
+    KNOWN_ACP_PROVIDERS
+        .iter()
+        .map(|provider| {
+            // Try to find the ACP adapter binary.
+            let adapter_result = provider
+                .commands
+                .iter()
+                .find_map(|command| find_command(command).map(|path| (*command, path)));
+
+            let (availability, command, binary_path) = if let Some((cmd, path)) = adapter_result {
+                (
+                    AcpAvailabilityStatus::Available,
+                    Some(cmd.to_string()),
+                    Some(path.display().to_string()),
+                )
+            } else if let Some(cli) = provider.underlying_cli {
+                if find_command(cli).is_some() {
+                    (AcpAvailabilityStatus::AdapterMissing, None, None)
+                } else {
+                    (AcpAvailabilityStatus::NotInstalled, None, None)
+                }
+            } else {
+                (AcpAvailabilityStatus::NotInstalled, None, None)
+            };
+
+            let underlying_cli_path = provider
+                .underlying_cli
+                .and_then(|cli| find_command(cli))
+                .map(|p| p.display().to_string());
+
+            let default_args = command
+                .as_deref()
+                .map(|cmd| normalize_agent_args(cmd, Vec::new()))
+                .unwrap_or_default();
+
+            let can_auto_install = !provider.cli_install_commands.is_empty()
+                || !provider.adapter_install_commands.is_empty();
+
+            AcpProviderCatalogEntry {
+                id: provider.id.to_string(),
+                label: provider.label.to_string(),
+                avatar_url: provider.avatar_url.to_string(),
+                availability,
+                command,
+                binary_path,
+                default_args,
+                mcp_command: provider.mcp_command.map(str::to_string),
+                install_hint: provider.install_hint.to_string(),
+                install_instructions_url: provider.install_instructions_url.to_string(),
+                can_auto_install,
+                underlying_cli_path,
+            }
         })
         .collect()
 }

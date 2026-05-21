@@ -327,6 +327,33 @@ type RawAcpProvider = {
   mcp_command: string | null;
 };
 
+type RawAcpProviderCatalogEntry = {
+  id: string;
+  label: string;
+  avatar_url: string;
+  availability: "available" | "adapter_missing" | "not_installed";
+  command: string | null;
+  binary_path: string | null;
+  default_args: string[];
+  mcp_command: string | null;
+  install_hint: string;
+  install_instructions_url: string;
+  can_auto_install: boolean;
+  underlying_cli_path: string | null;
+};
+
+type RawInstallRuntimeResult = {
+  success: boolean;
+  steps: Array<{
+    step: string;
+    command: string;
+    success: boolean;
+    stdout: string;
+    stderr: string;
+    exit_code: number | null;
+  }>;
+};
+
 type RawCommandAvailability = {
   command: string;
   resolved_path: string | null;
@@ -3501,6 +3528,89 @@ async function handleDiscoverAcpProviders(
   ];
 }
 
+async function handleDiscoverAllAcpProviders(
+  _config: E2eConfig | undefined,
+): Promise<RawAcpProviderCatalogEntry[]> {
+  return [
+    {
+      id: "goose",
+      label: "Goose",
+      avatar_url: "",
+      availability: "available",
+      command: "goose",
+      binary_path: "/usr/local/bin/goose",
+      default_args: ["acp"],
+      mcp_command: null,
+      install_hint: "Install Goose via the official install script.",
+      install_instructions_url: "https://block.github.io/goose/",
+      can_auto_install: true,
+      underlying_cli_path: null,
+    },
+    {
+      id: "claude",
+      label: "Claude Code",
+      avatar_url: "",
+      availability: "adapter_missing",
+      command: null,
+      binary_path: null,
+      default_args: [],
+      mcp_command: null,
+      install_hint: "Install the Claude Code ACP adapter via npm.",
+      install_instructions_url:
+        "https://www.npmjs.com/package/@anthropic-ai/claude-agent-acp",
+      can_auto_install: true,
+      underlying_cli_path: "/usr/local/bin/claude",
+    },
+    {
+      id: "codex",
+      label: "Codex",
+      avatar_url: "",
+      availability: "not_installed",
+      command: null,
+      binary_path: null,
+      default_args: [],
+      mcp_command: null,
+      install_hint:
+        "The codex-acp adapter must be built from source. See the GitHub repo.",
+      install_instructions_url: "https://github.com/openai/codex",
+      can_auto_install: false,
+      underlying_cli_path: null,
+    },
+    {
+      id: "sprout-agent",
+      label: "Sprout Agent",
+      avatar_url: "",
+      availability: "available",
+      command: "sprout-agent",
+      binary_path: "/usr/local/bin/sprout-agent",
+      default_args: [],
+      mcp_command: "sprout-dev-mcp",
+      install_hint: "Ships with the Sprout desktop app.",
+      install_instructions_url: "https://github.com/block/sprout",
+      can_auto_install: false,
+      underlying_cli_path: null,
+    },
+  ];
+}
+
+async function handleInstallAcpRuntime(args: {
+  providerId?: string;
+}): Promise<RawInstallRuntimeResult> {
+  return {
+    success: true,
+    steps: [
+      {
+        step: "adapter",
+        command: `mock install ${args.providerId ?? "unknown"}`,
+        success: true,
+        stdout: "mock: installed successfully",
+        stderr: "",
+        exit_code: 0,
+      },
+    ],
+  };
+}
+
 async function handleDiscoverManagedAgentPrereqs(
   args: {
     input?: {
@@ -4673,6 +4783,10 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
         return handleDiscoverAcpProviders(activeConfig);
+      case "discover_all_acp_providers":
+        return handleDiscoverAllAcpProviders(activeConfig);
+      case "install_acp_runtime":
+        return handleInstallAcpRuntime(payload as { providerId?: string });
       case "discover_backend_providers":
         return [];
       case "probe_backend_provider":

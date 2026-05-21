@@ -376,6 +376,40 @@ export type AcpProvider = {
   mcpCommand: string | null;
 };
 
+export type AcpAvailabilityStatus =
+  | "available"
+  | "adapter_missing"
+  | "not_installed";
+
+export type AcpProviderCatalogEntry = {
+  id: string;
+  label: string;
+  avatarUrl: string;
+  availability: AcpAvailabilityStatus;
+  command: string | null;
+  binaryPath: string | null;
+  defaultArgs: string[];
+  mcpCommand: string | null;
+  installHint: string;
+  installInstructionsUrl: string;
+  canAutoInstall: boolean;
+  underlyingCliPath: string | null;
+};
+
+export type InstallStepResult = {
+  step: string;
+  command: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+};
+
+export type InstallRuntimeResult = {
+  success: boolean;
+  steps: InstallStepResult[];
+};
+
 export type CommandAvailability = {
   command: string;
   resolvedPath: string | null;

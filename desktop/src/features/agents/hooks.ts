@@ -11,9 +11,11 @@ import {
   createManagedAgent,
   deleteManagedAgent,
   discoverAcpProviders,
+  discoverAllAcpProviders,
   discoverBackendProviders,
   discoverManagedAgentPrereqs,
   getManagedAgentLog,
+  installAcpRuntime,
   listManagedAgents,
   listRelayAgents,
   startManagedAgent,
@@ -72,6 +74,7 @@ export const managedAgentsQueryKey = ["managed-agents"] as const;
 export const personasQueryKey = ["personas"] as const;
 export const teamsQueryKey = ["teams"] as const;
 export const acpProvidersQueryKey = ["acp-providers"] as const;
+export const allAcpProvidersQueryKey = ["all-acp-providers"] as const;
 export const managedAgentPrereqsQueryKey = ["managed-agent-prereqs"] as const;
 export const backendProvidersQueryKey = ["backend-providers"] as const;
 
@@ -102,6 +105,27 @@ export function useAcpProvidersQuery() {
     queryKey: acpProvidersQueryKey,
     queryFn: discoverAcpProviders,
     staleTime: 60_000,
+  });
+}
+
+export function useAllAcpProvidersQuery() {
+  return useQuery({
+    queryKey: allAcpProvidersQueryKey,
+    queryFn: discoverAllAcpProviders,
+    staleTime: 60_000,
+  });
+}
+
+export function useInstallAcpRuntimeMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (providerId: string) => installAcpRuntime(providerId),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: acpProvidersQueryKey });
+      void queryClient.invalidateQueries({
+        queryKey: allAcpProvidersQueryKey,
+      });
+    },
   });
 }
 

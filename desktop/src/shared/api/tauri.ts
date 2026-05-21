@@ -39,8 +39,11 @@ import type {
   CreateManagedAgentInput,
   AgentModelsResponse,
   UpdateManagedAgentInput,
+  AcpAvailabilityStatus,
   AcpProvider,
+  AcpProviderCatalogEntry,
   CommandAvailability,
+  InstallRuntimeResult,
   OpenDmInput,
 } from "@/shared/api/types";
 
@@ -252,6 +255,35 @@ type RawAcpProvider = {
   binary_path: string;
   default_args: string[];
   mcp_command: string | null;
+};
+
+type RawAcpProviderCatalogEntry = {
+  id: string;
+  label: string;
+  avatar_url: string;
+  availability: AcpAvailabilityStatus;
+  command: string | null;
+  binary_path: string | null;
+  default_args: string[];
+  mcp_command: string | null;
+  install_hint: string;
+  install_instructions_url: string;
+  can_auto_install: boolean;
+  underlying_cli_path: string | null;
+};
+
+type RawInstallStepResult = {
+  step: string;
+  command: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+};
+
+type RawInstallRuntimeResult = {
+  success: boolean;
+  steps: RawInstallStepResult[];
 };
 
 type RawCommandAvailability = {
@@ -861,6 +893,41 @@ function fromRawAcpProvider(provider: RawAcpProvider): AcpProvider {
   };
 }
 
+function fromRawAcpProviderCatalogEntry(
+  entry: RawAcpProviderCatalogEntry,
+): AcpProviderCatalogEntry {
+  return {
+    id: entry.id,
+    label: entry.label,
+    avatarUrl: entry.avatar_url,
+    availability: entry.availability,
+    command: entry.command,
+    binaryPath: entry.binary_path,
+    defaultArgs: entry.default_args,
+    mcpCommand: entry.mcp_command,
+    installHint: entry.install_hint,
+    installInstructionsUrl: entry.install_instructions_url,
+    canAutoInstall: entry.can_auto_install,
+    underlyingCliPath: entry.underlying_cli_path,
+  };
+}
+
+function fromRawInstallRuntimeResult(
+  raw: RawInstallRuntimeResult,
+): InstallRuntimeResult {
+  return {
+    success: raw.success,
+    steps: raw.steps.map((step) => ({
+      step: step.step,
+      command: step.command,
+      success: step.success,
+      stdout: step.stdout,
+      stderr: step.stderr,
+      exitCode: step.exit_code,
+    })),
+  };
+}
+
 function fromRawCommandAvailability(
   command: RawCommandAvailability,
 ): CommandAvailability {
@@ -1017,6 +1084,26 @@ export async function discoverAcpProviders(): Promise<AcpProvider[]> {
   return (await invokeTauri<RawAcpProvider[]>("discover_acp_providers")).map(
     fromRawAcpProvider,
   );
+}
+
+export async function discoverAllAcpProviders(): Promise<
+  AcpProviderCatalogEntry[]
+> {
+  return (
+    await invokeTauri<RawAcpProviderCatalogEntry[]>(
+      "discover_all_acp_providers",
+    )
+  ).map(fromRawAcpProviderCatalogEntry);
+}
+
+export async function installAcpRuntime(
+  providerId: string,
+): Promise<InstallRuntimeResult> {
+  const raw = await invokeTauri<RawInstallRuntimeResult>(
+    "install_acp_runtime",
+    { providerId },
+  );
+  return fromRawInstallRuntimeResult(raw);
 }
 
 export async function discoverManagedAgentPrereqs(input: {

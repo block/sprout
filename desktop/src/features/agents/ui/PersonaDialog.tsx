@@ -2,7 +2,7 @@ import * as React from "react";
 import { RefreshCw, Upload } from "lucide-react";
 
 import type {
-  AcpProvider,
+  AcpProviderCatalogEntry,
   CreatePersonaInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
@@ -35,7 +35,7 @@ type PersonaDialogProps = {
   error: Error | null;
   isPending: boolean;
   isImportPending?: boolean;
-  providers: AcpProvider[];
+  providers: AcpProviderCatalogEntry[];
   providersLoading?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: CreatePersonaInput | UpdatePersonaInput) => Promise<void>;
@@ -354,13 +354,32 @@ export function PersonaDialog({
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}
+                    {p.availability === "adapter_missing"
+                      ? " (adapter missing)"
+                      : p.availability === "not_installed"
+                        ? " (not installed)"
+                        : ""}
                   </option>
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
                 Optional. When deploying this persona, the selected runtime will
-                be pre-selected. Falls back to the default if unavailable.
+                be pre-selected. Unavailable runtimes can be installed from
+                Settings &gt; Doctor.
               </p>
+              {(() => {
+                const selected = providers.find((p) => p.id === provider);
+                if (!selected || selected.availability === "available")
+                  return null;
+                return (
+                  <p className="text-xs text-warning">
+                    {selected.availability === "adapter_missing"
+                      ? `${selected.label} CLI is installed but the ACP adapter is missing.`
+                      : `${selected.label} is not installed.`}{" "}
+                    Visit Settings &gt; Doctor to set it up.
+                  </p>
+                );
+              })()}
             </div>
 
             <div className="space-y-1.5">
