@@ -201,7 +201,7 @@ export function MessageThreadPanel({
           onScroll={syncScrollState}
           ref={threadBodyRef}
         >
-          <div className="pb-10" ref={contentRef}>
+          <div ref={contentRef}>
             <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
               <div className="rounded-2xl">
                 <MessageRow
