@@ -399,6 +399,9 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
 
+            // Sync shared agent data from the canonical dev data directory to
+            // this worktree's data directory. Must run before
+            // restore_managed_agents_on_launch (which reads managed-agents.json).
             migration::sync_shared_agent_data(&app_handle);
 
             // Resolve persisted identity key (env var → file → generate+save).

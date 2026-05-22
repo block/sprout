@@ -355,6 +355,7 @@ fn pack_id_rejects_too_long() {
 
 #[test]
 fn migrate_retires_unmodified_personas() {
+    let now = "2026-04-01T00:00:00Z";
     // Simulate a store from before the Solo/Kit/Scout transition: all 6
     // retired personas with original system prompts.
     let mut stored: Vec<PersonaRecord> = RETIRED_PERSONAS
@@ -368,52 +369,64 @@ fn migrate_retires_unmodified_personas() {
         })
         .collect();
 
-    let changed = migrate_retired_personas(&mut stored);
+    let changed = migrate_retired_personas(&mut stored, now);
 
     assert!(changed);
+    assert_eq!(
+        stored.len(),
+        RETIRED_PERSONAS.len(),
+        "all retired personas should be soft-deprecated, not removed",
+    );
     assert!(
-        stored.is_empty(),
-        "all unmodified retired personas should be removed, got: {:?}",
-        stored.iter().map(|r| &r.id).collect::<Vec<_>>()
+        stored.iter().all(|r| r.display_name.ends_with(" (retired)")),
+        "all retired personas should have ' (retired)' suffix",
+    );
+    assert!(
+        stored.iter().all(|r| !r.is_active),
+        "all retired personas should be inactive",
+    );
+    assert!(
+        stored.iter().all(|r| r.updated_at == now),
+        "all retired personas should have refreshed updated_at",
     );
 }
 
 #[test]
 fn migrate_preserves_customized_personas() {
+    let now = "2026-04-01T00:00:00Z";
     let mut stored = vec![PersonaRecord {
         id: "builtin:researcher".to_string(),
-        display_name: "Researcher".to_string(),
+        display_name: "My Researcher".to_string(),
         system_prompt: "My custom research workflow with special instructions".to_string(),
         is_builtin: false,
         is_active: true,
-        ..custom_persona("builtin:researcher", "Researcher")
+        ..custom_persona("builtin:researcher", "My Researcher")
     }];
 
-    let changed = migrate_retired_personas(&mut stored);
+    let changed = migrate_retired_personas(&mut stored, now);
 
     assert!(changed);
     assert_eq!(stored.len(), 1);
     let record = &stored[0];
-    assert_eq!(record.display_name, "Researcher (retired)");
+    assert_eq!(record.display_name, "My Researcher (retired)");
     assert!(!record.is_active);
     assert_eq!(
         record.system_prompt,
         "My custom research workflow with special instructions"
     );
+    assert_eq!(record.updated_at, now);
 }
 
 #[test]
 fn migrate_is_idempotent() {
-    // No retired personas present — should be a no-op.
+    let now = "2026-04-01T00:00:00Z";
+
+    // 1. Non-retired persona — no-op.
     let mut stored = vec![custom_persona("custom:test", "Custom")];
-    let original_len = stored.len();
+    assert!(!migrate_retired_personas(&mut stored, now));
+    assert_eq!(stored.len(), 1);
 
-    let changed = migrate_retired_personas(&mut stored);
-
-    assert!(!changed);
-    assert_eq!(stored.len(), original_len);
-
-    // Second run with already-retired (renamed) persona — also a no-op.
+    // 2. Already-retired persona (display_name ends with " (retired)") — no-op.
     let mut stored_with_retired = vec![PersonaRecord {
         id: "builtin:researcher".to_string(),
         display_name: "Researcher (retired)".to_string(),
@@ -422,11 +435,25 @@ fn migrate_is_idempotent() {
         is_active: false,
         ..custom_persona("builtin:researcher", "Researcher (retired)")
     }];
-
-    let changed = migrate_retired_personas(&mut stored_with_retired);
     assert!(
-        !changed,
+        !migrate_retired_personas(&mut stored_with_retired, now),
         "already-retired persona should not trigger another change"
     );
-    assert_eq!(stored_with_retired[0].display_name, "Researcher (retired)");
+
+    // 3. Retired persona still marked is_builtin: true (pre-demotion).
+    // migrate_retired_personas should still soft-deprecate it.
+    let mut stored_pre_demotion = vec![PersonaRecord {
+        id: "builtin:reviewer".to_string(),
+        display_name: "Reviewer".to_string(),
+        system_prompt: "Custom review prompt".to_string(),
+        is_builtin: true,
+        is_active: true,
+        ..custom_persona("builtin:reviewer", "Reviewer")
+    }];
+    assert!(migrate_retired_personas(&mut stored_pre_demotion, now));
+    assert_eq!(stored_pre_demotion[0].display_name, "Reviewer (retired)");
+    assert!(!stored_pre_demotion[0].is_active);
+
+    // 4. Run again on result of (3) — should be no-op.
+    assert!(!migrate_retired_personas(&mut stored_pre_demotion, now));
 }

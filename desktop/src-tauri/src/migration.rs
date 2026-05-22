@@ -1,25 +1,15 @@
-//! Per-file migration from the legacy `com.wesb.sprout` app data directory
-//! to the current `xyz.block.sprout.app` directory.
+//! Data migrations and worktree sync for the Sprout desktop app.
 //!
-//! On each launch, for every known file in [`LEGACY_FILES`]:
-//!   - If the file **already exists** at the new path → skip (it's its own guard).
-//!   - If the file exists at the old path but not the new → copy it over.
+//! **Legacy migration** (`migrate_legacy_data_dir`): One-time, idempotent
+//! per-file copy from the legacy `com.wesb.sprout` app data directory to
+//! the current directory. Runs on every launch; each file's existence at
+//! the destination is its own guard.
 //!
-//! Each `std::fs::copy` is atomic per-file, so there is no partial-migration
-//! problem and no sentinel file is needed.
-//!
-//! The legacy directory is intentionally **not** deleted — users can clean it
-//! up manually once they're satisfied everything works.
-//!
-//! Errors are logged but never fatal; the app must still start even if
-//! individual file copies fail.
-//!
-//! **Note on dev/prod side-by-side:** Both the production build
-//! (`xyz.block.sprout.app`) and the dev build (`xyz.block.sprout.app.dev`)
-//! will attempt to migrate from the same legacy `com.wesb.sprout` directory,
-//! resulting in duplicated identity keys. To avoid this, set the
-//! `SPROUT_PRIVATE_KEY` env var when running the dev build — this bypasses
-//! file-based identity resolution entirely.
+//! **Worktree sync** (`sync_shared_agent_data`): Per-launch copy-with-
+//! overwrite of agent data files from the canonical dev data directory
+//! (`xyz.block.sprout.app.dev`) to the current worktree data directory.
+//! Only runs when `SPROUT_SHARE_IDENTITY=1` and `SPROUT_PRIVATE_KEY` is
+//! set. Overwrites on every launch so worktree data stays current.
 
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -29,7 +19,15 @@ const LEGACY_DATA_DIR_NAME: &str = "com.wesb.sprout";
 const CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
 
 /// JSON files synced from the canonical dev data directory to worktree
-/// data directories. Only data files — never `agent-pids/` or `logs/`.
+/// data directories. This is the agent-data subset of [`LEGACY_FILES`];
+/// `identity.key` is deliberately excluded because worktree instances
+/// receive their identity via the `SPROUT_PRIVATE_KEY` env var.
+/// Only data files — never `agent-pids/` or `logs/`.
+///
+/// NOTE: `agents/packs/` is intentionally excluded — recursive directory
+/// sync is out of scope. Pack personas will appear in the worktree but
+/// agents with `persona_pack_path` may fail if the ACP reads pack files
+/// at runtime. Install packs in the worktree separately if needed.
 const SHARED_AGENT_FILES: &[&str] = &[
     "agents/managed-agents.json",
     "agents/personas.json",
@@ -47,16 +45,16 @@ const LEGACY_FILES: &[&str] = &[
     "agents/teams.json",
 ];
 
-/// Compute the legacy `com.wesb.sprout` data directory path by replacing the
-/// last component of the current app data directory.
-fn legacy_data_dir(current: &Path) -> Option<PathBuf> {
-    current.parent().map(|p| p.join(LEGACY_DATA_DIR_NAME))
+fn sibling_data_dir(current: &Path, name: &str) -> Option<PathBuf> {
+    current.parent().map(|p| p.join(name))
 }
 
-/// Compute the canonical `xyz.block.sprout.app.dev` data directory path by
-/// replacing the last component of the current app data directory.
+fn legacy_data_dir(current: &Path) -> Option<PathBuf> {
+    sibling_data_dir(current, LEGACY_DATA_DIR_NAME)
+}
+
 fn canonical_dev_data_dir(current: &Path) -> Option<PathBuf> {
-    current.parent().map(|p| p.join(CANONICAL_DEV_IDENTIFIER))
+    sibling_data_dir(current, CANONICAL_DEV_IDENTIFIER)
 }
 
 /// Copy a single file from `old_dir/rel` to `new_dir/rel`, creating parent
@@ -137,6 +135,40 @@ pub fn migrate_legacy_data_dir(app: &tauri::AppHandle) {
     }
 }
 
+/// After copying managed-agents.json from the canonical dir, remove
+/// process-local runtime state that would cause the worktree instance
+/// to kill the canonical instance's running agents.
+fn scrub_managed_agents_runtime_state(path: &Path) {
+    let Ok(content) = std::fs::read_to_string(path) else { return };
+    let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else { return };
+
+    const RUNTIME_FIELDS: &[&str] = &[
+        "runtime_pid",
+        "last_error",
+        "last_exit_code",
+        "last_stopped_at",
+        "last_started_at",
+        "backend_agent_id",
+    ];
+
+    let mut scrubbed_any = false;
+    for record in &mut records {
+        if let Some(obj) = record.as_object_mut() {
+            for field in RUNTIME_FIELDS {
+                if obj.remove(*field).is_some() {
+                    scrubbed_any = true;
+                }
+            }
+        }
+    }
+
+    if scrubbed_any {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&records) {
+            let _ = std::fs::write(path, bytes);
+        }
+    }
+}
+
 /// Copy shared agent data files from the canonical dev data directory to
 /// the current (worktree) data directory, overwriting any existing files.
 ///
@@ -188,7 +220,10 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     };
 
     // Guard: skip if we ARE the canonical instance.
-    if canonical_dir == current_dir {
+    // Use canonicalize to handle case-insensitive FS and symlinks.
+    let current_canonical = std::fs::canonicalize(&current_dir).unwrap_or_else(|_| current_dir.clone());
+    let source_canonical = std::fs::canonicalize(&canonical_dir).unwrap_or_else(|_| canonical_dir.clone());
+    if current_canonical == source_canonical {
         return;
     }
 
@@ -227,6 +262,13 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
                 eprintln!("sprout-desktop: shared-agent-sync: failed to copy {rel}: {e}");
             }
         }
+    }
+
+    // Scrub runtime-local state from the copied managed-agents.json to
+    // prevent the worktree from killing the canonical instance's running agents.
+    let managed_agents_dst = current_dir.join("agents/managed-agents.json");
+    if managed_agents_dst.exists() {
+        scrub_managed_agents_runtime_state(&managed_agents_dst);
     }
 
     if synced > 0 {
@@ -504,11 +546,67 @@ mod tests {
 
     #[test]
     fn sync_skips_when_canonical_equals_current() {
-        let (_parent, canonical, _worktree) = setup_sync_layout();
+        let parent = tempfile::tempdir().unwrap();
+        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
 
-        // When canonical and current are the same path, nothing should be copied.
-        // We verify by checking that the function doesn't panic and the dir
-        // is unchanged — in practice this guard is in sync_shared_agent_data().
-        assert_eq!(canonical, canonical); // trivially true — the real guard is `canonical_dir == current_dir`
+        // When the current dir IS the canonical dir, canonical_dev_data_dir
+        // returns the exact same path. The equality guard in
+        // sync_shared_agent_data detects this and skips the sync entirely,
+        // so data is never clobbered.
+        let resolved = canonical_dev_data_dir(&canonical).unwrap();
+        assert_eq!(resolved, canonical);
+    }
+
+    #[test]
+    fn canonical_dev_data_dir_for_canonical_instance_returns_self() {
+        // When the current app data dir IS the canonical dev identifier,
+        // canonical_dev_data_dir returns the exact same path. The caller
+        // (sync_shared_agent_data) uses this equality to skip the sync.
+        // The env-var guards (SPROUT_SHARE_IDENTITY, SPROUT_PRIVATE_KEY)
+        // require a live Tauri AppHandle and are covered by integration
+        // testing only.
+        let current = PathBuf::from(
+            "/Users/me/Library/Application Support/xyz.block.sprout.app.dev",
+        );
+        let canonical = canonical_dev_data_dir(&current).unwrap();
+        assert_eq!(canonical, current);
+    }
+
+    #[test]
+    fn sync_scrubs_runtime_pid_from_managed_agents() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+
+        // Write canonical managed-agents.json with runtime state fields.
+        std::fs::write(
+            canonical.join("agents/managed-agents.json"),
+            serde_json::to_string_pretty(&serde_json::json!([{
+                "id": "agent-1",
+                "name": "Test Agent",
+                "runtime_pid": 12345,
+                "last_error": "some error",
+                "last_exit_code": 1,
+                "last_stopped_at": "2026-01-01T00:00:00Z",
+                "last_started_at": "2026-01-01T00:00:00Z",
+                "backend_agent_id": "ba-123"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+
+        sync_files(&canonical, &worktree);
+        scrub_managed_agents_runtime_state(&worktree.join("agents/managed-agents.json"));
+
+        let content = std::fs::read_to_string(worktree.join("agents/managed-agents.json")).unwrap();
+        let records: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
+        let agent = &records[0];
+
+        assert_eq!(agent["id"], "agent-1");
+        assert_eq!(agent["name"], "Test Agent");
+        assert!(agent.get("runtime_pid").is_none(), "runtime_pid should be scrubbed");
+        assert!(agent.get("last_error").is_none(), "last_error should be scrubbed");
+        assert!(agent.get("last_exit_code").is_none(), "last_exit_code should be scrubbed");
+        assert!(agent.get("last_stopped_at").is_none(), "last_stopped_at should be scrubbed");
+        assert!(agent.get("last_started_at").is_none(), "last_started_at should be scrubbed");
+        assert!(agent.get("backend_agent_id").is_none(), "backend_agent_id should be scrubbed");
     }
 }

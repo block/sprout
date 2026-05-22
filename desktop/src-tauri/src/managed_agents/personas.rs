@@ -595,10 +595,10 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
         }
     }
 
-    // Remove or soft-deprecate retired built-in personas that were replaced
-    // by Solo/Kit/Scout. Runs after demotion so the records are already
+    // Soft-deprecate retired built-in personas that were replaced by
+    // Solo/Kit/Scout. Runs after demotion so the records are already
     // marked as non-builtin.
-    if migrate_retired_personas(&mut stored) {
+    if migrate_retired_personas(&mut stored, now) {
         changed = true;
     }
 
@@ -606,47 +606,35 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
     (stored, changed)
 }
 
-/// Remove or soft-deprecate retired built-in personas.
-///
-/// - If the system prompt matches the original unmodified content, the record
-///   is removed entirely (safe — the user never customized it).
-/// - If the system prompt was customized, the record is kept with a renamed
-///   display name and `is_active = false` so it stays in the catalog but
-///   doesn't clutter the active agent list.
-///
-/// Always-on idempotent check — no migration version flag needed.
-fn migrate_retired_personas(stored: &mut Vec<PersonaRecord>) -> bool {
+/// Soft-deprecate retired built-in personas by appending " (retired)" to
+/// their display name and marking them inactive. Never removes records —
+/// the cost is 6 extra records for pre-transition users, but this
+/// eliminates dangling `persona_id` references in managed-agents.json
+/// and teams.json.
+fn migrate_retired_personas(stored: &mut [PersonaRecord], now: &str) -> bool {
     let mut changed = false;
 
-    stored.retain_mut(|record| {
-        if let Some((_, original_name, original_prompt)) = RETIRED_PERSONAS
+    for record in stored.iter_mut() {
+        if let Some((_, _original_name, original_prompt)) = RETIRED_PERSONAS
             .iter()
             .find(|(id, _, _)| *id == record.id)
         {
-            if record.system_prompt == *original_prompt {
-                // Unmodified — safe to remove entirely.
-                eprintln!(
-                    "sprout-desktop: persona-migration: removing unmodified retired persona '{}'",
-                    record.display_name
-                );
-                changed = true;
-                return false; // remove from vec
-            }
-
-            // Customized — soft-deprecate.
             let retired_suffix = " (retired)";
             if !record.display_name.ends_with(retired_suffix) {
+                let was_unmodified = record.system_prompt == *original_prompt;
                 eprintln!(
-                    "sprout-desktop: persona-migration: retiring customized persona '{}' → '{} (retired)'",
-                    record.display_name, record.display_name
+                    "sprout-desktop: persona-migration: retiring {} persona '{}' → '{} (retired)'",
+                    if was_unmodified { "unmodified" } else { "customized" },
+                    record.display_name,
+                    record.display_name,
                 );
-                record.display_name = format!("{}{}", original_name, retired_suffix);
+                record.display_name = format!("{}{}", record.display_name, retired_suffix);
                 record.is_active = false;
+                record.updated_at = now.to_string();
                 changed = true;
             }
         }
-        true // keep non-retired records
-    });
+    }
 
     changed
 }
