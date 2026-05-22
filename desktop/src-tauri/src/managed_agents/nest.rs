@@ -233,7 +233,6 @@ pub fn ensure_cli_symlink(_exe_parent: &Path) -> Result<(), String> {
     Ok(())
 }
 
-
 fn escape_md_cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
 }
@@ -383,7 +382,6 @@ pub fn try_regenerate_nest(app: &AppHandle) {
         eprintln!("sprout-desktop: nest context regeneration failed: {error}");
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -405,7 +405,6 @@ pub fn run() {
 
             try_regenerate_nest(&app_handle);
 
-
             // Pre-download voice models in the background so they're ready
             // when the user starts their first huddle. Idempotent — no-op if
             // already downloaded. ~289 MB total (~100 MB Parakeet STT + ~189 MB Pocket TTS).
