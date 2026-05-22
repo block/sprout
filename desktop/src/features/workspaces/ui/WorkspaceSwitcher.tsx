@@ -116,7 +116,7 @@ export function WorkspaceSwitcher({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="w-[--radix-dropdown-menu-trigger-width] min-w-[220px]"
+              className="w-(--radix-dropdown-menu-trigger-width) min-w-[220px]"
               onCloseAutoFocus={(e) => e.preventDefault()}
               side="bottom"
               sideOffset={4}
