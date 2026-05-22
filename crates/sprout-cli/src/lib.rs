@@ -942,6 +942,9 @@ pub enum MemCmd {
         /// Owner pubkey (hex). Overrides SPROUT_AUTH_TAG.
         #[arg(long)]
         owner: Option<String>,
+        /// Agent pubkey (hex) to read as this key's owner.
+        #[arg(long)]
+        agent: Option<String>,
         /// Emit JSON instead of tab-delimited lines.
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -951,12 +954,18 @@ pub enum MemCmd {
         slug: String,
         #[arg(long)]
         owner: Option<String>,
+        /// Agent pubkey (hex) to read as this key's owner.
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Print sha256(value) in hex (use as `--base-hash` for `mem patch`).
     Hash {
         slug: String,
         #[arg(long)]
         owner: Option<String>,
+        /// Agent pubkey (hex) to read as this key's owner.
+        #[arg(long)]
+        agent: Option<String>,
     },
     /// Set a slug's value. Pass `-` to read the value from stdin.
     Set {
