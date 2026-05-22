@@ -1,0 +1,7 @@
+rules:
+  cache-poisoning:
+    ignore:
+      # Swatinem/rust-cache uses save-if to prevent cache writes on PR events,
+      # which mitigates cache poisoning. zizmor only recognizes lookup-only as
+      # a mitigation, not save-if. Filed upstream: https://github.com/zizmorcore/zizmor/issues/2051
+      - ci.yml
