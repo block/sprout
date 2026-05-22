@@ -477,7 +477,7 @@ export function AddChannelBotDialog({
         footerClassName="justify-end gap-2"
         footerTestId="add-channel-bot-dialog-footer"
         headerTestId="add-channel-bot-dialog-header"
-        scrollAreaClassName="space-y-5"
+        scrollAreaClassName="space-y-6"
         scrollAreaTestId="add-channel-bot-dialog-scroll-area"
         title="Add agents"
       >

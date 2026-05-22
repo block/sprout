@@ -31,7 +31,7 @@ export function MembersSidebarAgentControls({
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button
-          className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           data-testid="members-sidebar-agent-controls"
           type="button"
         >

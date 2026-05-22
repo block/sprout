@@ -29,12 +29,14 @@ import type {
   AddChannelMembersInput,
   Channel,
   ChannelDetail,
+  ChannelMember,
   CreateChannelInput,
   OpenDmInput,
   SetChannelPurposeInput,
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 
 export const channelsQueryKey = ["channels"] as const;
 const channelDetailQueryKey = (channelId: string) =>
@@ -409,6 +411,25 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
       }
 
       await removeChannelMemberWithManagedAgentCleanup(channelId, pubkey);
+    },
+    onMutate: async (pubkey) => {
+      if (!channelId) return;
+      const membersKey = channelMembersQueryKey(channelId);
+      await queryClient.cancelQueries({ queryKey: membersKey });
+      const previous =
+        queryClient.getQueryData<ChannelMember[]>(membersKey) ?? [];
+      queryClient.setQueryData<ChannelMember[]>(
+        membersKey,
+        previous.filter(
+          (m) => normalizePubkey(m.pubkey) !== normalizePubkey(pubkey),
+        ),
+      );
+      return { previous, membersKey };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.membersKey) {
+        queryClient.setQueryData(context.membersKey, context.previous);
+      }
     },
     onSettled: async () => {
       await Promise.all([

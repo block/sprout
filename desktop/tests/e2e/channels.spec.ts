@@ -83,6 +83,7 @@ async function addGenericAgent(
   await page.getByTestId(`channel-${channelName}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await page.getByTestId("channel-add-bot-trigger").click();
+  await page.getByTestId("quick-add-more-options").click();
   await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
   await page.getByRole("button", { name: "Generic" }).click();
   await page.locator("#channel-generic-name").fill(agentName);
@@ -852,6 +853,7 @@ test("open-channel members can add agents from the header", async ({
   await expect(addAgentTrigger).toBeEnabled();
 
   await addAgentTrigger.click();
+  await page.getByTestId("quick-add-more-options").click();
   await expect(page.getByRole("heading", { name: "Add agents" })).toBeVisible();
   await expect(page.getByTestId("add-channel-bot-dialog-header")).toBeVisible();
   await expect(

@@ -13,6 +13,7 @@ import {
   discoverAcpProviders,
   discoverBackendProviders,
   discoverManagedAgentPrereqs,
+  getChannelMembers,
   getManagedAgentLog,
   listManagedAgents,
   listRelayAgents,
@@ -38,6 +39,7 @@ import {
 import type {
   AgentPersona,
   AgentTeam,
+  ChannelMember,
   CreateManagedAgentInput,
   CreatePersonaInput,
   CreateTeamInput,
@@ -46,6 +48,7 @@ import type {
   UpdatePersonaInput,
   UpdateTeamInput,
 } from "@/shared/api/types";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import type {
   AttachManagedAgentToChannelInput,
   AttachManagedAgentToChannelResult,
@@ -356,6 +359,29 @@ export function useAttachManagedAgentToChannelMutation(
 
       return attachManagedAgentToChannel(channelId, input);
     },
+    onMutate: async (input) => {
+      if (!channelId) return;
+      const membersKey = ["channels", channelId, "members"];
+      await queryClient.cancelQueries({ queryKey: membersKey });
+      const previous =
+        queryClient.getQueryData<ChannelMember[]>(membersKey) ?? [];
+      const optimistic: ChannelMember = {
+        pubkey: normalizePubkey(input.agent.pubkey),
+        role: input.role ?? "bot",
+        joinedAt: new Date().toISOString(),
+        displayName: input.agent.name,
+      };
+      queryClient.setQueryData<ChannelMember[]>(membersKey, [
+        ...previous,
+        optimistic,
+      ]);
+      return { previous, membersKey };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.membersKey) {
+        queryClient.setQueryData(context.membersKey, context.previous);
+      }
+    },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
     },
@@ -392,7 +418,39 @@ export function useCreateChannelManagedAgentMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return createChannelManagedAgent(channelId, input);
+      const [managedAgents, members] = await Promise.all([
+        listManagedAgents(),
+        getChannelMembers(channelId),
+      ]);
+      const channelMemberPubkeys = new Set(
+        members.map((m) => normalizePubkey(m.pubkey)),
+      );
+
+      return createChannelManagedAgent(channelId, input, {
+        managedAgents,
+        channelMemberPubkeys,
+      });
+    },
+    onSuccess: (result) => {
+      if (!channelId) return;
+      const membersKey = ["channels", channelId, "members"];
+      const current =
+        queryClient.getQueryData<ChannelMember[]>(membersKey) ?? [];
+      const alreadyPresent = current.some(
+        (m) =>
+          normalizePubkey(m.pubkey) === normalizePubkey(result.agent.pubkey),
+      );
+      if (!alreadyPresent) {
+        queryClient.setQueryData<ChannelMember[]>(membersKey, [
+          ...current,
+          {
+            pubkey: normalizePubkey(result.agent.pubkey),
+            role: "bot",
+            joinedAt: new Date().toISOString(),
+            displayName: result.agent.name,
+          },
+        ]);
+      }
     },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);
@@ -414,6 +472,29 @@ export function useCreateChannelManagedAgentsMutation(
       }
 
       return createChannelManagedAgents(channelId, inputs);
+    },
+    onSuccess: (result) => {
+      if (!channelId) return;
+      const membersKey = ["channels", channelId, "members"];
+      const current =
+        queryClient.getQueryData<ChannelMember[]>(membersKey) ?? [];
+      const existingPubkeys = new Set(
+        current.map((m) => normalizePubkey(m.pubkey)),
+      );
+      const newMembers: ChannelMember[] = result.successes
+        .filter((s) => !existingPubkeys.has(normalizePubkey(s.agent.pubkey)))
+        .map((s) => ({
+          pubkey: normalizePubkey(s.agent.pubkey),
+          role: "bot" as const,
+          joinedAt: new Date().toISOString(),
+          displayName: s.agent.name,
+        }));
+      if (newMembers.length > 0) {
+        queryClient.setQueryData<ChannelMember[]>(membersKey, [
+          ...current,
+          ...newMembers,
+        ]);
+      }
     },
     onSettled: async () => {
       await invalidateAgentQueries(queryClient, channelId);

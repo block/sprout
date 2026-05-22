@@ -34,7 +34,7 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/teams.rs", 580], // built-in team registry (Kit & Scout) + merge_teams + validate_team_deletion + JSON export/import + tests
   ["src-tauri/src/managed_agents/persona_card.rs", 970], // PNG/ZIP/MD persona card codec + pack-zip detection + nested root finder + provider/model/namePool fields + 27 unit tests
   ["src/app/AppShell.tsx", 815], // message edit state + handlers + ChannelPane edit prop threading + scrollback pagination + workflows view + projects view + memory-leak safeguards + home-badge state lifted here so it consumes the same NIP-RS read-state as the sidebar (single ReadStateManager)
-  ["src/features/channels/hooks.ts", 550], // canvas query + mutation hooks + DM hide mutation
+  ["src/features/channels/hooks.ts", 560], // canvas query + mutation hooks + DM hide mutation + optimistic remove
   ["src/features/channels/ui/ChannelManagementSheet.tsx", 800],
   ["src/features/channels/ui/ChannelPane.tsx", 520], // composer/timeline/sidebar orchestration + anchored agent activity footers
   ["src/features/channels/ui/ChannelScreen.tsx", 550], // profile panel state + mutual exclusion wiring + ProfilePanelProvider context + agent typing classification
@@ -55,7 +55,7 @@ const overrides = new Map([
   ["src-tauri/src/managed_agents/types.rs", 715], // ManagedAgentRecord/Summary + Create/Update request structs + RespondTo enum + validate_respond_to_allowlist + tests + persona/agent env_vars field
   ["src-tauri/src/managed_agents/backend.rs", 700], // provider IPC, validation, discovery, binary resolution + tests + redact_secrets_with for user env values + env_secrets_from_request + redact_env_values_in (shared with model discovery)
   ["src/features/huddle/HuddleContext.tsx", 650], // huddle lifecycle context + joinHuddle + connectAndSetupMedia shared helper + activeSpeakers/isReconnecting state + PTT (reusable AudioContext) + TTS subscription + mic level analyser (10fps throttle) + agent pubkey refresh
-  ["src/features/agents/hooks.ts", 540], // agent query/mutation surface now includes built-in persona library activation + useUpdateManagedAgentMutation
+  ["src/features/agents/hooks.ts", 610], // agent query/mutation surface + optimistic member updates + reuse-guard context fetch
   ["src/features/agents/ui/AgentsView.tsx", 880], // remote agent lifecycle controls + persona/team management + persona import-update dialog wiring + built-in catalog/library state orchestration
   ["src/features/agents/ui/UnifiedAgentsSection.tsx", 570], // unified persona-grouped agent view with collapsible groups, bulk actions, drag-drop import, empty/loading states
   ["src/features/agents/ui/ManagedAgentRow.tsx", 530], // EditAgentDialog integration + provider/local branching

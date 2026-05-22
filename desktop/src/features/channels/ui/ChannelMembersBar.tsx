@@ -9,15 +9,19 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { sortProviders } from "@/features/agents/lib/sortProviders";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import type { Channel } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { AddChannelBotDialog } from "./AddChannelBotDialog";
+import { QuickAddAgentPopover } from "./QuickAddAgentPopover";
 
 type ChannelMembersBarProps = {
   channel: Channel;
   currentPubkey?: string;
+  isAddBotDialogOpen?: boolean;
+  onAddBotDialogOpenChange?: (open: boolean) => void;
   onManageChannel: () => void;
   onToggleMembers: () => void;
 };
@@ -25,10 +29,16 @@ type ChannelMembersBarProps = {
 export function ChannelMembersBar({
   channel,
   currentPubkey,
+  isAddBotDialogOpen,
+  onAddBotDialogOpenChange,
   onManageChannel,
   onToggleMembers,
 }: ChannelMembersBarProps) {
-  const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
+  // Dialog state: controlled externally if props provided, otherwise local.
+  const [localIsAddBotOpen, setLocalIsAddBotOpen] = React.useState(false);
+  const isAddBotOpen = isAddBotDialogOpen ?? localIsAddBotOpen;
+  const setIsAddBotOpen = onAddBotDialogOpenChange ?? setLocalIsAddBotOpen;
+  const [isQuickAddOpen, setIsQuickAddOpen] = React.useState(false);
   const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channel.id);
@@ -39,16 +49,7 @@ export function ChannelMembersBar({
   const members = membersQuery.data ?? [];
   const memberCount = membersQuery.data?.length ?? channel.memberCount;
   const providers = React.useMemo(
-    () =>
-      [...(providersQuery.data ?? [])].sort((left, right) => {
-        const leftPriority = left.id === "goose" ? 0 : 1;
-        const rightPriority = right.id === "goose" ? 0 : 1;
-        if (leftPriority !== rightPriority) {
-          return leftPriority - rightPriority;
-        }
-
-        return left.label.localeCompare(right.label);
-      }),
+    () => sortProviders(providersQuery.data ?? []),
     [providersQuery.data],
   );
   const normalizedCurrentPubkey = currentPubkey
@@ -73,7 +74,8 @@ export function ChannelMembersBar({
 
     previousChannelIdRef.current = channel.id;
     setIsAddBotOpen(false);
-  }, [channel.id]);
+    setIsQuickAddOpen(false);
+  }, [channel.id, setIsAddBotOpen]);
 
   const dialogErrorMessage =
     providersQuery.error instanceof Error
@@ -87,20 +89,24 @@ export function ChannelMembersBar({
   return (
     <React.Fragment>
       <div className="flex items-center gap-1">
-        <Button
-          aria-label="Add agent"
-          className="h-7 w-7 rounded-full"
-          data-testid="channel-add-bot-trigger"
-          disabled={!canAddAgents}
-          onClick={() => {
-            setIsAddBotOpen(true);
-          }}
-          size="icon"
-          type="button"
-          variant="outline"
+        <QuickAddAgentPopover
+          channelId={channel.id}
+          open={isQuickAddOpen}
+          onOpenChange={setIsQuickAddOpen}
+          onMoreOptions={() => setIsAddBotOpen(true)}
         >
-          <Plus className="h-3 w-3" />
-        </Button>
+          <Button
+            aria-label="Add agent"
+            className="h-7 w-7 rounded-full"
+            data-testid="channel-add-bot-trigger"
+            disabled={!canAddAgents}
+            size="icon"
+            type="button"
+            variant="outline"
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        </QuickAddAgentPopover>
 
         <HuddleIndicator
           className="h-7 w-7"

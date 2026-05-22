@@ -1,3 +1,4 @@
+import { Plus } from "lucide-react";
 import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -41,12 +42,14 @@ import { MembersSidebarAgentControls } from "./MembersSidebarAgentControls";
 import { ChannelMemberInviteCard } from "./ChannelMemberInviteCard";
 import { MembersSidebarMemberCard } from "./MembersSidebarMemberCard";
 import { useMembersSidebarActions } from "./useMembersSidebarActions";
+import { QuickAddAgentPopover } from "./QuickAddAgentPopover";
 
 type MembersSidebarProps = {
   channel: Channel | null;
   currentPubkey?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onOpenAddBotDialog?: () => void;
   onViewActivity?: (pubkey: string) => void;
 };
 
@@ -55,6 +58,7 @@ export function MembersSidebar({
   currentPubkey,
   open,
   onOpenChange,
+  onOpenAddBotDialog,
   onViewActivity,
 }: MembersSidebarProps) {
   const channelId = channel?.id ?? null;
@@ -92,12 +96,31 @@ export function MembersSidebar({
     enabled: open && rawMembers.length > 0,
   });
 
+  const presence = memberPresenceQuery.data;
+  const sortedBots = React.useMemo(() => {
+    if (!presence) return bots;
+    return [...bots].sort((a, b) => {
+      const aOnline = presence[normalizePubkey(a.pubkey)] === "online" ? 0 : 1;
+      const bOnline = presence[normalizePubkey(b.pubkey)] === "online" ? 0 : 1;
+      if (aOnline !== bOnline) return aOnline - bOnline;
+      return formatMemberName(a).localeCompare(formatMemberName(b));
+    });
+  }, [bots, presence]);
+
   const selfMember =
     rawMembers.find((member) => member.pubkey === currentPubkey) ?? null;
   const canManageMembers =
     selfMember?.role === "owner" || selfMember?.role === "admin";
   const isArchived =
     channel?.archivedAt !== null && channel?.archivedAt !== undefined;
+  const canAddAgents =
+    channel?.channelType !== "dm" &&
+    !isArchived &&
+    (channel?.visibility === "open" || canManageMembers);
+
+  const [isSidebarQuickAddOpen, setIsSidebarQuickAddOpen] =
+    React.useState(false);
+
   const managedAgentByPubkey = React.useMemo(
     () =>
       new Map(
@@ -110,11 +133,11 @@ export function MembersSidebar({
   );
   const controllableManagedBots = React.useMemo(
     () =>
-      bots.flatMap((member) => {
+      sortedBots.flatMap((member) => {
         const agent = managedAgentByPubkey.get(normalizePubkey(member.pubkey));
         return agent ? [agent] : [];
       }),
-    [bots, managedAgentByPubkey],
+    [sortedBots, managedAgentByPubkey],
   );
   const canRemoveMember = React.useCallback(
     (member: ChannelMember) => {
@@ -129,7 +152,7 @@ export function MembersSidebar({
   );
   const removableManagedBots = React.useMemo(
     () =>
-      bots.flatMap((member) => {
+      sortedBots.flatMap((member) => {
         if (!canRemoveMember(member)) {
           return [];
         }
@@ -137,7 +160,7 @@ export function MembersSidebar({
         const agent = managedAgentByPubkey.get(normalizePubkey(member.pubkey));
         return agent ? [agent] : [];
       }),
-    [bots, canRemoveMember, managedAgentByPubkey],
+    [sortedBots, canRemoveMember, managedAgentByPubkey],
   );
   const {
     actionErrorMessage,
@@ -267,29 +290,51 @@ export function MembersSidebar({
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-semibold tracking-tight">Bots</h2>
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {bots.length}
+                  {sortedBots.length}
                 </span>
-                {hasControllableManagedBots ? (
-                  <MembersSidebarAgentControls
-                    canBulkRemove={hasRemovableManagedBots}
-                    canBulkRespawn={hasControllableManagedBots}
-                    canBulkStop={hasStoppableManagedBots}
-                    disabled={isActionPending || isArchived}
-                    onRemoveAll={() => {
-                      void handleRemoveAll();
-                    }}
-                    onRespawnAll={() => {
-                      void handleRespawnAll();
-                    }}
-                    onStopAll={() => {
-                      void handleStopAll();
-                    }}
-                  />
-                ) : null}
+                <div className="ml-auto flex items-center gap-0.5">
+                  {canAddAgents ? (
+                    <QuickAddAgentPopover
+                      channelId={channelId}
+                      open={isSidebarQuickAddOpen}
+                      onOpenChange={setIsSidebarQuickAddOpen}
+                      onMoreOptions={() => {
+                        setIsSidebarQuickAddOpen(false);
+                        onOpenAddBotDialog?.();
+                      }}
+                    >
+                      <button
+                        aria-label="Add agent to channel"
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        data-testid="sidebar-add-agent-trigger"
+                        type="button"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    </QuickAddAgentPopover>
+                  ) : null}
+                  {hasControllableManagedBots ? (
+                    <MembersSidebarAgentControls
+                      canBulkRemove={hasRemovableManagedBots}
+                      canBulkRespawn={hasControllableManagedBots}
+                      canBulkStop={hasStoppableManagedBots}
+                      disabled={isActionPending || isArchived}
+                      onRemoveAll={() => {
+                        void handleRemoveAll();
+                      }}
+                      onRespawnAll={() => {
+                        void handleRespawnAll();
+                      }}
+                      onStopAll={() => {
+                        void handleStopAll();
+                      }}
+                    />
+                  ) : null}
+                </div>
               </div>
               <div className="space-y-2" data-testid="members-sidebar-bots">
-                {bots.length > 0 ? (
-                  bots.map((member) => renderMemberCard(member, true))
+                {sortedBots.length > 0 ? (
+                  sortedBots.map((member) => renderMemberCard(member, true))
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     {membersQuery.isLoading
