@@ -4293,6 +4293,7 @@ dependencies = [
  "nostr",
  "rand 0.10.1",
  "reqwest 0.13.3",
+ "rust-s3",
  "rustls",
  "serde",
  "serde_json",
