@@ -79,17 +79,18 @@ Two operations act on `R`:
   `refname ↦ (old_id, new_id)`.
 
 **The manifest pointer is the sole source of truth.** In Sprout, a successful
-push also publishes a relay event (kind:30618) so subscribers learn refs moved.
+push may also publish a relay event (kind:30618) so subscribers learn refs moved.
 That event is a *derived notification*, never the commit point: a push has
 happened iff `M_R` was CAS-swapped (A3), regardless of whether — or when — any
 event is published. Relay events can lag, duplicate, or replay; subscribers must
 treat them only as a signal to re-read `pointer(R)`, never as ref state. The
 dangerous inversion — "the push succeeded because the event published" — would
 substitute relay ordering for manifest ordering and reintroduce the lost-update
-hole A3 closes. (This is a real behavioral obligation, not a restatement: the
-current code publishes the event as the de-facto commit step — see
-§Implementation Correspondence — and porting it to manifest-CAS is the change,
-not just a storage swap.)
+hole A3 closes. (This is a real behavioral obligation, not a restatement: today
+the commit point is the local filesystem — `receive-pack` updating the bare repo,
+with the relay event published best-effort afterward — so making manifest-CAS the
+commit, with the event derived from it, is the change, not just a storage swap.
+See §Implementation Correspondence.)
 
 ## Axioms
 
