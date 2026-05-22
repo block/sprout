@@ -86,7 +86,7 @@ pub async fn handle_side_effects(
         }
         9021 => handle_join_request(event, state).await,
         9022 => handle_leave_request(event, state).await,
-        // NIP-34: Git repo announcement → create bare repo on disk.
+        // NIP-34: Git repo announcement → reserve name + seed manifest pointer.
         KIND_GIT_REPO_ANNOUNCEMENT => handle_git_repo_announcement(event, state).await,
         // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
@@ -1653,18 +1653,16 @@ fn validate_repo_id(repo_id: &str) -> bool {
 
 /// Handle kind:30617 (NIP-34 Git Repository Announcement).
 ///
-/// Creates a bare git repo on disk when a repo announcement event is stored.
-/// The event's `d` tag is the repo identifier; the pubkey is the owner.
+/// Reserves the repo name and seeds its empty-manifest pointer when a repo
+/// announcement event is stored. The event's `d` tag is the repo identifier;
+/// the pubkey is the owner. No bare repo is created on disk — runtime reads
+/// and writes hydrate an ephemeral repo from object storage per request.
 ///
 /// Security hardening:
 /// - Repo name validated: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`
-/// - Owner pubkey validated: exactly 64 lowercase hex chars
-/// - Path canonicalized and verified to start with repo root
-/// - Pre-receive hook installed for permission enforcement (only hook enabled)
+/// - Name reserved atomically (`.names/<repo_id>`), unique across owners
 /// - Per-pubkey repo count limit enforced
 async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
-    use tokio::process::Command;
-
     // Extract repo identifier from d tag (required for NIP-33 parameterized replaceable events).
     let repo_id =
         extract_tag_value(event, "d").ok_or_else(|| anyhow::anyhow!("kind:30617 missing d tag"))?;
@@ -1677,53 +1675,74 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
 
     let owner_hex = nostr::util::hex::encode(event.pubkey.serialize());
 
-    // Resolve repo path.
-    let git_repo_root = &state.config.git_repo_path;
-
-    // Defensive: ensure the configured root exists. Config bootstrap creates
-    // this at startup, but a misconfigured deployment or out-of-band deletion
-    // would otherwise cause every canonicalize() below to fail and the
-    // side-effect to be silently swallowed by the ingest pipeline, leaving the
-    // repo announcement stored but no bare repo on disk (push then 500s with
-    // "git service misconfigured").
-    if let Err(e) = std::fs::create_dir_all(git_repo_root) {
-        return Err(anyhow::anyhow!(
-            "failed to ensure git_repo_path {} exists: {e}",
-            git_repo_root.display()
-        ));
-    }
-
-    let repo_dir = git_repo_root
-        .join(&owner_hex)
-        .join(format!("{repo_id}.git"));
-
-    // If repo already exists, this is an update to the announcement — nothing to do on disk.
-    // Backfill the name reservation if missing (handles upgrade from pre-uniqueness-check state).
-    if repo_dir.exists() {
-        let names_dir = git_repo_root.join(".names");
-        let _ = std::fs::create_dir_all(&names_dir);
-        let _ = std::fs::create_dir(names_dir.join(&repo_id));
-        info!(
-            repo_id = %repo_id,
-            owner = %owner_hex,
-            "kind:30617 repo announcement updated (repo already exists)"
-        );
-        return Ok(());
-    }
-
-    // Global uniqueness: repo names are unique across all owners (relay = single namespace).
-    // The relay signs kind:30618 ref-state with d-tag = repo_name, so collisions would
-    // cause one owner's ref state to overwrite another's.
+    // The relay holds no persistent per-repo disk state: runtime reads and
+    // writes hydrate an ephemeral bare repo from object storage per request
+    // (see `api::git::hydrate`). Announce only (1) reserves the repo name and
+    // (2) seeds the empty-manifest pointer that makes the repo clone-able.
     //
-    // Atomicity: std::fs::create_dir fails with AlreadyExists if the directory exists,
-    // preventing TOCTOU races between concurrent kind:30617 events. The .names/ directory
-    // acts as a global name reservation index.
+    // `.names/<repo_id>` is the relay's name registry. Each reservation holds
+    // an `owner` file naming the announcer. It serves three jobs at once:
+    //   - uniqueness: `create_dir` is atomic, so concurrent kind:30617 events
+    //     for the same name can't both claim it (TOCTOU-free);
+    //   - idempotent re-announce: a reservation owned by the same pubkey is an
+    //     update, not a collision;
+    //   - per-pubkey quota: count the reservations whose `owner` matches.
+    //
+    // This is the one local-disk simplification in v1: separate relay
+    // instances with separate disks would each grant the name, with the CAS
+    // pointer (not this registry) preventing actual ref-state corruption. A
+    // CAS-backed name index is the multi-instance follow-up.
+    let git_repo_root = &state.config.git_repo_path;
     let names_dir = git_repo_root.join(".names");
     std::fs::create_dir_all(&names_dir)
         .map_err(|e| anyhow::anyhow!("failed to create name reservation index: {e}"))?;
+
     let reservation = names_dir.join(&repo_id);
+    let owner_marker = reservation.join("owner");
+
+    // Re-announce by the same owner is a no-op update; a name held by anyone
+    // else is a collision (the relay signs kind:30618 with d-tag = repo_name,
+    // so a shared name would let one owner overwrite another's ref state).
+    if reservation.exists() {
+        match std::fs::read_to_string(&owner_marker) {
+            Ok(existing) if existing == owner_hex => {
+                info!(
+                    repo_id = %repo_id,
+                    owner = %owner_hex,
+                    "kind:30617 repo announcement updated (name already reserved)"
+                );
+                return Ok(());
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "repo name '{repo_id}' already taken by another owner"
+                ));
+            }
+        }
+    }
+
+    // Per-pubkey repo count limit: reservations owned by this pubkey.
+    let limit = state.config.git_max_repos_per_pubkey as usize;
+    let owned = std::fs::read_dir(&names_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    std::fs::read_to_string(e.path().join("owner"))
+                        .map(|o| o == owner_hex)
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if owned >= limit {
+        return Err(anyhow::anyhow!("repo limit exceeded: {owned} >= {limit}"));
+    }
+
+    // Claim the name. `create_dir` (not `create_dir_all`) fails AlreadyExists
+    // if a concurrent announce won the race, closing the TOCTOU window above.
     match std::fs::create_dir(&reservation) {
-        Ok(()) => {} // Name claimed successfully.
+        Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(anyhow::anyhow!(
                 "repo name '{repo_id}' already taken by another owner"
@@ -1735,141 +1754,10 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             ));
         }
     }
-
-    // Per-pubkey repo count limit.
-    let owner_dir = git_repo_root.join(&owner_hex);
-    if owner_dir.exists() {
-        let count = std::fs::read_dir(&owner_dir)
-            .map(|entries| entries.filter_map(|e| e.ok()).count())
-            .unwrap_or(0);
-        let limit = state.config.git_max_repos_per_pubkey as usize;
-        if count >= limit {
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("repo limit exceeded: {count} >= {limit}"));
-        }
+    if let Err(e) = std::fs::write(&owner_marker, &owner_hex) {
+        let _ = std::fs::remove_dir_all(&reservation);
+        return Err(anyhow::anyhow!("failed to record repo owner: {e}"));
     }
-
-    // Create parent directory.
-    if let Err(e) = tokio::fs::create_dir_all(&repo_dir).await {
-        let _ = std::fs::remove_dir(&reservation);
-        return Err(anyhow::anyhow!(
-            "failed to create repo directory {}: {e}",
-            repo_dir.display()
-        ));
-    }
-
-    // Path canonicalization: verify resolved path is under the repo root.
-    let canonical_root = match git_repo_root.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("failed to canonicalize repo root: {e}"));
-        }
-    };
-    let canonical_repo = match repo_dir.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("failed to canonicalize repo path: {e}"));
-        }
-    };
-    if !canonical_repo.starts_with(&canonical_root) {
-        let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-        let _ = std::fs::remove_dir(&reservation);
-        return Err(anyhow::anyhow!(
-            "repo path escapes root: {} not under {}",
-            canonical_repo.display(),
-            canonical_root.display()
-        ));
-    }
-
-    // Initialize bare repo with main as default branch.
-    let output = match Command::new("git")
-        .arg("init")
-        .arg("--bare")
-        .arg("-b")
-        .arg("main")
-        .arg(&repo_dir)
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("HOME", "/dev/null")
-        .output()
-        .await
-    {
-        Ok(o) => o,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("git init --bare failed to spawn: {e}"));
-        }
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-        let _ = std::fs::remove_dir(&reservation);
-        return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
-    }
-
-    // Git config for Smart HTTP compatibility.
-    for (key, value) in [
-        ("http.receivepack", "true"),
-        ("receive.denyNonFastForwards", "false"),
-        ("uploadpack.allowTipSHA1InWant", "true"),
-        ("uploadpack.allowReachableSHA1InWant", "true"),
-    ] {
-        match Command::new("git")
-            .args(["config", "--file"])
-            .arg(repo_dir.join("config"))
-            .args([key, value])
-            .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("HOME", "/dev/null")
-            .output()
-            .await
-        {
-            Ok(output) if !output.status.success() => {
-                tracing::warn!(
-                    key,
-                    value,
-                    status = %output.status,
-                    "git config failed for bare repo"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    key,
-                    value,
-                    error = %e,
-                    "git config command failed for bare repo"
-                );
-            }
-            _ => {}
-        }
-    }
-
-    // Install pre-receive hook for permission enforcement.
-    // This replaces the old "disable all hooks" approach — we now have our own
-    // hook that calls back to the relay's internal policy endpoint.
-    // Only pre-receive is installed; all other hook slots remain empty (RCE prevention).
-    // SECURITY: Hook installation is FATAL. If the hook can't be installed,
-    // the repo would be unprotected. Better to fail repo creation than allow
-    // an unprotected repo to exist. The receive_pack handler also checks hook
-    // existence as a belt-and-suspenders measure.
-    crate::api::git::hook::install_hook(&repo_dir)
-        .await
-        .map_err(|e| {
-            // Clean up the repo directory since it's unusable without the hook.
-            let _ = std::fs::remove_dir_all(&repo_dir);
-            let _ = std::fs::remove_dir(&reservation);
-            anyhow::anyhow!("failed to install pre-receive hook: {e}")
-        })?;
 
     // Seed the empty-manifest pointer in object storage. Establishes the
     // invariant "repo announced ⟺ pointer exists" so the read path can rely
@@ -1879,20 +1767,17 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
     seed_manifest_pointer(state, &owner_hex, &repo_id)
         .await
         .map_err(|e| {
-            // Pointer seed failure leaves the on-disk repo + name reservation
-            // without a clone-able pointer, which is exactly the broken state
-            // the seed exists to prevent. Unwind both so the announce is
-            // either fully consummated or fully rolled back.
-            let _ = std::fs::remove_dir_all(&repo_dir);
-            let _ = std::fs::remove_dir(&reservation);
+            // A reserved name without a clone-able pointer is exactly the
+            // broken state the seed exists to prevent. Release the reservation
+            // so the announce is either fully consummated or fully rolled back.
+            let _ = std::fs::remove_dir_all(&reservation);
             anyhow::anyhow!("failed to seed manifest pointer: {e}")
         })?;
 
     info!(
         repo_id = %repo_id,
         owner = %owner_hex,
-        path = %repo_dir.display(),
-        "bare git repo created from kind:30617 announcement"
+        "kind:30617 repo announced (name reserved, manifest pointer seeded)"
     );
 
     // Derived after the pointer commits: kind:30618 ref-state event over the

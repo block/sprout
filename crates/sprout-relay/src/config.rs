@@ -100,8 +100,9 @@ pub struct Config {
     pub ephemeral_ttl_override: Option<i32>,
 
     // ── Git server configuration ─────────────────────────────────────────────
-    /// Root directory for bare git repositories.
-    /// Repos are stored at `{git_repo_path}/{owner_hex}/{repo_id}.git/`.
+    /// Root directory for the relay's local git state. No per-repo bare repos
+    /// live here — runtime reads/writes hydrate ephemeral repos from object
+    /// storage. Holds only the name-reservation index at `{git_repo_path}/.names/`.
     pub git_repo_path: std::path::PathBuf,
     /// Maximum pack file size for git push (bytes). Default: 500 MB.
     pub git_max_pack_bytes: u64,
