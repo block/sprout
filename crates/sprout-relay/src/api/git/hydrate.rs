@@ -21,7 +21,11 @@
 //! cleans up. Every read currently re-hydrates from scratch — naive but
 //! correct; caching is named follow-up work.
 
-#![allow(dead_code)] // wired in by transport.rs in a follow-up commit
+// Public surface is consumed by `transport.rs` after Eva's `AppState::git_store`
+// wires in; the items below are intentionally `pub` to keep the consumer-side
+// diff minimal once integration lands. We narrow `#[allow(dead_code)]` to those
+// specific items rather than blanketing the module — that lets the compiler
+// still catch accidental dead code inside `hydrate.rs` itself.
 
 use std::path::{Path, PathBuf};
 
@@ -52,19 +56,11 @@ impl HydratedRepo {
 
 /// Hydration errors.
 ///
-/// `PointerNotFound` is the "repo doesn't exist" signal — callers should map it
-/// to HTTP 404. Everything else is a backend / data error → 5xx.
+/// "Repo doesn't exist" is signalled by `Ok(None)` from `hydrate_for_read`,
+/// not a variant here — the type system enforces the 404-vs-5xx split.
+/// Every variant of `HydrateError` maps to a backend / data error → HTTP 5xx.
 #[derive(Debug, thiserror::Error)]
 pub enum HydrateError {
-    /// The pointer for this repo does not exist — repo was never created.
-    /// Caller should serve HTTP 404, not synthesize an empty repo.
-    #[error("pointer not found for {owner}/{repo}")]
-    PointerNotFound {
-        /// Repo owner.
-        owner: String,
-        /// Repo name.
-        repo: String,
-    },
     /// Pointer body was not a valid manifest digest (64 hex chars).
     #[error("pointer body is not a 64-char hex digest")]
     InvalidPointer,
