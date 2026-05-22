@@ -1,0 +1,460 @@
+//! Read-path hydration: materialize an ephemeral bare repo from an object-store
+//! manifest, so the existing `upload-pack`/`info-refs` subprocess runner can
+//! serve it.
+//!
+//! Flow (spec §Read):
+//!
+//! 1. GET pointer → manifest digest.
+//! 2. GET manifest (digest-verified) → parsed [`Manifest`].
+//! 3. GET every pack the manifest names (digest-verified, in parallel).
+//! 4. **Phase 1** — for each pack: write `pack-<hex>.pack`, run
+//!    `git index-pack` to materialize `.idx`. Failure here tears down the
+//!    tempdir with no refs/HEAD ever written.
+//! 5. **Phase 2** — only after all packs are indexed: write loose refs and
+//!    HEAD from the manifest.
+//!
+//! The phase boundary is load-bearing: `upload-pack` walks refs → objects;
+//! a ref pointing into a not-yet-indexed pack is an opaque protocol failure
+//! mid-stream. Sami/Max named this explicitly.
+//!
+//! The returned [`HydratedRepo`] owns a [`tempfile::TempDir`]; dropping it
+//! cleans up. Every read currently re-hydrates from scratch — naive but
+//! correct; caching is named follow-up work.
+
+#![allow(dead_code)] // wired in by transport.rs in a follow-up commit
+
+use std::path::{Path, PathBuf};
+
+use futures_util::future::try_join_all;
+use tempfile::TempDir;
+use tokio::process::Command;
+
+use super::manifest::{Manifest, ManifestError};
+use super::store::{GitStore, StoreError};
+
+/// A bare repo hydrated to a temporary directory.
+///
+/// The tempdir is removed when this value is dropped — callers must keep the
+/// handle alive for the duration of the subprocess that reads from `path()`.
+pub struct HydratedRepo {
+    /// Owns the lifetime of the on-disk tree.
+    _tempdir: TempDir,
+    /// Absolute path to the bare repo root.
+    path: PathBuf,
+}
+
+impl HydratedRepo {
+    /// Path to the bare repository — pass this to `upload-pack`/`info-refs`.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Hydration errors.
+///
+/// `PointerNotFound` is the "repo doesn't exist" signal — callers should map it
+/// to HTTP 404. Everything else is a backend / data error → 5xx.
+#[derive(Debug, thiserror::Error)]
+pub enum HydrateError {
+    /// The pointer for this repo does not exist — repo was never created.
+    /// Caller should serve HTTP 404, not synthesize an empty repo.
+    #[error("pointer not found for {owner}/{repo}")]
+    PointerNotFound {
+        /// Repo owner.
+        owner: String,
+        /// Repo name.
+        repo: String,
+    },
+    /// Pointer body was not a valid manifest digest (64 hex chars).
+    #[error("pointer body is not a 64-char hex digest")]
+    InvalidPointer,
+    /// Manifest serde / version error.
+    #[error("manifest: {0}")]
+    Manifest(#[from] ManifestError),
+    /// Store-level error (GET failure, digest mismatch, etc.).
+    #[error("store: {0}")]
+    Store(#[from] StoreError),
+    /// `git init --bare`, `git index-pack`, or filesystem operation failed.
+    #[error("hydrate: {0}")]
+    Hydrate(String),
+}
+
+/// The standard pointer key for `<owner>/<repo>`.
+pub fn pointer_key(owner: &str, repo: &str) -> String {
+    // Strip a trailing `.git` if the caller passed it; matches transport.rs.
+    let repo = repo.strip_suffix(".git").unwrap_or(repo);
+    format!("pointers/{owner}/{repo}")
+}
+
+/// Hydrate a bare repo for read (`upload-pack` / `info-refs`).
+///
+/// Returns `Ok(None)` when the pointer is absent — the repo doesn't exist;
+/// caller should respond 404. `Ok(Some(_))` is a usable bare repo. Any other
+/// failure is a backend/data error.
+pub async fn hydrate_for_read(
+    store: &GitStore,
+    owner: &str,
+    repo: &str,
+) -> Result<Option<HydratedRepo>, HydrateError> {
+    let pkey = pointer_key(owner, repo);
+
+    // Step 1: pointer → manifest digest.
+    let (_etag, pointer_bytes) = match store.get_pointer(&pkey).await? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let digest = std::str::from_utf8(&pointer_bytes)
+        .map_err(|_| HydrateError::InvalidPointer)?
+        .trim();
+    if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(HydrateError::InvalidPointer);
+    }
+
+    // Step 2: manifest (digest-verified).
+    let manifest_key = format!("manifests/{digest}");
+    let manifest_bytes = store.get_verified(&manifest_key, digest).await?;
+    let manifest = Manifest::from_bytes(&manifest_bytes)?;
+
+    // Step 3: fetch all packs in parallel, each digest-verified by its key.
+    let pack_fetches = manifest.packs.iter().map(|key| async move {
+        let digest = key
+            .strip_prefix("packs/")
+            .ok_or_else(|| HydrateError::Hydrate(format!("malformed pack key {key:?}")))?;
+        let bytes = store.get_verified(key, digest).await?;
+        Ok::<_, HydrateError>((digest.to_string(), bytes))
+    });
+    let packs = try_join_all(pack_fetches).await?;
+
+    // Init bare repo.
+    let tempdir = TempDir::new().map_err(|e| HydrateError::Hydrate(format!("tempdir: {e}")))?;
+    let path = tempdir.path().to_path_buf();
+    run_git(&path, &["init", "--bare", "--quiet"]).await?;
+
+    // Phase 1: write + index every pack. Any failure here aborts before any
+    // ref is written — failed hydrate ⇒ no advertised refs.
+    let pack_dir = path.join("objects").join("pack");
+    for (digest, bytes) in &packs {
+        let pack_path = pack_dir.join(format!("pack-{digest}.pack"));
+        tokio::fs::write(&pack_path, bytes)
+            .await
+            .map_err(|e| HydrateError::Hydrate(format!("write pack {digest}: {e}")))?;
+        // No `--strict`: `index-pack` already validates structural integrity
+        // (CRC, type tags, internal refs). `--strict` adds connectivity-graph
+        // checks, which would re-prove what manifest.packs already covers by
+        // construction (Inv_Closed, write-path invariant). Latency cost on
+        // every clone is not worth re-proving a write-path bug.
+        run_git(&path, &["index-pack", pack_path.to_str().unwrap()]).await?;
+    }
+
+    // Phase 2: install refs and HEAD. After this point, the repo advertises.
+    for (refname, oid) in &manifest.refs {
+        // Defensive: refuse any ref name that escapes the repo or contains
+        // null/newline. The writer should already have sanitized; double-check
+        // because we're about to write file paths.
+        if !is_safe_refname(refname) {
+            return Err(HydrateError::Hydrate(format!(
+                "manifest contains unsafe refname {refname:?}"
+            )));
+        }
+        if !is_hex_oid(oid) {
+            return Err(HydrateError::Hydrate(format!(
+                "manifest ref {refname} has malformed oid"
+            )));
+        }
+        let ref_path = path.join(refname);
+        if let Some(parent) = ref_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| HydrateError::Hydrate(format!("mkdir {parent:?}: {e}")))?;
+        }
+        // Loose ref format: oid + newline.
+        tokio::fs::write(&ref_path, format!("{oid}\n"))
+            .await
+            .map_err(|e| HydrateError::Hydrate(format!("write ref {refname}: {e}")))?;
+    }
+
+    // HEAD: protocol formatting (`ref: <name>\n`) happens here, not in storage.
+    if !is_safe_refname(&manifest.head) {
+        return Err(HydrateError::Hydrate(format!(
+            "manifest head {:?} is not a safe ref name",
+            manifest.head
+        )));
+    }
+    tokio::fs::write(path.join("HEAD"), format!("ref: {}\n", manifest.head))
+        .await
+        .map_err(|e| HydrateError::Hydrate(format!("write HEAD: {e}")))?;
+
+    Ok(Some(HydratedRepo {
+        _tempdir: tempdir,
+        path,
+    }))
+}
+
+/// Run `git <args>` in `cwd`, fail on non-zero exit.
+async fn run_git(cwd: &Path, args: &[&str]) -> Result<(), HydrateError> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(cwd).args(args).kill_on_drop(true);
+    // Match transport.rs's harden_git_env semantics for subprocesses: clear
+    // user/system git config so behavior is reproducible.
+    cmd.env_clear();
+    if let Ok(path) = std::env::var("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("HOME", cwd); // forces $HOME/.gitconfig lookups to miss
+
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| HydrateError::Hydrate(format!("spawn git {args:?}: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(HydrateError::Hydrate(format!(
+            "git {args:?} exited {}: {stderr}",
+            output.status
+        )));
+    }
+    Ok(())
+}
+
+/// Conservative refname validation — refuses traversal, control chars, and
+/// non-`refs/` prefixes. The writer should already enforce this; we re-check
+/// because we're about to use it as a file path.
+fn is_safe_refname(s: &str) -> bool {
+    if !s.starts_with("refs/") {
+        return false;
+    }
+    if s.contains("..") || s.contains("//") || s.starts_with('/') || s.ends_with('/') {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '.' | '-'))
+}
+
+fn is_hex_oid(s: &str) -> bool {
+    // Accept both SHA-1 (40) and SHA-256 (64) oids — sprout pins SHA-1 today
+    // but future-proof for the algorithm transition.
+    (s.len() == 40 || s.len() == 64) && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn safe_refnames() {
+        assert!(is_safe_refname("refs/heads/main"));
+        assert!(is_safe_refname("refs/tags/v1.0.0"));
+        assert!(is_safe_refname("refs/heads/feat/cas-publish"));
+        assert!(!is_safe_refname("refs/heads/../escape"));
+        assert!(!is_safe_refname("HEAD"));
+        assert!(!is_safe_refname("refs/heads/"));
+        assert!(!is_safe_refname("/refs/heads/main"));
+        assert!(!is_safe_refname("refs/heads/main\nrefs/heads/evil"));
+        assert!(!is_safe_refname("refs/heads/main\0"));
+    }
+
+    #[test]
+    fn hex_oids() {
+        assert!(is_hex_oid(&"a".repeat(40))); // SHA-1
+        assert!(is_hex_oid(&"a".repeat(64))); // SHA-256
+        assert!(!is_hex_oid(&"a".repeat(39)));
+        assert!(!is_hex_oid(&"g".repeat(40))); // non-hex
+        assert!(!is_hex_oid(""));
+    }
+
+    #[test]
+    fn pointer_key_strips_dot_git() {
+        assert_eq!(pointer_key("alice", "myrepo"), "pointers/alice/myrepo");
+        assert_eq!(pointer_key("alice", "myrepo.git"), "pointers/alice/myrepo");
+    }
+
+    // -------- Live MinIO + real git roundtrip ----------------------------------
+    //
+    // Run manually:
+    //   SPROUT_GIT_S3_PROBE=1 cargo test -p sprout-relay --lib \
+    //     api::git::hydrate::tests::live -- --nocapture --test-threads=1
+
+    fn probe_enabled() -> bool {
+        std::env::var("SPROUT_GIT_S3_PROBE").as_deref() == Ok("1")
+    }
+
+    fn store() -> GitStore {
+        GitStore::new(
+            "http://localhost:9000",
+            "sprout_dev",
+            "sprout_dev_secret",
+            "sprout-git",
+        )
+        .expect("connect minio")
+    }
+
+    /// Build a tiny on-disk repo, return (pack bytes, head_oid).
+    async fn build_source_repo() -> (Vec<u8>, String) {
+        let src = TempDir::new().unwrap();
+        run_git(src.path(), &["init", "--quiet", "--initial-branch=main"])
+            .await
+            .unwrap();
+        run_git(src.path(), &["config", "user.email", "probe@test"])
+            .await
+            .unwrap();
+        run_git(src.path(), &["config", "user.name", "probe"])
+            .await
+            .unwrap();
+        tokio::fs::write(src.path().join("hello.txt"), b"hello\n")
+            .await
+            .unwrap();
+        run_git(src.path(), &["add", "hello.txt"]).await.unwrap();
+        run_git(src.path(), &["commit", "-m", "init", "--quiet"])
+            .await
+            .unwrap();
+        run_git(src.path(), &["repack", "-a", "-d", "--quiet"])
+            .await
+            .unwrap();
+
+        // Find the single pack file and read it.
+        let pack_dir = src.path().join(".git").join("objects").join("pack");
+        let mut packs = vec![];
+        let mut rd = tokio::fs::read_dir(&pack_dir).await.unwrap();
+        while let Some(entry) = rd.next_entry().await.unwrap() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("pack") {
+                packs.push(p);
+            }
+        }
+        assert_eq!(packs.len(), 1, "expected exactly one pack");
+        let pack_bytes = tokio::fs::read(&packs[0]).await.unwrap();
+
+        // Read the HEAD oid.
+        let mut cmd = Command::new("git");
+        cmd.current_dir(src.path())
+            .args(["rev-parse", "HEAD"])
+            .kill_on_drop(true);
+        let out = cmd.output().await.unwrap();
+        let head_oid = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+        (pack_bytes, head_oid)
+    }
+
+    #[tokio::test]
+    async fn live_hydrate_roundtrip() {
+        if !probe_enabled() {
+            return;
+        }
+        let st = store();
+
+        // Build a real source repo, capture its pack and HEAD oid.
+        let (pack_bytes, head_oid) = build_source_repo().await;
+
+        // Upload pack and manifest to S3 under a unique pointer key.
+        let pack_key = st.put_pack(&pack_bytes).await.expect("put_pack");
+        let mut refs = BTreeMap::new();
+        refs.insert("refs/heads/main".to_string(), head_oid.clone());
+        let manifest = Manifest {
+            version: 1,
+            head: "refs/heads/main".into(),
+            refs,
+            packs: vec![pack_key.clone()],
+            parent: None,
+        };
+        let manifest_bytes = manifest.canonical_bytes().expect("serialize");
+        let manifest_key = st
+            .put_manifest(&manifest_bytes)
+            .await
+            .expect("put_manifest");
+        let manifest_digest = manifest_key.strip_prefix("manifests/").unwrap();
+
+        let owner = format!("probe-{}", uuid::Uuid::new_v4());
+        let repo = "hello";
+        let pkey = pointer_key(&owner, repo);
+        match st
+            .put_pointer(
+                &pkey,
+                manifest_digest.as_bytes(),
+                super::super::store::Precond::IfNoneMatchStar,
+            )
+            .await
+            .expect("put_pointer")
+        {
+            super::super::store::CasOutcome::Won(_) => {}
+            super::super::store::CasOutcome::LostRace => panic!("first INM* must win"),
+        }
+
+        // Hydrate.
+        let hydrated = hydrate_for_read(&st, &owner, repo)
+            .await
+            .expect("hydrate")
+            .expect("hydrate Some");
+        eprintln!("hydrated to {}", hydrated.path().display());
+
+        // The hydrated repo must list the same ref with the same oid.
+        let mut cmd = Command::new("git");
+        cmd.current_dir(hydrated.path())
+            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+            .kill_on_drop(true);
+        let out = cmd.output().await.unwrap();
+        let listing = String::from_utf8(out.stdout).unwrap();
+        eprintln!("for-each-ref: {listing}");
+        assert!(
+            listing.contains(&format!("refs/heads/main {head_oid}")),
+            "ref/oid mismatch in hydrated repo: {listing}"
+        );
+
+        // HEAD points at refs/heads/main.
+        let head_file = tokio::fs::read_to_string(hydrated.path().join("HEAD"))
+            .await
+            .unwrap();
+        assert_eq!(head_file.trim(), "ref: refs/heads/main");
+
+        // git rev-parse HEAD resolves to the same oid.
+        let mut rp = Command::new("git");
+        rp.current_dir(hydrated.path())
+            .args(["rev-parse", "HEAD"])
+            .kill_on_drop(true);
+        let resolved = String::from_utf8(rp.output().await.unwrap().stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(resolved, head_oid, "HEAD did not resolve to original oid");
+
+        // Bonus: clone the hydrated repo and verify the file content survives.
+        let clone_target = TempDir::new().unwrap();
+        let mut clone = Command::new("git");
+        clone
+            .args([
+                "clone",
+                "--quiet",
+                hydrated.path().to_str().unwrap(),
+                clone_target.path().to_str().unwrap(),
+            ])
+            .kill_on_drop(true);
+        let cl_out = clone.output().await.unwrap();
+        assert!(
+            cl_out.status.success(),
+            "clone failed: {}",
+            String::from_utf8_lossy(&cl_out.stderr)
+        );
+        let hello = tokio::fs::read_to_string(clone_target.path().join("hello.txt"))
+            .await
+            .unwrap();
+        assert_eq!(hello, "hello\n");
+
+        eprintln!("✓ hydrate + clone roundtrip works");
+        // We leave the probe pointer/manifest/pack behind — the owner is
+        // UUID-namespaced so subsequent runs don't collide, and immutable
+        // objects accumulate by design (retention is a backend concern).
+        let _ = &pkey; // suppress unused warning when cleanup is omitted
+    }
+
+    #[tokio::test]
+    async fn live_hydrate_missing_pointer_returns_none() {
+        if !probe_enabled() {
+            return;
+        }
+        let st = store();
+        let owner = format!("nope-{}", uuid::Uuid::new_v4());
+        let result = hydrate_for_read(&st, &owner, "ghost").await.expect("ok");
+        assert!(result.is_none(), "missing pointer must surface as None");
+    }
+}
