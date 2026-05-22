@@ -468,10 +468,15 @@ pub async fn receive_pack(
         ("GIT_CONFIG_VALUE_0", hooks_dir),
     ];
 
-    // Snapshot refs before push — used to detect whether anything actually changed.
+    // Snapshot refs before push — used by the post-push fence to detect
+    // whether anything actually changed.
     let refs_before = snapshot_refs(&validated.repo_path).await;
 
-    let response = run_git_service_with_env(
+    // Run receive-pack and obtain the *owned* subprocess output. Crucially we
+    // do NOT build a `Response` here — that work is delegated to
+    // `finalize_push`, which is the sole site that converts a push's
+    // `PackOutput` into a 2xx response (see the type docs on `PackOutput`).
+    let pack = run_git_subprocess(
         &state,
         &params.owner,
         &params.repo,
@@ -481,28 +486,36 @@ pub async fn receive_pack(
     )
     .await?;
 
-    // Post-push: publish kind:30618 ref state only if refs actually changed.
-    // Git smart HTTP returns 200 even on denied pushes (in-band rejection),
-    // so we compare before/after refs to avoid publishing on no-ops.
-    let state_clone = state.clone();
-    let owner = params.owner.clone();
-    let repo = params.repo.clone();
-    let pusher = auth.pubkey;
-    let repo_path = validated.repo_path.clone();
-    tokio::spawn(async move {
-        let refs_after = snapshot_refs(&repo_path).await;
-        if refs_before == refs_after {
-            return; // Nothing changed — skip publish.
-        }
-        if let Err(e) = publish_ref_state(&state_clone, &owner, &repo, &pusher).await {
-            warn!(error = %e, owner = %owner, repo = %repo, "failed to publish kind:30618");
-        }
-    });
-
-    Ok(response)
+    let ctx = PushContext {
+        pack,
+        refs_before,
+        owner: params.owner.clone(),
+        repo: params.repo.clone(),
+        pusher: auth.pubkey,
+        repo_path: validated.repo_path.clone(),
+    };
+    Ok(finalize_push(state, ctx).await)
 }
 
-/// Shared git service runner — spawns subprocess and streams I/O.
+/// Buffered output of a `git --stateless-rpc` subprocess.
+///
+/// The handler holds this as an owned value between subprocess completion and
+/// response construction — this is the *structural seam* the post-push fence
+/// relies on (see §Implementation Correspondence in
+/// `docs/git-on-object-storage.md`): nothing reaches the client until the
+/// handler has decided to build a `Response` from these bytes.
+pub(crate) struct PackOutput {
+    pub stdout: Vec<u8>,
+}
+
+/// Shared git service runner — spawns subprocess and builds the canonical
+/// `application/x-git-{service}-result` response. Used for `info/refs` and
+/// `upload-pack` (read paths, no post-publish fence).
+///
+/// Push (`receive-pack`) does **not** use this: it calls
+/// [`run_git_subprocess`] directly to obtain a [`PackOutput`], then dispatches
+/// to [`finalize_push`] which is the sole site that constructs a 2xx push
+/// response from that buffer.
 async fn run_git_service(
     state: &Arc<AppState>,
     owner: &str,
@@ -510,21 +523,25 @@ async fn run_git_service(
     service: &str,
     body: Body,
 ) -> Result<Response, Response> {
-    run_git_service_with_env(state, owner, repo, service, body, &[]).await
+    let output = run_git_subprocess(state, owner, repo, service, body, &[]).await?;
+    Ok(build_git_response(service, output))
 }
 
-/// Shared git service runner with extra environment variables.
+/// Spawn a `git --stateless-rpc <service>` subprocess, stream the request body
+/// to stdin, and return the buffered stdout/stderr/exit status as a
+/// [`PackOutput`].
 ///
-/// The `extra_env` pairs are set AFTER `harden_git_env` clears the environment,
-/// so they're available to the git subprocess and any hooks it spawns.
-async fn run_git_service_with_env(
+/// Critically returns the **owned** subprocess output rather than a `Response`,
+/// so callers can sequence post-subprocess work (e.g. the push fence) before
+/// any byte reaches the client.
+async fn run_git_subprocess(
     state: &Arc<AppState>,
     owner: &str,
     repo: &str,
     service: &str,
     body: Body,
     extra_env: &[(&str, String)],
-) -> Result<Response, Response> {
+) -> Result<PackOutput, Response> {
     let validated = validate_repo_path(owner, repo, &state.config.git_repo_path)?;
     if !validated.repo_path.exists() {
         return Err((StatusCode::NOT_FOUND, "repository not found").into_response());
@@ -609,33 +626,127 @@ async fn run_git_service_with_env(
         // Still return output — git protocol errors are communicated in-band.
     }
 
+    Ok(PackOutput {
+        stdout: output.stdout,
+    })
+}
+
+/// Build the canonical `application/x-git-{service}-result` response from a
+/// completed subprocess. For the push path this is **only** reached via
+/// [`finalize_push`]; for read paths it is reached via [`run_git_service`].
+fn build_git_response(service: &str, output: PackOutput) -> Response {
     let content_type = format!("application/x-git-{service}-result");
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from(output.stdout))
-        .unwrap())
+        .unwrap()
 }
 
 // ── Post-Push Event Publishing ───────────────────────────────────────────────
+
+/// Failure mode for a refs snapshot.
+///
+/// Both variants are treated identically by [`finalize_push`]: any `Err`
+/// collapses to the publish branch. Distinguished only for observability.
+#[derive(Debug)]
+pub(crate) enum SnapshotError {
+    /// `git for-each-ref` failed to spawn or exited non-zero.
+    CommandFailed,
+}
 
 /// Quick snapshot of current refs — used to detect whether a push changed anything.
 ///
 /// Returns the raw `git for-each-ref` output as a string. Comparison is by
 /// string equality — cheap and sufficient (same refs + same SHAs = same string).
-/// Returns empty string on error (conservative: will trigger publish on failure).
-async fn snapshot_refs(repo_path: &std::path::Path) -> String {
+///
+/// **Fallible by design.** An earlier version returned `""` on error, which
+/// hid a silent-skip bug: if *both* the pre- and post-push snapshots failed,
+/// the two empty strings compared equal and the handler skipped publish on
+/// a push that did change refs. [`finalize_push`] now matches on
+/// `Result<String, SnapshotError>` and treats any `Err` as "assume changed →
+/// publish fires," closing the double-failure hole. See
+/// `docs/git-on-object-storage.md` §Implementation Correspondence.
+async fn snapshot_refs(repo_path: &std::path::Path) -> Result<String, SnapshotError> {
     let mut cmd = Command::new("git");
     cmd.args(["for-each-ref", "--format=%(refname) %(objectname)"])
         .current_dir(repo_path);
     harden_git_env(&mut cmd);
     match cmd.output().await {
         Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).into_owned()
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         }
-        _ => String::new(), // Error → empty → won't match after → publish fires (safe default)
+        _ => Err(SnapshotError::CommandFailed),
     }
+}
+
+/// Per-push state captured between subprocess completion and response
+/// construction. This is the single argument shape `finalize_push` consumes —
+/// constructing a `PushContext` is the only path from a push subprocess to a
+/// 2xx push response.
+pub(crate) struct PushContext {
+    pub pack: PackOutput,
+    pub refs_before: Result<String, SnapshotError>,
+    pub owner: String,
+    pub repo: String,
+    pub pusher: nostr::PublicKey,
+    pub repo_path: PathBuf,
+}
+
+/// Decide whether the post-push fence should publish based on the pre- and
+/// post-push ref snapshots.
+///
+/// Deny-by-default: publish unless we have **both** successful snapshots that
+/// compare equal (i.e. a true no-op push). Any `Err` on either side — or any
+/// difference between the two — falls through to publish.
+///
+/// This is the function whose previous string-based predecessor had the
+/// silent-skip bug: when both snapshots failed, both became `""`, they
+/// "matched," and publish was skipped on a real push. Now both-`Err` is
+/// structurally outside the skip arm.
+pub(crate) fn should_publish(
+    before: &Result<String, SnapshotError>,
+    after: &Result<String, SnapshotError>,
+) -> bool {
+    !matches!((before, after), (Ok(b), Ok(a)) if b == a)
+}
+
+/// Finalize a push request: take a snapshot of the post-push ref state, decide
+/// whether anything changed, conditionally publish kind:30618 inline, and only
+/// then construct the success response.
+///
+/// **The fence (Theorem 1 in `docs/git-on-object-storage.md`):** for a push
+/// that changed refs (or where either ref snapshot failed), the `Response` is
+/// not constructed until `publish_ref_state` has been awaited. No-op pushes —
+/// where the before/after snapshots both succeed and compare equal — short-
+/// circuit at the `(Ok(b), Ok(a)) if b == a` arm and skip publish entirely,
+/// paying zero fence latency.
+///
+/// The match below is written deny-by-default: only the `(Ok, Ok)`-and-equal
+/// arm skips publish; every other state — including the previously load-
+/// bearing **double-failure case** where two failed `snapshot_refs` calls
+/// collide on the same value — falls through to the publish branch.
+async fn finalize_push(state: Arc<AppState>, ctx: PushContext) -> Response {
+    let refs_after = snapshot_refs(&ctx.repo_path).await;
+
+    if should_publish(&ctx.refs_before, &refs_after) {
+        if let Err(e) = publish_ref_state(&state, &ctx.owner, &ctx.repo, &ctx.pusher).await {
+            // Today publish failure (relay DB insert) is non-fatal — the pack
+            // is durable on disk and the client sees success. The S3 manifest-
+            // CAS evolution of this seam will instead map a precondition
+            // failure (412) to HTTP 409 here; see
+            // `docs/git-on-object-storage.md` §Implementation Correspondence.
+            warn!(
+                error = %e,
+                owner = %ctx.owner,
+                repo = %ctx.repo,
+                "failed to publish kind:30618"
+            );
+        }
+    }
+
+    build_git_response("receive-pack", ctx.pack)
 }
 
 /// Publish kind:30618 (repo state) after a successful push.
@@ -761,4 +872,72 @@ pub fn git_router(state: Arc<AppState>) -> Router {
         .route("/git/{owner}/{repo}/git-receive-pack", post(receive_pack))
         .layer(RequestBodyLimitLayer::new(body_limit))
         .with_state(state)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok(s: &str) -> Result<String, SnapshotError> {
+        Ok(s.to_string())
+    }
+    fn err() -> Result<String, SnapshotError> {
+        Err(SnapshotError::CommandFailed)
+    }
+
+    /// True no-op push: both snapshots succeed and are equal → publish skipped.
+    /// This is the fast path; the fence pays zero latency.
+    #[test]
+    fn should_publish_skips_on_noop() {
+        let before = ok("refs/heads/main abc123\n");
+        let after = ok("refs/heads/main abc123\n");
+        assert!(!should_publish(&before, &after));
+    }
+
+    /// Refs changed → publish fires. The fence engages and the response
+    /// must wait for `publish_ref_state` to complete before being built.
+    #[test]
+    fn should_publish_fires_on_changed_refs() {
+        let before = ok("refs/heads/main abc123\n");
+        let after = ok("refs/heads/main def456\n");
+        assert!(should_publish(&before, &after));
+    }
+
+    /// First push to an empty repo: before is `Ok("")`, after has real refs.
+    /// They differ; publish fires. Closes "what if the empty-repo case is
+    /// modeled by `Ok("")` instead of `Err`."
+    #[test]
+    fn should_publish_fires_on_first_push_to_empty_repo() {
+        let before = ok("");
+        let after = ok("refs/heads/main abc123\n");
+        assert!(should_publish(&before, &after));
+    }
+
+    /// Snapshot fails *before* the push: assume changed → publish fires.
+    /// Anything else would risk dropping a publish on a real ref change.
+    #[test]
+    fn should_publish_fires_when_before_errors() {
+        assert!(should_publish(&err(), &ok("refs/heads/main abc123\n")));
+    }
+
+    /// Snapshot fails *after* the push: assume changed → publish fires.
+    #[test]
+    fn should_publish_fires_when_after_errors() {
+        assert!(should_publish(&ok("refs/heads/main abc123\n"), &err()));
+    }
+
+    /// The bug this whole fix exists to close: both snapshots fail.
+    ///
+    /// The pre-refactor implementation returned `""` on error from
+    /// `snapshot_refs`, so two failed scans both produced `""`, compared
+    /// equal, and the handler silently skipped publish on a ref-changing
+    /// push. Under `Result<_, _>` this case is structurally outside the
+    /// skip arm: `(Err, Err)` does not match `(Ok(b), Ok(a)) if b == a`.
+    /// Publish fires.
+    #[test]
+    fn should_publish_fires_when_both_snapshots_error() {
+        assert!(should_publish(&err(), &err()));
+    }
 }
