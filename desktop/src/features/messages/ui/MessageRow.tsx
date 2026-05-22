@@ -302,7 +302,7 @@ export const MessageRow = React.memo(
             "group/message relative rounded-2xl px-2 py-1 transition-colors",
             "flex items-start gap-2.5",
             highlighted
-              ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:bg-primary/10 before:content-[''] sm:-mx-6 sm:px-8"
+              ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
               : "",
           )}
           data-message-id={message.id}

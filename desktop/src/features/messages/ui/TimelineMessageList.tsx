@@ -106,7 +106,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           className={cn(
             "relative flex flex-col gap-0",
             isHighlighted &&
-              "-mx-4 px-4 before:absolute before:-inset-y-1.5 before:inset-x-0 before:bg-primary/10 before:content-[''] sm:-mx-6 sm:px-6",
+              "-mx-4 px-4 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-6",
           )}
         >
           <MessageRow
