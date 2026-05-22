@@ -615,16 +615,19 @@ fn migrate_retired_personas(stored: &mut [PersonaRecord], now: &str) -> bool {
     let mut changed = false;
 
     for record in stored.iter_mut() {
-        if let Some((_, _original_name, original_prompt)) = RETIRED_PERSONAS
-            .iter()
-            .find(|(id, _, _)| *id == record.id)
+        if let Some((_, _original_name, original_prompt)) =
+            RETIRED_PERSONAS.iter().find(|(id, _, _)| *id == record.id)
         {
             let retired_suffix = " (retired)";
             if !record.display_name.ends_with(retired_suffix) {
                 let was_unmodified = record.system_prompt == *original_prompt;
                 eprintln!(
                     "sprout-desktop: persona-migration: retiring {} persona '{}' → '{} (retired)'",
-                    if was_unmodified { "unmodified" } else { "customized" },
+                    if was_unmodified {
+                        "unmodified"
+                    } else {
+                        "customized"
+                    },
                     record.display_name,
                     record.display_name,
                 );

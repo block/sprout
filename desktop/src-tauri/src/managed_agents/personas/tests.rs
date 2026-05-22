@@ -378,7 +378,9 @@ fn migrate_retires_unmodified_personas() {
         "all retired personas should be soft-deprecated, not removed",
     );
     assert!(
-        stored.iter().all(|r| r.display_name.ends_with(" (retired)")),
+        stored
+            .iter()
+            .all(|r| r.display_name.ends_with(" (retired)")),
         "all retired personas should have ' (retired)' suffix",
     );
     assert!(

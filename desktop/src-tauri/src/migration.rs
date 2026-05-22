@@ -139,8 +139,12 @@ pub fn migrate_legacy_data_dir(app: &tauri::AppHandle) {
 /// process-local runtime state that would cause the worktree instance
 /// to kill the canonical instance's running agents.
 fn scrub_managed_agents_runtime_state(path: &Path) {
-    let Ok(content) = std::fs::read_to_string(path) else { return };
-    let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else { return };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else {
+        return;
+    };
 
     const RUNTIME_FIELDS: &[&str] = &[
         "runtime_pid",
@@ -221,8 +225,10 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
 
     // Guard: skip if we ARE the canonical instance.
     // Use canonicalize to handle case-insensitive FS and symlinks.
-    let current_canonical = std::fs::canonicalize(&current_dir).unwrap_or_else(|_| current_dir.clone());
-    let source_canonical = std::fs::canonicalize(&canonical_dir).unwrap_or_else(|_| canonical_dir.clone());
+    let current_canonical =
+        std::fs::canonicalize(&current_dir).unwrap_or_else(|_| current_dir.clone());
+    let source_canonical =
+        std::fs::canonicalize(&canonical_dir).unwrap_or_else(|_| canonical_dir.clone());
     if current_canonical == source_canonical {
         return;
     }
@@ -565,9 +571,8 @@ mod tests {
         // The env-var guards (SPROUT_SHARE_IDENTITY, SPROUT_PRIVATE_KEY)
         // require a live Tauri AppHandle and are covered by integration
         // testing only.
-        let current = PathBuf::from(
-            "/Users/me/Library/Application Support/xyz.block.sprout.app.dev",
-        );
+        let current =
+            PathBuf::from("/Users/me/Library/Application Support/xyz.block.sprout.app.dev");
         let canonical = canonical_dev_data_dir(&current).unwrap();
         assert_eq!(canonical, current);
     }
@@ -602,11 +607,29 @@ mod tests {
 
         assert_eq!(agent["id"], "agent-1");
         assert_eq!(agent["name"], "Test Agent");
-        assert!(agent.get("runtime_pid").is_none(), "runtime_pid should be scrubbed");
-        assert!(agent.get("last_error").is_none(), "last_error should be scrubbed");
-        assert!(agent.get("last_exit_code").is_none(), "last_exit_code should be scrubbed");
-        assert!(agent.get("last_stopped_at").is_none(), "last_stopped_at should be scrubbed");
-        assert!(agent.get("last_started_at").is_none(), "last_started_at should be scrubbed");
-        assert!(agent.get("backend_agent_id").is_none(), "backend_agent_id should be scrubbed");
+        assert!(
+            agent.get("runtime_pid").is_none(),
+            "runtime_pid should be scrubbed"
+        );
+        assert!(
+            agent.get("last_error").is_none(),
+            "last_error should be scrubbed"
+        );
+        assert!(
+            agent.get("last_exit_code").is_none(),
+            "last_exit_code should be scrubbed"
+        );
+        assert!(
+            agent.get("last_stopped_at").is_none(),
+            "last_stopped_at should be scrubbed"
+        );
+        assert!(
+            agent.get("last_started_at").is_none(),
+            "last_started_at should be scrubbed"
+        );
+        assert!(
+            agent.get("backend_agent_id").is_none(),
+            "backend_agent_id should be scrubbed"
+        );
     }
 }
