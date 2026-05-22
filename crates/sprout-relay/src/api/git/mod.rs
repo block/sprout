@@ -25,6 +25,7 @@ use crate::state::AppState;
 pub mod hook;
 pub mod hydrate;
 pub mod manifest;
+pub mod manifest_event;
 pub mod policy;
 pub mod store;
 pub mod transport;
