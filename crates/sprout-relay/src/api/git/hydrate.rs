@@ -33,7 +33,7 @@ use futures_util::future::try_join_all;
 use tempfile::TempDir;
 use tokio::process::Command;
 
-use super::manifest::{is_hex_oid, is_safe_refname, Manifest, ManifestError};
+use super::manifest::{is_hex_oid, is_safe_refname, pointer_key, Manifest, ManifestError};
 use super::store::{GitStore, StoreError};
 
 /// A bare repo hydrated to a temporary directory.
@@ -75,17 +75,8 @@ pub enum HydrateError {
     Hydrate(String),
 }
 
-/// The standard pointer key for `<owner>/<repo>`.
-///
-/// Layout: `repos/<owner>/<repo>/pointer` — namespace under each repo so
-/// future per-repo keys (config, refs index, gc state) co-locate. Must
-/// match `cas_publish::pointer_key` exactly; otherwise reads 404 against
-/// writes.
-pub fn pointer_key(owner: &str, repo: &str) -> String {
-    // Strip a trailing `.git` if the caller passed it; matches transport.rs.
-    let repo = repo.strip_suffix(".git").unwrap_or(repo);
-    format!("repos/{owner}/{repo}/pointer")
-}
+// `pointer_key` is imported from `super::manifest` — single source of truth
+// shared with `cas_publish` (write side). See manifest.rs.
 
 /// Hydrate a bare repo for read (`upload-pack` / `info-refs`).
 ///
@@ -249,14 +240,7 @@ mod tests {
         assert!(!is_hex_oid(""));
     }
 
-    #[test]
-    fn pointer_key_strips_dot_git() {
-        assert_eq!(pointer_key("alice", "myrepo"), "repos/alice/myrepo/pointer");
-        assert_eq!(
-            pointer_key("alice", "myrepo.git"),
-            "repos/alice/myrepo/pointer"
-        );
-    }
+    // `pointer_key` is tested in `super::manifest::tests` — single source.
 
     // -------- Live MinIO + real git roundtrip ----------------------------------
     //
