@@ -213,6 +213,10 @@ pub struct AppState {
     pub audit_tx: mpsc::Sender<sprout_audit::NewAuditEntry>,
     /// Media storage client (S3/MinIO).
     pub media_storage: Arc<MediaStorage>,
+    /// Git object-store backend (content-addressed packs/manifests plus
+    /// CAS-guarded manifest pointer). This is the durable git source of truth;
+    /// see `api::git::store` and `docs/git-on-object-storage.md`.
+    pub git_store: crate::api::git::store::GitStore,
     /// Audio relay room manager — tracks active huddle audio rooms.
     pub audio_rooms: Arc<AudioRoomManager>,
     /// Set to `true` on SIGTERM — readiness probe returns 503.
@@ -316,6 +320,13 @@ impl AppState {
         });
 
         let git_max_concurrent_ops = config.git_max_concurrent_ops;
+        let git_store = crate::api::git::store::GitStore::new(
+            &config.media.s3_endpoint,
+            &config.media.s3_access_key,
+            &config.media.s3_secret_key,
+            &config.media.s3_bucket,
+        )
+        .expect("media storage was already constructed with this S3 config");
         let state = Self {
             config: Arc::new(config),
             db,
@@ -355,6 +366,7 @@ impl AppState {
             search_index_tx,
             audit_tx,
             media_storage: Arc::new(media_storage),
+            git_store,
             audio_rooms: Arc::new(AudioRoomManager::new()),
             shutting_down: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
