@@ -411,7 +411,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 }
                 showTopBorder={false}
               />
-              {activeChannel && isTerminalOpen ? (
+              {activeChannel ? (
                 <TerminalPanel
                   channelId={activeChannel.id}
                   isOpen={isTerminalOpen}
