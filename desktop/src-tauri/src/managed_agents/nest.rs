@@ -447,6 +447,11 @@ pub fn upsert_managed_section(file_path: &Path, new_section_content: &str) -> io
         }
     };
 
+    // Skip write when content is unchanged — avoids bumping mtime on every launch.
+    if new_content == current {
+        return Ok(());
+    }
+
     let parent = file_path.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
