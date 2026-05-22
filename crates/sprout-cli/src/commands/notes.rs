@@ -149,7 +149,7 @@ impl NoteSnapshot {
             summary,
             tags,
             published_at,
-            updated_at: event.created_at.as_u64(),
+            updated_at: event.created_at.as_secs(),
             content: event.content.clone(),
         })
     }
@@ -487,20 +487,19 @@ pub fn build_set_event(
     let published_at: u64 = prior.and_then(|p| p.published_at).unwrap_or(now);
 
     let mut evt_tags: Vec<Tag> = Vec::with_capacity(4 + topic_tags.len());
-    evt_tags.push(Tag::parse(&["d", slug]).map_err(tag_err)?);
-    evt_tags.push(Tag::parse(&["title", title_value]).map_err(tag_err)?);
+    evt_tags.push(Tag::parse(["d", slug]).map_err(tag_err)?);
+    evt_tags.push(Tag::parse(["title", title_value]).map_err(tag_err)?);
     if let Some(s) = summary_value {
-        evt_tags.push(Tag::parse(&["summary", s]).map_err(tag_err)?);
+        evt_tags.push(Tag::parse(["summary", s]).map_err(tag_err)?);
     }
     for t in &topic_tags {
-        evt_tags.push(Tag::parse(&["t", t]).map_err(tag_err)?);
+        evt_tags.push(Tag::parse(["t", t.as_str()]).map_err(tag_err)?);
     }
-    evt_tags.push(Tag::parse(&["published_at", &published_at.to_string()]).map_err(tag_err)?);
+    evt_tags.push(Tag::parse(["published_at", &published_at.to_string()]).map_err(tag_err)?);
 
-    Ok(
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content, evt_tags)
-            .custom_created_at(Timestamp::from(now)),
-    )
+    Ok(EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content)
+        .tags(evt_tags)
+        .custom_created_at(Timestamp::from(now)))
 }
 
 fn tag_err(e: impl std::fmt::Display) -> CliError {
@@ -716,8 +715,8 @@ pub async fn cmd_ls(
 /// would route to the per-event path and leave the live replaceable row
 /// intact — the note would survive the "deletion". Pure and unit-testable.
 pub fn build_rm_event(coord: &nostr::nips::nip01::Coordinate) -> Result<EventBuilder, CliError> {
-    let a_tag = Tag::parse(&["a", &coord.to_string()]).map_err(tag_err)?;
-    Ok(EventBuilder::new(Kind::EventDeletion, "", vec![a_tag]))
+    let a_tag = Tag::parse(["a", &coord.to_string()]).map_err(tag_err)?;
+    Ok(EventBuilder::new(Kind::EventDeletion, "").tags(vec![a_tag]))
 }
 
 pub async fn cmd_rm(client: &SproutClient, slug: &str) -> Result<(), CliError> {
@@ -897,11 +896,12 @@ mod tests {
         content: &str,
     ) -> Event {
         let mut tags = vec![
-            Tag::parse(&["d", slug]).unwrap(),
-            Tag::parse(&["title", title]).unwrap(),
+            Tag::parse(["d", slug]).unwrap(),
+            Tag::parse(["title", title]).unwrap(),
         ];
         tags.extend(extra);
-        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content, tags)
+        EventBuilder::new(Kind::Custom(KIND_LONG_FORM), content)
+            .tags(tags)
             .custom_created_at(Timestamp::from(ts))
             .sign_with_keys(keys)
             .unwrap()
@@ -916,10 +916,10 @@ mod tests {
             "my-slug",
             "My Title",
             vec![
-                Tag::parse(&["summary", "a short summary"]).unwrap(),
-                Tag::parse(&["t", "rust"]).unwrap(),
-                Tag::parse(&["t", "cli"]).unwrap(),
-                Tag::parse(&["published_at", "1700000000"]).unwrap(),
+                Tag::parse(["summary", "a short summary"]).unwrap(),
+                Tag::parse(["t", "rust"]).unwrap(),
+                Tag::parse(["t", "cli"]).unwrap(),
+                Tag::parse(["published_at", "1700000000"]).unwrap(),
             ],
             "# body",
         );
@@ -940,13 +940,10 @@ mod tests {
         let keys = Keys::generate();
         // Synthesize an event without a `d` tag — has to be done with EventBuilder
         // directly since `build_30023` always inserts one.
-        let event = EventBuilder::new(
-            Kind::Custom(KIND_LONG_FORM),
-            "body",
-            vec![Tag::parse(&["title", "no-d"]).unwrap()],
-        )
-        .sign_with_keys(&keys)
-        .unwrap();
+        let event = EventBuilder::new(Kind::Custom(KIND_LONG_FORM), "body")
+            .tags(vec![Tag::parse(["title", "no-d"]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
         let err = NoteSnapshot::from_event(&event).unwrap_err();
         assert!(matches!(err, CliError::Other(m) if m.contains("missing the required `d` tag")));
     }
@@ -954,13 +951,10 @@ mod tests {
     #[test]
     fn note_snapshot_rejects_wrong_kind() {
         let keys = Keys::generate();
-        let event = EventBuilder::new(
-            Kind::TextNote,
-            "hi",
-            vec![Tag::parse(&["d", "ignored"]).unwrap()],
-        )
-        .sign_with_keys(&keys)
-        .unwrap();
+        let event = EventBuilder::new(Kind::TextNote, "hi")
+            .tags(vec![Tag::parse(["d", "ignored"]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
         let err = NoteSnapshot::from_event(&event).unwrap_err();
         assert!(matches!(err, CliError::Other(m) if m.contains("expected kind:30023")));
     }
@@ -976,7 +970,7 @@ mod tests {
             1_000,
             "x",
             "T",
-            vec![Tag::parse(&["published_at", "not-a-number"]).unwrap()],
+            vec![Tag::parse(["published_at", "not-a-number"]).unwrap()],
             "",
         );
         let snap = NoteSnapshot::from_event(&event).unwrap();
@@ -1061,13 +1055,13 @@ mod tests {
         let keys = Keys::generate();
         let mut extra: Vec<Tag> = Vec::new();
         if let Some(s) = summary {
-            extra.push(Tag::parse(&["summary", s]).unwrap());
+            extra.push(Tag::parse(["summary", s]).unwrap());
         }
         for t in tags {
-            extra.push(Tag::parse(&["t", t]).unwrap());
+            extra.push(Tag::parse(["t", t]).unwrap());
         }
         if let Some(p) = published_at {
-            extra.push(Tag::parse(&["published_at", &p.to_string()]).unwrap());
+            extra.push(Tag::parse(["published_at", &p.to_string()]).unwrap());
         }
         NoteSnapshot::from_event(&build_30023(&keys, ts, slug, title, extra, content)).unwrap()
     }
