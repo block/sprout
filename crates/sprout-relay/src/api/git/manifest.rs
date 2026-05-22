@@ -297,6 +297,30 @@ mod tests {
         sample().validate().expect("sample manifest must validate");
     }
 
+    /// The empty manifest is the announce-time seed (`side_effects.rs::
+    /// seed_manifest_pointer`). It must validate — otherwise repo announce
+    /// would fail before the pointer can be seeded, and the read path would
+    /// 404 every freshly-announced repo. This pins that contract.
+    #[test]
+    fn empty_manifest_validates() {
+        let m = Manifest {
+            version: MANIFEST_VERSION,
+            head: "refs/heads/main".into(),
+            refs: BTreeMap::new(),
+            packs: Vec::new(),
+            parent: None,
+        };
+        m.validate().expect("empty manifest is the announce-seed");
+        // Canonical bytes must be deterministic + stable so all empty manifests
+        // share one digest (idempotent put_manifest, one shared S3 object).
+        let bytes = m.canonical_bytes().expect("serialize");
+        let s = std::str::from_utf8(&bytes).expect("utf8");
+        assert_eq!(
+            s,
+            r#"{"version":1,"head":"refs/heads/main","refs":{},"packs":[],"parent":null}"#
+        );
+    }
+
     #[test]
     fn validate_rejects_empty_head() {
         let mut m = sample();

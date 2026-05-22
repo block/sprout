@@ -1871,6 +1871,23 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             anyhow::anyhow!("failed to install pre-receive hook: {e}")
         })?;
 
+    // Seed the empty-manifest pointer in object storage. Establishes the
+    // invariant "repo announced ⟺ pointer exists" so the read path can rely
+    // on pointer-absent meaning never-announced (not just no-pushes-yet),
+    // keeping `info_refs`'s fail-closed `Ok(None) → 404` unambiguous.
+    // First push CASes the seeded pointer normally — no special-case branch.
+    seed_manifest_pointer(state, &owner_hex, &repo_id)
+        .await
+        .map_err(|e| {
+            // Pointer seed failure leaves the on-disk repo + name reservation
+            // without a clone-able pointer, which is exactly the broken state
+            // the seed exists to prevent. Unwind both so the announce is
+            // either fully consummated or fully rolled back.
+            let _ = std::fs::remove_dir_all(&repo_dir);
+            let _ = std::fs::remove_dir(&reservation);
+            anyhow::anyhow!("failed to seed manifest pointer: {e}")
+        })?;
+
     info!(
         repo_id = %repo_id,
         owner = %owner_hex,
@@ -1878,6 +1895,145 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         "bare git repo created from kind:30617 announcement"
     );
 
+    // Derived after the pointer commits: kind:30618 ref-state event over the
+    // seeded empty manifest. Pointer is the commit; this event is the
+    // notification that the repo exists (with empty refs) so subscribers see
+    // a first signal without waiting for the first push.
+    if let Err(e) = emit_initial_ref_state(state, &owner_hex, &repo_id).await {
+        // Non-fatal: the manifest is the source of truth; this is just the
+        // derived notification. A failure here means subscribers miss the
+        // "repo now exists" event, but clone/push still works.
+        warn!(
+            repo_id = %repo_id,
+            owner = %owner_hex,
+            error = %e,
+            "failed to emit initial kind:30618 ref state (non-fatal)"
+        );
+    }
+
+    Ok(())
+}
+
+/// Default symbolic HEAD for a freshly-announced (empty) repo. Matches
+/// `init.defaultBranch=main` (git ≥ 2.28) and the seed used by
+/// `live_hydrate_empty_repo`. Pinned in one place so the seeded manifest
+/// and the initial kind:30618 emission can't drift.
+///
+/// The first push's `cas_publish` overwrites this with the real symbolic
+/// HEAD observed in the receive-pack workspace via standard CAS, so the
+/// default is a stand-in, not a permanent commitment.
+const DEFAULT_HEAD: &str = "refs/heads/main";
+
+/// Seed the manifest-pointer for a newly-announced repo with an empty manifest.
+///
+/// Idempotent: a `CasOutcome::LostRace` is treated as success **only if** the
+/// existing pointer names the same empty manifest digest. Any other pre-existing
+/// pointer body (e.g. a non-empty manifest from a previous announce/push pair
+/// for the same `(owner, repo)`) surfaces as an error rather than silently
+/// succeeding — that would mask a real misconfiguration.
+async fn seed_manifest_pointer(
+    state: &Arc<AppState>,
+    owner_hex: &str,
+    repo_id: &str,
+) -> anyhow::Result<()> {
+    use crate::api::git::manifest::{pointer_key, Manifest, MANIFEST_VERSION};
+    use crate::api::git::store::{CasOutcome, Precond};
+    use std::collections::BTreeMap;
+
+    // The empty manifest. All empty manifests across all repos share canonical
+    // bytes — by design — so `put_manifest` is idempotent at the store level
+    // too.
+    let empty = Manifest {
+        version: MANIFEST_VERSION,
+        head: DEFAULT_HEAD.to_string(),
+        refs: BTreeMap::new(),
+        packs: Vec::new(),
+        parent: None,
+    };
+    empty
+        .validate()
+        .map_err(|e| anyhow::anyhow!("empty manifest failed validation: {e}"))?;
+    let bytes = empty
+        .canonical_bytes()
+        .map_err(|e| anyhow::anyhow!("empty manifest serialize: {e}"))?;
+    let manifest_key = state
+        .git_store
+        .put_manifest(&bytes)
+        .await
+        .map_err(|e| anyhow::anyhow!("put_manifest: {e}"))?;
+    let digest = manifest_key
+        .strip_prefix("manifests/")
+        .ok_or_else(|| anyhow::anyhow!("put_manifest returned non-standard key: {manifest_key}"))?;
+
+    let pkey = pointer_key(owner_hex, repo_id);
+    let outcome = state
+        .git_store
+        .put_pointer(&pkey, digest.as_bytes(), Precond::IfNoneMatchStar)
+        .await
+        .map_err(|e| anyhow::anyhow!("put_pointer: {e}"))?;
+    match outcome {
+        CasOutcome::Won(_) => Ok(()),
+        CasOutcome::LostRace => {
+            // Pointer already exists. Idempotency check: only treat as success
+            // if it names the same empty manifest digest. Any other value is
+            // either a stale pointer from a prior repo lifecycle for the same
+            // (owner, repo) or a real misconfiguration — surface, don't swallow.
+            let (_etag, body) = state
+                .git_store
+                .get_pointer(&pkey)
+                .await
+                .map_err(|e| anyhow::anyhow!("re-read pointer after LostRace: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("pointer vanished after LostRace race"))?;
+            let existing = std::str::from_utf8(&body)
+                .map_err(|e| anyhow::anyhow!("pointer body not utf-8: {e}"))?
+                .trim();
+            if existing != digest {
+                return Err(anyhow::anyhow!(
+                    "repo '{repo_id}' for owner {owner_hex} already has a non-empty pointer \
+                     ({existing}); refusing to overwrite via announce"
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Emit the initial kind:30618 ref-state event for a freshly-announced repo.
+///
+/// The seeded empty manifest is the source of truth; this event is the
+/// derived notification. Fires once per announce, signed by the relay,
+/// carrying the announcer's pubkey in the `p` tag (sprout extension).
+async fn emit_initial_ref_state(
+    state: &Arc<AppState>,
+    owner_hex: &str,
+    repo_id: &str,
+) -> anyhow::Result<()> {
+    use crate::api::git::manifest_event::{build_ref_state_event, RefStateInputs};
+    use std::collections::BTreeMap;
+
+    let empty_refs: BTreeMap<String, String> = BTreeMap::new();
+    let inputs = RefStateInputs {
+        repo_id,
+        head: DEFAULT_HEAD,
+        refs: &empty_refs,
+        actor_pubkey_hex: owner_hex,
+    };
+    let event = build_ref_state_event(&inputs, &state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("build_ref_state_event: {e}"))?;
+    let (stored, was_inserted) = state
+        .db
+        .insert_event(&event, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert kind:30618: {e}"))?;
+    if was_inserted {
+        let matches = state.sub_registry.fan_out(&stored);
+        for (conn_id, sub_id) in matches {
+            let _ = state.conn_manager.send_to(
+                conn_id,
+                crate::protocol::RelayMessage::event(&sub_id, &stored.event),
+            );
+        }
+    }
     Ok(())
 }
 
