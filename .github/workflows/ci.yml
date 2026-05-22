@@ -32,11 +32,15 @@ jobs:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - '.github/workflows/ci.yml'
               - 'scripts/run-tests.sh'
-              - 'Justfile'
+              - 'justfile'
             desktop:
               - 'desktop/**'
               - '!desktop/src-tauri/**'
+              - 'pnpm-lock.yaml'
             desktop-rust:
               - 'desktop/src-tauri/**'
             web:
@@ -79,9 +83,9 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.136
       - name: Unit tests
-        run: cargo nextest run -p sprout-core -p sprout-auth --lib
+        run: just test-unit
 
   desktop:
     name: Desktop
@@ -122,10 +126,13 @@ jobs:
             libxdo-dev \
             patchelf \
             wget
-      - name: Cache pnpm store
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.local/share/pnpm/store/v3
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
       - name: Install desktop dependencies
@@ -169,13 +176,19 @@ jobs:
             desktop/playwright-report
             desktop/test-results
           if-no-files-found: ignore
+      - name: Save pnpm store cache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
 
   desktop-e2e-integration:
     name: Desktop E2E Integration
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [changes]
-    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -186,25 +199,15 @@ jobs:
           workspaces: |
             .
             desktop/src-tauri
-      - name: Restore Docker image cache
+      - name: Start integration services
+        run: docker compose up -d postgres redis typesense
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Restore pnpm store cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: /tmp/docker-cache
-          key: docker-${{ hashFiles('docker-compose.yml') }}
-          restore-keys: docker-
-      - name: Load cached Docker images
-        run: |
-          if [ -d /tmp/docker-cache ]; then
-            for img in /tmp/docker-cache/*.tar; do
-              docker load < "$img" 2>/dev/null || true
-            done
-          fi
-      - name: Start integration services
-        run: docker compose up -d
-      - name: Cache pnpm store
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.local/share/pnpm/store/v3
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
       - name: Install desktop dependencies
@@ -301,19 +304,12 @@ jobs:
             desktop/test-results
             /tmp/sprout-relay.log
           if-no-files-found: ignore
-      - name: Save Docker image cache
-        if: github.event_name == 'push'
-        run: |
-          mkdir -p /tmp/docker-cache
-          docker save postgres:17-alpine > /tmp/docker-cache/postgres.tar
-          docker save redis:7-alpine > /tmp/docker-cache/redis.tar
-          docker save typesense/typesense:27.1 > /tmp/docker-cache/typesense.tar
-      - name: Upload Docker image cache
+      - name: Save pnpm store cache
         if: github.event_name == 'push'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: /tmp/docker-cache
-          key: docker-${{ hashFiles('docker-compose.yml') }}
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
 
   web:
     name: Web
@@ -326,10 +322,13 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
-      - name: Cache pnpm store
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Restore pnpm store cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ~/.local/share/pnpm/store/v3
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
           key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
       - name: Install dependencies
@@ -338,6 +337,12 @@ jobs:
         run: just web-check
       - name: Web build
         run: just web-build
+      - name: Save pnpm store cache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
 
   mobile:
     name: Mobile
@@ -416,6 +421,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: cross-${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cross
         uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2
         with:
@@ -447,6 +453,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: desktop/src-tauri
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install desktop dependencies
         run: just desktop-install-ci
       - name: Create sidecar placeholders
