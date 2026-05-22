@@ -1080,7 +1080,7 @@ mod tests {
         assert_eq!(tag_value(&event, "title"), Some("Hello"));
         assert_eq!(tag_value(&event, "d"), Some("x"));
         assert_eq!(tag_value(&event, "published_at"), Some("1700000000"));
-        assert_eq!(event.created_at.as_u64(), 1_700_000_000);
+        assert_eq!(event.created_at.as_secs(), 1_700_000_000);
         // No `summary` tag should be present when none was specified.
         assert!(tag_value(&event, "summary").is_none());
         assert!(t_tags(&event).is_empty());
@@ -1110,7 +1110,7 @@ mod tests {
         .unwrap();
         assert_eq!(tag_value(&event, "title"), Some("Original Title"));
         assert_eq!(tag_value(&event, "published_at"), Some("1650000000"));
-        assert_eq!(event.created_at.as_u64(), 1_700_001_000);
+        assert_eq!(event.created_at.as_secs(), 1_700_001_000);
         assert_eq!(event.content, "new body");
     }
 
