@@ -49,6 +49,41 @@ Stating this boundary is part of the claim. "Provably sound" without naming the
 trust boundary does not survive scrutiny; "safety is machine-checkable relative
 to three stated axioms, each empirically gated per backend" does.
 
+### v1 deployment architecture
+
+The implementation has *no per-repo persistent filesystem state*. Every request
+hydrates an ephemeral working tree from the published manifest, runs the
+appropriate git subprocess against it, and drops the tree on scope exit:
+read paths (`info/refs`, `upload-pack`) via `hydrate_for_read`, the write path
+(`receive-pack`) via `hydrate_for_write`, which also returns the `ParentState`
+the CAS at §Push step 7 predicates on. The relay is multi-instance-ready by
+construction: nothing on local disk needs to be coordinated between instances.
+
+The accepted v1 tradeoff: under concurrent same-repo pushes, every contender
+hydrates and runs receive-pack, and the CAS losers' subprocess work is
+discarded. This is wasted CPU/IO under contention, not a correctness bug —
+`Inv_NoFork` (Theorem 3) holds because the CAS is the only writer
+serialization. Same-ref concurrent push is rare; the alternative (a
+cross-instance lock service) is the kind of dependency this protocol exists
+to avoid. If contention ever shows up in metrics the fix is a short
+best-effort *local* lock as a latency optimization, never a correctness
+dependency.
+
+A bounded retry layer on classified-terminal-vs-transport errors is **parked,
+not closed.** The checked-in regression fence is the 8-way live CAS race
+(`e2e_git::git_concurrent_push_one_wins_and_repo_recovers`), which passes
+against MinIO with no retry layer; we ship v1 without one. (A one-off 16-way
+local run against MinIO also passed, as separate calibration evidence that
+the property holds at greater width — the regression test stays at 8 because
+each contender clones/commits/pushes through real `git` and the cost grows
+with width.) The open question — "is the no-retry default safe past MinIO
+and beyond the widths so far exercised?" — re-opens on a different backend
+or a sustained-load regime the conformance probe (§Conformance) doesn't
+already exercise. The non-negotiable rule: retry, if added, lives in the
+store layer and retries *only* pre-classification network errors — never
+`Ok(2xx)`, `LostRace(412)`, or `NotFound(404)`. Retrying a classified
+outcome would change the TLA action and break the proof.
+
 ## System Model
 
 A **repository** `R` has the following state in the object store:
@@ -386,57 +421,85 @@ transfer:
   `finalize_push`, the fence would be convention, not structure, and Theorem 1
   would not hold. This is a checkable code property, verified by reviewers against
   the actual seam (`finalize_push`).
-- **Fallible snapshot.** Ref-state snapshots are `Result`, and the skip predicate
-  is `Ok(after) == Ok(before)`, never `after == before` over values that default
-  to equal on error. Any `Err` on either snapshot falls through to publish
-  ("assume changed"). This closes the double-failure hole — two failed scans
-  comparing equal and bypassing the fence — and is exactly the `MustPublish ==
-  changes \/ snapErr` rule the model checks.
-- **Conditional fence.** The fence engages only when refs changed; a no-op push
-  returns success without awaiting publish (the `SkipPublish` path). The
-  obligation is "publish-before-success *for ref-changing pushes*," not
-  unconditional publish.
+- **Parent observed once.** `hydrate_for_write` reads the pointer, fetches and
+  verifies the parent manifest, materializes the workspace from it, and returns
+  a `(HydratedRepo, ParentState)` pair where `ParentState` carries the exact
+  `(ETag, digest, Manifest)` triple the workspace was hydrated against. That
+  same `ParentState` rides on the `PushContext` through receive-pack, and
+  `cas_publish` predicates the CAS on `parent_state.if_match` — it never re-reads
+  the pointer. The "build on `d_old`, publish against `d_new`" hazard is closed
+  at the type system: a concurrent writer that advances the pointer between
+  hydrate and CAS surfaces as `CasError::Conflict`/HTTP 409, not as a manifest
+  whose `parent` disagrees with the refs the workspace produced. This is the
+  Rust analogue of `Inv_RefDerivedFromParent`.
+- **412 → 409, terminal.** The CAS lost-race outcome maps to a typed
+  `CasError::Conflict { winner_manifest, winner_manifest_key }`. The variant is
+  distinct from `Backend(StoreError)` so `?`-bubbling cannot turn 412 into 500.
+  There is no in-handler retry: the loser's receive-pack output was derived
+  against a now-superseded parent, so reusing it would change the TLA action
+  and break `Inv_RefDerivedFromParent`. The client re-pushes, which re-hydrates
+  against the advanced state — that is the only safe retry, and `git` itself
+  drives it.
+- **kind:30618 derived after CAS.** Emission is conditional on
+  `manifest_changed = (parent_digest != committed_digest)` — `Manifest::
+  canonical_bytes` is deterministic, so equal published state ⇒ equal digest by
+  construction (no-op pushes pay no 30618 cost). The event is built by
+  `manifest_event::build_ref_state_event` from `CasSuccess.manifest` — the
+  values that *physically landed* via CAS, by `Inv_RefEffectApplied`. The event
+  is relay-signed (the relay is authoritative for ref state of repos it hosts);
+  the pusher's pubkey rides in a `p` tag (sprout extension; NIP-34 does not
+  define one). 30618 emission happens after `cas_publish` returns `Ok` and
+  before the success `Response` is constructed — so 30618 is a strict
+  consequence of a committed CAS, never the commit itself. A failed 30618
+  insert is non-fatal: the push remains durable in the object store, and the
+  next read/push surfaces the committed state from the manifest.
+- **No advisory lock.** Writer serialization is the CAS. The per-repo mutex the
+  legacy persistent-disk path used would only have spanned a single process and
+  is incompatible with the multi-instance v1 architecture (§Scope). Dropping it
+  was strictly more correct, not a risk — same-repo concurrent pushes each
+  hydrate + run receive-pack, and the CAS losers' work is discarded (an
+  accepted v1 tradeoff named in §Scope).
 
-Six decision tests pin every arm of the fence predicate (`should_publish`):
-no-op skip, changed-refs publish, first-push-to-empty-repo publish, before-error
-publish, after-error publish, and the load-bearing both-snapshots-fail publish.
-Runtime *ordering* — publish completes before the `Response` is constructed — is
-enforced by `finalize_push` being a single sequential async function (no detached
-`tokio::spawn`), not by a test; a behavioral ordering test once a mockable publish
-seam exists is named follow-up work.
-
-**Current code status (verified provenance).** The seam *shape* exists in code as
-of `quinn/transport-fence-typesplit` @ `17df7884` (`crates/sprout-relay/src/api/
-git/transport.rs`), 198 relay tests green:
+**Current code status (verified provenance).** The full S3-CAS implementation
+exists in code at PR #726's tip (`crates/sprout-relay/src/api/git/`), with the
+relay lib green, clippy `--tests -D warnings` clean, fmt clean, and the live
+MinIO e2e — clone/push/fetch/force-push roundtrip + N-way concurrent-push
+no-fork — green on the assembled tip. (Line numbers below are pinned at
+landing time; reviewers checking after subsequent refactors should consult
+symbol search, not line counts.)
 
 | Spec element | Code |
 |---|---|
-| `PackOutput { stdout: Vec<u8> }` | `:507` |
-| `SnapshotError` | `:654` |
-| `snapshot_refs -> Result<_, SnapshotError>` | `:671` |
-| `PushContext { pack, refs_before, … }` | `:688` |
-| `should_publish(before, after) -> bool` (pure, deny-by-default) | `:708` |
-| `finalize_push(state, ctx) -> Response` — **the seam** | `:730` |
-| `build_git_response` (sole `Body::from(stdout)` site) | `:637` |
+| `Manifest { version, head, refs, packs, parent }` + `canonical_bytes` | `manifest.rs` |
+| `Manifest::validate()` (pre-CAS rejection: refs/HEAD/OIDs/parent-shape) | `manifest.rs` |
+| `GitStore::{put_pack, put_manifest, put_pointer}` (create-only + CAS) | `store.rs` |
+| `run_conformance_probe` (A1/A3 fail-closed startup gate) | `store.rs` + `main.rs` |
+| `hydrate_for_read` / `hydrate_for_write` | `hydrate.rs` |
+| `ParentState { if_match, parent_digest, parent }` + `from_loaded`/`fresh` | `cas_publish.rs:154` |
+| `cas_publish(.., &parent_state) -> Result<CasSuccess, CasError>` | `cas_publish.rs:410` |
+| `CasError::Conflict { winner_manifest, winner_manifest_key }` (typed 412) | `cas_publish.rs:92` |
+| `build_ref_state_event(&RefStateInputs, &Keys)` (NIP-34 kind:30618) | `manifest_event.rs` |
+| `PushContext { pack, parent_state, repo_handle, … }` | `transport.rs:643` |
+| `finalize_push(state, ctx) -> Response` — **the seam** | `transport.rs:674` |
+| `build_git_response` (sole `Body::from(stdout)` site) | `transport.rs:627` |
 
-The push path reaches `build_git_response` *only* through `finalize_push`, which
-consumes a `PushContext` — so the compiler enforces "no `PushContext` ⇒ no push
-`Response`." (`build_git_response` is shared with read paths, but those carry no
-`PushContext` and no fence obligation; push-side uniqueness is structural.) The
-fallible-snapshot bite has a dedicated test, `should_publish_fires_when_both_
-snapshots_error` — the exact double-failure hole, now structurally outside the
-skip arm.
+The push path reaches `build_git_response` *only* through `finalize_push`,
+which consumes a `PushContext`; the compiler enforces "no `PushContext` ⇒ no
+push `Response`." Read paths reach `build_git_response` independently after
+hydrating the published state via `hydrate_for_read` — pointer-absent → 404,
+any below-pointer failure → 5xx, never a synthesized empty repo (A1
+detectability holds in the read direction too). The 404 invariant is
+unambiguous because kind:30617 announce seeds an empty-manifest pointer
+*before* the announcement event is published: an announced repo is always
+cloneable (empty refs, but a valid pointer), and pointer-absence means "never
+announced."
 
-Two honest gaps remain, both named:
-1. **`412 → 409` is future work.** Today `publish_ref_state` is a relay-DB insert
-   (`db.insert_event`, kind:30618), not an S3 pointer swap; its failure is logged.
-   The `if let Err(e)` arm in `finalize_push` (`:740`) is the plug point where the
-   S3 manifest-CAS evolution maps `412 → 409`. The spec describes that target; the
-   seam shape is real now, the S3 CAS is not yet.
-2. **Runtime-ordering test deferred.** Six tests pin the publish *decision*; the
-   publish-before-response *ordering* is enforced by `finalize_push` being a single
-   sequential async fn (no `tokio::spawn`). A mockable-publish integration test is
-   the belt-and-suspenders follow-up.
+One named follow-up: a behavioral integration test for runtime ordering
+(publish-before-response) — currently enforced by `finalize_push` being a
+single sequential async fn (no detached `tokio::spawn`) — is the
+belt-and-suspenders item to add once a mockable-CAS seam exists. The
+mechanical no-fork claim is empirically gated by the live N-way
+concurrent-push e2e (`e2e_git::git_concurrent_push_one_wins_and_repo_recovers`).
 
 ## Mechanized Verification
 
