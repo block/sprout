@@ -258,6 +258,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(
             race_width = report.race_width,
             race_rounds = report.race_rounds,
+            transport_drops = report.transport_drops,
             "git object-store backend admitted: A3 conformance probe passed"
         );
     }

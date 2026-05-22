@@ -115,6 +115,21 @@ pub struct ProbeReport {
     pub race_width: usize,
     /// Rounds executed per race phase.
     pub race_rounds: usize,
+    /// Total number of *transport-unknown* per-racer outcomes across all
+    /// race rounds (sum of both `if_match_race` and `if_none_match_race`
+    /// phases). A "transport-unknown" is a pre-classification failure —
+    /// `S3Error::{Reqwest, Http, Io}` — that means the racer never got a
+    /// classified response from the backend, so its outcome is neither
+    /// evidence for nor against A3 linearizability. Such racers are
+    /// dropped from the observer set (see the race phases for the
+    /// invariant: `classified >= 2` and `winners == 1` *among classified
+    /// observers*).
+    ///
+    /// Surfaced on the admission log line so a slowly-degrading backend
+    /// shows up before it's a probe failure: a passing probe with
+    /// non-zero `transport_drops` is "admitted with degraded
+    /// observation count," not silently flaky.
+    pub transport_drops: usize,
 }
 
 /// Failure carrying the phase that failed plus enough context to diagnose.
@@ -405,6 +420,9 @@ impl GitStore {
         }
         let nonce = uuid::Uuid::new_v4();
         let pointer_key = format!("probe/pointer-{nonce}");
+        // Accumulator for *transport-unknown* per-racer outcomes across both
+        // race phases. See `ProbeReport::transport_drops` for the rationale.
+        let mut transport_drops = 0usize;
 
         // -- Phase 1: sequential --------------------------------------------------
         for round in 0..cfg.race_rounds {
@@ -460,15 +478,42 @@ impl GitStore {
                 tasks.push(async move { me.put_pointer(&pkey, &body, Precond::IfMatch(et)).await });
             }
             let outcomes = futures_util::future::join_all(tasks).await;
+            // Drop-and-floor classification. A `Reqwest`/`Http`/`Io` error
+            // means the racer never got a classified response from the
+            // backend (couldn't open a socket, send flaked, etc.); its
+            // outcome is *unknown*, not negative. A3 is a claim about
+            // **observers**: dropping unknowns from the observer set
+            // sharpens the assertion ("exactly one winner among observers")
+            // and avoids smuggling a network-stack test into the
+            // conformance probe. Parse/decode errors (`Utf8`,
+            // `ReqwestHeaderToStr`, `SerdeXml`, ...) and `HttpFailWithBody`
+            // stay in the catch-all — those mean the backend *did* answer
+            // but not in the contract shape, which is a real conformance
+            // signal.
+            let mut classified = 0usize;
             let mut winners = 0usize;
             let mut new_etag: Option<ETag> = None;
             for (i, outcome) in outcomes.into_iter().enumerate() {
                 match outcome {
                     Ok(CasOutcome::Won(e)) => {
+                        classified += 1;
                         winners += 1;
                         new_etag = Some(e);
                     }
-                    Ok(CasOutcome::LostRace) => {}
+                    Ok(CasOutcome::LostRace) => {
+                        classified += 1;
+                    }
+                    Err(StoreError::Backend(
+                        S3Error::Reqwest(_) | S3Error::Http(_) | S3Error::Io(_),
+                    )) => {
+                        transport_drops += 1;
+                        tracing::warn!(
+                            phase = "if_match_race",
+                            round,
+                            racer = i,
+                            "transport drop (pre-classification: socket/send failure)"
+                        );
+                    }
                     Err(e) => {
                         return Err(ProbeFailure {
                             phase: "if_match_race",
@@ -480,12 +525,29 @@ impl GitStore {
                     }
                 }
             }
+            // A3 needs ≥2 observers to *see* a race. With 31/32 classified
+            // and 1 transport drop, the race is well-observed; with 0/32
+            // classified the probe didn't run at all — fail closed.
+            if classified < 2 {
+                return Err(ProbeFailure {
+                    phase: "if_match_race",
+                    round,
+                    key: pointer_key,
+                    reason: format!(
+                        "race not observed: classified={classified}, transport_drops={}",
+                        cfg.race_width - classified
+                    ),
+                }
+                .into());
+            }
             if winners != 1 {
                 return Err(ProbeFailure {
                     phase: "if_match_race",
                     round,
                     key: pointer_key,
-                    reason: format!("expected exactly 1 winner, got {winners}"),
+                    reason: format!(
+                        "expected exactly 1 winner among {classified} classified observers, got {winners}"
+                    ),
                 }
                 .into());
             }
@@ -509,12 +571,24 @@ impl GitStore {
                 tasks.push(async move { me.put_immutable_raw(&k, &b).await });
             }
             let results = futures_util::future::join_all(tasks).await;
+            // Drop-and-floor: same classification rule as Phase 2. Drop
+            // `Reqwest`/`Http`/`Io` (pre-classification — socket/send
+            // failure); count 2xx + 412 as the classified observers. Any
+            // other status or any non-transport `StoreError` is a real
+            // conformance signal and fails closed.
+            let mut classified = 0usize;
             let mut twos = 0usize;
             let mut twelves = 0usize;
             for (i, r) in results.into_iter().enumerate() {
                 match r {
-                    Ok(200..=299) => twos += 1,
-                    Ok(412) => twelves += 1,
+                    Ok(200..=299) => {
+                        classified += 1;
+                        twos += 1;
+                    }
+                    Ok(412) => {
+                        classified += 1;
+                        twelves += 1;
+                    }
                     Ok(code) => {
                         return Err(ProbeFailure {
                             phase: "if_none_match_race",
@@ -524,25 +598,53 @@ impl GitStore {
                         }
                         .into())
                     }
+                    Err(StoreError::Backend(
+                        S3Error::Reqwest(_) | S3Error::Http(_) | S3Error::Io(_),
+                    )) => {
+                        transport_drops += 1;
+                        tracing::warn!(
+                            phase = "if_none_match_race",
+                            round,
+                            racer = i,
+                            "transport drop (pre-classification: socket/send failure)"
+                        );
+                    }
                     Err(e) => {
                         return Err(ProbeFailure {
                             phase: "if_none_match_race",
                             round,
                             key,
-                            reason: format!("racer {i}: {e}"),
+                            reason: format!("racer {i} backend error: {e}"),
                         }
                         .into())
                     }
                 }
             }
-            if twos != 1 || twelves != cfg.race_width - 1 {
+            // Floor: A3 needs ≥2 observers to *see* a race.
+            if classified < 2 {
                 return Err(ProbeFailure {
                     phase: "if_none_match_race",
                     round,
                     key,
                     reason: format!(
-                        "expected 1×2xx + {}×412, got {twos}×2xx + {twelves}×412",
-                        cfg.race_width - 1
+                        "race not observed: classified={classified}, transport_drops={}",
+                        cfg.race_width - classified
+                    ),
+                }
+                .into());
+            }
+            // Create-only contract: exactly 1×2xx + (classified − 1)×412
+            // *among observers*. The previous fixed `race_width − 1` would
+            // false-positive on any transport drop; this expression honors
+            // the drop-and-floor invariant.
+            if twos != 1 || twelves != classified - 1 {
+                return Err(ProbeFailure {
+                    phase: "if_none_match_race",
+                    round,
+                    key,
+                    reason: format!(
+                        "expected 1×2xx + {}×412 among {classified} classified observers, got {twos}×2xx + {twelves}×412",
+                        classified - 1
                     ),
                 }
                 .into());
@@ -607,6 +709,7 @@ impl GitStore {
         Ok(ProbeReport {
             race_width: cfg.race_width,
             race_rounds: cfg.race_rounds,
+            transport_drops,
         })
     }
 
