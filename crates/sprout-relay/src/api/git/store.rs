@@ -24,6 +24,8 @@
 
 #![allow(dead_code)] // wired in by the push path in a follow-up commit
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use s3::creds::Credentials;
 use s3::error::S3Error;
@@ -136,8 +138,9 @@ impl From<ProbeFailure> for StoreError {
 }
 
 /// Object-store client for git refs.
+#[derive(Clone)]
 pub struct GitStore {
-    bucket: Box<Bucket>,
+    bucket: Arc<Bucket>,
 }
 
 impl GitStore {
@@ -159,7 +162,9 @@ impl GitStore {
         let bucket = Bucket::new(bucket_name, region, creds)
             .map_err(StoreError::Backend)?
             .with_path_style();
-        Ok(Self { bucket })
+        Ok(Self {
+            bucket: Arc::from(bucket),
+        })
     }
 
     /// Compute the hex SHA-256 of `bytes`. The content-addressed key.
