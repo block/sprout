@@ -1,5 +1,4 @@
 use std::io::Read;
-use std::sync::atomic::Ordering::{Acquire, Relaxed};
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -13,11 +12,16 @@ use crate::{
     relay::query_relay,
 };
 
-static INSTALL_IN_PROGRESS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+fn active_installs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(HashSet::new()))
+}
 
 #[tauri::command]
 pub fn discover_acp_providers() -> Vec<AcpProviderCatalogEntry> {
+    crate::managed_agents::clear_resolve_cache();
     crate::managed_agents::discover_acp_providers()
 }
 
@@ -31,18 +35,25 @@ pub async fn install_acp_runtime(provider_id: String) -> Result<InstallRuntimeRe
 /// Err(_) = infrastructure failure (panic, concurrency guard).
 /// Ok({success: false}) = an install step failed (stderr captured in steps).
 fn install_acp_runtime_blocking(provider_id: &str) -> Result<InstallRuntimeResult, String> {
-    // Prevent concurrent installs.
-    INSTALL_IN_PROGRESS
-        .compare_exchange(false, true, Acquire, Relaxed)
-        .map_err(|_| "an install is already in progress".to_string())?;
-
-    struct Guard;
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            INSTALL_IN_PROGRESS.store(false, std::sync::atomic::Ordering::Release);
+    // Prevent concurrent installs for the same provider.
+    {
+        let mut set = active_installs()
+            .lock()
+            .map_err(|_| "install lock poisoned".to_string())?;
+        if !set.insert(provider_id.to_string()) {
+            return Err(format!("an install is already in progress for {provider_id}"));
         }
     }
-    let _guard = Guard;
+
+    struct Guard(String);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if let Ok(mut set) = active_installs().lock() {
+                set.remove(&self.0);
+            }
+        }
+    }
+    let _guard = Guard(provider_id.to_string());
 
     let provider = crate::managed_agents::known_acp_provider_exact(provider_id)
         .ok_or_else(|| format!("unknown provider: {provider_id}"))?;

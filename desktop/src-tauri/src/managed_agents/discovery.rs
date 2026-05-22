@@ -95,7 +95,7 @@ const KNOWN_ACP_PROVIDERS: &[KnownAcpProvider] = &[
         mcp_command: None,
         mcp_hooks: false,
         underlying_cli: Some("codex"),
-        cli_install_commands: &[],
+        cli_install_commands: &["npm install -g @openai/codex"],
         adapter_install_commands: &["npm install -g @zed-industries/codex-acp"],
         install_instructions_url: "https://github.com/zed-industries/codex-acp",
         install_hint: "Install the Codex ACP adapter via npm.",
@@ -446,6 +446,40 @@ pub fn discover_acp_providers() -> Vec<AcpProviderCatalogEntry> {
             let can_auto_install = !provider.cli_install_commands.is_empty()
                 || !provider.adapter_install_commands.is_empty();
 
+            let install_hint = if availability == AcpAvailabilityStatus::Available {
+                provider.install_hint.to_string()
+            } else if provider.underlying_cli.is_some() {
+                let has_cli_cmds = !provider.cli_install_commands.is_empty();
+                let has_adapter_cmds = !provider.adapter_install_commands.is_empty();
+                match availability {
+                    AcpAvailabilityStatus::AdapterMissing => {
+                        if has_adapter_cmds {
+                            format!("Install the {} ACP adapter via the Install button, or follow the manual instructions.", provider.label)
+                        } else {
+                            provider.install_hint.to_string()
+                        }
+                    }
+                    AcpAvailabilityStatus::NotInstalled => match (has_cli_cmds, has_adapter_cmds) {
+                        (true, true) => format!(
+                            "Install will set up the {} CLI and its ACP adapter.",
+                            provider.label
+                        ),
+                        (true, false) => format!(
+                            "Install will set up the {} CLI. Install the ACP adapter manually.",
+                            provider.label
+                        ),
+                        (false, true) => format!(
+                            "Install will set up the ACP adapter. Install the {} CLI manually.",
+                            provider.label
+                        ),
+                        (false, false) => provider.install_hint.to_string(),
+                    },
+                    AcpAvailabilityStatus::Available => unreachable!(),
+                }
+            } else {
+                provider.install_hint.to_string()
+            };
+
             AcpProviderCatalogEntry {
                 id: provider.id.to_string(),
                 label: provider.label.to_string(),
@@ -455,7 +489,7 @@ pub fn discover_acp_providers() -> Vec<AcpProviderCatalogEntry> {
                 binary_path,
                 default_args,
                 mcp_command: provider.mcp_command.map(str::to_string),
-                install_hint: provider.install_hint.to_string(),
+                install_hint,
                 install_instructions_url: provider.install_instructions_url.to_string(),
                 can_auto_install,
                 underlying_cli_path,
