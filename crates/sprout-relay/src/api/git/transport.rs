@@ -256,7 +256,7 @@ fn validate_repo_path(
 /// - `GIT_CONFIG_NOSYSTEM=1` — ignore system-wide gitconfig
 /// - `GIT_CONFIG_GLOBAL=/dev/null` — prevent reading global gitconfig
 /// - `HOME=/dev/null` — prevent reading ~/.gitconfig
-fn harden_git_env(cmd: &mut Command) {
+pub(crate) fn harden_git_env(cmd: &mut Command) {
     cmd.env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("GIT_HTTP_EXPORT_ALL", "1")
