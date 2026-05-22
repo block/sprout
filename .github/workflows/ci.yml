@@ -24,7 +24,7 @@ jobs:
       mobile: ${{ steps.filter.outputs.mobile }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: filter
         with:
           filters: |
@@ -61,6 +61,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Format check
         run: just fmt-check
       - name: Desktop Tauri format check
@@ -80,6 +82,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: cashapp/activate-hermit@e49f5cb4dd64ff0b0b659d1d8df499595451155a # v1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cargo-nextest
         uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2
         with:
@@ -101,6 +105,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: desktop/src-tauri
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install Tauri dependencies (Linux)
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -199,6 +204,7 @@ jobs:
           workspaces: |
             .
             desktop/src-tauri
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Start integration services
         run: docker compose up -d postgres redis typesense
       - name: Get pnpm store directory
