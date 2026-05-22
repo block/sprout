@@ -86,11 +86,10 @@ export function TerminalPanel({ channelId, isOpen }: TerminalPanelProps) {
       {isOpen ? (
         <motion.div
           key="terminal-panel"
-          initial={{ height: 0, opacity: 0, scale: 0.97 }}
-          animate={{ height: heightPx + 12, opacity: 1, scale: 1 }}
-          exit={{ height: 0, opacity: 0, scale: 0.97 }}
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: heightPx + 12, opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.2, ease: "easeOut" }}
-          style={{ transformOrigin: "bottom" }}
           className="overflow-hidden px-4 pb-2 pt-1"
         >
           <div
