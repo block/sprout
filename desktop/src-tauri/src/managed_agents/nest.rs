@@ -17,6 +17,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+use crate::managed_agents::discovery::known_skill_dirs;
+
 /// Subdirectories created inside the nest.
 const NEST_DIRS: &[&str] = &[
     "GUIDES",
@@ -47,6 +49,9 @@ const NEST_SKILL_VERSION: u32 = 3;
 
 const BEGIN_MARKER: &str = "<!-- BEGIN SPROUT MANAGED";
 const END_MARKER: &str = "<!-- END SPROUT MANAGED -->";
+
+/// Canonical skill directory path relative to the nest root.
+const CANONICAL_SKILL_DIR: &str = ".agents/skills/sprout-cli";
 /// Returns the nest root path (`~/.sprout`), or `None` if the home
 /// directory cannot be resolved.
 pub fn nest_dir() -> Option<PathBuf> {
@@ -67,7 +72,8 @@ pub fn ensure_nest() -> Result<(), String> {
 /// - Creates the root directory and all subdirectories.
 /// - Writes `AGENTS.md` only if it doesn't already exist.
 /// - Writes `.agents/skills/sprout-cli/SKILL.md` only if it doesn't already exist.
-/// - Creates a `.claude/skills/sprout-cli` symlink to the `.agents` location.
+/// - Creates harness-specific symlinks (e.g. `.claude/skills/sprout-cli`) pointing
+///   to the canonical `.agents/skills/sprout-cli` directory.
 /// - Sets 700 permissions on the root, all subdirectories, and the skill
 ///   directory tree (Unix).
 ///
@@ -129,7 +135,7 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
     // Write sprout-cli skill to the harness-agnostic .agents path.
     // The first-init write uses the new canonical path; migration from
     // the old .claude path is handled in refresh_skill_md_if_stale.
-    let agents_skill_dir = root.join(".agents/skills/sprout-cli");
+    let agents_skill_dir = root.join(CANONICAL_SKILL_DIR);
     fs::create_dir_all(&agents_skill_dir)
         .map_err(|e| format!("create {}: {e}", agents_skill_dir.display()))?;
 
@@ -150,28 +156,15 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
         }
     }
 
-    // Create .claude/skills/sprout-cli symlink for Claude Code compatibility.
-    #[cfg(unix)]
-    {
-        let claude_skills_dir = root.join(".claude/skills");
-        fs::create_dir_all(&claude_skills_dir)
-            .map_err(|e| format!("create {}: {e}", claude_skills_dir.display()))?;
-        let symlink_path = root.join(".claude/skills/sprout-cli");
-        // Only create symlink if it doesn't already exist as a symlink.
-        // If it's a real directory (pre-migration), refresh_skill_md_if_stale handles migration.
-        let is_symlink = symlink_path
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        if !is_symlink && !symlink_path.exists() {
-            std::os::unix::fs::symlink("../../.agents/skills/sprout-cli", &symlink_path)
-                .map_err(|e| format!("symlink {}: {e}", symlink_path.display()))?;
-        }
-    }
+    // Create harness-specific symlinks for all known providers.
+    // Migration of the old .claude/skills/sprout-cli real dir is handled in
+    // refresh_skill_md_if_stale; ensure_skill_symlinks skips paths that already exist.
+    ensure_skill_symlinks(root)?;
 
     // Refresh static content if the embedded template version is newer.
     refresh_agents_md_if_stale(root)?;
     refresh_skill_md_if_stale(root)?;
+
 
     // Set owner-only permissions on root and all subdirectories.
     // Skip any path that is a symlink — chmod would affect the target.
@@ -192,16 +185,25 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
                     .map_err(|e| format!("set permissions on {}: {e}", path.display()))?;
             }
         }
-        // .agents skill dir tree and .claude parents inside root get 700.
-        // create_dir_all creates them with umask defaults — lock them down
-        // the same way we do NEST_DIRS. Skip symlinks (chmod affects target).
-        for dir in [
-            root.join(".agents"),
-            root.join(".agents/skills"),
-            agents_skill_dir.clone(),
-            root.join(".claude"),
-            root.join(".claude/skills"),
-        ] {
+        // Skill directory trees inside root get 700.
+        // Build the list from canonical path + all known provider skill dirs.
+        let mut skill_perm_dirs = Vec::new();
+        {
+            let mut accumulated = std::path::PathBuf::new();
+            for component in std::path::Path::new(CANONICAL_SKILL_DIR).components() {
+                accumulated.push(component);
+                skill_perm_dirs.push(root.join(&accumulated));
+            }
+        }
+        for skill_dir in known_skill_dirs() {
+            // Ensure every ancestor dir gets 700, not just the leaf.
+            let mut accumulated = std::path::PathBuf::new();
+            for component in std::path::Path::new(skill_dir).components() {
+                accumulated.push(component);
+                skill_perm_dirs.push(root.join(&accumulated));
+            }
+        }
+        for dir in skill_perm_dirs {
             let is_symlink = dir
                 .symlink_metadata()
                 .map(|m| m.file_type().is_symlink())
@@ -213,6 +215,32 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// Create harness-specific skill symlinks for each known provider.
+/// Idempotent: skips any path where `symlink_metadata` succeeds — real
+/// directories, valid symlinks, and dangling symlinks are all left alone.
+#[cfg(unix)]
+fn ensure_skill_symlinks(root: &Path) -> Result<(), String> {
+    for skill_dir in known_skill_dirs() {
+        let parent = root.join(skill_dir);
+        fs::create_dir_all(&parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        let link = parent.join("sprout-cli");
+        if link.symlink_metadata().is_ok() {
+            continue; // symlink or real path exists — skip
+        }
+        let depth = std::path::Path::new(skill_dir).components().count();
+        let prefix = "../".repeat(depth);
+        let target = format!("{prefix}{CANONICAL_SKILL_DIR}");
+        std::os::unix::fs::symlink(&target, &link)
+            .map_err(|e| format!("symlink {} → {}: {e}", link.display(), target))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_skill_symlinks(_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -661,14 +689,20 @@ mod tests {
         let content = fs::read_to_string(&skill).unwrap();
         assert_eq!(content, SPROUT_CLI_SKILL_MD);
 
-        // .claude/skills/sprout-cli is a symlink on Unix.
+        // On unix, harness-specific symlinks should resolve to the canonical dir.
         #[cfg(unix)]
         {
-            let symlink = root.join(".claude/skills/sprout-cli");
-            assert!(
-                symlink.symlink_metadata().unwrap().file_type().is_symlink(),
-                ".claude/skills/sprout-cli should be a symlink"
-            );
+            for dir in [".goose/skills", ".claude/skills", ".codex/skills"] {
+                let link = root.join(dir).join("sprout-cli");
+                assert!(
+                    link.symlink_metadata().unwrap().file_type().is_symlink(),
+                    "{dir}/sprout-cli should be a symlink"
+                );
+                assert!(
+                    link.join("SKILL.md").exists(),
+                    "symlink at {dir}/sprout-cli should resolve to dir with SKILL.md"
+                );
+            }
         }
     }
 
@@ -692,14 +726,18 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join(".sprout");
         ensure_nest_at(&root).unwrap();
-        // Real dirs in .agents tree and .claude parents should be 700.
-        // .claude/skills/sprout-cli is a symlink — excluded from chmod check.
+        // Canonical path and all provider parent dirs should be locked down.
+        // Symlinks (e.g. .goose/skills/sprout-cli) are skipped by the chmod loop.
         for dir in [
             ".agents",
             ".agents/skills",
             ".agents/skills/sprout-cli",
+            ".goose",
+            ".goose/skills",
             ".claude",
             ".claude/skills",
+            ".codex",
+            ".codex/skills",
         ] {
             let path = root.join(dir);
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
@@ -773,6 +811,81 @@ mod tests {
                 .file_type()
                 .is_symlink(),
             "old path should now be a symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_skill_symlinks_are_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+        // Second call should succeed without errors.
+        ensure_nest_at(&root).unwrap();
+        // All symlinks still valid and point to relative targets.
+        for dir in [".goose/skills", ".claude/skills", ".codex/skills"] {
+            let link = root.join(dir).join("sprout-cli");
+            assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+            assert!(
+                link.join("SKILL.md").exists(),
+                "symlink at {dir}/sprout-cli should resolve to dir with SKILL.md"
+            );
+            let target = fs::read_link(&link).unwrap();
+            assert_eq!(
+                target.to_str().unwrap(),
+                format!("../../{CANONICAL_SKILL_DIR}"),
+                "symlink at {dir}/sprout-cli should use relative target"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_skill_symlinks_skip_real_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        // Pre-create a real directory where a symlink would go.
+        let real_dir = root.join(".claude/skills/sprout-cli");
+        fs::create_dir_all(&real_dir).unwrap();
+        fs::write(real_dir.join("custom.md"), "user content").unwrap();
+
+        ensure_nest_at(&root).unwrap();
+
+        // Real directory should be preserved, not replaced with a symlink.
+        assert!(real_dir.is_dir());
+        assert!(!real_dir
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_to_string(real_dir.join("custom.md")).unwrap(),
+            "user content"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_skill_symlinks_skip_dangling_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        // Pre-create a dangling symlink where the .codex link would go.
+        let codex_skills = root.join(".codex/skills");
+        fs::create_dir_all(&codex_skills).unwrap();
+        let dangling = codex_skills.join("sprout-cli");
+        std::os::unix::fs::symlink("/nonexistent/target", &dangling).unwrap();
+
+        ensure_nest_at(&root).unwrap();
+
+        // Dangling symlink should be left alone (not clobbered).
+        assert!(dangling
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(&dangling).unwrap().to_str().unwrap(),
+            "/nonexistent/target"
         );
     }
 
