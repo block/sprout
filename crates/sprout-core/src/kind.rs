@@ -118,6 +118,20 @@ pub const KIND_NIP43_MEMBER_REMOVED: u32 = 8001;
 /// NIP-43: User leave request (user-signed, ephemeral).
 pub const KIND_NIP43_LEAVE_REQUEST: u32 = 28936;
 
+// NIP-IA identity archival requests (user/agent/owner-signed)
+/// NIP-IA: Request that the relay archive a target identity.
+pub const KIND_IA_ARCHIVE_REQUEST: u32 = 9035;
+/// NIP-IA: Request that the relay unarchive a target identity.
+pub const KIND_IA_UNARCHIVE_REQUEST: u32 = 9036;
+
+// NIP-IA identity archival announcement events (relay-signed)
+/// NIP-IA: Archived-identity delta (relay-signed).
+pub const KIND_IA_ARCHIVED: u32 = 8002;
+/// NIP-IA: Unarchived-identity delta (relay-signed).
+pub const KIND_IA_UNARCHIVED: u32 = 8003;
+/// NIP-IA: Archived identities list snapshot (relay-signed, replaceable).
+pub const KIND_IA_ARCHIVED_LIST: u32 = 13535;
+
 // System / admin (9100–9999)
 /// V1 used kind:9001 — moved here due to NIP-29 conflict.
 pub const KIND_SYSTEM_TIMER_FIRED: u32 = 9100;
@@ -379,6 +393,11 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP43_MEMBER_ADDED,
     KIND_NIP43_MEMBER_REMOVED,
     KIND_NIP43_LEAVE_REQUEST,
+    KIND_IA_ARCHIVE_REQUEST,
+    KIND_IA_UNARCHIVE_REQUEST,
+    KIND_IA_ARCHIVED,
+    KIND_IA_UNARCHIVED,
+    KIND_IA_ARCHIVED_LIST,
     KIND_SYSTEM_TIMER_FIRED,
     KIND_SYSTEM_SLASH_COMMAND,
     KIND_SYSTEM_FLAG,
@@ -505,6 +524,15 @@ pub const fn is_relay_admin_kind(kind: u32) -> bool {
         kind,
         RELAY_ADMIN_ADD_MEMBER | RELAY_ADMIN_REMOVE_MEMBER | RELAY_ADMIN_CHANGE_ROLE
     )
+}
+
+/// Returns `true` if `kind` is a NIP-IA identity archival request (9035–9036).
+///
+/// Only the user-signed *request* kinds are matched. The relay-signed delta and
+/// snapshot kinds (8002/8003/13535) are emitted by the relay, never ingested as
+/// commands, so they are intentionally excluded.
+pub const fn is_identity_archive_request_kind(kind: u32) -> bool {
+    matches!(kind, KIND_IA_ARCHIVE_REQUEST | KIND_IA_UNARCHIVE_REQUEST)
 }
 
 /// Returns `true` if `kind` is a Sprout command kind that requires transactional execution.
