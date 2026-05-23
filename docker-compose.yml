@@ -53,7 +53,7 @@ services:
     restart: unless-stopped
 
   typesense:
-    image: typesense/typesense:27.1
+    image: typesense/typesense:30.2
     container_name: sprout-typesense
     environment:
       TYPESENSE_DATA_DIR: /data
