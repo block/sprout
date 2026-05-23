@@ -229,11 +229,9 @@ fn command_search_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
         dirs.push(current_dir.join("target/debug"));
     }
 
-    if app.is_some() {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(parent) = exe_path.parent() {
-                dirs.push(parent.to_path_buf());
-            }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            dirs.push(parent.to_path_buf());
         }
     }
 
