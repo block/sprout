@@ -425,4 +425,138 @@ mod tests {
         assert!(enforce_request_auth_time_bounds(&auth.to_string(), 100).is_err());
         assert!(enforce_request_auth_time_bounds(&auth.to_string(), 200).is_err());
     }
+
+    async fn test_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://sprout:sprout_dev@localhost:5432/sprout".into());
+        sqlx::PgPool::connect(&url).await.ok()
+    }
+
+    async fn test_state(pool: sqlx::PgPool) -> Option<Arc<AppState>> {
+        let db = sprout_db::Db::from_pool(pool.clone());
+        let config = crate::config::Config::from_env().ok()?;
+        let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .ok()?;
+        let pubsub = Arc::new(
+            sprout_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
+                .await
+                .ok()?,
+        );
+        let audit = sprout_audit::AuditService::new(pool);
+        let auth = sprout_auth::AuthService::new(config.auth.clone());
+        let search = sprout_search::SearchService::new(sprout_search::SearchConfig {
+            url: config.typesense_url.clone(),
+            api_key: config.typesense_key.clone(),
+            collection: "events".to_string(),
+        });
+        let workflow_engine = Arc::new(sprout_workflow::WorkflowEngine::new(
+            db.clone(),
+            sprout_workflow::WorkflowConfig::default(),
+        ));
+        let media_storage = sprout_media::MediaStorage::new(&config.media).ok()?;
+        let (state, _audit_shutdown) = crate::state::AppState::new(
+            config,
+            db,
+            redis_pool,
+            audit,
+            pubsub,
+            auth,
+            search,
+            workflow_engine,
+            Keys::generate(),
+            media_storage,
+        );
+        Some(Arc::new(state))
+    }
+
+    fn auth_tag(owner_keys: &Keys, target_pubkey: &nostr::PublicKey) -> Tag {
+        let tag_json = sprout_sdk::nip_oa::compute_auth_tag(owner_keys, target_pubkey, "")
+            .expect("compute auth tag");
+        sprout_sdk::nip_oa::parse_auth_tag(&tag_json).expect("parse auth tag")
+    }
+
+    fn profile_event(target_keys: &Keys, auth_tag: Tag, created_at: u64) -> Event {
+        EventBuilder::new(Kind::Metadata, "{}")
+            .tags([auth_tag])
+            .custom_created_at(nostr::Timestamp::from(created_at))
+            .sign_with_keys(target_keys)
+            .expect("sign profile")
+    }
+
+    fn owner_archive_request(owner_keys: &Keys, target_hex: &str, auth_tag: Tag) -> Event {
+        EventBuilder::new(Kind::Custom(KIND_IA_ARCHIVE_REQUEST as u16), "")
+            .tags([
+                Tag::parse(["-"]).expect("protected tag"),
+                Tag::parse(["p", target_hex]).expect("p tag"),
+                auth_tag,
+            ])
+            .sign_with_keys(owner_keys)
+            .expect("sign archive request")
+    }
+
+    #[tokio::test]
+    async fn owner_archive_rejects_stale_request_after_live_kind0_owner_flip() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        if sqlx::query("SELECT 1 FROM archived_identities LIMIT 1")
+            .execute(&pool)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let Some(state) = test_state(pool).await else {
+            return;
+        };
+
+        let owner_keys = Keys::generate();
+        let other_owner_keys = Keys::generate();
+        let target_keys = Keys::generate();
+        let target_pubkey = target_keys.public_key();
+        let target_hex = target_pubkey.to_hex();
+        let now = nostr::Timestamp::now().as_secs();
+
+        let live_profile = profile_event(&target_keys, auth_tag(&owner_keys, &target_pubkey), now);
+        state
+            .db
+            .replace_addressable_event(&live_profile, None)
+            .await
+            .expect("insert initial target kind:0");
+
+        let request_auth = auth_tag(&owner_keys, &target_pubkey);
+        let archive_request = owner_archive_request(&owner_keys, &target_hex, request_auth.clone());
+        handle_identity_archive_event(&state, &archive_request)
+            .await
+            .expect("owner archive accepted while live kind:0 attests owner");
+        assert!(
+            state
+                .db
+                .is_archived(&target_hex)
+                .await
+                .expect("is_archived"),
+            "first owner archive should mutate archive state"
+        );
+
+        let revoked_profile = profile_event(
+            &target_keys,
+            auth_tag(&other_owner_keys, &target_pubkey),
+            now + 1,
+        );
+        state
+            .db
+            .replace_addressable_event(&revoked_profile, None)
+            .await
+            .expect("replace target kind:0");
+
+        let stale_request = owner_archive_request(&owner_keys, &target_hex, request_auth);
+        let err = handle_identity_archive_event(&state, &stale_request)
+            .await
+            .expect_err("stale owner request must be rejected after live kind:0 owner flip");
+        assert!(
+            err.contains("live kind:0 no longer attests"),
+            "unexpected error: {err}"
+        );
+    }
 }
