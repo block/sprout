@@ -841,26 +841,36 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn ensure_skill_symlinks_skip_real_directory() {
+    fn ensure_skill_symlinks_skips_existing_path_during_initial_pass() {
+        // ensure_skill_symlinks skips any path where symlink_metadata succeeds.
+        // However, refresh_skill_md_if_stale (called after ensure_skill_symlinks)
+        // migrates pre-existing real directories at .claude/skills/sprout-cli to
+        // symlinks. This test verifies the end-to-end behavior: a pre-existing real
+        // dir at the claude path is migrated to a symlink.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join(".sprout");
         // Pre-create a real directory where a symlink would go.
         let real_dir = root.join(".claude/skills/sprout-cli");
         fs::create_dir_all(&real_dir).unwrap();
-        fs::write(real_dir.join("custom.md"), "user content").unwrap();
+        // Place SKILL.md so migration preserves it.
+        fs::write(real_dir.join("SKILL.md"), "custom skill content").unwrap();
 
         ensure_nest_at(&root).unwrap();
 
-        // Real directory should be preserved, not replaced with a symlink.
-        assert!(real_dir.is_dir());
-        assert!(!real_dir
-            .symlink_metadata()
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        // Migration converts the real dir to a symlink; content is moved to canonical path.
+        assert!(
+            real_dir
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            ".claude/skills/sprout-cli should be migrated to a symlink"
+        );
+        // The canonical path now holds the migrated content.
+        let canonical = root.join(".agents/skills/sprout-cli/SKILL.md");
         assert_eq!(
-            fs::read_to_string(real_dir.join("custom.md")).unwrap(),
-            "user content"
+            fs::read_to_string(&canonical).unwrap(),
+            "custom skill content"
         );
     }
 

@@ -30,7 +30,7 @@ const rules = [
 
 // Exceptions should stay rare and temporary. Prefer splitting files instead.
 const overrides = new Map([
-  ["src-tauri/src/managed_agents/nest.rs", 1300], // version-gated AGENTS.md + SKILL.md refresh + .agents/.claude symlink migration + managed section upsert + dynamic agent context + tests
+  ["src-tauri/src/managed_agents/nest.rs", 1420], // version-gated AGENTS.md + SKILL.md refresh + .agents/.claude symlink migration + ensure_skill_symlinks (all known providers) + managed section upsert + dynamic agent context + tests
   ["src-tauri/src/managed_agents/personas.rs", 950], // built-in persona system prompts (Solo + Kit + Scout) + merge_personas inequality checks + persona pack import/uninstall/list + uninstall safety check
   ["src-tauri/src/managed_agents/teams.rs", 580], // built-in team registry (Kit & Scout) + merge_teams + validate_team_deletion + JSON export/import + tests
   ["src-tauri/src/managed_agents/persona_card.rs", 970], // PNG/ZIP/MD persona card codec + pack-zip detection + nested root finder + provider/model/namePool fields + 27 unit tests
