@@ -238,7 +238,16 @@ Accepted self deltas MUST use `consent=self`. If a request has `actor == target`
 
 A relay MAY accept requests where the actor is an owner key and the target is an agent key authorized by that owner under NIP-OA. This covers the common zombie-agent case: the human still controls the owner key, but the old agent key is gone or dormant and cannot sign a self-archive request.
 
-To accept an owner-of-agent request, the relay MUST verify exactly one `auth` tag on the request using the NIP-OA cryptographic construction with the target as the authorized agent pubkey:
+There are two interchangeable ways to establish the owner-of-agent relationship. Both produce `consent=owner`. They differ only in where the relay obtains the NIP-OA proof:
+
+- **request-borne**: the owner attaches a NIP-OA `auth` tag to the request itself, and
+- **published profile attestation**: the relay reads a NIP-OA `auth` tag from the target's own latest `kind:0` profile.
+
+A relay MAY support either or both. The published-profile-attestation path is RECOMMENDED for the zombie case, because it does not require the owner to retain any credential: the target's profile attestation remains retrievable from the relay after the agent key is gone.
+
+#### Request-Borne Credential
+
+To accept a request-borne owner-of-agent request, the relay MUST verify exactly one `auth` tag on the request using the NIP-OA cryptographic construction with the target as the authorized agent pubkey:
 
 1. The `auth` tag MUST have exactly four elements.
 2. The owner pubkey in the tag MUST equal the request actor (`event.pubkey`).
@@ -251,6 +260,23 @@ To accept an owner-of-agent request, the relay MUST verify exactly one `auth` ta
 This mirrors NIP-AA's treatment of `kind=` at connection admission: the credential here is identity-binding evidence, not a per-event capability. It deliberately differs from event-level NIP-OA verification, where verifiers evaluate every clause against the event being verified and reject self-attestation by comparing the owner to `event.pubkey`. NIP-IA uses the NIP-OA signing preimage as ownership evidence for the target key; the request event itself is authored by the owner, so `auth` owner equals request `event.pubkey` is expected and valid in this specific verification context.
 
 If accepted, relay deltas MUST use `consent=owner` and place the owner pubkey in the third element of the `consent` tag.
+
+#### Published Profile Attestation
+
+A relay MAY instead establish the owner-of-agent relationship from a NIP-OA `auth` tag the **target published in its own `kind:0` profile**. In this path the request itself carries no `auth` tag; the owner proves authority by being the owner pubkey named in the target's profile attestation and by signing the request with the owner key.
+
+The proof event is the target's `kind:0` profile. Because `kind:0` is replaceable per NIP-01, the relay MUST use the **latest valid `kind:0` authored by the target that it knows at request time**. There is no fallback to an older profile version or to any non-profile event: a target revokes this path by republishing its profile without a valid `auth` tag, and the relay MUST honor that revocation.
+
+To accept the request, the relay MUST verify the target's latest `kind:0` under the NIP-OA cryptographic construction:
+
+1. The profile MUST be authored by the target (`profile.pubkey == target`) and MUST have a valid NIP-01 `id` and `sig`.
+2. The profile MUST carry exactly one `auth` tag with exactly four elements. A profile carrying zero `auth` tags, more than one `auth` tag (per NIP-OA, multiple means no valid tag), or no valid `auth` tag fails this proof source; the relay MUST NOT fall back to an earlier profile.
+3. The owner pubkey in the `auth` tag MUST equal the request actor (`request.pubkey`).
+4. The Schnorr signature MUST verify under the owner pubkey over the NIP-OA preimage `nostr:agent-auth:` || `<target-pubkey>` || `:` || `<conditions>`, where `<conditions>` is the exact string from the profile's `auth` tag.
+5. The conditions string MUST be syntactically valid per NIP-OA.
+6. NIP-OA condition clauses MUST NOT be evaluated on this path. Like the request-borne path, this path reuses the NIP-OA signing preimage as identity-binding owner-of-target evidence in a NIP-IA-specific verification context; it is not full event-level NIP-OA provenance verification of the archive request. Because the proof is the target's latest profile used as a standing *ownership declaration*, this path additionally does not evaluate time clauses: `kind=`, `created_at<`, and `created_at>` describe the profile event, not the request, and MUST NOT deny an otherwise valid request. The request-borne path above still evaluates time clauses against the request's `created_at`.
+
+If accepted, relay deltas MUST use `consent=owner` and place the owner pubkey in the third element of the `consent` tag. The delta SHOULD reference the profile event used as proof with a marked `e` tag, `["e", "<profile-event-id>", "", "proof", "<target-pubkey>"]`, kept distinct from the unmarked request `e` tag, so the ownership evidence remains independently auditable.
 
 ## Relay Processing Algorithm
 
@@ -399,7 +425,9 @@ Three places where independent re-derivations are most likely to diverge:
 
 2. **BIP-340 Schnorr signatures are non-deterministic in `aux`.** The signatures in §Test Vectors were produced with 32-byte zero `aux`; a different `aux` (or a library that defaults to random `aux`) produces a different — equally valid — signature for the same `id`. Verifiers MUST verify a signature cryptographically; they MUST NOT compare a re-signed reproduction byte-for-byte against the published value.
 
-3. **`auth` tag preimage is the NIP-OA preimage of the target, not of the request signer.** When verifying an owner-of-agent archive request (§Owner-of-Agent Requests step 3), the `<event.pubkey>` slot in the NIP-OA preimage `nostr:agent-auth:<event.pubkey>:<conditions>` is the *target* (agent) pubkey, not the request signer (owner). Implementations that reuse a generic NIP-OA verifier MUST substitute the target before computing the preimage.
+3. **`auth` tag preimage is the NIP-OA preimage of the target, not of the request signer.** When verifying an owner-of-agent archive request (§Owner-of-Agent Requests), the `<event.pubkey>` slot in the NIP-OA preimage `nostr:agent-auth:<event.pubkey>:<conditions>` is the *target* (agent) pubkey, not the request signer (owner). Implementations that reuse a generic NIP-OA verifier MUST substitute the target before computing the preimage.
+
+4. **Condition evaluation differs by proof source.** In the request-borne owner path the relay evaluates `created_at<`/`created_at>` clauses against the *request's* `created_at`. In the published-profile-attestation path the relay MUST NOT evaluate any clause: the profile `auth` tag is a standing ownership declaration, not authorization for the request, and an agent that only ever issued time-bounded credentials would otherwise be permanently un-archivable once those windows close — defeating the zombie case. A verifier that evaluates conditions on the profile path will silently reject valid requests.
 
 ## Security Considerations
 
@@ -486,6 +514,8 @@ The relay verifies the owner signature on the request, verifies the NIP-OA `auth
 
 The old agent disappears from active agent pickers on that relay. Its historical messages remain visible and authored by `agent_old`.
 
+If the owner no longer holds a saved `auth` credential, they can use the published-profile-attestation path instead: `agent_old` published its NIP-OA `auth` tag (naming `owner_pubkey`) in its `kind:0` profile while it was alive, so that profile remains on the relay. The owner signs the same `kind:9035` with no `auth` tag, and the relay verifies `owner_pubkey` against the target's latest `kind:0`. The owner needs only their own key.
+
 ### Admin archive plus NIP-43 ban
 
 A spammer should be hidden and barred from reconnecting. A relay admin removes the spammer via NIP-43 member removal (`kind:8001`) and archives the same pubkey with NIP-IA (`kind:9035`).
@@ -521,6 +551,8 @@ Relays MUST reject each of the following requests:
 | Non-admin actor archives someone else without valid NIP-OA owner proof | unauthorized |
 | Owner-of-agent request where `auth` owner does not equal actor | unauthorized |
 | Owner-of-agent request where NIP-OA signature was made for a different agent pubkey | unauthorized |
+| Profile-attestation request where the target's latest `kind:0` carries no valid `auth` tag | revoked or never declared; no fallback to older profiles |
+| Profile-attestation request where the owner in the latest `kind:0` `auth` tag does not equal actor | unauthorized |
 | Self-unarchive from a pubkey currently banned by access-control policy | access-control policy wins |
 | Request outside relay freshness window | replay risk |
 
