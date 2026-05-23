@@ -12,7 +12,8 @@ use uuid::Uuid;
 use nostr::Event;
 use sprout_auth::Scope;
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, is_relay_admin_kind, KIND_AGENT_ENGRAM,
+    event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
+    is_relay_admin_kind, KIND_AGENT_ENGRAM,
     KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET,
     KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
     KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
@@ -21,6 +22,7 @@ use sprout_core::kind::{
     KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
     KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE,
     KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED, KIND_LONG_FORM,
+    KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MUTE_LIST,
     KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
     KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
@@ -187,6 +189,15 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         {
             Ok(Scope::AdminUsers)
         }
+        // NIP-IA: identity archive/unarchive requests (9035/9036).
+        // Scope is intentionally UsersWrite, not AdminUsers: NIP-IA's self and
+        // owner-of-agent paths are open to ordinary users (a user retiring their
+        // own key, or an owner archiving their agent). Real authorization is the
+        // consent-path check inside handle_identity_archive_event — the relay
+        // verifies self / admin-role / owner-via-live-kind:0 there. This gate
+        // only ensures the actor can write user-scoped state, which any
+        // profile-publishing user already holds.
+        KIND_IA_ARCHIVE_REQUEST | KIND_IA_UNARCHIVE_REQUEST => Ok(Scope::UsersWrite),
         KIND_NIP29_EDIT_METADATA => {
             // kind:9002 scope split: archived tag → AdminChannels, else ChannelsWrite
             let has_archived = event
@@ -1258,6 +1269,17 @@ pub async fn ingest_event(
     // ── 9. Admin validation (kinds 9000–9022) ────────────────────────────
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
         crate::handlers::side_effects::validate_admin_event(kind_u32, &event, state)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    // ── 9c. NIP-IA identity archive requests (kinds 9035/9036) ───────────
+    // Processed here (verify consent, mutate archived_identities, emit the
+    // relay-signed 8002/8003 delta + 13535 snapshot), then — unlike the
+    // NIP-43 admin commands above — the request itself falls through to normal
+    // storage so the delta's `["e", request_id]` audit reference resolves.
+    if is_identity_archive_request_kind(kind_u32) {
+        crate::handlers::identity_archive::handle_identity_archive_event(state, &event)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
