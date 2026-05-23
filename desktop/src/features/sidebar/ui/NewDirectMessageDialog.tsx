@@ -1,6 +1,7 @@
 import { Search, X } from "lucide-react";
 import * as React from "react";
 
+import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useUserSearchQuery } from "@/features/profile/hooks";
 import { truncatePubkey } from "@/features/profile/lib/identity";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -66,16 +67,18 @@ export function NewDirectMessageDialog({
       open && deferredSearchQuery.length > 0 && !hasReachedRecipientLimit,
     limit: 8,
   });
+  const isArchivedDiscovery = useIsArchivedPredicate();
   const searchResults = React.useMemo(
     () =>
       (userSearchQuery.data ?? []).filter((user) => {
         const normalizedPubkey = user.pubkey.toLowerCase();
         return (
           normalizedPubkey !== currentPubkey?.toLowerCase() &&
-          !selectedPubkeys.has(normalizedPubkey)
+          !selectedPubkeys.has(normalizedPubkey) &&
+          !isArchivedDiscovery(user.pubkey)
         );
       }),
-    [currentPubkey, selectedPubkeys, userSearchQuery.data],
+    [currentPubkey, isArchivedDiscovery, selectedPubkeys, userSearchQuery.data],
   );
 
   React.useEffect(() => {

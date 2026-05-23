@@ -4,6 +4,7 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
+import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { ChannelMember } from "@/shared/api/types";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
@@ -15,6 +16,7 @@ export function useClassifiedMembers(
 ) {
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();
+  const isArchived = useIsArchivedPredicate();
 
   const managedAgents = managedAgentsQuery.data ?? [];
   const relayAgents = relayAgentsQuery.data ?? [];
@@ -47,11 +49,19 @@ export function useClassifiedMembers(
     [managedAgentPubkeys],
   );
 
-  const { people, bots } = React.useMemo(() => {
+  // Archived wins over bot: a zombie agent should fold into "Archived", not
+  // appear as an active "Bot". This is NIP-IA's headline use case. Peel
+  // archived FIRST, then split the remainder into people/bots.
+  const { people, bots, archived } = React.useMemo(() => {
     const peopleList: ChannelMember[] = [];
     const botList: ChannelMember[] = [];
+    const archivedList: ChannelMember[] = [];
 
     for (const member of members) {
+      if (isArchived(member.pubkey)) {
+        archivedList.push(member);
+        continue;
+      }
       if (isBot(member)) {
         botList.push(member);
       } else {
@@ -64,14 +74,20 @@ export function useClassifiedMembers(
         compareMembersByRole(left, right, currentPubkey),
       );
 
-    return { people: sort(peopleList), bots: sort(botList) };
-  }, [currentPubkey, isBot, members]);
+    return {
+      people: sort(peopleList),
+      bots: sort(botList),
+      archived: sort(archivedList),
+    };
+  }, [currentPubkey, isArchived, isBot, members]);
 
   return {
     people,
     bots,
+    archived,
     peopleCount: people.length,
     botCount: bots.length,
+    archivedCount: archived.length,
     isBot,
     isMyBot,
     managedAgentsQuery,

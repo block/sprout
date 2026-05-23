@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -32,6 +33,30 @@ export function useIsIdentityArchived(pubkey: string): boolean | undefined {
   if (!query.data) return undefined;
   const lower = pubkey.toLowerCase();
   return query.data.archived.includes(lower);
+}
+
+/**
+ * Predicate for hiding archived identities from forward-looking discovery
+ * surfaces (mention autocomplete, DM picker, member-adder, search,
+ * panel-fold). Distinct from `useIsIdentityArchived` because callers here
+ * need a synchronous boolean: while the `kind:13535` snapshot is loading the
+ * predicate returns `false` (no-op — show everyone), never `true` — fail-open
+ * so a cold-start can't briefly hide everyone.
+ *
+ * No `currentPubkey` carve-out: self-mention / self-DM are already no-ops at
+ * their consumers, and the panel partition intentionally folds the current
+ * user into their own Archived section when self-archived (NIP-IA's
+ * anti-shadowban property surfaces in the UI; the profile pane's flair and
+ * `selfMember` role lookup are independent of bucket).
+ */
+export function useIsArchivedPredicate(): (pubkey: string) => boolean {
+  const query = useArchivedIdentitiesQuery();
+  return React.useMemo(() => {
+    const set = new Set(
+      (query.data?.archived ?? []).map((p) => p.toLowerCase()),
+    );
+    return (pubkey: string) => set.has(pubkey.toLowerCase());
+  }, [query.data]);
 }
 
 /**
