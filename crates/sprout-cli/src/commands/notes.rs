@@ -7,9 +7,10 @@
 //! - `notes set --name <s> --title T [--summary S] [--tag t]... --content -`
 //!   Idempotent upsert. Read-before-write preserves `published_at` and carries
 //!   forward the existing title when `--title` is omitted on an update.
-//! - `notes get (--naddr <n> | --name <slug> [--author <ref>]) [--content-only]`
+//! - `notes get (--naddr <n> | --name <slug> [--author <ref>] [--latest]) [--content-only]`
 //!   `--naddr` / coordinate form is exact. `--name` does a cross-author `#d`
-//!   query; >1 hit prints candidates and exits 1.
+//!   query; >1 hit prints candidates and exits 1, unless `--latest` picks the
+//!   most recently updated one. `--latest` conflicts with `--author`/`--naddr`.
 //! - `notes ls [--author <ref>] [--tag t] [--limit N]` — own notes by default.
 //! - `notes rm --name <s>` — NIP-09 deletion (kind:5) targeting the addressable
 //!   coordinate via an `a` tag only (no `e` tag — see [`build_rm_event`]).
@@ -619,11 +620,40 @@ pub async fn cmd_set(
     Ok(())
 }
 
+/// Validate the flag combination for `notes get`. Pure (booleans only) so the
+/// full matrix is unit-testable without a relay. `--naddr` and `--name` are
+/// exclusive-or; `--author` and `--latest` only refine `--name`, and they
+/// disambiguate the same multi-author case in opposite ways, so they conflict.
+fn validate_get_args(naddr: bool, name: bool, author: bool, latest: bool) -> Result<(), CliError> {
+    if naddr == name {
+        return Err(CliError::Usage(
+            "exactly one of --naddr or --name is required".into(),
+        ));
+    }
+    if naddr && author {
+        return Err(CliError::Usage(
+            "--author only applies with --name; --naddr already identifies the author".into(),
+        ));
+    }
+    if naddr && latest {
+        return Err(CliError::Usage(
+            "--latest only applies with --name; --naddr already identifies one note".into(),
+        ));
+    }
+    if author && latest {
+        return Err(CliError::Usage(
+            "--latest and --author are mutually exclusive".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn cmd_get(
     client: &SproutClient,
     naddr: Option<&str>,
     name: Option<&str>,
     author: Option<&str>,
+    latest: bool,
     content_only: bool,
 ) -> Result<(), CliError> {
     let snapshot = if let Some(raw) = naddr {
@@ -653,10 +683,14 @@ pub async fn cmd_get(
                 1 => snapshots.remove(0),
                 _ => {
                     sort_snapshots_newest_first(&mut snapshots);
-                    return Err(CliError::Usage(format!(
-                        "note name {slug:?} is ambiguous; pass --author <pubkey>\n{}",
-                        format_note_candidates(&snapshots)
-                    )));
+                    if latest {
+                        snapshots.remove(0)
+                    } else {
+                        return Err(CliError::Usage(format!(
+                            "note name {slug:?} is ambiguous; pass --author <pubkey> or --latest\n{}",
+                            format_note_candidates(&snapshots)
+                        )));
+                    }
                 }
             }
         }
@@ -799,24 +833,16 @@ pub async fn dispatch(cmd: crate::NotesCmd, client: &SproutClient) -> Result<(),
             naddr,
             name,
             author,
+            latest,
             content_only,
         } => {
-            if naddr.is_some() == name.is_some() {
-                return Err(CliError::Usage(
-                    "exactly one of --naddr or --name is required".into(),
-                ));
-            }
-            if naddr.is_some() && author.is_some() {
-                return Err(CliError::Usage(
-                    "--author only applies with --name; --naddr already identifies the author"
-                        .into(),
-                ));
-            }
+            validate_get_args(naddr.is_some(), name.is_some(), author.is_some(), latest)?;
             cmd_get(
                 client,
                 naddr.as_deref(),
                 name.as_deref(),
                 author.as_deref(),
+                latest,
                 content_only,
             )
             .await
@@ -1299,5 +1325,45 @@ mod tests {
         let prior = prior_snapshot(1_000, "x", "T", None, &[], None, "");
         let event = build_and_sign(Some(&prior), "x", None, None, None, "body", 2_000).unwrap();
         assert_eq!(tag_value(&event, "published_at"), Some("2000"));
+    }
+
+    // -- validate_get_args --
+
+    #[test]
+    fn validate_get_args_accepts_minimal_forms() {
+        // (naddr, name, author, latest)
+        assert!(validate_get_args(true, false, false, false).is_ok()); // --naddr
+        assert!(validate_get_args(false, true, false, false).is_ok()); // --name
+        assert!(validate_get_args(false, true, true, false).is_ok()); // --name --author
+        assert!(validate_get_args(false, true, false, true).is_ok()); // --name --latest
+    }
+
+    #[test]
+    fn validate_get_args_requires_exactly_one_selector() {
+        let neither = validate_get_args(false, false, false, false);
+        let both = validate_get_args(true, true, false, false);
+        for err in [neither, both] {
+            assert!(matches!(err, Err(CliError::Usage(m)) if m.contains("exactly one")));
+        }
+    }
+
+    #[test]
+    fn validate_get_args_rejects_naddr_with_refiners() {
+        assert!(matches!(
+            validate_get_args(true, false, true, false),
+            Err(CliError::Usage(m)) if m.contains("--author only applies with --name")
+        ));
+        assert!(matches!(
+            validate_get_args(true, false, false, true),
+            Err(CliError::Usage(m)) if m.contains("--latest only applies with --name")
+        ));
+    }
+
+    #[test]
+    fn validate_get_args_rejects_author_and_latest_together() {
+        assert!(matches!(
+            validate_get_args(false, true, true, true),
+            Err(CliError::Usage(m)) if m.contains("mutually exclusive")
+        ));
     }
 }

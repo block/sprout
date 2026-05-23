@@ -840,6 +840,10 @@ pub enum NotesCmd {
         /// Disambiguate `--name` to a specific author (hex pubkey, display name, or `me`).
         #[arg(long)]
         author: Option<String>,
+        /// On an ambiguous `--name` (multiple authors), pick the most recently updated note
+        /// instead of erroring. Mutually exclusive with `--author` and `--naddr`.
+        #[arg(long, default_value_t = false)]
+        latest: bool,
         /// Print only the markdown body, not the full event JSON.
         #[arg(long, default_value_t = false)]
         content_only: bool,
