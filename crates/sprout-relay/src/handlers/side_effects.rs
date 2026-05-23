@@ -7,9 +7,10 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, KIND_GIT_REPO_ANNOUNCEMENT,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
-    KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
+    event_kind_u32, is_parameterized_replaceable, KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED,
+    KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
+    KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
 use sprout_db::channel::MemberRole;
 
@@ -2097,4 +2098,150 @@ pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<(
         tracing::info!(count = reconciled, "reconciled channel discovery events");
     }
     Ok(())
+}
+
+// ── NIP-IA relay-level identity archive announcement events ──────────────────
+
+/// Publish a kind:13535 archived identities list event (NIP-IA).
+///
+/// Queries all current archived identities and emits a relay-signed,
+/// NIP-70-protected replaceable-by-convention snapshot with bare `p` tags.
+pub async fn publish_nipia_archival_list(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let archived = state.db.list_archived().await?;
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags: Vec<Tag> = Vec::with_capacity(archived.len() + 1);
+    tags.push(Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
+
+    for identity in &archived {
+        tags.push(
+            Tag::parse(["p", &identity.pubkey])
+                .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+        );
+    }
+
+    let event = EventBuilder::new(Kind::Custom(KIND_IA_ARCHIVED_LIST as u16), "")
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{KIND_IA_ARCHIVED_LIST}: {e}"))?;
+
+    let (stored, was_inserted) = state.db.replace_addressable_event(&event, None).await?;
+    if was_inserted {
+        dispatch_persistent_event(state, &stored, KIND_IA_ARCHIVED_LIST, &relay_pubkey_hex).await;
+    }
+
+    info!(
+        archived_count = archived.len(),
+        "NIP-IA archived identities list published"
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn publish_nipia_delta(
+    state: &Arc<AppState>,
+    kind: u32,
+    target_pubkey_hex: &str,
+    consent_path: &str,
+    actor_pubkey_hex: &str,
+    request_event_id: &str,
+    content: &str,
+    reason: Option<&str>,
+    replaced_by: Option<&str>,
+) -> anyhow::Result<()> {
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags = vec![
+        Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
+        Tag::parse(["p", target_pubkey_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+        Tag::parse(["consent", consent_path, actor_pubkey_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build consent tag: {e}"))?,
+        Tag::parse(["e", request_event_id])
+            .map_err(|e| anyhow::anyhow!("failed to build e tag: {e}"))?,
+    ];
+
+    if let Some(reason) = reason {
+        tags.push(
+            Tag::parse(["reason", reason])
+                .map_err(|e| anyhow::anyhow!("failed to build reason tag: {e}"))?,
+        );
+    }
+    if let Some(replaced_by) = replaced_by {
+        tags.push(
+            Tag::parse(["replaced-by", replaced_by])
+                .map_err(|e| anyhow::anyhow!("failed to build replaced-by tag: {e}"))?,
+        );
+    }
+
+    let event = EventBuilder::new(Kind::Custom(kind as u16), content)
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
+
+    let (stored, was_inserted) = state.db.insert_event(&event, None).await?;
+    if !was_inserted {
+        return Ok(());
+    }
+
+    dispatch_persistent_event(state, &stored, kind, &relay_pubkey_hex).await;
+
+    info!(
+        target = %target_pubkey_hex,
+        relay = %relay_pubkey_hex,
+        kind,
+        consent = %consent_path,
+        "NIP-IA delta event published"
+    );
+    Ok(())
+}
+
+/// Publish a kind:8002 archived-identity delta event (NIP-IA).
+#[allow(clippy::too_many_arguments)]
+pub async fn publish_nipia_archived(
+    state: &Arc<AppState>,
+    target_pubkey_hex: &str,
+    consent_path: &str,
+    actor_pubkey_hex: &str,
+    request_event_id: &str,
+    content: &str,
+    reason: Option<&str>,
+    replaced_by: Option<&str>,
+) -> anyhow::Result<()> {
+    publish_nipia_delta(
+        state,
+        KIND_IA_ARCHIVED,
+        target_pubkey_hex,
+        consent_path,
+        actor_pubkey_hex,
+        request_event_id,
+        content,
+        reason,
+        replaced_by,
+    )
+    .await
+}
+
+/// Publish a kind:8003 unarchived-identity delta event (NIP-IA).
+pub async fn publish_nipia_unarchived(
+    state: &Arc<AppState>,
+    target_pubkey_hex: &str,
+    consent_path: &str,
+    actor_pubkey_hex: &str,
+    request_event_id: &str,
+    content: &str,
+    reason: Option<&str>,
+) -> anyhow::Result<()> {
+    publish_nipia_delta(
+        state,
+        KIND_IA_UNARCHIVED,
+        target_pubkey_hex,
+        consent_path,
+        actor_pubkey_hex,
+        request_event_id,
+        content,
+        reason,
+        None,
+    )
+    .await
 }
