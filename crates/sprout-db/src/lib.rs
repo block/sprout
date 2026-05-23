@@ -11,6 +11,8 @@
 
 /// API token storage and lookup.
 pub mod api_token;
+/// Relay-scoped archived identity persistence (NIP-IA).
+pub mod archived_identities;
 /// Channel and membership persistence.
 pub mod channel;
 /// Direct message channel persistence.
@@ -1414,6 +1416,45 @@ impl Db {
     /// inserted, or 0 if the `pubkey_allowlist` table doesn't exist.
     pub async fn backfill_from_allowlist(&self) -> Result<u64> {
         relay_members::backfill_from_allowlist(&self.pool).await
+    }
+
+    // ── Archived identities (NIP-IA) ──────────────────────────────────────────
+
+    /// Returns `true` if `pubkey` (64-char hex) is currently archived.
+    pub async fn is_archived(&self, pubkey: &str) -> Result<bool> {
+        archived_identities::is_archived(&self.pool, pubkey).await
+    }
+
+    /// Archives an identity. Returns `true` if inserted, `false` if already archived.
+    pub async fn archive(
+        &self,
+        pubkey: &str,
+        consent_path: &str,
+        actor: &str,
+        reason: Option<&str>,
+        replaced_by: Option<&str>,
+        request_event_id: &str,
+    ) -> Result<bool> {
+        archived_identities::archive(
+            &self.pool,
+            pubkey,
+            consent_path,
+            actor,
+            reason,
+            replaced_by,
+            request_event_id,
+        )
+        .await
+    }
+
+    /// Unarchives an identity. Returns `true` if deleted, `false` if absent.
+    pub async fn unarchive(&self, pubkey: &str) -> Result<bool> {
+        archived_identities::unarchive(&self.pool, pubkey).await
+    }
+
+    /// Returns all archived identities ordered by archive time ascending.
+    pub async fn list_archived(&self) -> Result<Vec<archived_identities::ArchivedIdentity>> {
+        archived_identities::list_archived(&self.pool).await
     }
 
     // ── Discovery events ─────────────────────────────────────────────────────
