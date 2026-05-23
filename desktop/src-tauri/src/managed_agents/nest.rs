@@ -4,7 +4,8 @@
 //! Sprout-spawned agent starts with orientation (AGENTS.md) and a
 //! place to accumulate research, plans, and logs across sessions.
 //!
-//! Idempotent: existing files and directories are never overwritten.
+//! Static template content in AGENTS.md (above the managed-section markers)
+//! and SKILL.md is refreshed when the embedded template version changes.
 
 use super::{load_managed_agents, load_personas, ManagedAgentRecord, PersonaRecord};
 #[cfg(test)]
@@ -35,6 +36,15 @@ const AGENTS_MD: &str = include_str!("nest_agents.md");
 /// Written to ~/.sprout/.claude/skills/sprout-cli/SKILL.md on first init.
 const SPROUT_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
 
+/// Template content version for AGENTS.md static content (above managed markers).
+/// Bump this when changing `nest_agents.md` to trigger refresh on existing installs.
+/// Version 1 is implicitly "before this mechanism existed" (no version file).
+const NEST_AGENTS_VERSION: u32 = 2;
+
+/// Template content version for SKILL.md.
+/// Bump this when changing `nest_skill.md` to trigger refresh on existing installs.
+const NEST_SKILL_VERSION: u32 = 2;
+
 const BEGIN_MARKER: &str = "<!-- BEGIN SPROUT MANAGED";
 const END_MARKER: &str = "<!-- END SPROUT MANAGED -->";
 /// Returns the nest root path (`~/.sprout`), or `None` if the home
@@ -60,8 +70,10 @@ pub fn ensure_nest() -> Result<(), String> {
 /// - Sets 700 permissions on the root, all subdirectories, and the skill
 ///   directory tree (Unix).
 ///
-/// Idempotent: safe to call on every launch. Existing files are never
-/// overwritten — users can freely edit AGENTS.md or SKILL.md and they persist.
+/// Idempotent: safe to call on every launch. Static template content in
+/// AGENTS.md (above the managed-section markers) and SKILL.md is refreshed
+/// when the embedded template version changes. The managed section in AGENTS.md
+/// and any user content below it are preserved.
 ///
 /// Rejects symlinks at the root path to prevent redirect attacks.
 ///
@@ -133,6 +145,10 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
             return Err(format!("create {}: {e}", skill_md.display()));
         }
     }
+
+    // Refresh static content if the embedded template version is newer.
+    refresh_agents_md_if_stale(root)?;
+    refresh_skill_md_if_stale(root)?;
 
     // Set owner-only permissions on root and all subdirectories.
     // Skip any path that is a symlink — chmod would affect the target.
@@ -230,6 +246,99 @@ pub fn ensure_cli_symlink(exe_parent: &Path) -> Result<(), String> {
 /// No-op on non-Unix platforms — symlink management is macOS/Linux only.
 #[cfg(not(unix))]
 pub fn ensure_cli_symlink(_exe_parent: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// Read a version number from a file. Returns 0 if the file doesn't exist or can't be parsed.
+fn read_version_file(path: &Path) -> u32 {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Refresh AGENTS.md static content if the template version has changed.
+///
+/// Preserves everything from the `<!-- BEGIN SPROUT MANAGED` marker onward
+/// (the dynamic section managed by `upsert_managed_section`). Replaces
+/// only the static template content above the marker.
+fn refresh_agents_md_if_stale(root: &Path) -> Result<(), String> {
+    let version_path = root.join(".nest-agents-version");
+    if read_version_file(&version_path) >= NEST_AGENTS_VERSION {
+        return Ok(());
+    }
+
+    let agents_md = root.join("AGENTS.md");
+    let current =
+        fs::read_to_string(&agents_md).map_err(|e| format!("read {}: {e}", agents_md.display()))?;
+
+    let new_content = match find_marker_at_line_start(&current, BEGIN_MARKER) {
+        Some(pos) => {
+            // Find the start of the marker line (could be preceded by blank lines).
+            let marker_line_start = current[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            // Template content up to (but not including) the managed section,
+            // then the existing managed section from the marker onward.
+            let template_static = match AGENTS_MD.find(BEGIN_MARKER) {
+                Some(tmpl_marker_pos) => {
+                    let tmpl_line_start = AGENTS_MD[..tmpl_marker_pos]
+                        .rfind('\n')
+                        .map(|p| p + 1)
+                        .unwrap_or(0);
+                    &AGENTS_MD[..tmpl_line_start]
+                }
+                None => AGENTS_MD,
+            };
+            format!("{}{}", template_static, &current[marker_line_start..])
+        }
+        None => {
+            // No managed section found — write full template.
+            AGENTS_MD.to_string()
+        }
+    };
+
+    // Atomic write via temp file.
+    let parent = agents_md.parent().ok_or("AGENTS.md has no parent dir")?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| format!("tempfile in {}: {e}", parent.display()))?;
+    {
+        use std::io::Write;
+        tmp.write_all(new_content.as_bytes())
+            .map_err(|e| format!("write tempfile: {e}"))?;
+    }
+    tmp.persist(&agents_md)
+        .map_err(|e| format!("persist {}: {e}", agents_md.display()))?;
+
+    fs::write(&version_path, format!("{NEST_AGENTS_VERSION}\n"))
+        .map_err(|e| format!("write {}: {e}", version_path.display()))?;
+
+    Ok(())
+}
+
+/// Refresh SKILL.md if the template version has changed.
+///
+/// SKILL.md has no user-editable sections — it is fully overwritten on version bump.
+fn refresh_skill_md_if_stale(root: &Path) -> Result<(), String> {
+    let version_path = root.join(".claude/skills/sprout-cli/.skill-version");
+    if read_version_file(&version_path) >= NEST_SKILL_VERSION {
+        return Ok(());
+    }
+
+    let skill_md = root.join(".claude/skills/sprout-cli/SKILL.md");
+    // Atomic write via temp file.
+    let parent = skill_md.parent().ok_or("SKILL.md has no parent dir")?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| format!("tempfile in {}: {e}", parent.display()))?;
+    {
+        use std::io::Write;
+        tmp.write_all(SPROUT_CLI_SKILL_MD.as_bytes())
+            .map_err(|e| format!("write tempfile: {e}"))?;
+    }
+    tmp.persist(&skill_md)
+        .map_err(|e| format!("persist {}: {e}", skill_md.display()))?;
+
+    fs::write(&version_path, format!("{NEST_SKILL_VERSION}\n"))
+        .map_err(|e| format!("write {}: {e}", version_path.display()))?;
+
     Ok(())
 }
 
@@ -945,6 +1054,101 @@ mod tests {
         assert_eq!(
             after_first, after_second,
             "upsert must be idempotent: second call must not alter the file"
+        );
+    }
+
+    #[test]
+    fn refresh_agents_md_writes_version_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+        let version = fs::read_to_string(root.join(".nest-agents-version")).unwrap();
+        assert_eq!(version.trim(), NEST_AGENTS_VERSION.to_string());
+    }
+
+    #[test]
+    fn refresh_skill_md_writes_version_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+        let version =
+            fs::read_to_string(root.join(".claude/skills/sprout-cli/.skill-version")).unwrap();
+        assert_eq!(version.trim(), NEST_SKILL_VERSION.to_string());
+    }
+
+    #[test]
+    fn refresh_agents_md_preserves_managed_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+
+        // Simulate a managed section update.
+        let agents_md = root.join("AGENTS.md");
+        upsert_managed_section(
+            &agents_md,
+            "## Active Agents\n\n| Name | Role |\n|------|------|\n| Kit | Builder |",
+        )
+        .unwrap();
+
+        // Remove version file to simulate an upgrade.
+        fs::remove_file(root.join(".nest-agents-version")).unwrap();
+
+        // Re-run ensure_nest_at (triggers refresh).
+        ensure_nest_at(&root).unwrap();
+
+        let content = fs::read_to_string(&agents_md).unwrap();
+        // Static content should be refreshed (from template).
+        assert!(
+            content.starts_with("# Sprout Nest"),
+            "template header must be present"
+        );
+        // Managed section should be preserved.
+        assert!(
+            content.contains("Kit"),
+            "managed section agent table must survive refresh"
+        );
+        assert!(content.contains(BEGIN_MARKER), "BEGIN marker must survive");
+        assert!(content.contains(END_MARKER), "END marker must survive");
+    }
+
+    #[test]
+    fn refresh_skips_when_version_current() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+
+        // Manually change AGENTS.md content after version file is written.
+        let agents_md = root.join("AGENTS.md");
+        fs::write(&agents_md, "user modified content").unwrap();
+
+        // Re-run ensure_nest_at — version file is current, so no refresh.
+        ensure_nest_at(&root).unwrap();
+
+        let content = fs::read_to_string(&agents_md).unwrap();
+        assert_eq!(
+            content, "user modified content",
+            "should not overwrite when version is current"
+        );
+    }
+
+    #[test]
+    fn refresh_skill_overwrites_on_version_bump() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+
+        let skill_md = root.join(".claude/skills/sprout-cli/SKILL.md");
+        fs::write(&skill_md, "stale skill content").unwrap();
+
+        // Remove version file to simulate upgrade.
+        let _ = fs::remove_file(root.join(".claude/skills/sprout-cli/.skill-version"));
+
+        ensure_nest_at(&root).unwrap();
+
+        let content = fs::read_to_string(&skill_md).unwrap();
+        assert_eq!(
+            content, SPROUT_CLI_SKILL_MD,
+            "SKILL.md must be refreshed on version bump"
         );
     }
 }

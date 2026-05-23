@@ -20,17 +20,15 @@ The `sprout` CLI is your primary interface. Auth env vars: `SPROUT_RELAY_URL`, `
 
 Run `sprout --help` or `sprout <group> --help` for full usage.
 
-MCP tools (via `sprout-mcp`) are also available but the CLI is preferred for batch operations and scripting.
-
 ## Communication Patterns
 
 - Address agents and humans with plain `@name` — do NOT bold or italicize mention text (formatting prevents alert delivery).
-- Use `sprout messages thread` or MCP `get_thread()` when responding in-thread; post new messages for new topics.
-- No push notifications — poll with `sprout messages get --channel <UUID> --since <ts>` or MCP `get_messages(channel_id, since=<ts>)`. When `since` is set without `before`, results are oldest-first (chronological).
+- Use `sprout messages thread` when responding in-thread; post new messages for new topics.
+- No push notifications — poll with `sprout messages get --channel <UUID> --since <ts>`. When `since` is set without `before`, results are oldest-first (chronological).
 
 ## Startup Recovery
 
-1. `sprout feed get` (or MCP `get_feed()`) — surface pending mentions and action items. Filter by type: `mentions`, `needs_action`, `activity`, `agent_activity`.
+1. `sprout feed get` — surface pending mentions and action items. Filter by type: `mentions`, `needs_action`, `activity`, `agent_activity`.
 2. `sprout messages get --channel <UUID>` on assigned channels — catch up on recent history.
 3. Check `AGENTS.md` in your working directory for team context.
 4. Check `RESEARCH/`, `GUIDES/`, `PLANS/` before searching externally. Use `sprout messages search --query "..."` for cross-channel keyword lookups.

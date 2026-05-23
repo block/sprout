@@ -799,14 +799,14 @@ fn format_event_block(
 
 /// Append a reply instruction when the agent is responding to a thread event.
 ///
-/// Tells the agent to pass the triggering event's ID as `parent_event_id` on
-/// every tool call in this turn, and to leave `broadcast_to_channel` unset so
-/// replies stay inside the thread.
+/// Tells the agent to pass `--reply-to <event_id>` on every `sprout messages
+/// send` call in this turn, and not to broadcast to the channel so replies
+/// stay inside the thread.
 fn append_reply_instruction(s: &mut String, event_id: &str) {
     s.push_str(&format!(
-        "\nIMPORTANT: When responding, pass parent_event_id=\"{event_id}\" \
-         on EVERY send_message and send_diff_message call in this turn. \
-         Do not set broadcast_to_channel."
+        "\nIMPORTANT: When responding, use `--reply-to {event_id}` \
+         on EVERY `sprout messages send` call in this turn. \
+         Do not broadcast to the channel."
     ));
 }
 
@@ -828,16 +828,16 @@ fn format_context_hints(
     // and the scope should be "dm" (not "thread") because the agent is in a DM.
     if is_dm {
         let is_reply = thread_tags.root_event_id.is_some();
-        // DM replies use get_thread() because /messages excludes thread replies.
-        // DM non-replies use get_messages() for recent conversation.
+        // DM replies use thread command because /messages excludes thread replies.
+        // DM non-replies use get for recent conversation.
         let ctx_hint = if has_conversation_context && is_reply {
-            "Thread context included below. Use get_thread() for full history if truncated."
+            "Thread context included below. Use `sprout messages thread --channel <UUID> --event <ID>` for full history if truncated."
         } else if has_conversation_context {
-            "Conversation context included below. Use get_messages() for full history if truncated."
+            "Conversation context included below. Use `sprout messages get --channel <UUID>` for full history if truncated."
         } else if is_reply {
-            "Use get_thread() to fetch the reply chain."
+            "Use `sprout messages thread --channel <UUID> --event <ID>` to fetch the reply chain."
         } else {
-            "Use get_messages() for conversation context."
+            "Use `sprout messages get --channel <UUID>` for conversation context."
         };
         let mut s = format!(
             "[Context]\n\
@@ -860,9 +860,9 @@ fn format_context_hints(
         s
     } else if let Some(ref root) = thread_tags.root_event_id {
         let ctx_hint = if has_conversation_context {
-            "Thread context included below. Use get_thread() for full history if truncated."
+            "Thread context included below. Use `sprout messages thread --channel <UUID> --event <ID>` for full history if truncated."
         } else {
-            "Use get_thread() to fetch thread context."
+            "Use `sprout messages thread --channel <UUID> --event <ID>` to fetch thread context."
         };
         let mut s = format!(
             "[Context]\n\
@@ -885,7 +885,7 @@ fn format_context_hints(
             "[Context]\n\
              Scope: channel\n\
              Channel: {channel_display}\n\
-             Hint: Use get_messages() for recent messages if needed."
+             Hint: Use `sprout messages get --channel <UUID>` for recent messages if needed."
         )
     }
 }
@@ -2364,10 +2364,10 @@ mod tests {
             prompt.contains("Scope: dm"),
             "DM reply should have Scope: dm, got:\n{prompt}"
         );
-        // Hint should point to get_thread(), not get_messages().
+        // Hint should point to the thread command, not get.
         assert!(
-            prompt.contains("get_thread()"),
-            "DM reply hint should mention get_thread(), got:\n{prompt}"
+            prompt.contains("sprout messages thread"),
+            "DM reply hint should mention `sprout messages thread`, got:\n{prompt}"
         );
         // Thread structural info should be present.
         assert!(
@@ -2406,12 +2406,12 @@ mod tests {
         );
         assert!(prompt.contains("Scope: dm"));
         assert!(
-            prompt.contains("get_messages()"),
-            "DM non-reply hint should mention get_messages()"
+            prompt.contains("sprout messages get"),
+            "DM non-reply hint should mention `sprout messages get`"
         );
         assert!(
-            !prompt.contains("get_thread()"),
-            "DM non-reply should NOT mention get_thread()"
+            !prompt.contains("sprout messages thread"),
+            "DM non-reply should NOT mention `sprout messages thread`"
         );
     }
 
@@ -2801,11 +2801,11 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
         assert!(
-            prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
+            prompt.contains(&format!("--reply-to {event_id}")),
             "channel thread reply should include reply instruction with triggering event ID"
         );
         assert!(
-            prompt.contains("Do not set broadcast_to_channel"),
+            prompt.contains("Do not broadcast to the channel"),
             "channel thread reply should include broadcast suppression hint"
         );
     }
@@ -2841,7 +2841,7 @@ mod tests {
             },
         );
         assert!(
-            prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
+            prompt.contains(&format!("--reply-to {event_id}")),
             "DM thread reply should include reply instruction"
         );
     }
@@ -2862,7 +2862,7 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
         assert!(
-            !prompt.contains("parent_event_id"),
+            !prompt.contains("--reply-to"),
             "top-level message should NOT include reply instruction"
         );
     }
@@ -2893,7 +2893,7 @@ mod tests {
             },
         );
         assert!(
-            !prompt.contains("parent_event_id"),
+            !prompt.contains("--reply-to"),
             "DM non-reply should NOT include reply instruction"
         );
     }
@@ -2924,15 +2924,15 @@ mod tests {
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
         // The instruction should use the triggering event's own ID — not root or parent.
         assert!(
-            prompt.contains(&format!("parent_event_id=\"{event_id}\"")),
+            prompt.contains(&format!("--reply-to {event_id}")),
             "nested reply instruction should use the triggering event ID"
         );
         assert!(
-            !prompt.contains(&format!("parent_event_id=\"{root_id}\"")),
+            !prompt.contains(&format!("--reply-to {root_id}")),
             "instruction should NOT use root_event_id"
         );
         assert!(
-            !prompt.contains(&format!("parent_event_id=\"{parent_id}\"")),
+            !prompt.contains(&format!("--reply-to {parent_id}")),
             "instruction should NOT use parent_event_id from tags"
         );
     }
@@ -2966,7 +2966,7 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
         assert!(
-            prompt.contains(&format!("parent_event_id=\"{threaded_id}\"")),
+            prompt.contains(&format!("--reply-to {threaded_id}")),
             "batched prompt should use last (threaded) event's ID"
         );
     }
@@ -2999,7 +2999,7 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default());
         assert!(
-            !prompt.contains("parent_event_id"),
+            !prompt.contains("--reply-to"),
             "batched prompt where last event is top-level should NOT include reply instruction"
         );
     }

@@ -2356,14 +2356,15 @@ fn default_heartbeat_prompt() -> String {
          You have been awakened for a routine heartbeat. You have NO incoming messages or\n\
          active channel context for this turn.\n\n\
          Your tasks:\n\
-         1. Call `get_feed(types='needs_action')` to check for pending workflow approvals or\n\
+         1. Run `sprout feed get --types needs_action` to check for pending workflow approvals or\n\
             high-priority requests addressed to you.\n\
-         2. Call `get_feed(types='mentions')` to check for unanswered @mentions.\n\
-         3. If you find actionable items, address them using the appropriate tools\n\
-            (e.g., `approve_step`, `send_message`, `send_message(parent_event_id=...)`).\n\
+         2. Run `sprout feed get --types mentions` to check for unanswered @mentions.\n\
+         3. If you find actionable items, address them using the appropriate CLI commands\n\
+            (e.g., `sprout workflows approve --token <UUID>`, `sprout messages send`,\n\
+            `sprout messages send --reply-to <event-id>`).\n\
          4. If there are no pending actions or mentions, end your turn immediately.\n\n\
-         Do not call `list_channels()` or `search()` unless you have a specific reason.\n\
-         Do not invent work — only act on items surfaced by the feed tools."
+         Do not run `sprout channels list` or `sprout messages search` unless you have a specific reason.\n\
+         Do not invent work — only act on items surfaced by the feed commands."
     )
 }
 
