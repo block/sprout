@@ -15,6 +15,9 @@ const ALICE_PUBKEY =
   "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
 const BOB_PUBKEY =
   "bb22a5299220cad76ffd46190ccbeede8ab5dc260faa28b6e5a2cb31b9aff260";
+// Active mock identity (matches DEFAULT_MOCK_IDENTITY.pubkey in e2eBridge).
+// Used to exercise the self-exemption rule in the predicate.
+const SELF_PUBKEY = "deadbeef".repeat(8);
 
 test.describe("NIP-IA hide archived from discovery", () => {
   test("members sidebar: archived member folds under Archived section", async ({
@@ -115,5 +118,52 @@ test.describe("NIP-IA hide archived from discovery", () => {
     const aliceMessage = page.getByTestId("message-row").nth(1);
     await expect(aliceMessage).toContainText("alice");
     await expect(aliceMessage).toContainText("Hey team — checking in.");
+  });
+
+  test("self-exemption: archived current user still appears in their own People list (not folded)", async ({
+    page,
+  }) => {
+    // Anti-shadowban property: the current user is never hidden from their
+    // own client even when archived on the relay. The predicate's
+    // self-exemption is what enforces this — without it, the user would lose
+    // their own seat in the members sidebar.
+    await installMockBridge(page, { archivedIdentities: [SELF_PUBKEY] });
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await page.getByTestId("channel-members-trigger").click();
+    await expect(page.getByTestId("members-sidebar")).toBeVisible();
+
+    // Self appears in active People list — NOT folded into Archived. The
+    // members sidebar renders the current user as "You" + a pubkey-prefix.
+    await expect(page.getByTestId("members-sidebar-people")).toContainText(
+      "You",
+    );
+    await expect(page.getByTestId("members-sidebar-people")).toContainText(
+      "deadbeef",
+    );
+    // No Archived section at all when self is the only archived pubkey in
+    // the channel (self-exemption makes archived.length === 0).
+    await expect(page.getByTestId("members-sidebar-archived")).toHaveCount(0);
+  });
+
+  test("self-exemption: archived current user can still self-mention in own autocomplete", async ({
+    page,
+  }) => {
+    // Self-mention is a no-op in practice, but the predicate must not filter
+    // self from their own autocomplete — that would be the shadowban NIP-IA
+    // exists to prevent.
+    await installMockBridge(page, { archivedIdentities: [SELF_PUBKEY] });
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+    const input = page.getByTestId("message-input");
+    await input.click();
+    await input.pressSequentially("@npub");
+    // Self's suggestion appears in autocomplete despite being in the archived
+    // set — the predicate's self-exemption fires.
+    await expect(
+      page.getByTestId(`mention-suggestion-${SELF_PUBKEY}`),
+    ).toBeVisible();
   });
 });
