@@ -17,7 +17,7 @@ dependencies:
   mobile_scanner: ^7.0.0
   shared_preferences: ^2.5.5
   web_socket_channel: ^3.0.1
-  connectivity_plus: ^6.1.4
+  connectivity_plus: ^7.0.0
   nostr: ^1.5.0
   pointycastle: ^3.7.3
   url_launcher: ^6.3.2
