@@ -7,7 +7,6 @@
 use std::fs;
 use std::path::Path;
 
-use sprout_persona::legacy;
 use sprout_persona::pack;
 use sprout_persona::persona;
 use sprout_persona::resolve;
@@ -265,115 +264,6 @@ You are a test agent. Be precise and thorough.
     assert_eq!(rt.mentions, Some(true));
     assert_eq!(rt.keywords, vec!["test"]);
     assert_eq!(rt.all_messages, Some(false));
-}
-
-// ── Legacy JSON → PersonaConfig adapter ──────────────────────────────────────
-
-#[test]
-fn legacy_adapter_full_pipeline() {
-    let record = legacy::LegacyPersonaRecord {
-        id: "custom:security-bot".into(),
-        display_name: "Security Bot 🔒".into(),
-        avatar_url: Some("./avatars/security.png".into()),
-        system_prompt: "You are a security-focused assistant.\n\nAnalyze code for vulnerabilities."
-            .into(),
-        provider: Some("anthropic".into()),
-        model: Some("claude-sonnet-4-20250514".into()),
-        name_pool: vec!["sentinel".into(), "guardian".into()],
-        is_builtin: false,
-        is_active: true,
-        created_at: "2026-01-01T00:00:00Z".into(),
-        updated_at: "2026-04-01T00:00:00Z".into(),
-    };
-
-    // 1. Convert to PersonaConfig.
-    let config = legacy::legacy_to_persona_config(&record).unwrap();
-    assert_eq!(config.name, "security-bot");
-    assert_eq!(config.display_name, "Security Bot 🔒");
-    assert_eq!(
-        config.model.as_deref(),
-        Some("anthropic:claude-sonnet-4-20250514")
-    );
-    assert!(config.prompt.contains("security-focused assistant"));
-    // name_pool should NOT survive migration.
-    // (No field for it in PersonaConfig — this is correct.)
-
-    // 2. Generate .persona.md from the legacy record.
-    let (filename, md_content) = legacy::legacy_to_persona_md(&record).unwrap();
-    assert_eq!(filename, "security-bot.persona.md");
-
-    // 3. Parse the generated .persona.md back.
-    let parsed = persona::parse_persona_md(&md_content).unwrap();
-    assert_eq!(parsed.name, "security-bot");
-    assert_eq!(parsed.display_name, "Security Bot 🔒");
-    assert_eq!(
-        parsed.model.as_deref(),
-        Some("anthropic:claude-sonnet-4-20250514")
-    );
-    assert!(parsed.prompt.contains("security-focused assistant"));
-    assert!(parsed.prompt.contains("Analyze code for vulnerabilities"));
-}
-
-// ── Legacy migration: batch JSON → pack directory ────────────────────────────
-
-#[test]
-fn legacy_batch_migration() {
-    let dir = tempfile::tempdir().unwrap();
-    let input_path = dir.path().join("personas.json");
-    let output_dir = dir.path().join("agents");
-
-    fs::write(
-        &input_path,
-        r#"[
-  {
-    "id": "custom:alpha",
-    "display_name": "Alpha",
-    "system_prompt": "You are Alpha.",
-    "is_builtin": false,
-    "is_active": true,
-    "created_at": "",
-    "updated_at": ""
-  },
-  {
-    "id": "builtin:solo",
-    "display_name": "Solo",
-    "system_prompt": "You are Solo.",
-    "is_builtin": true,
-    "is_active": true,
-    "created_at": "",
-    "updated_at": ""
-  },
-  {
-    "id": "custom:inactive",
-    "display_name": "Inactive",
-    "system_prompt": "You are Inactive.",
-    "is_builtin": false,
-    "is_active": false,
-    "created_at": "",
-    "updated_at": ""
-  }
-]"#,
-    )
-    .unwrap();
-
-    // Migrate with defaults (skip builtin, skip inactive).
-    let report = legacy::migrate_json_to_md(&input_path, &output_dir, false, false).unwrap();
-
-    assert_eq!(
-        report.migrated.len(),
-        1,
-        "only active non-builtin should migrate"
-    );
-    assert_eq!(report.migrated[0], "alpha.persona.md");
-    assert_eq!(report.skipped_builtin, 1);
-    assert_eq!(report.skipped_inactive, 1);
-
-    // Verify the migrated file parses.
-    let content = fs::read_to_string(output_dir.join("alpha.persona.md")).unwrap();
-    let parsed = persona::parse_persona_md(&content).unwrap();
-    assert_eq!(parsed.name, "alpha");
-    assert_eq!(parsed.display_name, "Alpha");
-    assert!(parsed.prompt.contains("You are Alpha"));
 }
 
 // ── Validation catches real errors ───────────────────────────────────────────
@@ -698,53 +588,6 @@ fn resolve_persona_by_name_not_found() {
             || matches!(err, pack::PackError::PersonaNotFound(_)),
         "expected PersonaNotFound, got: {err}"
     );
-}
-
-/// Legacy JSON → PersonaConfig → .persona.md → resolve round-trip.
-#[test]
-fn resolve_legacy_migration_roundtrip() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-
-    // 1. Start with a legacy JSON record
-    let record = legacy::LegacyPersonaRecord {
-        id: "custom:security-bot".into(),
-        display_name: "Security Bot 🔒".into(),
-        avatar_url: Some("./avatars/security.png".into()),
-        system_prompt: "You are a security-focused assistant.".into(),
-        provider: Some("anthropic".into()),
-        model: Some("claude-sonnet-4-20250514".into()),
-        name_pool: vec![],
-        is_builtin: false,
-        is_active: true,
-        created_at: String::new(),
-        updated_at: String::new(),
-    };
-
-    // 2. Convert to .persona.md
-    let (_filename, md_content) = legacy::legacy_to_persona_md(&record).unwrap();
-
-    // 3. Build a pack directory with the migrated persona
-    fs::create_dir_all(root.join(".plugin")).unwrap();
-    fs::create_dir_all(root.join("agents")).unwrap();
-
-    fs::write(
-        root.join(".plugin/plugin.json"),
-        r#"{"id":"com.test.migrated","name":"Migrated","version":"1.0.0","personas":["agents/security-bot.persona.md"]}"#,
-    )
-    .unwrap();
-    fs::write(root.join("agents/security-bot.persona.md"), &md_content).unwrap();
-
-    // 4. Resolve the pack
-    let resolved = resolve::resolve_pack(root).unwrap();
-    assert_eq!(resolved.personas.len(), 1);
-
-    let persona = &resolved.personas[0];
-    assert_eq!(persona.name, "security-bot");
-    assert_eq!(persona.display_name, "Security Bot 🔒");
-    assert_eq!(persona.provider.as_deref(), Some("anthropic"));
-    assert_eq!(persona.model.as_deref(), Some("claude-sonnet-4-20250514"));
-    assert!(persona.system_prompt.contains("security-focused assistant"));
 }
 
 // ── Validation: zero-persona and duplicate-name in full pipeline ─────────────

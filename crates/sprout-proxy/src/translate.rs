@@ -744,32 +744,6 @@ impl Translator {
 
         f
     }
-
-    /// Translate a Sprout REQ filter to NIP-28 format (for outbound subscription
-    /// forwarding, e.g. when the proxy subscribes on behalf of a client).
-    ///
-    /// - kind:9 / kind:40002 → kind:42
-    pub fn translate_filter_outbound(&self, filter: &Filter) -> Filter {
-        let mut f = filter.clone();
-
-        if let Some(ref kinds) = filter.kinds {
-            let new_kinds: Vec<Kind> = kinds
-                .iter()
-                .map(|k| {
-                    let k_u32 = k.as_u16() as u32;
-                    let standard_k = self.kind_translator.to_standard(k_u32);
-                    // SAFETY: standard kind values (42, 41) always fit in u16
-                    Kind::Custom(
-                        u16::try_from(standard_k)
-                            .expect("SAFETY: standard kind values always fit in u16"),
-                    )
-                })
-                .collect();
-            f = f.remove_kinds(kinds.iter().cloned()).kinds(new_kinds);
-        }
-
-        f
-    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1051,24 +1025,6 @@ mod tests {
         let h_tag = SingleLetterTag::lowercase(Alphabet::H);
         let has_h_filter = translated.generic_tags.contains_key(&h_tag);
         assert!(has_h_filter, "filter must have #h tag constraints injected");
-    }
-
-    #[test]
-    fn filter_outbound_translates_kind() {
-        let (translator, _) = make_translator();
-
-        let filter = Filter::new().kind(Kind::Custom(KIND_STREAM_MESSAGE as u16));
-        let translated = translator.translate_filter_outbound(&filter);
-
-        let kinds = translated.kinds.as_ref().expect("filter must have kinds");
-        assert!(
-            kinds.contains(&Kind::Custom(42)),
-            "filter must contain kind:42 after outbound translation"
-        );
-        assert!(
-            !kinds.contains(&Kind::Custom(KIND_STREAM_MESSAGE as u16)),
-            "filter must not contain KIND_STREAM_MESSAGE after outbound translation"
-        );
     }
 
     // ── Test 6b: Filter — #e channel ref translates to #h UUID (FIX A) ─────
