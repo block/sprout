@@ -113,7 +113,7 @@
 //! }
 //! ```
 //!
-//! [Sprout]: https://github.com/sprout-rs/sprout
+//! [Sprout]: https://github.com/block/sprout
 //! [NIP-42]: https://github.com/nostr-protocol/nips/blob/master/42.md
 
 // NOTE: `parse_relay_message`, `OkResponse`, and `RelayMessage` from `relay_client`
