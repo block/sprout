@@ -738,16 +738,14 @@ Sprout Relay ──WS──→ sprout-acp ──stdio (ACP/JSON-RPC)──→ Ag
 
 ### sprout-admin — Operator CLI
 
-Two subcommands:
+Subcommands:
 
 | Subcommand | Purpose |
 |------------|---------|
-| `mint-token` | Generate API token, store SHA-256 hash in DB, display raw token once |
-| `list-tokens` | List all active tokens (ID, name, scopes, created) |
-
-`mint-token` options: `--name`, `--scopes` (comma-separated), optional `--pubkey`. If `--pubkey` omitted, generates a new keypair and displays `nsec` (bech32) and pubkey.
-
-Raw token is shown exactly once and never stored. Only the SHA-256 hash reaches the database.
+| `add-member` | Add a pubkey to the relay membership list (`--pubkey`, `--role`) |
+| `list-members` | List all relay members |
+| `generate-key` | Generate a new Nostr keypair (for bootstrapping) |
+| `reconcile-channels` | Emit kind:39000/39002 discovery events for channels missing them (idempotent) |
 
 ---
 

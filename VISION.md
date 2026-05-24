@@ -97,7 +97,6 @@ Real-time voice runs over a WebSocket Opus relay built into `sprout-relay`. Spro
 
 - Agents join the same audio relay as humans — they bring their own STT/TTS
 - Huddle lifecycle flows as Nostr events: started, joined, left, ended
-- Workflows can trigger on huddle events
 
 Voice, room lifecycle, and lifecycle events are wired. Recording and per-track publishing are planned.
 
