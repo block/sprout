@@ -65,9 +65,11 @@ Each release produces two GitHub releases:
 
 ## Platform Support
 
-The release workflow currently builds for **macOS ARM64 only**
-(`darwin-aarch64`). Intel Mac (`darwin-x86_64`) support would require
-adding a matrix build to the workflow.
+The release workflow builds **two separate macOS DMGs** — Apple
+Silicon (`darwin-aarch64`, the `release` job) and Intel
+(`darwin-x86_64`, the `release-macos-x64` job) — plus Linux `.deb` and
+`.AppImage`. Both macOS DMGs are codesigned, notarized, and attached to
+the same `v<version>` release. Intel users download the `_x64.dmg`.
 
 ## Code Signing (macOS)
 
@@ -111,5 +113,7 @@ requires `TAURI_SIGNING_PRIVATE_KEY` and
 
 ### Auto-updater reports "no update available"
 Verify that the `sprout-desktop-latest` release exists and contains a
-valid `latest.json`. If the user is on Intel Mac, no update will be
-found (ARM64 only).
+valid `latest.json`. The auto-updater manifest currently lists
+`darwin-aarch64` only, so Intel and Linux users do not yet receive
+auto-updates — they download new versions manually from the release
+page. (Adding their entries to `latest.json` is a follow-up.)
