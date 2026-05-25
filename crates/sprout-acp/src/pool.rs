@@ -220,27 +220,6 @@ pub struct PromptContext {
 // ── AgentPool impl ────────────────────────────────────────────────────────────
 
 impl AgentPool {
-    /// Create a new pool from a list of initialized agents.
-    ///
-    /// Agents are placed into indexed slots. The unbounded channel is created
-    /// here; tasks send results back through `result_tx`.
-    ///
-    /// Prefer [`AgentPool::from_slots`] for startup paths where some agents may
-    /// have failed — `new()` packs agents densely and will break the
-    /// `agent.index` invariant if any slot was skipped.
-    #[allow(dead_code)]
-    pub fn new(agents: Vec<OwnedAgent>) -> Self {
-        let (result_tx, result_rx) = mpsc::unbounded_channel();
-        let slots = agents.into_iter().map(Some).collect();
-        Self {
-            agents: slots,
-            result_tx,
-            result_rx,
-            join_set: JoinSet::new(),
-            task_map: HashMap::new(),
-        }
-    }
-
     /// Create a pool from pre-indexed slots (may contain None for failed startups).
     ///
     /// Slot positions are preserved so that `agent.index` always matches the
