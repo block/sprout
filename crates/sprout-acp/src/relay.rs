@@ -372,7 +372,6 @@ enum RelayCommand {
         filter: ChannelFilter,
     },
     /// Unsubscribe from a channel (sends a NIP-01 CLOSE).
-    #[allow(dead_code)]
     Unsubscribe { channel_id: Uuid },
     /// Reconnect to the relay (re-authenticate and resubscribe).
     Reconnect,
@@ -416,11 +415,7 @@ pub struct HarnessRelay {
     relay_url: String,
     /// Keys used for NIP-42 signing and NIP-98 HTTP auth.
     keys: Keys,
-    /// Agent public key (hex) used as the `#p` filter on subscriptions.
-    #[allow(dead_code)]
-    agent_pubkey_hex: String,
     /// Optional NIP-OA auth tag for relay membership delegation.
-    #[allow(dead_code)]
     auth_tag: Option<nostr::Tag>,
     /// Handle to the background task (for clean shutdown).
     /// Wrapped in `Option` so `shutdown()` can take ownership without conflicting
@@ -500,7 +495,6 @@ impl HarnessRelay {
                 .map_err(|e| RelayError::Http(format!("failed to build HTTP client: {e}")))?,
             relay_url: relay_url.to_string(),
             keys: keys.clone(),
-            agent_pubkey_hex: agent_pubkey_hex.to_string(),
             auth_tag,
             bg_handle: Some(bg_handle),
         })
@@ -680,7 +674,6 @@ impl HarnessRelay {
     }
 
     /// Unsubscribe from a channel.
-    #[allow(dead_code)]
     pub async fn unsubscribe_channel(&mut self, channel_id: Uuid) -> Result<(), RelayError> {
         self.cmd_tx
             .send(RelayCommand::Unsubscribe { channel_id })

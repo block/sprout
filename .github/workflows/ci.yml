@@ -85,7 +85,7 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@e0eafa9a0d485c37f97c0f7beb930a58a2facbac # v2.79.4
+        uses: taiki-e/install-action@6c1f7cf125e42770ff087ea443901b487cc5471a # v2.79.5
         with:
           tool: cargo-nextest@0.9.136
       - name: Unit tests
@@ -430,7 +430,7 @@ jobs:
           key: cross-${{ matrix.target }}
           save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cross
-        uses: taiki-e/install-action@e0eafa9a0d485c37f97c0f7beb930a58a2facbac # v2.79.4
+        uses: taiki-e/install-action@6c1f7cf125e42770ff087ea443901b487cc5471a # v2.79.5
         with:
           tool: cross@0.2.5
       - name: Build server binaries

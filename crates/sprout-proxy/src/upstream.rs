@@ -155,30 +155,6 @@ impl UpstreamClient {
         self.inner.connected.try_read().map(|v| *v).unwrap_or(false)
     }
 
-    // ── Subscription tracking helpers ─────────────────────────────────────────
-
-    /// Track a subscription by storing its REQ JSON for replay on reconnect.
-    /// Called by the server layer when forwarding REQs from downstream clients.
-    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
-    pub(crate) fn track_subscription(&self, sub_id: &str, req_json: &str) {
-        self.inner
-            .active_subs
-            .insert(sub_id.to_string(), req_json.to_string());
-    }
-
-    /// Remove a subscription from the active set.
-    /// Called by the server layer when handling CLOSEs from downstream clients.
-    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
-    pub(crate) fn untrack_subscription(&self, sub_id: &str) {
-        self.inner.active_subs.remove(sub_id);
-    }
-
-    /// Returns the number of currently tracked active subscriptions.
-    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
-    pub(crate) fn active_subscription_count(&self) -> usize {
-        self.inner.active_subs.len()
-    }
-
     // ── Run loop ──────────────────────────────────────────────────────────────
 
     /// Run the upstream connection loop.  Reconnects on disconnect with exponential
@@ -593,35 +569,18 @@ mod tests {
     }
 
     #[test]
-    fn track_and_untrack_subscriptions() {
-        let client = UpstreamClient::new("ws://localhost:3000", "sprout_test");
-
-        assert_eq!(client.active_subscription_count(), 0);
-
-        client.track_subscription("sub-1", r#"["REQ","sub-1",{}]"#);
-        client.track_subscription("sub-2", r#"["REQ","sub-2",{}]"#);
-        assert_eq!(client.active_subscription_count(), 2);
-
-        client.untrack_subscription("sub-1");
-        assert_eq!(client.active_subscription_count(), 1);
-
-        client.untrack_subscription("sub-2");
-        assert_eq!(client.active_subscription_count(), 0);
-    }
-
-    #[test]
     fn send_req_tracks_subscription() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let client = UpstreamClient::new("ws://localhost:3000", "sprout_test");
 
-            assert_eq!(client.active_subscription_count(), 0);
+            assert_eq!(client.inner.active_subs.len(), 0);
 
             let sub_id = SubscriptionId::new("tracked-sub");
             let filters = vec![Filter::new().kind(Kind::TextNote)];
             client.send_req(sub_id.clone(), filters).await.unwrap();
 
-            assert_eq!(client.active_subscription_count(), 1);
+            assert_eq!(client.inner.active_subs.len(), 1);
             assert!(
                 client.inner.active_subs.contains_key("tracked-sub"),
                 "subscription should be tracked"
@@ -629,7 +588,7 @@ mod tests {
 
             // CLOSE should remove it.
             client.send_close(sub_id).await.unwrap();
-            assert_eq!(client.active_subscription_count(), 0);
+            assert_eq!(client.inner.active_subs.len(), 0);
         });
     }
 }
