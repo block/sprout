@@ -1,5 +1,7 @@
 //! imeta tag validation helpers — shared between ingest pipeline and bridge.
 
+use sprout_media::validation::mime_to_ext;
+
 /// Validate imeta tags for correctness and safety.
 ///
 /// Shared between REST (send_message) and WebSocket (handle_event) paths.
@@ -153,7 +155,7 @@ pub fn validate_imeta_tags(tags: &[Vec<String>], media_base_url: &str) -> Result
             }
         }
         if let Some(ext_in_url) = extract_ext_from_media_url(&url_value) {
-            let expected_ext = mime_to_canonical_ext(&m_value);
+            let expected_ext = mime_to_ext(&m_value);
             if ext_in_url != expected_ext {
                 return Err("imeta url extension does not match m".into());
             }
@@ -316,18 +318,6 @@ fn extract_ext_from_media_url(url: &str) -> Option<&str> {
         Some(segments[1])
     } else {
         None
-    }
-}
-
-/// Map MIME to canonical extension (must match sprout-media's mime_to_ext).
-fn mime_to_canonical_ext(mime: &str) -> &str {
-    match mime {
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "video/mp4" => "mp4",
-        _ => "bin",
     }
 }
 
