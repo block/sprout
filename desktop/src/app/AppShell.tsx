@@ -446,8 +446,8 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(homeBadgeCount);
-  }, [homeBadgeCount]);
+    void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
+  }, [homeBadgeCount, unreadChannelIds.size]);
 
   React.useEffect(() => {
     let isCancelled = false;

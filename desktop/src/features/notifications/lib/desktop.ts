@@ -208,7 +208,7 @@ export async function requestDockBounce(): Promise<void> {
   if (!isTauri()) {
     return;
   }
-  if (!document.hidden) {
+  if (document.hasFocus()) {
     return;
   }
   try {
