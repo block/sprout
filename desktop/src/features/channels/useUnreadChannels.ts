@@ -314,17 +314,22 @@ export function useUnreadChannels(
     readStateVersion,
   ]);
 
+  const unreadChannelIdsRef = React.useRef(unreadChannelIds);
+  unreadChannelIdsRef.current = unreadChannelIds;
+
   const markAllChannelsRead = React.useCallback(() => {
-    for (const channelId of unreadChannelIds) {
+    for (const channelId of unreadChannelIdsRef.current) {
       forcedUnreadRef.current.delete(channelId);
       const unixSeconds =
         latestByChannelRef.current.get(channelId) ??
         getEffectiveTimestamp(channelId) ??
-        Math.floor(Date.now() / 1_000);
-      markContextRead(channelId, unixSeconds);
+        null;
+      if (unixSeconds !== null) {
+        markContextRead(channelId, unixSeconds);
+      }
     }
     bumpLatestVersion();
-  }, [getEffectiveTimestamp, markContextRead, unreadChannelIds]);
+  }, [getEffectiveTimestamp, markContextRead]);
 
   return {
     unreadChannelIds,

@@ -1,15 +1,16 @@
 import * as React from "react";
 
-import type { Channel } from "@/shared/api/types";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 
 export function useMarkAsReadShortcuts({
-  activeChannel,
+  activeChannelId,
+  activeChannelLastMessageAt,
   markAllChannelsRead,
   markChannelRead,
   selectedView,
 }: {
-  activeChannel: Channel | null;
+  activeChannelId: string | null;
+  activeChannelLastMessageAt: string | null | undefined;
   markAllChannelsRead: () => void;
   markChannelRead: (
     channelId: string,
@@ -17,7 +18,7 @@ export function useMarkAsReadShortcuts({
   ) => void;
   selectedView: string;
 }) {
-  React.useLayoutEffect(() => {
+  React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       if (event.defaultPrevented) return;
@@ -29,9 +30,9 @@ export function useMarkAsReadShortcuts({
         return;
       }
 
-      if (selectedView === "channel" && activeChannel) {
+      if (selectedView === "channel" && activeChannelId) {
         event.preventDefault();
-        markChannelRead(activeChannel.id, activeChannel.lastMessageAt ?? null);
+        markChannelRead(activeChannelId, activeChannelLastMessageAt ?? null);
       }
     }
 
@@ -39,5 +40,11 @@ export function useMarkAsReadShortcuts({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activeChannel, markAllChannelsRead, markChannelRead, selectedView]);
+  }, [
+    activeChannelId,
+    activeChannelLastMessageAt,
+    markAllChannelsRead,
+    markChannelRead,
+    selectedView,
+  ]);
 }

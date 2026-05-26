@@ -321,7 +321,11 @@ export function SidebarSection({
                   </SidebarMenuItem>
                 );
 
-                return onMarkChannelUnread || onMarkChannelRead ? (
+                const hasContextAction =
+                  (unreadChannelIds.has(channel.id) && onMarkChannelRead) ||
+                  (!unreadChannelIds.has(channel.id) && onMarkChannelUnread);
+
+                return hasContextAction ? (
                   <ContextMenu key={channel.id}>
                     <ContextMenuTrigger asChild>{menuItem}</ContextMenuTrigger>
                     <ContextMenuContent>

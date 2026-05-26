@@ -211,6 +211,9 @@ export function AppShell() {
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
+  const handleChannelNotification = React.useEffectEvent(() => {
+    void requestDockBounce();
+  });
 
   const handleDmNotification = React.useEffectEvent(
     (event: RelayEvent, channel: Channel) => {
@@ -283,7 +286,7 @@ export function AppShell() {
       pubkey: identityQuery.data?.pubkey,
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
-      onChannelMessage: () => void requestDockBounce(),
+      onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
     },
@@ -551,7 +554,8 @@ export function AppShell() {
   }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
 
   useMarkAsReadShortcuts({
-    activeChannel,
+    activeChannelId: activeChannel?.id ?? null,
+    activeChannelLastMessageAt: activeChannel?.lastMessageAt,
     markAllChannelsRead,
     markChannelRead,
     selectedView,

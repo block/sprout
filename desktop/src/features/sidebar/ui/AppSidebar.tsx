@@ -195,6 +195,7 @@ function SectionHeaderActions({
           aria-label="Mark all as read"
           className={SECTION_ICON_BUTTON_CLASS}
           onClick={onMarkAllRead}
+          title="Mark all as read"
           type="button"
         >
           <CheckCheck className="h-3.5 w-3.5" />
