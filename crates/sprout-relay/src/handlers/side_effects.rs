@@ -183,16 +183,13 @@ pub async fn validate_admin_event(
                 return Err(anyhow::anyhow!("invalid role: {role_str}"));
             }
 
-            // PUT_USER: open channels allow any authenticated user; private requires owner/admin
-            // for human members, but any channel member can add bots.
+            // PUT_USER: open channels allow any authenticated user; private channels
+            // require the actor to be an existing member (any role can invite).
             if channel.visibility == "private" {
                 let members = state.db.get_members(channel_id).await?;
-                let actor_member = members.iter().find(|m| m.pubkey == actor_bytes);
-                let is_bot_addition = role_str == "bot";
-                match actor_member {
-                    Some(m) if m.role == "owner" || m.role == "admin" => {}
-                    Some(_) if is_bot_addition => {}
-                    _ => return Err(anyhow::anyhow!("actor not authorized")),
+                let is_member = members.iter().any(|m| m.pubkey == actor_bytes);
+                if !is_member {
+                    return Err(anyhow::anyhow!("actor not authorized"));
                 }
             }
 
