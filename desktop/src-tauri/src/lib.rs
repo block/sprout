@@ -26,7 +26,7 @@ use huddle::{
 use managed_agents::{
     ensure_nest, kill_stale_tracked_processes, load_managed_agents,
     restore_managed_agents_on_launch, save_managed_agents, sync_managed_agent_processes,
-    BackendKind, ManagedAgentProcess,
+    try_regenerate_nest, BackendKind, ManagedAgentProcess,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -402,6 +402,8 @@ pub fn run() {
                     }
                 }
             }
+
+            try_regenerate_nest(&app_handle);
 
             // Pre-download voice models in the background so they're ready
             // when the user starts their first huddle. Idempotent — no-op if
