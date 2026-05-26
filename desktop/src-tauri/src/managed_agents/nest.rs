@@ -165,7 +165,6 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
     refresh_agents_md_if_stale(root)?;
     refresh_skill_md_if_stale(root)?;
 
-
     // Set owner-only permissions on root and all subdirectories.
     // Skip any path that is a symlink — chmod would affect the target.
     #[cfg(unix)]

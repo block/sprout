@@ -8,9 +8,9 @@ use crate::{
     managed_agents::{
         build_managed_agent_summary, default_agent_workdir, find_managed_agent_mut,
         load_managed_agents, managed_agent_avatar_url, missing_command_message,
-        normalize_agent_args, resolve_command, save_managed_agents,
-        sync_managed_agent_processes, try_regenerate_nest, AgentModelInfo, AgentModelsResponse,
-        UpdateManagedAgentRequest, UpdateManagedAgentResponse, DEFAULT_MCP_COMMAND,
+        normalize_agent_args, resolve_command, save_managed_agents, sync_managed_agent_processes,
+        try_regenerate_nest, AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest,
+        UpdateManagedAgentResponse, DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
