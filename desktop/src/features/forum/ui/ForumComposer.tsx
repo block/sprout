@@ -451,7 +451,7 @@ export function ForumComposer({
             className="rich-text-composer max-h-32 overflow-y-auto"
             onKeyDown={handleEditorKeyDown}
           >
-            {richText.editor && <EditorContent editor={richText.editor} />}
+            <EditorContent editor={richText.editor} />
           </div>
 
           <MessageComposerToolbar

@@ -720,7 +720,7 @@ export function MessageComposer({
             ref={composerScrollRef}
             onKeyDown={handleEditorKeyDown}
           >
-            {richText.editor && <EditorContent editor={richText.editor} />}
+            <EditorContent editor={richText.editor} />
           </div>
 
           <MessageComposerToolbar

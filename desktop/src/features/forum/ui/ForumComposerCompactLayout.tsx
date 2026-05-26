@@ -31,7 +31,7 @@ export function ForumComposerCompactLayout({
         className="rich-text-composer max-h-10 min-w-0 flex-1 overflow-y-auto"
         onKeyDown={onEditorKeyDown}
       >
-        {editor && <EditorContent editor={editor} />}
+        <EditorContent editor={editor} />
       </div>
       <Button
         aria-label={isSending ? "Sending" : "Send message"}
