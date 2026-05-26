@@ -6,7 +6,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 // nostr 0.36 alias — required for cross-version bridging with sprout-sdk.
-use nostr_compat;
 
 use crate::app_state::AppState;
 
@@ -215,7 +214,7 @@ fn build_profile_event(
     let builder = if let Some(tag_json) = auth_tag_json {
         // Bridge nostr 0.37 PublicKey → nostr 0.36 PublicKey via hex encoding.
         let agent_pubkey_hex = agent_keys.public_key().to_hex();
-        let compat_pubkey = nostr_compat::PublicKey::from_hex(&agent_pubkey_hex)
+        let compat_pubkey = nostr::PublicKey::from_hex(&agent_pubkey_hex)
             .map_err(|e| format!("failed to convert agent pubkey for auth verification: {e}"))?;
 
         // Verify Schnorr signature before injecting into profile event.
@@ -401,10 +400,10 @@ mod tests {
     /// `sprout_sdk::nip_oa::compute_auth_tag` expects nostr 0.36 types.
     /// The agent pubkey is bridged via hex encoding.
     fn make_valid_auth_tag(agent_keys: &nostr::Keys) -> String {
-        let owner_keys = nostr_compat::Keys::generate();
+        let owner_keys = nostr::Keys::generate();
         let agent_pubkey_hex = agent_keys.public_key().to_hex();
-        let agent_compat_pubkey = nostr_compat::PublicKey::from_hex(&agent_pubkey_hex)
-            .expect("valid hex pubkey should parse");
+        let agent_compat_pubkey =
+            nostr::PublicKey::from_hex(&agent_pubkey_hex).expect("valid hex pubkey should parse");
         sprout_sdk::nip_oa::compute_auth_tag(&owner_keys, &agent_compat_pubkey, "")
             .expect("compute_auth_tag should not fail with distinct keys")
     }

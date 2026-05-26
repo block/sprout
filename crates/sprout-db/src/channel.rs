@@ -758,7 +758,7 @@ pub async fn get_accessible_channels(
         format!("{base}        ORDER BY array_position(ARRAY['stream','forum','dm']::text[], c.channel_type::text), c.name\n        LIMIT 1000")
     };
 
-    let query = sqlx::query(&sql).bind(pubkey);
+    let query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(pubkey);
     let query = if let Some(vis) = visibility_filter {
         query.bind(vis)
     } else {
@@ -833,7 +833,7 @@ pub async fn get_users_bulk(pool: &PgPool, pubkeys: &[Vec<u8>]) -> Result<Vec<Us
     let sql =
         format!("SELECT pubkey, display_name, avatar_url, nip05_handle FROM users WHERE pubkey IN ({placeholders})");
 
-    let mut q = sqlx::query(&sql);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for pk in pubkeys {
         q = q.bind(pk);
     }
@@ -948,7 +948,7 @@ pub async fn update_channel(
         set_parts.join(", ")
     );
 
-    let mut q = sqlx::query(&sql);
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     if let Some(ref name) = updates.name {
         q = q.bind(name);
     }
@@ -1202,7 +1202,7 @@ mod tests {
     }
 
     fn random_pubkey() -> Vec<u8> {
-        Keys::generate().public_key().serialize().to_vec()
+        Keys::generate().public_key().to_bytes().to_vec()
     }
 
     /// Agent owner (non-admin) can remove their own bot from a channel.

@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useHuddle } from "@/features/huddle";
 import { HuddleIndicator } from "@/features/huddle/components/HuddleIndicator";
 import {
-  useAcpProvidersQuery,
+  useAvailableAcpProviders,
   useBackendProvidersQuery,
   useManagedAgentsQuery,
   useRelayAgentsQuery,
@@ -32,7 +32,7 @@ export function ChannelMembersBar({
   const { startHuddle, isStarting: isStartingHuddle } = useHuddle();
   const queryClient = useQueryClient();
   const membersQuery = useChannelMembersQuery(channel.id);
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
   const backendProvidersQuery = useBackendProvidersQuery();
   const managedAgentsQuery = useManagedAgentsQuery();
   const relayAgentsQuery = useRelayAgentsQuery();

@@ -87,7 +87,7 @@ impl ActionSink for RelayActionSink {
             let author_pubkey = nostr::PublicKey::from_hex(&author_pubkey).map_err(|e| {
                 ActionSinkError::InvalidInput(format!("invalid author pubkey: {e}"))
             })?;
-            let author_pubkey_bytes = author_pubkey.serialize().to_vec();
+            let author_pubkey_bytes = author_pubkey.to_bytes().to_vec();
             let author_pubkey_hex = author_pubkey.to_hex();
             let is_member = state
                 .is_member_cached(channel_uuid, &author_pubkey_bytes)
@@ -105,16 +105,17 @@ impl ActionSink for RelayActionSink {
             //    - `h` tag scopes to the channel (NIP-29, canonical UUID)
             //    - `sprout:workflow` tag prevents recursive workflow triggering
             let tags = vec![
-                Tag::parse(&["p", &author_pubkey_hex])
+                Tag::parse(["p", &author_pubkey_hex])
                     .map_err(|e| ActionSinkError::EventBuild(format!("p tag: {e}")))?,
-                Tag::parse(&["h", &channel_id_canonical])
+                Tag::parse(["h", &channel_id_canonical])
                     .map_err(|e| ActionSinkError::EventBuild(format!("h tag: {e}")))?,
-                Tag::parse(&["sprout:workflow", "true"])
+                Tag::parse(["sprout:workflow", "true"])
                     .map_err(|e| ActionSinkError::EventBuild(format!("workflow tag: {e}")))?,
             ];
 
             let kind = Kind::from(KIND_STREAM_MESSAGE as u16);
-            let event = EventBuilder::new(kind, &text, tags)
+            let event = EventBuilder::new(kind, &text)
+                .tags(tags)
                 .sign_with_keys(&state.relay_keypair)
                 .map_err(|e| ActionSinkError::EventBuild(format!("signing: {e}")))?;
 
@@ -123,7 +124,7 @@ impl ActionSink for RelayActionSink {
             let kind_u32 = KIND_STREAM_MESSAGE;
 
             let event_created_at = {
-                let ts = event.created_at.as_u64() as i64;
+                let ts = event.created_at.as_secs() as i64;
                 chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
             };
 

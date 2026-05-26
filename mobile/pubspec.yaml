@@ -13,11 +13,11 @@ dependencies:
   flutter_hooks: ^0.21.3
   lucide_icons_flutter: ^3.1.0
   http: ^1.4.0
-  flutter_secure_storage: ^9.2.4
+  flutter_secure_storage: ^10.0.0
   mobile_scanner: ^7.0.0
   shared_preferences: ^2.5.5
   web_socket_channel: ^3.0.1
-  connectivity_plus: ^6.1.4
+  connectivity_plus: ^7.0.0
   nostr: ^1.5.0
   pointycastle: ^3.7.3
   url_launcher: ^6.3.2
@@ -26,7 +26,7 @@ dependencies:
   uuid: ^4.5.1
   image_picker: ^1.1.2
   video_player: ^2.10.1
-  package_info_plus: ^8.3.0
+  package_info_plus: ^10.0.0
 
 dev_dependencies:
   flutter_test:

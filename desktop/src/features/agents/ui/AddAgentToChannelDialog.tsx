@@ -128,7 +128,7 @@ export function AddAgentToChannelDialog({
                 Channel
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
                 disabled={
                   channels.length === 0 || attachAgentMutation.isPending
                 }
@@ -166,7 +166,7 @@ export function AddAgentToChannelDialog({
                 Role
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
                 disabled={attachAgentMutation.isPending}
                 id="agent-channel-role"
                 onChange={(event) =>

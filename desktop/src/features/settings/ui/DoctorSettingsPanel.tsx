@@ -1,64 +1,221 @@
+import * as React from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Circle,
+  Download,
+  ExternalLink,
   RefreshCw,
   Stethoscope,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
-import { useAcpProvidersQuery } from "@/features/agents/hooks";
+import {
+  useAcpProvidersQuery,
+  useInstallAcpRuntimeMutation,
+} from "@/features/agents/hooks";
 import { describeResolvedCommand } from "@/features/agents/ui/agentUi";
+import type { AcpProviderCatalogEntry } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 
-function StatusIcon({ available }: { available: boolean }) {
-  return available ? (
-    <CheckCircle2 className="h-4 w-4 text-status-added" />
-  ) : (
-    <AlertTriangle className="h-4 w-4 text-warning" />
+function StatusIcon({
+  availability,
+}: {
+  availability: AcpProviderCatalogEntry["availability"];
+}) {
+  switch (availability) {
+    case "available":
+      return <CheckCircle2 className="h-4 w-4 text-status-added" />;
+    case "adapter_missing":
+      return <AlertTriangle className="h-4 w-4 text-warning" />;
+    case "cli_missing":
+      return <AlertTriangle className="h-4 w-4 text-warning" />;
+    case "not_installed":
+      return <Circle className="h-4 w-4 text-muted-foreground/50" />;
+  }
+}
+
+function InstallActions({
+  isInstalling,
+  onInstall,
+  provider,
+}: {
+  isInstalling: boolean;
+  onInstall: () => void;
+  provider: AcpProviderCatalogEntry;
+}) {
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      {provider.canAutoInstall ? (
+        <Button
+          disabled={isInstalling}
+          onClick={onInstall}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          {isInstalling ? (
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          {isInstalling ? "Installing..." : "Install"}
+        </Button>
+      ) : null}
+      <button
+        className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        onClick={() => void openUrl(provider.installInstructionsUrl)}
+        type="button"
+      >
+        <ExternalLink className="h-3 w-3" />
+        View instructions
+      </button>
+    </div>
   );
 }
 
 function ProviderRow({
-  command,
-  defaultArgs,
-  label,
-  providerId,
-  resolvedPath,
+  installError,
+  installSuccess,
+  isInstalling,
+  onInstall,
+  provider,
 }: {
-  command: string;
-  defaultArgs: string[];
-  label: string;
-  providerId: string;
-  resolvedPath: string;
+  installError: string | null;
+  installSuccess: boolean;
+  isInstalling: boolean;
+  onInstall: () => void;
+  provider: AcpProviderCatalogEntry;
 }) {
   return (
     <div
-      className="flex items-start gap-3 rounded-xl border border-border/70 bg-background/80 px-4 py-3"
-      data-testid={`doctor-provider-${providerId}`}
+      className={cn(
+        "flex items-start gap-3 rounded-xl border px-4 py-3",
+        provider.availability === "available"
+          ? "border-border/70 bg-background/80"
+          : provider.availability === "adapter_missing" ||
+              provider.availability === "cli_missing"
+            ? "border-amber-500/30 bg-amber-500/5"
+            : "border-border/50 bg-muted/30",
+      )}
+      data-testid={`doctor-provider-${provider.id}`}
     >
       <div className="mt-0.5 shrink-0">
-        <StatusIcon available={true} />
+        <StatusIcon availability={provider.availability} />
       </div>
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-semibold tracking-tight">{label}</p>
-          <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
-            {command}
-          </code>
+          <p className="text-sm font-semibold tracking-tight">
+            {provider.label}
+          </p>
+          {provider.command ? (
+            <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">
+              {provider.command}
+            </code>
+          ) : null}
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Available via {describeResolvedCommand(command, resolvedPath)}.
-        </p>
-        {defaultArgs.length > 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Default args:{" "}
-            <code className="font-mono">{defaultArgs.join(", ")}</code>
+
+        {provider.availability === "available" &&
+        provider.command &&
+        provider.binaryPath ? (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Available via{" "}
+              {describeResolvedCommand(provider.command, provider.binaryPath)}.
+            </p>
+            {provider.defaultArgs.length > 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Default args:{" "}
+                <code className="font-mono">
+                  {provider.defaultArgs.join(", ")}
+                </code>
+              </p>
+            ) : null}
+            {provider.underlyingCliPath &&
+            provider.underlyingCliPath !== provider.binaryPath ? (
+              <div className="mt-1 space-y-0.5">
+                <p className="break-all font-mono text-[11px] text-muted-foreground/80">
+                  <span className="text-muted-foreground">CLI:</span>{" "}
+                  {provider.underlyingCliPath}
+                </p>
+                <p className="break-all font-mono text-[11px] text-muted-foreground/80">
+                  <span className="text-muted-foreground">ACP adapter:</span>{" "}
+                  {provider.binaryPath}
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground/80">
+                  {provider.binaryPath}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground/60">
+                  ACP support built-in — no separate adapter needed.
+                </p>
+              </>
+            )}
+          </>
+        ) : provider.availability === "adapter_missing" ? (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">
+              CLI detected at{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+                {provider.underlyingCliPath ?? "unknown path"}
+              </code>{" "}
+              but ACP adapter not found.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {provider.installHint}
+            </p>
+            <InstallActions
+              isInstalling={isInstalling}
+              onInstall={onInstall}
+              provider={provider}
+            />
+          </>
+        ) : provider.availability === "cli_missing" ? (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">
+              ACP adapter found at{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">
+                {provider.binaryPath ?? "unknown path"}
+              </code>{" "}
+              but the {provider.label} CLI is not installed.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {provider.installHint}
+            </p>
+            <InstallActions
+              isInstalling={isInstalling}
+              onInstall={onInstall}
+              provider={provider}
+            />
+          </>
+        ) : (
+          <>
+            <p className="mt-1 text-sm text-muted-foreground">Not installed</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {provider.installHint}
+            </p>
+            <InstallActions
+              isInstalling={isInstalling}
+              onInstall={onInstall}
+              provider={provider}
+            />
+          </>
+        )}
+
+        {installSuccess && provider.availability !== "available" ? (
+          <p className="mt-2 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs text-green-700 dark:text-green-400">
+            Installed successfully!
           </p>
         ) : null}
-        <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground/80">
-          {resolvedPath}
-        </p>
+        {installError ? (
+          <p className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+            {installError}
+          </p>
+        ) : null}
       </div>
     </div>
   );
@@ -68,6 +225,47 @@ export function DoctorSettingsPanel() {
   const providersQuery = useAcpProvidersQuery();
   const providers = providersQuery.data ?? [];
   const isRefreshing = providersQuery.isFetching;
+  const installMutation = useInstallAcpRuntimeMutation();
+  const [installResults, setInstallResults] = React.useState<
+    Record<string, { success: boolean; error: string | null }>
+  >({});
+
+  function handleInstall(providerId: string) {
+    setInstallResults((prev) => ({
+      ...prev,
+      [providerId]: { success: false, error: null },
+    }));
+    installMutation.mutate(providerId, {
+      onSuccess: (result) => {
+        if (result.success) {
+          setInstallResults((prev) => ({
+            ...prev,
+            [providerId]: { success: true, error: null },
+          }));
+        } else {
+          const lastStep = result.steps[result.steps.length - 1];
+          setInstallResults((prev) => ({
+            ...prev,
+            [providerId]: {
+              success: false,
+              error: lastStep
+                ? `Step "${lastStep.step}" failed: ${lastStep.stderr || lastStep.stdout || "unknown error"}`
+                : "Install failed with no output.",
+            },
+          }));
+        }
+      },
+      onError: (error) => {
+        setInstallResults((prev) => ({
+          ...prev,
+          [providerId]: {
+            success: false,
+            error: error instanceof Error ? error.message : "Install failed.",
+          },
+        }));
+      },
+    });
+  }
 
   return (
     <section className="space-y-5" data-testid="settings-doctor">
@@ -86,6 +284,7 @@ export function DoctorSettingsPanel() {
           className="shrink-0"
           disabled={isRefreshing}
           onClick={() => {
+            setInstallResults({});
             void providersQuery.refetch();
           }}
           size="sm"
@@ -101,31 +300,35 @@ export function DoctorSettingsPanel() {
 
       <div className="mt-5 space-y-4">
         <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-          <h3 className="text-sm font-semibold tracking-tight">ACP runtimes</h3>
+          <h3 className="text-sm font-semibold tracking-tight">
+            Agent CLIs and ACP runtimes
+          </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Installed runtimes that the desktop app can offer in Create agent.
+            Installation status of supported agent CLIs and their ACP runtimes.
           </p>
 
           <div className="mt-4 space-y-2">
             {providersQuery.isLoading ? (
               <p className="text-sm text-muted-foreground">
-                Looking for installed ACP runtimes...
+                Looking for ACP runtimes...
               </p>
             ) : providers.length > 0 ? (
               providers.map((provider) => (
                 <ProviderRow
-                  command={provider.command}
-                  defaultArgs={provider.defaultArgs}
+                  installError={installResults[provider.id]?.error ?? null}
+                  installSuccess={installResults[provider.id]?.success ?? false}
+                  isInstalling={
+                    installMutation.isPending &&
+                    installMutation.variables === provider.id
+                  }
                   key={provider.id}
-                  label={provider.label}
-                  providerId={provider.id}
-                  resolvedPath={provider.binaryPath}
+                  onInstall={() => handleInstall(provider.id)}
+                  provider={provider}
                 />
               ))
             ) : (
               <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-warning">
-                No known ACP runtime was detected on your PATH yet. You can
-                still use a custom command in Create agent.
+                No known ACP runtimes found.
               </div>
             )}
           </div>

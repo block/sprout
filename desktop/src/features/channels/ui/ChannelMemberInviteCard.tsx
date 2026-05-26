@@ -2,6 +2,7 @@ import { ChevronDown, Search, UserPlus, X } from "lucide-react";
 import * as React from "react";
 
 import { formatPubkey } from "@/features/channels/lib/memberUtils";
+import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useUserSearchQuery } from "@/features/profile/hooks";
 import type {
   AddChannelMembersResult,
@@ -78,14 +79,21 @@ export function ChannelMemberInviteCard({
     // refined client-side. The Tauri command clamps at 50.
     limit: 25,
   });
+  const isArchivedDiscovery = useIsArchivedPredicate();
   const inviteSearchResults = React.useMemo(
     () =>
       (userSearchQuery.data ?? []).filter(
         (user) =>
           !memberPubkeys.has(user.pubkey.toLowerCase()) &&
-          !selectedInviteePubkeys.has(user.pubkey.toLowerCase()),
+          !selectedInviteePubkeys.has(user.pubkey.toLowerCase()) &&
+          !isArchivedDiscovery(user.pubkey),
       ),
-    [memberPubkeys, selectedInviteePubkeys, userSearchQuery.data],
+    [
+      isArchivedDiscovery,
+      memberPubkeys,
+      selectedInviteePubkeys,
+      userSearchQuery.data,
+    ],
   );
 
   React.useEffect(() => {

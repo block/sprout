@@ -39,8 +39,10 @@ import type {
   CreateManagedAgentInput,
   AgentModelsResponse,
   UpdateManagedAgentInput,
-  AcpProvider,
+  AcpAvailabilityStatus,
+  AcpProviderCatalogEntry,
   CommandAvailability,
+  InstallRuntimeResult,
   OpenDmInput,
 } from "@/shared/api/types";
 
@@ -245,13 +247,33 @@ type RawManagedAgentLog = {
   log_path: string;
 };
 
-type RawAcpProvider = {
+export type RawAcpProviderCatalogEntry = {
   id: string;
   label: string;
-  command: string;
-  binary_path: string;
+  avatar_url: string;
+  availability: AcpAvailabilityStatus;
+  command: string | null;
+  binary_path: string | null;
   default_args: string[];
   mcp_command: string | null;
+  install_hint: string;
+  install_instructions_url: string;
+  can_auto_install: boolean;
+  underlying_cli_path: string | null;
+};
+
+export type RawInstallStepResult = {
+  step: string;
+  command: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exit_code: number | null;
+};
+
+export type RawInstallRuntimeResult = {
+  success: boolean;
+  steps: RawInstallStepResult[];
 };
 
 type RawCommandAvailability = {
@@ -517,6 +539,10 @@ export async function setPresence(
 
 export function getDefaultRelayUrl(): Promise<string> {
   return invokeTauri<string>("get_default_relay_url");
+}
+
+export function isSharedIdentity(): Promise<boolean> {
+  return invokeTauri<boolean>("is_shared_identity");
 }
 
 export function getRelayWsUrl(): Promise<string> {
@@ -846,14 +872,38 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
   };
 }
 
-function fromRawAcpProvider(provider: RawAcpProvider): AcpProvider {
+function fromRawAcpProviderCatalogEntry(
+  entry: RawAcpProviderCatalogEntry,
+): AcpProviderCatalogEntry {
   return {
-    id: provider.id,
-    label: provider.label,
-    command: provider.command,
-    binaryPath: provider.binary_path,
-    defaultArgs: provider.default_args,
-    mcpCommand: provider.mcp_command,
+    id: entry.id,
+    label: entry.label,
+    avatarUrl: entry.avatar_url,
+    availability: entry.availability,
+    command: entry.command,
+    binaryPath: entry.binary_path,
+    defaultArgs: entry.default_args,
+    mcpCommand: entry.mcp_command,
+    installHint: entry.install_hint,
+    installInstructionsUrl: entry.install_instructions_url,
+    canAutoInstall: entry.can_auto_install,
+    underlyingCliPath: entry.underlying_cli_path,
+  };
+}
+
+function fromRawInstallRuntimeResult(
+  raw: RawInstallRuntimeResult,
+): InstallRuntimeResult {
+  return {
+    success: raw.success,
+    steps: raw.steps.map((step) => ({
+      step: step.step,
+      command: step.command,
+      success: step.success,
+      stdout: step.stdout,
+      stderr: step.stderr,
+      exitCode: step.exit_code,
+    })),
   };
 }
 
@@ -1009,10 +1059,22 @@ export async function getManagedAgentLog(pubkey: string, lineCount?: number) {
   };
 }
 
-export async function discoverAcpProviders(): Promise<AcpProvider[]> {
-  return (await invokeTauri<RawAcpProvider[]>("discover_acp_providers")).map(
-    fromRawAcpProvider,
+export async function discoverAcpProviders(): Promise<
+  AcpProviderCatalogEntry[]
+> {
+  return (
+    await invokeTauri<RawAcpProviderCatalogEntry[]>("discover_acp_providers")
+  ).map(fromRawAcpProviderCatalogEntry);
+}
+
+export async function installAcpRuntime(
+  providerId: string,
+): Promise<InstallRuntimeResult> {
+  const raw = await invokeTauri<RawInstallRuntimeResult>(
+    "install_acp_runtime",
+    { providerId },
   );
+  return fromRawInstallRuntimeResult(raw);
 }
 
 export async function discoverManagedAgentPrereqs(input: {

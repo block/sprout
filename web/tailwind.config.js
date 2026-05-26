@@ -1,10 +1,5 @@
-import tailwindcssAnimate from "tailwindcss-animate";
-import tailwindcssTypography from "@tailwindcss/typography";
-
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: ["class"],
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       borderRadius: {
@@ -68,5 +63,4 @@ export default {
       },
     },
   },
-  plugins: [tailwindcssAnimate, tailwindcssTypography],
 };

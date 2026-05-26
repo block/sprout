@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nostr::{Event, EventBuilder, Filter, Keys, Kind, Tag, Url};
+use nostr::{Event, EventBuilder, Filter, Keys, Kind, RelayUrl, Tag};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -330,32 +330,35 @@ fn build_auth_event(
     api_token: Option<&str>,
     auth_tag: Option<&Tag>,
 ) -> Result<Event, RelayClientError> {
-    let relay_nostr_url: Url = relay_url
-        .parse()
-        .map_err(|e: url::ParseError| RelayClientError::Url(e.to_string()))?;
+    let relay_nostr_url =
+        RelayUrl::parse(relay_url).map_err(|e| RelayClientError::Url(e.to_string()))?;
     if let Some(token) = api_token {
         let mut tags = vec![
-            Tag::parse(&["relay", relay_url])
+            Tag::parse(["relay", relay_url])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-            Tag::parse(&["challenge", challenge])
+            Tag::parse(["challenge", challenge])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-            Tag::parse(&["auth_token", token])
+            Tag::parse(["auth_token", token])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
         ];
         if let Some(t) = auth_tag {
             tags.push(t.clone());
         }
-        Ok(EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?)
+        Ok(EventBuilder::new(Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(keys)?)
     } else if let Some(t) = auth_tag {
         // Cannot use EventBuilder::auth() shortcut — it doesn't accept extra tags.
         let tags = vec![
-            Tag::parse(&["relay", relay_url])
+            Tag::parse(["relay", relay_url])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
-            Tag::parse(&["challenge", challenge])
+            Tag::parse(["challenge", challenge])
                 .map_err(|e| RelayClientError::EventBuilder(e.to_string()))?,
             t.clone(),
         ];
-        Ok(EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(keys)?)
+        Ok(EventBuilder::new(Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(keys)?)
     } else {
         Ok(EventBuilder::auth(challenge, relay_nostr_url).sign_with_keys(keys)?)
     }
@@ -774,7 +777,7 @@ impl RelayClient {
     /// `self.auth_tag` is configured or not — is rejected immediately.
     pub fn sign_event(&self, builder: EventBuilder) -> Result<Event, RelayClientError> {
         let builder = if let Some(ref tag) = self.auth_tag {
-            builder.add_tags([tag.clone()])
+            builder.tags([tag.clone()])
         } else {
             builder
         };
@@ -1303,12 +1306,12 @@ mod tests {
         let owner_pubkey = "a".repeat(64);
         let conditions = "";
         let signature = "b".repeat(128);
-        let auth_tag = nostr::Tag::parse(&["auth", &owner_pubkey, conditions, &signature]).unwrap();
+        let auth_tag = nostr::Tag::parse(["auth", &owner_pubkey, conditions, &signature]).unwrap();
 
         // With auth_tag: the signed event must contain it.
         let client = make_client(keys.clone(), Some(auth_tag.clone()));
         let event = client
-            .sign_event(EventBuilder::new(Kind::TextNote, "hello", []))
+            .sign_event(EventBuilder::new(Kind::TextNote, "hello").tags([]))
             .expect("sign_event should succeed");
 
         let tag_values: Vec<Vec<String>> = event
@@ -1328,7 +1331,7 @@ mod tests {
         // Without auth_tag: the signed event must NOT contain an auth tag.
         let client_no_auth = make_client(keys, None);
         let event_no_auth = client_no_auth
-            .sign_event(EventBuilder::new(Kind::TextNote, "hello", []))
+            .sign_event(EventBuilder::new(Kind::TextNote, "hello").tags([]))
             .expect("sign_event should succeed");
 
         let has_auth_tag = event_no_auth
@@ -1345,11 +1348,11 @@ mod tests {
         let owner_pubkey = "c".repeat(64);
         let conditions = "";
         let signature = "d".repeat(128);
-        let auth_tag = nostr::Tag::parse(&["auth", &owner_pubkey, conditions, &signature]).unwrap();
+        let auth_tag = nostr::Tag::parse(["auth", &owner_pubkey, conditions, &signature]).unwrap();
 
         // Case 1: client has auth_tag configured, caller also pre-adds one → duplicate → reject.
         let client = make_client(keys.clone(), Some(auth_tag.clone()));
-        let builder = EventBuilder::new(Kind::TextNote, "oops", [auth_tag.clone()]);
+        let builder = EventBuilder::new(Kind::TextNote, "oops").tags([auth_tag.clone()]);
         let result = client.sign_event(builder);
         assert!(
             result.is_err(),
@@ -1363,7 +1366,7 @@ mod tests {
 
         // Case 2: client has NO auth_tag configured, but caller manually adds one → bypass → reject.
         let client_no_auth = make_client(keys, None);
-        let builder_with_manual = EventBuilder::new(Kind::TextNote, "bypass", [auth_tag]);
+        let builder_with_manual = EventBuilder::new(Kind::TextNote, "bypass").tags([auth_tag]);
         let result2 = client_no_auth.sign_event(builder_with_manual);
         assert!(
             result2.is_err(),
@@ -1381,14 +1384,15 @@ mod tests {
     #[tokio::test]
     async fn test_send_event_rejects_forged_auth_tag() {
         let keys = Keys::generate();
-        let real_tag = nostr::Tag::parse(&["auth", &"a".repeat(64), "", &"b".repeat(128)]).unwrap();
+        let real_tag = nostr::Tag::parse(["auth", &"a".repeat(64), "", &"b".repeat(128)]).unwrap();
         let forged_tag =
-            nostr::Tag::parse(&["auth", &"c".repeat(64), "", &"d".repeat(128)]).unwrap();
+            nostr::Tag::parse(["auth", &"c".repeat(64), "", &"d".repeat(128)]).unwrap();
 
         let client = make_client(keys.clone(), Some(real_tag));
 
         // Build event with forged auth tag, bypassing sign_event
-        let event = EventBuilder::new(Kind::TextNote, "forged", [forged_tag])
+        let event = EventBuilder::new(Kind::TextNote, "forged")
+            .tags([forged_tag])
             .sign_with_keys(&keys)
             .unwrap();
 
@@ -1405,11 +1409,12 @@ mod tests {
     async fn test_send_event_rejects_auth_tag_when_unconfigured() {
         let keys = Keys::generate();
         let sneaky_tag =
-            nostr::Tag::parse(&["auth", &"a".repeat(64), "", &"b".repeat(128)]).unwrap();
+            nostr::Tag::parse(["auth", &"a".repeat(64), "", &"b".repeat(128)]).unwrap();
 
         let client = make_client(keys.clone(), None);
 
-        let event = EventBuilder::new(Kind::TextNote, "sneaky", [sneaky_tag])
+        let event = EventBuilder::new(Kind::TextNote, "sneaky")
+            .tags([sneaky_tag])
             .sign_with_keys(&keys)
             .unwrap();
 
@@ -1427,7 +1432,8 @@ mod tests {
         let client = make_client(client_keys, None);
 
         // Event signed by a different keypair
-        let event = EventBuilder::new(Kind::TextNote, "wrong author", [])
+        let event = EventBuilder::new(Kind::TextNote, "wrong author")
+            .tags([])
             .sign_with_keys(&other_keys)
             .unwrap();
 
@@ -1593,7 +1599,8 @@ mod tests {
             let keys = Keys::generate();
             let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
-            let event = EventBuilder::new(Kind::Custom(9), "test", [])
+            let event = EventBuilder::new(Kind::Custom(9), "test")
+                .tags([])
                 .sign_with_keys(&keys)
                 .unwrap();
             let expected_id = event.id.to_hex();
@@ -1621,7 +1628,8 @@ mod tests {
                             // Build 3 minimal valid events.
                             let relay_keys = Keys::generate();
                             for i in 0u8..3 {
-                                let ev = EventBuilder::new(Kind::TextNote, format!("msg {i}"), [])
+                                let ev = EventBuilder::new(Kind::TextNote, format!("msg {i}"))
+                                    .tags([])
                                     .sign_with_keys(&relay_keys)
                                     .unwrap();
                                 let frame = serde_json::to_string(&serde_json::json!([
@@ -1671,7 +1679,8 @@ mod tests {
             let keys = Keys::generate();
             let client = RelayClient::connect(&url, &keys, None, None).await.unwrap();
 
-            let event = EventBuilder::new(Kind::Custom(9), "timeout-test", [])
+            let event = EventBuilder::new(Kind::Custom(9), "timeout-test")
+                .tags([])
                 .sign_with_keys(&keys)
                 .unwrap();
 
@@ -1868,7 +1877,8 @@ mod tests {
                 .unwrap();
 
             // send_event should succeed on the new connection.
-            let event = EventBuilder::new(Kind::Custom(9), "after-reconnect", [])
+            let event = EventBuilder::new(Kind::Custom(9), "after-reconnect")
+                .tags([])
                 .sign_with_keys(&keys)
                 .unwrap();
             let ok = client.send_event(event).await.unwrap();

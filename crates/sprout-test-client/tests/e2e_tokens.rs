@@ -57,12 +57,13 @@ fn build_nip98_header(keys: &Keys, url: &str, method: &str, body: &[u8]) -> Stri
     let payload_hash = hex::encode(Sha256::digest(body));
 
     let tags = vec![
-        Tag::parse(&["u", url]).expect("u tag"),
-        Tag::parse(&["method", method]).expect("method tag"),
-        Tag::parse(&["payload", &payload_hash]).expect("payload tag"),
+        Tag::parse(["u", url]).expect("u tag"),
+        Tag::parse(["method", method]).expect("method tag"),
+        Tag::parse(["payload", &payload_hash]).expect("payload tag"),
     ];
 
-    let event = EventBuilder::new(Kind::HttpAuth, "", tags)
+    let event = EventBuilder::new(Kind::HttpAuth, "")
+        .tags(tags)
         .sign_with_keys(keys)
         .expect("signing must succeed");
 
@@ -78,11 +79,12 @@ fn build_nip98_header(keys: &Keys, url: &str, method: &str, body: &[u8]) -> Stri
 /// cryptographically bind the request body.
 fn build_nip98_header_no_payload(keys: &Keys, url: &str, method: &str) -> String {
     let tags = vec![
-        Tag::parse(&["u", url]).expect("u tag"),
-        Tag::parse(&["method", method]).expect("method tag"),
+        Tag::parse(["u", url]).expect("u tag"),
+        Tag::parse(["method", method]).expect("method tag"),
         // Deliberately omit payload tag
     ];
-    let event = EventBuilder::new(Kind::HttpAuth, "", tags)
+    let event = EventBuilder::new(Kind::HttpAuth, "")
+        .tags(tags)
         .sign_with_keys(keys)
         .expect("signing must succeed");
     let json = event.as_json();

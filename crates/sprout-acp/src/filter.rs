@@ -49,7 +49,7 @@ impl FilterContext {
             author: event.pubkey.to_hex(),
             kind: event.kind.as_u16() as u32,
             channel_id: channel_id.to_string(),
-            timestamp: event.created_at.as_u64(),
+            timestamp: event.created_at.as_secs(),
         }
     }
 }
@@ -485,7 +485,8 @@ mod tests {
     /// Build a minimal test event with the given kind and content.
     fn make_event(kind: u32, content: &str) -> nostr::Event {
         let keys = Keys::generate();
-        EventBuilder::new(Kind::Custom(kind as u16), content, [])
+        EventBuilder::new(Kind::Custom(kind as u16), content)
+            .tags([])
             .sign_with_keys(&keys)
             .unwrap()
     }
@@ -493,8 +494,9 @@ mod tests {
     /// Build a test event with an explicit `p` tag.
     fn make_event_with_p_tag(kind: u32, content: &str, p_hex: &str) -> nostr::Event {
         let keys = Keys::generate();
-        let p_tag = Tag::parse(&["p", p_hex]).expect("tag parse");
-        EventBuilder::new(Kind::Custom(kind as u16), content, [p_tag])
+        let p_tag = Tag::parse(["p", p_hex]).expect("tag parse");
+        EventBuilder::new(Kind::Custom(kind as u16), content)
+            .tags([p_tag])
             .sign_with_keys(&keys)
             .unwrap()
     }
@@ -535,7 +537,7 @@ mod tests {
         assert_eq!(ctx.author, event.pubkey.to_hex());
         assert_eq!(ctx.kind, 9);
         assert_eq!(ctx.channel_id, channel_id.to_string());
-        assert_eq!(ctx.timestamp, event.created_at.as_u64());
+        assert_eq!(ctx.timestamp, event.created_at.as_secs());
     }
 
     // ── evaluate_filter ───────────────────────────────────────────────────────

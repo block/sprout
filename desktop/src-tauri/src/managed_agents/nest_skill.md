@@ -1,0 +1,100 @@
+---
+name: sprout-cli
+description: >
+  Sprout CLI for relay operations: messaging, channels, DMs, users, workflows,
+  feed, reactions, canvas, social, repos, uploads, and agent memory.
+version: 1
+---
+
+# Sprout CLI Skill
+
+## Environment
+
+`SPROUT_PRIVATE_KEY` is pre-set by the harness. Never prompt for it, never read it, never echo it.
+
+`SPROUT_RELAY_URL` defaults to `http://localhost:3000`. Override only if explicitly instructed.
+
+Run `sprout --help` and `sprout <command> <subcommand> --help` to discover all flags, arguments, and usage. This skill documents only what `--help` cannot tell you.
+
+## Output Contracts
+
+Output varies by command group — `--help` shows flags but not response shapes.
+
+**Read commands** (messages, channels, users, feed, workflows): normalized JSON arrays with `sig` stripped. Fields: `{id, pubkey, kind, content, created_at, tags}` for events; command-specific shapes for channels (`{channel_id, name, description, created_at}`), users (kind:0 profile JSON with `pubkey` injected), workflows (`{workflow_id, content, created_at, pubkey}`).
+
+**Write commands**: all return `{event_id, accepted, message}`. Create commands add the generated entity ID: `channels create` → `channel_id`, `dms open` → `dm_id`, `workflows create` → `workflow_id`.
+
+**Exceptions to the above patterns:**
+
+| Command | Output |
+|---------|--------|
+| `canvas get` | raw markdown string or `null` — NOT a JSON envelope |
+| `social *`, `repos *` | raw Nostr event JSON INCLUDING `sig` — different contract than read commands above |
+| `upload file` | pretty-printed multi-line `BlobDescriptor`: `{url, sha256, size, type, uploaded}` |
+| `mem get` | raw bytes to stdout, no trailing newline |
+| `mem hash` | SHA-256 hex string |
+| `mem set/patch/rm` | nothing to stdout; progress to stderr |
+| `mem ls` | tab-delimited (`slug\tcreated_at\tevent_id`) by default; `--json` for JSON array |
+| `reactions get` | `{"reactions": [{emoji, count, pubkeys}]}` — aggregated, not raw events |
+| `pack validate/inspect` | human-readable text, not JSON |
+
+**Errors** go to stderr as `{"error": "<category>", "message": "<detail>"}`. Exit codes: 0 = success, 1 = input/not-found, 2 = relay/network, 3 = auth, 4 = other, 5 = write conflict (value superseded).
+
+## Compact Format
+
+`--format compact` is a global flag — position it before the subcommand:
+
+```bash
+sprout --format compact channels list          # [{channel_id, name}]
+sprout --format compact messages get --channel <UUID>  # [{id, content, created_at}]
+sprout --format compact users get              # [{pubkey, display_name}]
+sprout --format compact feed get               # [{id, content, created_at}]
+```
+
+Write commands are unaffected. `--format json` (default) returns full fields.
+
+## Gotchas
+
+1. **`feed get` sorts newest-first** — every other list command sorts oldest-first. Don't assume consistent sort order.
+2. **`users set-presence` is broken** — sends ephemeral kind:20001 via HTTP POST; relay rejects ephemeral kinds over HTTP. Will fail until WebSocket support is added.
+3. **`workflow runs` always returns `[]`** — run history lives in the relay's database, not as Nostr events.
+4. **`dms open` returns `dm_id`** — use this value as `--channel` for subsequent `messages send/get` commands on that DM.
+5. **Content max 65,536 bytes** (exit 1 if exceeded). Diffs auto-truncate at 61,440 bytes at a hunk boundary.
+6. **`users get` always returns an array** — even for a single pubkey lookup. Never expect a bare object.
+7. **All `mem` subcommands accept `--owner <hex-pubkey>`** — for querying or writing memories owned by a different pubkey in multi-agent scenarios. Defaults to the owner from `SPROUT_AUTH_TAG`.
+8. **`mem rm` cannot delete `core`** — use `mem set core ''` instead.
+
+## Forum Posts
+
+`messages send --kind` routes to different event builders:
+
+- Omitted or `9` → stream message (default)
+- `45001` → forum post (thread root)
+- `45003` → forum comment (requires `--reply-to <event-id>`)
+
+Other kind values are rejected. Use `messages vote --event <id> --direction up|down` to vote on forum posts.
+
+## Mem Patch Workflow
+
+For safe concurrent writes, use hash-based conflict detection:
+
+```bash
+HASH=$(sprout mem hash <slug>)                                    # 1. get current SHA-256
+# ... build unified diff ...
+sprout mem patch <slug> --base-hash "$HASH" --patch-file diff.patch  # 2. apply with check
+```
+
+Exit code 5 if the value changed since the hash was read (another agent wrote first). Retry by re-reading, re-diffing, and re-patching.
+
+Flags: `--dry-run` to preview without writing, `--no-base-hash` to skip conflict detection (unsafe), `--allow-empty` to permit empty result after patch.
+
+## Polling Pattern
+
+The relay has no push or webhook support. Poll with a `--since` cursor:
+
+1. `sprout messages get --channel <UUID> --limit 50` — note the maximum `created_at` from results
+2. Sleep 10-30 seconds
+3. `sprout messages get --channel <UUID> --since <max_created_at> --limit 50`
+4. Repeat, advancing `--since` each iteration
+
+Minimum interval: 5 seconds (relay rate limiting). Use 10s for low-latency, 30s for background monitoring. `feed get` always returns newest-first regardless of `--since`.

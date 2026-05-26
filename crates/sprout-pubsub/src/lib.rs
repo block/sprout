@@ -32,8 +32,6 @@ pub mod rate_limiter;
 /// Redis SUBSCRIBE for channel event delivery.
 pub mod subscriber;
 /// Typing indicator tracking in Redis.
-pub mod typing;
-
 pub use error::PubSubError;
 
 use std::collections::HashMap;
@@ -132,20 +130,6 @@ impl PubSubManager {
     ) -> Result<HashMap<String, String>, PubSubError> {
         presence::get_presence_bulk(&self.pool, pubkeys).await
     }
-
-    /// Records that `pubkey` is currently typing in `channel_id`. Expires after 5 seconds.
-    pub async fn set_typing(
-        &self,
-        channel_id: Uuid,
-        pubkey: &PublicKey,
-    ) -> Result<(), PubSubError> {
-        typing::set_typing(&self.pool, channel_id, pubkey).await
-    }
-
-    /// Returns hex pubkeys of users who have typed in `channel_id` within the last 5 seconds.
-    pub async fn get_typing(&self, channel_id: Uuid) -> Result<Vec<String>, PubSubError> {
-        typing::get_typing(&self.pool, channel_id).await
-    }
 }
 
 #[cfg(test)]
@@ -184,7 +168,8 @@ mod tests {
 
         let channel_id = Uuid::new_v4();
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::TextNote, "hello pubsub", [])
+        let event = EventBuilder::new(Kind::TextNote, "hello pubsub")
+            .tags([])
             .sign_with_keys(&keys)
             .expect("signing failed");
         let event_id = event.id;
@@ -233,48 +218,5 @@ mod tests {
         presence::clear_presence(&pool, &pubkey).await.unwrap();
         let status = presence::get_presence(&pool, &pubkey).await.unwrap();
         assert!(status.is_none());
-    }
-
-    #[tokio::test]
-    #[ignore = "requires Redis"]
-    async fn test_typing_set_and_prune() {
-        let pool = make_test_pool();
-        let channel_id = Uuid::new_v4();
-        let pk1 = Keys::generate().public_key();
-        let pk2 = Keys::generate().public_key();
-
-        typing::set_typing(&pool, channel_id, &pk1).await.unwrap();
-        typing::set_typing(&pool, channel_id, &pk2).await.unwrap();
-
-        let active = typing::get_typing(&pool, channel_id).await.unwrap();
-        assert!(active.contains(&pk1.to_hex()));
-        assert!(active.contains(&pk2.to_hex()));
-
-        let stale_pk = Keys::generate().public_key();
-        {
-            let mut conn = pool.get().await.unwrap();
-            let key = typing::typing_key(channel_id);
-            let stale_score = chrono::Utc::now().timestamp() as f64 - 10.0;
-            redis::cmd("ZADD")
-                .arg(&key)
-                .arg(stale_score)
-                .arg(stale_pk.to_hex())
-                .query_async::<()>(&mut conn)
-                .await
-                .unwrap();
-        }
-
-        typing::set_typing(&pool, channel_id, &pk1).await.unwrap();
-
-        let active = typing::get_typing(&pool, channel_id).await.unwrap();
-        assert!(!active.contains(&stale_pk.to_hex()));
-        assert!(active.contains(&pk1.to_hex()));
-
-        let mut conn = pool.get().await.unwrap();
-        redis::cmd("DEL")
-            .arg(typing::typing_key(channel_id))
-            .query_async::<()>(&mut conn)
-            .await
-            .unwrap();
     }
 }

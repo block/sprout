@@ -30,18 +30,17 @@ fn reject(reason: &'static str) {
 fn bounded_kind_label(kind: u32) -> String {
     match kind {
         0..=9 | 1059 | 1063 => kind.to_string(),
-        9000..=9022 | 9030..=9032 | 9100 | 9110 | 9900 => kind.to_string(),
+        8000..=8003 | 9000..=9022 | 9030..=9036 => kind.to_string(),
+        13534..=13535 => kind.to_string(),
         20000..=29999 => kind.to_string(),
         30023 | 30315 | 39000..=39003 => kind.to_string(),
         40002..=40100 => kind.to_string(),
-        41001..=41003 => kind.to_string(),
-        42001..=42003 => kind.to_string(),
+        41001 | 41010..=41012 => kind.to_string(),
         43001..=43006 => kind.to_string(),
-        44001..=44004 | 44100..=44101 => kind.to_string(),
+        44100..=44101 => kind.to_string(),
         45001..=45003 => kind.to_string(),
-        46001..=46012 => kind.to_string(),
-        47001..=47003 => kind.to_string(),
-        48001..=48005 | 48100..=48105 => kind.to_string(),
+        46001..=46012 | 46020 | 46030..=46031 => kind.to_string(),
+        48001 | 48100..=48103 | 48106 => kind.to_string(),
         49001 => kind.to_string(),
         _ => "other".to_string(),
     }
@@ -170,7 +169,7 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
         match &*auth {
             AuthState::Authenticated(ctx) => (
                 conn.conn_id,
-                ctx.pubkey.serialize().to_vec(),
+                ctx.pubkey.to_bytes().to_vec(),
                 ctx.pubkey,
                 ctx.scopes.clone(),
                 ctx.channel_ids.clone(),
@@ -515,7 +514,7 @@ async fn handle_agent_observer_event(
 
     // Freshness check: reject observer frames with stale/future timestamps
     let now = chrono::Utc::now().timestamp();
-    let event_ts = event.created_at.as_u64() as i64;
+    let event_ts = event.created_at.as_secs() as i64;
     if (event_ts - now).unsigned_abs() > 300 {
         conn.send(RelayMessage::ok(
             event_id_hex,
@@ -550,8 +549,8 @@ async fn handle_agent_observer_event(
         }
     };
 
-    let agent_bytes = route.agent.serialize().to_vec();
-    let owner_bytes = route.owner.serialize().to_vec();
+    let agent_bytes = route.agent.to_bytes().to_vec();
+    let owner_bytes = route.owner.to_bytes().to_vec();
     let cache_key = (agent_bytes.clone(), owner_bytes.clone());
     let is_owner = if session_owner_match {
         true
@@ -778,17 +777,14 @@ mod tests {
             &serde_json::json!({"type": "acp_read"}),
         )
         .expect("encrypt observer payload");
-        let event = EventBuilder::new(
-            Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
-            encrypted,
-            [
-                Tag::parse(&["p", &owner.public_key().to_hex()]).expect("p tag"),
-                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
-                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
-            ],
-        )
-        .sign_with_keys(&agent)
-        .expect("sign event");
+        let event = EventBuilder::new(Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16), encrypted)
+            .tags([
+                Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+                Tag::parse([OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
+            ])
+            .sign_with_keys(&agent)
+            .expect("sign event");
 
         let route = super::agent_observer_route(&event)
             .expect("observer route")
@@ -808,17 +804,14 @@ mod tests {
             &serde_json::json!({"type": "cancel_turn"}),
         )
         .expect("encrypt observer payload");
-        let event = EventBuilder::new(
-            Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
-            encrypted,
-            [
-                Tag::parse(&["p", &agent.public_key().to_hex()]).expect("p tag"),
-                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
-                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).expect("frame tag"),
-            ],
-        )
-        .sign_with_keys(&owner)
-        .expect("sign event");
+        let event = EventBuilder::new(Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16), encrypted)
+            .tags([
+                Tag::parse(["p", &agent.public_key().to_hex()]).expect("p tag"),
+                Tag::parse([OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+                Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_CONTROL]).expect("frame tag"),
+            ])
+            .sign_with_keys(&owner)
+            .expect("sign event");
 
         let route = super::agent_observer_route(&event)
             .expect("observer route")
@@ -835,12 +828,12 @@ mod tests {
         let event = EventBuilder::new(
             Kind::Custom(KIND_AGENT_OBSERVER_FRAME as u16),
             "not encrypted",
-            [
-                Tag::parse(&["p", &owner.public_key().to_hex()]).expect("p tag"),
-                Tag::parse(&[OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
-                Tag::parse(&[OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
-            ],
         )
+        .tags([
+            Tag::parse(["p", &owner.public_key().to_hex()]).expect("p tag"),
+            Tag::parse([OBSERVER_AGENT_TAG, &agent.public_key().to_hex()]).expect("agent tag"),
+            Tag::parse([OBSERVER_FRAME_TAG, OBSERVER_FRAME_TELEMETRY]).expect("frame tag"),
+        ])
         .sign_with_keys(&agent)
         .expect("sign event");
 

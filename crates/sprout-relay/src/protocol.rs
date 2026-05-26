@@ -223,7 +223,7 @@ mod tests {
     use sprout_core::test_helpers::make_event;
 
     fn make_auth_event(keys: &Keys, challenge: &str, relay: &str) -> Event {
-        let url: nostr::Url = relay.parse().expect("url");
+        let url: nostr::RelayUrl = relay.parse().expect("url");
         EventBuilder::auth(challenge, url)
             .sign_with_keys(keys)
             .expect("sign")

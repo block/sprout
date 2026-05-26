@@ -1,6 +1,6 @@
 //! Sprout V2 kind number registry.
 //!
-//! Authoritative source: RESEARCH/SPROUT_KIND_REGISTRY_V2.md
+//! This module is the authoritative source for Sprout kind numbers.
 //! All constants are `u32` — NIP-01 specifies kind as an unsigned integer,
 //! and u32 covers the full range without truncation.
 
@@ -118,13 +118,19 @@ pub const KIND_NIP43_MEMBER_REMOVED: u32 = 8001;
 /// NIP-43: User leave request (user-signed, ephemeral).
 pub const KIND_NIP43_LEAVE_REQUEST: u32 = 28936;
 
-// System / admin (9100–9999)
-/// V1 used kind:9001 — moved here due to NIP-29 conflict.
-pub const KIND_SYSTEM_TIMER_FIRED: u32 = 9100;
-/// V1 used kind:9010 — moved here for NIP-29 range safety.
-pub const KIND_SYSTEM_SLASH_COMMAND: u32 = 9110;
-/// Internal system flag event for admin tooling.
-pub const KIND_SYSTEM_FLAG: u32 = 9900;
+// NIP-IA identity archival requests (user/agent/owner-signed)
+/// NIP-IA: Request that the relay archive a target identity.
+pub const KIND_IA_ARCHIVE_REQUEST: u32 = 9035;
+/// NIP-IA: Request that the relay unarchive a target identity.
+pub const KIND_IA_UNARCHIVE_REQUEST: u32 = 9036;
+
+// NIP-IA identity archival announcement events (relay-signed)
+/// NIP-IA: Archived-identity delta (relay-signed).
+pub const KIND_IA_ARCHIVED: u32 = 8002;
+/// NIP-IA: Unarchived-identity delta (relay-signed).
+pub const KIND_IA_UNARCHIVED: u32 = 8003;
+/// NIP-IA: Archived identities list snapshot (relay-signed, replaceable).
+pub const KIND_IA_ARCHIVED_LIST: u32 = 13535;
 
 // NIP-29 group state (addressable range 39000–39003)
 /// NIP-29: Addressable group metadata state.
@@ -185,9 +191,7 @@ pub const KIND_CANVAS: u32 = 40100;
 /// System message for channel state changes (join, leave, rename, etc.).
 pub const KIND_SYSTEM_MESSAGE: u32 = 40099;
 
-// Relay-only enrichment kinds (never client-submitted)
-/// Thread summaries, reaction rollups (relay-signed sidecar).
-pub const KIND_ENRICHMENT: u32 = 40900;
+// Relay-only sidecar kinds (never client-submitted)
 /// Channel metadata with computed fields (relay-signed sidecar).
 pub const KIND_CHANNEL_SUMMARY: u32 = 40901;
 /// Bulk presence state (relay-signed sidecar).
@@ -202,18 +206,6 @@ pub const KIND_DM_ADD_MEMBER: u32 = 41011;
 pub const KIND_DM_HIDE: u32 = 41012;
 /// A new direct-message conversation was created.
 pub const KIND_DM_CREATED: u32 = 41001;
-/// A member was added to a DM conversation.
-pub const KIND_DM_MEMBER_ADDED: u32 = 41002;
-/// A member was removed from a DM conversation.
-pub const KIND_DM_MEMBER_REMOVED: u32 = 41003;
-
-// Channel / topic management (42000–42999)
-/// A new channel topic was created.
-pub const KIND_TOPIC_CREATED: u32 = 42001;
-/// An existing channel topic was updated.
-pub const KIND_TOPIC_UPDATED: u32 = 42002;
-/// A channel topic was archived.
-pub const KIND_TOPIC_ARCHIVED: u32 = 42003;
 
 // Agent job protocol (43000–43999)
 // Not using NIP-90 kinds (5000–6999) — Sprout requires auth chains (depth ≤ 3, breadth ≤ 10).
@@ -229,16 +221,6 @@ pub const KIND_JOB_RESULT: u32 = 43004;
 pub const KIND_JOB_CANCEL: u32 = 43005;
 /// An agent job failed with an error.
 pub const KIND_JOB_ERROR: u32 = 43006;
-
-// Subscription system (44000–44999)
-/// A new event subscription was created.
-pub const KIND_SUBSCRIPTION_CREATED: u32 = 44001;
-/// An event matched an active subscription.
-pub const KIND_SUBSCRIPTION_MATCHED: u32 = 44002;
-/// A subscription was paused.
-pub const KIND_SUBSCRIPTION_PAUSED: u32 = 44003;
-/// A paused subscription was resumed.
-pub const KIND_SUBSCRIPTION_RESUMED: u32 = 44004;
 
 /// Relay-signed notification: the target pubkey was added to a channel.
 /// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
@@ -286,24 +268,10 @@ pub const KIND_WORKFLOW_APPROVAL_GRANTED: u32 = 46011;
 pub const KIND_WORKFLOW_APPROVAL_DENIED: u32 = 46012;
 
 // User groups (47000–47999)
-/// A new user group was created.
-pub const KIND_USER_GROUP_CREATED: u32 = 47001;
-/// An existing user group was updated.
-pub const KIND_USER_GROUP_UPDATED: u32 = 47002;
-/// A user group was deleted.
-pub const KIND_USER_GROUP_DELETED: u32 = 47003;
 
 // System / admin custom range (48000–48999)
 /// An audit log entry was recorded.
 pub const KIND_AUDIT_ENTRY: u32 = 48001;
-/// A compliance export was initiated.
-pub const KIND_COMPLIANCE_EXPORT: u32 = 48002;
-/// A knowledge crystal was created.
-pub const KIND_KNOWLEDGE_CRYSTAL_CREATED: u32 = 48003;
-/// A knowledge crystal was approved.
-pub const KIND_KNOWLEDGE_CRYSTAL_APPROVED: u32 = 48004;
-/// A knowledge crystal was updated.
-pub const KIND_KNOWLEDGE_CRYSTAL_UPDATED: u32 = 48005;
 /// A huddle (audio/video session) was started.
 pub const KIND_HUDDLE_STARTED: u32 = 48100;
 /// A participant joined a huddle.
@@ -312,10 +280,6 @@ pub const KIND_HUDDLE_PARTICIPANT_JOINED: u32 = 48101;
 pub const KIND_HUDDLE_PARTICIPANT_LEFT: u32 = 48102;
 /// A huddle ended.
 pub const KIND_HUDDLE_ENDED: u32 = 48103;
-/// A media track was published in a huddle.
-pub const KIND_HUDDLE_TRACK_PUBLISHED: u32 = 48104;
-/// A huddle recording became available.
-pub const KIND_HUDDLE_RECORDING_AVAILABLE: u32 = 48105;
 /// Huddle channel guidelines/rules document.
 pub const KIND_HUDDLE_GUIDELINES: u32 = 48106;
 
@@ -379,9 +343,11 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_NIP43_MEMBER_ADDED,
     KIND_NIP43_MEMBER_REMOVED,
     KIND_NIP43_LEAVE_REQUEST,
-    KIND_SYSTEM_TIMER_FIRED,
-    KIND_SYSTEM_SLASH_COMMAND,
-    KIND_SYSTEM_FLAG,
+    KIND_IA_ARCHIVE_REQUEST,
+    KIND_IA_UNARCHIVE_REQUEST,
+    KIND_IA_ARCHIVED,
+    KIND_IA_UNARCHIVED,
+    KIND_IA_ARCHIVED_LIST,
     KIND_NIP29_GROUP_METADATA,
     KIND_NIP29_GROUP_ADMINS,
     KIND_NIP29_GROUP_MEMBERS,
@@ -402,28 +368,18 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_STREAM_MESSAGE_DIFF,
     KIND_CANVAS,
     KIND_SYSTEM_MESSAGE,
-    KIND_ENRICHMENT,
     KIND_CHANNEL_SUMMARY,
     KIND_PRESENCE_SNAPSHOT,
     KIND_DM_OPEN,
     KIND_DM_ADD_MEMBER,
     KIND_DM_HIDE,
     KIND_DM_CREATED,
-    KIND_DM_MEMBER_ADDED,
-    KIND_DM_MEMBER_REMOVED,
-    KIND_TOPIC_CREATED,
-    KIND_TOPIC_UPDATED,
-    KIND_TOPIC_ARCHIVED,
     KIND_JOB_REQUEST,
     KIND_JOB_ACCEPTED,
     KIND_JOB_PROGRESS,
     KIND_JOB_RESULT,
     KIND_JOB_CANCEL,
     KIND_JOB_ERROR,
-    KIND_SUBSCRIPTION_CREATED,
-    KIND_SUBSCRIPTION_MATCHED,
-    KIND_SUBSCRIPTION_PAUSED,
-    KIND_SUBSCRIPTION_RESUMED,
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_WORKFLOW_DEF,
@@ -446,20 +402,11 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_WORKFLOW_APPROVAL_REQUESTED,
     KIND_WORKFLOW_APPROVAL_GRANTED,
     KIND_WORKFLOW_APPROVAL_DENIED,
-    KIND_USER_GROUP_CREATED,
-    KIND_USER_GROUP_UPDATED,
-    KIND_USER_GROUP_DELETED,
     KIND_AUDIT_ENTRY,
-    KIND_COMPLIANCE_EXPORT,
-    KIND_KNOWLEDGE_CRYSTAL_CREATED,
-    KIND_KNOWLEDGE_CRYSTAL_APPROVED,
-    KIND_KNOWLEDGE_CRYSTAL_UPDATED,
     KIND_HUDDLE_STARTED,
     KIND_HUDDLE_PARTICIPANT_JOINED,
     KIND_HUDDLE_PARTICIPANT_LEFT,
     KIND_HUDDLE_ENDED,
-    KIND_HUDDLE_TRACK_PUBLISHED,
-    KIND_HUDDLE_RECORDING_AVAILABLE,
     KIND_HUDDLE_GUIDELINES,
     KIND_MEDIA_UPLOAD,
     KIND_GIT_REPO_ANNOUNCEMENT,
@@ -507,6 +454,15 @@ pub const fn is_relay_admin_kind(kind: u32) -> bool {
     )
 }
 
+/// Returns `true` if `kind` is a NIP-IA identity archival request (9035–9036).
+///
+/// Only the user-signed *request* kinds are matched. The relay-signed delta and
+/// snapshot kinds (8002/8003/13535) are emitted by the relay, never ingested as
+/// commands, so they are intentionally excluded.
+pub const fn is_identity_archive_request_kind(kind: u32) -> bool {
+    matches!(kind, KIND_IA_ARCHIVE_REQUEST | KIND_IA_UNARCHIVE_REQUEST)
+}
+
 /// Returns `true` if `kind` is a Sprout command kind that requires transactional execution.
 pub const fn is_command_kind(kind: u32) -> bool {
     matches!(
@@ -521,13 +477,10 @@ pub const fn is_command_kind(kind: u32) -> bool {
     )
 }
 
-/// Returns `true` if `kind` is a relay-only enrichment kind (40900–40902).
+/// Returns `true` if `kind` is a relay-only sidecar kind.
 /// Client submission of these kinds must be rejected.
 pub const fn is_relay_only_kind(kind: u32) -> bool {
-    matches!(
-        kind,
-        KIND_ENRICHMENT | KIND_CHANNEL_SUMMARY | KIND_PRESENCE_SNAPSHOT
-    )
+    matches!(kind, KIND_CHANNEL_SUMMARY | KIND_PRESENCE_SNAPSHOT)
 }
 
 /// Extract the kind from a nostr Event as u32.
@@ -559,7 +512,7 @@ const _: () = assert!(
 // Compile-time: all Sprout kind constants fit in nostr's u16-backed Kind.
 const _: () = assert!(KIND_AUTH <= u16::MAX as u32);
 const _: () = assert!(KIND_CANVAS <= u16::MAX as u32);
-const _: () = assert!(KIND_HUDDLE_RECORDING_AVAILABLE <= u16::MAX as u32);
+const _: () = assert!(KIND_HUDDLE_GUIDELINES <= u16::MAX as u32);
 const _: () = assert!(EPHEMERAL_KIND_MIN < EPHEMERAL_KIND_MAX);
 
 #[cfg(test)]

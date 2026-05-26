@@ -87,7 +87,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             if state.config.pubkey_allowlist_enabled
                 && auth_ctx.auth_method == sprout_auth::AuthMethod::Nip42
             {
-                let allowed = match state.db.is_pubkey_allowed(&pubkey.serialize()).await {
+                let allowed = match state.db.is_pubkey_allowed(pubkey.as_bytes()).await {
                     Ok(v) => v,
                     Err(e) => {
                         warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = %e,
@@ -112,7 +112,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             // Relay membership gate — uses the shared helper with NIP-OA fallback.
             let nip_oa_owner = match crate::api::relay_members::enforce_relay_membership(
                 &state,
-                &pubkey.serialize(),
+                pubkey.as_bytes(),
                 auth_tag_json.as_deref(),
             )
             .await
@@ -139,7 +139,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             let nip_oa_owner = nip_oa_owner.or_else(|| {
                 if !state.config.require_relay_membership && auth_tag_json.is_some() {
                     crate::api::relay_members::extract_nip_oa_owner(
-                        &pubkey.serialize(),
+                        pubkey.as_bytes(),
                         auth_tag_json.as_deref(),
                     )
                 } else {
@@ -152,10 +152,10 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             if let Some(owner) = nip_oa_owner {
                 // Ensure both agent and owner have users rows (BYO agents may not,
                 // and agent_owner_pubkey has a FK constraint to users.pubkey).
-                if let Err(e) = state.db.ensure_user(&pubkey.serialize()).await {
+                if let Err(e) = state.db.ensure_user(pubkey.as_bytes()).await {
                     warn!(conn_id = %conn_id, error = %e, "ensure_user(agent) failed during NIP-OA backfill");
                 }
-                if let Err(e) = state.db.ensure_user(&owner.serialize()).await {
+                if let Err(e) = state.db.ensure_user(owner.as_bytes()).await {
                     warn!(conn_id = %conn_id, error = %e, "ensure_user(owner) failed during NIP-OA backfill");
                 }
 
@@ -164,14 +164,14 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 // Returns Ok(true) if written, Ok(false) if already owned by someone else.
                 match state
                     .db
-                    .set_agent_owner(&pubkey.serialize(), &owner.serialize())
+                    .set_agent_owner(pubkey.as_bytes(), owner.as_bytes())
                     .await
                 {
                     Ok(true) => {
                         // Successfully materialized — this owner is authoritative.
                         auth_ctx.agent_owner_pubkey = Some(owner);
                         // Pre-warm the observer cache to avoid stale negatives.
-                        let cache_key = (pubkey.serialize().to_vec(), owner.serialize().to_vec());
+                        let cache_key = (pubkey.to_bytes().to_vec(), owner.to_bytes().to_vec());
                         state.observer_owner_cache.insert(cache_key, true);
                     }
                     Ok(false) => {
@@ -179,7 +179,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                         // owner matches the existing DB record before trusting it.
                         match state
                             .db
-                            .is_agent_owner(&pubkey.serialize(), &owner.serialize())
+                            .is_agent_owner(pubkey.as_bytes(), owner.as_bytes())
                             .await
                         {
                             Ok(true) => {
@@ -218,7 +218,7 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
             state
                 .conn_manager
-                .set_authenticated_pubkey(conn_id, pubkey.serialize().to_vec());
+                .set_authenticated_pubkey(conn_id, pubkey.to_bytes().to_vec());
             conn.send(RelayMessage::ok(&event_id_hex, true, ""));
         }
         Err(e) => {

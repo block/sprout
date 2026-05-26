@@ -134,7 +134,7 @@ pub fn normalize_slug(raw: &str) -> Result<String, EngramError> {
 ///
 /// `K_c` is symmetric: `derive(seckey_a, pubkey_o) == derive(seckey_o, pubkey_a)`.
 pub fn conversation_key(my_seckey: &SecretKey, their_pubkey: &PublicKey) -> ConversationKey {
-    ConversationKey::derive(my_seckey, their_pubkey)
+    ConversationKey::derive(my_seckey, their_pubkey).expect("valid keys produce conversation key")
 }
 
 /// Compute the `d` tag for a slug under a conversation key.
@@ -403,12 +403,13 @@ pub fn build_event(
 
     let d = d_tag(&k_c, body.slug());
     let tags = vec![
-        Tag::parse(&["d", &d]).map_err(|e| EngramError::Encrypt(e.to_string()))?,
-        Tag::parse(&["p", &owner_pubkey.to_hex()])
+        Tag::parse(["d", &d]).map_err(|e| EngramError::Encrypt(e.to_string()))?,
+        Tag::parse(["p", &owner_pubkey.to_hex()])
             .map_err(|e| EngramError::Encrypt(e.to_string()))?,
     ];
 
-    EventBuilder::new(Kind::Custom(KIND_AGENT_ENGRAM as u16), ciphertext, tags)
+    EventBuilder::new(Kind::Custom(KIND_AGENT_ENGRAM as u16), ciphertext)
+        .tags(tags)
         .custom_created_at(nostr::Timestamp::from(created_at))
         .sign_with_keys(agent_keys)
         .map_err(|e| EngramError::Sign(e.to_string()))
@@ -508,8 +509,8 @@ where
     I: IntoIterator<Item = Event>,
 {
     events.into_iter().reduce(|a, b| {
-        let a_ts = a.created_at.as_u64();
-        let b_ts = b.created_at.as_u64();
+        let a_ts = a.created_at.as_secs();
+        let b_ts = b.created_at.as_secs();
         if b_ts > a_ts {
             return b;
         }
@@ -797,17 +798,15 @@ mod tests {
             .unwrap();
         let upper_d = d.to_uppercase();
         let tags = vec![
-            Tag::parse(&["d", &upper_d]).unwrap(),
-            Tag::parse(&["p", &owner.public_key().to_hex()]).unwrap(),
+            Tag::parse(["d", &upper_d]).unwrap(),
+            Tag::parse(["p", &owner.public_key().to_hex()]).unwrap(),
         ];
-        let tampered = EventBuilder::new(
-            Kind::Custom(KIND_AGENT_ENGRAM as u16),
-            ev.content.clone(),
-            tags,
-        )
-        .custom_created_at(ev.created_at)
-        .sign_with_keys(&agent)
-        .unwrap();
+        let tampered =
+            EventBuilder::new(Kind::Custom(KIND_AGENT_ENGRAM as u16), ev.content.clone())
+                .tags(tags)
+                .custom_created_at(ev.created_at)
+                .sign_with_keys(&agent)
+                .unwrap();
         let err = validate_and_decrypt(
             &tampered,
             &agent.public_key(),

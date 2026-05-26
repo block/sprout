@@ -19,10 +19,10 @@
 
 use core::str::FromStr;
 
-use nostr::bitcoin::hashes::sha256::Hash as Sha256Hash;
-use nostr::bitcoin::hashes::Hash;
-use nostr::bitcoin::secp256k1::schnorr::Signature;
-use nostr::bitcoin::secp256k1::{Message, XOnlyPublicKey};
+use nostr::hashes::sha256::Hash as Sha256Hash;
+use nostr::hashes::Hash;
+use nostr::secp256k1::schnorr::Signature;
+use nostr::secp256k1::Message;
 use nostr::{Keys, PublicKey, Tag, SECP256K1};
 use serde_json::Value;
 
@@ -229,9 +229,11 @@ pub fn verify_auth_tag(
     let preimage = build_preimage(agent_pubkey, conditions);
     let message = hash_preimage(&preimage);
 
-    let xonly: &XOnlyPublicKey = &owner_pubkey;
+    let xonly = owner_pubkey.xonly().map_err(|e| {
+        SdkError::InvalidInput(format!("owner pubkey xonly conversion failed: {e}"))
+    })?;
     SECP256K1
-        .verify_schnorr(&sig, &message, xonly)
+        .verify_schnorr(&sig, &message, &xonly)
         .map_err(|e| SdkError::InvalidInput(format!("signature verification failed: {e}")))?;
 
     Ok(owner_pubkey)
@@ -296,7 +298,7 @@ pub fn parse_auth_tag(json_str: &str) -> Result<Tag, SdkError> {
         )));
     }
 
-    Tag::parse(&["auth", owner_pubkey_hex, conditions, sig_hex])
+    Tag::parse(["auth", owner_pubkey_hex, conditions, sig_hex])
         .map_err(|e| SdkError::InvalidInput(format!("failed to construct Tag: {e}")))
 }
 
@@ -329,9 +331,9 @@ mod tests {
         let message = hash_preimage(&preimage);
 
         let sig = Signature::from_str(SPEC_SIG_HEX).expect("spec sig must parse");
-        let xonly: &XOnlyPublicKey = &owner_pubkey;
+        let xonly = owner_pubkey.xonly().expect("valid test pubkey");
         SECP256K1
-            .verify_schnorr(&sig, &message, xonly)
+            .verify_schnorr(&sig, &message, &xonly)
             .expect("spec test vector signature must verify");
     }
 

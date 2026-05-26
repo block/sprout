@@ -18,8 +18,8 @@ use tracing::{debug, error, info, warn};
 /// Messages forwarded from the upstream relay to the server layer.
 #[derive(Debug, Clone)]
 pub enum UpstreamEvent {
-    /// A relay message to route to a downstream client.
-    RelayMessage(RelayMessage),
+    /// A relay message to route to a downstream client (raw JSON text).
+    RelayMessage(String),
     /// The upstream connection was lost (reconnect in progress).
     Disconnected,
     /// The upstream connection was (re)established and authenticated.
@@ -153,30 +153,6 @@ impl UpstreamClient {
     /// Returns `true` if the upstream connection is currently established and authenticated.
     pub fn is_connected(&self) -> bool {
         self.inner.connected.try_read().map(|v| *v).unwrap_or(false)
-    }
-
-    // ── Subscription tracking helpers ─────────────────────────────────────────
-
-    /// Track a subscription by storing its REQ JSON for replay on reconnect.
-    /// Called by the server layer when forwarding REQs from downstream clients.
-    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
-    pub(crate) fn track_subscription(&self, sub_id: &str, req_json: &str) {
-        self.inner
-            .active_subs
-            .insert(sub_id.to_string(), req_json.to_string());
-    }
-
-    /// Remove a subscription from the active set.
-    /// Called by the server layer when handling CLOSEs from downstream clients.
-    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
-    pub(crate) fn untrack_subscription(&self, sub_id: &str) {
-        self.inner.active_subs.remove(sub_id);
-    }
-
-    /// Returns the number of currently tracked active subscriptions.
-    #[allow(dead_code)] // Used in tests; kept for future server-layer integration
-    pub(crate) fn active_subscription_count(&self) -> usize {
-        self.inner.active_subs.len()
     }
 
     // ── Run loop ──────────────────────────────────────────────────────────────
@@ -374,11 +350,7 @@ where
                                 event_id.to_hex()
                             );
                             if inbound_tx
-                                .send(UpstreamEvent::RelayMessage(RelayMessage::Ok {
-                                    event_id,
-                                    status: *status,
-                                    message: message.clone(),
-                                }))
+                                .send(UpstreamEvent::RelayMessage(text_str.to_string()))
                                 .await
                                 .is_err()
                             {
@@ -389,9 +361,9 @@ where
                     }
 
                     // ── All other messages → forward downstream ──────────────
-                    other => {
+                    _other => {
                         if inbound_tx
-                            .send(UpstreamEvent::RelayMessage(other))
+                            .send(UpstreamEvent::RelayMessage(text_str.to_string()))
                             .await
                             .is_err()
                         {
@@ -435,18 +407,18 @@ async fn respond_to_auth_challenge(
     inner: &Inner,
     write_tx: &mpsc::Sender<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let relay_tag = Tag::parse(&["relay", &inner.relay_url])
+    let relay_tag = Tag::parse(["relay", &inner.relay_url])
         .map_err(|e| crate::ProxyError::Auth(format!("relay tag: {e}")))?;
-    let challenge_tag = Tag::parse(&["challenge", challenge])
+    let challenge_tag = Tag::parse(["challenge", challenge])
         .map_err(|e| crate::ProxyError::Auth(format!("challenge tag: {e}")))?;
-    let token_tag = Tag::parse(&["auth_token", &inner.api_token])
+    let token_tag = Tag::parse(["auth_token", &inner.api_token])
         .map_err(|e| crate::ProxyError::Auth(format!("auth_token tag: {e}")))?;
 
     let auth_event = EventBuilder::new(
         Kind::Authentication, // kind:22242
         "",
-        [relay_tag, challenge_tag, token_tag],
     )
+    .tags([relay_tag, challenge_tag, token_tag])
     .sign_with_keys(&inner.auth_keys)
     .map_err(|e| crate::ProxyError::Auth(format!("sign auth event: {e}")))?;
 
@@ -483,7 +455,8 @@ mod tests {
 
             // Queue an EVENT message.
             let keys = Keys::generate();
-            let event = EventBuilder::new(Kind::TextNote, "hello", [])
+            let event = EventBuilder::new(Kind::TextNote, "hello")
+                .tags([])
                 .sign_with_keys(&keys)
                 .unwrap();
             let event_id = event.id;
@@ -596,35 +569,18 @@ mod tests {
     }
 
     #[test]
-    fn track_and_untrack_subscriptions() {
-        let client = UpstreamClient::new("ws://localhost:3000", "sprout_test");
-
-        assert_eq!(client.active_subscription_count(), 0);
-
-        client.track_subscription("sub-1", r#"["REQ","sub-1",{}]"#);
-        client.track_subscription("sub-2", r#"["REQ","sub-2",{}]"#);
-        assert_eq!(client.active_subscription_count(), 2);
-
-        client.untrack_subscription("sub-1");
-        assert_eq!(client.active_subscription_count(), 1);
-
-        client.untrack_subscription("sub-2");
-        assert_eq!(client.active_subscription_count(), 0);
-    }
-
-    #[test]
     fn send_req_tracks_subscription() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let client = UpstreamClient::new("ws://localhost:3000", "sprout_test");
 
-            assert_eq!(client.active_subscription_count(), 0);
+            assert_eq!(client.inner.active_subs.len(), 0);
 
             let sub_id = SubscriptionId::new("tracked-sub");
             let filters = vec![Filter::new().kind(Kind::TextNote)];
             client.send_req(sub_id.clone(), filters).await.unwrap();
 
-            assert_eq!(client.active_subscription_count(), 1);
+            assert_eq!(client.inner.active_subs.len(), 1);
             assert!(
                 client.inner.active_subs.contains_key("tracked-sub"),
                 "subscription should be tracked"
@@ -632,7 +588,7 @@ mod tests {
 
             // CLOSE should remove it.
             client.send_close(sub_id).await.unwrap();
-            assert_eq!(client.active_subscription_count(), 0);
+            assert_eq!(client.inner.active_subs.len(), 0);
         });
     }
 }

@@ -448,7 +448,8 @@ mod tests {
 
     fn make_stored_event(kind: Kind, channel_id: Option<Uuid>) -> StoredEvent {
         let keys = Keys::generate();
-        let event = EventBuilder::new(kind, "test", [])
+        let event = EventBuilder::new(kind, "test")
+            .tags([])
             .sign_with_keys(&keys)
             .expect("sign");
         StoredEvent::with_received_at(event, Utc::now(), channel_id, true)
@@ -456,7 +457,8 @@ mod tests {
 
     fn make_stored_event_with_p(kind: Kind, p: &str, channel_id: Option<Uuid>) -> StoredEvent {
         let keys = Keys::generate();
-        let event = EventBuilder::new(kind, "test", [Tag::parse(&["p", p]).expect("valid p tag")])
+        let event = EventBuilder::new(kind, "test")
+            .tags([Tag::parse(["p", p]).expect("valid p tag")])
             .sign_with_keys(&keys)
             .expect("sign");
         StoredEvent::with_received_at(event, Utc::now(), channel_id, true)
@@ -974,13 +976,13 @@ mod tests {
         registry.register(
             conn_a,
             "observer_a".to_string(),
-            vec![Filter::new().kind(kind).custom_tag(p_tag(), [p_a])],
+            vec![Filter::new().kind(kind).custom_tags(p_tag(), [p_a])],
             None,
         );
         registry.register(
             conn_b,
             "observer_b".to_string(),
-            vec![Filter::new().kind(kind).custom_tag(p_tag(), [p_b])],
+            vec![Filter::new().kind(kind).custom_tags(p_tag(), [p_b])],
             None,
         );
 
@@ -1000,7 +1002,7 @@ mod tests {
         let conn_id = Uuid::new_v4();
         let kind = Kind::Custom(sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16);
         let p = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let filter = Filter::new().kind(kind).custom_tag(p_tag(), [p]);
+        let filter = Filter::new().kind(kind).custom_tags(p_tag(), [p]);
         let key = GlobalPKindIndexKey {
             kind,
             p: p.to_string(),

@@ -366,14 +366,46 @@ export type CancelManagedAgentTurnResult = {
   status: "sent" | "no_active_turn";
 };
 
-export type AcpProvider = {
+export type AcpAvailabilityStatus =
+  | "available"
+  | "adapter_missing"
+  | "cli_missing"
+  | "not_installed";
+
+export type AcpProviderCatalogEntry = {
   id: string;
   label: string;
+  avatarUrl: string;
+  availability: AcpAvailabilityStatus;
+  command: string | null;
+  binaryPath: string | null;
+  defaultArgs: string[];
+  mcpCommand: string | null;
+  installHint: string;
+  installInstructionsUrl: string;
+  canAutoInstall: boolean;
+  underlyingCliPath: string | null;
+};
+
+/** An AcpProviderCatalogEntry that is confirmed available — command and binaryPath are non-null. */
+export type AcpProvider = AcpProviderCatalogEntry & {
+  availability: "available";
   command: string;
   binaryPath: string;
-  defaultArgs: string[];
-  /** MCP server binary override, or `null` for the default (`sprout-mcp-server`). */
-  mcpCommand: string | null;
+};
+
+export type InstallStepResult = {
+  step: string;
+  command: string;
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+};
+
+export type InstallRuntimeResult = {
+  success: boolean;
+  steps: InstallStepResult[];
 };
 
 export type CommandAvailability = {

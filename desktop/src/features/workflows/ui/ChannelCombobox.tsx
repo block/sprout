@@ -88,7 +88,7 @@ export function ChannelCombobox({
         <button
           aria-expanded={open}
           className={cn(
-            "flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+            "flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 text-sm shadow-xs transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
             !selected && "text-muted-foreground",
           )}
           disabled={disabled}
@@ -104,7 +104,7 @@ export function ChannelCombobox({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[--radix-popover-trigger-width] p-0"
+        className="w-(--radix-popover-trigger-width) p-0"
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -112,7 +112,7 @@ export function ChannelCombobox({
             autoCapitalize="off"
             autoComplete="off"
             ref={(el) => el?.focus()}
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="flex-1 bg-transparent text-sm outline-hidden placeholder:text-muted-foreground"
             onChange={(e) => {
               setQuery(e.target.value);
               setHighlightedIndex(0);
@@ -131,7 +131,7 @@ export function ChannelCombobox({
             filtered.map((channel, index) => (
               <button
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+                  "flex w-full items-center gap-2 rounded-xs px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground",
                   channel.id === value && "bg-accent/50",
                   index === highlightedIndex &&
                     "bg-accent text-accent-foreground",

@@ -39,9 +39,9 @@ function SettingsSectionButton({
     <button
       aria-pressed={active}
       className={cn(
-        "group inline-flex min-w-fit items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group inline-flex min-w-fit items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium whitespace-nowrap motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
         active
-          ? "border-border bg-background text-foreground shadow-sm"
+          ? "border-border bg-background text-foreground shadow-xs"
           : "border-transparent bg-transparent text-muted-foreground hover:bg-background/70 hover:text-foreground",
         isLoaded ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-2",
       )}
@@ -159,7 +159,7 @@ export function SettingsView({
           </h2>
           <button
             aria-label="Close settings"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             data-testid="settings-close"
             onClick={onClose}
             type="button"

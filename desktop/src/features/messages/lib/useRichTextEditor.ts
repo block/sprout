@@ -268,7 +268,7 @@ export function useRichTextEditor({
       editorProps: {
         attributes: {
           class:
-            "min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 md:leading-6 shadow-none focus-visible:ring-0 caret-foreground outline-none prose-sm max-w-none",
+            "min-h-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-0 text-sm leading-6 md:leading-6 shadow-none focus-visible:ring-0 caret-foreground outline-hidden prose-sm max-w-none",
           "data-testid": "message-input",
         },
       },
@@ -343,9 +343,25 @@ export function useRichTextEditor({
     [editor],
   );
 
-  const focus = React.useCallback(() => {
+  const focusEnd = React.useCallback(() => {
     editor?.commands.focus("end");
   }, [editor]);
+
+  /**
+   * Ensure the editor has DOM focus without moving the ProseMirror
+   * selection. If the editor already has focus this is a no-op.
+   * Use this for re-render-triggered focus calls (e.g. reply-target
+   * effect) where we don't want to yank the cursor to the end.
+   */
+  const focusPreserve = React.useCallback(() => {
+    if (!editor) return;
+    // `focus()` with no position argument preserves the current selection.
+    editor.commands.focus();
+  }, [editor]);
+
+  // Backwards-compatible alias — existing call sites that want "end"
+  // behaviour keep working. New call sites should use the explicit names.
+  const focus = focusEnd;
 
   /**
    * Plain-text view of the document plus the cursor position in
@@ -416,6 +432,8 @@ export function useRichTextEditor({
     clearContent,
     setContent,
     focus,
+    focusEnd,
+    focusPreserve,
     getPlainTextAndCursor,
     replacePlainTextRange,
   };

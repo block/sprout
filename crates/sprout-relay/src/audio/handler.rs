@@ -157,13 +157,13 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
 
     let pubkey = auth_ctx.pubkey;
     let pubkey_hex = pubkey.to_hex();
-    let pubkey_bytes = pubkey.serialize().to_vec();
+    let pubkey_bytes = pubkey.to_bytes().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;
 
     // ── Relay membership gate (with NIP-OA fallback) ────────────────────────────
     if crate::api::relay_members::enforce_relay_membership(
         &state,
-        &pubkey.serialize(),
+        pubkey.as_bytes(),
         auth_tag_json.as_deref(),
     )
     .await
@@ -725,14 +725,14 @@ async fn emit_participant_event(
 ) {
     let content = serde_json::json!({"ephemeral_channel_id": channel_id.to_string()}).to_string();
 
-    let h_tag = match Tag::parse(&["h", &parent_channel_id.to_string()]) {
+    let h_tag = match Tag::parse(["h", &parent_channel_id.to_string()]) {
         Ok(t) => t,
         Err(e) => {
             warn!("audio: failed to parse h tag: {e}");
             return;
         }
     };
-    let p_tag = match Tag::parse(&["p", participant_pubkey]) {
+    let p_tag = match Tag::parse(["p", participant_pubkey]) {
         Ok(t) => t,
         Err(e) => {
             warn!("audio: failed to parse p tag: {e}");
@@ -741,7 +741,10 @@ async fn emit_participant_event(
     };
     let tags = vec![h_tag, p_tag];
 
-    let event = match EventBuilder::new(kind, content, tags).sign_with_keys(&state.relay_keypair) {
+    let event = match EventBuilder::new(kind, content)
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+    {
         Ok(e) => e,
         Err(e) => {
             warn!("audio: failed to sign lifecycle event: {e}");

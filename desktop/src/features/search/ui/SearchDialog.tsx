@@ -213,7 +213,7 @@ export function SearchDialog({
       >
         <DialogHeader className="border-b border-border/80 px-6 py-5">
           <DialogTitle className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-xs">
               <Search className="h-4 w-4" />
             </span>
             Search
@@ -221,7 +221,7 @@ export function SearchDialog({
           <DialogDescription>
             Full-text search across accessible channels.
           </DialogDescription>
-          <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-sm">
+          <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-xs">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
               autoFocus

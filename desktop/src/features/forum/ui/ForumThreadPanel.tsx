@@ -77,7 +77,7 @@ function ReplyRow({
       <div className="flex items-center gap-2">
         <UserProfilePopover pubkey={reply.pubkey}>
           <button
-            className="flex items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex items-center gap-2 rounded-lg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
             type="button"
           >
             <UserAvatar
@@ -218,7 +218,7 @@ export function ForumThreadPanel({
           <div className="flex items-center gap-2">
             <UserProfilePopover pubkey={post.pubkey}>
               <button
-                className="flex items-center gap-2 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex items-center gap-2 rounded-xl focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                 type="button"
               >
                 <UserAvatar

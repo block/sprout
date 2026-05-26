@@ -34,7 +34,7 @@ export function InboxListPane({
         <div className="flex flex-nowrap gap-1">
           {FILTER_OPTIONS.map((option) => (
             <Button
-              className="h-7 rounded-full border border-transparent px-1.5 text-[10.5px] font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-sm data-[active=true]:backdrop-blur-sm"
+              className="h-7 rounded-full border border-transparent px-1.5 text-[10.5px] font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm"
               data-active={filter === option.value}
               key={option.value}
               onClick={() => onFilterChange(option.value)}

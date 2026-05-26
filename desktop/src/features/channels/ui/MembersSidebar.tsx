@@ -78,7 +78,7 @@ export function MembersSidebar({
       : null;
 
   const rawMembers = membersQuery.data ?? [];
-  const { people, bots, isBot, isMyBot, managedAgentsQuery } =
+  const { people, bots, archived, isBot, isMyBot, managedAgentsQuery } =
     useClassifiedMembers(rawMembers, currentPubkey);
 
   const allMemberPubkeys = React.useMemo(
@@ -299,6 +299,38 @@ export function MembersSidebar({
                 )}
               </div>
             </section>
+
+            {archived.length > 0 ? (
+              <section className="space-y-2.5">
+                <details
+                  className="group/archived"
+                  data-testid="members-sidebar-archived"
+                >
+                  <summary className="flex cursor-pointer items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
+                    <h2 className="text-sm font-semibold tracking-tight text-muted-foreground">
+                      Archived
+                    </h2>
+                    <span
+                      className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+                      data-testid="members-sidebar-archived-count"
+                    >
+                      {archived.length}
+                    </span>
+                    <span className="ml-auto text-xs text-muted-foreground transition-transform group-open/archived:rotate-90">
+                      ▸
+                    </span>
+                  </summary>
+                  <div
+                    className="mt-2 space-y-2"
+                    data-testid="members-sidebar-archived-list"
+                  >
+                    {archived.map((member) =>
+                      renderMemberCard(member, isBot(member)),
+                    )}
+                  </div>
+                </details>
+              </section>
+            ) : null}
 
             {changeRoleError ? (
               <p

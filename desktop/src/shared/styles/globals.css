@@ -1,6 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+@config "../../../tailwind.config.js";
 
 /* ── Tiptap rich-text composer ──────────────────────────────────────── */
 .rich-text-composer .tiptap {
@@ -151,6 +151,17 @@
   82%,
   100% {
     background-position: 0% 50%;
+  }
+}
+
+@keyframes route-target-highlight-fade {
+  0%,
+  60% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
   }
 }
 

@@ -159,25 +159,26 @@ async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
 
         // kind:39000 — channel metadata
         {
-            let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &channel_id_str])?];
-            tags.push(Tag::parse(&["name", &channel.name])?);
+            let mut tags: Vec<Tag> = vec![Tag::parse(["d", &channel_id_str])?];
+            tags.push(Tag::parse(["name", &channel.name])?);
             if let Some(ref desc) = channel.description {
                 if !desc.is_empty() {
-                    tags.push(Tag::parse(&["about", desc])?);
+                    tags.push(Tag::parse(["about", desc])?);
                 }
             }
             if channel.visibility == "private" {
-                tags.push(Tag::parse(&["private"])?);
+                tags.push(Tag::parse(["private"])?);
             } else {
-                tags.push(Tag::parse(&["public"])?);
+                tags.push(Tag::parse(["public"])?);
             }
             if channel.channel_type == "dm" {
-                tags.push(Tag::parse(&["hidden"])?);
+                tags.push(Tag::parse(["hidden"])?);
             }
-            tags.push(Tag::parse(&["closed"])?);
-            tags.push(Tag::parse(&["t", &channel.channel_type])?);
+            tags.push(Tag::parse(["closed"])?);
+            tags.push(Tag::parse(["t", &channel.channel_type])?);
 
-            let event = EventBuilder::new(Kind::Custom(39000), "", tags)
+            let event = EventBuilder::new(Kind::Custom(39000), "")
+                .tags(tags)
                 .sign_with_keys(&relay_keys)
                 .map_err(|e| anyhow::anyhow!("sign kind:39000: {e}"))?;
             db.replace_addressable_event(&event, Some(channel.id))
@@ -186,15 +187,16 @@ async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
 
         // kind:39001 — admins
         {
-            let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &channel_id_str])?];
+            let mut tags: Vec<Tag> = vec![Tag::parse(["d", &channel_id_str])?];
             for m in members
                 .iter()
                 .filter(|m| m.role == "owner" || m.role == "admin")
             {
                 let pk = hex::encode(&m.pubkey);
-                tags.push(Tag::parse(&["p", &pk, &m.role])?);
+                tags.push(Tag::parse(["p", &pk, &m.role])?);
             }
-            let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_ADMINS as u16), "", tags)
+            let event = EventBuilder::new(Kind::Custom(KIND_NIP29_GROUP_ADMINS as u16), "")
+                .tags(tags)
                 .sign_with_keys(&relay_keys)
                 .map_err(|e| anyhow::anyhow!("sign kind:39001: {e}"))?;
             db.replace_addressable_event(&event, Some(channel.id))
@@ -203,12 +205,13 @@ async fn reconcile_channels(relay_key_arg: Option<String>) -> Result<()> {
 
         // kind:39002 — members
         {
-            let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &channel_id_str])?];
+            let mut tags: Vec<Tag> = vec![Tag::parse(["d", &channel_id_str])?];
             for m in &members {
                 let pk = hex::encode(&m.pubkey);
-                tags.push(Tag::parse(&["p", &pk, "", &m.role])?);
+                tags.push(Tag::parse(["p", &pk, "", &m.role])?);
             }
-            let event = EventBuilder::new(Kind::Custom(39002), "", tags)
+            let event = EventBuilder::new(Kind::Custom(39002), "")
+                .tags(tags)
                 .sign_with_keys(&relay_keys)
                 .map_err(|e| anyhow::anyhow!("sign kind:39002: {e}"))?;
             db.replace_addressable_event(&event, Some(channel.id))

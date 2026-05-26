@@ -113,7 +113,7 @@ export const ComposerAttachments = React.memo(function ComposerAttachments({
                             src={rewriteRelayUrl(attachment.url)}
                           />
                         )}
-                        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30">
+                        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-white/30">
                           <X className="h-5 w-5" />
                           <span className="sr-only">Close</span>
                         </DialogPrimitive.Close>

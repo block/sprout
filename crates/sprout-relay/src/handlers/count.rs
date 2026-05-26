@@ -33,7 +33,7 @@ pub async fn handle_count(
     let pubkey_bytes = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Authenticated(ctx) => ctx.pubkey.serialize().to_vec(),
+            AuthState::Authenticated(ctx) => ctx.pubkey.to_bytes().to_vec(),
             _ => {
                 conn.send(RelayMessage::closed(
                     &sub_id,

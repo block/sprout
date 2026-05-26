@@ -135,7 +135,7 @@ pub async fn submit_event(
         state.config.require_auth_token,
     )?;
     check_nip98_replay(&state, event_id_bytes)?;
-    let pubkey_bytes = pubkey.serialize().to_vec();
+    let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
@@ -183,7 +183,7 @@ pub async fn query_events(
         state.config.require_auth_token,
     )?;
     check_nip98_replay(&state, event_id_bytes)?;
-    let pubkey_bytes = pubkey.serialize().to_vec();
+    let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
     super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
@@ -284,7 +284,7 @@ pub async fn count_events(
         state.config.require_auth_token,
     )?;
     check_nip98_replay(&state, event_id_bytes)?;
-    let pubkey_bytes = pubkey.serialize().to_vec();
+    let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
     super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
@@ -482,10 +482,10 @@ async fn handle_bridge_search(
             }
         }
         if let Some(since) = filter.since {
-            filter_parts.push(format!("created_at:>={}", since.as_u64()));
+            filter_parts.push(format!("created_at:>={}", since.as_secs()));
         }
         if let Some(until) = filter.until {
-            filter_parts.push(format!("created_at:<={}", until.as_u64()));
+            filter_parts.push(format!("created_at:<={}", until.as_secs()));
         }
 
         let filter_by = filter_parts.join(" && ");
@@ -755,15 +755,13 @@ async fn synthesize_presence(state: &AppState, filters: &[nostr::Filter]) -> Opt
     let mut events = Vec::with_capacity(presence_map.len());
     for (pubkey_hex, status) in &presence_map {
         // Build a synthetic event: relay-signed, content = status, p-tag = subject.
-        let tags = vec![nostr::Tag::parse(&["p", pubkey_hex]).ok()?];
-        let event = nostr::EventBuilder::new(
-            nostr::Kind::Custom(KIND_PRESENCE_UPDATE as u16),
-            status,
-            tags,
-        )
-        .custom_created_at(nostr::Timestamp::from(now))
-        .sign_with_keys(&state.relay_keypair)
-        .ok()?;
+        let tags = vec![nostr::Tag::parse(["p", pubkey_hex]).ok()?];
+        let event =
+            nostr::EventBuilder::new(nostr::Kind::Custom(KIND_PRESENCE_UPDATE as u16), status)
+                .tags(tags)
+                .custom_created_at(nostr::Timestamp::from(now))
+                .sign_with_keys(&state.relay_keypair)
+                .ok()?;
 
         if let Ok(v) = serde_json::to_value(&event) {
             events.push(v);
@@ -788,7 +786,8 @@ mod tests {
             nostr::TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::P)),
             [owner_hex],
         );
-        let ev = EventBuilder::new(Kind::Custom(30174), "engram body", [d_tag, p_tag])
+        let ev = EventBuilder::new(Kind::Custom(30174), "engram body")
+            .tags([d_tag, p_tag])
             .sign_with_keys(agent)
             .expect("sign engram");
         sprout_core::StoredEvent::new(ev, None)
@@ -815,7 +814,7 @@ mod tests {
         let p_tag = SingleLetterTag::lowercase(Alphabet::P);
         let filter = nostr::Filter::new()
             .kind(Kind::Custom(30174))
-            .custom_tag(p_tag, [&owner_a]);
+            .custom_tags(p_tag, [&owner_a]);
 
         assert!(
             search_hit_accepted(&filter, &env_for_a, &[]),
@@ -864,7 +863,7 @@ mod tests {
         let p_tag = SingleLetterTag::lowercase(Alphabet::P);
         let filter = nostr::Filter::new()
             .kind(Kind::Custom(30174))
-            .custom_tag(p_tag, [&owner]);
+            .custom_tags(p_tag, [&owner]);
 
         assert!(
             !search_hit_accepted(&filter, &stored, &[]),

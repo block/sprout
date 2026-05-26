@@ -7,7 +7,8 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use sprout_core::kind::{
-    event_kind_u32, KIND_GIT_REPO_ANNOUNCEMENT, KIND_MEMBER_ADDED_NOTIFICATION,
+    event_kind_u32, is_parameterized_replaceable, KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED,
+    KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED, KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS, KIND_NIP29_GROUP_MEMBERS,
     KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
 };
@@ -86,7 +87,7 @@ pub async fn handle_side_effects(
         }
         9021 => handle_join_request(event, state).await,
         9022 => handle_leave_request(event, state).await,
-        // NIP-34: Git repo announcement → create bare repo on disk.
+        // NIP-34: Git repo announcement → reserve name + seed manifest pointer.
         KIND_GIT_REPO_ANNOUNCEMENT => handle_git_repo_announcement(event, state).await,
         // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
@@ -104,7 +105,7 @@ pub async fn validate_standard_deletion_event(
     let actor_bytes = effective_message_author(event, &state.relay_keypair.public_key());
     let target_ids = extract_target_event_ids(event);
 
-    if target_ids.is_empty() {
+    if !has_e_tag(event) {
         // a-tag deletion: verify author owns the addressable event
         let a_tag = event
             .tags
@@ -156,7 +157,7 @@ pub async fn validate_admin_event(
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing or invalid h tag"))?;
 
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Reject mutations on archived channels — except kind:9002 with archived=false
     // (unarchive), which must be allowed through so the channel can be restored.
@@ -419,9 +420,10 @@ pub async fn emit_system_message(
     channel_id: Uuid,
     content: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let channel_tag = Tag::parse(&["h", &channel_id.to_string()])?;
+    let channel_tag = Tag::parse(["h", &channel_id.to_string()])?;
 
-    let event = EventBuilder::new(Kind::Custom(40099), content.to_string(), [channel_tag])
+    let event = EventBuilder::new(Kind::Custom(40099), content.to_string())
+        .tags([channel_tag])
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign system message: {e}"))?;
 
@@ -453,9 +455,9 @@ pub async fn emit_membership_notification(
     let actor_hex = hex::encode(actor_pubkey);
     let channel_id_str = channel_id.to_string();
 
-    let p_tag = Tag::parse(&["p", &target_hex])
+    let p_tag = Tag::parse(["p", &target_hex])
         .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?;
-    let h_tag = Tag::parse(&["h", &channel_id_str])
+    let h_tag = Tag::parse(["h", &channel_id_str])
         .map_err(|e| anyhow::anyhow!("failed to build h tag: {e}"))?;
 
     let event_type = match notification_kind {
@@ -475,13 +477,10 @@ pub async fn emit_membership_notification(
     })
     .to_string();
 
-    let event = EventBuilder::new(
-        Kind::Custom(notification_kind as u16),
-        content,
-        [p_tag, h_tag],
-    )
-    .sign_with_keys(&state.relay_keypair)
-    .map_err(|e| anyhow::anyhow!("failed to sign membership notification: {e}"))?;
+    let event = EventBuilder::new(Kind::Custom(notification_kind as u16), content)
+        .tags([p_tag, h_tag])
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign membership notification: {e}"))?;
 
     // Store with channel_id = None → globally scoped, reachable by global subscribers.
     let (stored, was_inserted) = state.db.insert_event(&event, None).await?;
@@ -544,12 +543,13 @@ async fn emit_addressable_discovery_event(
             .unwrap_or_default();
         existing
             .first()
-            .map(|e| e.event.created_at.as_u64() + 1)
+            .map(|e| e.event.created_at.as_secs() + 1)
             .unwrap_or(now)
     };
     let ts = now.max(min_ts);
 
-    let event = EventBuilder::new(Kind::Custom(kind as u16), "", tags)
+    let event = EventBuilder::new(Kind::Custom(kind as u16), "")
+        .tags(tags)
         .custom_created_at(nostr::Timestamp::from(ts))
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
@@ -580,61 +580,61 @@ pub async fn emit_group_discovery_events(
     let channel = state.db.get_channel(channel_id).await?;
     let members = state.db.get_members(channel_id).await?;
 
-    let relay_pubkey_hex = hex::encode(state.relay_keypair.public_key().serialize());
+    let relay_pubkey_hex = hex::encode(state.relay_keypair.public_key().to_bytes());
     let group_id = channel_id.to_string();
 
     // ── kind:39000 group metadata ────────────────────────────────────────────
     {
-        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
-        tags.push(Tag::parse(&["name", &channel.name])?);
+        let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
+        tags.push(Tag::parse(["name", &channel.name])?);
         if let Some(ref desc) = channel.description {
             if !desc.is_empty() {
-                tags.push(Tag::parse(&["about", desc])?);
+                tags.push(Tag::parse(["about", desc])?);
             }
         }
         if channel.visibility == "private" {
-            tags.push(Tag::parse(&["private"])?);
+            tags.push(Tag::parse(["private"])?);
         } else {
             // Explicit "public" tag complements NIP-29's absence-of-"private" convention,
             // making channel visibility self-describing for clients.
-            tags.push(Tag::parse(&["public"])?);
+            tags.push(Tag::parse(["public"])?);
         }
         // NIP-29 hidden tag: hint to clients not to show DMs in public group lists.
         // Not a security boundary — access control is handled by channel-scoped storage.
         if channel.channel_type == "dm" {
-            tags.push(Tag::parse(&["hidden"])?);
+            tags.push(Tag::parse(["hidden"])?);
             // Include participant pubkeys in kind:39000 for DMs so clients can
             // resolve display names without a separate kind:39002 fetch.
             for m in &members {
                 let pubkey_hex = hex::encode(&m.pubkey);
-                tags.push(Tag::parse(&["p", &pubkey_hex])?);
+                tags.push(Tag::parse(["p", &pubkey_hex])?);
             }
         }
         // Sprout channels always require explicit membership
-        tags.push(Tag::parse(&["closed"])?);
+        tags.push(Tag::parse(["closed"])?);
         // Channel type tag so clients can distinguish stream/forum/dm without inference
-        tags.push(Tag::parse(&["t", &channel.channel_type])?);
+        tags.push(Tag::parse(["t", &channel.channel_type])?);
         // Optional topic / purpose for richer client UX
         if let Some(ref topic) = channel.topic {
             if !topic.is_empty() {
-                tags.push(Tag::parse(&["topic", topic])?);
+                tags.push(Tag::parse(["topic", topic])?);
             }
         }
         if let Some(ref purpose) = channel.purpose {
             if !purpose.is_empty() {
-                tags.push(Tag::parse(&["purpose", purpose])?);
+                tags.push(Tag::parse(["purpose", purpose])?);
             }
         }
         // Archived state — clients use this to hide channels from the sidebar.
         if channel.archived_at.is_some() {
-            tags.push(Tag::parse(&["archived", "true"])?);
+            tags.push(Tag::parse(["archived", "true"])?);
         }
         // Ephemeral channel TTL — clients use this to show countdown timers.
         if let Some(ttl) = channel.ttl_seconds {
-            tags.push(Tag::parse(&["ttl", &ttl.to_string()])?);
+            tags.push(Tag::parse(["ttl", &ttl.to_string()])?);
         }
         if let Some(ref deadline) = channel.ttl_deadline {
-            tags.push(Tag::parse(&["ttl_deadline", &deadline.to_rfc3339()])?);
+            tags.push(Tag::parse(["ttl_deadline", &deadline.to_rfc3339()])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -648,13 +648,13 @@ pub async fn emit_group_discovery_events(
 
     // ── kind:39001 group admins ──────────────────────────────────────────────
     {
-        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
         for m in members
             .iter()
             .filter(|m| m.role == "owner" || m.role == "admin")
         {
             let pubkey_hex = hex::encode(&m.pubkey);
-            tags.push(Tag::parse(&["p", &pubkey_hex, &m.role])?);
+            tags.push(Tag::parse(["p", &pubkey_hex, &m.role])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -668,12 +668,12 @@ pub async fn emit_group_discovery_events(
 
     // ── kind:39002 group members ─────────────────────────────────────────────
     {
-        let mut tags: Vec<Tag> = vec![Tag::parse(&["d", &group_id])?];
+        let mut tags: Vec<Tag> = vec![Tag::parse(["d", &group_id])?];
         for m in &members {
             let pubkey_hex = hex::encode(&m.pubkey);
             // NIP-29 convention: ["p", pubkey, relay_url, role]. Empty relay_url
             // because the canonical relay is implicit (this event is signed by it).
-            tags.push(Tag::parse(&["p", &pubkey_hex, "", &m.role])?);
+            tags.push(Tag::parse(["p", &pubkey_hex, "", &m.role])?);
         }
         emit_addressable_discovery_event(
             state,
@@ -721,7 +721,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
         .and_then(|raw| crate::api::nip05::canonicalize_nip05(raw, &state.config.relay_url).ok());
     let nip05_handle = nip05_owned.as_deref().unwrap_or("");
 
-    let pubkey_bytes = event.pubkey.serialize().to_vec();
+    let pubkey_bytes = event.pubkey.to_bytes().to_vec();
 
     state.db.ensure_user(&pubkey_bytes).await?;
 
@@ -743,7 +743,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
     if let Err(ref e) = result {
         let msg = format!("{e}");
         if msg.contains("duplicate key value") || msg.contains("23505") {
-            warn!(pubkey = %nostr::util::hex::encode(&pubkey_bytes),
+            warn!(pubkey = %hex::encode(&pubkey_bytes),
                 "kind:0 NIP-05 handle contested, syncing profile without it");
             state
                 .db
@@ -760,7 +760,7 @@ async fn handle_kind0_profile(event: &Event, state: &Arc<AppState>) -> anyhow::R
         }
     }
 
-    info!(pubkey = %nostr::util::hex::encode(&pubkey_bytes), "kind:0 profile synced to users table");
+    info!(pubkey = %hex::encode(&pubkey_bytes), "kind:0 profile synced to users table");
     Ok(())
 }
 
@@ -775,7 +775,7 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid role: {role_str}"))?;
 
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     state
         .db
@@ -783,8 +783,8 @@ async fn handle_put_user(event: &Event, state: &Arc<AppState>) -> anyhow::Result
         .await?;
     state.invalidate_membership(channel_id, &target_pubkey);
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
-    let target_hex = nostr::util::hex::encode(&target_pubkey);
+    let actor_hex = hex::encode(&actor_bytes);
+    let target_hex = hex::encode(&target_pubkey);
     emit_system_message(
         state,
         channel_id,
@@ -820,7 +820,7 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
     let target_pubkey = extract_p_tag(event).ok_or_else(|| anyhow::anyhow!("missing p tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Guard: prevent last-owner orphaning on self-removal (kind 9001).
     if target_pubkey == actor_bytes {
@@ -843,8 +843,8 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
     state.invalidate_membership(channel_id, &target_pubkey);
     evict_live_channel_subscriptions(state, channel_id, &target_pubkey).await;
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
-    let target_hex = nostr::util::hex::encode(&target_pubkey);
+    let actor_hex = hex::encode(&actor_bytes);
+    let target_hex = hex::encode(&target_pubkey);
     let msg_type = if target_pubkey == actor_bytes {
         "member_left"
     } else {
@@ -883,8 +883,8 @@ async fn handle_remove_user(event: &Event, state: &Arc<AppState>) -> anyhow::Res
 async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
+    let actor_hex = hex::encode(&actor_bytes);
 
     for tag in event.tags.iter() {
         let key = tag.kind().to_string();
@@ -1047,7 +1047,7 @@ async fn handle_delete_event_side_effect(
         return Ok(()); // No-op: skip system message to avoid false audit records.
     }
 
-    let actor_hex = nostr::util::hex::encode(event.pubkey.serialize());
+    let actor_hex = hex::encode(event.pubkey.to_bytes());
     emit_system_message(
         state,
         channel_id,
@@ -1078,7 +1078,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid channel_type: {channel_type_str}"))?;
 
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
     let description = extract_tag_value(event, "about");
     let ttl_seconds = super::resolve_ttl(event, state.config.ephemeral_ttl_override);
 
@@ -1126,7 +1126,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         state.invalidate_all_accessible_channels();
     }
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel.id,
@@ -1159,7 +1159,7 @@ async fn handle_create_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Soft-delete the channel.
     let deleted = state
@@ -1175,7 +1175,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     // Clean up NIP-29 discovery events for the deleted group.
     if let Err(e) = state
         .db
-        .soft_delete_discovery_events(channel_id, &state.relay_keypair.public_key().serialize())
+        .soft_delete_discovery_events(channel_id, state.relay_keypair.public_key().as_bytes())
         .await
     {
         warn!(channel = %channel_id, error = %e, "failed to clean up NIP-29 discovery events");
@@ -1185,7 +1185,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
     // Stale is_member=true entries would bypass the DB's deleted_at guard.
     state.invalidate_channel_deleted();
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel_id,
@@ -1202,7 +1202,7 @@ async fn handle_delete_group(event: &Event, state: &Arc<AppState>) -> anyhow::Re
 async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Only open channels allow self-join via kind:9021.
     let channel = state
@@ -1235,7 +1235,7 @@ async fn handle_join_request(event: &Event, state: &Arc<AppState>) -> anyhow::Re
         .await?;
     state.invalidate_membership(channel_id, &actor_bytes);
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel_id,
@@ -1271,7 +1271,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
     // Kind 9022: functionally identical to self-remove via kind 9001
     let channel_id =
         extract_h_tag_channel(event).ok_or_else(|| anyhow::anyhow!("missing h tag"))?;
-    let actor_bytes = event.pubkey.serialize().to_vec();
+    let actor_bytes = event.pubkey.to_bytes().to_vec();
 
     // Guard: prevent last-owner orphaning on leave.
     let members = state.db.get_members(channel_id).await?;
@@ -1292,7 +1292,7 @@ async fn handle_leave_request(event: &Event, state: &Arc<AppState>) -> anyhow::R
     state.invalidate_membership(channel_id, &actor_bytes);
     evict_live_channel_subscriptions(state, channel_id, &actor_bytes).await;
 
-    let actor_hex = nostr::util::hex::encode(&actor_bytes);
+    let actor_hex = hex::encode(&actor_bytes);
     emit_system_message(
         state,
         channel_id,
@@ -1380,11 +1380,53 @@ async fn handle_a_tag_deletion(event: &Event, state: &Arc<AppState>) -> anyhow::
                 }
             }
         }
+        // Generic NIP-33 (parameterized-replaceable) soft-delete by coordinate.
+        //
+        // Listed after the workflow branch so workflow's bespoke deletion
+        // (which doesn't soft-delete the `events` row by design — that's a
+        // separate concern) takes precedence. For every other addressable
+        // kind, including kind:30023 (NIP-23 long-form), we soft-delete the
+        // live row matching `(kind, pubkey, d_tag)` so REQs stop returning it.
+        // See https://github.com/block/sprout/issues/714.
+        k if is_parameterized_replaceable(k) => {
+            let pubkey_bytes = match hex::decode(pubkey_hex) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "invalid pubkey hex in a-tag {pubkey_hex}: {e}"
+                    ));
+                }
+            };
+            // Safe cast: NIP-33 kinds are 30000–39999, well within i32.
+            let kind_i32 = k as i32;
+            let deleted = state
+                .db
+                .soft_delete_by_coordinate(kind_i32, &pubkey_bytes, d_tag)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to soft-delete by coordinate {kind_i32}:{pubkey_hex}:{d_tag}: {e}"
+                    )
+                })?;
+            if deleted {
+                tracing::info!(
+                    kind = k,
+                    d_tag = d_tag,
+                    "NIP-09 a-tag deletion: soft-deleted addressable event by coordinate"
+                );
+            } else {
+                tracing::debug!(
+                    kind = k,
+                    d_tag = d_tag,
+                    "NIP-09 a-tag deletion: no live row matched coordinate"
+                );
+            }
+        }
         _ => {
             tracing::debug!(
                 kind = kind_num,
                 d_tag = d_tag,
-                "NIP-09 a-tag deletion for unhandled kind — no side effect"
+                "NIP-09 a-tag deletion for non-NIP-33 kind — no side effect"
             );
         }
     }
@@ -1397,8 +1439,10 @@ async fn handle_standard_deletion_event(
     state: &Arc<AppState>,
 ) -> anyhow::Result<()> {
     let target_ids = extract_target_event_ids(event);
-    if target_ids.is_empty() {
-        // NIP-09 a-tag deletion path for addressable events
+    if !has_e_tag(event) {
+        // NIP-09 a-tag deletion path for addressable events. Keyed on the
+        // absence of *any* e tag (not just valid e-ids): a malformed e + a must
+        // not route here and silently soft-delete the coordinate.
         return handle_a_tag_deletion(event, state).await;
     }
 
@@ -1468,7 +1512,7 @@ async fn handle_standard_deletion_event(
                             state.db.get_event_by_id(&react_target_id).await
                         {
                             let react_target_ts = chrono::DateTime::from_timestamp(
-                                react_target_event.event.created_at.as_u64() as i64,
+                                react_target_event.event.created_at.as_secs() as i64,
                                 0,
                             )
                             .unwrap_or_else(chrono::Utc::now);
@@ -1550,7 +1594,16 @@ fn effective_message_author(event: &Event, relay_pubkey: &nostr::PublicKey) -> V
             }
         }
     }
-    event.pubkey.serialize().to_vec()
+    event.pubkey.to_bytes().to_vec()
+}
+
+/// True if the event carries any `e` tag at all, regardless of whether its
+/// value decodes to a valid 32-byte id. NIP-09 treats `e`/`a` as target
+/// classes: a malformed `e` makes the deletion ambiguous, not addressable-only.
+/// Routing keys on this rather than on decoded-target count so a malformed `e`
+/// alongside an `a` never silently soft-deletes a coordinate.
+fn has_e_tag(event: &Event) -> bool {
+    event.tags.iter().any(|t| t.kind().to_string() == "e")
 }
 
 fn extract_target_event_ids(event: &Event) -> Vec<Vec<u8>> {
@@ -1600,18 +1653,16 @@ fn validate_repo_id(repo_id: &str) -> bool {
 
 /// Handle kind:30617 (NIP-34 Git Repository Announcement).
 ///
-/// Creates a bare git repo on disk when a repo announcement event is stored.
-/// The event's `d` tag is the repo identifier; the pubkey is the owner.
+/// Reserves the repo name and seeds its empty-manifest pointer when a repo
+/// announcement event is stored. The event's `d` tag is the repo identifier;
+/// the pubkey is the owner. No bare repo is created on disk — runtime reads
+/// and writes hydrate an ephemeral repo from object storage per request.
 ///
 /// Security hardening:
 /// - Repo name validated: `[a-zA-Z0-9._-]{1,64}`, no leading dots, no `..`
-/// - Owner pubkey validated: exactly 64 lowercase hex chars
-/// - Path canonicalized and verified to start with repo root
-/// - Pre-receive hook installed for permission enforcement (only hook enabled)
+/// - Name reserved atomically (`.names/<repo_id>`), unique across owners
 /// - Per-pubkey repo count limit enforced
 async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> anyhow::Result<()> {
-    use tokio::process::Command;
-
     // Extract repo identifier from d tag (required for NIP-33 parameterized replaceable events).
     let repo_id =
         extract_tag_value(event, "d").ok_or_else(|| anyhow::anyhow!("kind:30617 missing d tag"))?;
@@ -1622,55 +1673,76 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
         ));
     }
 
-    let owner_hex = nostr::util::hex::encode(event.pubkey.serialize());
+    let owner_hex = hex::encode(event.pubkey.to_bytes());
 
-    // Resolve repo path.
-    let git_repo_root = &state.config.git_repo_path;
-
-    // Defensive: ensure the configured root exists. Config bootstrap creates
-    // this at startup, but a misconfigured deployment or out-of-band deletion
-    // would otherwise cause every canonicalize() below to fail and the
-    // side-effect to be silently swallowed by the ingest pipeline, leaving the
-    // repo announcement stored but no bare repo on disk (push then 500s with
-    // "git service misconfigured").
-    if let Err(e) = std::fs::create_dir_all(git_repo_root) {
-        return Err(anyhow::anyhow!(
-            "failed to ensure git_repo_path {} exists: {e}",
-            git_repo_root.display()
-        ));
-    }
-
-    let repo_dir = git_repo_root
-        .join(&owner_hex)
-        .join(format!("{repo_id}.git"));
-
-    // If repo already exists, this is an update to the announcement — nothing to do on disk.
-    // Backfill the name reservation if missing (handles upgrade from pre-uniqueness-check state).
-    if repo_dir.exists() {
-        let names_dir = git_repo_root.join(".names");
-        let _ = std::fs::create_dir_all(&names_dir);
-        let _ = std::fs::create_dir(names_dir.join(&repo_id));
-        info!(
-            repo_id = %repo_id,
-            owner = %owner_hex,
-            "kind:30617 repo announcement updated (repo already exists)"
-        );
-        return Ok(());
-    }
-
-    // Global uniqueness: repo names are unique across all owners (relay = single namespace).
-    // The relay signs kind:30618 ref-state with d-tag = repo_name, so collisions would
-    // cause one owner's ref state to overwrite another's.
+    // The relay holds no persistent per-repo disk state: runtime reads and
+    // writes hydrate an ephemeral bare repo from object storage per request
+    // (see `api::git::hydrate`). Announce only (1) reserves the repo name and
+    // (2) seeds the empty-manifest pointer that makes the repo clone-able.
     //
-    // Atomicity: std::fs::create_dir fails with AlreadyExists if the directory exists,
-    // preventing TOCTOU races between concurrent kind:30617 events. The .names/ directory
-    // acts as a global name reservation index.
+    // `.names/<repo_id>` is the relay's name registry. Each reservation holds
+    // an `owner` file naming the announcer. It serves three jobs at once:
+    //   - uniqueness: `create_dir` is atomic, so concurrent kind:30617 events
+    //     for the same name can't both claim it (TOCTOU-free);
+    //   - idempotent re-announce: a reservation owned by the same pubkey is an
+    //     update, not a collision;
+    //   - per-pubkey quota: count the reservations whose `owner` matches.
+    //
+    // This is the one local-disk simplification in v1: separate relay
+    // instances with separate disks would each grant the name, with the CAS
+    // pointer (not this registry) preventing actual ref-state corruption. A
+    // CAS-backed name index is the multi-instance follow-up.
+    let git_repo_root = &state.config.git_repo_path;
     let names_dir = git_repo_root.join(".names");
     std::fs::create_dir_all(&names_dir)
         .map_err(|e| anyhow::anyhow!("failed to create name reservation index: {e}"))?;
+
     let reservation = names_dir.join(&repo_id);
+    let owner_marker = reservation.join("owner");
+
+    // Re-announce by the same owner is a no-op update; a name held by anyone
+    // else is a collision (the relay signs kind:30618 with d-tag = repo_name,
+    // so a shared name would let one owner overwrite another's ref state).
+    if reservation.exists() {
+        match std::fs::read_to_string(&owner_marker) {
+            Ok(existing) if existing == owner_hex => {
+                info!(
+                    repo_id = %repo_id,
+                    owner = %owner_hex,
+                    "kind:30617 repo announcement updated (name already reserved)"
+                );
+                return Ok(());
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "repo name '{repo_id}' already taken by another owner"
+                ));
+            }
+        }
+    }
+
+    // Per-pubkey repo count limit: reservations owned by this pubkey.
+    let limit = state.config.git_max_repos_per_pubkey as usize;
+    let owned = std::fs::read_dir(&names_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    std::fs::read_to_string(e.path().join("owner"))
+                        .map(|o| o == owner_hex)
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if owned >= limit {
+        return Err(anyhow::anyhow!("repo limit exceeded: {owned} >= {limit}"));
+    }
+
+    // Claim the name. `create_dir` (not `create_dir_all`) fails AlreadyExists
+    // if a concurrent announce won the race, closing the TOCTOU window above.
     match std::fs::create_dir(&reservation) {
-        Ok(()) => {} // Name claimed successfully.
+        Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(anyhow::anyhow!(
                 "repo name '{repo_id}' already taken by another owner"
@@ -1682,149 +1754,171 @@ async fn handle_git_repo_announcement(event: &Event, state: &Arc<AppState>) -> a
             ));
         }
     }
-
-    // Per-pubkey repo count limit.
-    let owner_dir = git_repo_root.join(&owner_hex);
-    if owner_dir.exists() {
-        let count = std::fs::read_dir(&owner_dir)
-            .map(|entries| entries.filter_map(|e| e.ok()).count())
-            .unwrap_or(0);
-        let limit = state.config.git_max_repos_per_pubkey as usize;
-        if count >= limit {
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("repo limit exceeded: {count} >= {limit}"));
-        }
+    if let Err(e) = std::fs::write(&owner_marker, &owner_hex) {
+        let _ = std::fs::remove_dir_all(&reservation);
+        return Err(anyhow::anyhow!("failed to record repo owner: {e}"));
     }
 
-    // Create parent directory.
-    if let Err(e) = tokio::fs::create_dir_all(&repo_dir).await {
-        let _ = std::fs::remove_dir(&reservation);
-        return Err(anyhow::anyhow!(
-            "failed to create repo directory {}: {e}",
-            repo_dir.display()
-        ));
-    }
-
-    // Path canonicalization: verify resolved path is under the repo root.
-    let canonical_root = match git_repo_root.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("failed to canonicalize repo root: {e}"));
-        }
-    };
-    let canonical_repo = match repo_dir.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("failed to canonicalize repo path: {e}"));
-        }
-    };
-    if !canonical_repo.starts_with(&canonical_root) {
-        let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-        let _ = std::fs::remove_dir(&reservation);
-        return Err(anyhow::anyhow!(
-            "repo path escapes root: {} not under {}",
-            canonical_repo.display(),
-            canonical_root.display()
-        ));
-    }
-
-    // Initialize bare repo with main as default branch.
-    let output = match Command::new("git")
-        .arg("init")
-        .arg("--bare")
-        .arg("-b")
-        .arg("main")
-        .arg(&repo_dir)
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("HOME", "/dev/null")
-        .output()
-        .await
-    {
-        Ok(o) => o,
-        Err(e) => {
-            let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-            let _ = std::fs::remove_dir(&reservation);
-            return Err(anyhow::anyhow!("git init --bare failed to spawn: {e}"));
-        }
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let _ = tokio::fs::remove_dir_all(&repo_dir).await;
-        let _ = std::fs::remove_dir(&reservation);
-        return Err(anyhow::anyhow!("git init --bare failed: {stderr}"));
-    }
-
-    // Git config for Smart HTTP compatibility.
-    for (key, value) in [
-        ("http.receivepack", "true"),
-        ("receive.denyNonFastForwards", "false"),
-        ("uploadpack.allowTipSHA1InWant", "true"),
-        ("uploadpack.allowReachableSHA1InWant", "true"),
-    ] {
-        match Command::new("git")
-            .args(["config", "--file"])
-            .arg(repo_dir.join("config"))
-            .args([key, value])
-            .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("HOME", "/dev/null")
-            .output()
-            .await
-        {
-            Ok(output) if !output.status.success() => {
-                tracing::warn!(
-                    key,
-                    value,
-                    status = %output.status,
-                    "git config failed for bare repo"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    key,
-                    value,
-                    error = %e,
-                    "git config command failed for bare repo"
-                );
-            }
-            _ => {}
-        }
-    }
-
-    // Install pre-receive hook for permission enforcement.
-    // This replaces the old "disable all hooks" approach — we now have our own
-    // hook that calls back to the relay's internal policy endpoint.
-    // Only pre-receive is installed; all other hook slots remain empty (RCE prevention).
-    // SECURITY: Hook installation is FATAL. If the hook can't be installed,
-    // the repo would be unprotected. Better to fail repo creation than allow
-    // an unprotected repo to exist. The receive_pack handler also checks hook
-    // existence as a belt-and-suspenders measure.
-    crate::api::git::hook::install_hook(&repo_dir)
+    // Seed the empty-manifest pointer in object storage. Establishes the
+    // invariant "repo announced ⟺ pointer exists" so the read path can rely
+    // on pointer-absent meaning never-announced (not just no-pushes-yet),
+    // keeping `info_refs`'s fail-closed `Ok(None) → 404` unambiguous.
+    // First push CASes the seeded pointer normally — no special-case branch.
+    seed_manifest_pointer(state, &owner_hex, &repo_id)
         .await
         .map_err(|e| {
-            // Clean up the repo directory since it's unusable without the hook.
-            let _ = std::fs::remove_dir_all(&repo_dir);
-            let _ = std::fs::remove_dir(&reservation);
-            anyhow::anyhow!("failed to install pre-receive hook: {e}")
+            // A reserved name without a clone-able pointer is exactly the
+            // broken state the seed exists to prevent. Release the reservation
+            // so the announce is either fully consummated or fully rolled back.
+            let _ = std::fs::remove_dir_all(&reservation);
+            anyhow::anyhow!("failed to seed manifest pointer: {e}")
         })?;
 
     info!(
         repo_id = %repo_id,
         owner = %owner_hex,
-        path = %repo_dir.display(),
-        "bare git repo created from kind:30617 announcement"
+        "kind:30617 repo announced (name reserved, manifest pointer seeded)"
     );
 
+    // Derived after the pointer commits: kind:30618 ref-state event over the
+    // seeded empty manifest. Pointer is the commit; this event is the
+    // notification that the repo exists (with empty refs) so subscribers see
+    // a first signal without waiting for the first push.
+    if let Err(e) = emit_initial_ref_state(state, &owner_hex, &repo_id).await {
+        // Non-fatal: the manifest is the source of truth; this is just the
+        // derived notification. A failure here means subscribers miss the
+        // "repo now exists" event, but clone/push still works.
+        warn!(
+            repo_id = %repo_id,
+            owner = %owner_hex,
+            error = %e,
+            "failed to emit initial kind:30618 ref state (non-fatal)"
+        );
+    }
+
+    Ok(())
+}
+
+/// Default symbolic HEAD for a freshly-announced (empty) repo. Matches
+/// `init.defaultBranch=main` (git ≥ 2.28) and the seed used by
+/// `live_hydrate_empty_repo`. Pinned in one place so the seeded manifest
+/// and the initial kind:30618 emission can't drift.
+///
+/// The first push's `cas_publish` overwrites this with the real symbolic
+/// HEAD observed in the receive-pack workspace via standard CAS, so the
+/// default is a stand-in, not a permanent commitment.
+const DEFAULT_HEAD: &str = "refs/heads/main";
+
+/// Seed the manifest-pointer for a newly-announced repo with an empty manifest.
+///
+/// Idempotent: a `CasOutcome::LostRace` is treated as success **only if** the
+/// existing pointer names the same empty manifest digest. Any other pre-existing
+/// pointer body (e.g. a non-empty manifest from a previous announce/push pair
+/// for the same `(owner, repo)`) surfaces as an error rather than silently
+/// succeeding — that would mask a real misconfiguration.
+async fn seed_manifest_pointer(
+    state: &Arc<AppState>,
+    owner_hex: &str,
+    repo_id: &str,
+) -> anyhow::Result<()> {
+    use crate::api::git::manifest::{pointer_key, Manifest, MANIFEST_VERSION};
+    use crate::api::git::store::{CasOutcome, Precond};
+    use std::collections::BTreeMap;
+
+    // The empty manifest. All empty manifests across all repos share canonical
+    // bytes — by design — so `put_manifest` is idempotent at the store level
+    // too.
+    let empty = Manifest {
+        version: MANIFEST_VERSION,
+        head: DEFAULT_HEAD.to_string(),
+        refs: BTreeMap::new(),
+        packs: Vec::new(),
+        parent: None,
+    };
+    empty
+        .validate()
+        .map_err(|e| anyhow::anyhow!("empty manifest failed validation: {e}"))?;
+    let bytes = empty
+        .canonical_bytes()
+        .map_err(|e| anyhow::anyhow!("empty manifest serialize: {e}"))?;
+    let manifest_key = state
+        .git_store
+        .put_manifest(&bytes)
+        .await
+        .map_err(|e| anyhow::anyhow!("put_manifest: {e}"))?;
+    let digest = manifest_key
+        .strip_prefix("manifests/")
+        .ok_or_else(|| anyhow::anyhow!("put_manifest returned non-standard key: {manifest_key}"))?;
+
+    let pkey = pointer_key(owner_hex, repo_id);
+    let outcome = state
+        .git_store
+        .put_pointer(&pkey, digest.as_bytes(), Precond::IfNoneMatchStar)
+        .await
+        .map_err(|e| anyhow::anyhow!("put_pointer: {e}"))?;
+    match outcome {
+        CasOutcome::Won(_) => Ok(()),
+        CasOutcome::LostRace => {
+            // Pointer already exists. Idempotency check: only treat as success
+            // if it names the same empty manifest digest. Any other value is
+            // either a stale pointer from a prior repo lifecycle for the same
+            // (owner, repo) or a real misconfiguration — surface, don't swallow.
+            let (_etag, body) = state
+                .git_store
+                .get_pointer(&pkey)
+                .await
+                .map_err(|e| anyhow::anyhow!("re-read pointer after LostRace: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("pointer vanished after LostRace race"))?;
+            let existing = std::str::from_utf8(&body)
+                .map_err(|e| anyhow::anyhow!("pointer body not utf-8: {e}"))?
+                .trim();
+            if existing != digest {
+                return Err(anyhow::anyhow!(
+                    "repo '{repo_id}' for owner {owner_hex} already has a non-empty pointer \
+                     ({existing}); refusing to overwrite via announce"
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Emit the initial kind:30618 ref-state event for a freshly-announced repo.
+///
+/// The seeded empty manifest is the source of truth; this event is the
+/// derived notification. Fires once per announce, signed by the relay,
+/// carrying the announcer's pubkey in the `p` tag (sprout extension).
+async fn emit_initial_ref_state(
+    state: &Arc<AppState>,
+    owner_hex: &str,
+    repo_id: &str,
+) -> anyhow::Result<()> {
+    use crate::api::git::manifest_event::{build_ref_state_event, RefStateInputs};
+    use std::collections::BTreeMap;
+
+    let empty_refs: BTreeMap<String, String> = BTreeMap::new();
+    let inputs = RefStateInputs {
+        repo_id,
+        head: DEFAULT_HEAD,
+        refs: &empty_refs,
+        actor_pubkey_hex: owner_hex,
+    };
+    let event = build_ref_state_event(&inputs, &state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("build_ref_state_event: {e}"))?;
+    let (stored, was_inserted) = state
+        .db
+        .insert_event(&event, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("insert kind:30618: {e}"))?;
+    if was_inserted {
+        let matches = state.sub_registry.fan_out(&stored);
+        for (conn_id, sub_id) in matches {
+            let _ = state.conn_manager.send_to(
+                conn_id,
+                crate::protocol::RelayMessage::event(&sub_id, &stored.event),
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1841,16 +1935,17 @@ pub async fn publish_nip43_membership_list(state: &Arc<AppState>) -> anyhow::Res
     let mut tags: Vec<Tag> = Vec::with_capacity(members.len() + 1);
 
     // NIP-70 protected-event marker — prevents re-broadcasting by third parties.
-    tags.push(Tag::parse(&["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
+    tags.push(Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
 
     for member in &members {
         tags.push(
-            Tag::parse(&["member", &member.pubkey, &member.role])
+            Tag::parse(["member", &member.pubkey, &member.role])
                 .map_err(|e| anyhow::anyhow!("failed to build member tag: {e}"))?,
         );
     }
 
-    let event = EventBuilder::new(Kind::Custom(KIND_NIP43_MEMBERSHIP_LIST as u16), "", tags)
+    let event = EventBuilder::new(Kind::Custom(KIND_NIP43_MEMBERSHIP_LIST as u16), "")
+        .tags(tags)
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:13534: {e}"))?;
 
@@ -1890,12 +1985,13 @@ async fn publish_nip43_delta(
     let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
 
     let tags = vec![
-        Tag::parse(&["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
-        Tag::parse(&["p", target_pubkey_hex])
+        Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
+        Tag::parse(["p", target_pubkey_hex])
             .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
     ];
 
-    let event = EventBuilder::new(Kind::Custom(kind), "", tags)
+    let event = EventBuilder::new(Kind::Custom(kind), "")
+        .tags(tags)
         .sign_with_keys(&state.relay_keypair)
         .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
 
@@ -2002,4 +2098,150 @@ pub async fn reconcile_channel_events(state: &Arc<AppState>) -> anyhow::Result<(
         tracing::info!(count = reconciled, "reconciled channel discovery events");
     }
     Ok(())
+}
+
+// ── NIP-IA relay-level identity archive announcement events ──────────────────
+
+/// Publish a kind:13535 archived identities list event (NIP-IA).
+///
+/// Queries all current archived identities and emits a relay-signed,
+/// NIP-70-protected replaceable-by-convention snapshot with bare `p` tags.
+pub async fn publish_nipia_archival_list(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let archived = state.db.list_archived().await?;
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags: Vec<Tag> = Vec::with_capacity(archived.len() + 1);
+    tags.push(Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?);
+
+    for identity in &archived {
+        tags.push(
+            Tag::parse(["p", &identity.pubkey])
+                .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+        );
+    }
+
+    let event = EventBuilder::new(Kind::Custom(KIND_IA_ARCHIVED_LIST as u16), "")
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{KIND_IA_ARCHIVED_LIST}: {e}"))?;
+
+    let (stored, was_inserted) = state.db.replace_addressable_event(&event, None).await?;
+    if was_inserted {
+        dispatch_persistent_event(state, &stored, KIND_IA_ARCHIVED_LIST, &relay_pubkey_hex).await;
+    }
+
+    info!(
+        archived_count = archived.len(),
+        "NIP-IA archived identities list published"
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn publish_nipia_delta(
+    state: &Arc<AppState>,
+    kind: u32,
+    target_pubkey_hex: &str,
+    consent_path: &str,
+    actor_pubkey_hex: &str,
+    request_event_id: &str,
+    content: &str,
+    reason: Option<&str>,
+    replaced_by: Option<&str>,
+) -> anyhow::Result<()> {
+    let relay_pubkey_hex = state.relay_keypair.public_key().to_hex();
+
+    let mut tags = vec![
+        Tag::parse(["-"]).map_err(|e| anyhow::anyhow!("failed to build '-' tag: {e}"))?,
+        Tag::parse(["p", target_pubkey_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build p tag: {e}"))?,
+        Tag::parse(["consent", consent_path, actor_pubkey_hex])
+            .map_err(|e| anyhow::anyhow!("failed to build consent tag: {e}"))?,
+        Tag::parse(["e", request_event_id])
+            .map_err(|e| anyhow::anyhow!("failed to build e tag: {e}"))?,
+    ];
+
+    if let Some(reason) = reason {
+        tags.push(
+            Tag::parse(["reason", reason])
+                .map_err(|e| anyhow::anyhow!("failed to build reason tag: {e}"))?,
+        );
+    }
+    if let Some(replaced_by) = replaced_by {
+        tags.push(
+            Tag::parse(["replaced-by", replaced_by])
+                .map_err(|e| anyhow::anyhow!("failed to build replaced-by tag: {e}"))?,
+        );
+    }
+
+    let event = EventBuilder::new(Kind::Custom(kind as u16), content)
+        .tags(tags)
+        .sign_with_keys(&state.relay_keypair)
+        .map_err(|e| anyhow::anyhow!("failed to sign kind:{kind}: {e}"))?;
+
+    let (stored, was_inserted) = state.db.insert_event(&event, None).await?;
+    if !was_inserted {
+        return Ok(());
+    }
+
+    dispatch_persistent_event(state, &stored, kind, &relay_pubkey_hex).await;
+
+    info!(
+        target = %target_pubkey_hex,
+        relay = %relay_pubkey_hex,
+        kind,
+        consent = %consent_path,
+        "NIP-IA delta event published"
+    );
+    Ok(())
+}
+
+/// Publish a kind:8002 archived-identity delta event (NIP-IA).
+#[allow(clippy::too_many_arguments)]
+pub async fn publish_nipia_archived(
+    state: &Arc<AppState>,
+    target_pubkey_hex: &str,
+    consent_path: &str,
+    actor_pubkey_hex: &str,
+    request_event_id: &str,
+    content: &str,
+    reason: Option<&str>,
+    replaced_by: Option<&str>,
+) -> anyhow::Result<()> {
+    publish_nipia_delta(
+        state,
+        KIND_IA_ARCHIVED,
+        target_pubkey_hex,
+        consent_path,
+        actor_pubkey_hex,
+        request_event_id,
+        content,
+        reason,
+        replaced_by,
+    )
+    .await
+}
+
+/// Publish a kind:8003 unarchived-identity delta event (NIP-IA).
+pub async fn publish_nipia_unarchived(
+    state: &Arc<AppState>,
+    target_pubkey_hex: &str,
+    consent_path: &str,
+    actor_pubkey_hex: &str,
+    request_event_id: &str,
+    content: &str,
+    reason: Option<&str>,
+) -> anyhow::Result<()> {
+    publish_nipia_delta(
+        state,
+        KIND_IA_UNARCHIVED,
+        target_pubkey_hex,
+        consent_path,
+        actor_pubkey_hex,
+        request_event_id,
+        content,
+        reason,
+        None,
+    )
+    .await
 }

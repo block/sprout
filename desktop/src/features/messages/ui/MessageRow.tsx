@@ -301,7 +301,9 @@ export const MessageRow = React.memo(
           className={cn(
             "group/message relative rounded-2xl px-2 py-1 transition-colors",
             "flex items-start gap-2.5",
-            highlighted ? "bg-primary/10 ring-1 ring-primary/30" : "",
+            highlighted
+              ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
+              : "",
           )}
           data-message-id={message.id}
           data-testid="message-row"
@@ -316,7 +318,7 @@ export const MessageRow = React.memo(
                 >
                   <button
                     className={cn(
-                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                       avatarButtonRadiusClass,
                     )}
                     type="button"
@@ -336,7 +338,7 @@ export const MessageRow = React.memo(
                       botIdenticonValue={message.author}
                     >
                       <button
-                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="truncate rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         type="button"
                       >
                         {authorNode}
@@ -366,7 +368,7 @@ export const MessageRow = React.memo(
                 >
                   <button
                     className={cn(
-                      "flex shrink-0 items-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      "flex shrink-0 items-start focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                       avatarButtonRadiusClass,
                     )}
                     type="button"
@@ -386,7 +388,7 @@ export const MessageRow = React.memo(
                       botIdenticonValue={message.author}
                     >
                       <button
-                        className="truncate rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="truncate rounded focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                         type="button"
                       >
                         {authorNode}

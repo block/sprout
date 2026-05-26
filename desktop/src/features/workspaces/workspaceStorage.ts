@@ -79,3 +79,20 @@ export function deriveWorkspaceName(relayUrl: string): string {
     return "Workspace";
   }
 }
+
+export function initFirstWorkspace(
+  relayUrl: string,
+  pubkey: string,
+): Workspace {
+  const normalizedUrl = normalizeRelayUrl(relayUrl);
+  const workspace: Workspace = {
+    id: crypto.randomUUID(),
+    name: deriveWorkspaceName(normalizedUrl),
+    relayUrl: normalizedUrl,
+    pubkey,
+    addedAt: new Date().toISOString(),
+  };
+  saveWorkspaces([workspace]);
+  saveActiveWorkspaceId(workspace.id);
+  return workspace;
+}

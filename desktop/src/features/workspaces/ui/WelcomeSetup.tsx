@@ -4,13 +4,7 @@ import { getIdentity } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
-import type { Workspace } from "../types";
-import {
-  deriveWorkspaceName,
-  normalizeRelayUrl,
-  saveActiveWorkspaceId,
-  saveWorkspaces,
-} from "../workspaceStorage";
+import { initFirstWorkspace, deriveWorkspaceName } from "../workspaceStorage";
 
 const LOCAL_RELAY_URL = "ws://localhost:3000";
 
@@ -35,7 +29,6 @@ export function WelcomeSetup({
       return;
     }
 
-    const normalizedUrl = normalizeRelayUrl(trimmedUrl);
     setIsConnecting(true);
     setError(null);
 
@@ -44,17 +37,7 @@ export function WelcomeSetup({
       // labels, etc.). The private key lives on disk in `identity.key` and
       // is the single source of truth — never copied into localStorage.
       const identity = await getIdentity();
-
-      const workspace: Workspace = {
-        id: crypto.randomUUID(),
-        name: deriveWorkspaceName(normalizedUrl),
-        relayUrl: normalizedUrl,
-        pubkey: identity.pubkey,
-        addedAt: new Date().toISOString(),
-      };
-
-      saveWorkspaces([workspace]);
-      saveActiveWorkspaceId(workspace.id);
+      initFirstWorkspace(trimmedUrl, identity.pubkey);
 
       // The reload triggered by onComplete() will re-run useWorkspaceInit,
       // which calls applyWorkspace with the saved config. No need to apply here.
@@ -74,7 +57,7 @@ export function WelcomeSetup({
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_48%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.55))] px-4 py-8">
-      <div className="w-full max-w-sm rounded-[28px] border border-border/70 bg-background/92 p-8 shadow-2xl backdrop-blur">
+      <div className="w-full max-w-sm rounded-[28px] border border-border/70 bg-background/92 p-8 shadow-2xl backdrop-blur-sm">
         <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
           Sprout
         </p>

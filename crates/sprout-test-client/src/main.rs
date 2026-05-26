@@ -103,7 +103,7 @@ async fn run_subscribe(url: &str, keys: &Keys, channel: &str, kind: u16) {
     };
 
     let sub_id = format!("cli-sub-{}", uuid::Uuid::new_v4());
-    let filter = Filter::new().kind(nostr::Kind::Custom(kind)).custom_tag(
+    let filter = Filter::new().kind(nostr::Kind::Custom(kind)).custom_tags(
         nostr::SingleLetterTag::lowercase(nostr::Alphabet::E),
         [channel],
     );

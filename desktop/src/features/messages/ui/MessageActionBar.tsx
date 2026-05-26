@@ -231,12 +231,12 @@ export function MessageActionBar({
   return (
     <div
       className={cn(
-        "max-w-36 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
+        "max-w-36 overflow-hidden rounded-full border border-border/70 bg-background/95 shadow-xs backdrop-blur-sm supports-[backdrop-filter]:bg-background/85 transition-all duration-150 ease-out",
         "translate-y-0 opacity-100 sm:max-w-0 sm:border-0 sm:shadow-none sm:translate-y-1 sm:opacity-0",
-        "sm:group-hover/message:max-w-36 sm:group-hover/message:border sm:group-hover/message:border-border/70 sm:group-hover/message:shadow-sm sm:group-hover/message:translate-y-0 sm:group-hover/message:opacity-100",
-        "sm:group-focus-within/message:max-w-36 sm:group-focus-within/message:border sm:group-focus-within/message:border-border/70 sm:group-focus-within/message:shadow-sm sm:group-focus-within/message:translate-y-0 sm:group-focus-within/message:opacity-100",
+        "sm:group-hover/message:max-w-36 sm:group-hover/message:border sm:group-hover/message:border-border/70 sm:group-hover/message:shadow-xs sm:group-hover/message:translate-y-0 sm:group-hover/message:opacity-100",
+        "sm:group-focus-within/message:max-w-36 sm:group-focus-within/message:border sm:group-focus-within/message:border-border/70 sm:group-focus-within/message:shadow-xs sm:group-focus-within/message:translate-y-0 sm:group-focus-within/message:opacity-100",
         isReplyingToMessage || isReactionPickerOpen || isDropdownOpen
-          ? "sm:max-w-36 sm:border sm:border-border/70 sm:shadow-sm sm:translate-y-0 sm:opacity-100"
+          ? "sm:max-w-36 sm:border sm:border-border/70 sm:shadow-xs sm:translate-y-0 sm:opacity-100"
           : "",
       )}
       data-testid={`message-action-bar-${message.id}`}

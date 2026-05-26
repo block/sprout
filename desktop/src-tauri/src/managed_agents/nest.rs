@@ -24,6 +24,10 @@ const NEST_DIRS: &[&str] = &[
 /// Fully static — no runtime interpolation, no secrets, no user paths.
 const AGENTS_MD: &str = include_str!("nest_agents.md");
 
+/// Default SKILL.md content for the sprout-cli Claude Code skill.
+/// Written to ~/.sprout/.claude/skills/sprout-cli/SKILL.md on first init.
+const SPROUT_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
+
 /// Returns the nest root path (`~/.sprout`), or `None` if the home
 /// directory cannot be resolved.
 pub fn nest_dir() -> Option<PathBuf> {
@@ -43,10 +47,12 @@ pub fn ensure_nest() -> Result<(), String> {
 ///
 /// - Creates the root directory and all subdirectories.
 /// - Writes `AGENTS.md` only if it doesn't already exist.
-/// - Sets 700 permissions on the root and all subdirectories (Unix).
+/// - Writes `.claude/skills/sprout-cli/SKILL.md` only if it doesn't already exist.
+/// - Sets 700 permissions on the root, all subdirectories, and the skill
+///   directory tree (Unix).
 ///
 /// Idempotent: safe to call on every launch. Existing files are never
-/// overwritten — users can freely edit AGENTS.md and it will persist.
+/// overwritten — users can freely edit AGENTS.md or SKILL.md and they persist.
 ///
 /// Rejects symlinks at the root path to prevent redirect attacks.
 ///
@@ -98,6 +104,27 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
         }
     }
 
+    // Write sprout-cli skill alongside AGENTS.md (same idempotent pattern).
+    let skill_dir = root.join(".claude/skills/sprout-cli");
+    fs::create_dir_all(&skill_dir).map_err(|e| format!("create {}: {e}", skill_dir.display()))?;
+
+    let skill_md = root.join(".claude/skills/sprout-cli/SKILL.md");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&skill_md)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(SPROUT_CLI_SKILL_MD.as_bytes())
+                .map_err(|e| format!("write {}: {e}", skill_md.display()))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => {
+            return Err(format!("create {}: {e}", skill_md.display()));
+        }
+    }
+
     // Set owner-only permissions on root and all subdirectories.
     // Skip any path that is a symlink — chmod would affect the target.
     #[cfg(unix)]
@@ -115,6 +142,23 @@ pub fn ensure_nest_at(root: &Path) -> Result<(), String> {
             if !is_symlink {
                 fs::set_permissions(&path, perms.clone())
                     .map_err(|e| format!("set permissions on {}: {e}", path.display()))?;
+            }
+        }
+        // Skill directory and its intermediate parents inside root get 700.
+        // create_dir_all creates .claude/ and .claude/skills/ with umask
+        // defaults — lock them down the same way we do NEST_DIRS.
+        for dir in [
+            root.join(".claude"),
+            root.join(".claude/skills"),
+            skill_dir.clone(),
+        ] {
+            let is_symlink = dir
+                .symlink_metadata()
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if !is_symlink {
+                fs::set_permissions(&dir, perms.clone())
+                    .map_err(|e| format!("set permissions on {}: {e}", dir.display()))?;
             }
         }
     }
@@ -258,6 +302,43 @@ mod tests {
         let result = ensure_nest_at(&link);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("symlink"));
+    }
+
+    #[test]
+    fn ensure_nest_creates_skill_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+        let skill = root.join(".claude/skills/sprout-cli/SKILL.md");
+        assert!(skill.exists(), "SKILL.md should exist");
+        let content = fs::read_to_string(&skill).unwrap();
+        assert_eq!(content, SPROUT_CLI_SKILL_MD);
+    }
+
+    #[test]
+    fn ensure_nest_does_not_overwrite_skill_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+        let skill = root.join(".claude/skills/sprout-cli/SKILL.md");
+        fs::write(&skill, "custom skill content").unwrap();
+        ensure_nest_at(&root).unwrap();
+        assert_eq!(fs::read_to_string(&skill).unwrap(), "custom skill content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_nest_skill_dir_has_700_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".sprout");
+        ensure_nest_at(&root).unwrap();
+        // All three dirs in the skill path should be locked down.
+        for dir in [".claude", ".claude/skills", ".claude/skills/sprout-cli"] {
+            let path = root.join(dir);
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{dir} should be 700");
+        }
     }
 
     #[cfg(unix)]

@@ -27,13 +27,14 @@ fn http_client() -> Client {
 }
 
 fn sign_blossom_auth(keys: &Keys, sha256: &str) -> nostr::Event {
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let tags = vec![
-        Tag::parse(&["t", "upload"]).unwrap(),
-        Tag::parse(&["x", sha256]).unwrap(),
-        Tag::parse(&["expiration", &(now + 300).to_string()]).unwrap(),
+        Tag::parse(["t", "upload"]).unwrap(),
+        Tag::parse(["x", sha256]).unwrap(),
+        Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
     ];
-    EventBuilder::new(Kind::from(24242), "Upload test", tags)
+    EventBuilder::new(Kind::from(24242), "Upload test")
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap()
 }
@@ -127,7 +128,8 @@ fn tiny_webp() -> Vec<u8> {
 // ── Auth edge case helpers ──────────────────────────────────────────────────
 
 fn sign_custom_auth(keys: &Keys, kind: u16, content: &str, tags: Vec<Tag>) -> nostr::Event {
-    EventBuilder::new(Kind::from(kind), content, tags)
+    EventBuilder::new(Kind::from(kind), content)
+        .tags(tags)
         .sign_with_keys(keys)
         .unwrap()
 }
@@ -227,15 +229,15 @@ async fn test_auth_wrong_kind() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         27235,
         "Upload test",
         vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &(now + 300).to_string()]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -250,14 +252,14 @@ async fn test_auth_missing_t_tag() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
         "Upload test",
         vec![
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &(now + 300).to_string()]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -277,8 +279,8 @@ async fn test_auth_missing_expiration() {
         24242,
         "Upload test",
         vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -293,15 +295,15 @@ async fn test_auth_expired_token() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
         "Upload test",
         vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &(now - 60).to_string()]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &(now - 60).to_string()]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -316,15 +318,15 @@ async fn test_auth_empty_content() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
         "",
         vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &(now + 300).to_string()]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -339,16 +341,16 @@ async fn test_auth_server_tag_mismatch() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
         "Upload test",
         vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &(now + 300).to_string()]).unwrap(),
-            Tag::parse(&["server", "evil.example.com"]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
+            Tag::parse(["server", "evil.example.com"]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -363,16 +365,16 @@ async fn test_auth_server_tag_correct() {
     let keys = Keys::generate();
     let jpeg = tiny_jpeg();
     let sha256 = hex::encode(Sha256::digest(&jpeg));
-    let now = Timestamp::now().as_u64();
+    let now = Timestamp::now().as_secs();
     let auth = sign_custom_auth(
         &keys,
         24242,
         "Upload test",
         vec![
-            Tag::parse(&["t", "upload"]).unwrap(),
-            Tag::parse(&["x", &sha256]).unwrap(),
-            Tag::parse(&["expiration", &(now + 300).to_string()]).unwrap(),
-            Tag::parse(&["server", "localhost:3000"]).unwrap(),
+            Tag::parse(["t", "upload"]).unwrap(),
+            Tag::parse(["x", &sha256]).unwrap(),
+            Tag::parse(["expiration", &(now + 300).to_string()]).unwrap(),
+            Tag::parse(["server", "localhost:3000"]).unwrap(),
         ],
     );
     let resp = upload_with_auth(&client, &auth, &sha256, &jpeg).await;
@@ -487,18 +489,15 @@ async fn test_ws_valid_imeta() {
     // Create channel via signed kind:9007 event
     let channel_uuid = uuid::Uuid::new_v4();
     let channel_name = format!("ws-imeta-test-{}", channel_uuid);
-    let create_event = EventBuilder::new(
-        Kind::from(9007),
-        "",
-        vec![
-            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
-            Tag::parse(&["name", &channel_name]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+    let create_event = EventBuilder::new(Kind::from(9007), "")
+        .tags(vec![
+            Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(["name", &channel_name]).unwrap(),
+            Tag::parse(["channel_type", "stream"]).unwrap(),
+            Tag::parse(["visibility", "open"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
     let create_resp = http
         .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
@@ -523,12 +522,10 @@ async fn test_ws_valid_imeta() {
         .unwrap();
 
     // Send event with valid imeta
-    let event = EventBuilder::new(
-        Kind::from(9),
-        "image via ws",
-        vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&[
+    let event = EventBuilder::new(Kind::from(9), "image via ws")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse([
                 "imeta",
                 &format!("url http://localhost:3000/media/{sha256}.jpg"),
                 "m image/jpeg",
@@ -536,10 +533,9 @@ async fn test_ws_valid_imeta() {
                 "size 347",
             ])
             .unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
 
     let ok = client.send_event(event).await.unwrap();
     assert!(
@@ -563,18 +559,15 @@ async fn test_ws_invalid_imeta_external_url() {
 
     let channel_uuid = uuid::Uuid::new_v4();
     let channel_name = format!("ws-imeta-bad-{}", channel_uuid);
-    let create_event = EventBuilder::new(
-        Kind::from(9007),
-        "",
-        vec![
-            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
-            Tag::parse(&["name", &channel_name]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+    let create_event = EventBuilder::new(Kind::from(9007), "")
+        .tags(vec![
+            Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(["name", &channel_name]).unwrap(),
+            Tag::parse(["channel_type", "stream"]).unwrap(),
+            Tag::parse(["visibility", "open"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
     let create_resp = http
         .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
@@ -591,12 +584,10 @@ async fn test_ws_invalid_imeta_external_url() {
         .await
         .unwrap();
 
-    let event = EventBuilder::new(
-        Kind::from(9),
-        "bad imeta",
-        vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&[
+    let event = EventBuilder::new(Kind::from(9), "bad imeta")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse([
                 "imeta",
                 &format!("url https://evil.com/media/{sha}.jpg"),
                 "m image/jpeg",
@@ -604,10 +595,9 @@ async fn test_ws_invalid_imeta_external_url() {
                 "size 347",
             ])
             .unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
 
     let ok = client.send_event(event).await.unwrap();
     assert!(!ok.accepted, "external URL imeta via WS must be rejected");
@@ -635,18 +625,15 @@ async fn test_ws_invalid_imeta_missing_fields() {
 
     let channel_uuid = uuid::Uuid::new_v4();
     let channel_name = format!("ws-imeta-miss-{}", channel_uuid);
-    let create_event = EventBuilder::new(
-        Kind::from(9007),
-        "",
-        vec![
-            Tag::parse(&["h", &channel_uuid.to_string()]).unwrap(),
-            Tag::parse(&["name", &channel_name]).unwrap(),
-            Tag::parse(&["channel_type", "stream"]).unwrap(),
-            Tag::parse(&["visibility", "open"]).unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+    let create_event = EventBuilder::new(Kind::from(9007), "")
+        .tags(vec![
+            Tag::parse(["h", &channel_uuid.to_string()]).unwrap(),
+            Tag::parse(["name", &channel_name]).unwrap(),
+            Tag::parse(["channel_type", "stream"]).unwrap(),
+            Tag::parse(["visibility", "open"]).unwrap(),
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
     let create_resp = http
         .post(format!("{}/api/events", relay_http_url()))
         .header("X-Pubkey", &pubkey_hex)
@@ -664,20 +651,17 @@ async fn test_ws_invalid_imeta_missing_fields() {
         .unwrap();
 
     // Only url, missing m/x/size
-    let event = EventBuilder::new(
-        Kind::from(9),
-        "incomplete imeta",
-        vec![
-            Tag::parse(&["h", &channel_id]).unwrap(),
-            Tag::parse(&[
+    let event = EventBuilder::new(Kind::from(9), "incomplete imeta")
+        .tags(vec![
+            Tag::parse(["h", &channel_id]).unwrap(),
+            Tag::parse([
                 "imeta",
                 &format!("url http://localhost:3000/media/{sha}.jpg"),
             ])
             .unwrap(),
-        ],
-    )
-    .sign_with_keys(&keys)
-    .unwrap();
+        ])
+        .sign_with_keys(&keys)
+        .unwrap();
 
     let ok = client.send_event(event).await.unwrap();
     assert!(!ok.accepted, "incomplete imeta via WS must be rejected");

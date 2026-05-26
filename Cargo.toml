@@ -34,7 +34,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88.0"
 license = "Apache-2.0"
-repository = "https://github.com/sprout-rs/sprout"
+repository = "https://github.com/block/sprout"
 
 [workspace.dependencies]
 # Runtime
@@ -47,16 +47,16 @@ tower       = { version = "0.5", features = ["timeout", "util"] }
 tower-http  = { version = "0.6", features = ["trace", "cors", "compression-gzip", "limit", "fs"] }
 
 # Database
-sqlx = { version = "0.8", features = [
-    "runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"
+sqlx = { version = "0.9", features = [
+    "runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json"
 ] }
 
 # Redis
-redis        = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
+redis        = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
 
 # Nostr
-nostr = { version = "0.36" }
+nostr = { version = "0.44", features = ["nip44", "nip98"] }
 
 # Serialization
 serde       = { version = "1", features = ["derive"] }

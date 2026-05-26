@@ -90,7 +90,7 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
         crate::api::relay_members::enforce_relay_membership(
             state,
-            &auth_event.pubkey.serialize(),
+            auth_event.pubkey.as_bytes(),
             auth_tag,
         )
         .await
@@ -581,7 +581,7 @@ async fn resolve_upload_scopes(
         }
 
         // Token owner must match the Blossom signer — prevents token theft attacks.
-        let blossom_bytes = blossom_pubkey.serialize().to_vec();
+        let blossom_bytes = blossom_pubkey.to_bytes().to_vec();
         if record.owner_pubkey != blossom_bytes {
             return Err(MediaError::PubkeyMismatch);
         }
@@ -606,7 +606,7 @@ async fn resolve_upload_scopes(
 
     // 3. Pubkey allowlist check (dev mode only).
     if state.config.pubkey_allowlist_enabled {
-        let pubkey_bytes = blossom_pubkey.serialize().to_vec();
+        let pubkey_bytes = blossom_pubkey.to_bytes().to_vec();
         if !state
             .db
             .is_pubkey_allowed(&pubkey_bytes)

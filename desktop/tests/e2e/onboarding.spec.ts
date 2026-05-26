@@ -197,7 +197,7 @@ test("page 2 falls back to Doctor guidance when ACP tools are not installed", as
   await installMockBridge(
     page,
     {
-      acpProviders: [],
+      acpProvidersCatalog: [],
     },
     { skipOnboardingSeed: true },
   );

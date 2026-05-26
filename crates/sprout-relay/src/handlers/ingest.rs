@@ -12,25 +12,26 @@ use uuid::Uuid;
 use nostr::Event;
 use sprout_auth::Scope;
 use sprout_core::kind::{
-    event_kind_u32, is_parameterized_replaceable, is_relay_admin_kind, KIND_AGENT_ENGRAM,
-    KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH, KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET,
-    KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION, KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN,
-    KIND_FOLLOW_SET, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP,
-    KIND_GIT_ISSUE, KIND_GIT_PATCH, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
-    KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE, KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT,
-    KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN, KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES,
-    KIND_HUDDLE_PARTICIPANT_JOINED, KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_RECORDING_AVAILABLE,
-    KIND_HUDDLE_STARTED, KIND_HUDDLE_TRACK_PUBLISHED, KIND_LONG_FORM,
-    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MUTE_LIST,
-    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
-    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
-    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
-    KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PROFILE,
-    KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
-    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER,
-    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    event_kind_u32, is_identity_archive_request_kind, is_parameterized_replaceable,
+    is_relay_admin_kind, KIND_AGENT_ENGRAM, KIND_APPROVAL_DENY, KIND_APPROVAL_GRANT, KIND_AUTH,
+    KIND_BOOKMARK_LIST, KIND_BOOKMARK_SET, KIND_CANVAS, KIND_CONTACT_LIST, KIND_DELETION,
+    KIND_DM_ADD_MEMBER, KIND_DM_HIDE, KIND_DM_OPEN, KIND_FOLLOW_SET, KIND_FORUM_COMMENT,
+    KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_GIFT_WRAP, KIND_GIT_ISSUE, KIND_GIT_PATCH,
+    KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT, KIND_GIT_REPO_STATE,
+    KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
+    KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
+    KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST,
+    KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MEMBER_ADDED_NOTIFICATION,
+    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP,
+    KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA,
+    KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE,
+    KIND_PROFILE, KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF,
+    KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER,
 };
 use sprout_core::verification::verify_event;
 
@@ -187,6 +188,15 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         {
             Ok(Scope::AdminUsers)
         }
+        // NIP-IA: identity archive/unarchive requests (9035/9036).
+        // Scope is intentionally UsersWrite, not AdminUsers: NIP-IA's self and
+        // owner-of-agent paths are open to ordinary users (a user retiring their
+        // own key, or an owner archiving their agent). Real authorization is the
+        // consent-path check inside handle_identity_archive_event — the relay
+        // verifies self / admin-role / owner-via-live-kind:0 there. This gate
+        // only ensures the actor can write user-scoped state, which any
+        // profile-publishing user already holds.
+        KIND_IA_ARCHIVE_REQUEST | KIND_IA_UNARCHIVE_REQUEST => Ok(Scope::UsersWrite),
         KIND_NIP29_EDIT_METADATA => {
             // kind:9002 scope split: archived tag → AdminChannels, else ChannelsWrite
             let has_archived = event
@@ -208,8 +218,6 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_HUDDLE_PARTICIPANT_JOINED
         | KIND_HUDDLE_PARTICIPANT_LEFT
         | KIND_HUDDLE_ENDED
-        | KIND_HUDDLE_TRACK_PUBLISHED
-        | KIND_HUDDLE_RECORDING_AVAILABLE
         | KIND_HUDDLE_GUIDELINES => Ok(Scope::ChannelsWrite),
         // NIP-34: Git repository events
         KIND_GIT_REPO_ANNOUNCEMENT | KIND_GIT_REPO_STATE => Ok(Scope::ReposWrite),
@@ -340,6 +348,11 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | RELAY_ADMIN_REMOVE_MEMBER
             | RELAY_ADMIN_CHANGE_ROLE
             | KIND_NIP43_LEAVE_REQUEST
+            // NIP-IA: identity archive/unarchive requests drive relay-global
+            // archive state (8002/8003/13535) and are audited as global request
+            // events. A stray `h` tag must not channel-scope them.
+            | KIND_IA_ARCHIVE_REQUEST
+            | KIND_IA_UNARCHIVE_REQUEST
     )
 }
 
@@ -499,7 +512,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
     }
 
     let parent_created =
-        chrono::DateTime::from_timestamp(parent_event.event.created_at.as_u64() as i64, 0)
+        chrono::DateTime::from_timestamp(parent_event.event.created_at.as_secs() as i64, 0)
             .unwrap_or_else(Utc::now);
 
     let client_root_bytes =
@@ -516,7 +529,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
             }
             let root_ts = if let Ok(Some(root_ev)) = state.db.get_event_by_id(&effective_root).await
             {
-                chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
                     .unwrap_or(parent_created)
             } else {
                 parent_created
@@ -558,7 +571,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
             let depth = if parent_root == parent_bytes { 1 } else { 2 };
             let root_created = if parent_root != parent_bytes {
                 if let Ok(Some(root_ev)) = state.db.get_event_by_id(&parent_root).await {
-                    chrono::DateTime::from_timestamp(root_ev.event.created_at.as_u64() as i64, 0)
+                    chrono::DateTime::from_timestamp(root_ev.event.created_at.as_secs() as i64, 0)
                         .unwrap_or(parent_created)
                 } else {
                     parent_created
@@ -575,7 +588,7 @@ pub(crate) async fn resolve_nip10_thread_meta(
         parts.len() >= 2 && parts[0] == "broadcast" && parts[1] == "1"
     });
 
-    let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_u64() as i64, 0)
+    let event_created_at = chrono::DateTime::from_timestamp(event.created_at.as_secs() as i64, 0)
         .unwrap_or_else(Utc::now);
 
     Ok(Some(ThreadMetadataOwned {
@@ -631,7 +644,7 @@ pub(crate) fn effective_message_author(event: &Event, relay_pubkey: &nostr::Publ
             }
         }
     }
-    event.pubkey.serialize().to_vec()
+    event.pubkey.to_bytes().to_vec()
 }
 
 /// Validate kind:40003 edit ownership — event.pubkey must match target's effective author.
@@ -676,7 +689,7 @@ async fn validate_edit_ownership(event: &Event, state: &AppState) -> Result<(), 
     }
 
     let author = effective_message_author(&target_event.event, &state.relay_keypair.public_key());
-    let actor = event.pubkey.serialize().to_vec();
+    let actor = event.pubkey.to_bytes().to_vec();
     if author != actor {
         return Err("must be event author to edit".to_string());
     }
@@ -988,7 +1001,7 @@ pub async fn ingest_event(
     if !auth.has_proxy_scope() {
         const MAX_TIMESTAMP_DRIFT_SECS: i64 = 900; // ±15 minutes
         let now = chrono::Utc::now().timestamp();
-        let event_ts = event.created_at.as_u64() as i64;
+        let event_ts = event.created_at.as_secs() as i64;
         if (event_ts - now).abs() > MAX_TIMESTAMP_DRIFT_SECS {
             return Err(IngestError::Rejected(
                 "invalid: event timestamp too far from server time".into(),
@@ -1144,7 +1157,7 @@ pub async fn ingest_event(
     }
 
     // ── 8. Membership check ──────────────────────────────────────────────
-    let pubkey_bytes = auth.pubkey().serialize().to_vec();
+    let pubkey_bytes = auth.pubkey().to_bytes().to_vec();
     if let Some(ch_id) = channel_id {
         // kind:9021 (join) doesn't require prior membership.
         // kind:9007 (create) — channel doesn't exist yet; creator becomes owner in step 16.
@@ -1182,7 +1195,7 @@ pub async fn ingest_event(
 
         // Freshness check: reject events outside ±120s of now (same as admin commands).
         {
-            let event_ts = event.created_at.as_u64() as i64;
+            let event_ts = event.created_at.as_secs() as i64;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -1258,6 +1271,17 @@ pub async fn ingest_event(
     // ── 9. Admin validation (kinds 9000–9022) ────────────────────────────
     if crate::handlers::side_effects::is_admin_kind(kind_u32) {
         crate::handlers::side_effects::validate_admin_event(kind_u32, &event, state)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
+    // ── 9c. NIP-IA identity archive requests (kinds 9035/9036) ───────────
+    // Processed here (verify consent, mutate archived_identities, emit the
+    // relay-signed 8002/8003 delta + 13535 snapshot), then — unlike the
+    // NIP-43 admin commands above — the request itself falls through to normal
+    // storage so the delta's `["e", request_id]` audit reference resolves.
+    if is_identity_archive_request_kind(kind_u32) {
+        crate::handlers::identity_archive::handle_identity_archive_event(state, &event)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
@@ -1398,7 +1422,7 @@ pub async fn ingest_event(
 
             let ttl_seconds = super::resolve_ttl(&event, state.config.ephemeral_ttl_override);
 
-            let actor_bytes = event.pubkey.serialize().to_vec();
+            let actor_bytes = event.pubkey.to_bytes().to_vec();
             let (_, was_created) = state
                 .db
                 .create_channel_with_id(
@@ -1530,7 +1554,7 @@ pub async fn ingest_event(
             })?;
 
         let target_created_at =
-            chrono::DateTime::from_timestamp(target_event.event.created_at.as_u64() as i64, 0)
+            chrono::DateTime::from_timestamp(target_event.event.created_at.as_secs() as i64, 0)
                 .unwrap_or_else(chrono::Utc::now);
 
         let actor_bytes = effective_message_author(&event, &state.relay_keypair.public_key());
@@ -1715,6 +1739,19 @@ mod tests {
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
         KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_DIFF, KIND_USER_STATUS,
     };
+
+    #[test]
+    fn nip_ia_requests_are_global_only() {
+        // NIP-IA requests drive relay-global archive state; a stray `h` tag
+        // must not channel-scope them, or the global audit trail breaks.
+        for kind in [KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST] {
+            assert!(is_global_only_kind(kind), "kind {kind} must be global-only");
+            assert!(
+                !requires_h_channel_scope(kind),
+                "kind {kind} must not require an h tag"
+            );
+        }
+    }
 
     #[test]
     fn channel_scoped_content_kinds_require_h_tags() {
@@ -2024,16 +2061,20 @@ mod tests {
 
     fn make_dummy_event() -> Event {
         let keys = nostr::Keys::generate();
-        nostr::EventBuilder::new(nostr::Kind::Custom(9), "", [])
+        nostr::EventBuilder::new(nostr::Kind::Custom(9), "")
+            .tags([])
             .sign_with_keys(&keys)
             .unwrap()
     }
 
     fn make_event_with_tags(kind: u32, content: &str, tags: &[&[&str]]) -> Event {
         let keys = nostr::Keys::generate();
-        let nostr_tags: Vec<nostr::Tag> =
-            tags.iter().map(|t| nostr::Tag::parse(t).unwrap()).collect();
-        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content, nostr_tags)
+        let nostr_tags: Vec<nostr::Tag> = tags
+            .iter()
+            .map(|t| nostr::Tag::parse(t.iter().copied()).unwrap())
+            .collect();
+        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content)
+            .tags(nostr_tags)
             .sign_with_keys(&keys)
             .unwrap()
     }

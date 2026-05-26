@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import {
-  useAcpProvidersQuery,
+  useAvailableAcpProviders,
   useCreateChannelManagedAgentMutation,
 } from "@/features/agents/hooks";
 import { resolvePersonaProvider } from "@/features/agents/lib/resolvePersonaProvider";
@@ -17,7 +17,7 @@ type QuickBotDropState = {
  */
 export function useQuickBotDrop(channelId: string | null) {
   const createMutation = useCreateChannelManagedAgentMutation(channelId);
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
   const [state, setState] = React.useState<QuickBotDropState>({
     pending: false,
     error: null,

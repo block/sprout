@@ -146,7 +146,7 @@ export function ReposPage() {
             value={sort}
             onChange={(e) => setSort(e.target.value as SortOrder)}
             aria-label="Sort repositories"
-            className="rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="newest">Newest</option>
             <option value="oldest">Oldest</option>

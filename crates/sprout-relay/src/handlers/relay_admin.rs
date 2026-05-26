@@ -77,7 +77,7 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
     // of captured admin commands. The window is intentionally tight — admin
     // events should be freshly signed.
     {
-        let event_ts = event.created_at.as_u64() as i64;
+        let event_ts = event.created_at.as_secs() as i64;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -294,9 +294,10 @@ mod tests {
         let keys = Keys::generate();
         let nostr_tags: Vec<Tag> = tags
             .into_iter()
-            .map(|parts| Tag::parse(&parts).expect("valid tag"))
+            .map(|parts| Tag::parse(parts).expect("valid tag"))
             .collect();
-        EventBuilder::new(Kind::from(kind), "", nostr_tags)
+        EventBuilder::new(Kind::from(kind), "")
+            .tags(nostr_tags)
             .sign_with_keys(&keys)
             .expect("signing failed")
     }

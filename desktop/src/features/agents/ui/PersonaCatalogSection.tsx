@@ -74,7 +74,7 @@ export function PersonaCatalogSection({
             return (
               <div
                 className={cn(
-                  "group relative flex flex-col gap-4 rounded-xl border p-3 shadow-sm transition-[background-color,border-color,box-shadow]",
+                  "group relative flex flex-col gap-4 rounded-xl border p-3 shadow-xs transition-[background-color,border-color,box-shadow]",
                   isPending
                     ? "cursor-not-allowed opacity-70"
                     : "cursor-pointer",
@@ -92,7 +92,7 @@ export function PersonaCatalogSection({
                     isSelected,
                   )}
                   aria-pressed={isSelected}
-                  className="absolute inset-0 z-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
+                  className="absolute inset-0 z-0 rounded-xl focus:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2"
                   data-testid={`persona-catalog-card-target-${persona.id}`}
                   disabled={isPending}
                   onClick={() => {

@@ -26,6 +26,8 @@ export default defineConfig({
         "**/mentions.spec.ts",
         "**/relay-reconnect.spec.ts",
         "**/workflows.spec.ts",
+        "**/identity-archive.spec.ts",
+        "**/identity-archive-hide.spec.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],

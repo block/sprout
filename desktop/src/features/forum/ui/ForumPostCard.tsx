@@ -72,7 +72,7 @@ export function ForumPostCard({
         <div onClick={(e) => e.stopPropagation()} role="presentation">
           <UserProfilePopover pubkey={post.pubkey}>
             <button
-              className="flex items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex items-center gap-2 rounded-lg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
               type="button"
             >
               <UserAvatar

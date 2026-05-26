@@ -363,22 +363,15 @@ where
         Err(_) => return Ok(()),
     };
 
-    let relay_url_parsed: url::Url = relay_url
-        .parse()
-        .map_err(|e| format!("invalid relay URL: {e}"))?;
+    let relay_url_parsed =
+        nostr::RelayUrl::parse(relay_url).map_err(|e| format!("invalid relay URL: {e}"))?;
     let auth_json = {
         let guard = session.lock().await;
         let s = guard.as_ref().ok_or("session gone during auth")?;
         let auth_event = s
-            .sign_event(nostr_compat::EventBuilder::auth(
-                challenge,
-                relay_url_parsed,
-            ))
+            .sign_event(nostr::EventBuilder::auth(challenge, relay_url_parsed))
             .map_err(|e| format!("sign auth event: {e}"))?;
-        format!(
-            "[\"AUTH\",{}]",
-            nostr_compat::JsonUtil::as_json(&auth_event)
-        )
+        format!("[\"AUTH\",{}]", nostr::JsonUtil::as_json(&auth_event))
     };
 
     write
@@ -406,12 +399,12 @@ where
 }
 
 /// Serialize a nostr 0.36 Event to `["EVENT", <event>]` JSON string.
-fn event_to_relay_json(event: &nostr_compat::Event) -> String {
-    format!("[\"EVENT\",{}]", nostr_compat::JsonUtil::as_json(event))
+fn event_to_relay_json(event: &nostr::Event) -> String {
+    format!("[\"EVENT\",{}]", nostr::JsonUtil::as_json(event))
 }
 
 /// Parse a relay EVENT message into a nostr 0.36 Event (sprout-core compatible).
-fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr_compat::Event> {
+fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr::Event> {
     let arr: serde_json::Value = serde_json::from_str(text).ok()?;
     let arr = arr.as_array()?;
     if arr.len() < 3 {

@@ -2,7 +2,7 @@ import * as React from "react";
 import { RefreshCw, Upload } from "lucide-react";
 
 import type {
-  AcpProvider,
+  AcpProviderCatalogEntry,
   CreatePersonaInput,
   UpdatePersonaInput,
 } from "@/shared/api/types";
@@ -35,7 +35,7 @@ type PersonaDialogProps = {
   error: Error | null;
   isPending: boolean;
   isImportPending?: boolean;
-  providers: AcpProvider[];
+  providers: AcpProviderCatalogEntry[];
   providersLoading?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (input: CreatePersonaInput | UpdatePersonaInput) => Promise<void>;
@@ -266,6 +266,19 @@ export function PersonaDialog({
     importErrorMessage,
   });
 
+  const selectedProvider = providers.find((p) => p.id === provider);
+  const providerWarning =
+    selectedProvider && selectedProvider.availability !== "available" ? (
+      <p className="text-xs text-warning">
+        {selectedProvider.availability === "adapter_missing"
+          ? `${selectedProvider.label} CLI is installed but the ACP adapter is missing.`
+          : selectedProvider.availability === "cli_missing"
+            ? `${selectedProvider.label} ACP adapter is installed but the CLI is missing.`
+            : `${selectedProvider.label} is not installed.`}{" "}
+        Visit Settings &gt; Doctor to set it up.
+      </p>
+    ) : null;
+
   return (
     <Dialog onOpenChange={handleOpenChange} open={open}>
       <DialogContent className="max-w-2xl overflow-hidden p-0">
@@ -340,7 +353,7 @@ export function PersonaDialog({
                 Preferred runtime
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
                 disabled={isPending || providersLoading}
                 id="persona-provider"
                 onChange={(event) => setProvider(event.target.value)}
@@ -354,13 +367,22 @@ export function PersonaDialog({
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}
+                    {p.availability === "adapter_missing"
+                      ? " (adapter missing)"
+                      : p.availability === "cli_missing"
+                        ? " (CLI missing)"
+                        : p.availability === "not_installed"
+                          ? " (not installed)"
+                          : ""}
                   </option>
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
                 Optional. When deploying this persona, the selected runtime will
-                be pre-selected. Falls back to the default if unavailable.
+                be pre-selected. Unavailable runtimes can be installed from
+                Settings &gt; Doctor.
               </p>
+              {providerWarning}
             </div>
 
             <div className="space-y-1.5">

@@ -95,20 +95,21 @@ fn sign_nip98(
     body: Option<&[u8]>,
 ) -> Result<String, CliError> {
     let mut tags = vec![
-        Tag::parse(&["u", url]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
-        Tag::parse(&["method", method]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        Tag::parse(["u", url]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
+        Tag::parse(["method", method]).map_err(|e| CliError::Other(format!("tag error: {e}")))?,
         // Nonce prevents replay rejection for rapid-fire requests with identical bodies.
-        Tag::parse(&["nonce", &uuid::Uuid::new_v4().to_string()])
+        Tag::parse(["nonce", &uuid::Uuid::new_v4().to_string()])
             .map_err(|e| CliError::Other(format!("tag error: {e}")))?,
     ];
     if let Some(b) = body {
         let hash = hex::encode(Sha256::digest(b));
         tags.push(
-            Tag::parse(&["payload", &hash])
+            Tag::parse(["payload", &hash])
                 .map_err(|e| CliError::Other(format!("tag error: {e}")))?,
         );
     }
-    let event = EventBuilder::new(Kind::Custom(27235), "", tags)
+    let event = EventBuilder::new(Kind::Custom(27235), "")
+        .tags(tags)
         .sign_with_keys(keys)
         .map_err(|e| CliError::Other(format!("NIP-98 signing failed: {e}")))?;
     let json = event.as_json();
@@ -179,7 +180,7 @@ impl SproutClient {
     /// before calling this method.
     pub fn sign_event(&self, builder: EventBuilder) -> Result<nostr::Event, CliError> {
         let builder = if let Some(ref tag) = self.auth_tag {
-            builder.add_tags([tag.clone()])
+            builder.tags([tag.clone()])
         } else {
             builder
         };
@@ -220,11 +221,16 @@ impl SproutClient {
     /// `filter` is a Nostr filter object (will be wrapped in an array).
     /// Returns the raw JSON response (array of events).
     pub async fn query(&self, filter: &serde_json::Value) -> Result<String, CliError> {
+        self.query_multi(std::slice::from_ref(filter)).await
+    }
+
+    /// Execute a one-shot query with multiple filters via the HTTP bridge.
+    /// Each filter is ORed by the relay (standard Nostr REQ behavior).
+    pub async fn query_multi(&self, filters: &[serde_json::Value]) -> Result<String, CliError> {
         let url = format!("{}/query", self.relay_url);
-        let body_bytes = serde_json::to_vec(&[filter])
+        let body_bytes = serde_json::to_vec(filters)
             .map_err(|e| CliError::Other(format!("filter serialization failed: {e}")))?;
         let auth = sign_nip98(&self.keys, "POST", &url, Some(&body_bytes))?;
-
         let req = self
             .http
             .post(&url)
@@ -232,7 +238,6 @@ impl SproutClient {
             .header("Content-Type", "application/json")
             .body(body_bytes);
         let resp = self.with_auth_tag(req).send().await?;
-
         self.handle_response(resp).await
     }
 
@@ -323,7 +328,7 @@ impl SproutClient {
 
         // 5. Sign Blossom auth event (kind:24242)
         use nostr::Timestamp;
-        let now = Timestamp::now().as_u64();
+        let now = Timestamp::now().as_secs();
         let expiry = if mime.starts_with("video/") {
             3600
         } else {
@@ -332,9 +337,9 @@ impl SproutClient {
         let exp_str = (now + expiry).to_string();
 
         let mut blossom_tags = vec![
-            Tag::parse(&["t", "upload"]).map_err(|e| CliError::Other(e.to_string()))?,
-            Tag::parse(&["x", &sha256]).map_err(|e| CliError::Other(e.to_string()))?,
-            Tag::parse(&["expiration", &exp_str]).map_err(|e| CliError::Other(e.to_string()))?,
+            Tag::parse(["t", "upload"]).map_err(|e| CliError::Other(e.to_string()))?,
+            Tag::parse(["x", &sha256]).map_err(|e| CliError::Other(e.to_string()))?,
+            Tag::parse(["expiration", &exp_str]).map_err(|e| CliError::Other(e.to_string()))?,
         ];
         // Extract server domain from relay URL for BUD-11 server tag
         if let Ok(parsed) = url::Url::parse(&self.relay_url) {
@@ -344,12 +349,13 @@ impl SproutClient {
                     None => host.to_string(),
                 };
                 blossom_tags.push(
-                    Tag::parse(&["server", &domain]).map_err(|e| CliError::Other(e.to_string()))?,
+                    Tag::parse(["server", &domain]).map_err(|e| CliError::Other(e.to_string()))?,
                 );
             }
         }
 
-        let auth_event = EventBuilder::new(Kind::from(24242), "Upload file", blossom_tags)
+        let auth_event = EventBuilder::new(Kind::from(24242), "Upload file")
+            .tags(blossom_tags)
             .sign_with_keys(&self.keys)
             .map_err(|e| CliError::Other(format!("signing failed: {e}")))?;
 
@@ -404,6 +410,15 @@ impl SproutClient {
                         .map(|s| s.to_string())
                 })
                 .unwrap_or(body);
+            if status == 403 && std::env::var("SPROUT_AUTH_TAG").is_ok() {
+                let message = format!(
+                    "{message} (SPROUT_AUTH_TAG is set — it may be stale or revoked; try unsetting it)"
+                );
+                return Err(CliError::Relay {
+                    status,
+                    body: message,
+                });
+            }
             return Err(CliError::Relay {
                 status,
                 body: message,
@@ -424,4 +439,120 @@ pub fn normalize_relay_url(url: &str) -> String {
         .replace("ws://", "http://")
         .trim_end_matches('/')
         .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Output normalization helpers
+// ---------------------------------------------------------------------------
+
+/// Normalize raw event JSON array into consistent shape.
+/// Each event becomes: {id, pubkey, kind, content, created_at, tags}
+pub fn normalize_events(events: &[serde_json::Value]) -> String {
+    let normalized: Vec<serde_json::Value> = events
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                "pubkey": e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""),
+                "kind": e.get("kind").and_then(|v| v.as_u64()).unwrap_or(0),
+                "content": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+                "tags": e.get("tags").cloned().unwrap_or(serde_json::json!([])),
+            })
+        })
+        .collect();
+    serde_json::to_string(&normalized).unwrap_or_default()
+}
+
+/// Extract the d-tag value from a Nostr event JSON object.
+pub fn extract_d_tag(event: &serde_json::Value) -> String {
+    event
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .and_then(|tags| {
+            tags.iter().find(|t| {
+                t.as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    == Some("d")
+            })
+        })
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.get(1))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Extract a named tag's value from a Nostr event JSON object.
+/// Finds the first tag whose first element matches `key` and returns the second element.
+pub fn extract_tag_value(event: &serde_json::Value, key: &str) -> String {
+    event
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .and_then(|tags| {
+            tags.iter().find(|t| {
+                t.as_array()
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    == Some(key)
+            })
+        })
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.get(1))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Extract all p-tags into [{pubkey, role}] from a Nostr event JSON object.
+pub fn extract_p_tags(event: &serde_json::Value) -> Vec<serde_json::Value> {
+    event
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|tags| {
+            tags.iter()
+                .filter(|t| {
+                    t.as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_str())
+                        == Some("p")
+                })
+                .map(|t| {
+                    let a = t.as_array().unwrap();
+                    serde_json::json!({
+                        "pubkey": a.get(1).and_then(|v| v.as_str()).unwrap_or(""),
+                        "role": a.get(3).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("member"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Print a create-command response, injecting the generated entity ID.
+pub fn print_create_response(resp: &str, id_key: &str, id_val: &str) {
+    let mut v: serde_json::Value = serde_json::from_str(resp).unwrap_or(serde_json::json!({}));
+    v[id_key] = serde_json::json!(id_val);
+    if v.get("accepted").is_none() {
+        v["accepted"] = serde_json::json!(true);
+    }
+    println!("{v}");
+}
+
+/// Normalize a relay write-response into a consistent JSON object.
+/// Relay returns: {"event_id": "...", "accepted": true, "message": "..."}
+/// Falls back to raw text if parsing fails.
+pub fn normalize_write_response(raw: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        if v.get("event_id").is_some() || v.get("accepted").is_some() {
+            return serde_json::json!({
+                "event_id": v.get("event_id").and_then(|v| v.as_str()).unwrap_or(""),
+                "accepted": v.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false),
+                "message": v.get("message").and_then(|v| v.as_str()).unwrap_or(""),
+            })
+            .to_string();
+        }
+    }
+    raw.to_string()
 }

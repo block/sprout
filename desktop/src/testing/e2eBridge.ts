@@ -4,20 +4,15 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
+import type {
+  RawAcpProviderCatalogEntry,
+  RawInstallRuntimeResult,
+} from "@/shared/api/tauri";
 
 type TestIdentity = {
   privateKey: string;
   pubkey: string;
   username: string;
-};
-
-type MockAcpProvider = {
-  id: string;
-  label: string;
-  command: string;
-  binaryPath: string;
-  defaultArgs: string[];
-  mcpCommand?: string | null;
 };
 
 type MockCommandAvailability = {
@@ -29,7 +24,8 @@ type MockCommandAvailability = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
-    acpProviders?: MockAcpProvider[];
+    acpProvidersCatalog?: RawAcpProviderCatalogEntry[];
+    installAcpRuntimeResult?: RawInstallRuntimeResult;
     managedAgentPrereqs?: {
       acp?: MockCommandAvailability;
       mcp?: MockCommandAvailability;
@@ -38,6 +34,15 @@ type E2eConfig = {
     profileReadError?: string;
     profileUpdateError?: string;
     stallWebsocketSends?: boolean;
+    // NIP-IA gate inputs — see tests/helpers/bridge.ts:MockBridgeOptions for
+    // semantics. These three drive the archive-button gate matrix in
+    // tests/e2e/identity-archive.spec.ts; they're plumbed into:
+    // - `list_archived_identities` (archivedIdentities)
+    // - `resolve_oa_owner` (oaOwnerIsMe)
+    // - `resetMockRelayMembers` (relayRole)
+    archivedIdentities?: string[];
+    oaOwnerIsMe?: boolean;
+    relayRole?: "owner" | "admin" | "member" | null;
   };
   relayHttpUrl?: string;
   relayWsUrl?: string;
@@ -316,15 +321,6 @@ type RawCreateManagedAgentResponse = {
 type RawManagedAgentLog = {
   content: string;
   log_path: string;
-};
-
-type RawAcpProvider = {
-  id: string;
-  label: string;
-  command: string;
-  binary_path: string;
-  default_args: string[];
-  mcp_command: string | null;
 };
 
 type RawCommandAvailability = {
@@ -695,13 +691,21 @@ function cloneManagedAgent(agent: MockManagedAgent): RawManagedAgent {
 
 function resetMockRelayMembers(config: E2eConfig | undefined) {
   const pubkey = getMockMemberPubkey(config);
+  // Drive the active identity's role from `mock.relayRole` so the e2e harness
+  // can exercise the NIP-IA admin gate (owner/admin → true, member/null →
+  // false). Default stays `owner` to preserve existing test behavior.
+  const role = config?.mock?.relayRole;
+  const activeRoleMember =
+    role === null
+      ? null
+      : {
+          pubkey,
+          role: role ?? "owner",
+          added_by: null,
+          created_at: isoMinutesAgo(120),
+        };
   mockRelayMembers = [
-    {
-      pubkey,
-      role: "owner",
-      added_by: null,
-      created_at: isoMinutesAgo(120),
-    },
+    ...(activeRoleMember ? [activeRoleMember] : []),
     {
       pubkey: ALICE_PUBKEY,
       role: "admin",
@@ -1634,10 +1638,26 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
           {
             id: "mock-general-welcome",
             pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
-            created_at: Math.floor(Date.now() / 1000),
+            created_at: Math.floor(Date.now() / 1000) - 120,
             kind: 9,
             tags: [["h", channelId]],
             content: "Welcome to #general",
+            sig: "mocksig".repeat(20).slice(0, 128),
+          },
+          // Alice authored — gives e2e specs a non-self profile pane to open
+          // by clicking the second message-row's author button. Used by
+          // tests/e2e/identity-archive.spec.ts to exercise the admin / OA /
+          // none-of-the-above branches of the NIP-IA gate. Both seeds are
+          // backdated (welcome at -120s, Alice at -60s) so user-sent messages
+          // in other specs always land after both — preserving
+          // `message-row.first()` = welcome and `.last()` = sent.
+          {
+            id: "mock-general-alice",
+            pubkey: ALICE_PUBKEY,
+            created_at: Math.floor(Date.now() / 1000) - 60,
+            kind: 9,
+            tags: [["h", channelId]],
+            content: "Hey team — checking in.",
             sig: "mocksig".repeat(20).slice(0, 128),
           },
         ]
@@ -3468,37 +3488,96 @@ async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
 
 async function handleDiscoverAcpProviders(
   config: E2eConfig | undefined,
-): Promise<RawAcpProvider[]> {
-  const configuredProviders = config?.mock?.acpProviders;
-  if (configuredProviders) {
-    return configuredProviders.map((provider) => ({
-      id: provider.id,
-      label: provider.label,
-      command: provider.command,
-      binary_path: provider.binaryPath,
-      default_args: [...provider.defaultArgs],
-      mcp_command: provider.mcpCommand ?? null,
-    }));
+): Promise<RawAcpProviderCatalogEntry[]> {
+  const configured = config?.mock?.acpProvidersCatalog;
+  if (configured) {
+    return configured;
   }
-
   return [
     {
       id: "goose",
       label: "Goose",
+      avatar_url: "",
+      availability: "available",
       command: "goose",
       binary_path: "/usr/local/bin/goose",
       default_args: ["acp"],
       mcp_command: null,
+      install_hint: "Install Goose via the official install script.",
+      install_instructions_url: "https://block.github.io/goose/",
+      can_auto_install: true,
+      underlying_cli_path: null,
+    },
+    {
+      id: "claude",
+      label: "Claude Code",
+      avatar_url: "",
+      availability: "adapter_missing",
+      command: null,
+      binary_path: null,
+      default_args: [],
+      mcp_command: null,
+      install_hint: "Install the Claude Code ACP adapter via npm.",
+      install_instructions_url:
+        "https://www.npmjs.com/package/@anthropic-ai/claude-agent-acp",
+      can_auto_install: true,
+      underlying_cli_path: "/usr/local/bin/claude",
     },
     {
       id: "codex",
       label: "Codex",
-      command: "codex-acp",
-      binary_path: "/usr/local/bin/codex-acp",
+      avatar_url: "",
+      availability: "not_installed",
+      command: null,
+      binary_path: null,
       default_args: [],
       mcp_command: null,
+      install_hint:
+        "The codex-acp adapter must be built from source. See the GitHub repo.",
+      install_instructions_url: "https://github.com/openai/codex",
+      can_auto_install: false,
+      underlying_cli_path: null,
+    },
+    {
+      id: "sprout-agent",
+      label: "Sprout Agent",
+      avatar_url: "",
+      availability: "available",
+      command: "sprout-agent",
+      binary_path: "/usr/local/bin/sprout-agent",
+      default_args: [],
+      mcp_command: "sprout-dev-mcp",
+      install_hint: "Ships with the Sprout desktop app.",
+      install_instructions_url: "https://github.com/block/sprout",
+      can_auto_install: false,
+      underlying_cli_path: null,
     },
   ];
+}
+
+async function handleInstallAcpRuntime(
+  args: {
+    providerId?: string;
+  },
+  config: E2eConfig | undefined,
+): Promise<RawInstallRuntimeResult> {
+  const configured = config?.mock?.installAcpRuntimeResult;
+  if (configured) {
+    return configured;
+  }
+  return {
+    success: true,
+    steps: [
+      {
+        step: "adapter",
+        command: `mock install ${args.providerId ?? "unknown"}`,
+        success: true,
+        stdout: "mock: installed successfully",
+        stderr: "",
+        exit_code: 0,
+      },
+    ],
+  };
 }
 
 async function handleDiscoverManagedAgentPrereqs(
@@ -4673,6 +4752,11 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
         return handleDiscoverAcpProviders(activeConfig);
+      case "install_acp_runtime":
+        return handleInstallAcpRuntime(
+          payload as { providerId?: string },
+          activeConfig,
+        );
       case "discover_backend_providers":
         return [];
       case "probe_backend_provider":
@@ -4986,6 +5070,26 @@ export function maybeInstallE2eTauriMocks() {
       case "plugin:event|listen":
         // Tauri event system (pairing, huddle) — no-op in e2e, return unlisten fn ID
         return Math.floor(Math.random() * 1_000_000);
+      // ── NIP-IA identity archival ────────────────────────────────────────
+      // These mocks drive the archive-button gate matrix in
+      // tests/e2e/identity-archive.spec.ts. Defaults keep the button hidden
+      // for non-self viewees so the negative case is the unsurprising one.
+      case "resolve_oa_owner": {
+        const isMe = activeConfig?.mock?.oaOwnerIsMe ?? false;
+        const owner = isMe
+          ? (identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey)
+          : "ff".repeat(32);
+        return { owner, is_me: isMe };
+      }
+      case "list_archived_identities": {
+        const archived = activeConfig?.mock?.archivedIdentities ?? [];
+        return { archived };
+      }
+      case "archive_identity":
+      case "unarchive_identity":
+        // The spec only verifies UI state, not the submitted request shape;
+        // returning null mirrors the Rust submit_event success path.
+        return null;
       default:
         throw new Error(`Unsupported mocked Tauri command: ${command}`);
     }

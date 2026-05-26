@@ -73,8 +73,8 @@ async fn fetch_core_body(
     let filter = nostr::Filter::new()
         .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
         .author(agent_keys.public_key())
-        .custom_tag(nostr::SingleLetterTag::lowercase(nostr::Alphabet::D), [d])
-        .custom_tag(
+        .custom_tags(nostr::SingleLetterTag::lowercase(nostr::Alphabet::D), [d])
+        .custom_tags(
             nostr::SingleLetterTag::lowercase(nostr::Alphabet::P),
             [owner.to_hex()],
         )

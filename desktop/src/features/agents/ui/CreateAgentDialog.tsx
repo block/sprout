@@ -3,6 +3,7 @@ import * as React from "react";
 
 import {
   useAcpProvidersQuery,
+  useAvailableAcpProviders,
   useBackendProvidersQuery,
   useCreateManagedAgentMutation,
   useManagedAgentPrereqsQuery,
@@ -48,7 +49,8 @@ export function CreateAgentDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const createMutation = useCreateManagedAgentMutation();
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
+  const allProvidersQuery = useAcpProvidersQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
   const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
@@ -85,6 +87,10 @@ export function CreateAgentDialog({
   const [probeError, setProbeError] = React.useState<string | null>(null);
 
   const providers = providersQuery.data ?? [];
+  const allProviders = allProvidersQuery.data ?? [];
+  const unavailableCount = allProviders.filter(
+    (p) => p.availability !== "available",
+  ).length;
   const backendProviders = backendProvidersQuery.data ?? [];
   const prereqs = prereqsQuery.data ?? null;
   const selectedProvider = React.useMemo(
@@ -389,7 +395,7 @@ export function CreateAgentDialog({
                   Run on
                 </label>
                 <select
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
                   id="agent-run-on"
                   onChange={(e) => handleRunOnChange(e.target.value)}
                   value={runOn}
@@ -443,6 +449,7 @@ export function CreateAgentDialog({
                 providersLoading={providersQuery.isLoading}
                 selectedProvider={selectedProvider}
                 selectedProviderId={selectedProviderId}
+                unavailableCount={unavailableCount}
               />
             ) : null}
 

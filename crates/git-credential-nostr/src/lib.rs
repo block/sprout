@@ -9,7 +9,8 @@ use std::io::{self, BufRead, Write};
 
 use base64::Engine as _;
 use nostr::nips::nip98::{HttpData, HttpMethod};
-use nostr::{EventBuilder, Keys, UncheckedUrl};
+use nostr::types::Url;
+use nostr::{EventBuilder, Keys};
 use zeroize::Zeroize;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -204,7 +205,8 @@ pub fn run() -> i32 {
     };
     raw_key.zeroize();
 
-    let http_data = HttpData::new(UncheckedUrl::from(url.as_str()), method);
+    let parsed_url = Url::parse(&url).unwrap_or_else(|e| panic!("invalid URL {url:?}: {e}"));
+    let http_data = HttpData::new(parsed_url, method);
     let event = match EventBuilder::http_auth(http_data).sign_with_keys(&keys) {
         Ok(e) => e,
         Err(e) => {

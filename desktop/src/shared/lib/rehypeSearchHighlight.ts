@@ -67,7 +67,7 @@ export default function rehypeSearchHighlight({ query }: { query: string }) {
                 tagName: "mark",
                 properties: {
                   className:
-                    "rounded-sm bg-primary/20 text-foreground dark:bg-primary/30",
+                    "rounded-xs bg-primary/20 text-foreground dark:bg-primary/30",
                 },
                 children: [{ type: "text", value: part }],
               });

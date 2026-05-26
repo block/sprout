@@ -17,7 +17,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use nostr::{
-    Alphabet, Event, EventBuilder, Filter, JsonUtil, Keys, Kind, SingleLetterTag, Tag, Url,
+    Alphabet, Event, EventBuilder, Filter, JsonUtil, Keys, Kind, RelayUrl, SingleLetterTag, Tag,
 };
 use serde_json::{json, Value};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -143,14 +143,16 @@ async fn connect_and_authenticate(config: &Config) -> Result<Ws> {
 }
 
 fn build_auth_event(config: &Config, challenge: &str) -> Result<Event> {
-    let relay_url: Url = config.relay_url.parse()?;
+    let relay_url: RelayUrl = RelayUrl::parse(&config.relay_url)?;
     if let Some(auth_tag) = &config.owner_auth_tag {
         let tags = vec![
-            Tag::parse(&["relay", config.relay_url.as_str()])?,
-            Tag::parse(&["challenge", challenge])?,
+            Tag::parse(["relay", config.relay_url.as_str()])?,
+            Tag::parse(["challenge", challenge])?,
             auth_tag.clone(),
         ];
-        Ok(EventBuilder::new(Kind::Authentication, "", tags).sign_with_keys(&config.bot_keys)?)
+        Ok(EventBuilder::new(Kind::Authentication, "")
+            .tags(tags)
+            .sign_with_keys(&config.bot_keys)?)
     } else {
         Ok(EventBuilder::auth(challenge, relay_url).sign_with_keys(&config.bot_keys)?)
     }
@@ -174,15 +176,11 @@ async fn publish_profile(ws: &mut Ws, config: &Config) -> Result<()> {
 }
 
 async fn announce_channel_membership(ws: &mut Ws, config: &Config) -> Result<()> {
-    let builder = EventBuilder::new(
-        Kind::Custom(9000),
-        "",
-        [
-            Tag::parse(&["h", config.channel_id.as_str()])?,
-            Tag::parse(&["p", &config.bot_keys.public_key().to_hex()])?,
-            Tag::parse(&["role", "bot"])?,
-        ],
-    );
+    let builder = EventBuilder::new(Kind::Custom(9000), "").tags([
+        Tag::parse(["h", config.channel_id.as_str()])?,
+        Tag::parse(["p", &config.bot_keys.public_key().to_hex()])?,
+        Tag::parse(["role", "bot"])?,
+    ]);
     let event = builder.sign_with_keys(&config.bot_keys)?;
     let event_id = event.id.to_hex();
 
@@ -199,7 +197,7 @@ async fn announce_channel_membership(ws: &mut Ws, config: &Config) -> Result<()>
 async fn subscribe_to_channel(ws: &mut Ws, channel_id: &str) -> Result<()> {
     let filter = Filter::new().kind(Kind::Custom(9)).custom_tag(
         SingleLetterTag::lowercase(Alphabet::H),
-        [channel_id.to_string()],
+        channel_id.to_string(),
     );
     send_json(ws, json!(["REQ", SUBSCRIPTION_ID, filter])).await
 }

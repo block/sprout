@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use nostr::EventId;
 
-use crate::client::SproutClient;
+use crate::client::{normalize_write_response, SproutClient};
 use crate::error::CliError;
 use crate::validate::validate_hex64;
 
@@ -19,7 +21,7 @@ pub async fn cmd_add_reaction(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 
@@ -65,19 +67,54 @@ pub async fn cmd_remove_reaction(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 
 pub async fn cmd_get_reactions(client: &SproutClient, event_id: &str) -> Result<(), CliError> {
     validate_hex64(event_id)?;
-    // Query kind:7 reactions referencing this event
     let filter = serde_json::json!({
         "kinds": [7],
         "#e": [event_id]
     });
     let resp = client.query(&filter).await?;
-    println!("{resp}");
+    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
+
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    for e in &events {
+        let emoji = e
+            .get("content")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("+")
+            .to_string();
+        let pubkey = e
+            .get("pubkey")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        groups.entry(emoji).or_default().push(pubkey);
+    }
+
+    let mut reactions: Vec<serde_json::Value> = groups
+        .into_iter()
+        .map(|(emoji, pubkeys)| {
+            serde_json::json!({
+                "emoji": emoji,
+                "count": pubkeys.len(),
+                "pubkeys": pubkeys,
+            })
+        })
+        .collect();
+    reactions.sort_by(|a, b| {
+        a.get("emoji")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .cmp(b.get("emoji").and_then(|v| v.as_str()).unwrap_or(""))
+    });
+
+    let output = serde_json::json!({ "reactions": reactions });
+    println!("{}", serde_json::to_string(&output).unwrap_or_default());
     Ok(())
 }
 

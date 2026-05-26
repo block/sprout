@@ -5,6 +5,7 @@ import {
   parsePubkeyInput,
 } from "@/features/agents/lib/respondToAllowlist";
 import { formatPubkey } from "@/features/channels/lib/memberUtils";
+import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import { useUserSearchQuery } from "@/features/profile/hooks";
 import type { RespondToMode, UserSearchResult } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -79,12 +80,15 @@ export function CreateAgentRespondToField({
     enabled: mode === "allowlist" && deferredQuery.length > 0,
     limit: 8,
   });
+  const isArchivedDiscovery = useIsArchivedPredicate();
   const searchResults = React.useMemo(
     () =>
       (userSearchQuery.data ?? []).filter(
-        (user) => !allowlistSet.has(user.pubkey.toLowerCase()),
+        (user) =>
+          !allowlistSet.has(user.pubkey.toLowerCase()) &&
+          !isArchivedDiscovery(user.pubkey),
       ),
-    [allowlistSet, userSearchQuery.data],
+    [allowlistSet, isArchivedDiscovery, userSearchQuery.data],
   );
 
   const pasteParsed = React.useMemo(
@@ -115,7 +119,7 @@ export function CreateAgentRespondToField({
         Who can talk to this agent
       </label>
       <select
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
         data-testid="agent-respond-to-select"
         disabled={disabled}
         id="agent-respond-to"

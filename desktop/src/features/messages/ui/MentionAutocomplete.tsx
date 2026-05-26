@@ -58,6 +58,7 @@ export const MentionAutocomplete = React.memo(function MentionAutocomplete({
                 ? "bg-accent text-accent-foreground"
                 : "text-popover-foreground hover:bg-accent/50",
             )}
+            data-testid={`mention-suggestion-${suggestion.pubkey}`}
             key={suggestion.pubkey}
             onMouseDown={(event) => {
               event.preventDefault();

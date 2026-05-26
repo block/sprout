@@ -2,12 +2,13 @@ name: sprout
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     container_name: sprout-postgres
     environment:
       POSTGRES_USER: sprout
       POSTGRES_PASSWORD: sprout_dev
       POSTGRES_DB: sprout
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "5432:5432"
     volumes:
@@ -30,7 +31,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: sprout-redis
     ports:
       - "6379:6379"
@@ -52,7 +53,7 @@ services:
     restart: unless-stopped
 
   typesense:
-    image: typesense/typesense:27.1
+    image: typesense/typesense:30.2
     container_name: sprout-typesense
     environment:
       TYPESENSE_DATA_DIR: /data

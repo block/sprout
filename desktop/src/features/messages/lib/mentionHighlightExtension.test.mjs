@@ -138,3 +138,17 @@ test("handles empty patterns against non-empty text", () => {
   const matches = findHighlightMatches("@alice #general", []);
   assert.equal(matches.length, 0);
 });
+
+// ── Trailing word boundary regression tests ───────────────────────────
+
+test("@Marge should NOT match inside @Margex (trailing word boundary)", () => {
+  const patterns = buildHighlightPatterns(["Marge"], []);
+  const matches = findHighlightMatches("@Margex", patterns);
+  assert.equal(matches.length, 0);
+});
+
+test("#general should NOT match inside #generally (trailing word boundary)", () => {
+  const patterns = buildHighlightPatterns([], ["general"]);
+  const matches = findHighlightMatches("#generally", patterns);
+  assert.equal(matches.length, 0);
+});

@@ -476,7 +476,7 @@ export function AppSidebar({
           />
         </div>
         <Button
-          className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          className="w-full justify-between rounded-xl border border-sidebar-border/80 bg-sidebar-accent/60 px-3 text-sidebar-foreground/80 shadow-xs hover:bg-sidebar-accent hover:text-sidebar-foreground"
           data-testid="open-search"
           onClick={onOpenSearch}
           size="sm"

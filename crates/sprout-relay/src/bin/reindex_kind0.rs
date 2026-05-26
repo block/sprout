@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
         let tail = batch
             .last()
             .map(|ev| {
-                let ts = ev.event.created_at.as_u64() as i64;
+                let ts = ev.event.created_at.as_secs() as i64;
                 let dt = DateTime::<Utc>::from_timestamp(ts, 0).unwrap_or(cursor_until);
                 let id_bytes = ev.event.id.to_bytes().to_vec();
                 (dt, id_bytes)

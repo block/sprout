@@ -18,6 +18,7 @@ import { MessageComposer } from "./MessageComposer";
 import { MessageRow } from "./MessageRow";
 import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { TypingIndicatorRow } from "./TypingIndicatorRow";
+import { useComposerHeightPadding } from "./useComposerHeightPadding";
 import { useTimelineScrollManager } from "./useTimelineScrollManager";
 
 type MessageThreadPanelProps = {
@@ -107,8 +108,10 @@ export function MessageThreadPanel({
   widthPx,
 }: MessageThreadPanelProps) {
   const threadBodyRef = React.useRef<HTMLDivElement>(null);
+  const threadComposerWrapperRef = React.useRef<HTMLDivElement>(null);
   const isOverlay = useIsThreadPanelOverlay();
   useEscapeKey(onClose, isOverlay);
+  useComposerHeightPadding(threadBodyRef, threadComposerWrapperRef);
 
   const threadHeadId = threadHead?.id ?? null;
 
@@ -198,7 +201,7 @@ export function MessageThreadPanel({
           onScroll={syncScrollState}
           ref={threadBodyRef}
         >
-          <div className="pb-10" ref={contentRef}>
+          <div ref={contentRef}>
             <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
               <div className="rounded-2xl">
                 <MessageRow
@@ -287,7 +290,7 @@ export function MessageThreadPanel({
         {!isAtBottom ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-36 z-20 flex justify-center px-4">
             <Button
-              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
+              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
               data-testid="thread-scroll-to-latest"
               onClick={() => scrollToBottom("smooth")}
               size="sm"
@@ -302,7 +305,10 @@ export function MessageThreadPanel({
           </div>
         ) : null}
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+          ref={threadComposerWrapperRef}
+        >
           <div className="pointer-events-auto">
             <MessageComposer
               channelId={channelId}

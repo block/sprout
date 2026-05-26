@@ -203,13 +203,13 @@ export function ChannelBrowserDialog({
       >
         <DialogHeader className="border-b border-border/80 px-6 py-5">
           <DialogTitle className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
+            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-xs">
               <Compass className="h-4 w-4" />
             </span>
             {browseTitle}
           </DialogTitle>
           <DialogDescription>{browseDescription}</DialogDescription>
-          <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-sm">
+          <div className="mt-4 flex items-center gap-3 rounded-2xl border border-input bg-card px-3 py-3 shadow-xs">
             <Search className="h-4 w-4 text-muted-foreground" />
             <Input
               className="h-auto border-0 bg-transparent px-0 py-0 text-base shadow-none focus-visible:ring-0"
@@ -354,8 +354,8 @@ function ChannelCard({
     <button
       className={
         isSelected
-          ? "w-full rounded-2xl border border-primary/30 bg-primary/10 px-4 py-4 text-left shadow-sm outline-none transition-colors"
-          : "w-full rounded-2xl border border-border/80 bg-card/60 px-4 py-4 text-left shadow-sm outline-none transition-colors hover:border-primary/20 hover:bg-accent"
+          ? "w-full rounded-2xl border border-primary/30 bg-primary/10 px-4 py-4 text-left shadow-xs outline-hidden transition-colors"
+          : "w-full rounded-2xl border border-border/80 bg-card/60 px-4 py-4 text-left shadow-xs outline-hidden transition-colors hover:border-primary/20 hover:bg-accent"
       }
       data-testid={`browse-channel-${channel.name}`}
       onClick={onSelect}

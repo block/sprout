@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use crate::client::SproutClient;
+use crate::client::{extract_d_tag, normalize_write_response, print_create_response, SproutClient};
 use crate::error::CliError;
 use crate::validate::{parse_uuid, read_or_stdin, sdk_err, validate_uuid};
 
@@ -18,7 +18,20 @@ pub async fn cmd_list_workflows(client: &SproutClient, channel_id: &str) -> Resu
         "#h": [channel_id]
     });
     let resp = client.query(&filter).await?;
-    println!("{resp}");
+    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
+    let workflows: Vec<serde_json::Value> = events
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "workflow_id": extract_d_tag(e),
+                "content": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+                "pubkey": e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""),
+            })
+        })
+        .collect();
+    let output = serde_json::to_string(&workflows).unwrap_or_default();
+    println!("{output}");
     Ok(())
 }
 
@@ -30,11 +43,27 @@ pub async fn cmd_get_workflow(client: &SproutClient, workflow_id: &str) -> Resul
         "#d": [workflow_id]
     });
     let resp = client.query(&filter).await?;
-    println!("{resp}");
+    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
+    if let Some(e) = events.first() {
+        let normalized = serde_json::json!({
+            "workflow_id": extract_d_tag(e),
+            "content": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+            "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+            "pubkey": e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""),
+        });
+        println!("{normalized}");
+    } else {
+        println!("null");
+    }
     Ok(())
 }
 
-/// Get workflow run history — query kind:46020 trigger events for this workflow.
+/// Get workflow run history — query kinds [46001, 46002, 46003].
+///
+/// NOTE: The relay does not currently emit workflow execution events (46001-46003).
+/// Run history is stored in the workflow_runs DB table, not as Nostr events.
+/// This command will return an empty array until the relay adds event emission
+/// or a dedicated REST endpoint for run history.
 pub async fn cmd_get_workflow_runs(
     client: &SproutClient,
     workflow_id: &str,
@@ -43,12 +72,26 @@ pub async fn cmd_get_workflow_runs(
     validate_uuid(workflow_id)?;
     let limit = limit.unwrap_or(20).min(100);
     let filter = serde_json::json!({
-        "kinds": [46020],
+        "kinds": [46001, 46002, 46003],
         "#d": [workflow_id],
         "limit": limit
     });
     let resp = client.query(&filter).await?;
-    println!("{resp}");
+    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
+    let normalized: Vec<serde_json::Value> = events
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "event_id": e.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                "kind": e.get("kind").and_then(|v| v.as_u64()).unwrap_or(0),
+                "content": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+                "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+                "tags": e.get("tags").cloned().unwrap_or(serde_json::json!([])),
+            })
+        })
+        .collect();
+    let output = serde_json::to_string(&normalized).unwrap_or_default();
+    println!("{output}");
     Ok(())
 }
 
@@ -71,7 +114,7 @@ pub async fn cmd_create_workflow(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    print_create_response(&resp, "workflow_id", &workflow_id.to_string());
     Ok(())
 }
 
@@ -91,7 +134,7 @@ pub async fn cmd_update_workflow(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 
@@ -105,7 +148,7 @@ pub async fn cmd_delete_workflow(client: &SproutClient, workflow_id: &str) -> Re
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 
@@ -120,7 +163,7 @@ pub async fn cmd_trigger_workflow(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 
@@ -142,7 +185,7 @@ pub async fn cmd_approve_step(
     let event = client.sign_event(builder)?;
 
     let resp = client.submit_event(event).await?;
-    println!("{resp}");
+    println!("{}", normalize_write_response(&resp));
     Ok(())
 }
 

@@ -225,6 +225,44 @@ async fn main() -> anyhow::Result<()> {
     );
     let state = Arc::new(app_state);
 
+    // Git-on-object-storage: admit the configured S3/MinIO backend against the
+    // linearizable conditional-write axiom (A3) before serving git traffic.
+    // Failure is fatal: a backend that cannot satisfy pointer CAS invalidates
+    // the manifest-pointer protocol. This is a deployment gate, not a proof.
+    if std::env::var("SPROUT_GIT_CONFORMANCE_PROBE")
+        .map(|v| v != "false")
+        .unwrap_or(true)
+    {
+        let race_width = std::env::var("SPROUT_GIT_PROBE_WRITERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(32);
+        let race_rounds = std::env::var("SPROUT_GIT_PROBE_ROUNDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+        let cfg = sprout_relay::api::git::store::ProbeConfig {
+            race_width,
+            race_rounds,
+        };
+        tracing::info!(
+            race_width,
+            race_rounds,
+            "running git object-store conformance probe (A3 gate)"
+        );
+        let report = state
+            .git_store
+            .run_conformance_probe(cfg)
+            .await
+            .map_err(|e| anyhow::anyhow!("git conformance probe failed: {e}"))?;
+        tracing::info!(
+            race_width = report.race_width,
+            race_rounds = report.race_rounds,
+            transport_drops = report.transport_drops,
+            "git object-store backend admitted: A3 conformance probe passed"
+        );
+    }
+
     // NIP-43: publish the initial membership list on startup so clients can
     // REQ kind:13534 immediately without waiting for the next membership change.
     if config.require_relay_membership {

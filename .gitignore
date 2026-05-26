@@ -53,3 +53,6 @@ doc/
 # Local identity files
 identity.key
 **/identity.key
+
+# Claude Code worktrees
+.claude/worktrees/

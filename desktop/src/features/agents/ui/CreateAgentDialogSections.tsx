@@ -40,12 +40,14 @@ export function CreateAgentRuntimeProviderField({
   providersLoading,
   selectedProvider,
   selectedProviderId,
+  unavailableCount,
   onProviderChange,
 }: {
   providers: AcpProvider[];
   providersLoading: boolean;
   selectedProvider: AcpProvider | null;
   selectedProviderId: string;
+  unavailableCount: number;
   onProviderChange: (value: string) => void;
 }) {
   return (
@@ -54,7 +56,7 @@ export function CreateAgentRuntimeProviderField({
         Agent runtime
       </label>
       <select
-        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
         id="agent-provider"
         onChange={(event) => onProviderChange(event.target.value)}
         value={selectedProviderId}
@@ -86,6 +88,14 @@ export function CreateAgentRuntimeProviderField({
           command in Advanced setup.
         </p>
       )}
+      {unavailableCount > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          {unavailableCount} additional{" "}
+          {unavailableCount === 1 ? "runtime" : "runtimes"} available to
+          install. Visit Settings &gt; Doctor to set{" "}
+          {unavailableCount === 1 ? "it" : "them"} up.
+        </p>
+      ) : null}
     </div>
   );
 }

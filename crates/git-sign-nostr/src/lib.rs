@@ -80,10 +80,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use chrono::DateTime;
-use nostr::bitcoin::hashes::sha256::Hash as Sha256Hash;
-use nostr::bitcoin::hashes::{Hash, HashEngine};
-use nostr::bitcoin::secp256k1::schnorr::Signature;
-use nostr::bitcoin::secp256k1::{Keypair, Message, XOnlyPublicKey};
+use nostr::hashes::sha256::Hash as Sha256Hash;
+use nostr::hashes::{Hash, HashEngine};
+use nostr::secp256k1::schnorr::Signature;
+use nostr::secp256k1::{Keypair, Message};
 use nostr::{FromBech32, PublicKey, SecretKey, SECP256K1};
 use zeroize::Zeroize;
 
@@ -957,7 +957,7 @@ fn do_sign(key_id: &str, status: &mut StatusWriter) -> Result<(), Error> {
 
     // Parse directly into SecretKey — avoids nostr::Keys which stores
     // non-zeroizable copies of the secret material internally.
-    let mut secret_key = match SecretKey::parse(&*raw_key) {
+    let mut secret_key = match SecretKey::parse(&raw_key) {
         Ok(k) => k,
         Err(e) => {
             raw_key.zeroize();
@@ -970,7 +970,7 @@ fn do_sign(key_id: &str, status: &mut StatusWriter) -> Result<(), Error> {
     // Drop secret_key immediately after creating the keypair so it doesn't
     // linger on the stack through the rest of the function.
     // Wrapped in KeypairGuard so non_secure_erase() runs on ALL exit paths.
-    let keypair = KeypairGuard::new(Keypair::from_secret_key(&SECP256K1, &secret_key));
+    let keypair = KeypairGuard::new(Keypair::from_secret_key(SECP256K1, &secret_key));
     // Explicitly zero the SecretKey stack slot before dropping. nostr::SecretKey's
     // Drop calls inner.non_secure_erase(), but that operates on the moved value.
     // This write_bytes targets our local copy to minimize residual secret material.
@@ -1236,8 +1236,14 @@ fn do_verify(sig_file: &str, status: &mut StatusWriter) -> Result<(), Error> {
     })?;
 
     // Verify BIP-340 signature
-    let xonly: &XOnlyPublicKey = &pk;
-    if SECP256K1.verify_schnorr(&sig, &message, xonly).is_err() {
+    let xonly = pk.xonly().map_err(|_| {
+        write_errsig(status, Some(&envelope.pk));
+        Error::VerifyFailed {
+            pk: Some(envelope.pk.clone()),
+            msg: "invalid public key xonly conversion".to_string(),
+        }
+    })?;
+    if SECP256K1.verify_schnorr(&sig, &message, &xonly).is_err() {
         status.write_line("NEWSIG");
         status.write_line(&format!("BADSIG {} {}", envelope.pk, envelope.pk));
         return Err(Error::VerifyFailed {
@@ -1543,8 +1549,14 @@ fn verify_oa(agent_pk_hex: &str, oa: &(String, String, String)) -> bool {
         }
     };
 
-    let xonly: &XOnlyPublicKey = &owner_pk;
-    if SECP256K1.verify_schnorr(&sig, &message, xonly).is_err() {
+    let xonly = match owner_pk.xonly() {
+        Ok(x) => x,
+        Err(_) => {
+            eprintln!("warning: oa owner pubkey conversion to xonly failed");
+            return false;
+        }
+    };
+    if SECP256K1.verify_schnorr(&sig, &message, &xonly).is_err() {
         eprintln!("warning: NIP-OA owner attestation signature verification failed");
         return false;
     }
@@ -2026,7 +2038,7 @@ Initial commit"
 
     /// Helper: sign a payload and return the armored signature
     fn sign_payload(secret_hex: &str, payload: &[u8], t: u64) -> String {
-        let keypair = Keypair::from_seckey_str(&SECP256K1, secret_hex).unwrap();
+        let keypair = Keypair::from_seckey_str(SECP256K1, secret_hex).unwrap();
         let (xonly, _) = keypair.x_only_public_key();
         let pk_hex = hex::encode(xonly.serialize());
         let hash = compute_signing_hash(t, None, payload);
@@ -2059,9 +2071,9 @@ Initial commit"
         let message = Message::from_digest(hash);
         let sig_bytes = hex::decode(&envelope.sig).map_err(|_| "bad sig hex")?;
         let sig = Signature::from_slice(&sig_bytes).map_err(|_| "bad sig")?;
-        let xonly: &XOnlyPublicKey = &pk;
+        let xonly = pk.xonly().map_err(|_| "xonly conversion failed")?;
         SECP256K1
-            .verify_schnorr(&sig, &message, xonly)
+            .verify_schnorr(&sig, &message, &xonly)
             .map_err(|_| "signature verification failed")?;
         Ok(envelope)
     }
@@ -2107,7 +2119,7 @@ Initial commit"
     fn test_verify_rejects_non_canonical_json() {
         // Build a valid signature but with extra whitespace in JSON
         let secret = "0000000000000000000000000000000000000000000000000000000000000003";
-        let keypair = Keypair::from_seckey_str(&SECP256K1, secret).unwrap();
+        let keypair = Keypair::from_seckey_str(SECP256K1, secret).unwrap();
         let (xonly, _) = keypair.x_only_public_key();
         let pk_hex = hex::encode(xonly.serialize());
         let payload = test_payload();

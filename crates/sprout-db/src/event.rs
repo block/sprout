@@ -120,7 +120,7 @@ pub async fn insert_event(
     let tags_json = serde_json::to_value(&event.tags)?;
     // Cast chain: nostr Kind (u16) → i32 (Postgres INT column). Safe: all Sprout kinds fit in i32.
     let kind_i32 = event_kind_i32(event);
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
@@ -550,6 +550,36 @@ pub async fn soft_delete_event(pool: &PgPool, event_id: &[u8]) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
+/// Soft-delete the live row for an addressable coordinate
+/// `(kind, pubkey, d_tag)` — the NIP-33 replacement key.
+///
+/// Used by `handle_a_tag_deletion` to honour NIP-09 a-tag deletions for any
+/// parameterized-replaceable kind. The WHERE clause mirrors
+/// `replace_parameterized_event` so the coordinate semantics stay consistent:
+/// `channel_id` is intentionally NOT in the key (NIP-33 replacement is global
+/// per the spec — `channel_id` is stored for query scoping, not identity).
+///
+/// Returns `Ok(true)` if a row was deleted, `Ok(false)` if no live row matched
+/// (already deleted, or never existed).
+pub async fn soft_delete_by_coordinate(
+    pool: &PgPool,
+    kind: i32,
+    pubkey: &[u8],
+    d_tag: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE events SET deleted_at = NOW() \
+         WHERE kind = $1 AND pubkey = $2 AND d_tag = $3 AND deleted_at IS NULL",
+    )
+    .bind(kind)
+    .bind(pubkey)
+    .bind(d_tag)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Atomically soft-delete an event and decrement thread reply counters.
 ///
 /// Wraps the delete + counter update in a single transaction so a crash between
@@ -807,7 +837,7 @@ pub async fn insert_event_with_thread_metadata(
     let sig_bytes = event.sig.serialize();
     let tags_json = serde_json::to_value(&event.tags)?;
     let kind_i32 = event_kind_i32(event);
-    let created_at_secs = event.created_at.as_u64() as i64;
+    let created_at_secs = event.created_at.as_secs() as i64;
     let created_at = DateTime::from_timestamp(created_at_secs, 0)
         .ok_or(DbError::InvalidTimestamp(created_at_secs))?;
     let received_at = Utc::now();
@@ -958,7 +988,8 @@ mod tests {
 
     fn make_event_with_kind_and_tags(kind: u16, tags: Vec<Tag>) -> nostr::Event {
         let keys = Keys::generate();
-        EventBuilder::new(Kind::Custom(kind), "test", tags)
+        EventBuilder::new(Kind::Custom(kind), "test")
+            .tags(tags)
             .sign_with_keys(&keys)
             .expect("sign")
     }
@@ -967,7 +998,7 @@ mod tests {
     fn extract_d_tag_from_nip33_event() {
         let event = make_event_with_kind_and_tags(
             30023,
-            vec![Tag::parse(&["d", "my-article-slug"]).unwrap()],
+            vec![Tag::parse(["d", "my-article-slug"]).unwrap()],
         );
         assert_eq!(extract_d_tag(&event), Some("my-article-slug".to_string()));
     }
@@ -977,8 +1008,8 @@ mod tests {
         let event = make_event_with_kind_and_tags(
             30023,
             vec![
-                Tag::parse(&["d", "first"]).unwrap(),
-                Tag::parse(&["d", "second"]).unwrap(),
+                Tag::parse(["d", "first"]).unwrap(),
+                Tag::parse(["d", "second"]).unwrap(),
             ],
         );
         assert_eq!(extract_d_tag(&event), Some("first".to_string()));
@@ -988,23 +1019,21 @@ mod tests {
     fn extract_d_tag_missing_becomes_empty_string() {
         // NIP-33: "if there is no d tag, the d tag is considered to be ''"
         let event =
-            make_event_with_kind_and_tags(30023, vec![Tag::parse(&["p", "abc123"]).unwrap()]);
+            make_event_with_kind_and_tags(30023, vec![Tag::parse(["p", "abc123"]).unwrap()]);
         assert_eq!(extract_d_tag(&event), Some(String::new()));
     }
 
     #[test]
     fn extract_d_tag_empty_value_preserved() {
-        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", ""]).unwrap()]);
+        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(["d", ""]).unwrap()]);
         assert_eq!(extract_d_tag(&event), Some(String::new()));
     }
 
     #[test]
     fn extract_d_tag_non_nip33_returns_none() {
         // kind:1 (text note) — not parameterized replaceable
-        let event = make_event_with_kind_and_tags(
-            1,
-            vec![Tag::parse(&["d", "should-be-ignored"]).unwrap()],
-        );
+        let event =
+            make_event_with_kind_and_tags(1, vec![Tag::parse(["d", "should-be-ignored"]).unwrap()]);
         assert_eq!(extract_d_tag(&event), None);
     }
 
@@ -1012,33 +1041,33 @@ mod tests {
     fn extract_d_tag_nip29_group_metadata() {
         // kind:39000 is in the 30000–39999 range — d_tag should be extracted
         let event =
-            make_event_with_kind_and_tags(39000, vec![Tag::parse(&["d", "group-id"]).unwrap()]);
+            make_event_with_kind_and_tags(39000, vec![Tag::parse(["d", "group-id"]).unwrap()]);
         assert_eq!(extract_d_tag(&event), Some("group-id".to_string()));
     }
 
     #[test]
     fn extract_d_tag_boundary_kinds() {
         // kind:29999 — just below range
-        let below = make_event_with_kind_and_tags(29999, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let below = make_event_with_kind_and_tags(29999, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&below), None);
 
         // kind:30000 — lower bound
-        let lower = make_event_with_kind_and_tags(30000, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let lower = make_event_with_kind_and_tags(30000, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&lower), Some("val".to_string()));
 
         // kind:39999 — upper bound
-        let upper = make_event_with_kind_and_tags(39999, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let upper = make_event_with_kind_and_tags(39999, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&upper), Some("val".to_string()));
 
         // kind:40000 — just above range
-        let above = make_event_with_kind_and_tags(40000, vec![Tag::parse(&["d", "val"]).unwrap()]);
+        let above = make_event_with_kind_and_tags(40000, vec![Tag::parse(["d", "val"]).unwrap()]);
         assert_eq!(extract_d_tag(&above), None);
     }
 
     #[test]
     fn extract_d_tag_single_element_d_tag_ignored() {
         // A d tag with only one element (no value) should not match — parts.len() < 2
-        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d"]).unwrap()]);
+        let event = make_event_with_kind_and_tags(30023, vec![Tag::parse(["d"]).unwrap()]);
         // No d tag with a value → empty string per NIP-33
         assert_eq!(extract_d_tag(&event), Some(String::new()));
     }
@@ -1048,7 +1077,7 @@ mod tests {
         // extract_d_tag returns the full value — length enforcement is at the ingest layer.
         let long_val = "x".repeat(2048);
         let event =
-            make_event_with_kind_and_tags(30023, vec![Tag::parse(&["d", &long_val]).unwrap()]);
+            make_event_with_kind_and_tags(30023, vec![Tag::parse(["d", &long_val]).unwrap()]);
         let result = extract_d_tag(&event).unwrap();
         assert_eq!(result.len(), 2048);
         assert_eq!(result, long_val);

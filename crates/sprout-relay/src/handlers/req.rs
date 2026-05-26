@@ -49,7 +49,7 @@ pub async fn handle_req(
                     return;
                 }
 
-                let pk_bytes = ctx.pubkey.serialize().to_vec();
+                let pk_bytes = ctx.pubkey.to_bytes().to_vec();
 
                 let subs = conn.subscriptions.lock().await;
                 if !subs.contains_key(&sub_id) && subs.len() >= MAX_SUBSCRIPTIONS {
@@ -346,10 +346,10 @@ async fn handle_search_req(
             }
         }
         if let Some(since) = filter.since {
-            filter_parts.push(format!("created_at:>={}", since.as_u64()));
+            filter_parts.push(format!("created_at:>={}", since.as_secs()));
         }
         if let Some(until) = filter.until {
-            filter_parts.push(format!("created_at:<={}", until.as_u64()));
+            filter_parts.push(format!("created_at:<={}", until.as_secs()));
         }
 
         let filter_by = filter_parts.join(" && ");
@@ -557,10 +557,10 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
 
     let since = filter
         .since
-        .and_then(|s| chrono::DateTime::from_timestamp(s.as_u64() as i64, 0));
+        .and_then(|s| chrono::DateTime::from_timestamp(s.as_secs() as i64, 0));
     let until = filter
         .until
-        .and_then(|u| chrono::DateTime::from_timestamp(u.as_u64() as i64, 0));
+        .and_then(|u| chrono::DateTime::from_timestamp(u.as_secs() as i64, 0));
     let limit = filter
         .limit
         .map(|l| (l as i64).min(MAX_HISTORICAL_LIMIT))
@@ -569,12 +569,12 @@ fn filter_to_query_params(filter: &Filter, channel_id: Option<uuid::Uuid>) -> Ev
     // Push author filter into SQL. Single-author uses the indexed `pubkey` column;
     // multi-author uses the `authors` IN-list pushdown added in the pure-nostr PR.
     let (pubkey, authors) = match filter.authors.as_ref() {
-        Some(a) if a.len() == 1 => (a.iter().next().map(|pk| pk.serialize().to_vec()), None),
+        Some(a) if a.len() == 1 => (a.iter().next().map(|pk| pk.to_bytes().to_vec()), None),
         Some(a) if !a.is_empty() => (
             None,
             Some(
                 a.iter()
-                    .map(|pk| pk.serialize().to_vec())
+                    .map(|pk| pk.to_bytes().to_vec())
                     .collect::<Vec<_>>(),
             ),
         ),
@@ -791,7 +791,7 @@ mod tests {
     fn filter_with_channel(channel_id: uuid::Uuid) -> Filter {
         Filter::new().custom_tag(
             SingleLetterTag::lowercase(Alphabet::H),
-            [channel_id.to_string()],
+            channel_id.to_string(),
         )
     }
 
@@ -880,14 +880,14 @@ mod tests {
             .kind(nostr::Kind::Custom(
                 sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
             ))
-            .custom_tag(p_tag, [other]);
+            .custom_tags(p_tag, [other]);
         assert!(!p_gated_filters_authorized(&[wrong_p], authed));
 
         let matching_p = Filter::new()
             .kind(nostr::Kind::Custom(
                 sprout_core::kind::KIND_AGENT_OBSERVER_FRAME as u16,
             ))
-            .custom_tag(p_tag, [authed]);
+            .custom_tags(p_tag, [authed]);
         assert!(p_gated_filters_authorized(&[matching_p], authed));
     }
 
@@ -898,33 +898,33 @@ mod tests {
         // NIP-33 kind with #d → pushdown active
         let nip33_filter = Filter::new()
             .kind(nostr::Kind::Custom(30023))
-            .custom_tag(d_tag, ["my-slug"]);
+            .custom_tags(d_tag, ["my-slug"]);
         let q = filter_to_query_params(&nip33_filter, None);
         assert_eq!(q.d_tag, Some("my-slug".to_string()));
 
         // Non-NIP-33 kind with #d → pushdown NOT active (would miss rows with d_tag=NULL)
         let non_nip33_filter = Filter::new()
             .kind(nostr::Kind::Custom(1))
-            .custom_tag(d_tag, ["some-value"]);
+            .custom_tags(d_tag, ["some-value"]);
         let q2 = filter_to_query_params(&non_nip33_filter, None);
         assert_eq!(q2.d_tag, None);
 
         // Mixed kinds (one NIP-33, one not) → pushdown NOT active
         let mixed_filter = Filter::new()
             .kinds([nostr::Kind::Custom(30023), nostr::Kind::Custom(1)])
-            .custom_tag(d_tag, ["slug"]);
+            .custom_tags(d_tag, ["slug"]);
         let q3 = filter_to_query_params(&mixed_filter, None);
         assert_eq!(q3.d_tag, None);
 
         // No kinds specified → pushdown NOT active
-        let no_kinds_filter = Filter::new().custom_tag(d_tag, ["slug"]);
+        let no_kinds_filter = Filter::new().custom_tags(d_tag, ["slug"]);
         let q4 = filter_to_query_params(&no_kinds_filter, None);
         assert_eq!(q4.d_tag, None);
 
         // Multi-value #d → pushdown NOT active (can't push OR into single column match)
         let multi_d_filter = Filter::new()
             .kind(nostr::Kind::Custom(30023))
-            .custom_tag(d_tag, ["slug-a", "slug-b"]);
+            .custom_tags(d_tag, ["slug-a", "slug-b"]);
         let q5 = filter_to_query_params(&multi_d_filter, None);
         assert_eq!(q5.d_tag, None);
     }
@@ -965,7 +965,7 @@ mod tests {
         let f = Filter::new()
             .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
             .author(nostr::PublicKey::from_hex(&agent).unwrap())
-            .custom_tag(p_tag, [&owner]);
+            .custom_tags(p_tag, [&owner]);
         assert!(engram_filters_authorized(&[f], &agent));
     }
 
@@ -977,7 +977,7 @@ mod tests {
         let f = Filter::new()
             .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
             .author(nostr::PublicKey::from_hex(&agent).unwrap())
-            .custom_tag(p_tag, [&owner]);
+            .custom_tags(p_tag, [&owner]);
         assert!(engram_filters_authorized(&[f], &owner));
     }
 
@@ -988,7 +988,7 @@ mod tests {
         let p_tag = SingleLetterTag::lowercase(Alphabet::P);
         let f = Filter::new()
             .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
-            .custom_tag(p_tag, [&owner]);
+            .custom_tags(p_tag, [&owner]);
         assert!(engram_filters_authorized(&[f], &owner));
     }
 
@@ -1000,7 +1000,7 @@ mod tests {
         let f = Filter::new()
             .kind(nostr::Kind::Custom(KIND_AGENT_ENGRAM as u16))
             .author(nostr::PublicKey::from_hex(&agent).unwrap())
-            .custom_tag(p_tag, [&owner]);
+            .custom_tags(p_tag, [&owner]);
         assert!(!engram_filters_authorized(&[f], &attacker));
     }
 

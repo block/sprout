@@ -688,7 +688,7 @@ pub fn build_trigger_context(event: &sprout_core::StoredEvent) -> executor::Trig
             .channel_id
             .map(|id| id.to_string())
             .unwrap_or_default(),
-        timestamp: event.event.created_at.as_u64().to_string(),
+        timestamp: event.event.created_at.as_secs().to_string(),
         emoji,
         message_id,
         webhook_fields: HashMap::new(),
@@ -1056,7 +1056,8 @@ steps:
         use nostr::{EventBuilder, Keys, Kind};
         use uuid::Uuid;
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::Custom(9), "hello world", [])
+        let event = EventBuilder::new(Kind::Custom(9), "hello world")
+            .tags([])
             .sign_with_keys(&keys)
             .expect("sign");
         sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()))
@@ -1069,13 +1070,15 @@ steps:
         let keys = Keys::generate();
         // Create a dummy target message ID (64-char hex).
         let target_keys = Keys::generate();
-        let target_event = EventBuilder::new(Kind::Custom(9), "target msg", [])
+        let target_event = EventBuilder::new(Kind::Custom(9), "target msg")
+            .tags([])
             .sign_with_keys(&target_keys)
             .expect("sign target");
         let target_id_hex = target_event.id.to_hex();
         // NIP-25: reaction references the target via an `e` tag.
-        let e_tag = Tag::parse(&["e", &target_id_hex]).expect("tag parse");
-        let event = EventBuilder::new(Kind::Reaction, "👍", [e_tag])
+        let e_tag = Tag::parse(["e", &target_id_hex]).expect("tag parse");
+        let event = EventBuilder::new(Kind::Reaction, "👍")
+            .tags([e_tag])
             .sign_with_keys(&keys)
             .expect("sign");
         (
@@ -1092,7 +1095,7 @@ steps:
         assert_eq!(ctx.text, "hello world");
         assert_eq!(ctx.author, stored.event.pubkey.to_hex());
         assert_eq!(ctx.channel_id, stored.channel_id.unwrap().to_string());
-        assert_eq!(ctx.timestamp, stored.event.created_at.as_u64().to_string());
+        assert_eq!(ctx.timestamp, stored.event.created_at.as_secs().to_string());
         assert_eq!(ctx.message_id, stored.event.id.to_hex());
         // Non-reaction events have empty emoji.
         assert_eq!(ctx.emoji, "");
@@ -1118,7 +1121,8 @@ steps:
     fn build_trigger_context_no_channel_id() {
         use nostr::{EventBuilder, Keys, Kind};
         let keys = Keys::generate();
-        let event = EventBuilder::new(Kind::Custom(9), "msg", [])
+        let event = EventBuilder::new(Kind::Custom(9), "msg")
+            .tags([])
             .sign_with_keys(&keys)
             .expect("sign");
         // channel_id = None (global/DM event)
@@ -1167,16 +1171,13 @@ steps:
         let thread_root_id = EventId::all_zeros();
         let direct_target_id = EventId::from_byte_array([0x42; 32]);
 
-        let event = EventBuilder::new(
-            Kind::Reaction,
-            "👍",
-            [
-                Tag::parse(&["e", &thread_root_id.to_hex()]).unwrap(),
-                Tag::parse(&["e", &direct_target_id.to_hex()]).unwrap(),
-            ],
-        )
-        .sign_with_keys(&keys)
-        .expect("sign");
+        let event = EventBuilder::new(Kind::Reaction, "👍")
+            .tags([
+                Tag::parse(["e", &thread_root_id.to_hex()]).unwrap(),
+                Tag::parse(["e", &direct_target_id.to_hex()]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .expect("sign");
 
         let stored = sprout_core::StoredEvent::new(event, Some(Uuid::new_v4()));
         let ctx = build_trigger_context(&stored);

@@ -28,7 +28,7 @@ export function ManagedAgentLogPanel({
   return (
     <section
       className={cn(
-        "border border-border/70 shadow-sm",
+        "border border-border/70 shadow-xs",
         isInline
           ? "rounded-2xl bg-background/80 p-4"
           : "rounded-[28px] bg-card/90 p-5",

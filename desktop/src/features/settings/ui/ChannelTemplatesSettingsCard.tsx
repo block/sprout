@@ -11,7 +11,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import {
-  useAcpProvidersQuery,
+  useAvailableAcpProviders,
   usePersonasQuery,
   useTeamsQuery,
 } from "@/features/agents/hooks";
@@ -295,7 +295,7 @@ function TemplateFormDialog({
   const updateMutation = useUpdateChannelTemplateMutation();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
   const providers = providersQuery.data ?? [];
 
   const [name, setName] = React.useState("");
@@ -622,7 +622,7 @@ function TemplateTeamSelector({
               type="button"
               aria-pressed={isSelected}
               className={cn(
-                "inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                 isSelected
                   ? "border-primary bg-primary/10 text-foreground"
                   : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -765,7 +765,7 @@ function ProviderRow({
         <span className="truncate text-sm">{label}</span>
       </div>
       <select
-        className="h-7 rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="h-7 rounded-md border border-input bg-background px-2 text-xs shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         value={value}

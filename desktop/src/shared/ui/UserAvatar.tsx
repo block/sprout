@@ -32,7 +32,7 @@ export function UserAvatar({
 
   return (
     <Avatar
-      className={cn(sizeClasses[size], "rounded-lg shadow-sm", className)}
+      className={cn(sizeClasses[size], "rounded-lg shadow-xs", className)}
     >
       {avatarUrl ? (
         <AvatarImage

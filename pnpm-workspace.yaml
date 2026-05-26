@@ -1,5 +1,7 @@
 packages:
   - "desktop"
   - "web"
+allowBuilds:
+  esbuild: true
 patchedDependencies:
-  isomorphic-git: patches/isomorphic-git.patch
+  isomorphic-git@1.38.1: patches/isomorphic-git@1.38.1.patch

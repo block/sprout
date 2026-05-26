@@ -22,6 +22,9 @@ type MessageTimelineProps = {
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
+  /** Optional external ref to the scroll container — used by the parent to
+   *  observe scroll position or adjust padding dynamically. */
+  scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   isFetchingOlder?: boolean;
   messageFooters?: Record<string, React.ReactNode>;
   /** Map from lowercase pubkey → persona display name for bot members. */
@@ -65,14 +68,19 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   onMarkUnread,
   onReply,
   onToggleReaction,
+  scrollContainerRef: externalScrollRef,
   searchActiveMessageId = null,
   searchMatchingMessageIds,
   searchQuery,
   targetMessageId = null,
   onTargetReached,
 }: MessageTimelineProps) {
-  const scrollContainerRef = React.useRef<HTMLDivElement>(null);
+  const internalScrollRef = React.useRef<HTMLDivElement>(null);
+  const scrollContainerRef = externalScrollRef ?? internalScrollRef;
   const topSentinelRef = React.useRef<HTMLDivElement>(null);
+  const scrollRestorationId = targetMessageId
+    ? `message-timeline:${channelId ?? "none"}:target:${targetMessageId}`
+    : `message-timeline:${channelId ?? "none"}`;
 
   const {
     bottomAnchorRef,
@@ -94,6 +102,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
   // Scroll to the active search match when it changes.
   const prevSearchActiveRef = React.useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scrollContainerRef is a stable React ref
   React.useEffect(() => {
     if (
       !searchActiveMessageId ||
@@ -129,15 +138,12 @@ export const MessageTimeline = React.memo(function MessageTimeline({
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div
           className="absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain px-4 pb-24 pt-1 [overflow-anchor:none] sm:px-6"
-          data-scroll-restoration-id="message-timeline"
+          data-scroll-restoration-id={scrollRestorationId}
           data-testid="message-timeline"
           onScroll={syncScrollState}
           ref={scrollContainerRef}
         >
-          <div
-            className="flex w-full flex-col gap-2 pb-10 pt-12"
-            ref={contentRef}
-          >
+          <div className="flex w-full flex-col gap-2 pt-12" ref={contentRef}>
             <div ref={topSentinelRef} aria-hidden className="h-px" />
 
             {isFetchingOlder ? (
@@ -163,7 +169,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
             {!isLoading && messages.length === 0 ? (
               <div
-                className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-sm"
+                className="rounded-3xl border border-dashed border-border/80 bg-card/70 px-6 py-10 text-center shadow-xs"
                 data-testid="message-empty"
               >
                 <p className="text-base font-semibold tracking-tight">
@@ -203,7 +209,7 @@ export const MessageTimeline = React.memo(function MessageTimeline({
         {!isAtBottom ? (
           <div className="pointer-events-none absolute inset-x-0 bottom-36 z-20 flex justify-center px-4">
             <Button
-              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
+              className="pointer-events-auto h-7 min-h-7 gap-1.5 rounded-full border-border/50 bg-background/85 px-2.5 text-[11px] font-medium text-muted-foreground shadow-xs backdrop-blur-sm hover:bg-muted/70 hover:text-foreground [&_svg]:size-3.5"
               data-testid="message-scroll-to-latest"
               onClick={() => {
                 scrollToBottom("smooth");

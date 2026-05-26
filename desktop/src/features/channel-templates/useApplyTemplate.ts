@@ -5,7 +5,7 @@ import {
   type CreateChannelManagedAgentInput,
 } from "@/features/agents/channelAgents";
 import {
-  useAcpProvidersQuery,
+  useAvailableAcpProviders,
   usePersonasQuery,
   useTeamsQuery,
 } from "@/features/agents/hooks";
@@ -29,7 +29,7 @@ function toManagedBackend(
 export function useApplyTemplate() {
   const queryClient = useQueryClient();
   const channelTemplatesQuery = useChannelTemplatesQuery();
-  const acpProvidersQuery = useAcpProvidersQuery();
+  const acpProvidersQuery = useAvailableAcpProviders();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
   const { lastProviderId } = useLastRuntimeProvider();

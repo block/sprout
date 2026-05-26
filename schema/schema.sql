@@ -341,3 +341,15 @@ CREATE TABLE IF NOT EXISTS relay_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_relay_members_role ON relay_members(role);
+
+-- ── Archived identities (NIP-IA) ──────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS archived_identities (
+    pubkey            TEXT PRIMARY KEY,
+    consent_path      TEXT NOT NULL CHECK (consent_path IN ('self', 'owner', 'admin')),
+    actor             TEXT NOT NULL,
+    reason            TEXT,
+    replaced_by       TEXT,
+    request_event_id  TEXT NOT NULL,
+    archived_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);

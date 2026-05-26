@@ -36,6 +36,7 @@ type UseFirstRunOnboardingGateOptions = {
   hasExistingProfile: boolean;
   identityIsFetching: boolean;
   identityStatus: QueryStatus;
+  isSharedIdentity: boolean;
   profileStatus: QueryStatus;
 };
 
@@ -129,13 +130,15 @@ export function useFirstRunOnboardingGate({
   hasExistingProfile,
   identityIsFetching,
   identityStatus,
+  isSharedIdentity,
   profileStatus,
 }: UseFirstRunOnboardingGateOptions) {
   const [gateState, setGateState] = React.useState<OnboardingGateState>(() =>
     createOnboardingGateState(currentPubkey),
   );
   const activeGateState = resolveActiveGateState(gateState, currentPubkey);
-  const { hasSettledCurrentPubkey } = activeGateState;
+  const { hasCompletedCurrentPubkey, hasSettledCurrentPubkey } =
+    activeGateState;
 
   React.useEffect(() => {
     setGateState((current) =>
@@ -146,6 +149,33 @@ export function useFirstRunOnboardingGate({
   }, [currentPubkey]);
 
   React.useEffect(() => {
+    // Fast-path: shared identity worktrees have already onboarded in the
+    // main checkout. Skip unconditionally without waiting for the relay
+    // profile query. Guarded by !hasCompletedCurrentPubkey so it fires once.
+    if (
+      isSharedIdentity &&
+      currentPubkey &&
+      identityStatus === "success" &&
+      !hasCompletedCurrentPubkey
+    ) {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          onboardingCompletionStorageKey(currentPubkey),
+          "true",
+        );
+      }
+      setGateState((current) =>
+        updateActiveGateState(current, currentPubkey, (activeGateState) => ({
+          ...activeGateState,
+          hasCompletedCurrentPubkey: true,
+          hasSettledCurrentPubkey: true,
+          isOpen: false,
+        })),
+      );
+      return;
+    }
+
+    // Original guard — restored to simple form.
     if (hasSettledCurrentPubkey || !currentPubkey) {
       return;
     }
@@ -194,9 +224,11 @@ export function useFirstRunOnboardingGate({
     );
   }, [
     currentPubkey,
+    hasCompletedCurrentPubkey,
     hasExistingProfile,
     hasSettledCurrentPubkey,
     identityStatus,
+    isSharedIdentity,
     profileStatus,
   ]);
 
@@ -246,7 +278,7 @@ function hasRealDisplayName(displayName?: string | null): boolean {
   return !lower.startsWith("npub1") && !lower.startsWith("nostr:npub1");
 }
 
-export function useAppOnboardingState() {
+export function useAppOnboardingState(isSharedIdentity: boolean) {
   const queryClient = useQueryClient();
   const identityQuery = useIdentityQuery();
   const identity = identityQuery.data;
@@ -257,6 +289,7 @@ export function useAppOnboardingState() {
     hasExistingProfile: hasRealDisplayName(profileQuery.data?.displayName),
     identityIsFetching: identityQuery.fetchStatus === "fetching",
     identityStatus: identityQuery.status,
+    isSharedIdentity,
     profileStatus: profileQuery.status,
   });
   const gateComplete = onboardingGate.complete;

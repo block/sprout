@@ -8,6 +8,8 @@ pub mod command_executor;
 pub mod count;
 /// EVENT handler — WS dispatcher → ingest pipeline → fan-out.
 pub mod event;
+/// NIP-IA identity archive request handler (kinds 9035–9036).
+pub mod identity_archive;
 /// imeta tag validation helpers.
 pub mod imeta;
 /// Transport-neutral event ingestion pipeline.

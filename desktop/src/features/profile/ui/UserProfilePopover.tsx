@@ -171,12 +171,12 @@ export function UserProfilePopover({
             {profile?.avatarUrl ? (
               <img
                 alt={profile.displayName ?? "User avatar"}
-                className="h-10 w-10 shrink-0 rounded-xl object-cover shadow-sm"
+                className="h-10 w-10 shrink-0 rounded-xl object-cover shadow-xs"
                 referrerPolicy="no-referrer"
                 src={rewriteRelayUrl(profile.avatarUrl)}
               />
             ) : (
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary text-xs font-semibold text-secondary-foreground shadow-sm">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary text-xs font-semibold text-secondary-foreground shadow-xs">
                 {(profile?.displayName ?? pubkey.slice(0, 2))
                   .slice(0, 2)
                   .toUpperCase()}

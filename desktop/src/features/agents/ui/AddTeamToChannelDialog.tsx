@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 
 import {
-  useAcpProvidersQuery,
+  useAvailableAcpProviders,
   useCreateChannelManagedAgentsMutation,
 } from "@/features/agents/hooks";
 import type { CreateChannelManagedAgentsResult } from "@/features/agents/channelAgents";
@@ -50,7 +50,7 @@ export function AddTeamToChannelDialog({
   onDeployed,
 }: AddTeamToChannelDialogProps) {
   const channelsQuery = useChannelsQuery();
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
   const [channelId, setChannelId] = React.useState("");
   const [role, setRole] = React.useState<Exclude<ChannelRole, "owner">>("bot");
   const deployMutation = useCreateChannelManagedAgentsMutation(
@@ -195,7 +195,7 @@ export function AddTeamToChannelDialog({
                 Channel
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
                 disabled={channels.length === 0 || deployMutation.isPending}
                 id="team-channel-id"
                 onChange={(event) => setChannelId(event.target.value)}
@@ -220,7 +220,7 @@ export function AddTeamToChannelDialog({
                 Role
               </label>
               <select
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
                 disabled={deployMutation.isPending}
                 id="team-channel-role"
                 onChange={(event) =>

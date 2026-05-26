@@ -5,6 +5,7 @@ import {
   usePersonasQuery,
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
+import { useIsArchivedPredicate } from "@/features/identity-archive/hooks";
 import type { MentionSuggestion } from "@/features/messages/ui/MentionAutocomplete";
 import type { AutocompleteEdit } from "./useRichTextEditor";
 import type { ChannelMember } from "@/shared/api/types";
@@ -27,6 +28,7 @@ export function useMentions(
 
   const membersQuery = useChannelMembersQuery(channelId);
   const members = externalMembers ?? membersQuery.data;
+  const isArchivedDiscovery = useIsArchivedPredicate();
   const managedAgentsQuery = useManagedAgentsQuery();
   const personasQuery = usePersonasQuery();
   const managedAgentNamesByPubkey = React.useMemo(
@@ -123,6 +125,7 @@ export function useMentions(
     };
 
     return (members ?? [])
+      .filter((member) => !isArchivedDiscovery(member.pubkey))
       .map((member) => {
         const pubkeyLower = member.pubkey.toLowerCase();
 
@@ -160,6 +163,7 @@ export function useMentions(
         personaName,
       }));
   }, [
+    isArchivedDiscovery,
     managedAgentNamesByPubkey,
     members,
     mentionQuery,

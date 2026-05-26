@@ -66,7 +66,7 @@ async fn main() {
 
     // ── Parse salt ────────────────────────────────────────────────────────────
 
-    let salt = nostr::util::hex::decode(&salt_hex).unwrap_or_else(|e| {
+    let salt = hex::decode(&salt_hex).unwrap_or_else(|e| {
         eprintln!("error: invalid SPROUT_PROXY_SALT (must be hex): {e}");
         std::process::exit(1);
     });
@@ -148,9 +148,8 @@ async fn main() {
     tokio::spawn(async move {
         while let Some(event) = inbound_rx.recv().await {
             match event {
-                UpstreamEvent::RelayMessage(msg) => {
-                    let json = msg.as_json();
-                    // Ignore send errors — no active subscribers is fine.
+                UpstreamEvent::RelayMessage(json) => {
+                    // Already raw JSON — forward directly to the broadcast channel.
                     let _ = bridge_events_tx.send(json);
                 }
                 UpstreamEvent::Connected => {

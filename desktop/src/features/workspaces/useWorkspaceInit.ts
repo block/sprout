@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
 import { relayClient } from "@/shared/api/relayClient";
-import { applyWorkspace, getDefaultRelayUrl } from "@/shared/api/tauri";
+import {
+  applyWorkspace,
+  getDefaultRelayUrl,
+  getIdentity,
+} from "@/shared/api/tauri";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 
+import { initFirstWorkspace } from "./workspaceStorage";
 import type { Workspace } from "./types";
 
 /**
@@ -43,6 +48,7 @@ type WorkspaceInitResult =
 export function useWorkspaceInit(
   activeWorkspace: Workspace | null,
   workspaceKey: string,
+  isSharedIdentity: boolean,
 ): WorkspaceInitResult {
   const [result, setResult] = useState<WorkspaceInitResult>({
     isReady: false,
@@ -60,9 +66,19 @@ export function useWorkspaceInit(
 
     async function init() {
       if (!activeWorkspace) {
-        // No workspace — need setup
         try {
           const defaultRelayUrl = await getDefaultRelayUrl();
+
+          if (isSharedIdentity) {
+            const identity = await getIdentity();
+            if (cancelled) return;
+            initFirstWorkspace(defaultRelayUrl, identity.pubkey);
+            if (!cancelled) {
+              window.location.reload();
+            }
+            return;
+          }
+
           if (!cancelled) {
             setResult({
               isReady: false,
@@ -136,6 +152,7 @@ export function useWorkspaceInit(
     activeWorkspace?.id,
     activeWorkspace?.relayUrl,
     activeWorkspace?.token,
+    isSharedIdentity,
     workspaceKey,
   ]);
 

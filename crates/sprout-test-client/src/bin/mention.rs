@@ -23,10 +23,11 @@ async fn main() -> anyhow::Result<()> {
 
     let mut client = SproutTestClient::connect(&url, &keys).await?;
 
-    let h_tag = Tag::parse(&["h", channel_id])?;
-    let p_tag = Tag::parse(&["p", target_pubkey])?;
-    let event =
-        EventBuilder::new(Kind::Custom(9), message, [h_tag, p_tag]).sign_with_keys(&keys)?;
+    let h_tag = Tag::parse(["h", channel_id])?;
+    let p_tag = Tag::parse(["p", target_pubkey])?;
+    let event = EventBuilder::new(Kind::Custom(9), message)
+        .tags([h_tag, p_tag])
+        .sign_with_keys(&keys)?;
 
     let ok = client.send_event(event).await?;
     if ok.accepted {

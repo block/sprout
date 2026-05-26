@@ -83,7 +83,7 @@ function ChannelIdRow({ channelId }: { channelId: string }) {
 
   return (
     <button
-      className="group flex w-full items-center gap-3 rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="group flex w-full items-center gap-3 rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
       data-testid="channel-management-channel-id"
       onClick={() => {
         void handleCopyChannelId();

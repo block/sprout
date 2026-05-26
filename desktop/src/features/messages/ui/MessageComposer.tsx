@@ -122,11 +122,13 @@ export function MessageComposer({
 
   const disabledRef = React.useRef(disabled);
   const isSendingRef = React.useRef(isSending);
+  const isUploadingRef = React.useRef(media.isUploading);
   const onSendRef = React.useRef(onSend);
   const onEditSaveRef = React.useRef(onEditSave);
   const editTargetRef = React.useRef(editTarget);
   disabledRef.current = disabled;
   isSendingRef.current = isSending;
+  isUploadingRef.current = media.isUploading;
   onSendRef.current = onSend;
   onEditSaveRef.current = onEditSave;
   editTargetRef.current = editTarget;
@@ -233,10 +235,12 @@ export function MessageComposer({
   }, [editTarget?.id]);
 
   // ── Focus on reply ──────────────────────────────────────────────────
+  // Use focusPreserve so that re-renders (e.g. new messages arriving in
+  // a thread) don't yank the cursor to the end while the user is editing.
   React.useEffect(() => {
     if (!replyTarget || disabled) return;
-    richText.focus();
-  }, [disabled, replyTarget, richText.focus]);
+    richText.focusPreserve();
+  }, [disabled, replyTarget, richText.focusPreserve]);
 
   // ── Autofocus on mount / channel switch ─────────────────────────────
   useComposerAutofocus(richText.focus, effectiveDraftKey, disabled);
@@ -366,7 +370,8 @@ export function MessageComposer({
     if (
       (!trimmed && !hasMedia) ||
       disabledRef.current ||
-      isSendingRef.current
+      isSendingRef.current ||
+      isUploadingRef.current
     ) {
       return;
     }
@@ -544,27 +549,15 @@ export function MessageComposer({
 
           // --- Mention / channel-link normalization ---
           // When copying from the chat area the browser puts styled HTML
-          // on the clipboard. TipTap's DOMParser doesn't understand our
-          // custom `data-mention` / `data-channel-link` spans, so the
-          // pasted text can arrive with stale formatting and without the
-          // `@` / `#` prefix.  Detect this case, flatten the HTML to
-          // plain text and insert directly — bypassing TipTap's Bold
-          // extension which would otherwise wrap the mention in `**`.
-          // NOTE: This flattens *all* formatting in the pasted fragment
-          // when mentions are present. Acceptable for the primary use
-          // case (pasting a mention chip); a future refinement could
-          // preserve non-mention formatting.
+          // on the clipboard. The mention/channel-link wrappers have
+          // font-weight:600 which Tiptap's Bold extension misinterprets
+          // as bold. Strip those wrappers and use ProseMirror's pasteHTML
+          // to parse the cleaned HTML into proper rich content nodes.
           const html = event.clipboardData?.getData("text/html");
           if (html && hasMentionClipboardHtml(html)) {
-            const cleanText = normalizeMentionClipboardHtml(html);
+            const cleanHtml = normalizeMentionClipboardHtml(html);
             event.preventDefault();
-            _view.dispatch(
-              _view.state.tr.insertText(
-                cleanText,
-                _view.state.selection.from,
-                _view.state.selection.to,
-              ),
-            );
+            _view.pasteHTML(cleanHtml);
             return true;
           }
 
@@ -583,8 +576,9 @@ export function MessageComposer({
   const sendDisabled = React.useMemo(
     () =>
       disabled ||
+      media.isUploading ||
       (content.trim().length === 0 && media.pendingImeta.length === 0),
-    [disabled, content, media.pendingImeta.length],
+    [disabled, media.isUploading, content, media.pendingImeta.length],
   );
 
   const handleCaptureSelection = React.useCallback(() => {

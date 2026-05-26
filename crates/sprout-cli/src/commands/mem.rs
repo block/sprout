@@ -8,10 +8,11 @@
 //! - `sprout mem patch <slug>`          — apply a unified diff to the current value
 //! - `sprout mem rm <slug>`             — publish a tombstone
 //!
-//! The caller's `SPROUT_PRIVATE_KEY` is the agent's nsec. The agent's owner
-//! pubkey is resolved from `SPROUT_AUTH_TAG` (NIP-OA attestation) or the
-//! `--owner` flag. Every record is encrypted under the agent↔owner NIP-44
-//! conversation key; both parties can decrypt.
+//! By default, the caller's `SPROUT_PRIVATE_KEY` is the agent's nsec. The
+//! agent's owner pubkey is resolved from `SPROUT_AUTH_TAG` (NIP-OA attestation)
+//! or the `--owner` flag. Read commands also support owner-side recovery via
+//! `--agent <pubkey>`: the CLI identity is treated as the owner and decrypts
+//! the agent's engrams through the same agent↔owner NIP-44 conversation key.
 
 use std::io::Read;
 use std::time::SystemTime;
@@ -42,6 +43,39 @@ fn resolve_owner(client: &SproutClient, owner_flag: Option<&str>) -> Result<Publ
     })?;
     PublicKey::from_hex(&tag)
         .map_err(|e| CliError::Other(format!("auth_tag owner pubkey is not valid hex: {e}")))
+}
+
+/// Resolve the read perspective for `mem ls/get/hash`.
+///
+/// Normal agent-side reads use the CLI identity as the agent and resolve the
+/// owner from `--owner` / SPROUT_AUTH_TAG. Owner-side recovery passes
+/// `--agent <pubkey>`; the CLI identity is then the owner and the supplied
+/// pubkey is the agent author to query/decrypt.
+fn resolve_reader(
+    client: &SproutClient,
+    owner_flag: Option<&str>,
+    agent_flag: Option<&str>,
+) -> Result<(PublicKey, PublicKey, PublicKey), CliError> {
+    if let Some(agent) = agent_flag {
+        if owner_flag.is_some() {
+            return Err(CliError::Usage(
+                "--owner and --agent are mutually exclusive for read commands".into(),
+            ));
+        }
+        let agent = PublicKey::from_hex(agent)
+            .map_err(|e| CliError::Usage(format!("--agent must be a 64-hex pubkey: {e}")))?;
+        if agent == client.keys().public_key() {
+            return Err(CliError::Usage(
+                "--agent must differ from the CLI identity; omit --agent for agent-side reads"
+                    .into(),
+            ));
+        }
+        return Ok((agent, client.keys().public_key(), agent));
+    }
+
+    let agent = client.keys().public_key();
+    let owner = resolve_owner(client, owner_flag)?;
+    Ok((agent, owner, owner))
 }
 
 fn now_secs() -> u64 {
@@ -101,16 +135,21 @@ fn parse_events(json: &str) -> Result<Vec<nostr::Event>, CliError> {
 /// Fetch the head event for `slug`, returning `(Option<Event>, Option<Body>)`.
 async fn fetch_head(
     client: &SproutClient,
+    agent: &PublicKey,
     owner: &PublicKey,
     slug: &str,
 ) -> Result<(Option<nostr::Event>, Option<Body>), CliError> {
-    let agent = client.keys();
-    let k_c = conversation_key(agent.secret_key(), owner);
+    let their_pubkey = if client.keys().public_key() == *agent {
+        owner
+    } else {
+        agent
+    };
+    let k_c = conversation_key(client.keys().secret_key(), their_pubkey);
     let d = d_tag(&k_c, slug);
 
     let filter = serde_json::json!({
         "kinds": [KIND_AGENT_ENGRAM],
-        "authors": [agent.public_key().to_hex()],
+        "authors": [agent.to_hex()],
         "#d": [d],
         "#p": [owner.to_hex()],
         "limit": 16,
@@ -125,7 +164,7 @@ async fn fetch_head(
         if ev.verify().is_err() {
             continue;
         }
-        match validate_and_decrypt(&ev, &agent.public_key(), owner, agent.secret_key(), owner) {
+        match validate_and_decrypt(&ev, agent, owner, client.keys().secret_key(), their_pubkey) {
             Ok(body) => valid_with_body.push((ev, body)),
             Err(_) => continue,
         }
@@ -150,14 +189,14 @@ async fn fetch_head(
 pub async fn cmd_ls(
     client: &SproutClient,
     owner_flag: Option<&str>,
+    agent_flag: Option<&str>,
     json: bool,
 ) -> Result<(), CliError> {
-    let owner = resolve_owner(client, owner_flag)?;
-    let agent = client.keys();
+    let (agent, owner, their_pubkey) = resolve_reader(client, owner_flag, agent_flag)?;
 
     let filter = serde_json::json!({
         "kinds": [KIND_AGENT_ENGRAM],
-        "authors": [agent.public_key().to_hex()],
+        "authors": [agent.to_hex()],
         "#p": [owner.to_hex()],
         "limit": 5000,
     });
@@ -182,10 +221,10 @@ pub async fn cmd_ls(
         };
         let body = match validate_and_decrypt(
             &ev,
-            &agent.public_key(),
+            &agent,
             &owner,
-            agent.secret_key(),
-            &owner,
+            client.keys().secret_key(),
+            &their_pubkey,
         ) {
             Ok(b) => b,
             Err(_) => continue,
@@ -213,7 +252,7 @@ pub async fn cmd_ls(
                 listings.push(Listing {
                     slug: slug.clone(),
                     event_id: head.id.to_hex(),
-                    created_at: head.created_at.as_u64(),
+                    created_at: head.created_at.as_secs(),
                 });
             }
         }
@@ -239,11 +278,12 @@ pub async fn cmd_get(
     client: &SproutClient,
     raw_slug: &str,
     owner_flag: Option<&str>,
+    agent_flag: Option<&str>,
 ) -> Result<(), CliError> {
     let slug =
         normalize_slug(raw_slug).map_err(|e| CliError::Usage(format!("invalid slug: {e}")))?;
-    let owner = resolve_owner(client, owner_flag)?;
-    let (_head, body) = fetch_head(client, &owner, &slug).await?;
+    let (agent, owner, _) = resolve_reader(client, owner_flag, agent_flag)?;
+    let (_head, body) = fetch_head(client, &agent, &owner, &slug).await?;
     use std::io::Write;
     match body {
         None => Err(CliError::NotFound(format!("not found: {slug}"))),
@@ -317,8 +357,9 @@ pub async fn cmd_set(
             value: Some(value),
         }
     };
-    let (head, _) = fetch_head(client, &owner, &slug).await?;
-    let prior_created_at = head.map(|e| e.created_at.as_u64());
+    let agent_pubkey = client.keys().public_key();
+    let (head, _) = fetch_head(client, &agent_pubkey, &owner, &slug).await?;
+    let prior_created_at = head.map(|e| e.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
     let agent = client.keys();
@@ -442,10 +483,11 @@ fn verify_hunks_at_declared_position(
 /// Returns `(head_event, value)` so the caller can preserve monotonic ordering.
 async fn fetch_value(
     client: &SproutClient,
+    agent: &PublicKey,
     owner: &PublicKey,
     slug: &str,
 ) -> Result<(nostr::Event, String), CliError> {
-    let (head, body) = fetch_head(client, owner, slug).await?;
+    let (head, body) = fetch_head(client, agent, owner, slug).await?;
     match (head, body) {
         (None, _) => Err(CliError::NotFound(format!("not found: {slug}"))),
         (_, None) => Err(CliError::NotFound(format!("not found: {slug}"))),
@@ -467,11 +509,12 @@ pub async fn cmd_hash(
     client: &SproutClient,
     raw_slug: &str,
     owner_flag: Option<&str>,
+    agent_flag: Option<&str>,
 ) -> Result<(), CliError> {
     let slug =
         normalize_slug(raw_slug).map_err(|e| CliError::Usage(format!("invalid slug: {e}")))?;
-    let owner = resolve_owner(client, owner_flag)?;
-    let (_head, value) = fetch_value(client, &owner, &slug).await?;
+    let (agent, owner, _) = resolve_reader(client, owner_flag, agent_flag)?;
+    let (_head, value) = fetch_value(client, &agent, &owner, &slug).await?;
     println!("{}", sha256_hex(&value));
     Ok(())
 }
@@ -555,7 +598,8 @@ pub async fn cmd_patch(
     };
 
     let owner = resolve_owner(client, owner_flag)?;
-    let (head, current) = fetch_value(client, &owner, &slug).await?;
+    let agent_pubkey = client.keys().public_key();
+    let (head, current) = fetch_value(client, &agent_pubkey, &owner, &slug).await?;
 
     // Base-hash gate: concurrent-edit safety.
     if let Some(expected) = base_hash {
@@ -641,7 +685,7 @@ pub async fn cmd_patch(
             value: Some(new_value.clone()),
         }
     };
-    let prior_created_at = Some(head.created_at.as_u64());
+    let prior_created_at = Some(head.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
     let agent = client.keys();
@@ -676,8 +720,9 @@ pub async fn cmd_rm(
         slug: slug.clone(),
         value: None,
     };
-    let (head, _) = fetch_head(client, &owner, &slug).await?;
-    let prior_created_at = head.map(|e| e.created_at.as_u64());
+    let agent_pubkey = client.keys().public_key();
+    let (head, _) = fetch_head(client, &agent_pubkey, &owner, &slug).await?;
+    let prior_created_at = head.map(|e| e.created_at.as_secs());
     let created_at = engram::monotonic_created_at(now_secs(), prior_created_at);
 
     let agent = client.keys();
@@ -696,9 +741,15 @@ pub async fn cmd_rm(
 pub async fn dispatch(cmd: crate::MemCmd, client: &SproutClient) -> Result<(), CliError> {
     use crate::MemCmd;
     match cmd {
-        MemCmd::Ls { owner, json } => cmd_ls(client, owner.as_deref(), json).await,
-        MemCmd::Get { slug, owner } => cmd_get(client, &slug, owner.as_deref()).await,
-        MemCmd::Hash { slug, owner } => cmd_hash(client, &slug, owner.as_deref()).await,
+        MemCmd::Ls { owner, agent, json } => {
+            cmd_ls(client, owner.as_deref(), agent.as_deref(), json).await
+        }
+        MemCmd::Get { slug, owner, agent } => {
+            cmd_get(client, &slug, owner.as_deref(), agent.as_deref()).await
+        }
+        MemCmd::Hash { slug, owner, agent } => {
+            cmd_hash(client, &slug, owner.as_deref(), agent.as_deref()).await
+        }
         MemCmd::Set {
             slug,
             value,
@@ -737,6 +788,64 @@ mod tests {
     // sha256_hex must match `printf '%s' "$value" | sha256sum` so operators can
     // verify base-hash from the shell. Hard-coded vectors from the NIST and
     // common quick-check inputs.
+
+    fn test_client(keys: nostr::Keys) -> SproutClient {
+        SproutClient::new("http://127.0.0.1:9".into(), keys, None, None).unwrap()
+    }
+
+    #[test]
+    fn resolve_reader_defaults_to_agent_identity() {
+        let agent = nostr::Keys::generate();
+        let owner = nostr::Keys::generate();
+        let client = test_client(agent.clone());
+
+        let (resolved_agent, resolved_owner, their_pubkey) =
+            resolve_reader(&client, Some(&owner.public_key().to_hex()), None).unwrap();
+
+        assert_eq!(resolved_agent, agent.public_key());
+        assert_eq!(resolved_owner, owner.public_key());
+        assert_eq!(their_pubkey, owner.public_key());
+    }
+
+    #[test]
+    fn resolve_reader_agent_flag_uses_cli_identity_as_owner() {
+        let owner = nostr::Keys::generate();
+        let agent = nostr::Keys::generate();
+        let client = test_client(owner.clone());
+
+        let (resolved_agent, resolved_owner, their_pubkey) =
+            resolve_reader(&client, None, Some(&agent.public_key().to_hex())).unwrap();
+
+        assert_eq!(resolved_agent, agent.public_key());
+        assert_eq!(resolved_owner, owner.public_key());
+        assert_eq!(their_pubkey, agent.public_key());
+    }
+
+    #[test]
+    fn resolve_reader_rejects_owner_with_agent_flag() {
+        let owner = nostr::Keys::generate();
+        let agent = nostr::Keys::generate();
+        let client = test_client(owner.clone());
+
+        let err = resolve_reader(
+            &client,
+            Some(&owner.public_key().to_hex()),
+            Some(&agent.public_key().to_hex()),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("mutually exclusive"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_reader_rejects_agent_flag_matching_cli_identity() {
+        let owner = nostr::Keys::generate();
+        let client = test_client(owner.clone());
+
+        let err = resolve_reader(&client, None, Some(&owner.public_key().to_hex())).unwrap_err();
+
+        assert!(err.to_string().contains("must differ"), "got: {err}");
+    }
 
     #[test]
     fn sha256_hex_empty() {

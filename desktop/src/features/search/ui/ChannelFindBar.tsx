@@ -65,7 +65,7 @@ export function ChannelFindBar({
           className={cn(
             "h-7 w-full rounded-md border border-input bg-transparent px-2 pr-20 text-sm",
             "placeholder:text-muted-foreground",
-            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
           )}
           onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={handleKeyDown}

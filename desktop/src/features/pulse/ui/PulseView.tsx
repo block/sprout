@@ -36,7 +36,7 @@ import { UserAvatar } from "@/shared/ui/UserAvatar";
 type PulseTab = "search" | "foryou" | "people" | "agents" | "mine";
 
 const tabTriggerClassName =
-  "h-7 rounded-full px-3.5 py-0 text-xs font-semibold shadow-none transition-colors !text-muted-foreground hover:!text-foreground data-[state=active]:bg-background data-[state=active]:!text-foreground data-[state=active]:shadow-sm dark:!text-white/35 dark:hover:!text-white/70 dark:data-[state=active]:!text-white";
+  "h-7 rounded-full px-3.5 py-0 text-xs font-semibold shadow-none transition-colors !text-muted-foreground hover:!text-foreground data-[state=active]:bg-background data-[state=active]:!text-foreground data-[state=active]:shadow-xs dark:!text-white/35 dark:hover:!text-white/70 dark:data-[state=active]:!text-white";
 
 type PulseViewProps = {
   currentPubkey?: string;
@@ -351,7 +351,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
                 <TabsTrigger
                   aria-label="Search Pulse"
                   value="search"
-                  className="h-7 w-7 rounded-full p-0 !text-muted-foreground shadow-none transition-colors hover:!text-foreground data-[state=active]:bg-background data-[state=active]:!text-foreground data-[state=active]:shadow-sm dark:!text-white/35 dark:hover:!text-white/70 dark:data-[state=active]:!text-white"
+                  className="h-7 w-7 rounded-full p-0 !text-muted-foreground shadow-none transition-colors hover:!text-foreground data-[state=active]:bg-background data-[state=active]:!text-foreground data-[state=active]:shadow-xs dark:!text-white/35 dark:hover:!text-white/70 dark:data-[state=active]:!text-white"
                 >
                   <Search className="h-4 w-4" />
                 </TabsTrigger>

@@ -1,6 +1,6 @@
 import { TerminalSquare } from "lucide-react";
 
-import { useAcpProvidersQuery } from "@/features/agents/hooks";
+import { useAvailableAcpProviders } from "@/features/agents/hooks";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import type { SetupStepActions, SetupStepState } from "./types";
@@ -15,7 +15,7 @@ type SetupStepContentProps = {
 };
 
 function useSetupStepState(): SetupStepState {
-  const providersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpProviders();
   const items = providersQuery.data ?? [];
   const isChecking = providersQuery.isLoading;
   const errorMessage =

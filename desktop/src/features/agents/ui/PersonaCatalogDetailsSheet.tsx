@@ -76,7 +76,7 @@ export function PersonaCatalogDetailsSheet({
                 )}
                 aria-pressed={isSelected}
                 className={cn(
-                  "w-full rounded-xl border p-4 text-left transition-[background-color,border-color,box-shadow] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2",
+                  "w-full rounded-xl border p-4 text-left transition-[background-color,border-color,box-shadow] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2",
                   isSelected
                     ? "border-primary bg-primary/10 text-foreground"
                     : "border-border/80 bg-background/60 text-muted-foreground hover:bg-accent hover:text-accent-foreground",

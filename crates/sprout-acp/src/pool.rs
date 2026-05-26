@@ -220,27 +220,6 @@ pub struct PromptContext {
 // ── AgentPool impl ────────────────────────────────────────────────────────────
 
 impl AgentPool {
-    /// Create a new pool from a list of initialized agents.
-    ///
-    /// Agents are placed into indexed slots. The unbounded channel is created
-    /// here; tasks send results back through `result_tx`.
-    ///
-    /// Prefer [`AgentPool::from_slots`] for startup paths where some agents may
-    /// have failed — `new()` packs agents densely and will break the
-    /// `agent.index` invariant if any slot was skipped.
-    #[allow(dead_code)]
-    pub fn new(agents: Vec<OwnedAgent>) -> Self {
-        let (result_tx, result_rx) = mpsc::unbounded_channel();
-        let slots = agents.into_iter().map(Some).collect();
-        Self {
-            agents: slots,
-            result_tx,
-            result_rx,
-            join_set: JoinSet::new(),
-            task_map: HashMap::new(),
-        }
-    }
-
     /// Create a pool from pre-indexed slots (may contain None for failed startups).
     ///
     /// Slot positions are preserved so that `agent.index` always matches the
@@ -1287,7 +1266,7 @@ async fn fetch_channel_info(channel_id: Uuid, rest: &RestClient) -> Option<Promp
         .kind(nostr::Kind::Custom(
             sprout_core::kind::KIND_NIP29_GROUP_METADATA as u16,
         ))
-        .custom_tag(d_tag, [channel_id.to_string()]);
+        .custom_tags(d_tag, [channel_id.to_string()]);
 
     fetch_with_retry(|| async {
         match timeout(
@@ -1543,8 +1522,8 @@ async fn fetch_thread_context(
             nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
             nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
         ])
-        .custom_tag(e_tag, [root_event_id])
-        .custom_tag(h_tag, [ch_str.as_str()])
+        .custom_tags(e_tag, [root_event_id])
+        .custom_tags(h_tag, [ch_str.as_str()])
         .limit(limit as usize);
 
     fetch_with_retry(|| async {
@@ -1591,7 +1570,7 @@ async fn fetch_dm_context(
             nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE as u16),
             nostr::Kind::Custom(sprout_core::kind::KIND_STREAM_MESSAGE_V2 as u16),
         ])
-        .custom_tag(h_tag, [ch_str.as_str()])
+        .custom_tags(h_tag, [ch_str.as_str()])
         .limit(limit as usize);
 
     fetch_with_retry(|| async {
@@ -1977,7 +1956,7 @@ pub(crate) async fn reaction_remove(rest: &crate::relay::RestClient, event_id: &
     let filter = nostr::Filter::new()
         .kind(nostr::Kind::Reaction)
         .author(my_pubkey)
-        .custom_tag(e_tag, [event_id]);
+        .custom_tags(e_tag, [event_id]);
 
     let resp = match tokio::time::timeout(Duration::from_millis(1_000), rest.query(&[filter])).await
     {
@@ -2324,12 +2303,13 @@ mod tests {
     #[test]
     fn test_collect_prompt_pubkeys_includes_authors_mentions_and_context() {
         let keys = Keys::generate();
-        let p_tag = Tag::parse(&[
+        let p_tag = Tag::parse([
             "p",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ])
         .unwrap();
-        let event = EventBuilder::new(Kind::Custom(9), "hello", [p_tag])
+        let event = EventBuilder::new(Kind::Custom(9), "hello")
+            .tags([p_tag])
             .sign_with_keys(&keys)
             .unwrap();
         let author_hex = event.pubkey.to_hex();
