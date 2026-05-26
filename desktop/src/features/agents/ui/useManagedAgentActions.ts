@@ -81,7 +81,7 @@ export function useManagedAgentActions() {
     const map: Record<string, string[]> = {};
     for (const ra of relayAgentsQuery.data ?? []) {
       if (ra.channels.length > 0) {
-        map[ra.pubkey] = ra.channels;
+        map[normalizePubkey(ra.pubkey)] = ra.channels;
       }
     }
     return map;

@@ -90,10 +90,8 @@ export function ManagedAgentRow({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border bg-card/70 transition-colors",
-        isLogSelected
-          ? "border-primary/40 bg-primary/5 shadow-xs"
-          : "border-border/70 hover:bg-muted/20",
+        "overflow-hidden transition-colors",
+        isLogSelected ? "bg-primary/5" : "hover:bg-muted/20",
       )}
       data-testid={`managed-agent-${agent.pubkey}`}
     >

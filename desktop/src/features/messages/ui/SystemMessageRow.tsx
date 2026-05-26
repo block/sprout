@@ -121,15 +121,32 @@ function SystemMessageAvatar({
       })
     : "Someone";
 
+  const singlePubkey = actorPubkey ?? targetPubkey;
+
   if (!hasActorAndTarget) {
-    return (
+    const avatar = (
       <UserAvatar
-        avatarUrl={resolveAvatarUrl(actorPubkey ?? targetPubkey, profiles)}
+        avatarUrl={resolveAvatarUrl(singlePubkey, profiles)}
         className="!h-9 !w-9 shrink-0 text-[10px]"
         displayName={actorLabel}
         testId="system-message-avatar"
       />
     );
+
+    if (singlePubkey) {
+      return (
+        <UserProfilePopover pubkey={singlePubkey}>
+          <button
+            className="shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+            type="button"
+          >
+            {avatar}
+          </button>
+        </UserProfilePopover>
+      );
+    }
+
+    return avatar;
   }
 
   const targetLabel = resolveUserLabel({
@@ -139,7 +156,7 @@ function SystemMessageAvatar({
     preferResolvedSelfLabel: true,
   });
 
-  return (
+  const dualAvatar = (
     <div
       className="relative h-9 w-9 shrink-0"
       data-testid="system-message-avatar"
@@ -155,6 +172,17 @@ function SystemMessageAvatar({
         displayName={targetLabel}
       />
     </div>
+  );
+
+  return (
+    <UserProfilePopover pubkey={actorPubkey}>
+      <button
+        className="shrink-0 rounded-full focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        type="button"
+      >
+        {dualAvatar}
+      </button>
+    </UserProfilePopover>
   );
 }
 

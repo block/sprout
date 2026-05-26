@@ -20,6 +20,7 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { CreateNewButton } from "./CreateNewButton";
+import { normalizePubkey } from "@/shared/lib/pubkey";
 import { ManagedAgentRow } from "./ManagedAgentRow";
 
 type PersonaGroup = {
@@ -262,7 +263,9 @@ export function ManagedAgentsSection({
                     {group.agents.map((agent) => (
                       <ManagedAgentRow
                         agent={agent}
-                        channelNames={channelsByPubkey[agent.pubkey] ?? []}
+                        channelNames={
+                          channelsByPubkey[normalizePubkey(agent.pubkey)] ?? []
+                        }
                         isActionPending={isActionPending}
                         isLogSelected={selectedLogAgentPubkey === agent.pubkey}
                         key={agent.pubkey}
