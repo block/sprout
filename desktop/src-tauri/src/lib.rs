@@ -403,6 +403,7 @@ pub fn run() {
             // this worktree's data directory. Must run before
             // restore_managed_agents_on_launch (which reads managed-agents.json).
             migration::sync_shared_agent_data(&app_handle);
+            migration::reconcile_provider_mcp_commands(&app_handle);
 
             // Resolve persisted identity key (env var → file → generate+save).
             // This is fatal — the app should not start with an ephemeral identity
