@@ -135,42 +135,56 @@ pub fn migrate_legacy_data_dir(app: &tauri::AppHandle) {
     }
 }
 
-/// After copying managed-agents.json from the canonical dir, remove
-/// process-local runtime state that would cause the worktree instance
-/// to kill the canonical instance's running agents.
-fn scrub_managed_agents_runtime_state(path: &Path) {
+/// Read a JSON array of objects from `path`, apply `f` to each object,
+/// and write back if any mutation returned `true`.
+fn patch_json_records(
+    path: &Path,
+    mut f: impl FnMut(&mut serde_json::Map<String, serde_json::Value>) -> bool,
+) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
     let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else {
+        eprintln!(
+            "sprout-desktop: patch-json-records: failed to parse {}",
+            path.display()
+        );
         return;
     };
-
-    const RUNTIME_FIELDS: &[&str] = &[
-        "runtime_pid",
-        "last_error",
-        "last_exit_code",
-        "last_stopped_at",
-        "last_started_at",
-        "backend_agent_id",
-    ];
-
-    let mut scrubbed_any = false;
+    let mut changed = false;
     for record in &mut records {
         if let Some(obj) = record.as_object_mut() {
-            for field in RUNTIME_FIELDS {
-                if obj.remove(*field).is_some() {
-                    scrubbed_any = true;
-                }
-            }
+            changed |= f(obj);
         }
     }
-
-    if scrubbed_any {
+    if changed {
         if let Ok(bytes) = serde_json::to_vec_pretty(&records) {
             let _ = std::fs::write(path, bytes);
         }
     }
+}
+
+/// After copying managed-agents.json from the canonical dir, remove
+/// process-local runtime state that would cause the worktree instance
+/// to kill the canonical instance's running agents.
+fn scrub_managed_agents_runtime_state(path: &Path) {
+    patch_json_records(path, |obj| {
+        const RUNTIME_FIELDS: &[&str] = &[
+            "runtime_pid",
+            "last_error",
+            "last_exit_code",
+            "last_stopped_at",
+            "last_started_at",
+            "backend_agent_id",
+        ];
+        let mut scrubbed = false;
+        for field in RUNTIME_FIELDS {
+            if obj.remove(*field).is_some() {
+                scrubbed = true;
+            }
+        }
+        scrubbed
+    });
 }
 
 /// Copy shared agent data files from the canonical dev data directory to
@@ -286,24 +300,13 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
 }
 
 fn reconcile_mcp_commands_in_file(path: &Path) {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(mut records) = serde_json::from_str::<Vec<serde_json::Value>>(&content) else {
-        return;
-    };
-
-    let mut changed_any = false;
-    for record in &mut records {
-        let Some(obj) = record.as_object_mut() else {
-            continue;
-        };
+    patch_json_records(path, |obj| {
         let agent_command = match obj.get("agent_command").and_then(|v| v.as_str()) {
             Some(cmd) => cmd.to_string(),
-            None => continue,
+            None => return false,
         };
         let Some(provider) = crate::managed_agents::known_acp_provider(&agent_command) else {
-            continue;
+            return false;
         };
         let expected = provider.mcp_command.unwrap_or("");
         let current = obj
@@ -322,15 +325,11 @@ fn reconcile_mcp_commands_in_file(path: &Path) {
                 "mcp_command".to_string(),
                 serde_json::Value::String(expected.to_string()),
             );
-            changed_any = true;
+            true
+        } else {
+            false
         }
-    }
-
-    if changed_any {
-        if let Ok(bytes) = serde_json::to_vec_pretty(&records) {
-            let _ = std::fs::write(path, bytes);
-        }
-    }
+    });
 }
 
 /// Reconcile `mcp_command` values in managed-agents.json against the
@@ -553,7 +552,11 @@ mod tests {
     }
 
     /// Helper: sync files directly (without a Tauri AppHandle) for unit testing.
-    /// Mirrors the core loop of `sync_shared_agent_data` but takes explicit paths.
+    /// Mirrors the core copy loop of `sync_shared_agent_data` but takes explicit
+    /// paths. Does NOT include the post-copy `scrub_managed_agents_runtime_state`
+    /// call — tests that need scrubbing must call it explicitly after `sync_files`.
+    /// This split exists because `sync_shared_agent_data` requires a live Tauri
+    /// AppHandle and cannot be unit-tested directly.
     fn sync_files(canonical: &Path, worktree: &Path) -> u32 {
         let mut synced = 0u32;
         for rel in SHARED_AGENT_FILES {
@@ -613,30 +616,21 @@ mod tests {
     }
 
     #[test]
-    fn sync_skips_when_canonical_equals_current() {
-        let parent = tempfile::tempdir().unwrap();
-        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
-
-        // When the current dir IS the canonical dir, canonical_dev_data_dir
-        // returns the exact same path. The equality guard in
-        // sync_shared_agent_data detects this and skips the sync entirely,
-        // so data is never clobbered.
-        let resolved = canonical_dev_data_dir(&canonical).unwrap();
-        assert_eq!(resolved, canonical);
-    }
-
-    #[test]
-    fn canonical_dev_data_dir_for_canonical_instance_returns_self() {
+    fn canonical_dev_data_dir_returns_self_for_canonical_instance() {
         // When the current app data dir IS the canonical dev identifier,
-        // canonical_dev_data_dir returns the exact same path. The caller
+        // canonical_dev_data_dir returns the exact same path — the caller
         // (sync_shared_agent_data) uses this equality to skip the sync.
         // The env-var guards (SPROUT_SHARE_IDENTITY, SPROUT_PRIVATE_KEY)
         // require a live Tauri AppHandle and are covered by integration
         // testing only.
         let current =
             PathBuf::from("/Users/me/Library/Application Support/xyz.block.sprout.app.dev");
-        let canonical = canonical_dev_data_dir(&current).unwrap();
-        assert_eq!(canonical, current);
+        assert_eq!(canonical_dev_data_dir(&current).unwrap(), current);
+
+        // Also verify with a temp dir on the real filesystem.
+        let parent = tempfile::tempdir().unwrap();
+        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+        assert_eq!(canonical_dev_data_dir(&canonical).unwrap(), canonical);
     }
 
     #[test]
@@ -822,7 +816,8 @@ mod tests {
                 {"name": "Scout", "agent_command": "goose", "mcp_command": "sprout-mcp-server"},
                 {"name": "Claude", "agent_command": "claude-agent-acp", "mcp_command": "sprout-mcp-server"},
                 {"name": "Solo", "agent_command": "sprout-agent", "mcp_command": "sprout-dev-mcp"},
-                {"name": "Custom", "agent_command": "my-bot", "mcp_command": "my-mcp"}
+                {"name": "Custom", "agent_command": "my-bot", "mcp_command": "my-mcp"},
+                {"name": "Codex", "agent_command": "codex-acp", "mcp_command": "sprout-mcp-server"}
             ]),
         );
         reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
@@ -837,5 +832,37 @@ mod tests {
             records[3]["mcp_command"], "my-mcp",
             "custom agent untouched"
         );
+        assert_eq!(records[4]["mcp_command"], "", "codex should be cleared");
+    }
+
+    #[test]
+    fn reconcile_adds_mcp_command_when_key_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        write_agents_json(
+            dir.path(),
+            &serde_json::json!([{
+                "name": "Solo",
+                "agent_command": "sprout-agent"
+            }]),
+        );
+        reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
+        let records = read_agents_json(dir.path());
+        assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
+    }
+
+    #[test]
+    fn reconcile_treats_null_mcp_command_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        write_agents_json(
+            dir.path(),
+            &serde_json::json!([{
+                "name": "Solo",
+                "agent_command": "sprout-agent",
+                "mcp_command": null
+            }]),
+        );
+        reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
+        let records = read_agents_json(dir.path());
+        assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
     }
 }

@@ -360,12 +360,11 @@ fn migrate_retires_unmodified_personas() {
     // retired personas with original system prompts.
     let mut stored: Vec<PersonaRecord> = RETIRED_PERSONAS
         .iter()
-        .map(|(id, name, prompt)| PersonaRecord {
+        .map(|(id, prompt)| PersonaRecord {
             id: id.to_string(),
-            display_name: name.to_string(),
             system_prompt: prompt.to_string(),
             is_builtin: false, // already demoted by merge_personas
-            ..custom_persona(id, name)
+            ..custom_persona(id, "Test Persona")
         })
         .collect();
 
