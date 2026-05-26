@@ -277,7 +277,7 @@ export function AppShell() {
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
   } = useUnreadChannels(
-    channels,
+    sidebarChannels,
     activeChannel,
     // Wait for ChannelScreen to report the latest loaded message before
     // advancing unread state for the active channel.

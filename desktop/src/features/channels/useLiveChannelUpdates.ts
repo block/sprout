@@ -150,6 +150,7 @@ export function useLiveChannelUpdates(
     // reactions / edits / system messages aren't "new content".
     if (
       UNREAD_TRIGGER_KINDS.has(event.kind) &&
+      channelId !== activeChannelId &&
       (normalizedCurrentPubkey.length === 0 ||
         event.pubkey.toLowerCase() !== normalizedCurrentPubkey)
     ) {
