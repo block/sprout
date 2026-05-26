@@ -136,10 +136,11 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
         .await
         .unwrap_or_default();
 
-        let counts = count_members_by_channel(&members_events);
+        let membership = collect_members_by_channel(&members_events);
         for channel in &mut channels {
-            if let Some(count) = counts.get(&channel.id) {
-                channel.member_count = *count;
+            if let Some(info) = membership.get(&channel.id) {
+                channel.member_count = info.count;
+                channel.member_pubkeys = info.pubkeys.clone();
             }
         }
     }
@@ -147,12 +148,19 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
     Ok(channels)
 }
 
-/// Build a `channel_id → unique-member-count` map from a batch of kind:39002
-/// events. Events without a `d` tag are skipped; member dedupe is delegated to
+struct ChannelMembership {
+    count: i64,
+    pubkeys: Vec<String>,
+}
+
+/// Build a `channel_id → membership` map from a batch of kind:39002 events.
+/// Events without a `d` tag are skipped; member dedupe is delegated to
 /// [`nostr_convert::channel_members_from_event`] so the parsing rules match the
 /// per-channel `get_channel_members` path.
-fn count_members_by_channel(events: &[nostr::Event]) -> std::collections::HashMap<String, i64> {
-    let mut counts: std::collections::HashMap<String, i64> =
+fn collect_members_by_channel(
+    events: &[nostr::Event],
+) -> std::collections::HashMap<String, ChannelMembership> {
+    let mut map: std::collections::HashMap<String, ChannelMembership> =
         std::collections::HashMap::with_capacity(events.len());
     for ev in events {
         let Some(d) = ev.tags.iter().find_map(|t| {
@@ -164,9 +172,16 @@ fn count_members_by_channel(events: &[nostr::Event]) -> std::collections::HashMa
         let Ok(resp) = nostr_convert::channel_members_from_event(ev) else {
             continue;
         };
-        counts.insert(d, resp.members.len() as i64);
+        let pubkeys: Vec<String> = resp.members.iter().map(|m| m.pubkey.clone()).collect();
+        map.insert(
+            d,
+            ChannelMembership {
+                count: pubkeys.len() as i64,
+                pubkeys,
+            },
+        );
     }
-    counts
+    map
 }
 
 #[tauri::command]

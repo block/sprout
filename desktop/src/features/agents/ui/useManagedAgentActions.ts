@@ -85,13 +85,13 @@ export function useManagedAgentActions() {
         map[normalizePubkey(ra.pubkey)] = ra.channels;
       }
     }
-    // Fill in from channel participant lists for any managed agents not
-    // already covered by relay agent data.
+    // Fill in from channel member lists (kind:39002) for any managed agents
+    // not already covered by relay agent data.
     const normalizedManaged = new Set(
       managedAgents.map((a) => normalizePubkey(a.pubkey)),
     );
     for (const ch of channelsQuery.data ?? []) {
-      for (const pk of ch.participantPubkeys) {
+      for (const pk of ch.memberPubkeys) {
         const key = normalizePubkey(pk);
         if (!normalizedManaged.has(key)) continue;
         if (!map[key]) map[key] = [];

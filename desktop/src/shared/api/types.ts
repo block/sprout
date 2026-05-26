@@ -11,6 +11,7 @@ export type Channel = {
   topic: string | null;
   purpose: string | null;
   memberCount: number;
+  memberPubkeys: string[];
   lastMessageAt: string | null;
   archivedAt: string | null;
   participants: string[];

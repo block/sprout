@@ -82,6 +82,8 @@ pub struct ChannelInfo {
     pub topic: Option<String>,
     pub purpose: Option<String>,
     pub member_count: i64,
+    #[serde(default)]
+    pub member_pubkeys: Vec<String>,
     pub last_message_at: Option<String>,
     pub archived_at: Option<String>,
     #[serde(default)]

@@ -130,6 +130,7 @@ pub fn channel_info_from_event(
         topic,
         purpose,
         member_count,
+        member_pubkeys: Vec::new(),
         last_message_at,
         archived_at,
         participants,

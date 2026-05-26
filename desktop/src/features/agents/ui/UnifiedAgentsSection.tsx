@@ -246,7 +246,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
             return (
               <div
                 key={g.persona.id}
-                className={`rounded-xl border border-border/70 bg-card/40${isDeactivated ? " opacity-60" : ""}`}
+                className={`overflow-hidden rounded-xl border border-border/70 bg-card/40${isDeactivated ? " opacity-60" : ""}`}
               >
                 <div className="flex items-center gap-2 px-3 py-2 transition-colors hover:bg-muted/40">
                   <button
@@ -537,7 +537,7 @@ function CollapsibleAgentGroup({
 }) {
   const isCollapsed = collapsed.has(groupKey);
   return (
-    <div className="rounded-xl border border-border/70 bg-card/40">
+    <div className="overflow-hidden rounded-xl border border-border/70 bg-card/40">
       <div className="px-3 py-2 transition-colors hover:bg-muted/40">
         <button
           className="flex w-full items-center gap-2 py-1 text-left"

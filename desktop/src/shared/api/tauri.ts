@@ -97,6 +97,7 @@ type RawChannel = {
   topic: string | null;
   purpose: string | null;
   member_count: number;
+  member_pubkeys: string[];
   last_message_at: string | null;
   archived_at: string | null;
   participants: string[];
@@ -355,6 +356,7 @@ function fromRawChannel(channel: RawChannel): Channel {
     topic: channel.topic,
     purpose: channel.purpose,
     memberCount: channel.member_count,
+    memberPubkeys: channel.member_pubkeys ?? [],
     lastMessageAt: channel.last_message_at,
     archivedAt: channel.archived_at,
     participants: channel.participants,
