@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { UserAttentionType, getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
   onAction,
@@ -201,6 +201,22 @@ export async function setDesktopAppBadgeCount(count: number): Promise<void> {
     await getCurrentWindow().setBadgeCount(count > 0 ? count : undefined);
   } catch {
     // Ignore unsupported platforms and best-effort badge sync failures.
+  }
+}
+
+export async function requestDockBounce(): Promise<void> {
+  if (!isTauri()) {
+    return;
+  }
+  if (!document.hidden) {
+    return;
+  }
+  try {
+    await getCurrentWindow().requestUserAttention(
+      UserAttentionType.Informational,
+    );
+  } catch {
+    // Best effort; ignore unsupported platforms.
   }
 }
 

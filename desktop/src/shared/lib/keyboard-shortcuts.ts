@@ -89,6 +89,22 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
     keysWindows: "Ctrl+S",
     category: "Navigation",
   },
+  {
+    id: "mark-current-read",
+    label: "Mark as read",
+    description: "Mark the current conversation as read",
+    keys: "Escape",
+    keysWindows: "Escape",
+    category: "Navigation",
+  },
+  {
+    id: "mark-all-read",
+    label: "Mark all as read",
+    description: "Mark all conversations as read",
+    keys: "⇧Escape",
+    keysWindows: "Shift+Escape",
+    category: "Navigation",
+  },
 
   // Zoom
   {

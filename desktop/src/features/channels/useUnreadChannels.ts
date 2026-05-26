@@ -314,8 +314,21 @@ export function useUnreadChannels(
     readStateVersion,
   ]);
 
+  const markAllChannelsRead = React.useCallback(() => {
+    for (const channelId of unreadChannelIds) {
+      forcedUnreadRef.current.delete(channelId);
+      const unixSeconds =
+        latestByChannelRef.current.get(channelId) ??
+        getEffectiveTimestamp(channelId) ??
+        Math.floor(Date.now() / 1_000);
+      markContextRead(channelId, unixSeconds);
+    }
+    bumpLatestVersion();
+  }, [getEffectiveTimestamp, markContextRead, unreadChannelIds]);
+
   return {
     unreadChannelIds,
+    markAllChannelsRead,
     markChannelRead,
     markChannelUnread,
     // Exposed so other surfaces (e.g. Home) can project per-item read state

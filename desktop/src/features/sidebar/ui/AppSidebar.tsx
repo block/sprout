@@ -2,6 +2,8 @@
 import {
   Activity,
   Bot,
+  CheckCheck,
+  CheckCircle2,
   ChevronDown,
   CircleDot,
   FolderGit2,
@@ -130,6 +132,11 @@ type AppSidebarProps = {
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
+  onMarkChannelRead: (
+    channelId: string,
+    lastMessageAt: string | null | undefined,
+  ) => void;
+  onMarkAllChannelsRead: () => void;
   onOpenDm: (input: { pubkeys: string[] }) => Promise<void>;
   onUpdateWorkspace: (
     id: string,
@@ -162,15 +169,19 @@ function SectionHeaderActions({
   browseTestId,
   className,
   createAriaLabel,
+  hasUnread,
   onBrowse,
   onCreateClick,
+  onMarkAllRead,
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
   className?: string;
   createAriaLabel: string;
+  hasUnread?: boolean;
   onBrowse: () => void;
   onCreateClick: () => void;
+  onMarkAllRead?: () => void;
 }) {
   return (
     <div
@@ -179,6 +190,16 @@ function SectionHeaderActions({
         className,
       )}
     >
+      {hasUnread && onMarkAllRead ? (
+        <button
+          aria-label="Mark all as read"
+          className={SECTION_ICON_BUTTON_CLASS}
+          onClick={onMarkAllRead}
+          type="button"
+        >
+          <CheckCheck className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
       <button
         aria-label={browseAriaLabel}
         className={SECTION_ICON_BUTTON_CLASS}
@@ -209,12 +230,15 @@ function ChannelGroupSection({
   browseTestId,
   createAriaLabel,
   groupClassName,
+  hasUnread,
   isCollapsed,
   isActiveChannel,
   items,
   listTestId,
   onBrowse,
   onCreateClick,
+  onMarkAllRead,
+  onMarkChannelRead,
   onMarkChannelUnread,
   onSelectChannel,
   onToggleCollapsed,
@@ -232,6 +256,10 @@ function ChannelGroupSection({
   listTestId: string;
   onBrowse: () => void;
   onCreateClick: () => void;
+  onMarkChannelRead: (
+    channelId: string,
+    lastMessageAt: string | null | undefined,
+  ) => void;
   onMarkChannelUnread: (
     channelId: string,
     lastMessageAt: string | null | undefined,
@@ -241,6 +269,8 @@ function ChannelGroupSection({
   selectedChannelId: string | null;
   title: string;
   unreadChannelIds: Set<string>;
+  hasUnread?: boolean;
+  onMarkAllRead?: () => void;
 }) {
   const contentId = `sidebar-${listTestId}`;
 
@@ -270,8 +300,10 @@ function ChannelGroupSection({
           browseTestId={browseTestId}
           className={SECTION_ACTION_VISIBILITY_CLASS}
           createAriaLabel={createAriaLabel}
+          hasUnread={hasUnread}
           onBrowse={onBrowse}
           onCreateClick={onCreateClick}
+          onMarkAllRead={onMarkAllRead}
         />
       </div>
       {!isCollapsed ? (
@@ -293,14 +325,25 @@ function ChannelGroupSection({
                     </SidebarMenuItem>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
-                    <ContextMenuItem
-                      onClick={() =>
-                        onMarkChannelUnread(channel.id, channel.lastMessageAt)
-                      }
-                    >
-                      <CircleDot className="h-4 w-4" />
-                      Mark unread
-                    </ContextMenuItem>
+                    {unreadChannelIds.has(channel.id) ? (
+                      <ContextMenuItem
+                        onClick={() =>
+                          onMarkChannelRead(channel.id, channel.lastMessageAt)
+                        }
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        Mark as read
+                      </ContextMenuItem>
+                    ) : (
+                      <ContextMenuItem
+                        onClick={() =>
+                          onMarkChannelUnread(channel.id, channel.lastMessageAt)
+                        }
+                      >
+                        <CircleDot className="h-4 w-4" />
+                        Mark unread
+                      </ContextMenuItem>
+                    )}
                   </ContextMenuContent>
                 </ContextMenu>
               ))}
@@ -344,6 +387,8 @@ export function AppSidebar({
   onOpenSearch,
   onHideDm,
   onMarkChannelUnread,
+  onMarkChannelRead,
+  onMarkAllChannelsRead,
   onOpenDm,
   onUpdateWorkspace,
   onRemoveWorkspace,
@@ -589,12 +634,15 @@ export function AppSidebar({
               browseTestId="browse-channels"
               createAriaLabel="Create a channel"
               groupClassName="pt-1"
+              hasUnread={unreadChannelIds.size > 0}
               isCollapsed={collapsedGroups.channels}
               isActiveChannel={selectedView === "channel"}
               items={streamChannels}
               listTestId="stream-list"
               onBrowse={onOpenBrowseChannels}
               onCreateClick={() => setCreateDialogKind("stream")}
+              onMarkAllRead={onMarkAllChannelsRead}
+              onMarkChannelRead={onMarkChannelRead}
               onMarkChannelUnread={onMarkChannelUnread}
               onSelectChannel={onSelectChannel}
               onToggleCollapsed={() => toggleCollapsedGroup("channels")}
@@ -606,12 +654,15 @@ export function AppSidebar({
               browseAriaLabel="Browse forums"
               browseTestId="browse-forums"
               createAriaLabel="Create a forum"
+              hasUnread={unreadChannelIds.size > 0}
               isCollapsed={collapsedGroups.forums}
               isActiveChannel={selectedView === "channel"}
               items={forumChannels}
               listTestId="forum-list"
               onBrowse={onOpenBrowseForums}
               onCreateClick={() => setCreateDialogKind("forum")}
+              onMarkAllRead={onMarkAllChannelsRead}
+              onMarkChannelRead={onMarkChannelRead}
               onMarkChannelUnread={onMarkChannelUnread}
               onSelectChannel={onSelectChannel}
               onToggleCollapsed={() => toggleCollapsedGroup("forums")}
@@ -643,6 +694,7 @@ export function AppSidebar({
               items={directMessages}
               channelLabels={dmChannelLabels}
               onHideDm={onHideDm}
+              onMarkChannelRead={onMarkChannelRead}
               onMarkChannelUnread={onMarkChannelUnread}
               onSelectChannel={onSelectChannel}
               onToggleCollapsed={() => toggleCollapsedGroup("directMessages")}

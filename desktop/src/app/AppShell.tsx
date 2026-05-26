@@ -11,6 +11,7 @@ import {
 } from "@/app/AppShellOverlays";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
+import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -26,6 +27,7 @@ import {
 } from "@/features/notifications/hooks";
 import {
   listenForDesktopNotificationActions,
+  requestDockBounce,
   revealDesktopAppWindow,
   sendDesktopNotification,
   setDesktopAppBadgeCount,
@@ -238,9 +240,9 @@ export function AppShell() {
           pubkey: event.pubkey,
         },
       }).then((didSend) => {
-        if (didSend && notificationSettings.settings.soundEnabled) {
-          playNotificationSound();
-        }
+        if (!didSend) return;
+        if (notificationSettings.settings.soundEnabled) playNotificationSound();
+        void requestDockBounce();
       });
     },
   );
@@ -265,6 +267,7 @@ export function AppShell() {
   );
 
   const {
+    markAllChannelsRead,
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
@@ -280,6 +283,7 @@ export function AppShell() {
       pubkey: identityQuery.data?.pubkey,
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
+      onChannelMessage: () => void requestDockBounce(),
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
     },
@@ -546,6 +550,13 @@ export function AppShell() {
     };
   }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
 
+  useMarkAsReadShortcuts({
+    activeChannel,
+    markAllChannelsRead,
+    markChannelRead,
+    selectedView,
+  });
+
   React.useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
       if (event.button !== 0 || event.detail > 1) {
@@ -581,6 +592,7 @@ export function AppShell() {
       <ChannelNavigationProvider channels={channels}>
         <AppShellProvider
           value={{
+            markAllChannelsRead,
             markChannelRead,
             markChannelUnread,
             openChannelManagement: () => {
@@ -693,6 +705,8 @@ export function AppShell() {
                     void applyAgents(templateId, createdForum.id);
                   }}
                   onHideDm={handleHideDm}
+                  onMarkAllChannelsRead={markAllChannelsRead}
+                  onMarkChannelRead={markChannelRead}
                   onMarkChannelUnread={markChannelUnread}
                   onOpenBrowseChannels={handleOpenBrowseChannels}
                   onOpenBrowseForums={handleOpenBrowseForums}

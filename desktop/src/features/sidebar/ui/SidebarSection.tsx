@@ -1,5 +1,13 @@
 import type * as React from "react";
-import { ChevronDown, CircleDot, FileText, Hash, Lock, X } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  CircleDot,
+  FileText,
+  Hash,
+  Lock,
+  X,
+} from "lucide-react";
 
 import {
   ContextMenu,
@@ -207,6 +215,7 @@ export function SidebarSection({
   testId,
   unreadChannelIds,
   onHideDm,
+  onMarkChannelRead,
   onMarkChannelUnread,
   onSelectChannel,
   onToggleCollapsed,
@@ -224,6 +233,10 @@ export function SidebarSection({
   testId: string;
   unreadChannelIds: Set<string>;
   onHideDm?: (channelId: string) => void;
+  onMarkChannelRead?: (
+    channelId: string,
+    lastMessageAt: string | null | undefined,
+  ) => void;
   onMarkChannelUnread?: (
     channelId: string,
     lastMessageAt: string | null | undefined,
@@ -308,18 +321,32 @@ export function SidebarSection({
                   </SidebarMenuItem>
                 );
 
-                return onMarkChannelUnread ? (
+                return onMarkChannelUnread || onMarkChannelRead ? (
                   <ContextMenu key={channel.id}>
                     <ContextMenuTrigger asChild>{menuItem}</ContextMenuTrigger>
                     <ContextMenuContent>
-                      <ContextMenuItem
-                        onClick={() =>
-                          onMarkChannelUnread(channel.id, channel.lastMessageAt)
-                        }
-                      >
-                        <CircleDot className="h-4 w-4" />
-                        Mark unread
-                      </ContextMenuItem>
+                      {unreadChannelIds.has(channel.id) && onMarkChannelRead ? (
+                        <ContextMenuItem
+                          onClick={() =>
+                            onMarkChannelRead(channel.id, channel.lastMessageAt)
+                          }
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Mark as read
+                        </ContextMenuItem>
+                      ) : onMarkChannelUnread ? (
+                        <ContextMenuItem
+                          onClick={() =>
+                            onMarkChannelUnread(
+                              channel.id,
+                              channel.lastMessageAt,
+                            )
+                          }
+                        >
+                          <CircleDot className="h-4 w-4" />
+                          Mark unread
+                        </ContextMenuItem>
+                      ) : null}
                     </ContextMenuContent>
                   </ContextMenu>
                 ) : (

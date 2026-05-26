@@ -1,6 +1,7 @@
 import * as React from "react";
 
 type AppShellContextValue = {
+  markAllChannelsRead: () => void;
   markChannelRead: (
     channelId: string,
     readAt: string | null | undefined,
@@ -20,6 +21,7 @@ type AppShellContextValue = {
 };
 
 const AppShellContext = React.createContext<AppShellContextValue>({
+  markAllChannelsRead: () => {},
   markChannelRead: () => {},
   markChannelUnread: () => {},
   openChannelManagement: () => {},
