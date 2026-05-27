@@ -461,3 +461,103 @@ test("messageLinkUrlTransform: leaves non-message sprout:// schemes to default",
   );
   assert.match(html, /href=""/);
 });
+
+// ── remarkMessageLinks: bare-URL → message-link node ──────────────────
+// `remark-gfm`'s autolinker only covers http(s)://, so bare `sprout://message`
+// URLs in plain text never reach any rendering path without this plugin.
+// The plugin emits a custom `message-link` HAST element which markdown.tsx
+// renders as an inline pill. Tests operate on the mdast tree directly —
+// the rendering side is a plain React component covered by app-level use.
+
+import remarkMessageLinks from "../../features/messages/lib/remarkMessageLinks.ts";
+
+function runPlugin(tree) {
+  remarkMessageLinks()(tree);
+  return tree;
+}
+
+function paragraph(...children) {
+  return { type: "root", children: [{ type: "paragraph", children }] };
+}
+
+function text(value) {
+  return { type: "text", value };
+}
+
+test("remarkMessageLinks: bare sprout://message URL is replaced", () => {
+  const tree = runPlugin(paragraph(text("sprout://message?channel=c&id=m")));
+  const para = tree.children[0];
+  assert.equal(para.children.length, 1);
+  assert.equal(para.children[0].type, "message-link");
+  assert.equal(para.children[0].value, "sprout://message?channel=c&id=m");
+  assert.equal(para.children[0].data.hName, "message-link");
+});
+
+test("remarkMessageLinks: mid-sentence URL splits surrounding text", () => {
+  const tree = runPlugin(
+    paragraph(text("see sprout://message?channel=c&id=m here")),
+  );
+  const kids = tree.children[0].children;
+  assert.equal(kids.length, 3);
+  assert.equal(kids[0].type, "text");
+  assert.equal(kids[0].value, "see ");
+  assert.equal(kids[1].type, "message-link");
+  assert.equal(kids[2].type, "text");
+  assert.equal(kids[2].value, " here");
+});
+
+test("remarkMessageLinks: two URLs in one text node both replaced", () => {
+  const tree = runPlugin(
+    paragraph(
+      text(
+        "first sprout://message?channel=a&id=1 then sprout://message?channel=b&id=2 done",
+      ),
+    ),
+  );
+  const kids = tree.children[0].children;
+  const links = kids.filter((c) => c.type === "message-link");
+  assert.equal(links.length, 2);
+  assert.equal(links[0].value, "sprout://message?channel=a&id=1");
+  assert.equal(links[1].value, "sprout://message?channel=b&id=2");
+});
+
+test("remarkMessageLinks: trailing `)` is excluded from URL", () => {
+  const tree = runPlugin(
+    paragraph(text("see (sprout://message?channel=c&id=m) for details")),
+  );
+  const link = tree.children[0].children.find((c) => c.type === "message-link");
+  assert.ok(link);
+  assert.equal(link.value, "sprout://message?channel=c&id=m");
+});
+
+test("remarkMessageLinks: non-message sprout:// URLs are not matched", () => {
+  const original = "sprout://connect?relay=wss://x.example";
+  const tree = runPlugin(paragraph(text(original)));
+  const kids = tree.children[0].children;
+  assert.equal(kids.length, 1);
+  assert.equal(kids[0].type, "text");
+  assert.equal(kids[0].value, original);
+});
+
+test("remarkMessageLinks: text inside inlineCode is left alone", () => {
+  // The shared factory's tree walker descends into all non-text nodes; an
+  // `inlineCode` node has its URL stored in `value` (not children), so the
+  // plugin can't reach it. Guard against a future regression where someone
+  // turns `inlineCode` into a children-bearing node.
+  const tree = {
+    type: "root",
+    children: [
+      {
+        type: "paragraph",
+        children: [
+          { type: "inlineCode", value: "sprout://message?channel=c&id=m" },
+        ],
+      },
+    ],
+  };
+  runPlugin(tree);
+  const kids = tree.children[0].children;
+  assert.equal(kids.length, 1);
+  assert.equal(kids[0].type, "inlineCode");
+  assert.equal(kids[0].value, "sprout://message?channel=c&id=m");
+});

@@ -26,6 +26,7 @@ import rehypeImageGallery from "@/shared/lib/rehypeImageGallery";
 import rehypeSearchHighlight from "@/shared/lib/rehypeSearchHighlight";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
+import remarkMessageLinks from "@/features/messages/lib/remarkMessageLinks";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
@@ -490,6 +491,35 @@ function createMarkdownComponents(
         </span>
       );
     },
+    "message-link": ({ children }: { children?: React.ReactNode }) => {
+      const href = String(children ?? "");
+      const parsed = parseMessageLink(href);
+      if (!parsed.ok) {
+        // Malformed `sprout://message?…` — render the raw URL as plain text
+        // rather than a misleading clickable pill.
+        return <span data-message-link="">{href}</span>;
+      }
+
+      const { channelId, messageId } = parsed.value;
+      const channel = channels.find((c) => c.id === channelId);
+      const channelLabel = channel?.name ?? "channel";
+      const shortId = messageId.slice(0, 6);
+
+      return (
+        <button
+          type="button"
+          data-message-link=""
+          aria-label={`Open message in ${channelLabel}`}
+          title={href}
+          className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
+          onClick={() => {
+            onOpenMessageLink(parsed.value);
+          }}
+        >
+          #{channelLabel} · {shortId}
+        </button>
+      );
+    },
   } as Components;
 }
 
@@ -541,6 +571,7 @@ function MarkdownInner({
     () => [
       remarkGfm,
       remarkBreaks,
+      remarkMessageLinks,
       [remarkMentions, { mentionNames }],
       [remarkChannelLinks, { channelNames }],
     ],
