@@ -261,7 +261,14 @@ export function MessageComposer({
       // attachments so they show up in `ComposerAttachments` and the user
       // can remove existing ones / add new ones before saving.
       media.setPendingImeta(editTarget.imetaMedia ?? []);
-      richText.focus();
+      // Defer focus to the next frame so it runs after any focus-
+      // restoration the trigger UI (e.g. the message-row context menu)
+      // fires on close. Without this, Radix-style focus-restoration races
+      // our call and leaves DOM focus on the message row — global keybinds
+      // like Delete then fire there instead of in the editor. `focusEnd`
+      // also lands the caret at end of the loaded content.
+      const rafId = requestAnimationFrame(() => richText.focusEnd());
+      return () => cancelAnimationFrame(rafId);
     } else if (preEditSnapshotRef.current !== null) {
       const { content: restoredContent, pendingImeta: restoredImeta } =
         preEditSnapshotRef.current;
