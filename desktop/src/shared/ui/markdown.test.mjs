@@ -406,10 +406,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 
-function isMessageLink(href) {
-  if (!href) return false;
-  return href.startsWith("sprout://message?") || href === "sprout://message";
-}
+import { isMessageLink } from "../../features/messages/lib/messageLink.ts";
 
 function messageLinkUrlTransform(value, key) {
   if (key === "href" && isMessageLink(value)) {
