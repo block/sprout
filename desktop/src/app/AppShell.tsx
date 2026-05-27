@@ -212,6 +212,7 @@ export function AppShell() {
     void homeFeedQuery.refetch();
   });
   const handleChannelNotification = React.useEffectEvent(() => {
+    if (!notificationSettings.settings.desktopEnabled) return;
     void requestDockBounce();
   });
 
