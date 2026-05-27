@@ -72,5 +72,6 @@ earshot = "1.0"
 rubato = "3.0"
 audioadapter-buffers = "3.0"
 tempfile = "3"
+strip-ansi-escapes = "0.2"
 
 [dev-dependencies]
