@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::AppHandle;
-
 use crate::managed_agents::{
     AcpAvailabilityStatus, AcpProviderCatalogEntry, CommandAvailabilityInfo,
 };
@@ -234,7 +232,7 @@ pub fn normalize_agent_args(command: &str, agent_args: Vec<String>) -> Vec<Strin
     normalized
 }
 
-fn command_search_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
+fn command_search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
         workspace_root_dir().join("target/release"),
         workspace_root_dir().join("target/debug"),
@@ -262,14 +260,14 @@ fn command_search_dirs(app: Option<&AppHandle>) -> Vec<PathBuf> {
     unique
 }
 
-fn resolve_workspace_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
+fn resolve_workspace_command(command: &str) -> Option<PathBuf> {
     if command_looks_like_path(command) {
         let path = PathBuf::from(command);
         return path.exists().then_some(path);
     }
 
     let file_name = executable_basename(command);
-    command_search_dirs(app)
+    command_search_dirs()
         .into_iter()
         .map(|dir| dir.join(&file_name))
         .find(|candidate| candidate.exists())
@@ -286,7 +284,7 @@ fn resolve_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String
 /// Resolve a command to an absolute path, caching results for the app lifetime.
 /// The cache eliminates redundant login-shell spawns when multiple agents share
 /// the same binaries (e.g. `npx`, `uvx`).
-pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
+pub fn resolve_command(command: &str) -> Option<PathBuf> {
     let cache = resolve_cache();
 
     // Fast path: return cached result without allocating a key.
@@ -297,7 +295,7 @@ pub fn resolve_command(command: &str, app: Option<&AppHandle>) -> Option<PathBuf
     }
 
     // Slow path: resolve and cache.
-    let result = resolve_command_uncached(command, app);
+    let result = resolve_command_uncached(command);
 
     if result.is_some() {
         if let Ok(mut guard) = cache.lock() {
@@ -314,8 +312,8 @@ pub fn clear_resolve_cache() {
     guard.clear();
 }
 
-fn resolve_command_uncached(command: &str, app: Option<&AppHandle>) -> Option<PathBuf> {
-    if let Some(path) = resolve_workspace_command(command, app) {
+fn resolve_command_uncached(command: &str) -> Option<PathBuf> {
+    if let Some(path) = resolve_workspace_command(command) {
         return Some(path);
     }
 
@@ -393,11 +391,11 @@ pub fn login_shell_path() -> Option<String> {
 }
 
 fn find_command(command: &str) -> Option<PathBuf> {
-    resolve_command(command, None)
+    resolve_command(command)
 }
 
-pub fn command_availability(command: &str, app: Option<&AppHandle>) -> CommandAvailabilityInfo {
-    let resolved_path = resolve_command(command, app).map(|path| path.display().to_string());
+pub fn command_availability(command: &str) -> CommandAvailabilityInfo {
+    let resolved_path = resolve_command(command).map(|path| path.display().to_string());
     CommandAvailabilityInfo {
         command: command.to_string(),
         available: resolved_path.is_some(),

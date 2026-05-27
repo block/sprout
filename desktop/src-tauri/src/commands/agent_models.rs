@@ -45,12 +45,12 @@ pub async fn get_agent_models(
             .find(|r| r.pubkey == pubkey)
             .ok_or_else(|| format!("agent {pubkey} not found"))?;
 
-        let resolved = resolve_command(&record.acp_command, Some(&app))
+        let resolved = resolve_command(&record.acp_command)
             .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
 
         let args = normalize_agent_args(&record.agent_command, record.agent_args.clone());
 
-        let resolved_agent = resolve_command(&record.agent_command, Some(&app))
+        let resolved_agent = resolve_command(&record.agent_command)
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| record.agent_command.clone());
 

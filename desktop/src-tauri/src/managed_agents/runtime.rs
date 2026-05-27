@@ -527,19 +527,18 @@ pub fn spawn_agent_child(
         .try_clone()
         .map_err(|error| format!("failed to clone log handle: {error}"))?;
     let agent_args = normalize_agent_args(&record.agent_command, record.agent_args.clone());
-    let resolved_acp_command = resolve_command(&record.acp_command, Some(app))
+    let resolved_acp_command = resolve_command(&record.acp_command)
         .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
-    let resolved_mcp_command: Option<std::path::PathBuf> = if record.mcp_command.is_empty() {
-        None
-    } else {
-        Some(
-            resolve_command(&record.mcp_command, Some(app)).ok_or_else(|| {
+    let resolved_mcp_command: Option<std::path::PathBuf> =
+        if record.mcp_command.is_empty() {
+            None
+        } else {
+            Some(resolve_command(&record.mcp_command).ok_or_else(|| {
                 missing_command_message(&record.mcp_command, "MCP server command")
-            })?,
-        )
-    };
+            })?)
+        };
     // Resolve agent command to a full path (DMG launches have minimal PATH).
-    let resolved_agent_command = resolve_command(&record.agent_command, Some(app))
+    let resolved_agent_command = resolve_command(&record.agent_command)
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| record.agent_command.clone());
 
@@ -698,7 +697,7 @@ pub fn spawn_agent_child(
     // interfere with other remotes (e.g. GitHub).
     //
     // NOSTR_PRIVATE_KEY mirrors SPROUT_PRIVATE_KEY — keep in sync.
-    if let Some(cred_helper) = resolve_command("git-credential-nostr", Some(app)) {
+    if let Some(cred_helper) = resolve_command("git-credential-nostr") {
         let relay_http_url = crate::relay::relay_http_base_url(&record.relay_url);
 
         command.env("NOSTR_PRIVATE_KEY", &record.private_key_nsec);

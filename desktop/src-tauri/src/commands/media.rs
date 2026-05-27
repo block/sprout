@@ -239,7 +239,7 @@ pub async fn upload_media(
 /// (login shell PATH, /opt/homebrew/bin, /usr/local/bin, etc.).
 /// Returns the resolved absolute path on success.
 fn find_ffmpeg() -> Result<std::path::PathBuf, String> {
-    let ffmpeg_path = resolve_command("ffmpeg", None).ok_or_else(|| {
+    let ffmpeg_path = resolve_command("ffmpeg").ok_or_else(|| {
         "ffmpeg is required for video uploads but was not found.\n\n\
          Install it:\n  \
          macOS:   brew install ffmpeg\n  \

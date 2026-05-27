@@ -1,5 +1,5 @@
 use std::io::Read;
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::{
     app_state::AppState,
@@ -64,7 +64,7 @@ fn install_acp_runtime_blocking(provider_id: &str) -> Result<InstallRuntimeResul
 
     // Phase 1: Install CLI if missing and commands are available.
     if let Some(cli) = provider.underlying_cli {
-        if crate::managed_agents::resolve_command(cli, None).is_none() {
+        if crate::managed_agents::resolve_command(cli).is_none() {
             for cmd in provider.cli_install_commands {
                 let result = run_install_command("cli", cmd);
                 let success = result.success;
@@ -83,7 +83,7 @@ fn install_acp_runtime_blocking(provider_id: &str) -> Result<InstallRuntimeResul
     let adapter_found = provider
         .commands
         .iter()
-        .any(|cmd| crate::managed_agents::resolve_command(cmd, None).is_some());
+        .any(|cmd| crate::managed_agents::resolve_command(cmd).is_some());
     if !adapter_found {
         for cmd in provider.adapter_install_commands {
             let result = run_install_command("adapter", cmd);
@@ -286,7 +286,6 @@ fn truncate_output(s: String) -> String {
 #[tauri::command]
 pub fn discover_managed_agent_prereqs(
     input: DiscoverManagedAgentPrereqsRequest,
-    app: AppHandle,
 ) -> ManagedAgentPrereqsInfo {
     let acp_command = input
         .acp_command
@@ -302,8 +301,8 @@ pub fn discover_managed_agent_prereqs(
         .unwrap_or(DEFAULT_MCP_COMMAND);
 
     ManagedAgentPrereqsInfo {
-        acp: command_availability(acp_command, Some(&app)),
-        mcp: command_availability(mcp_command, Some(&app)),
+        acp: command_availability(acp_command),
+        mcp: command_availability(mcp_command),
     }
 }
 
