@@ -363,16 +363,18 @@ export function MessageComposer({
 
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
-      if (!trimmed || isSendingRef.current) return;
+      if (isSendingRef.current) return;
+      const imetaMedia = editTargetRef.current.imetaMedia ?? [];
+      // Allow saving an empty caption when the message still carries imeta
+      // attachments — finalContent won't actually be empty since the imeta
+      // markdown lines get re-appended below.
+      if (!trimmed && imetaMedia.length === 0) return;
 
       // Re-append the imeta attachments we stripped on edit-load so the
       // saved content keeps rendering them. (The composer doesn't currently
       // expose attachment editing in edit-mode; round-tripping the original
       // imeta is enough.)
-      const finalContent = appendImetaMediaLines(
-        trimmed,
-        editTargetRef.current.imetaMedia ?? [],
-      );
+      const finalContent = appendImetaMediaLines(trimmed, imetaMedia);
 
       const savedContent = trimmed;
       setContent("");

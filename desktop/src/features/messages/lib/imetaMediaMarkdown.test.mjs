@@ -32,6 +32,7 @@ function appendImetaMediaLines(body, imetaMedia) {
   if (imetaMedia.length === 0) return body;
   let out = body;
   for (const { url, m } of imetaMedia) {
+    if (out.includes(url)) continue;
     const isVideo = m.startsWith("video/");
     out += isVideo ? `\n![video](${url})` : `\n![image](${url})`;
   }
@@ -167,4 +168,51 @@ test("edit-of-media-message: video URL without .mp4 suffix still rendered as vid
 test("edit-of-text-only-message: no imeta, body unchanged shape", () => {
   const finalBody = editRoundTrip("hello", [], "world");
   assert.equal(finalBody, "world");
+});
+
+test("append: empty body + imeta produces non-empty media-only body", () => {
+  // Backs the "media-only-no-caption edit" submit path: when the user clears
+  // the caption, finalContent must still contain the imeta URLs so the saved
+  // event renders the attachment.
+  const out = appendImetaMediaLines("", [
+    { url: "https://b/a.png", m: "image/png" },
+  ]);
+  assert.equal(out, "\n![image](https://b/a.png)");
+  assert.ok(out.includes("https://b/a.png"));
+});
+
+// ── append: dedup against URL already present in body ────────────────
+
+test("append: skips URL already textually present in body", () => {
+  // Defends non-trailing layouts: if strip leaves a media line in place
+  // (e.g. interleaved with text), append must not re-add the same URL.
+  const body = "before\n![image](https://b/a.png)\nmiddle";
+  const out = appendImetaMediaLines(body, [
+    { url: "https://b/a.png", m: "image/png" },
+  ]);
+  assert.equal(out, body);
+});
+
+test("append: dedup is per-URL (other entries still appended)", () => {
+  const body = "x\n![image](https://b/a.png)\ny";
+  const out = appendImetaMediaLines(body, [
+    { url: "https://b/a.png", m: "image/png" },
+    { url: "https://b/new.png", m: "image/png" },
+  ]);
+  assert.equal(
+    out,
+    "x\n![image](https://b/a.png)\ny\n![image](https://b/new.png)",
+  );
+});
+
+test("round-trip: interleaved imeta layout doesn't duplicate on save", () => {
+  // strip leaves the interleaved line in place, append must skip it.
+  const originalBody = "before\n![image](https://b/a.png)\nmiddle";
+  const imetaMedia = [{ url: "https://b/a.png", m: "image/png" }];
+  const editable = stripImetaMediaLines(originalBody, imetaMedia);
+  // Editable content still contains the embedded media line (out of scope to
+  // strip); user edits the surrounding text and saves.
+  assert.equal(editable, originalBody);
+  const finalBody = appendImetaMediaLines(editable, imetaMedia);
+  assert.equal(finalBody, originalBody);
 });

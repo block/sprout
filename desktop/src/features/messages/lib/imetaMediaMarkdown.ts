@@ -35,7 +35,7 @@ export function imetaMediaFromTags(
   const entries = parseImetaTags(tags as string[][]);
   const out: ImetaMedia[] = [];
   for (const entry of entries.values()) {
-    if (entry.url && entry.m) out.push({ url: entry.url, m: entry.m });
+    if (entry.url) out.push({ url: entry.url, m: entry.m ?? "image/jpeg" });
   }
   return out;
 }
@@ -78,7 +78,9 @@ export function stripImetaMediaLines(
 
 /**
  * Append `\n![image|video](url)` for each imeta entry. Preserves entry order
- * (which mirrors tag order on the original event).
+ * (which mirrors tag order on the original event). Skips URLs already present
+ * in `body` so non-trailing or interleaved layouts don't double-render the
+ * same attachment after a round-trip.
  */
 export function appendImetaMediaLines(
   body: string,
@@ -87,6 +89,7 @@ export function appendImetaMediaLines(
   if (imetaMedia.length === 0) return body;
   let out = body;
   for (const { url, m } of imetaMedia) {
+    if (out.includes(url)) continue;
     const isVideo = m.startsWith("video/");
     out += isVideo ? `\n![video](${url})` : `\n![image](${url})`;
   }
