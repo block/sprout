@@ -21,8 +21,9 @@ jobs:
           fetch-depth: 0
 
       - name: Extract version from branch name
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
-          BRANCH="${{ github.event.pull_request.head.ref }}"
           VERSION="${BRANCH#version-bump/}"
           echo "version=$VERSION" >> $GITHUB_ENV
           echo "Tagging v${VERSION}"

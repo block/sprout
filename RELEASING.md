@@ -66,8 +66,8 @@ If the automated flow isn't suitable (e.g., building from a non-main ref):
 
 After the OSS release ships, trigger an internal build in the `squareup/sprout-releases` repo:
 
-1. Go to **Actions** in `squareup/sprout-releases`
-2. Run the release workflow, providing the new OSS tag (e.g., `v0.3.0`)
+1. Go to the **sprout-releases Buildkite pipeline**
+2. Trigger a new build — fill in the version (e.g., `0.3.0`), set `sprout_ref` to the OSS tag (e.g., `v0.3.0`), and keep `publish_latest` as `true`
 
 ---
 
