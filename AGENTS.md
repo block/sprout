@@ -6,6 +6,30 @@ code style, PR process, architecture), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
+## Ecosystem
+
+Sprout spans five repos. This one (`block/sprout`) is the OSS source for the relay, desktop, mobile, and CLI. The others handle internal builds and deployment:
+
+| Repo | Purpose |
+|------|---------|
+| [block/sprout](https://github.com/block/sprout) | OSS source — relay, desktop app, mobile app, CLI, agent harness |
+| [squareup/sprout-releases](https://github.com/squareup/sprout-releases) | Buildkite pipeline producing Block-signed macOS + iOS builds with `-block` version suffix |
+| [squareup/sprout-oss](https://github.com/squareup/sprout-oss) | CI pipeline building the relay Docker image and pushing to internal ECR |
+| [squareup/block-coder-tf-stacks](https://github.com/squareup/block-coder-tf-stacks) | Terraform + ArgoCD deploying the relay to the staging Kubernetes cluster |
+| [squareup/sprout-backend-blox](https://github.com/squareup/sprout-backend-blox) | Desktop backend provider script connecting Blox workstation agents to the relay |
+
+```
+block/sprout (source)
+  ├─► sprout-releases    (desktop + mobile builds → Artifactory, GitHub, Mobile Releases)
+  ├─► sprout-oss         (relay Docker image → ECR)
+  │     └─► block-coder-tf-stacks  (Helm chart → ArgoCD → staging cluster)
+  └─── sprout-backend-blox         (Blox compute provider for Desktop agent launch)
+```
+
+See [RELEASING.md](RELEASING.md) for the desktop release flow across `block/sprout` and `sprout-releases`.
+
+---
+
 ## Repo Structure
 
 ```
