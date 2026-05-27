@@ -42,7 +42,7 @@ struct Session {
     original_task: Option<String>,
     handoff_count: usize,
     stop_rejections: u32,
-    effective_system_prompt: String,
+    effective_system_prompt: Arc<str>,
 }
 
 fn die(msg: String) -> ! {
@@ -255,15 +255,15 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             .await;
         }
     }
-    let effective_system_prompt = if app.cfg.hints_enabled {
+    let effective_system_prompt: Arc<str> = if app.cfg.hints_enabled {
         let hints = hints::build_hints_section(std::path::Path::new(&p.cwd));
         if hints.is_empty() {
-            app.cfg.system_prompt.clone()
+            Arc::from(app.cfg.system_prompt.as_str())
         } else {
-            format!("{}\n\n{}", app.cfg.system_prompt, hints)
+            Arc::from(format!("{}\n\n{}", app.cfg.system_prompt, hints))
         }
     } else {
-        app.cfg.system_prompt.clone()
+        Arc::from(app.cfg.system_prompt.as_str())
     };
     let mcp = match McpRegistry::spawn_all(&app.cfg, &p.mcp_servers, &p.cwd).await {
         Ok(m) => Arc::new(m),
@@ -394,7 +394,7 @@ async fn acquire_session(
         usize,
         u32,
         watch::Receiver<bool>,
-        String,
+        Arc<str>,
     ),
     &'static str,
 > {
@@ -414,7 +414,7 @@ async fn acquire_session(
         s.handoff_count,
         s.stop_rejections,
         rx,
-        s.effective_system_prompt.clone(),
+        Arc::clone(&s.effective_system_prompt),
     ))
 }
 

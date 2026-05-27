@@ -1,20 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::mcp::truncate_at_boundary;
+
 const MAX_HINTS_BYTES: usize = 128 * 1024;
 const MAX_SKILL_BODY_BYTES: usize = 32 * 1024;
 const SKILL_DIRS: &[&str] = &[".agents/skills", ".goose/skills", ".claude/skills"];
-
-fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
-    if max_bytes >= s.len() {
-        return s;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
 
 pub struct SkillEntry {
     pub name: String,
@@ -22,8 +13,7 @@ pub struct SkillEntry {
     pub body: String,
 }
 
-/// Walk upward from `start` looking for a `.git` entry (file or directory).
-/// Returns the directory that contains `.git`, or `None` if not found.
+/// Handles both normal repos (`.git/` dir) and worktrees (`.git` file).
 fn find_git_root(start: &Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();
     loop {
@@ -37,8 +27,6 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Load AGENTS.md files from git-root down to CWD, concatenated with `\n\n`.
-/// Silently skips files that can't be read. Caps total at `MAX_HINTS_BYTES`.
 fn load_hint_files(cwd: &Path) -> String {
     let dirs = match find_git_root(cwd) {
         Some(root) => {
@@ -75,7 +63,7 @@ fn load_hint_files(cwd: &Path) -> String {
         if content.len() <= remaining {
             result.push_str(&content);
         } else {
-            let truncated = truncate_to_char_boundary(&content, remaining);
+            let truncated = truncate_at_boundary(&content, remaining);
             result.push_str(truncated);
             break;
         }
@@ -83,8 +71,6 @@ fn load_hint_files(cwd: &Path) -> String {
     result
 }
 
-/// Parse YAML frontmatter from a SKILL.md file.
-/// Returns `(name, description, body)` or `None` if `name` is missing.
 fn parse_skill_frontmatter(content: &str) -> Option<(String, String, String)> {
     // Must start with `---`
     let rest = content.strip_prefix("---\n")?;
@@ -110,7 +96,7 @@ fn parse_skill_frontmatter(content: &str) -> Option<(String, String, String)> {
         .to_string();
 
     let body = if body.len() > MAX_SKILL_BODY_BYTES {
-        truncate_to_char_boundary(body, MAX_SKILL_BODY_BYTES).to_string()
+        truncate_at_boundary(body, MAX_SKILL_BODY_BYTES).to_string()
     } else {
         body.to_string()
     };
@@ -118,8 +104,6 @@ fn parse_skill_frontmatter(content: &str) -> Option<(String, String, String)> {
     Some((name, description, body))
 }
 
-/// Scan skill directories for subdirectories containing SKILL.md.
-/// Deduplicates by name (first wins). Caps each body at `MAX_SKILL_BODY_BYTES`.
 fn discover_skills(cwd: &Path) -> Vec<SkillEntry> {
     let mut seen = HashSet::new();
     let mut skills: Vec<SkillEntry> = Vec::new();
@@ -160,8 +144,6 @@ fn discover_skills(cwd: &Path) -> Vec<SkillEntry> {
     skills
 }
 
-/// Build the full hints section to inject into the system prompt.
-/// Returns an empty string when there is nothing to include.
 pub fn build_hints_section(cwd: &Path) -> String {
     let hints_text = load_hint_files(cwd);
     let skills = discover_skills(cwd);
