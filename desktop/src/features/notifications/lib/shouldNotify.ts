@@ -9,6 +9,7 @@ export function shouldNotifyForEvent(
   currentPubkey: string,
   participatedRootIds: ReadonlySet<string>,
   followedRootIds: ReadonlySet<string>,
+  authoredRootIds: ReadonlySet<string>,
 ): boolean {
   const { parentId, rootId } = getThreadReference(event.tags);
 
@@ -34,6 +35,10 @@ export function shouldNotifyForEvent(
   }
 
   if (rootId !== null && followedRootIds.has(rootId)) {
+    return true;
+  }
+
+  if (rootId !== null && authoredRootIds.has(rootId)) {
     return true;
   }
 

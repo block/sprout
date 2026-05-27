@@ -88,6 +88,7 @@ export function ChannelScreen({
     followThread,
     unfollowThread,
     isFollowingThread,
+    isNotifiedForThread,
   } = useAppShell();
   const [profilePanelPubkey, setProfilePanelPubkey] = React.useState<
     string | null
@@ -96,7 +97,9 @@ export function ChannelScreen({
   const [openThreadHeadId, setOpenThreadHeadId] = React.useState<string | null>(
     null,
   );
-  const isFollowingCurrentThread =
+  const isNotifiedForCurrentThread =
+    openThreadHeadId != null ? isNotifiedForThread(openThreadHeadId) : false;
+  const isExplicitlyFollowingCurrentThread =
     openThreadHeadId != null ? isFollowingThread(openThreadHeadId) : false;
   const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState(
     () => new Set<string>(),
@@ -501,19 +504,20 @@ export function ChannelScreen({
                   followThreadById={followThread}
                   unfollowThreadById={unfollowThread}
                   isFollowingThreadById={isFollowingThread}
-                  isFollowingThread={isFollowingCurrentThread}
+                  isFollowingThread={isNotifiedForCurrentThread}
                   isSending={sendMessageMutation.isPending}
                   isTimelineLoading={isTimelineLoading}
                   messages={timelineMessages}
                   onCancelEdit={handleCancelEdit}
                   onCancelThreadReply={handleCancelThreadReply}
                   onFollowThread={
-                    openThreadHeadId != null
+                    openThreadHeadId != null && !isNotifiedForCurrentThread
                       ? () => followThread(openThreadHeadId)
                       : undefined
                   }
                   onUnfollowThread={
-                    openThreadHeadId != null
+                    openThreadHeadId != null &&
+                    isExplicitlyFollowingCurrentThread
                       ? () => unfollowThread(openThreadHeadId)
                       : undefined
                   }

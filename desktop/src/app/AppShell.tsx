@@ -286,6 +286,9 @@ export function AppShell() {
     unreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
+    participatedRootIds,
+    authoredRootIds,
+    threadActivityItems,
   } = useUnreadChannels(
     sidebarChannels,
     activeChannel,
@@ -317,6 +320,14 @@ export function AppShell() {
     getChannelReadAt,
     readStateVersion,
     feedProfilesQuery.data?.profiles,
+  );
+
+  const isNotifiedForThread = React.useCallback(
+    (rootId: string) =>
+      followedRootIds.has(rootId) ||
+      participatedRootIds.has(rootId) ||
+      authoredRootIds.has(rootId),
+    [followedRootIds, participatedRootIds, authoredRootIds],
   );
 
   const createChannelMutation = useCreateChannelMutation();
@@ -621,6 +632,8 @@ export function AppShell() {
             followThread,
             unfollowThread,
             isFollowingThread,
+            isNotifiedForThread,
+            threadActivityItems,
           }}
         >
           <HuddleProvider>

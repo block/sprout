@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { ThreadActivityItem } from "@/features/channels/useUnreadChannels";
 
 type AppShellContextValue = {
   markAllChannelsRead: () => void;
@@ -21,6 +22,8 @@ type AppShellContextValue = {
   followThread: (rootId: string) => void;
   unfollowThread: (rootId: string) => void;
   isFollowingThread: (rootId: string) => boolean;
+  isNotifiedForThread: (rootId: string) => boolean;
+  threadActivityItems: ThreadActivityItem[];
 };
 
 const AppShellContext = React.createContext<AppShellContextValue>({
@@ -33,6 +36,8 @@ const AppShellContext = React.createContext<AppShellContextValue>({
   followThread: () => {},
   unfollowThread: () => {},
   isFollowingThread: () => false,
+  isNotifiedForThread: () => false,
+  threadActivityItems: [],
 });
 
 export function AppShellProvider({
