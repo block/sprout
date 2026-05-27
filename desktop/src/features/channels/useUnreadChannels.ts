@@ -4,6 +4,8 @@ import {
   type UseLiveChannelUpdatesOptions,
 } from "@/features/channels/useLiveChannelUpdates";
 import { useReadState } from "@/features/channels/readState/useReadState";
+import { getThreadReference } from "@/features/messages/lib/threading";
+import { shouldNotifyForEvent } from "@/features/notifications/lib/shouldNotify";
 import type { RelayClient } from "@/shared/api/relayClientSession";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import { CHANNEL_MESSAGE_EVENT_KINDS } from "@/shared/constants/kinds";
@@ -19,6 +21,8 @@ type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions & {
 // filter to find one external trigger message. 1000 matches the live sub's
 // per-channel limit elsewhere in the app.
 const CATCH_UP_LIMIT = 1000;
+
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 function parseTimestamp(value: string | null | undefined) {
   if (!value) {
@@ -74,6 +78,10 @@ export function useUnreadChannels(
   // against. Cleared when the user opens the channel.
   const forcedUnreadRef = React.useRef(new Set<string>());
 
+  // Root event IDs of threads where the current user has replied at least once.
+  // Used to determine if thread replies should trigger unread notifications.
+  const participatedRootIdsRef = React.useRef(new Set<string>());
+
   // Tracks which channels we've already issued a catch-up REQ for this
   // session. Prevents re-fetching on every channels-list refetch, while still
   // letting newly-joined channels be caught up. Reset on identity change.
@@ -92,6 +100,7 @@ export function useUnreadChannels(
     latestByChannelRef.current = new Map();
     forcedUnreadRef.current = new Set();
     caughtUpChannelsRef.current = new Set();
+    participatedRootIdsRef.current = new Set();
     bumpLatestVersion();
   }, [pubkey, relayClient]);
 
@@ -165,9 +174,19 @@ export function useUnreadChannels(
     [callerOnChannelMessage],
   );
 
+  const handleSelfChannelMessage = React.useCallback((event: RelayEvent) => {
+    const ref = getThreadReference(event.tags);
+    if (ref.rootId !== null) {
+      participatedRootIdsRef.current.add(ref.rootId);
+    }
+  }, []);
+
   useLiveChannelUpdates(channels, activeChannelId, {
     ...liveUpdateOptions,
     onChannelMessage: handleChannelMessage,
+    onSelfChannelMessage: handleSelfChannelMessage,
+    participatedRootIds: participatedRootIdsRef.current,
+    followedRootIds: liveUpdateOptions.followedRootIds,
   });
 
   // Effect-key the catch-up on the *set* of channel IDs, not the array
@@ -184,6 +203,7 @@ export function useUnreadChannels(
   // NIP-RS read marker?" If yes, advance latestByChannelRef so the unread
   // predicate fires. This is the only way historical unreads survive an
   // app restart now that we don't persist any client-side "latest" state.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: options.followedRootIds intentionally omitted — it's a Set reference that changes identity every render; the catch-up is a one-shot per-channel operation controlled by caughtUpChannelsRef, not reactive to follow changes
   React.useEffect(() => {
     if (!isReadStateReady) return;
     if (!relayClient) return;
@@ -224,6 +244,20 @@ export function useUnreadChannels(
             limit: CATCH_UP_LIMIT,
           });
 
+          // Pass 1: build participation from self-authored thread replies
+          for (const event of events) {
+            if (
+              normalizedPubkey !== null &&
+              event.pubkey.toLowerCase() === normalizedPubkey
+            ) {
+              const ref = getThreadReference(event.tags);
+              if (ref.rootId !== null) {
+                participatedRootIdsRef.current.add(ref.rootId);
+              }
+            }
+          }
+
+          // Pass 2: compute maxExternal, applying notification filter
           let maxExternal = 0;
           for (const event of events) {
             if (
@@ -233,6 +267,16 @@ export function useUnreadChannels(
               continue;
             }
             if (readAt !== null && event.created_at <= readAt) continue;
+            if (
+              !shouldNotifyForEvent(
+                event,
+                normalizedPubkey ?? "",
+                participatedRootIdsRef.current,
+                options.followedRootIds ?? EMPTY_SET,
+              )
+            ) {
+              continue;
+            }
             if (event.created_at > maxExternal) {
               maxExternal = event.created_at;
             }

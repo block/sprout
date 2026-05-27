@@ -90,6 +90,9 @@ type ChannelPaneProps = {
   threadScrollTargetId: string | null;
   targetMessageId: string | null;
   typingPubkeys: string[];
+  isFollowingThread?: boolean;
+  onFollowThread?: () => void;
+  onUnfollowThread?: () => void;
 };
 
 export const ChannelPane = React.memo(function ChannelPane({
@@ -103,6 +106,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   fetchOlder,
   hasOlderMessages,
   isFetchingOlder,
+  isFollowingThread,
   isJoining = false,
   isSending,
   isTimelineLoading,
@@ -115,6 +119,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onDelete,
   onEdit,
   onEditSave,
+  onFollowThread,
   onMarkUnread,
   onExpandThreadReplies,
   onJoinChannel,
@@ -127,6 +132,7 @@ export const ChannelPane = React.memo(function ChannelPane({
   onThreadScrollTargetResolved,
   onTargetReached,
   onToggleReaction,
+  onUnfollowThread,
   personaLookup,
   profiles,
   openThreadHeadId,
@@ -369,6 +375,7 @@ export const ChannelPane = React.memo(function ChannelPane({
           currentPubkey={currentPubkey}
           disabled={isComposerDisabled}
           editTarget={threadEditTarget}
+          isFollowingThread={isFollowingThread}
           isSending={isSending}
           onCancelEdit={onCancelEdit}
           onCancelReply={onCancelThreadReply}
@@ -376,12 +383,14 @@ export const ChannelPane = React.memo(function ChannelPane({
           onDelete={onDelete}
           onEdit={onEdit}
           onEditSave={onEditSave}
+          onFollowThread={onFollowThread}
           onMarkUnread={onMarkUnread}
           onExpandReplies={onExpandThreadReplies}
           onSelectReplyTarget={onSelectThreadReplyTarget}
           onSend={onSendThreadReply}
           onScrollTargetResolved={onThreadScrollTargetResolved}
           onToggleReaction={onToggleReaction}
+          onUnfollowThread={onUnfollowThread}
           profiles={profiles}
           replyTargetId={threadReplyTargetId}
           replyTargetMessage={threadReplyTargetMessage}

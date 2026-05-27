@@ -18,6 +18,9 @@ type AppShellContextValue = {
   // Bump-counter that invalidates whenever the read marker changes. Include
   // in memo deps that consume getChannelReadAt.
   readStateVersion: number;
+  followThread: (rootId: string) => void;
+  unfollowThread: (rootId: string) => void;
+  isFollowingThread: (rootId: string) => boolean;
 };
 
 const AppShellContext = React.createContext<AppShellContextValue>({
@@ -27,6 +30,9 @@ const AppShellContext = React.createContext<AppShellContextValue>({
   openChannelManagement: () => {},
   getChannelReadAt: () => null,
   readStateVersion: 0,
+  followThread: () => {},
+  unfollowThread: () => {},
+  isFollowingThread: () => false,
 });
 
 export function AppShellProvider({

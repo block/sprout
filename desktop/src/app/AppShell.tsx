@@ -21,6 +21,7 @@ import {
   useOpenDmMutation,
 } from "@/features/channels/hooks";
 import { useUnreadChannels } from "@/features/channels/useUnreadChannels";
+import { useThreadFollows } from "@/features/messages/lib/useThreadFollows";
 import {
   useHomeFeedNotifications,
   useHomeFeedNotificationState,
@@ -272,6 +273,13 @@ export function AppShell() {
   );
 
   const {
+    followedRootIds,
+    isFollowing: isFollowingThread,
+    followThread,
+    unfollowThread,
+  } = useThreadFollows(identityQuery.data?.pubkey);
+
+  const {
     markAllChannelsRead,
     markChannelRead,
     markChannelUnread,
@@ -291,6 +299,7 @@ export function AppShell() {
       onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
+      followedRootIds,
     },
   );
 
@@ -609,6 +618,9 @@ export function AppShell() {
             },
             getChannelReadAt,
             readStateVersion,
+            followThread,
+            unfollowThread,
+            isFollowingThread,
           }}
         >
           <HuddleProvider>
