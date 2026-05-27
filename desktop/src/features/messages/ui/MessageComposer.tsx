@@ -8,6 +8,11 @@ import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks"
 import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
 import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
+import {
+  appendImetaMediaLines,
+  type ImetaMedia,
+  stripImetaMediaLines,
+} from "@/features/messages/lib/imetaMediaMarkdown";
 
 import {
   ALLOWED_MEDIA_TYPES,
@@ -46,6 +51,13 @@ type MessageComposerProps = {
     author: string;
     body: string;
     id: string;
+    /**
+     * NIP-92 imeta attachments on the original event, in tag order.
+     * The composer strips matching `![image|video](url)` markdown lines from
+     * the body when loading the editor, and re-appends them on save, so the
+     * attachment survives the round-trip. See `imetaMediaMarkdown.ts`.
+     */
+    imetaMedia?: ImetaMedia[];
   } | null;
   isSending?: boolean;
   onCancelEdit?: () => void;
@@ -221,9 +233,17 @@ export function MessageComposer({
   React.useEffect(() => {
     if (editTarget) {
       preEditContentRef.current = contentRef.current;
-      setContent(editTarget.body);
-      contentRef.current = editTarget.body;
-      richText.setContent(editTarget.body);
+      // Strip the trailing `![image|video](url)` lines that correspond to
+      // imeta attachments. Those are re-appended on save (see submitMessage)
+      // so the attachment survives the round-trip; the user only sees and
+      // edits the text portion.
+      const editableBody = stripImetaMediaLines(
+        editTarget.body,
+        editTarget.imetaMedia ?? [],
+      );
+      setContent(editableBody);
+      contentRef.current = editableBody;
+      richText.setContent(editableBody);
       richText.focus();
     } else if (preEditContentRef.current !== null) {
       const restored = preEditContentRef.current;
@@ -345,6 +365,15 @@ export function MessageComposer({
     if (editTargetRef.current && onEditSaveRef.current) {
       if (!trimmed || isSendingRef.current) return;
 
+      // Re-append the imeta attachments we stripped on edit-load so the
+      // saved content keeps rendering them. (The composer doesn't currently
+      // expose attachment editing in edit-mode; round-tripping the original
+      // imeta is enough.)
+      const finalContent = appendImetaMediaLines(
+        trimmed,
+        editTargetRef.current.imetaMedia ?? [],
+      );
+
       const savedContent = trimmed;
       setContent("");
       contentRef.current = "";
@@ -355,7 +384,7 @@ export function MessageComposer({
       setIsEmojiPickerOpen(false);
 
       try {
-        await onEditSaveRef.current(trimmed);
+        await onEditSaveRef.current(finalContent);
       } catch {
         setContent(savedContent);
         contentRef.current = savedContent;
