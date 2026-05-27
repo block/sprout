@@ -63,7 +63,32 @@ export function ProfilePopover({
     /Mac|iPod|iPhone|iPad/.test(navigator.userAgent);
   const [statusDialogOpen, setStatusDialogOpen] = React.useState(false);
   const [presenceMenuOpen, setPresenceMenuOpen] = React.useState(false);
+  const presenceHoverTimer = React.useRef<number | null>(null);
   const hasUserStatus = Boolean(userStatusText || userStatusEmoji);
+
+  function clearPresenceHoverTimer() {
+    if (presenceHoverTimer.current !== null) {
+      window.clearTimeout(presenceHoverTimer.current);
+      presenceHoverTimer.current = null;
+    }
+  }
+
+  function schedulePresenceMenu(nextOpen: boolean) {
+    clearPresenceHoverTimer();
+    presenceHoverTimer.current = window.setTimeout(
+      () => setPresenceMenuOpen(nextOpen),
+      nextOpen ? 80 : 160,
+    );
+  }
+
+  React.useEffect(
+    () => () => {
+      if (presenceHoverTimer.current !== null) {
+        window.clearTimeout(presenceHoverTimer.current);
+      }
+    },
+    [],
+  );
 
   function handlePopoverOpenChange(nextOpen: boolean) {
     if (!nextOpen) {
@@ -73,6 +98,7 @@ export function ProfilePopover({
   }
 
   function closePopover() {
+    clearPresenceHoverTimer();
     setPresenceMenuOpen(false);
     onOpenChange(false);
   }
@@ -155,20 +181,6 @@ export function ProfilePopover({
                   {hasUserStatus ? "Update status" : "Set a status"}
                 </span>
               </button>
-              {hasUserStatus ? (
-                <button
-                  className="w-full px-3 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
-                  data-testid="profile-popover-clear-status"
-                  onClick={() => {
-                    onClearUserStatus();
-                    closePopover();
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Clear status
-                </button>
-              ) : null}
             </div>
 
             <hr className="my-1 h-px border-0 bg-border" />
@@ -184,7 +196,14 @@ export function ProfilePopover({
                     aria-expanded={presenceMenuOpen}
                     aria-haspopup="menu"
                     className={MENU_ITEM_CLASS}
+                    data-testid="profile-popover-presence-trigger"
                     disabled={isStatusPending}
+                    onClick={() => {
+                      clearPresenceHoverTimer();
+                      setPresenceMenuOpen((prev) => !prev);
+                    }}
+                    onMouseEnter={() => schedulePresenceMenu(true)}
+                    onMouseLeave={() => schedulePresenceMenu(false)}
                     role="menuitem"
                     type="button"
                   >
@@ -193,7 +212,7 @@ export function ProfilePopover({
                       status={currentStatus}
                     />
                     <span className="flex-1 text-sm text-popover-foreground">
-                      Change presence
+                      {getPresenceLabel(currentStatus)}
                     </span>
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </button>
@@ -201,6 +220,8 @@ export function ProfilePopover({
                 <PopoverContent
                   align="start"
                   className="w-44 rounded-xl border border-border bg-popover p-1.5 shadow-lg"
+                  onMouseEnter={() => schedulePresenceMenu(true)}
+                  onMouseLeave={() => schedulePresenceMenu(false)}
                   side="right"
                   sideOffset={4}
                 >
