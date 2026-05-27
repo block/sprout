@@ -36,7 +36,7 @@ const LIVE_SUBSCRIPTION_RETRY_MAX_MS = 30_000;
 // catch-up query in useUnreadChannels so the two paths stay in lockstep.
 const UNREAD_TRIGGER_KINDS = new Set<number>(CHANNEL_MESSAGE_EVENT_KINDS);
 
-const EMPTY_SET: ReadonlySet<string> = new Set();
+export const EMPTY_SET: ReadonlySet<string> = new Set();
 
 function isExternalMentionEvent(event: RelayEvent, currentPubkey: string) {
   return (

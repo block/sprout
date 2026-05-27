@@ -34,11 +34,12 @@ function readFromStorage(pubkey: string): ThreadFollowEntry[] {
   }
 }
 
-function writeToStorage(pubkey: string, entries: ThreadFollowEntry[]): void {
+function writeToStorage(pubkey: string, entries: ThreadFollowEntry[]): boolean {
   try {
     window.localStorage.setItem(storageKey(pubkey), JSON.stringify(entries));
+    return true;
   } catch {
-    // Ignore storage errors (private browsing, quota exceeded).
+    return false;
   }
 }
 
@@ -73,6 +74,23 @@ export function useThreadFollows(pubkey: string | undefined): {
     setEntries(readFromStorage(pubkey));
   }, [pubkey]);
 
+  React.useEffect(() => {
+    if (!pubkey) {
+      return;
+    }
+    const key = storageKey(pubkey);
+    const handler = (e: StorageEvent) => {
+      if (e.key !== key) {
+        return;
+      }
+      setEntries(readFromStorage(pubkey));
+    };
+    window.addEventListener("storage", handler);
+    return () => {
+      window.removeEventListener("storage", handler);
+    };
+  }, [pubkey]);
+
   const followedRootIds = React.useMemo<ReadonlySet<string>>(
     () => new Set(entries.map((e) => e.rootId)),
     [entries],
@@ -93,7 +111,9 @@ export function useThreadFollows(pubkey: string | undefined): {
           return prev;
         }
         const next = capEntries([...prev, { rootId, followedAt: Date.now() }]);
-        writeToStorage(pubkey, next);
+        if (!writeToStorage(pubkey, next)) {
+          return prev;
+        }
         return next;
       });
     },
@@ -107,7 +127,9 @@ export function useThreadFollows(pubkey: string | undefined): {
       }
       setEntries((prev) => {
         const next = prev.filter((e) => e.rootId !== rootId);
-        writeToStorage(pubkey, next);
+        if (!writeToStorage(pubkey, next)) {
+          return prev;
+        }
         return next;
       });
     },

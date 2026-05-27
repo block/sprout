@@ -498,6 +498,9 @@ export function ChannelScreen({
                         }
                       : null
                   }
+                  followThreadById={followThread}
+                  unfollowThreadById={unfollowThread}
+                  isFollowingThreadById={isFollowingThread}
                   isFollowingThread={isFollowingCurrentThread}
                   isSending={sendMessageMutation.isPending}
                   isTimelineLoading={isTimelineLoading}

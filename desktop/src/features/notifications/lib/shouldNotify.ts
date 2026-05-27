@@ -1,9 +1,12 @@
 import type { RelayEvent } from "@/shared/api/types";
-import { getThreadReference } from "@/features/messages/lib/threading";
+import {
+  getThreadReference,
+  isBroadcastReply,
+} from "@/features/messages/lib/threading";
 
 export function shouldNotifyForEvent(
   event: RelayEvent,
-  _currentPubkey: string,
+  currentPubkey: string,
   participatedRootIds: ReadonlySet<string>,
   followedRootIds: ReadonlySet<string>,
 ): boolean {
@@ -13,7 +16,16 @@ export function shouldNotifyForEvent(
     return true;
   }
 
-  if (event.tags.some((tag) => tag[0] === "broadcast" && tag[1] === "1")) {
+  if (isBroadcastReply(event.tags)) {
+    return true;
+  }
+
+  if (
+    currentPubkey.length > 0 &&
+    event.tags.some(
+      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === currentPubkey,
+    )
+  ) {
     return true;
   }
 

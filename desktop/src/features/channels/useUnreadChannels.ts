@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  EMPTY_SET,
   useLiveChannelUpdates,
   type UseLiveChannelUpdatesOptions,
 } from "@/features/channels/useLiveChannelUpdates";
@@ -22,7 +23,47 @@ type UseUnreadChannelsOptions = UseLiveChannelUpdatesOptions & {
 // per-channel limit elsewhere in the app.
 const CATCH_UP_LIMIT = 1000;
 
-const EMPTY_SET: ReadonlySet<string> = new Set();
+const PARTICIPATION_STORAGE_PREFIX = "sprout-thread-participation.v1";
+const MAX_PARTICIPATION_ENTRIES = 1000;
+
+function participationStorageKey(pubkey: string): string {
+  return `${PARTICIPATION_STORAGE_PREFIX}:${pubkey}`;
+}
+
+function readParticipationFromStorage(pubkey: string): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(participationStorageKey(pubkey));
+    if (!raw) {
+      return new Set();
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(parsed.filter((id): id is string => typeof id === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeParticipationToStorage(
+  pubkey: string,
+  rootIds: Set<string>,
+): void {
+  try {
+    const arr = [...rootIds];
+    const capped =
+      arr.length > MAX_PARTICIPATION_ENTRIES
+        ? arr.slice(arr.length - MAX_PARTICIPATION_ENTRIES)
+        : arr;
+    window.localStorage.setItem(
+      participationStorageKey(pubkey),
+      JSON.stringify(capped),
+    );
+  } catch {
+    // Ignore storage errors (private browsing, quota exceeded).
+  }
+}
 
 function parseTimestamp(value: string | null | undefined) {
   if (!value) {
@@ -100,7 +141,9 @@ export function useUnreadChannels(
     latestByChannelRef.current = new Map();
     forcedUnreadRef.current = new Set();
     caughtUpChannelsRef.current = new Set();
-    participatedRootIdsRef.current = new Set();
+    participatedRootIdsRef.current = pubkey
+      ? readParticipationFromStorage(pubkey)
+      : new Set();
     bumpLatestVersion();
   }, [pubkey, relayClient]);
 
@@ -174,12 +217,21 @@ export function useUnreadChannels(
     [callerOnChannelMessage],
   );
 
-  const handleSelfChannelMessage = React.useCallback((event: RelayEvent) => {
-    const ref = getThreadReference(event.tags);
-    if (ref.rootId !== null) {
-      participatedRootIdsRef.current.add(ref.rootId);
-    }
-  }, []);
+  const handleSelfChannelMessage = React.useCallback(
+    (event: RelayEvent) => {
+      const ref = getThreadReference(event.tags);
+      if (ref.rootId !== null) {
+        participatedRootIdsRef.current.add(ref.rootId);
+        if (normalizedPubkey !== null) {
+          writeParticipationToStorage(
+            normalizedPubkey,
+            participatedRootIdsRef.current,
+          );
+        }
+      }
+    },
+    [normalizedPubkey],
+  );
 
   useLiveChannelUpdates(channels, activeChannelId, {
     ...liveUpdateOptions,
@@ -255,6 +307,13 @@ export function useUnreadChannels(
                 participatedRootIdsRef.current.add(ref.rootId);
               }
             }
+          }
+
+          if (normalizedPubkey !== null) {
+            writeParticipationToStorage(
+              normalizedPubkey,
+              participatedRootIdsRef.current,
+            );
           }
 
           // Pass 2: compute maxExternal, applying notification filter
