@@ -64,10 +64,19 @@ If the automated flow isn't suitable (e.g., building from a non-main ref):
 
 ## Internal Releases
 
-After the OSS release ships, trigger an internal build in the `squareup/sprout-releases` repo:
+After the OSS release ships, trigger an internal build via the **sprout-releases** Buildkite pipeline:
 
-1. Go to the **sprout-releases Buildkite pipeline**
-2. Trigger a new build — fill in the version (e.g., `0.3.0`), set `sprout_ref` to the OSS tag (e.g., `v0.3.0`), and keep `publish_latest` as `true`
+1. Go to the [sprout-releases pipeline](https://buildkite.com/cash/sprout-releases) and click **New Build**
+2. Fill in the input fields:
+
+   | Field | Value | Notes |
+   |-------|-------|-------|
+   | `version` | `0.3.0` | Semver, no `v` prefix |
+   | `sprout_ref` | `v0.3.0` | The OSS git tag — use the tag, not a branch name |
+   | `relay_url` | *(default)* | Pre-filled with the production relay; usually leave as-is |
+   | `publish_latest` | `true` | Updates `latest.json` on Artifactory so installed apps auto-update. Set to `false` for test builds. |
+
+Internal desktop builds display a `-block` suffix in the version (e.g., `v0.3.0-block` in the Settings panel). This distinguishes them from OSS builds at a glance. iOS builds and GitHub release tags use the clean version (`0.3.0`) since Apple's `CFBundleShortVersionString` rejects pre-release suffixes.
 
 ---
 

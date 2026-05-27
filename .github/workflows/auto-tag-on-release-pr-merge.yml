@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   auto-tag:
@@ -25,12 +26,27 @@ jobs:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           VERSION="${BRANCH#version-bump/}"
-          echo "version=$VERSION" >> $GITHUB_ENV
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version in branch name: '$VERSION'"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_ENV"
           echo "Tagging v${VERSION}"
 
       - name: Create and push tag
+        env:
+          VERSION: ${{ env.version }}
         run: |
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git tag "v${{ env.version }}"
-          git push origin "v${{ env.version }}"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Trigger release build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.version }}
+        run: |
+          gh workflow run release.yml \
+            -f version="$VERSION" \
+            -f ref="v$VERSION"

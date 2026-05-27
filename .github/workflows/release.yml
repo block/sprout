@@ -178,17 +178,21 @@ jobs:
           ARCHIVE_NAME: ${{ steps.artifacts.outputs.archive_name }}
 
       - name: Create versioned GitHub release
-        run: |
-          RELEASE_SHA=$(git rev-parse HEAD)
-          gh release create "v${VERSION}" \
-            --target "$RELEASE_SHA" \
-            --title "Sprout Desktop v${VERSION}" \
-            --notes "Sprout Desktop v${VERSION}" \
-            "$DMG_PATH"
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
+        run: |
+          RELEASE_SHA=$(git rev-parse HEAD)
+          NOTES=$(awk "/^## v${VERSION}$/,/^## v/" CHANGELOG.md | head -n -1)
+          if [[ -z "$NOTES" ]]; then
+            NOTES="Sprout Desktop v${VERSION}"
+          fi
+          gh release create "v${VERSION}" \
+            --target "$RELEASE_SHA" \
+            --title "Sprout Desktop v${VERSION}" \
+            --notes "$NOTES" \
+            "$DMG_PATH"
 
       - name: Update rolling release for auto-updater
         run: |
@@ -257,8 +261,10 @@ jobs:
         run: just desktop-install-ci
 
       - name: Patch version
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
         run: |
-          cd desktop && node scripts/set-version-from-tag.mjs "${{ needs.release.outputs.version }}"
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
           cd src-tauri && cargo update --workspace
 
       - name: Build sidecars
@@ -291,12 +297,13 @@ jobs:
           echo "appimage=$APPIMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Upload Linux artifacts to versioned GitHub release
-        run: |
-          gh release upload "v${{ needs.release.outputs.version }}" \
-            "$DEB_PATH" \
-            "$APPIMAGE_PATH" \
-            --clobber
         env:
+          VERSION: ${{ needs.release.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEB_PATH: ${{ steps.linux-artifacts.outputs.deb }}
           APPIMAGE_PATH: ${{ steps.linux-artifacts.outputs.appimage }}
+        run: |
+          gh release upload "v$VERSION" \
+            "$DEB_PATH" \
+            "$APPIMAGE_PATH" \
+            --clobber

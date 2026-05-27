@@ -327,7 +327,7 @@ bump-version version:
     #!/usr/bin/env bash
     set -euo pipefail
     # Validate semver format
-    if ! echo "{{ version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if ! echo "{{ version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
         echo "Error: '{{ version }}' is not valid semver (expected X.Y.Z)"
         exit 1
     fi
@@ -342,12 +342,18 @@ bump-version version:
         fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
     "
     # desktop/src-tauri/Cargo.toml — only first version line (under [package])
-    sed -i '' '0,/^version = ".*"/s//version = "{{ version }}"/' desktop/src-tauri/Cargo.toml
+    node -e "
+        const fs = require('fs');
+        const p = 'desktop/src-tauri/Cargo.toml';
+        let t = fs.readFileSync(p, 'utf8');
+        t = t.replace(/^version = \".*\"/m, 'version = \"{{ version }}\"');
+        fs.writeFileSync(p, t);
+    "
     # mobile/pubspec.yaml — bump version but preserve build number
     sed -i '' "s/^version: .*/version: {{ version }}+1/" mobile/pubspec.yaml
     # Regenerate lockfiles
     pnpm install --lockfile-only
-    cargo generate-lockfile --manifest-path desktop/src-tauri/Cargo.toml
+    cargo update -p sprout-desktop --manifest-path desktop/src-tauri/Cargo.toml
     (unset GIT_DIR GIT_WORK_TREE; cd mobile && flutter pub get)
     echo "Bumped all manifests to {{ version }} and regenerated lockfiles"
 
@@ -371,6 +377,12 @@ release *ARGS:
         echo "Error: must be on main branch (currently on '$CURRENT_BRANCH')"
         exit 1
     fi
+    # Ensure local main is up-to-date
+    git fetch origin main --quiet
+    if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+        echo "Error: local main is not up-to-date with origin/main. Run 'git pull' first."
+        exit 1
+    fi
     # Ensure clean working tree
     if ! git diff --quiet || ! git diff --cached --quiet; then
         echo "Error: working tree is dirty. Commit or stash changes first."
@@ -382,11 +394,10 @@ release *ARGS:
     # Bump versions and lockfiles
     just bump-version "$VERSION"
     # Generate changelog
-    LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-    if [[ ! -f CHANGELOG.md ]]; then
-        echo "# Changelog" > CHANGELOG.md
-    fi
+    LAST_TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "")
+    TMPFILE=$(mktemp)
     {
+        echo "# Changelog"
         echo ""
         echo "## v${VERSION}"
         echo ""
@@ -396,9 +407,21 @@ release *ARGS:
             echo "Initial release"
         fi
         echo ""
-    } >> CHANGELOG.md
+        if [[ -f CHANGELOG.md ]]; then
+            tail -n +2 CHANGELOG.md
+        fi
+    } > "$TMPFILE"
+    mv "$TMPFILE" CHANGELOG.md
     # Commit
-    git add -A
+    git add \
+      desktop/package.json \
+      desktop/src-tauri/tauri.conf.json \
+      desktop/src-tauri/Cargo.toml \
+      desktop/src-tauri/Cargo.lock \
+      mobile/pubspec.yaml \
+      mobile/pubspec.lock \
+      pnpm-lock.yaml \
+      CHANGELOG.md
     git commit -m "chore(release): release version ${VERSION}"
     # Push and open PR
     git push -u origin "$BRANCH"
