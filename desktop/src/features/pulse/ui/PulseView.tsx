@@ -30,13 +30,12 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 type PulseTab = "search" | "foryou" | "people" | "agents" | "mine";
 
-const tabTriggerClassName =
-  "h-7 rounded-full px-3.5 py-0 text-xs font-semibold shadow-none transition-colors !text-muted-foreground hover:!text-foreground data-[state=active]:bg-background data-[state=active]:!text-foreground data-[state=active]:shadow-xs dark:!text-white/35 dark:hover:!text-white/70 dark:data-[state=active]:!text-white";
+const tabButtonClassName =
+  "h-7 rounded-full border border-transparent px-1.5 text-[10.5px] font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm";
 
 type PulseViewProps = {
   currentPubkey?: string;
@@ -66,8 +65,6 @@ function TimelineSkeleton() {
     </div>
   );
 }
-
-// ── Agent filter dropdown ──────────────────────────────────────────────────
 
 function AgentFilter({
   agents,
@@ -132,14 +129,11 @@ function AgentFilter({
   );
 }
 
-// ── Main PulseView ─────────────────────────────────────────────────────────
-
 export function PulseView({ currentPubkey }: PulseViewProps) {
   const [activeTab, setActiveTab] = React.useState<PulseTab>("foryou");
   const [agentFilter, setAgentFilter] = React.useState<string | null>(null);
   const [searchQuery, setSearchQuery] = React.useState("");
 
-  // ── Contact list & follow state ────────────────────────────────────────
   const contactListQuery = useContactListQuery(currentPubkey);
   const contacts = contactListQuery.data?.contacts ?? [];
   const contactPubkeys = React.useMemo(
@@ -151,7 +145,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     [contactPubkeys],
   );
 
-  // People-only pubkeys (contacts + self, no agents)
   const peoplePubkeys = React.useMemo(
     () =>
       currentPubkey
@@ -160,7 +153,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     [currentPubkey, contactPubkeys],
   );
 
-  // ── Agents ─────────────────────────────────────────────────────────────
   const relayAgentsQuery = useRelayAgentsQuery();
   const relayAgents = relayAgentsQuery.data ?? [];
   const agentPubkeys = React.useMemo(
@@ -179,13 +171,11 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     return map;
   }, [relayAgents]);
 
-  // ── "For You" combined pubkeys (contacts + agents + self) ──────────────
   const forYouPubkeys = React.useMemo(
     () => [...new Set([...peoplePubkeys, ...agentPubkeys])],
     [peoplePubkeys, agentPubkeys],
   );
 
-  // ── Queries per tab ────────────────────────────────────────────────────
   const forYouQuery = useTimelineQuery(forYouPubkeys, activeTab === "foryou");
   const peopleQuery = useTimelineQuery(peoplePubkeys, activeTab === "people");
   const agentTimelineQuery = useTimelineQuery(
@@ -199,7 +189,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   const followMutation = useFollowMutation(currentPubkey);
   const unfollowMutation = useUnfollowMutation(currentPubkey);
 
-  // ── Visible notes per tab ──────────────────────────────────────────────
   const visibleNotes: UserNote[] = React.useMemo(() => {
     if (activeTab === "foryou") {
       return forYouQuery.data?.notes ?? [];
@@ -223,13 +212,11 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     agentPubkeySet,
   ]);
 
-  // Agent note groups for the agents tab.
   const agentNoteGroups = React.useMemo(
     () => (activeTab === "agents" ? groupAgentNotes(visibleNotes) : []),
     [activeTab, visibleNotes],
   );
 
-  // ── Profile lookups ────────────────────────────────────────────────────
   const notePubkeys = React.useMemo(
     () => [...new Set(visibleNotes.map((n) => n.pubkey))],
     [visibleNotes],
@@ -240,7 +227,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   const profiles: Record<string, UserProfileSummary> =
     profilesQuery.data?.profiles ?? {};
 
-  // ── Mention members for ForumComposer ─────────────────────────────────
   const mentionProfilesQuery = useUsersBatchQuery(forYouPubkeys, {
     enabled: forYouPubkeys.length > 0,
   });
@@ -266,7 +252,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     return members;
   }, [forYouPubkeys, mentionProfiles]);
 
-  // ── Loading / refresh state ────────────────────────────────────────────
   const activeQuery =
     activeTab === "foryou"
       ? forYouQuery
@@ -285,7 +270,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     unfollowMutation.mutate(pubkey);
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────
   const emptyMessages: Record<PulseTab, string> = {
     search: "Search Pulse notes by author or text.",
     foryou:
@@ -337,146 +321,168 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => setActiveTab(v as PulseTab)}
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
-      >
-        {/* Tab bar */}
-        <div className="relative z-40 shrink-0 px-4 pt-2 sm:px-6">
-          <div className="relative mx-auto flex w-full max-w-2xl items-center justify-center">
-            <div className="flex items-center">
-              <TabsList className="h-8 gap-0.5 rounded-full border border-border/50 bg-muted/40 p-0.5">
-                <TabsTrigger
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="relative z-40 shrink-0 px-4 pt-2 sm:px-6">
+        <div className="relative mx-auto flex w-full max-w-2xl items-center justify-center">
+          <div className="min-w-0 max-w-full">
+            <div className="-mx-4 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div className="flex items-center gap-1">
+                <Button
                   aria-label="Search Pulse"
-                  value="search"
-                  className="h-7 w-7 rounded-full p-0 !text-muted-foreground shadow-none transition-colors hover:!text-foreground data-[state=active]:bg-background data-[state=active]:!text-foreground data-[state=active]:shadow-xs dark:!text-white/35 dark:hover:!text-white/70 dark:data-[state=active]:!text-white"
+                  className="h-7 w-7 shrink-0 rounded-full border border-transparent p-0 text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm"
+                  data-active={activeTab === "search"}
+                  onClick={() => setActiveTab("search")}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
                 >
                   <Search className="h-4 w-4" />
-                </TabsTrigger>
-                <TabsTrigger value="foryou" className={tabTriggerClassName}>
+                </Button>
+                <Button
+                  className={tabButtonClassName}
+                  data-active={activeTab === "foryou"}
+                  onClick={() => setActiveTab("foryou")}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
                   Everyone
-                </TabsTrigger>
-                <TabsTrigger value="people" className={tabTriggerClassName}>
+                </Button>
+                <Button
+                  className={tabButtonClassName}
+                  data-active={activeTab === "people"}
+                  onClick={() => setActiveTab("people")}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
                   Following
-                </TabsTrigger>
-                <TabsTrigger value="agents" className={tabTriggerClassName}>
+                </Button>
+                <Button
+                  className={tabButtonClassName}
+                  data-active={activeTab === "agents"}
+                  onClick={() => setActiveTab("agents")}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
                   Agents
                   {relayAgents.length > 0 ? (
-                    <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground dark:text-white/45">
+                    <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
                       {relayAgents.length}
                     </span>
                   ) : null}
-                </TabsTrigger>
-                <TabsTrigger value="mine" className={tabTriggerClassName}>
+                </Button>
+                <Button
+                  className={tabButtonClassName}
+                  data-active={activeTab === "mine"}
+                  onClick={() => setActiveTab("mine")}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
                   Mine
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <div className="absolute right-0 flex items-center gap-1">
-              {activeTab === "agents" && relayAgents.length > 1 ? (
-                <AgentFilter
-                  agents={relayAgents}
-                  onSelect={setAgentFilter}
-                  profiles={profiles}
-                  selectedPubkey={agentFilter}
-                />
-              ) : null}
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Timeline — TabsContent with forceMount so aria-controls resolves */}
-        <TabsContent
-          value={activeTab}
-          forceMount
-          className="mt-0 min-h-0 flex-1 overflow-y-auto"
+          <div className="absolute right-0 flex items-center gap-1">
+            {activeTab === "agents" && relayAgents.length > 1 ? (
+              <AgentFilter
+                agents={relayAgents}
+                onSelect={setAgentFilter}
+                profiles={profiles}
+                selectedPubkey={agentFilter}
+              />
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-0 min-h-0 flex-1 overflow-y-auto">
+        <div
+          className={`mx-auto flex w-full max-w-2xl flex-col px-4 pb-10 sm:px-6 ${
+            activeTab !== "search" && activeTab !== "agents" ? "pt-0" : "pt-7"
+          }`}
         >
-          <div
-            className={`mx-auto flex w-full max-w-2xl flex-col px-4 pb-10 sm:px-6 ${
-              activeTab !== "search" && activeTab !== "agents" ? "pt-0" : "pt-7"
-            }`}
-          >
-            {activeTab === "search" ? (
-              <div className="flex min-h-[calc(100vh-96px)] items-center justify-center">
-                <div className="relative flex w-full max-w-xl flex-col items-center px-2">
-                  <h2 className="mb-5 text-center text-2xl font-semibold tracking-tight text-foreground">
-                    What are you looking for?
-                  </h2>
-                  <div className="relative w-full max-w-lg">
-                    <div className="relative rounded-full border border-foreground/10 bg-background/80 p-1 shadow-[0_12px_48px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_16px_70px_rgba(0,0,0,0.55)]">
-                      <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground dark:text-white/55" />
-                      <Input
-                        autoFocus
-                        className="h-9 rounded-full border-0 bg-transparent pl-10 pr-12 text-sm shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0 dark:text-white dark:placeholder:text-white/60"
-                        onChange={(event) => setSearchQuery(event.target.value)}
-                        placeholder="What would you like to know?"
-                        type="search"
-                        value={searchQuery}
-                      />
-                      <button
-                        aria-label="Search Pulse"
-                        className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/10 text-foreground transition-colors hover:bg-foreground/15 dark:bg-white/85 dark:text-black dark:hover:bg-white"
-                        type="button"
-                      >
-                        <Search className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+          {activeTab === "search" ? (
+            <div className="flex min-h-[calc(100vh-96px)] items-center justify-center">
+              <div className="relative flex w-full max-w-xl flex-col items-center px-2">
+                <h2 className="mb-5 text-center text-2xl font-semibold tracking-tight text-foreground">
+                  What are you looking for?
+                </h2>
+                <div className="relative w-full max-w-lg">
+                  <div className="relative rounded-full border border-foreground/10 bg-background/80 p-1 shadow-[0_12px_48px_rgba(0,0,0,0.12)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_16px_70px_rgba(0,0,0,0.55)]">
+                    <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground dark:text-white/55" />
+                    <Input
+                      autoFocus
+                      className="h-9 rounded-full border-0 bg-transparent pl-10 pr-12 text-sm shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0 dark:text-white dark:placeholder:text-white/60"
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder="What would you like to know?"
+                      type="search"
+                      value={searchQuery}
+                    />
+                    <button
+                      aria-label="Search Pulse"
+                      className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-foreground/10 text-foreground transition-colors hover:bg-foreground/15 dark:bg-white/85 dark:text-black dark:hover:bg-white"
+                      type="button"
+                    >
+                      <Search className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 </div>
               </div>
-            ) : activeTab !== "agents" ? (
-              <div className="sticky top-0 z-10 mb-7 pb-3 pt-7">
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-x-0 top-[-1px] h-8 bg-background"
-                />
-                {publishMutation.isError && (
-                  <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {publishMutation.error instanceof Error
-                      ? publishMutation.error.message
-                      : "Failed to publish note"}
+            </div>
+          ) : activeTab !== "agents" ? (
+            <div className="sticky top-0 z-10 mb-7 pb-3 pt-7">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-[-1px] h-8 bg-background"
+              />
+              {publishMutation.isError && (
+                <div className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {publishMutation.error instanceof Error
+                    ? publishMutation.error.message
+                    : "Failed to publish note"}
+                </div>
+              )}
+              <ForumComposer
+                autocompleteBelow
+                className="pulse-composer overflow-hidden rounded-2xl border-border/50 bg-background/70 p-2 shadow-none backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
+                compact
+                header={
+                  <div className="flex min-w-0 items-center gap-2">
+                    <UserAvatar
+                      avatarUrl={currentProfile?.avatarUrl ?? null}
+                      className="!h-7 !w-7 shrink-0"
+                      displayName={currentDisplayName}
+                    />
+                    <span className="max-w-32 truncate text-sm font-medium text-foreground">
+                      {currentDisplayName}
+                    </span>
                   </div>
-                )}
-                <ForumComposer
-                  autocompleteBelow
-                  className="pulse-composer overflow-hidden rounded-2xl border-border/50 bg-background/70 p-2 shadow-none backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
-                  compact
-                  header={
-                    <div className="flex min-w-0 items-center gap-2">
-                      <UserAvatar
-                        avatarUrl={currentProfile?.avatarUrl ?? null}
-                        className="!h-7 !w-7 shrink-0"
-                        displayName={currentDisplayName}
-                      />
-                      <span className="max-w-32 truncate text-sm font-medium text-foreground">
-                        {currentDisplayName}
-                      </span>
-                    </div>
-                  }
-                  members={pulseMentionMembers}
-                  placeholder="What's on your mind?"
-                  isSending={publishMutation.isPending}
-                  onSubmit={(content, mentionPubkeys, mediaTags) =>
-                    publishMutation.mutateAsync({
-                      content,
-                      mentionPubkeys,
-                      mediaTags,
-                    })
-                  }
-                  profiles={mentionProfiles}
-                />
-              </div>
-            ) : null}
+                }
+                members={pulseMentionMembers}
+                placeholder="What's on your mind?"
+                isSending={publishMutation.isPending}
+                onSubmit={(content, mentionPubkeys, mediaTags) =>
+                  publishMutation.mutateAsync({
+                    content,
+                    mentionPubkeys,
+                    mediaTags,
+                  })
+                }
+                profiles={mentionProfiles}
+              />
+            </div>
+          ) : null}
 
-            {activeTab !== "search" ? (
-              <div className="space-y-4">{renderTimeline()}</div>
-            ) : null}
-          </div>
-        </TabsContent>
-      </Tabs>
+          {activeTab !== "search" ? (
+            <div className="space-y-4">{renderTimeline()}</div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
