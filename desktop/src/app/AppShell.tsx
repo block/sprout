@@ -60,6 +60,7 @@ import { joinChannel } from "@/shared/api/tauri";
 import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
+import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
 import { Button } from "@/shared/ui/button";
 import {
   SidebarInset,
@@ -449,6 +450,9 @@ export function AppShell() {
   React.useEffect(() => {
     void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
   }, [homeBadgeCount, unreadChannelIds.size]);
+
+  // Dispatch `sprout://message` deep links into the router.
+  useMessageDeepLinks();
 
   React.useEffect(() => {
     let isCancelled = false;

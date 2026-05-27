@@ -7,6 +7,11 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import {
+  isMessageLink,
+  parseMessageLink,
+  type ParsedMessageLink,
+} from "@/features/messages/lib/messageLink";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { invokeTauri } from "@/shared/api/tauri";
 import type { Channel } from "@/shared/api/types";
@@ -179,6 +184,7 @@ function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
   onOpenChannel: (channelId: string) => void,
+  onOpenMessageLink: (link: ParsedMessageLink) => void,
   imetaByUrl?: ImetaLookup,
   mentionPubkeysByName?: Record<string, string>,
 ): Components {
@@ -196,17 +202,43 @@ function createMarkdownComponents(
       : "space-y-1 pl-6 marker:text-muted-foreground";
 
   return {
-    a: ({ children, href, ...props }) => (
-      <a
-        {...props}
-        className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
-        href={href}
-        rel="noreferrer"
-        target="_blank"
-      >
-        {children}
-      </a>
-    ),
+    a: ({ children, href, ...props }) => {
+      // Intercept `sprout://message?channel=…&id=…` links so a click navigates
+      // in-app instead of opening the URL in the OS browser. http(s) links
+      // continue to use the existing target="_blank" behavior.
+      if (isMessageLink(href)) {
+        const parsed = parseMessageLink(href ?? "");
+        if (parsed.ok) {
+          const target = parsed.value;
+          return (
+            <a
+              {...props}
+              className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80 cursor-pointer"
+              href={href}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenMessageLink(target);
+              }}
+            >
+              {children}
+            </a>
+          );
+        }
+        // Malformed sprout://message link — fall through to the default
+        // anchor (renders as a normal external link).
+      }
+      return (
+        <a
+          {...props}
+          className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
+          href={href}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {children}
+        </a>
+      );
+    },
     blockquote: ({ children }) => (
       <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground">
         {children}
@@ -471,6 +503,16 @@ function MarkdownInner({
         channels,
         (channelId) => {
           void goChannel(channelId);
+        },
+        (link) => {
+          // Always route through `goChannel` with `messageId` set: the
+          // channel route already handles scroll-into-view + highlight via
+          // `useTimelineScrollManager` + `getEventById` backfill, and works
+          // for both stream-message replies and forum threads. Detecting
+          // "the thread root is a forum post" up front would require an
+          // event lookup we don't currently have synchronously; the brief
+          // explicitly allows skipping that detection and falling through.
+          void goChannel(link.channelId, { messageId: link.messageId });
         },
         imetaByUrl,
         mentionPubkeysByName,

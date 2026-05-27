@@ -4,6 +4,7 @@ import {
   Copy,
   CornerUpLeft,
   EllipsisVertical,
+  Link2,
   MailOpen,
   Pencil,
   SmilePlus,
@@ -12,6 +13,8 @@ import {
 import * as React from "react";
 import { toast } from "sonner";
 
+import { buildMessageLink } from "@/features/messages/lib/messageLink";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import type {
   TimelineMessage,
   TimelineReaction,
@@ -55,6 +58,7 @@ function copyToClipboard(text: string, successMessage: string) {
 // ---------------------------------------------------------------------------
 
 function MoreActionsMenu({
+  channelId,
   message,
   onDelete,
   onEdit,
@@ -62,6 +66,9 @@ function MoreActionsMenu({
   onOpenChange,
   open,
 }: {
+  /** Channel UUID for the "Copy link" action. When null/undefined, the
+   *  Copy link entry is hidden (e.g. inbox preview rows that don't have it). */
+  channelId?: string | null;
   message: TimelineMessage;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -148,6 +155,24 @@ function MoreActionsMenu({
             </DropdownMenuItem>
           ) : null}
 
+          {hasCopyActions && channelId ? (
+            <DropdownMenuItem
+              data-testid={`copy-message-link-${message.id}`}
+              onClick={() => {
+                const { rootId } = getThreadReference(message.tags ?? []);
+                const link = buildMessageLink({
+                  channelId,
+                  messageId: message.id,
+                  threadRootId: rootId,
+                });
+                copyToClipboard(link, "Link copied to clipboard");
+              }}
+            >
+              <Link2 className="h-4 w-4" />
+              Copy link
+            </DropdownMenuItem>
+          ) : null}
+
           {onDelete ? (
             <>
               <DropdownMenuSeparator />
@@ -207,6 +232,7 @@ function MoreActionsMenu({
 
 export function MessageActionBar({
   activeReplyTargetId = null,
+  channelId,
   message,
   onDelete,
   onEdit,
@@ -218,6 +244,9 @@ export function MessageActionBar({
   reactionPending = false,
 }: {
   activeReplyTargetId?: string | null;
+  /** Channel UUID — required for the "Copy link" action; when omitted the
+   *  action is hidden (callers like the home inbox that lack the context). */
+  channelId?: string | null;
   message: TimelineMessage;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
@@ -353,6 +382,7 @@ export function MessageActionBar({
 
         {hasMoreMenuActions ? (
           <MoreActionsMenu
+            channelId={channelId}
             message={message}
             onDelete={onDelete}
             onEdit={onEdit}

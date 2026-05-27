@@ -260,6 +260,7 @@ export function InboxDetailPane({
                 <InboxMessageRow
                   activeReplyTargetId={replyTargetId}
                   canReply={canReply}
+                  channelId={item.item.channelId}
                   isFocusHighlightVisible={isFocusHighlightVisible}
                   message={message}
                   onSelectReplyTarget={handleSelectReplyTarget}

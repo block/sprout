@@ -199,6 +199,37 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
             }
             let _ = app.emit("deep-link-connect", relay_url);
         }
+        Some("message") => {
+            // `sprout://message?channel=<uuid>&id=<eventId>[&thread=<rootId>]`
+            //
+            // Validation policy mirrors the `connect` arm: parse what we
+            // need, refuse to emit anything if a required param is missing
+            // so the frontend never sees a half-formed payload. The
+            // frontend listener mirrors `parseMessageLink` in TS — we keep
+            // structure on this side (serde JSON) and let the TS code own
+            // any further normalisation.
+            let mut channel: Option<String> = None;
+            let mut message_id: Option<String> = None;
+            let mut thread: Option<String> = None;
+            for (k, v) in url.query_pairs() {
+                match k.as_ref() {
+                    "channel" => channel = Some(v.into_owned()),
+                    "id" => message_id = Some(v.into_owned()),
+                    "thread" => thread = Some(v.into_owned()),
+                    _ => {}
+                }
+            }
+            let (Some(channel_id), Some(message_id)) = (channel, message_id) else {
+                eprintln!("sprout-desktop: message deep link missing channel or id: {url_str}");
+                return;
+            };
+            let payload = serde_json::json!({
+                "channelId": channel_id,
+                "messageId": message_id,
+                "threadRootId": thread,
+            });
+            let _ = app.emit("deep-link-message", payload);
+        }
         Some(action) => {
             eprintln!("sprout-desktop: unknown deep link action: {action}");
         }

@@ -28,6 +28,7 @@ const NESTED_REPLY_OFFSET_PX = 28;
 export const MessageRow = React.memo(
   function MessageRow({
     activeReplyTargetId = null,
+    channelId = null,
     highlighted = false,
     layoutVariant = "default",
     message,
@@ -199,6 +200,7 @@ export const MessageRow = React.memo(
       <div className="absolute right-2 top-1 z-10">
         <MessageActionBar
           activeReplyTargetId={activeReplyTargetId}
+          channelId={channelId}
           message={message}
           onDelete={onDelete}
           onEdit={onEdit}
