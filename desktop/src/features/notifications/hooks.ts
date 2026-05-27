@@ -282,14 +282,7 @@ export function useHomeFeedNotificationState(
     readStoredSeenFeedIds(normalizedPubkey),
   );
   const currentFeedItems = React.useMemo(
-    () =>
-      feed
-        ? [
-            ...feed.feed.mentions,
-            ...feed.feed.needsAction,
-            ...feed.feed.activity,
-          ]
-        : [],
+    () => (feed ? [...feed.feed.mentions, ...feed.feed.needsAction] : []),
     [feed],
   );
   const currentFeedIds = React.useMemo(
