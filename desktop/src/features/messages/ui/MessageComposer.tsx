@@ -10,6 +10,7 @@ import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomple
 import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
 import {
   appendImetaMediaLines,
+  formatImetaMediaLine,
   type ImetaMedia,
   stripImetaMediaLines,
 } from "@/features/messages/lib/imetaMediaMarkdown";
@@ -428,8 +429,7 @@ export function MessageComposer({
     // Append all attachments as markdown images at the end of the message.
     let finalContent = trimmed;
     for (const d of currentPendingImeta) {
-      const isVideo = d.type.startsWith("video/");
-      finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
+      finalContent += formatImetaMediaLine({ url: d.url, m: d.type });
     }
 
     const savedContent = trimmed;

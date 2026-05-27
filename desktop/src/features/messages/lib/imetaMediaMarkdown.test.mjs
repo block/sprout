@@ -28,13 +28,17 @@ function stripImetaMediaLines(body, imetaMedia) {
   return lines.slice(0, end).join("\n").replace(/\s+$/, "");
 }
 
+function formatImetaMediaLine({ url, m }) {
+  const isVideo = m.startsWith("video/");
+  return isVideo ? `\n![video](${url})` : `\n![image](${url})`;
+}
+
 function appendImetaMediaLines(body, imetaMedia) {
   if (imetaMedia.length === 0) return body;
   let out = body;
-  for (const { url, m } of imetaMedia) {
-    if (out.includes(url)) continue;
-    const isVideo = m.startsWith("video/");
-    out += isVideo ? `\n![video](${url})` : `\n![image](${url})`;
+  for (const media of imetaMedia) {
+    if (out.includes(media.url)) continue;
+    out += formatImetaMediaLine(media);
   }
   return out;
 }

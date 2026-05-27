@@ -77,6 +77,17 @@ export function stripImetaMediaLines(
 }
 
 /**
+ * Format a single imeta entry as a leading-newline markdown line, e.g.
+ * `\n![image](url)` or `\n![video](url)`. Mime-driven so the alt label is
+ * correct regardless of URL suffix. Shared by the send path (initial
+ * attach-and-send) and the edit-round-trip path.
+ */
+export function formatImetaMediaLine({ url, m }: ImetaMedia): string {
+  const isVideo = m.startsWith("video/");
+  return isVideo ? `\n![video](${url})` : `\n![image](${url})`;
+}
+
+/**
  * Append `\n![image|video](url)` for each imeta entry. Preserves entry order
  * (which mirrors tag order on the original event). Skips URLs already present
  * in `body` so non-trailing or interleaved layouts don't double-render the
@@ -88,10 +99,9 @@ export function appendImetaMediaLines(
 ): string {
   if (imetaMedia.length === 0) return body;
   let out = body;
-  for (const { url, m } of imetaMedia) {
-    if (out.includes(url)) continue;
-    const isVideo = m.startsWith("video/");
-    out += isVideo ? `\n![video](${url})` : `\n![image](${url})`;
+  for (const media of imetaMedia) {
+    if (out.includes(media.url)) continue;
+    out += formatImetaMediaLine(media);
   }
   return out;
 }
