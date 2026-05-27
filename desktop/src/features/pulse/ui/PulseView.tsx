@@ -1,7 +1,12 @@
-import { Check, Filter, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import * as React from "react";
 
+import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
+
 import { useRelayAgentsQuery } from "@/features/agents/hooks";
+import { useOpenDmMutation } from "@/features/channels/hooks";
+import { useToggleReactionMutation } from "@/features/messages/hooks";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import {
   useContactListQuery,
@@ -13,30 +18,21 @@ import {
   useUnfollowMutation,
 } from "@/features/pulse/hooks";
 import { groupAgentNotes } from "@/features/pulse/lib/groupAgentNotes";
+import {
+  buildNoteShareUri,
+  toggleNoteIdInSet,
+} from "@/features/pulse/lib/noteActions";
 import { AgentActivityCard } from "@/features/pulse/ui/AgentActivityCard";
 import { ForumComposer } from "@/features/forum/ui/ForumComposer";
 import { NoteCard } from "@/features/pulse/ui/NoteCard";
+import { PulseTabBar } from "@/features/pulse/ui/PulseTabBar";
 import type { UserNote } from "@/shared/api/socialTypes";
-import type {
-  ChannelMember,
-  RelayAgent,
-  UserProfileSummary,
-} from "@/shared/api/types";
-import { Button } from "@/shared/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/shared/ui/dropdown-menu";
+import type { ChannelMember, UserProfileSummary } from "@/shared/api/types";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
-type PulseTab = "search" | "everyone" | "people" | "agents" | "mine";
-
-const tabButtonClassName =
-  "h-7 rounded-full border border-transparent px-1.5 text-[10.5px] font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm";
+export type PulseTab = "search" | "everyone" | "people" | "agents" | "mine";
 
 type PulseViewProps = {
   currentPubkey?: string;
@@ -67,73 +63,14 @@ function TimelineSkeleton() {
   );
 }
 
-function AgentFilter({
-  agents,
-  profiles,
-  selectedPubkey,
-  onSelect,
-}: {
-  agents: RelayAgent[];
-  profiles: Record<string, UserProfileSummary>;
-  selectedPubkey: string | null;
-  onSelect: (pubkey: string | null) => void;
-}) {
-  const selectedName = selectedPubkey
-    ? (profiles[selectedPubkey.toLowerCase()]?.displayName ??
-      agents.find((a) => a.pubkey === selectedPubkey)?.name ??
-      `${selectedPubkey.slice(0, 8)}...`)
-    : null;
-
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          className="h-7 gap-1.5 px-2 text-xs"
-          size="sm"
-          variant={selectedPubkey ? "secondary" : "ghost"}
-        >
-          <Filter className="h-3 w-3" />
-          {selectedName ?? "All agents"}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-48 overflow-y-auto">
-        <DropdownMenuItem onClick={() => onSelect(null)}>
-          {!selectedPubkey ? (
-            <Check className="h-3.5 w-3.5" />
-          ) : (
-            <span className="h-3.5 w-3.5" />
-          )}
-          All agents
-        </DropdownMenuItem>
-        {agents.map((agent) => {
-          const name =
-            profiles[agent.pubkey.toLowerCase()]?.displayName ??
-            agent.name ??
-            `${agent.pubkey.slice(0, 8)}...`;
-          const isSelected = selectedPubkey === agent.pubkey;
-          return (
-            <DropdownMenuItem
-              key={agent.pubkey}
-              onClick={() => onSelect(agent.pubkey)}
-            >
-              {isSelected ? (
-                <Check className="h-3.5 w-3.5" />
-              ) : (
-                <span className="h-3.5 w-3.5" />
-              )}
-              {name}
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 export function PulseView({ currentPubkey }: PulseViewProps) {
   const [activeTab, setActiveTab] = React.useState<PulseTab>("everyone");
   const [agentFilter, setAgentFilter] = React.useState<string | null>(null);
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [upvotedNoteIds, setUpvotedNoteIds] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const navigate = useNavigate();
 
   const contactListQuery = useContactListQuery(currentPubkey);
   const contacts = contactListQuery.data?.contacts ?? [];
@@ -187,8 +124,11 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     activeTab === "mine" ? currentPubkey : undefined,
   );
   const publishMutation = usePublishNoteMutation(currentPubkey);
+  const replyMutation = usePublishNoteMutation(currentPubkey);
   const followMutation = useFollowMutation(currentPubkey);
   const unfollowMutation = useUnfollowMutation(currentPubkey);
+  const toggleReactionMutation = useToggleReactionMutation();
+  const openDmMutation = useOpenDmMutation();
 
   const visibleNotes: UserNote[] = React.useMemo(() => {
     if (activeTab === "everyone") {
@@ -271,6 +211,64 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     unfollowMutation.mutate(pubkey);
   }
 
+  async function handleToggleUpvote(note: UserNote, remove: boolean) {
+    setUpvotedNoteIds((current) =>
+      toggleNoteIdInSet(current, note.id, !remove),
+    );
+
+    try {
+      await toggleReactionMutation.mutateAsync({
+        eventId: note.id,
+        emoji: "+",
+        remove,
+      });
+    } catch (error) {
+      setUpvotedNoteIds((current) =>
+        toggleNoteIdInSet(current, note.id, remove),
+      );
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update reaction",
+      );
+    }
+  }
+
+  async function handleReply(
+    note: UserNote,
+    content: string,
+    mentionPubkeys: string[],
+    mediaTags?: string[][],
+  ) {
+    await replyMutation.mutateAsync({
+      content,
+      replyTo: note.id,
+      mentionPubkeys,
+      mediaTags,
+    });
+  }
+
+  async function handleShare(note: UserNote) {
+    try {
+      await navigator.clipboard.writeText(buildNoteShareUri(note));
+      toast.success("Copied note link");
+    } catch {
+      toast.error("Failed to copy note link");
+    }
+  }
+
+  async function handleStartDm(pubkey: string) {
+    try {
+      const directMessage = await openDmMutation.mutateAsync({
+        pubkeys: [pubkey],
+      });
+      await navigate({
+        to: "/channels/$channelId",
+        params: { channelId: directMessage.id },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to open DM");
+    }
+  }
+
   const emptyMessages: Record<PulseTab, string> = {
     search: "Search Pulse notes by author or text.",
     everyone: "No public notes yet.",
@@ -305,14 +303,22 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     ) : (
       visibleNotes.map((note) => (
         <NoteCard
+          composerProfiles={mentionProfiles}
           currentUserDisplayName={currentDisplayName}
           currentUserProfile={currentProfile}
           isAgent={agentPubkeySet.has(note.pubkey)}
           isFollowing={followingSet.has(note.pubkey)}
           isOwnNote={note.pubkey === currentPubkey}
+          isReplySending={replyMutation.isPending}
+          isUpvoted={upvotedNoteIds.has(note.id)}
           key={note.id}
+          members={pulseMentionMembers}
           note={note}
           onFollow={handleFollow}
+          onReply={handleReply}
+          onShare={handleShare}
+          onStartDm={handleStartDm}
+          onToggleUpvote={handleToggleUpvote}
           onUnfollow={handleUnfollow}
           profile={profiles[note.pubkey.toLowerCase()] ?? null}
         />
@@ -322,83 +328,14 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="relative z-40 shrink-0 px-4 pt-2 sm:px-6">
-        <div className="relative mx-auto flex w-full max-w-2xl items-center justify-center">
-          <div className="min-w-0 max-w-full">
-            <div className="-mx-4 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <div className="flex items-center gap-1">
-                <Button
-                  aria-label="Search Pulse"
-                  className="h-7 w-7 shrink-0 rounded-full border border-transparent p-0 text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm"
-                  data-active={activeTab === "search"}
-                  onClick={() => setActiveTab("search")}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  <Search className="h-4 w-4" />
-                </Button>
-                <Button
-                  className={tabButtonClassName}
-                  data-active={activeTab === "everyone"}
-                  onClick={() => setActiveTab("everyone")}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  Everyone
-                </Button>
-                <Button
-                  className={tabButtonClassName}
-                  data-active={activeTab === "people"}
-                  onClick={() => setActiveTab("people")}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  Following
-                </Button>
-                <Button
-                  className={tabButtonClassName}
-                  data-active={activeTab === "agents"}
-                  onClick={() => setActiveTab("agents")}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  Agents
-                  {relayAgents.length > 0 ? (
-                    <span className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                      {relayAgents.length}
-                    </span>
-                  ) : null}
-                </Button>
-                <Button
-                  className={tabButtonClassName}
-                  data-active={activeTab === "mine"}
-                  onClick={() => setActiveTab("mine")}
-                  size="sm"
-                  type="button"
-                  variant="ghost"
-                >
-                  Mine
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          <div className="absolute right-0 flex items-center gap-1">
-            {activeTab === "agents" && relayAgents.length > 1 ? (
-              <AgentFilter
-                agents={relayAgents}
-                onSelect={setAgentFilter}
-                profiles={profiles}
-                selectedPubkey={agentFilter}
-              />
-            ) : null}
-          </div>
-        </div>
-      </div>
+      <PulseTabBar
+        activeTab={activeTab}
+        agentFilter={agentFilter}
+        onAgentFilterChange={setAgentFilter}
+        onTabChange={setActiveTab}
+        profiles={profiles}
+        relayAgents={relayAgents}
+      />
 
       <div className="mt-0 min-h-0 flex-1 overflow-y-auto">
         <div
