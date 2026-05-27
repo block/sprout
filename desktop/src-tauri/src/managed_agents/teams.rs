@@ -153,7 +153,7 @@ pub fn save_teams(app: &AppHandle, records: &[TeamRecord]) -> Result<(), String>
     let path = teams_store_path(app)?;
     let payload = serde_json::to_vec_pretty(&sorted)
         .map_err(|error| format!("failed to serialize teams store: {error}"))?;
-    fs::write(&path, payload).map_err(|error| format!("failed to write teams store: {error}"))
+    crate::managed_agents::storage::atomic_write_json(&path, &payload)
 }
 
 // ---------------------------------------------------------------------------

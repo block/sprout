@@ -965,7 +965,7 @@ pub fn save_personas(app: &AppHandle, records: &[PersonaRecord]) -> Result<(), S
     let path = personas_store_path(app)?;
     let payload = serde_json::to_vec_pretty(&sorted)
         .map_err(|error| format!("failed to serialize persona store: {error}"))?;
-    fs::write(&path, payload).map_err(|error| format!("failed to write persona store: {error}"))
+    crate::managed_agents::storage::atomic_write_json(&path, &payload)
 }
 
 #[cfg(test)]

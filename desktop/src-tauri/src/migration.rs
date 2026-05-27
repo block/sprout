@@ -1,10 +1,11 @@
 //! Worktree data sync and on-launch reconciliation for the Sprout desktop app.
 //!
-//! **Worktree sync** (`sync_shared_agent_data`): Per-launch copy-with-
-//! overwrite of agent data files from the canonical dev data directory
-//! (`xyz.block.sprout.app.dev`) to the current worktree data directory.
-//! Only runs when `SPROUT_SHARE_IDENTITY=1` and `SPROUT_PRIVATE_KEY` is
-//! set. Overwrites on every launch so worktree data stays current.
+//! **Worktree sync** (`sync_shared_agent_data`): Per-launch symlink creation
+//! from the current worktree data directory to the canonical dev data
+//! directory (`xyz.block.sprout.app.dev`). Only runs when
+//! `SPROUT_SHARE_IDENTITY=1` and `SPROUT_PRIVATE_KEY` is set. All dev
+//! instances share the same physical files — edits in any worktree are
+//! immediately visible to all others.
 //!
 //! **Provider reconciliation** (`reconcile_provider_mcp_commands`): Per-launch
 //! fix-up of `mcp_command` values in `managed-agents.json` against the
@@ -16,13 +17,13 @@ use tauri::Manager;
 
 const CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
 
-/// JSON files synced from the canonical dev data directory to worktree
-/// data directories. Only data files — never `agent-pids/` or `logs/`.
+/// JSON files symlinked from worktree data directories to the canonical
+/// dev data directory. Only data files — never `agent-pids/` or `logs/`.
 /// `identity.key` is deliberately excluded because worktree instances
 /// receive their identity via the `SPROUT_PRIVATE_KEY` env var.
 ///
 /// NOTE: `agents/packs/` is intentionally excluded — recursive directory
-/// sync is out of scope. Pack personas will appear in the worktree but
+/// symlink is out of scope. Pack personas will appear in the worktree but
 /// agents with `persona_pack_path` may fail if the ACP reads pack files
 /// at runtime. Install packs in the worktree separately if needed.
 const SHARED_AGENT_FILES: &[&str] = &[
@@ -64,40 +65,14 @@ fn patch_json_records(
     }
 }
 
-/// After copying managed-agents.json from the canonical dir, remove
-/// process-local runtime state that would cause the worktree instance
-/// to kill the canonical instance's running agents.
-fn scrub_managed_agents_runtime_state(path: &Path) {
-    patch_json_records(path, |obj| {
-        const RUNTIME_FIELDS: &[&str] = &[
-            "runtime_pid",
-            "last_error",
-            "last_exit_code",
-            "last_stopped_at",
-            "last_started_at",
-            "backend_agent_id",
-        ];
-        let mut scrubbed = false;
-        for field in RUNTIME_FIELDS {
-            if obj.remove(*field).is_some() {
-                scrubbed = true;
-            }
-        }
-        scrubbed
-    });
-}
-
-/// Copy shared agent data files from the canonical dev data directory to
-/// the current (worktree) data directory, overwriting any existing files.
+/// Create symlinks for shared agent data files from the current (worktree)
+/// data directory to the canonical dev data directory.
 ///
 /// Guards:
 /// - `SPROUT_SHARE_IDENTITY` must be `"1"`
 /// - `SPROUT_PRIVATE_KEY` must parse as valid `nostr::Keys`
 /// - The canonical dir must differ from the current dir (skip if we ARE canonical)
 /// - The canonical dir must exist
-///
-/// Always overwrites — pre-existing worktree data directories already have
-/// empty/default files that must be replaced.
 pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     // Guard: only runs when sharing identity with a worktree.
     let is_shared = std::env::var("SPROUT_SHARE_IDENTITY")
@@ -165,7 +140,6 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
             continue;
         }
 
-        // Ensure parent directories exist (e.g. `agents/`).
         if let Some(parent) = dst.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -176,24 +150,31 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
             }
         }
 
-        match std::fs::copy(&src, &dst) {
+        // Already a correct symlink — nothing to do.
+        if dst.is_symlink() {
+            if let Ok(target) = std::fs::read_link(&dst) {
+                if target == src {
+                    continue;
+                }
+            }
+        }
+
+        // Remove whatever's at dst (regular file, wrong symlink, broken symlink).
+        if dst.exists() || dst.is_symlink() {
+            let _ = std::fs::remove_file(&dst);
+        }
+
+        match std::os::unix::fs::symlink(&src, &dst) {
             Ok(_) => synced += 1,
             Err(e) => {
-                eprintln!("sprout-desktop: shared-agent-sync: failed to copy {rel}: {e}");
+                eprintln!("sprout-desktop: shared-agent-sync: failed to symlink {rel}: {e}");
             }
         }
     }
 
-    // Scrub runtime-local state from the copied managed-agents.json to
-    // prevent the worktree from killing the canonical instance's running agents.
-    let managed_agents_dst = current_dir.join("agents/managed-agents.json");
-    if managed_agents_dst.exists() {
-        scrub_managed_agents_runtime_state(&managed_agents_dst);
-    }
-
     if synced > 0 {
         eprintln!(
-            "sprout-desktop: shared-agent-sync: {synced} file(s) synced from {}",
+            "sprout-desktop: shared-agent-sync: {synced} file(s) linked to {}",
             canonical_dir.display()
         );
     }
@@ -293,11 +274,9 @@ mod tests {
     }
 
     /// Helper: sync files directly (without a Tauri AppHandle) for unit testing.
-    /// Mirrors the core copy loop of `sync_shared_agent_data` but takes explicit
-    /// paths. Does NOT include the post-copy `scrub_managed_agents_runtime_state`
-    /// call — tests that need scrubbing must call it explicitly after `sync_files`.
-    /// This split exists because `sync_shared_agent_data` requires a live Tauri
-    /// AppHandle and cannot be unit-tested directly.
+    /// Mirrors the symlink loop of `sync_shared_agent_data` but takes explicit
+    /// paths. `sync_shared_agent_data` requires a live Tauri AppHandle and
+    /// cannot be unit-tested directly.
     fn sync_files(canonical: &Path, worktree: &Path) -> u32 {
         let mut synced = 0u32;
         for rel in SHARED_AGENT_FILES {
@@ -309,38 +288,42 @@ mod tests {
             if let Some(parent) = dst.parent() {
                 std::fs::create_dir_all(parent).unwrap();
             }
-            std::fs::copy(&src, &dst).unwrap();
+            if dst.is_symlink() {
+                if let Ok(target) = std::fs::read_link(&dst) {
+                    if target == src {
+                        continue;
+                    }
+                }
+            }
+            if dst.exists() || dst.is_symlink() {
+                let _ = std::fs::remove_file(&dst);
+            }
+            std::os::unix::fs::symlink(&src, &dst).unwrap();
             synced += 1;
         }
         synced
     }
 
     #[test]
-    fn sync_copies_files_to_fresh_worktree() {
+    fn sync_creates_symlinks_to_fresh_worktree() {
         let (_parent, canonical, worktree) = setup_sync_layout();
-
         let synced = sync_files(&canonical, &worktree);
-
         assert_eq!(synced, 3);
+        for rel in SHARED_AGENT_FILES {
+            let dst = worktree.join(rel);
+            assert!(dst.is_symlink(), "{rel} should be a symlink");
+            assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
+        }
+        // Content is readable through symlinks.
         assert_eq!(
             std::fs::read_to_string(worktree.join("agents/managed-agents.json")).unwrap(),
             r#"[{"id":"agent-1"}]"#,
         );
-        assert_eq!(
-            std::fs::read_to_string(worktree.join("agents/personas.json")).unwrap(),
-            r#"[{"id":"builtin:solo"}]"#,
-        );
-        assert_eq!(
-            std::fs::read_to_string(worktree.join("agents/teams.json")).unwrap(),
-            r#"[{"id":"team-1"}]"#,
-        );
     }
 
     #[test]
-    fn sync_overwrites_existing_files() {
+    fn sync_replaces_existing_files_with_symlinks() {
         let (_parent, canonical, worktree) = setup_sync_layout();
-
-        // Pre-create worktree with stale/empty data (the real-world scenario).
         std::fs::create_dir_all(worktree.join("agents")).unwrap();
         std::fs::write(worktree.join("agents/managed-agents.json"), "[]").unwrap();
         std::fs::write(worktree.join("agents/personas.json"), "[]").unwrap();
@@ -349,10 +332,97 @@ mod tests {
         let synced = sync_files(&canonical, &worktree);
 
         assert_eq!(synced, 3);
-        // Must contain canonical data, NOT the empty arrays.
+        for rel in SHARED_AGENT_FILES {
+            let dst = worktree.join(rel);
+            assert!(
+                dst.is_symlink(),
+                "{rel} should be a symlink after replacing regular file"
+            );
+            assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
+        }
         assert_eq!(
             std::fs::read_to_string(worktree.join("agents/managed-agents.json")).unwrap(),
             r#"[{"id":"agent-1"}]"#,
+        );
+    }
+
+    #[test]
+    fn sync_preserves_correct_symlinks() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        // First sync creates symlinks.
+        assert_eq!(sync_files(&canonical, &worktree), 3);
+        // Second sync should be a no-op.
+        assert_eq!(sync_files(&canonical, &worktree), 0);
+        for rel in SHARED_AGENT_FILES {
+            let dst = worktree.join(rel);
+            assert!(dst.is_symlink());
+            assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
+        }
+    }
+
+    #[test]
+    fn sync_replaces_wrong_symlinks() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        let wrong_target = PathBuf::from("/nonexistent/wrong-target.json");
+        std::fs::create_dir_all(worktree.join("agents")).unwrap();
+        for rel in SHARED_AGENT_FILES {
+            std::os::unix::fs::symlink(&wrong_target, worktree.join(rel)).unwrap();
+        }
+        let synced = sync_files(&canonical, &worktree);
+        assert_eq!(synced, 3);
+        for rel in SHARED_AGENT_FILES {
+            assert_eq!(
+                std::fs::read_link(worktree.join(rel)).unwrap(),
+                canonical.join(rel)
+            );
+        }
+    }
+
+    #[test]
+    fn sync_handles_broken_symlinks() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        std::fs::create_dir_all(worktree.join("agents")).unwrap();
+        let broken_target = PathBuf::from("/this/does/not/exist.json");
+        for rel in SHARED_AGENT_FILES {
+            std::os::unix::fs::symlink(&broken_target, worktree.join(rel)).unwrap();
+        }
+        let synced = sync_files(&canonical, &worktree);
+        assert_eq!(synced, 3);
+        for rel in SHARED_AGENT_FILES {
+            let dst = worktree.join(rel);
+            assert!(dst.is_symlink());
+            assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
+            // Content should be readable through the fixed symlink.
+            assert!(std::fs::read_to_string(&dst).is_ok());
+        }
+    }
+
+    #[test]
+    fn writes_through_symlink_reach_canonical() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        sync_files(&canonical, &worktree);
+
+        let worktree_path = worktree.join("agents/personas.json");
+        let canonical_path = canonical.join("agents/personas.json");
+
+        // Write through the symlink using the same pattern as atomic_write_json.
+        let new_content = r#"[{"id":"builtin:solo","updated":true}]"#;
+        let resolved = std::fs::canonicalize(&worktree_path).unwrap();
+        let tmp = resolved.with_extension("json.tmp");
+        std::fs::write(&tmp, new_content.as_bytes()).unwrap();
+        std::fs::rename(&tmp, &resolved).unwrap();
+
+        // The canonical file should have the new content.
+        assert_eq!(
+            std::fs::read_to_string(&canonical_path).unwrap(),
+            new_content
+        );
+        // The worktree path should still be a symlink.
+        assert!(worktree_path.is_symlink());
+        // Reading through the symlink should return the new content.
+        assert_eq!(
+            std::fs::read_to_string(&worktree_path).unwrap(),
+            new_content
         );
     }
 
@@ -372,62 +442,6 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
         assert_eq!(canonical_dev_data_dir(&canonical).unwrap(), canonical);
-    }
-
-    #[test]
-    fn sync_scrubs_runtime_pid_from_managed_agents() {
-        let (_parent, canonical, worktree) = setup_sync_layout();
-
-        // Write canonical managed-agents.json with runtime state fields.
-        std::fs::write(
-            canonical.join("agents/managed-agents.json"),
-            serde_json::to_string_pretty(&serde_json::json!([{
-                "id": "agent-1",
-                "name": "Test Agent",
-                "runtime_pid": 12345,
-                "last_error": "some error",
-                "last_exit_code": 1,
-                "last_stopped_at": "2026-01-01T00:00:00Z",
-                "last_started_at": "2026-01-01T00:00:00Z",
-                "backend_agent_id": "ba-123"
-            }]))
-            .unwrap(),
-        )
-        .unwrap();
-
-        sync_files(&canonical, &worktree);
-        scrub_managed_agents_runtime_state(&worktree.join("agents/managed-agents.json"));
-
-        let content = std::fs::read_to_string(worktree.join("agents/managed-agents.json")).unwrap();
-        let records: Vec<serde_json::Value> = serde_json::from_str(&content).unwrap();
-        let agent = &records[0];
-
-        assert_eq!(agent["id"], "agent-1");
-        assert_eq!(agent["name"], "Test Agent");
-        assert!(
-            agent.get("runtime_pid").is_none(),
-            "runtime_pid should be scrubbed"
-        );
-        assert!(
-            agent.get("last_error").is_none(),
-            "last_error should be scrubbed"
-        );
-        assert!(
-            agent.get("last_exit_code").is_none(),
-            "last_exit_code should be scrubbed"
-        );
-        assert!(
-            agent.get("last_stopped_at").is_none(),
-            "last_stopped_at should be scrubbed"
-        );
-        assert!(
-            agent.get("last_started_at").is_none(),
-            "last_started_at should be scrubbed"
-        );
-        assert!(
-            agent.get("backend_agent_id").is_none(),
-            "backend_agent_id should be scrubbed"
-        );
     }
 
     fn write_agents_json(dir: &Path, records: &serde_json::Value) {

@@ -56,14 +56,18 @@ pub fn save_managed_agents(app: &AppHandle, records: &[ManagedAgentRecord]) -> R
     let payload = serde_json::to_vec_pretty(&sorted)
         .map_err(|error| format!("failed to serialize agent store: {error}"))?;
 
-    // Atomic write: write to a temp file then rename. This prevents partial
-    // writes from corrupting the store if the process crashes mid-write.
-    // rename() is atomic on the same filesystem on both macOS and Linux.
-    let tmp_path = path.with_extension("json.tmp");
-    fs::write(&tmp_path, &payload)
-        .map_err(|error| format!("failed to write temp agent store: {error}"))?;
-    fs::rename(&tmp_path, &path)
-        .map_err(|error| format!("failed to rename temp agent store: {error}"))
+    atomic_write_json(&path, &payload)
+}
+
+/// Atomic, symlink-preserving JSON write.
+/// Resolves symlinks so the tmp+rename happens at the real target path,
+/// preserving any symlink at `path`.
+pub(crate) fn atomic_write_json(path: &Path, payload: &[u8]) -> Result<(), String> {
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let tmp = resolved.with_extension("json.tmp");
+    std::fs::write(&tmp, payload).map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &resolved)
+        .map_err(|e| format!("failed to rename {}: {e}", resolved.display()))
 }
 
 /// Maximum log file size before rotation (10 MB).
