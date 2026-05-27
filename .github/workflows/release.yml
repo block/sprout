@@ -39,9 +39,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Validate version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if ! echo "${{ steps.version.outputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "::error::Invalid version '${{ steps.version.outputs.version }}'. Expected semver (e.g. 0.4.0 or 1.0.0-beta.1)"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version '$VERSION'. Expected semver (e.g. 0.4.0 or 1.0.0-beta.1)"
             exit 1
           fi
 
@@ -56,8 +58,10 @@ jobs:
         run: just desktop-install-ci
 
       - name: Patch version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cd desktop && node scripts/set-version-from-tag.mjs "${{ steps.version.outputs.version }}"
+          cd desktop && node scripts/set-version-from-tag.mjs "$VERSION"
           cd src-tauri && cargo update --workspace
 
       - name: Generate release config
@@ -163,24 +167,26 @@ jobs:
       - name: Generate latest.json
         run: |
           bash desktop/scripts/generate-oss-latest-json.sh \
-            "${{ steps.version.outputs.version }}" \
+            "$VERSION" \
             "$SIG_PATH" \
             "https://github.com/block/sprout/releases/download/sprout-desktop-latest/$ARCHIVE_NAME" \
             > latest.json
           cat latest.json
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           SIG_PATH: ${{ steps.artifacts.outputs.sig }}
           ARCHIVE_NAME: ${{ steps.artifacts.outputs.archive_name }}
 
       - name: Create versioned GitHub release
         run: |
           RELEASE_SHA=$(git rev-parse HEAD)
-          gh release create "v${{ steps.version.outputs.version }}" \
+          gh release create "v${VERSION}" \
             --target "$RELEASE_SHA" \
-            --title "Sprout Desktop v${{ steps.version.outputs.version }}" \
-            --notes "Sprout Desktop v${{ steps.version.outputs.version }}" \
+            --title "Sprout Desktop v${VERSION}" \
+            --notes "Sprout Desktop v${VERSION}" \
             "$DMG_PATH"
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DMG_PATH: ${{ steps.artifacts.outputs.dmg }}
 
