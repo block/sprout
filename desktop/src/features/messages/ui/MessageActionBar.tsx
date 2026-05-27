@@ -70,6 +70,15 @@ function MoreActionsMenu({
   open: boolean;
 }) {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
+  // Set true the moment the user picks "Edit message". The
+  // `onCloseAutoFocus` handler on `DropdownMenuContent` reads it to
+  // suppress Radix's default focus-restoration (which would yank focus
+  // back to the trigger and steal it from the composer's editor — the
+  // composer schedules its own focus on RAF, but Radix's restoration
+  // runs in a setTimeout that fires after our RAF and wins the race).
+  // Reset to false inside the handler so Escape / non-Edit closes still
+  // get default trigger-restoration (a11y intact for keyboard users).
+  const editJustSelectedRef = React.useRef(false);
 
   const hasCopyActions = !message.pending;
 
@@ -93,11 +102,22 @@ function MoreActionsMenu({
           </TooltipTrigger>
           <TooltipContent>More actions</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" side="top" sideOffset={6}>
+        <DropdownMenuContent
+          align="end"
+          side="top"
+          sideOffset={6}
+          onCloseAutoFocus={(event) => {
+            if (editJustSelectedRef.current) {
+              event.preventDefault();
+              editJustSelectedRef.current = false;
+            }
+          }}
+        >
           {onEdit ? (
             <DropdownMenuItem
               data-testid={`edit-message-${message.id}`}
               onClick={() => {
+                editJustSelectedRef.current = true;
                 onEdit(message);
               }}
             >

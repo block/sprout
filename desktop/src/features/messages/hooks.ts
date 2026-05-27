@@ -21,6 +21,9 @@ import {
   sendChannelMessage,
 } from "@/shared/api/tauri";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
+// Same .mjs the renderer uses, so the cache-update projection can't drift
+// from the on-render overlay.
+import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
 import {
   KIND_STREAM_MESSAGE,
   KIND_SYSTEM_MESSAGE,
@@ -458,16 +461,17 @@ export function useEditMessageMutation(channel: Channel | null) {
     {
       eventId: string;
       content: string;
+      mediaTags?: string[][];
     }
   >({
-    mutationFn: async ({ eventId, content }) => {
+    mutationFn: async ({ eventId, content, mediaTags }) => {
       if (!channel) {
         throw new Error("No channel selected.");
       }
 
-      await editMessage(channel.id, eventId, content);
+      await editMessage(channel.id, eventId, content, mediaTags);
     },
-    onSuccess: (_data, { eventId, content }) => {
+    onSuccess: (_data, { eventId, content, mediaTags }) => {
       if (!channel) {
         return;
       }
@@ -475,9 +479,20 @@ export function useEditMessageMutation(channel: Channel | null) {
       queryClient.setQueryData<RelayEvent[]>(
         channelMessagesKey(channel.id),
         (current = []) =>
-          current.map((message) =>
-            message.id === eventId ? { ...message, content } : message,
-          ),
+          current.map((message) => {
+            if (message.id !== eventId) return message;
+            // Apply-on-success cache update: reflect the edit's new content
+            // and imeta tag set immediately, so the local cache matches
+            // what the receiver overlay (formatTimelineMessages) will
+            // produce when the edit event arrives back from the relay.
+            // (Not a true optimistic update — runs in onSuccess, not
+            // onMutate. Worth bearing the cost only because the edit event
+            // round-trip can lag perceptibly.)
+            const nextTags = mediaTags
+              ? applyEditTagOverlay(message.tags, mediaTags)
+              : message.tags;
+            return { ...message, content, tags: nextTags };
+          }),
       );
     },
   });

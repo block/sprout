@@ -33,6 +33,7 @@ import {
   formatTimelineMessages,
 } from "@/features/messages/lib/formatTimelineMessages";
 import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
+import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
@@ -483,6 +484,9 @@ export function ChannelScreen({
                           author: editTargetMessage.author,
                           body: editTargetMessage.body,
                           id: editTargetMessage.id,
+                          imetaMedia: imetaMediaFromTags(
+                            editTargetMessage.tags,
+                          ),
                         }
                       : null
                   }

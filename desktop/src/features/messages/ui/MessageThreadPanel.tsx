@@ -2,6 +2,7 @@ import * as React from "react";
 import { ArrowDown, X } from "lucide-react";
 
 import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
+import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
@@ -28,14 +29,19 @@ type MessageThreadPanelProps = {
   channelName: string;
   currentPubkey?: string;
   disabled?: boolean;
-  editTarget?: { author: string; body: string; id: string } | null;
+  editTarget?: {
+    author: string;
+    body: string;
+    id: string;
+    imetaMedia?: ImetaMedia[];
+  } | null;
   isSending: boolean;
   onCancelEdit?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
-  onEditSave?: (content: string) => Promise<void>;
+  onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
   onMarkUnread?: (message: TimelineMessage) => void;
   onExpandReplies: (message: TimelineMessage) => void;
   onResetWidth: () => void;

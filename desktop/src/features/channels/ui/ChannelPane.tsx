@@ -4,6 +4,7 @@ import { Hash, LogIn } from "lucide-react";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageTimeline } from "@/features/messages/ui/MessageTimeline";
+import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { TypingIndicatorRow } from "@/features/messages/ui/TypingIndicatorRow";
 import type { TypingIndicatorEntry } from "@/features/messages/useChannelTyping";
@@ -67,6 +68,7 @@ type ChannelPaneProps = {
     author: string;
     body: string;
     id: string;
+    imetaMedia?: ImetaMedia[];
   } | null;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
@@ -82,7 +84,7 @@ type ChannelPaneProps = {
   onCloseThread: () => void;
   onDelete?: (message: TimelineMessage) => void;
   onEdit?: (message: TimelineMessage) => void;
-  onEditSave?: (content: string) => Promise<void>;
+  onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
   onMarkUnread?: (message: TimelineMessage) => void;
   onExpandThreadReplies: (message: TimelineMessage) => void;
   onJoinChannel?: () => Promise<void>;

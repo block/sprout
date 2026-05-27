@@ -8,6 +8,11 @@ import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks"
 import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
 import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
+import {
+  buildOutgoingMessage,
+  type ImetaMedia,
+  stripImetaMediaLines,
+} from "@/features/messages/lib/imetaMediaMarkdown";
 
 import {
   ALLOWED_MEDIA_TYPES,
@@ -46,11 +51,19 @@ type MessageComposerProps = {
     author: string;
     body: string;
     id: string;
+    /**
+     * NIP-92 imeta attachments on the original event, in tag order. Loaded
+     * into the composer's pending-imeta state on edit-open so the user sees
+     * them as removable thumbnails (just like the send path) and can add
+     * more. The submit path emits a fresh full imeta tag set on the edit
+     * event; the receiver overlays it.
+     */
+    imetaMedia?: ImetaMedia[];
   } | null;
   isSending?: boolean;
   onCancelEdit?: () => void;
   onCancelReply?: () => void;
-  onEditSave?: (content: string) => Promise<void>;
+  onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -106,7 +119,14 @@ export function MessageComposer({
   const previousDraftKeyRef = React.useRef<string | null>(null);
   const effectiveDraftKeyRef = React.useRef(effectiveDraftKey);
   effectiveDraftKeyRef.current = effectiveDraftKey;
-  const preEditContentRef = React.useRef<string | null>(null);
+  // Snapshot of composer state at the moment we enter edit mode (text body
+  // + draft attachments) so the user's pre-edit work isn't lost when the
+  // composer is hijacked for editing. Restored on edit-cancel/exit. `null`
+  // while not in edit mode.
+  const preEditSnapshotRef = React.useRef<{
+    content: string;
+    pendingImeta: ImetaMedia[];
+  } | null>(null);
   const mentions = useMentions(channelId, undefined, profiles);
   const channelLinks = useChannelLinks();
   const emojiAutocomplete = useEmojiAutocomplete();
@@ -220,17 +240,45 @@ export function MessageComposer({
   // biome-ignore lint/correctness/useExhaustiveDependencies: editTarget?.id is the trigger
   React.useEffect(() => {
     if (editTarget) {
-      preEditContentRef.current = contentRef.current;
-      setContent(editTarget.body);
-      contentRef.current = editTarget.body;
-      richText.setContent(editTarget.body);
-      richText.focus();
-    } else if (preEditContentRef.current !== null) {
-      const restored = preEditContentRef.current;
-      preEditContentRef.current = null;
-      setContent(restored);
-      contentRef.current = restored;
-      restored ? richText.setContent(restored) : richText.clearContent();
+      // Snapshot the current draft (text + attachments) so the user's
+      // in-flight work survives the edit-mode hijack and is restored on
+      // edit-cancel/exit.
+      preEditSnapshotRef.current = {
+        content: contentRef.current,
+        pendingImeta: [...media.pendingImetaRef.current],
+      };
+      // Strip the trailing `![image|video](url)` lines that correspond to
+      // imeta attachments — the user manages those via the attachments row,
+      // not via raw markdown in the editor.
+      const editableBody = stripImetaMediaLines(
+        editTarget.body,
+        editTarget.imetaMedia ?? [],
+      );
+      setContent(editableBody);
+      contentRef.current = editableBody;
+      richText.setContent(editableBody);
+      // Seed the composer's pending-imeta state with the original event's
+      // attachments so they show up in `ComposerAttachments` and the user
+      // can remove existing ones / add new ones before saving.
+      media.setPendingImeta(editTarget.imetaMedia ?? []);
+      // Defer focus to the next frame so it runs after any focus-
+      // restoration the trigger UI (e.g. the message-row context menu)
+      // fires on close. Without this, Radix-style focus-restoration races
+      // our call and leaves DOM focus on the message row — global keybinds
+      // like Delete then fire there instead of in the editor. `focusEnd`
+      // also lands the caret at end of the loaded content.
+      const rafId = requestAnimationFrame(() => richText.focusEnd());
+      return () => cancelAnimationFrame(rafId);
+    } else if (preEditSnapshotRef.current !== null) {
+      const { content: restoredContent, pendingImeta: restoredImeta } =
+        preEditSnapshotRef.current;
+      preEditSnapshotRef.current = null;
+      setContent(restoredContent);
+      contentRef.current = restoredContent;
+      restoredContent
+        ? richText.setContent(restoredContent)
+        : richText.clearContent();
+      media.setPendingImeta(restoredImeta);
     }
   }, [editTarget?.id]);
 
@@ -343,23 +391,40 @@ export function MessageComposer({
 
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
-      if (!trimmed || isSendingRef.current) return;
+      if (isSendingRef.current || isUploadingRef.current) return;
+      const currentPendingImeta = media.pendingImetaRef.current;
+      const hasMedia = currentPendingImeta.length > 0;
+      // Empty text + zero attachments is a no-op (don't let edit become an
+      // effective deletion).
+      if (!trimmed && !hasMedia) return;
+
+      // Build the edit's body + imeta tag set. Coerce `mediaTags ?? []`
+      // because edit semantics use `[]` as the explicit "wipe all
+      // attachments" signal — the receiver overlay drops imeta when the
+      // edit carries an empty (but defined) set.
+      const { content: finalContent, mediaTags } = buildOutgoingMessage(
+        trimmed,
+        currentPendingImeta,
+      );
 
       const savedContent = trimmed;
+      const savedImeta = [...currentPendingImeta];
       setContent("");
       contentRef.current = "";
       richText.clearContent();
+      media.setPendingImeta([]);
       mentions.clearMentions();
       channelLinks.clearChannels();
       emojiAutocomplete.clearEmojis();
       setIsEmojiPickerOpen(false);
 
       try {
-        await onEditSaveRef.current(trimmed);
+        await onEditSaveRef.current(finalContent, mediaTags ?? []);
       } catch {
         setContent(savedContent);
         contentRef.current = savedContent;
         richText.setContent(savedContent);
+        media.setPendingImeta(savedImeta);
       }
       return;
     }
@@ -378,28 +443,13 @@ export function MessageComposer({
 
     const pubkeys = mentions.extractMentionPubkeys(trimmed);
 
-    const mediaTags =
-      currentPendingImeta.length > 0
-        ? currentPendingImeta.map((d) => [
-            "imeta",
-            `url ${d.url}`,
-            `m ${d.type}`,
-            `x ${d.sha256}`,
-            `size ${d.size}`,
-            ...(d.dim ? [`dim ${d.dim}`] : []),
-            ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
-            ...(d.thumb ? [`thumb ${d.thumb}`] : []),
-            ...(d.duration != null ? [`duration ${d.duration}`] : []),
-            ...(d.image ? [`image ${d.image}`] : []),
-          ])
-        : undefined;
-
-    // Append all attachments as markdown images at the end of the message.
-    let finalContent = trimmed;
-    for (const d of currentPendingImeta) {
-      const isVideo = d.type.startsWith("video/");
-      finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
-    }
+    // Send semantics use `undefined` for "no attachments" (no imeta tags
+    // emitted on the publish), which is what `buildOutgoingMessage`
+    // returns by default.
+    const { content: finalContent, mediaTags } = buildOutgoingMessage(
+      trimmed,
+      currentPendingImeta,
+    );
 
     const savedContent = trimmed;
     const savedImeta = [...currentPendingImeta];

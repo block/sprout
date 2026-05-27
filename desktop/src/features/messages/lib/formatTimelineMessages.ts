@@ -31,6 +31,9 @@ import {
 } from "@/shared/constants/kinds";
 import { resolveEventAuthorPubkey } from "@/shared/lib/authors";
 import { formatTime } from "@/features/messages/lib/dateFormatters";
+// Pure overlay helper lives in a sibling .mjs so node:test (no TS loader)
+// can exercise the exact same source the renderer uses.
+import { applyEditTagOverlay } from "@/features/messages/lib/applyEditTagOverlay.mjs";
 
 const HEX_RE = /^[0-9a-f]+$/i;
 
@@ -156,11 +159,14 @@ export function formatTimelineMessages(
     }
   }
 
-  // Build a map of latest edit per original message: targetId → { content, createdAt }.
+  // Build a map of latest edit per original message: targetId → { content, tags, createdAt }.
   // When multiple edits exist for the same message, the most recent one wins.
+  // The edit's own tags are kept so the renderer can overlay imeta tags
+  // (attachments) from the edit onto the original event — non-imeta tags on
+  // the original (`h`, `p` mentions, etc.) stay untouched.
   const editsByTargetId = new Map<
     string,
-    { content: string; createdAt: number }
+    { content: string; tags: string[][]; createdAt: number }
   >();
   for (const event of events) {
     if (
@@ -179,6 +185,7 @@ export function formatTimelineMessages(
     if (!existing || event.created_at > existing.createdAt) {
       editsByTargetId.set(targetId, {
         content: event.content,
+        tags: event.tags,
         createdAt: event.created_at,
       });
     }
@@ -348,7 +355,11 @@ export function formatTimelineMessages(
       pending: event.pending,
       edited: edit !== undefined,
       kind: event.kind,
-      tags: event.tags,
+      // When edited, swap the original event's imeta tags for the edit's
+      // imeta tags. All non-imeta tags on the original are preserved.
+      // Logic lives in `applyEditTagOverlay.mjs` so prod and tests share
+      // a single source.
+      tags: applyEditTagOverlay(event.tags, edit?.tags),
       reactions: (() => {
         const reactions = reactionsByEventId.get(event.id);
         return reactions ? [...reactions.values()] : undefined;
