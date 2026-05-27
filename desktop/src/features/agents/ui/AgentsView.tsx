@@ -100,7 +100,7 @@ export function AgentsView() {
               selectedLogAgentPubkey={agents.logAgentPubkey}
               // Persona props
               canChooseCatalog={personas.catalogPersonas.length > 0}
-              personas={personas.personasQuery.data ?? []}
+              personas={personas.libraryPersonas}
               personasError={
                 personas.personasQuery.error instanceof Error
                   ? personas.personasQuery.error
