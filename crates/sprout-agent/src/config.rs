@@ -75,6 +75,7 @@ pub struct Config {
     pub anthropic_api_version: String,
     /// OpenAI endpoint selection. See [`OpenAiApi`].
     pub openai_api: OpenAiApi,
+    pub hints_enabled: bool,
 }
 
 impl Config {
@@ -156,6 +157,7 @@ impl Config {
             )?),
             stop_max_rejections: parse_env("SPROUT_AGENT_STOP_MAX_REJECTIONS", 3u32)?,
             hook_servers: parse_hook_servers_env("MCP_HOOK_SERVERS"),
+            hints_enabled: parse_env("SPROUT_AGENT_NO_HINTS", 0u8)? == 0,
         };
         cfg.validate()?;
         Ok(cfg)
