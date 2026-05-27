@@ -281,17 +281,21 @@ pub fn build_forum_comment(
     Ok(EventBuilder::new(Kind::Custom(45003), content).tags(tags))
 }
 
-/// Kind 40003 — edit a message.
+/// Kind 40003 — edit a message. Carries the full new content AND a fresh
+/// imeta tag set; the receiver overlays the imeta tags onto the original
+/// event so the rendered message reflects exactly the edited state.
 pub fn build_message_edit(
     channel_id: Uuid,
     target_event_id: EventId,
     content: &str,
+    media_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
-    let tags = vec![
+    let mut tags = vec![
         tag(vec!["h", &channel_id.to_string()])?,
         tag(vec!["e", &target_event_id.to_hex()])?,
     ];
+    imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(40003), content).tags(tags))
 }
 

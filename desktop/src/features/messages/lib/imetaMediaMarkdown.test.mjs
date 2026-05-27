@@ -28,26 +28,74 @@ function stripImetaMediaLines(body, imetaMedia) {
   return lines.slice(0, end).join("\n").replace(/\s+$/, "");
 }
 
-function formatImetaMediaLine({ url, m }) {
-  const isVideo = m.startsWith("video/");
+function formatImetaMediaLine({ url, type }) {
+  const isVideo = type.startsWith("video/");
   return isVideo ? `\n![video](${url})` : `\n![image](${url})`;
 }
 
-function appendImetaMediaLines(body, imetaMedia) {
-  if (imetaMedia.length === 0) return body;
-  let out = body;
-  for (const media of imetaMedia) {
-    if (out.includes(media.url)) continue;
-    out += formatImetaMediaLine(media);
-  }
-  return out;
+function buildImetaTags(imetaMedia) {
+  return imetaMedia.map((d) => [
+    "imeta",
+    `url ${d.url}`,
+    `m ${d.type}`,
+    `x ${d.sha256}`,
+    `size ${d.size}`,
+    ...(d.dim ? [`dim ${d.dim}`] : []),
+    ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
+    ...(d.thumb ? [`thumb ${d.thumb}`] : []),
+    ...(d.duration != null ? [`duration ${d.duration}`] : []),
+    ...(d.image ? [`image ${d.image}`] : []),
+  ]);
 }
 
-// Convenience: full edit round-trip — strip, user edits text, re-append.
-function editRoundTrip(originalBody, imetaMedia, newText) {
-  const editable = stripImetaMediaLines(originalBody, imetaMedia);
-  void editable; // mirror composer flow; result not asserted here
-  return appendImetaMediaLines(newText, imetaMedia);
+// Mirror of `parseImetaTags` + `imetaMediaFromTags` so the projection's
+// type/x/size/dim/blurhash/thumb/duration/image fields can be tested without
+// a TS loader.
+function parseImetaTagsInline(tags) {
+  const map = new Map();
+  for (const tag of tags) {
+    if (tag[0] !== "imeta") continue;
+    const entry = {};
+    for (const part of tag.slice(1)) {
+      const i = part.indexOf(" ");
+      if (i === -1) continue;
+      const key = part.slice(0, i);
+      const val = part.slice(i + 1);
+      if (key === "url") entry.url = val;
+      else if (key === "m") entry.m = val;
+      else if (key === "x") entry.x = val;
+      else if (key === "size") entry.size = parseInt(val, 10);
+      else if (key === "dim") entry.dim = val;
+      else if (key === "blurhash") entry.blurhash = val;
+      else if (key === "thumb") entry.thumb = val;
+      else if (key === "duration") entry.duration = parseFloat(val);
+      else if (key === "image") entry.image = val;
+    }
+    if (entry.url) map.set(entry.url, entry);
+  }
+  return map;
+}
+
+function imetaMediaFromTags(tags) {
+  if (!tags || tags.length === 0) return [];
+  const entries = parseImetaTagsInline(tags);
+  const out = [];
+  for (const e of entries.values()) {
+    if (!e.url) continue;
+    out.push({
+      url: e.url,
+      type: e.m ?? "image/jpeg",
+      sha256: e.x ?? "",
+      size: e.size ?? 0,
+      uploaded: 0,
+      ...(e.dim ? { dim: e.dim } : {}),
+      ...(e.blurhash ? { blurhash: e.blurhash } : {}),
+      ...(e.thumb ? { thumb: e.thumb } : {}),
+      ...(e.duration != null ? { duration: e.duration } : {}),
+      ...(e.image ? { image: e.image } : {}),
+    });
+  }
+  return out;
 }
 
 // ── stripImetaMediaLines ──────────────────────────────────────────────
@@ -55,7 +103,7 @@ function editRoundTrip(originalBody, imetaMedia, newText) {
 test("strip: removes trailing image line whose URL is in imetaMedia", () => {
   const body = "Look at this\n![image](https://blossom/abc.png)";
   const stripped = stripImetaMediaLines(body, [
-    { url: "https://blossom/abc.png", m: "image/png" },
+    { url: "https://blossom/abc.png", type: "image/png" },
   ]);
   assert.equal(stripped, "Look at this");
 });
@@ -63,7 +111,7 @@ test("strip: removes trailing image line whose URL is in imetaMedia", () => {
 test("strip: removes trailing video line", () => {
   const body = "Demo:\n![video](https://blossom/clip.mp4)";
   const stripped = stripImetaMediaLines(body, [
-    { url: "https://blossom/clip.mp4", m: "video/mp4" },
+    { url: "https://blossom/clip.mp4", type: "video/mp4" },
   ]);
   assert.equal(stripped, "Demo:");
 });
@@ -71,8 +119,8 @@ test("strip: removes trailing video line", () => {
 test("strip: removes multiple trailing media lines in order", () => {
   const body = "two pics\n![image](https://b/a.png)\n![image](https://b/b.png)";
   const stripped = stripImetaMediaLines(body, [
-    { url: "https://b/a.png", m: "image/png" },
-    { url: "https://b/b.png", m: "image/png" },
+    { url: "https://b/a.png", type: "image/png" },
+    { url: "https://b/b.png", type: "image/png" },
   ]);
   assert.equal(stripped, "two pics");
 });
@@ -85,7 +133,7 @@ test("strip: leaves body alone when no imeta entries", () => {
 test("strip: leaves media line whose URL isn't in imetaMedia", () => {
   const body = "hello\n![image](https://b/other.png)";
   const stripped = stripImetaMediaLines(body, [
-    { url: "https://b/known.png", m: "image/png" },
+    { url: "https://b/known.png", type: "image/png" },
   ]);
   assert.equal(stripped, body);
 });
@@ -94,129 +142,179 @@ test("strip: stops at first non-media line (interleaved text preserved)", () => 
   const body =
     "before\n![image](https://b/a.png)\nmiddle\n![image](https://b/b.png)";
   const stripped = stripImetaMediaLines(body, [
-    { url: "https://b/a.png", m: "image/png" },
-    { url: "https://b/b.png", m: "image/png" },
+    { url: "https://b/a.png", type: "image/png" },
+    { url: "https://b/b.png", type: "image/png" },
   ]);
-  // Only the trailing one is peeled off; interleaved text stays.
   assert.equal(stripped, "before\n![image](https://b/a.png)\nmiddle");
 });
 
 test("strip: tolerates blank lines between text and trailing media", () => {
   const body = "hi\n\n![image](https://b/a.png)";
   const stripped = stripImetaMediaLines(body, [
-    { url: "https://b/a.png", m: "image/png" },
+    { url: "https://b/a.png", type: "image/png" },
   ]);
   assert.equal(stripped, "hi");
 });
 
-// ── appendImetaMediaLines ─────────────────────────────────────────────
+// ── formatImetaMediaLine (send-path body markdown) ────────────────────
 
-test("append: adds image and video lines based on mime type", () => {
-  const out = appendImetaMediaLines("new caption", [
-    { url: "https://b/a.png", m: "image/png" },
-    { url: "https://b/c.mp4", m: "video/mp4" },
-  ]);
+test("formatImetaMediaLine: image mime → ![image] line", () => {
   assert.equal(
-    out,
-    "new caption\n![image](https://b/a.png)\n![video](https://b/c.mp4)",
+    formatImetaMediaLine({ url: "https://b/a.png", type: "image/png" }),
+    "\n![image](https://b/a.png)",
   );
 });
 
-test("append: no-op when imetaMedia empty", () => {
-  assert.equal(appendImetaMediaLines("hi", []), "hi");
+test("formatImetaMediaLine: video mime → ![video] line (regardless of URL suffix)", () => {
+  assert.equal(
+    formatImetaMediaLine({ url: "https://cdn/blob/xyz", type: "video/mp4" }),
+    "\n![video](https://cdn/blob/xyz)",
+  );
 });
 
-// ── Round-trip (the bug fix) ──────────────────────────────────────────
+// ── imetaMediaFromTags (full BlobDescriptor projection) ───────────────
 
-test("edit-of-media-message: final body still contains all imeta URLs", () => {
-  const originalBody =
-    "old caption\n![image](https://b/photo.png)\n![video](https://b/clip.mp4)";
-  const imetaMedia = [
-    { url: "https://b/photo.png", m: "image/png" },
-    { url: "https://b/clip.mp4", m: "video/mp4" },
+test("imetaMediaFromTags: empty / undefined", () => {
+  assert.deepEqual(imetaMediaFromTags(undefined), []);
+  assert.deepEqual(imetaMediaFromTags([]), []);
+});
+
+test("imetaMediaFromTags: full descriptor round-trip with all fields", () => {
+  const tags = [
+    [
+      "imeta",
+      "url https://b/photo.png",
+      "m image/png",
+      "x deadbeef",
+      "size 12345",
+      "dim 1920x1080",
+      "blurhash LKO2:N%2Tw=^$f",
+      "thumb https://b/photo-thumb.png",
+      "image https://b/photo.png",
+    ],
+  ];
+  const out = imetaMediaFromTags(tags);
+  assert.deepEqual(out, [
+    {
+      url: "https://b/photo.png",
+      type: "image/png",
+      sha256: "deadbeef",
+      size: 12345,
+      uploaded: 0,
+      dim: "1920x1080",
+      blurhash: "LKO2:N%2Tw=^$f",
+      thumb: "https://b/photo-thumb.png",
+      image: "https://b/photo.png",
+    },
+  ]);
+});
+
+test("imetaMediaFromTags: video preserves duration", () => {
+  const tags = [
+    [
+      "imeta",
+      "url https://b/clip.mp4",
+      "m video/mp4",
+      "x cafef00d",
+      "size 999000",
+      "duration 12.5",
+    ],
+  ];
+  const out = imetaMediaFromTags(tags);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].duration, 12.5);
+  assert.equal(out[0].type, "video/mp4");
+});
+
+test("imetaMediaFromTags: legacy entry without `m` falls back to image/jpeg", () => {
+  const tags = [["imeta", "url https://b/legacy.jpg", "x abc", "size 100"]];
+  const out = imetaMediaFromTags(tags);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].type, "image/jpeg");
+  assert.equal(out[0].sha256, "abc");
+});
+
+test("imetaMediaFromTags: skips entries without a url", () => {
+  const tags = [["imeta", "m image/png", "x abc"]];
+  assert.deepEqual(imetaMediaFromTags(tags), []);
+});
+
+test("imetaMediaFromTags: ignores non-imeta tags", () => {
+  const tags = [
+    ["e", "abc"],
+    ["p", "def"],
+    ["h", "uuid"],
+  ];
+  assert.deepEqual(imetaMediaFromTags(tags), []);
+});
+
+test("imetaMediaFromTags: preserves order across multiple entries", () => {
+  const tags = [
+    ["imeta", "url https://b/a.png", "m image/png", "x 1", "size 10"],
+    ["imeta", "url https://b/b.png", "m image/png", "x 2", "size 20"],
+    ["imeta", "url https://b/c.mp4", "m video/mp4", "x 3", "size 30"],
+  ];
+  const out = imetaMediaFromTags(tags);
+  assert.deepEqual(
+    out.map((d) => d.url),
+    ["https://b/a.png", "https://b/b.png", "https://b/c.mp4"],
+  );
+});
+
+// ── buildImetaTags (send + edit symmetry) ─────────────────────────────
+
+test("buildImetaTags: round-trips through imetaMediaFromTags losslessly (full fields)", () => {
+  const original = [
+    {
+      url: "https://b/photo.png",
+      type: "image/png",
+      sha256: "deadbeef",
+      size: 12345,
+      uploaded: 0,
+      dim: "1920x1080",
+      blurhash: "LKO2:N%2Tw=^$f",
+      thumb: "https://b/photo-thumb.png",
+      image: "https://b/photo.png",
+    },
+  ];
+  const tags = buildImetaTags(original);
+  const projected = imetaMediaFromTags(tags);
+  assert.deepEqual(projected, original);
+});
+
+test("buildImetaTags: omits absent optional fields", () => {
+  const tags = buildImetaTags([
+    {
+      url: "https://b/a.png",
+      type: "image/png",
+      sha256: "x",
+      size: 1,
+      uploaded: 0,
+    },
+  ]);
+  assert.deepEqual(tags, [
+    ["imeta", "url https://b/a.png", "m image/png", "x x", "size 1"],
+  ]);
+});
+
+// ── Edit flow: open-edit → user modifies attachments → save ───────────
+
+test("edit flow: imeta tags rebuilt from current pending after user removes one", () => {
+  // Original event has two attachments.
+  const originalTags = [
+    ["imeta", "url https://b/a.png", "m image/png", "x 1", "size 10"],
+    ["imeta", "url https://b/b.png", "m image/png", "x 2", "size 20"],
   ];
 
-  // User opens edit — composer strips media lines.
-  const editable = stripImetaMediaLines(originalBody, imetaMedia);
-  assert.equal(editable, "old caption");
+  // Composer projects them into pendingImeta on edit-load.
+  const pending = imetaMediaFromTags(originalTags);
+  assert.equal(pending.length, 2);
 
-  // User changes the text and saves.
-  const finalBody = appendImetaMediaLines("new caption", imetaMedia);
+  // User removes the first one.
+  const after = pending.filter((d) => d.url !== "https://b/a.png");
 
-  for (const { url } of imetaMedia) {
-    assert.ok(
-      finalBody.includes(url),
-      `final body should still contain ${url}`,
-    );
-  }
-  // Order preserved; alt label matches mime type.
-  assert.equal(
-    finalBody,
-    "new caption\n![image](https://b/photo.png)\n![video](https://b/clip.mp4)",
-  );
-});
-
-test("edit-of-media-message: video URL without .mp4 suffix still rendered as video", () => {
-  // markdown.tsx switches on .mp4 suffix today, but the alt text we emit is
-  // mime-driven, so a videos served from a CDN-style URL (no extension)
-  // round-trip with the right `![video]` label.
-  const imetaMedia = [{ url: "https://cdn/blob/xyz", m: "video/mp4" }];
-  const finalBody = editRoundTrip(
-    "caption\n![video](https://cdn/blob/xyz)",
-    imetaMedia,
-    "new caption",
-  );
-  assert.equal(finalBody, "new caption\n![video](https://cdn/blob/xyz)");
-});
-
-test("edit-of-text-only-message: no imeta, body unchanged shape", () => {
-  const finalBody = editRoundTrip("hello", [], "world");
-  assert.equal(finalBody, "world");
-});
-
-test("append: empty body + imeta produces non-empty media-only body", () => {
-  // Backs the "media-only-no-caption edit" submit path: when the user clears
-  // the caption, finalContent must still contain the imeta URLs so the saved
-  // event renders the attachment.
-  const out = appendImetaMediaLines("", [
-    { url: "https://b/a.png", m: "image/png" },
-  ]);
-  assert.equal(out, "\n![image](https://b/a.png)");
-  assert.ok(out.includes("https://b/a.png"));
-});
-
-// ── append: dedup against URL already present in body ────────────────
-
-test("append: skips URL already textually present in body", () => {
-  // Defends non-trailing layouts: if strip leaves a media line in place
-  // (e.g. interleaved with text), append must not re-add the same URL.
-  const body = "before\n![image](https://b/a.png)\nmiddle";
-  const out = appendImetaMediaLines(body, [
-    { url: "https://b/a.png", m: "image/png" },
-  ]);
-  assert.equal(out, body);
-});
-
-test("append: dedup is per-URL (other entries still appended)", () => {
-  const body = "x\n![image](https://b/a.png)\ny";
-  const out = appendImetaMediaLines(body, [
-    { url: "https://b/a.png", m: "image/png" },
-    { url: "https://b/new.png", m: "image/png" },
-  ]);
-  assert.equal(
-    out,
-    "x\n![image](https://b/a.png)\ny\n![image](https://b/new.png)",
-  );
-});
-
-test("round-trip: interleaved imeta layout doesn't duplicate on save", () => {
-  // strip leaves the interleaved line in place, append must skip it.
-  const originalBody = "before\n![image](https://b/a.png)\nmiddle";
-  const imetaMedia = [{ url: "https://b/a.png", m: "image/png" }];
-  const editable = stripImetaMediaLines(originalBody, imetaMedia);
-  // Editable content still contains the embedded media line (out of scope to
-  // strip); user edits the surrounding text and saves.
-  assert.equal(editable, originalBody);
-  const finalBody = appendImetaMediaLines(editable, imetaMedia);
-  assert.equal(finalBody, originalBody);
+  // Composer builds the edit's mediaTags from the remaining pending list.
+  const editMediaTags = buildImetaTags(after);
+  assert.equal(editMediaTags.length, 1);
+  assert.equal(editMediaTags[0][1], "url https://b/b.png");
 });

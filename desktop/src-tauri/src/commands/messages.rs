@@ -389,16 +389,19 @@ pub async fn edit_message(
     channel_id: String,
     event_id: String,
     content: String,
+    media_tags: Vec<Vec<String>>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
         .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
     let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
     let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return Err("edit content must not be empty".into());
+    // Empty text is allowed when the edit still carries imeta attachments
+    // (a media-only edit). Reject only when both are empty.
+    if trimmed.is_empty() && media_tags.is_empty() {
+        return Err("edit must have content or attachments".into());
     }
-    let builder = events::build_message_edit(channel_uuid, target_eid, trimmed)?;
+    let builder = events::build_message_edit(channel_uuid, target_eid, trimmed, &media_tags)?;
     submit_event(builder, &state).await?;
     Ok(())
 }

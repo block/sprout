@@ -156,11 +156,14 @@ export function formatTimelineMessages(
     }
   }
 
-  // Build a map of latest edit per original message: targetId → { content, createdAt }.
+  // Build a map of latest edit per original message: targetId → { content, tags, createdAt }.
   // When multiple edits exist for the same message, the most recent one wins.
+  // The edit's own tags are kept so the renderer can overlay imeta tags
+  // (attachments) from the edit onto the original event — non-imeta tags on
+  // the original (`h`, `p` mentions, etc.) stay untouched.
   const editsByTargetId = new Map<
     string,
-    { content: string; createdAt: number }
+    { content: string; tags: string[][]; createdAt: number }
   >();
   for (const event of events) {
     if (
@@ -179,6 +182,7 @@ export function formatTimelineMessages(
     if (!existing || event.created_at > existing.createdAt) {
       editsByTargetId.set(targetId, {
         content: event.content,
+        tags: event.tags,
         createdAt: event.created_at,
       });
     }
@@ -348,7 +352,14 @@ export function formatTimelineMessages(
       pending: event.pending,
       edited: edit !== undefined,
       kind: event.kind,
-      tags: event.tags,
+      // When edited, swap the original event's imeta tags for the edit's
+      // imeta tags. All non-imeta tags on the original are preserved.
+      tags: edit
+        ? [
+            ...event.tags.filter((t) => t[0] !== "imeta"),
+            ...edit.tags.filter((t) => t[0] === "imeta"),
+          ]
+        : event.tags,
       reactions: (() => {
         const reactions = reactionsByEventId.get(event.id);
         return reactions ? [...reactions.values()] : undefined;

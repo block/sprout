@@ -9,7 +9,7 @@ import { useDrafts } from "@/features/messages/lib/useDrafts";
 import { useEmojiAutocomplete } from "@/features/messages/lib/useEmojiAutocomplete";
 import type { EmojiSuggestion } from "@/features/messages/lib/useEmojiAutocomplete";
 import {
-  appendImetaMediaLines,
+  buildImetaTags,
   formatImetaMediaLine,
   type ImetaMedia,
   stripImetaMediaLines,
@@ -53,17 +53,18 @@ type MessageComposerProps = {
     body: string;
     id: string;
     /**
-     * NIP-92 imeta attachments on the original event, in tag order.
-     * The composer strips matching `![image|video](url)` markdown lines from
-     * the body when loading the editor, and re-appends them on save, so the
-     * attachment survives the round-trip. See `imetaMediaMarkdown.ts`.
+     * NIP-92 imeta attachments on the original event, in tag order. Loaded
+     * into the composer's pending-imeta state on edit-open so the user sees
+     * them as removable thumbnails (just like the send path) and can add
+     * more. The submit path emits a fresh full imeta tag set on the edit
+     * event; the receiver overlays it.
      */
     imetaMedia?: ImetaMedia[];
   } | null;
   isSending?: boolean;
   onCancelEdit?: () => void;
   onCancelReply?: () => void;
-  onEditSave?: (content: string) => Promise<void>;
+  onEditSave?: (content: string, mediaTags?: string[][]) => Promise<void>;
   onSend: (
     content: string,
     mentionPubkeys: string[],
@@ -235,9 +236,8 @@ export function MessageComposer({
     if (editTarget) {
       preEditContentRef.current = contentRef.current;
       // Strip the trailing `![image|video](url)` lines that correspond to
-      // imeta attachments. Those are re-appended on save (see submitMessage)
-      // so the attachment survives the round-trip; the user only sees and
-      // edits the text portion.
+      // imeta attachments — the user manages those via the attachments row,
+      // not via raw markdown in the editor.
       const editableBody = stripImetaMediaLines(
         editTarget.body,
         editTarget.imetaMedia ?? [],
@@ -245,6 +245,10 @@ export function MessageComposer({
       setContent(editableBody);
       contentRef.current = editableBody;
       richText.setContent(editableBody);
+      // Seed the composer's pending-imeta state with the original event's
+      // attachments so they show up in `ComposerAttachments` and the user
+      // can remove existing ones / add new ones before saving.
+      media.setPendingImeta(editTarget.imetaMedia ?? []);
       richText.focus();
     } else if (preEditContentRef.current !== null) {
       const restored = preEditContentRef.current;
@@ -252,6 +256,9 @@ export function MessageComposer({
       setContent(restored);
       contentRef.current = restored;
       restored ? richText.setContent(restored) : richText.clearContent();
+      // Drop any imeta we'd seeded for the edit; the send-path defaults are
+      // empty until the user re-attaches.
+      media.setPendingImeta([]);
     }
   }, [editTarget?.id]);
 
@@ -364,34 +371,35 @@ export function MessageComposer({
 
     // Edit mode
     if (editTargetRef.current && onEditSaveRef.current) {
-      if (isSendingRef.current) return;
-      const imetaMedia = editTargetRef.current.imetaMedia ?? [];
-      // Allow saving an empty caption when the message still carries imeta
-      // attachments — finalContent won't actually be empty since the imeta
-      // markdown lines get re-appended below.
-      if (!trimmed && imetaMedia.length === 0) return;
+      if (isSendingRef.current || isUploadingRef.current) return;
+      const currentPendingImeta = media.pendingImetaRef.current;
+      const hasMedia = currentPendingImeta.length > 0;
+      // Empty text + zero attachments is a no-op (don't let edit become an
+      // effective deletion). The user-visible body is now the source of
+      // truth for the saved content — attachments live in tags.
+      if (!trimmed && !hasMedia) return;
 
-      // Re-append the imeta attachments we stripped on edit-load so the
-      // saved content keeps rendering them. (The composer doesn't currently
-      // expose attachment editing in edit-mode; round-tripping the original
-      // imeta is enough.)
-      const finalContent = appendImetaMediaLines(trimmed, imetaMedia);
+      const finalContent = trimmed;
+      const mediaTags = hasMedia ? buildImetaTags(currentPendingImeta) : [];
 
       const savedContent = trimmed;
+      const savedImeta = [...currentPendingImeta];
       setContent("");
       contentRef.current = "";
       richText.clearContent();
+      media.setPendingImeta([]);
       mentions.clearMentions();
       channelLinks.clearChannels();
       emojiAutocomplete.clearEmojis();
       setIsEmojiPickerOpen(false);
 
       try {
-        await onEditSaveRef.current(finalContent);
+        await onEditSaveRef.current(finalContent, mediaTags);
       } catch {
         setContent(savedContent);
         contentRef.current = savedContent;
         richText.setContent(savedContent);
+        media.setPendingImeta(savedImeta);
       }
       return;
     }
@@ -412,24 +420,13 @@ export function MessageComposer({
 
     const mediaTags =
       currentPendingImeta.length > 0
-        ? currentPendingImeta.map((d) => [
-            "imeta",
-            `url ${d.url}`,
-            `m ${d.type}`,
-            `x ${d.sha256}`,
-            `size ${d.size}`,
-            ...(d.dim ? [`dim ${d.dim}`] : []),
-            ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
-            ...(d.thumb ? [`thumb ${d.thumb}`] : []),
-            ...(d.duration != null ? [`duration ${d.duration}`] : []),
-            ...(d.image ? [`image ${d.image}`] : []),
-          ])
+        ? buildImetaTags(currentPendingImeta)
         : undefined;
 
     // Append all attachments as markdown images at the end of the message.
     let finalContent = trimmed;
     for (const d of currentPendingImeta) {
-      finalContent += formatImetaMediaLine({ url: d.url, m: d.type });
+      finalContent += formatImetaMediaLine(d);
     }
 
     const savedContent = trimmed;

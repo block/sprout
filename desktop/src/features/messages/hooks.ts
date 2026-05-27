@@ -458,16 +458,17 @@ export function useEditMessageMutation(channel: Channel | null) {
     {
       eventId: string;
       content: string;
+      mediaTags?: string[][];
     }
   >({
-    mutationFn: async ({ eventId, content }) => {
+    mutationFn: async ({ eventId, content, mediaTags }) => {
       if (!channel) {
         throw new Error("No channel selected.");
       }
 
-      await editMessage(channel.id, eventId, content);
+      await editMessage(channel.id, eventId, content, mediaTags);
     },
-    onSuccess: (_data, { eventId, content }) => {
+    onSuccess: (_data, { eventId, content, mediaTags }) => {
       if (!channel) {
         return;
       }
@@ -475,9 +476,17 @@ export function useEditMessageMutation(channel: Channel | null) {
       queryClient.setQueryData<RelayEvent[]>(
         channelMessagesKey(channel.id),
         (current = []) =>
-          current.map((message) =>
-            message.id === eventId ? { ...message, content } : message,
-          ),
+          current.map((message) => {
+            if (message.id !== eventId) return message;
+            // Optimistically reflect the edit: new content + new imeta tag
+            // set (preserve all non-imeta tags). The server-side edit event
+            // overlay (formatTimelineMessages) does the same projection
+            // when the edit event arrives.
+            const nextTags = mediaTags
+              ? [...message.tags.filter((t) => t[0] !== "imeta"), ...mediaTags]
+              : message.tags;
+            return { ...message, content, tags: nextTags };
+          }),
       );
     },
   });
