@@ -143,12 +143,21 @@ pub async fn get_global_notes(
     Ok(nostr_convert::user_notes_from_events(&events))
 }
 
+fn validate_note_id(note_id: &str) -> Result<(), String> {
+    if note_id.len() == 64 && note_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err("invalid note id".to_string())
+    }
+}
+
 /// Fetch a single NIP-01 kind:1 note by event id.
 #[tauri::command]
 pub async fn get_note(
     note_id: String,
     state: State<'_, AppState>,
 ) -> Result<Option<UserNoteInfo>, String> {
+    validate_note_id(&note_id)?;
     let events = query_relay(
         &state,
         &[serde_json::json!({
@@ -165,6 +174,8 @@ pub async fn get_note(
         .next())
 }
 
+const MAX_NOTE_IDS: usize = 200;
+
 /// Fetch and fold kind:7 reactions for visible Pulse notes.
 #[tauri::command]
 pub async fn get_note_reactions(
@@ -173,6 +184,15 @@ pub async fn get_note_reactions(
 ) -> Result<Vec<NoteReactionSummary>, String> {
     if note_ids.is_empty() {
         return Ok(Vec::new());
+    }
+    if note_ids.len() > MAX_NOTE_IDS {
+        return Err(format!(
+            "too many note ids (max {MAX_NOTE_IDS}, got {})",
+            note_ids.len()
+        ));
+    }
+    for note_id in &note_ids {
+        validate_note_id(note_id)?;
     }
 
     let events = query_relay(
@@ -248,7 +268,7 @@ pub async fn get_liked_notes(
     limit: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<UserNotesResponse, String> {
-    let cap = limit.unwrap_or(50).min(200) as usize;
+    let cap = limit.unwrap_or(50).min(MAX_NOTE_IDS as u32) as usize;
     let reaction_fetch_limit = (cap * 4).min(1000);
     let mut reactions = query_relay(
         &state,
