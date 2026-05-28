@@ -372,7 +372,7 @@ release *ARGS:
     # Determine target version
     ARG="{{ ARGS }}"
     if [[ -z "$ARG" ]]; then
-        VERSION=$(just get-next-minor-version)
+        VERSION=$(just get-next-patch-version)
     elif [[ "$ARG" == "patch" ]]; then
         VERSION=$(just get-next-patch-version)
     else
