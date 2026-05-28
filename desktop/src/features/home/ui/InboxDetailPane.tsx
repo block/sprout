@@ -13,6 +13,7 @@ import type {
   InboxItem,
   InboxReply,
 } from "@/features/home/lib/inbox";
+import { formatInboxTypeLabel } from "@/features/home/lib/inbox";
 import {
   type InboxDisplayMessage,
   InboxMessageRow,
@@ -193,7 +194,7 @@ export function InboxDetailPane({
         }
       : null;
   const channelContextName = contextChannelName ?? item.channelLabel;
-  const contextLabel = channelContextName ?? item.categoryLabel;
+  const contextLabel = channelContextName ?? formatInboxTypeLabel(item);
   const hasChannelContext = Boolean(channelContextName);
   const contextChannelId = item.item.channelId;
 
@@ -270,6 +271,7 @@ export function InboxDetailPane({
                 <InboxMessageRow
                   activeReplyTargetId={replyTargetId}
                   canReply={canReply}
+                  channelId={item.item.channelId}
                   isFocusHighlightVisible={isFocusHighlightVisible}
                   message={message}
                   onSelectReplyTarget={handleSelectReplyTarget}

@@ -297,10 +297,28 @@ fn anthropic_tool_result_content(content: &[ToolResultContent]) -> Vec<Value> {
 
 fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
     let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": cfg.system_prompt })];
+    // Images returned from tool calls ride on a trailing `role:"user"`
+    // message because OpenAI Chat's `role:"tool"` content is text-only. We
+    // batch them across a run of adjacent ToolResult items so that all
+    // `role:"tool"` messages stay contiguous — splitting them with a user
+    // turn breaks OpenAI-Chat-compatible frontends that translate back to
+    // Anthropic `tool_result` (notably Databricks model serving), since
+    // Anthropic requires every `tool_use` in one assistant turn to be
+    // answered by a single immediately-following user message.
+    let mut pending_images: Vec<Value> = Vec::new();
+    let flush_images = |messages: &mut Vec<Value>, pending: &mut Vec<Value>| {
+        if !pending.is_empty() {
+            messages.push(json!({ "role": "user", "content": std::mem::take(pending) }));
+        }
+    };
     for item in history {
         match item {
-            HistoryItem::User(text) => messages.push(json!({ "role": "user", "content": text })),
+            HistoryItem::User(text) => {
+                flush_images(&mut messages, &mut pending_images);
+                messages.push(json!({ "role": "user", "content": text }));
+            }
             HistoryItem::Assistant { text, tool_calls } => {
+                flush_images(&mut messages, &mut pending_images);
                 let mut msg = serde_json::Map::new();
                 msg.insert("role".into(), json!("assistant"));
                 msg.insert("content".into(), json!(text.as_str()));
@@ -323,13 +341,11 @@ fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Valu
                 messages.push(json!({
                     "role": "tool", "tool_call_id": r.provider_id,
                     "content": openai_tool_text_content(&r.content) }));
-                let image_content = openai_image_user_content(&r.content);
-                if !image_content.is_empty() {
-                    messages.push(json!({ "role": "user", "content": image_content }));
-                }
+                pending_images.extend(openai_image_user_content(&r.content));
             }
         }
     }
+    flush_images(&mut messages, &mut pending_images);
     let tools_json: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -1114,6 +1130,81 @@ mod tests {
             body["messages"][4]["content"][0]["image_url"]["url"],
             "data:image/png;base64,aW1n"
         );
+    }
+
+    /// Regression for Databricks model serving (and any OpenAI-Chat frontend
+    /// that translates to Anthropic on the way to the model). Parallel tool
+    /// calls where one or more return images previously produced an
+    /// interleaved sequence:
+    ///   role:"tool"  (A)
+    ///   role:"user"  (image A)
+    ///   role:"tool"  (B)
+    ///   role:"user"  (image B)
+    /// The intervening user message split the run of tool results, so the
+    /// translator could no longer fold them into a single Anthropic
+    /// `tool_result`-bearing user message — Anthropic then rejected the
+    /// request with "tool_use ids were found without tool_result blocks
+    /// immediately after". Fix: every `role:"tool"` for a run of adjacent
+    /// ToolResults emits contiguously, then a single trailing user message
+    /// carries all of the images from the batch.
+    #[test]
+    fn openai_parallel_image_tool_results_stay_contiguous() {
+        let history = vec![
+            HistoryItem::User("describe both images".into()),
+            HistoryItem::Assistant {
+                text: String::new(),
+                tool_calls: vec![
+                    ToolCall {
+                        provider_id: "toolu_a".into(),
+                        name: "dev__view_image".into(),
+                        arguments: serde_json::json!({"source": "a.png"}),
+                    },
+                    ToolCall {
+                        provider_id: "toolu_b".into(),
+                        name: "dev__view_image".into(),
+                        arguments: serde_json::json!({"source": "b.png"}),
+                    },
+                ],
+            },
+            HistoryItem::ToolResult(ToolResult {
+                provider_id: "toolu_a".into(),
+                content: vec![
+                    ToolResultContent::Text("10×10, 70 B (image/png from a.png)".into()),
+                    ToolResultContent::Image {
+                        data: "aaa".into(),
+                        mime_type: "image/png".into(),
+                    },
+                ],
+                is_error: false,
+            }),
+            HistoryItem::ToolResult(ToolResult {
+                provider_id: "toolu_b".into(),
+                content: vec![
+                    ToolResultContent::Text("10×10, 70 B (image/png from b.png)".into()),
+                    ToolResultContent::Image {
+                        data: "bbb".into(),
+                        mime_type: "image/png".into(),
+                    },
+                ],
+                is_error: false,
+            }),
+        ];
+        let body = openai_body(&cfg(Provider::OpenAi), &history, &[]);
+        let messages = body["messages"].as_array().unwrap();
+        // [0] system, [1] user, [2] assistant(tool_calls), [3] tool A, [4] tool B, [5] user(images)
+        assert_eq!(messages.len(), 6, "messages: {messages:#?}");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "toolu_a");
+        assert_eq!(
+            messages[4]["role"], "tool",
+            "tool results must stay adjacent; intervening user message breaks Databricks/Anthropic pairing"
+        );
+        assert_eq!(messages[4]["tool_call_id"], "toolu_b");
+        assert_eq!(messages[5]["role"], "user");
+        let imgs = messages[5]["content"].as_array().unwrap();
+        assert_eq!(imgs.len(), 2);
+        assert_eq!(imgs[0]["image_url"]["url"], "data:image/png;base64,aaa");
+        assert_eq!(imgs[1]["image_url"]["url"], "data:image/png;base64,bbb");
     }
 
     /// Regression: a connection that is accepted and then dropped before any

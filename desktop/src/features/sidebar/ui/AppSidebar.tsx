@@ -1,6 +1,8 @@
 // biome-ignore format: keep compact to stay within file size limit
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Bot,
   CheckCheck,
   CheckCircle2,
@@ -25,6 +27,8 @@ import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { ProfilePopover } from "@/features/profile/ui/ProfilePopover";
 import { useDmSidebarMetadata } from "@/features/sidebar/useDmSidebarMetadata";
+import { useUnreadOverflow } from "@/features/sidebar/lib/useUnreadOverflow";
+import { MoreUnreadButton } from "@/features/sidebar/ui/MoreUnreadButton";
 import {
   ChannelMenuButton,
   SidebarSection,
@@ -410,6 +414,7 @@ export function AppSidebar({
   const [isNewDmOpenInternal, setIsNewDmOpenInternal] = React.useState(false);
   const isNewDmOpen = isNewDmOpenProp ?? isNewDmOpenInternal;
   const setIsNewDmOpen = onNewDmOpenChange ?? setIsNewDmOpenInternal;
+  const scrollRef = React.useRef<HTMLDivElement>(null);
   const [profilePopoverOpen, setProfilePopoverOpen] = React.useState(false);
   const [createDialogKind, setCreateDialogKind] =
     React.useState<CreateChannelKind | null>(null);
@@ -472,6 +477,12 @@ export function AppSidebar({
     profile?.displayName?.trim() ||
     fallbackDisplayName?.trim() ||
     "Current identity";
+  const {
+    scrollToNextAbove,
+    scrollToNextBelow,
+    unreadAboveCount,
+    unreadBelowCount,
+  } = useUnreadOverflow({ scrollRef, unreadChannelIds });
 
   const isCreatingAny =
     createDialogKind === "stream"
@@ -587,106 +598,125 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent>
-        {isLoading ? (
-          <SidebarGroup>
-            <SidebarGroupLabel>Channels</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu data-testid="sidebar-loading">
-                {skeletonRows.map((row) => (
-                  <SidebarMenuSkeleton key={row} showIcon />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {unreadAboveCount > 0 ? (
+          <MoreUnreadButton
+            count={unreadAboveCount}
+            icon={<ArrowUp />}
+            onClick={scrollToNextAbove}
+            testId="sidebar-more-unread-above"
+          />
         ) : null}
+        <SidebarContent ref={scrollRef}>
+          {isLoading ? (
+            <SidebarGroup>
+              <SidebarGroupLabel>Channels</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu data-testid="sidebar-loading">
+                  {skeletonRows.map((row) => (
+                    <SidebarMenuSkeleton key={row} showIcon />
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
 
-        {!isLoading ? (
-          <>
-            <ChannelGroupSection
-              browseAriaLabel="Browse channels"
-              browseTestId="browse-channels"
-              createAriaLabel="Create a channel"
-              groupClassName="pt-1"
-              hasUnread={unreadChannelIds.size > 0}
-              isCollapsed={collapsedGroups.channels}
-              isActiveChannel={selectedView === "channel"}
-              items={streamChannels}
-              listTestId="stream-list"
-              onBrowse={onOpenBrowseChannels}
-              onCreateClick={() => setCreateDialogKind("stream")}
-              onMarkAllRead={onMarkAllChannelsRead}
-              onMarkChannelRead={onMarkChannelRead}
-              onMarkChannelUnread={onMarkChannelUnread}
-              onSelectChannel={onSelectChannel}
-              onToggleCollapsed={() => toggleCollapsedGroup("channels")}
-              selectedChannelId={selectedChannelId}
-              title="Channels"
-              unreadChannelIds={unreadChannelIds}
-            />
-            <ChannelGroupSection
-              browseAriaLabel="Browse forums"
-              browseTestId="browse-forums"
-              createAriaLabel="Create a forum"
-              hasUnread={unreadChannelIds.size > 0}
-              isCollapsed={collapsedGroups.forums}
-              isActiveChannel={selectedView === "channel"}
-              items={forumChannels}
-              listTestId="forum-list"
-              onBrowse={onOpenBrowseForums}
-              onCreateClick={() => setCreateDialogKind("forum")}
-              onMarkAllRead={onMarkAllChannelsRead}
-              onMarkChannelRead={onMarkChannelRead}
-              onMarkChannelUnread={onMarkChannelUnread}
-              onSelectChannel={onSelectChannel}
-              onToggleCollapsed={() => toggleCollapsedGroup("forums")}
-              selectedChannelId={selectedChannelId}
-              title="Forums"
-              unreadChannelIds={unreadChannelIds}
-            />
-            <SidebarSection
-              action={
-                <SidebarGroupAction
-                  aria-expanded={isNewDmOpen}
-                  aria-label="Start a direct message"
-                  className={cn(
-                    "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-                    SECTION_ACTION_VISIBILITY_CLASS,
-                  )}
-                  data-testid="new-dm-trigger"
-                  onClick={() => {
-                    setIsNewDmOpen(true);
-                  }}
-                  type="button"
-                >
-                  <PenSquare className="transition-transform" />
-                </SidebarGroupAction>
-              }
-              dmParticipantsByChannelId={dmParticipantsByChannelId}
-              isCollapsed={collapsedGroups.directMessages}
-              isActiveChannel={selectedView === "channel"}
-              items={directMessages}
-              channelLabels={dmChannelLabels}
-              onHideDm={onHideDm}
-              onMarkChannelRead={onMarkChannelRead}
-              onMarkChannelUnread={onMarkChannelUnread}
-              onSelectChannel={onSelectChannel}
-              onToggleCollapsed={() => toggleCollapsedGroup("directMessages")}
-              presenceByChannelId={dmPresenceByChannelId}
-              selectedChannelId={selectedChannelId}
-              testId="dm-list"
-              title="Direct Messages"
-              unreadChannelIds={unreadChannelIds}
-            />
-          </>
-        ) : null}
+          {!isLoading ? (
+            <>
+              <ChannelGroupSection
+                browseAriaLabel="Browse channels"
+                browseTestId="browse-channels"
+                createAriaLabel="Create a channel"
+                groupClassName="pt-1"
+                hasUnread={unreadChannelIds.size > 0}
+                isCollapsed={collapsedGroups.channels}
+                isActiveChannel={selectedView === "channel"}
+                items={streamChannels}
+                listTestId="stream-list"
+                onBrowse={onOpenBrowseChannels}
+                onCreateClick={() => setCreateDialogKind("stream")}
+                onMarkAllRead={onMarkAllChannelsRead}
+                onMarkChannelRead={onMarkChannelRead}
+                onMarkChannelUnread={onMarkChannelUnread}
+                onSelectChannel={onSelectChannel}
+                onToggleCollapsed={() => toggleCollapsedGroup("channels")}
+                selectedChannelId={selectedChannelId}
+                title="Channels"
+                unreadChannelIds={unreadChannelIds}
+              />
+              <ChannelGroupSection
+                browseAriaLabel="Browse forums"
+                browseTestId="browse-forums"
+                createAriaLabel="Create a forum"
+                hasUnread={unreadChannelIds.size > 0}
+                isCollapsed={collapsedGroups.forums}
+                isActiveChannel={selectedView === "channel"}
+                items={forumChannels}
+                listTestId="forum-list"
+                onBrowse={onOpenBrowseForums}
+                onCreateClick={() => setCreateDialogKind("forum")}
+                onMarkAllRead={onMarkAllChannelsRead}
+                onMarkChannelRead={onMarkChannelRead}
+                onMarkChannelUnread={onMarkChannelUnread}
+                onSelectChannel={onSelectChannel}
+                onToggleCollapsed={() => toggleCollapsedGroup("forums")}
+                selectedChannelId={selectedChannelId}
+                title="Forums"
+                unreadChannelIds={unreadChannelIds}
+              />
+              <SidebarSection
+                action={
+                  <SidebarGroupAction
+                    aria-expanded={isNewDmOpen}
+                    aria-label="Start a direct message"
+                    className={cn(
+                      "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                      SECTION_ACTION_VISIBILITY_CLASS,
+                    )}
+                    data-testid="new-dm-trigger"
+                    onClick={() => {
+                      setIsNewDmOpen(true);
+                    }}
+                    type="button"
+                  >
+                    <PenSquare className="transition-transform" />
+                  </SidebarGroupAction>
+                }
+                dmParticipantsByChannelId={dmParticipantsByChannelId}
+                isCollapsed={collapsedGroups.directMessages}
+                isActiveChannel={selectedView === "channel"}
+                items={directMessages}
+                channelLabels={dmChannelLabels}
+                onHideDm={onHideDm}
+                onMarkChannelRead={onMarkChannelRead}
+                onMarkChannelUnread={onMarkChannelUnread}
+                onSelectChannel={onSelectChannel}
+                onToggleCollapsed={() => toggleCollapsedGroup("directMessages")}
+                presenceByChannelId={dmPresenceByChannelId}
+                selectedChannelId={selectedChannelId}
+                testId="dm-list"
+                title="Direct Messages"
+                unreadChannelIds={unreadChannelIds}
+              />
+            </>
+          ) : null}
 
-        {errorMessage ? (
-          <div className="px-3 py-2 text-sm text-destructive">
-            {errorMessage}
-          </div>
+          {errorMessage ? (
+            <div className="px-3 py-2 text-sm text-destructive">
+              {errorMessage}
+            </div>
+          ) : null}
+        </SidebarContent>
+
+        {unreadBelowCount > 0 ? (
+          <MoreUnreadButton
+            count={unreadBelowCount}
+            icon={<ArrowDown />}
+            onClick={scrollToNextBelow}
+            testId="sidebar-more-unread-below"
+          />
         ) : null}
-      </SidebarContent>
+      </div>
 
       <SidebarFooter>
         <SidebarMenu>

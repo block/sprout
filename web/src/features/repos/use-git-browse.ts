@@ -11,8 +11,9 @@ import {
   ensureClone,
   findReadme,
   getCommitLog,
-  readFileContent,
+  readBlobView,
   readTreeEntries,
+  resolveHtmlAssets,
 } from "./git-client";
 
 /**
@@ -87,7 +88,7 @@ export function useGitReadme(owner: string, repoName: string, ref: string) {
   });
 }
 
-/** Read a single file's content. */
+/** Read a single file's content as a classified `BlobView`. */
 export function useGitBlob(
   owner: string,
   repoName: string,
@@ -101,9 +102,37 @@ export function useGitBlob(
     queryFn: async () => {
       const { fs, dir } = cloneQuery.data!;
       const oid = await resolveRef({ fs, dir, ref });
-      return readFileContent(fs, dir, oid, filepath);
+      return readBlobView(fs, dir, oid, filepath);
     },
     enabled: !!cloneQuery.data && !!filepath,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/**
+ * Resolve an HTML file into a self-contained doc (relative assets inlined),
+ * ready to drop into a sandboxed iframe. Lazy: `enabled` is caller-gated so
+ * we only do the inlining work when the user clicks "Run". The decoded HTML
+ * is passed in (the blob view already has it) to avoid a second read.
+ */
+export function useGitHtmlDoc(
+  owner: string,
+  repoName: string,
+  ref: string,
+  filepath: string,
+  html: string,
+  enabled: boolean,
+) {
+  const cloneQuery = useGitClone(owner, repoName, ref);
+
+  return useQuery({
+    queryKey: ["git-html-doc", owner, repoName, ref, filepath],
+    queryFn: async () => {
+      const { fs, dir } = cloneQuery.data!;
+      const oid = await resolveRef({ fs, dir, ref });
+      return resolveHtmlAssets(fs, dir, oid, filepath, html);
+    },
+    enabled: enabled && !!cloneQuery.data && !!filepath,
     staleTime: 5 * 60_000,
   });
 }

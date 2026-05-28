@@ -461,6 +461,33 @@ Your name is Scout. You are friendly and helpful. You are understated, but have 
     },
 ];
 
+const RETIRED_PERSONAS: &[(&str, &str)] = &[
+    (
+        "builtin:orchestrator",
+        "You are an orchestration agent. Coordinate multi-step work across specialized agents, keep the overall plan moving, and synthesize results into a clear final outcome. When another agent should take a task, @mention them explicitly with the assignment, expected deliverable, and any relevant constraints or deadlines.",
+    ),
+    (
+        "builtin:researcher",
+        "You are a research agent. Gather relevant information, compare sources, call out uncertainty, and return concise findings with evidence.",
+    ),
+    (
+        "builtin:planner",
+        "You are a planning agent. Turn ambiguous requests into structured plans with milestones, dependencies, risks, and clear next actions. Do not implement the work yourself unless asked.",
+    ),
+    (
+        "builtin:implementer",
+        "You are a builder agent. Execute tasks directly, make code and configuration changes carefully, validate the result, and explain important decisions and follow-up items.",
+    ),
+    (
+        "builtin:refactor",
+        "You are a refactoring agent. Improve structure, naming, duplication, and module boundaries without changing externally observable behavior. Keep changes incremental, preserve compatibility, and add or update validation when behavior could drift.",
+    ),
+    (
+        "builtin:reviewer",
+        "You are a review agent. Inspect plans, code, and outputs for bugs, regressions, edge cases, security issues, and missing tests. Prioritize findings by severity, cite concrete evidence, and keep summaries secondary to the actual review.",
+    ),
+];
+
 fn personas_store_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(managed_agents_base_dir(app)?.join("personas.json"))
 }
@@ -562,8 +589,53 @@ fn merge_personas(mut stored: Vec<PersonaRecord>, now: &str) -> (Vec<PersonaReco
         }
     }
 
+    // Soft-deprecate retired built-in personas that were replaced by
+    // Solo/Kit/Scout. Runs after demotion so the records are already
+    // marked as non-builtin.
+    if migrate_retired_personas(&mut stored, now) {
+        changed = true;
+    }
+
     sort_personas(&mut stored);
     (stored, changed)
+}
+
+/// Soft-deprecate retired built-in personas by appending " (retired)" to
+/// their display name and marking them inactive. Never removes records —
+/// the cost is 6 extra records for pre-transition users, but this
+/// eliminates dangling `persona_id` references in managed-agents.json
+/// and teams.json.
+fn migrate_retired_personas(stored: &mut [PersonaRecord], now: &str) -> bool {
+    let mut changed = false;
+
+    for record in stored.iter_mut() {
+        if let Some((_, original_prompt)) = RETIRED_PERSONAS.iter().find(|(id, _)| *id == record.id)
+        {
+            let retired_suffix = " (retired)";
+            let needs_suffix = !record.display_name.ends_with(retired_suffix);
+            if needs_suffix || record.is_active {
+                let was_unmodified = record.system_prompt == *original_prompt;
+                eprintln!(
+                    "sprout-desktop: persona-migration: retiring {} persona '{}' → '{} (retired)'",
+                    if was_unmodified {
+                        "unmodified"
+                    } else {
+                        "customized"
+                    },
+                    record.display_name,
+                    record.display_name,
+                );
+                if needs_suffix {
+                    record.display_name = format!("{}{}", record.display_name, retired_suffix);
+                }
+                record.is_active = false;
+                record.updated_at = now.to_string();
+                changed = true;
+            }
+        }
+    }
+
+    changed
 }
 
 pub fn ensure_persona_is_active(
@@ -893,7 +965,7 @@ pub fn save_personas(app: &AppHandle, records: &[PersonaRecord]) -> Result<(), S
     let path = personas_store_path(app)?;
     let payload = serde_json::to_vec_pretty(&sorted)
         .map_err(|error| format!("failed to serialize persona store: {error}"))?;
-    fs::write(&path, payload).map_err(|error| format!("failed to write persona store: {error}"))
+    crate::managed_agents::storage::atomic_write_json(&path, &payload)
 }
 
 #[cfg(test)]

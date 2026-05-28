@@ -1,5 +1,8 @@
 import * as React from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, {
+  type Components,
+  defaultUrlTransform,
+} from "react-markdown";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Copy } from "lucide-react";
 import remarkBreaks from "remark-breaks";
@@ -7,6 +10,11 @@ import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
+import {
+  isMessageLink,
+  parseMessageLink,
+  type ParsedMessageLink,
+} from "@/features/messages/lib/messageLink";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { invokeTauri } from "@/shared/api/tauri";
 import type { Channel } from "@/shared/api/types";
@@ -18,6 +26,7 @@ import rehypeImageGallery from "@/shared/lib/rehypeImageGallery";
 import rehypeSearchHighlight from "@/shared/lib/rehypeSearchHighlight";
 import remarkChannelLinks from "@/shared/lib/remarkChannelLinks";
 import remarkMentions from "@/shared/lib/remarkMentions";
+import remarkMessageLinks from "@/features/messages/lib/remarkMessageLinks";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
@@ -30,6 +39,19 @@ import {
 import { VideoPlayer } from "./VideoPlayer";
 
 type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
+
+/**
+ * `urlTransform` for `<ReactMarkdown>` that preserves `sprout://message?…`
+ * links. The default transform strips unknown schemes (returns `""`) before
+ * the `a` component override can see them, which would break copy → paste →
+ * click end-to-end. Everything else delegates to `defaultUrlTransform`.
+ */
+function messageLinkUrlTransform(value: string, key: string): string {
+  if (key === "href" && isMessageLink(value)) {
+    return value;
+  }
+  return defaultUrlTransform(value);
+}
 
 type MarkdownProps = {
   channelNames?: string[];
@@ -150,7 +172,7 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
   );
 
   return (
-    <div className="group relative">
+    <div className="group relative" data-code-block="">
       <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
         {children}
       </pre>
@@ -179,6 +201,7 @@ function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
   onOpenChannel: (channelId: string) => void,
+  onOpenMessageLink: (link: ParsedMessageLink) => void,
   imetaByUrl?: ImetaLookup,
   mentionPubkeysByName?: Record<string, string>,
 ): Components {
@@ -196,19 +219,45 @@ function createMarkdownComponents(
       : "space-y-1 pl-6 marker:text-muted-foreground";
 
   return {
-    a: ({ children, href, ...props }) => (
-      <a
-        {...props}
-        className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
-        href={href}
-        rel="noreferrer"
-        target="_blank"
-      >
-        {children}
-      </a>
-    ),
+    a: ({ children, href, ...props }) => {
+      // Intercept `sprout://message?channel=…&id=…` links so a click navigates
+      // in-app instead of opening the URL in the OS browser. http(s) links
+      // continue to use the existing target="_blank" behavior.
+      if (isMessageLink(href)) {
+        const parsed = parseMessageLink(href ?? "");
+        if (parsed.ok) {
+          const target = parsed.value;
+          return (
+            <a
+              {...props}
+              className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80 cursor-pointer"
+              href={href}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenMessageLink(target);
+              }}
+            >
+              {children}
+            </a>
+          );
+        }
+        // Malformed sprout://message link — fall through to the default
+        // anchor (renders as a normal external link).
+      }
+      return (
+        <a
+          {...props}
+          className="font-medium text-primary underline underline-offset-4 transition-colors hover:text-primary/80"
+          href={href}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {children}
+        </a>
+      );
+    },
     blockquote: ({ children }) => (
-      <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground">
+      <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground [&>*:first-child]:mt-0 [&>*+*]:mt-2">
         {children}
       </blockquote>
     ),
@@ -245,13 +294,19 @@ function createMarkdownComponents(
       );
     },
     h1: ({ children }) => (
-      <h1 className="text-lg font-semibold tracking-tight">{children}</h1>
+      <h1 className="text-xl font-semibold leading-8 tracking-tight">
+        {children}
+      </h1>
     ),
     h2: ({ children }) => (
-      <h2 className="text-base font-semibold tracking-tight">{children}</h2>
+      <h2 className="text-lg font-semibold leading-7 tracking-tight">
+        {children}
+      </h2>
     ),
     h3: ({ children }) => (
-      <h3 className="font-semibold tracking-tight">{children}</h3>
+      <h3 className="text-base font-semibold leading-6 tracking-tight">
+        {children}
+      </h3>
     ),
     hr: () => <hr className="border-border/80" />,
     img: ({ alt, src }) => {
@@ -265,76 +320,80 @@ function createMarkdownComponents(
           ? rewriteRelayUrl(posterUrl)
           : undefined;
         return (
-          <VideoPlayer
-            key={resolvedSrc}
-            src={resolvedSrc}
-            poster={resolvedPoster}
-          />
+          <span data-block-media="">
+            <VideoPlayer
+              key={resolvedSrc}
+              src={resolvedSrc}
+              poster={resolvedPoster}
+            />
+          </span>
         );
       }
       return (
-        <ImageContextMenu src={src}>
-          <DialogPrimitive.Root>
-            <DialogPrimitive.Trigger asChild>
-              <div className="mt-1 max-w-sm cursor-pointer transition-opacity hover:opacity-90">
-                <img
-                  alt={alt}
-                  className="max-h-64 max-w-full rounded-xl object-contain"
-                  src={resolvedSrc}
-                  onContextMenu={(e) => e.preventDefault()}
-                />
-              </div>
-            </DialogPrimitive.Trigger>
-            <DialogPrimitive.Portal>
-              <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-              <DialogPrimitive.Content
-                className="fixed inset-0 z-50 flex items-center justify-center p-8"
-                // Let clicks on the backdrop (the content container itself) close the lightbox
-                onPointerDownOutside={(e) => e.preventDefault()}
-                onInteractOutside={(e) => e.preventDefault()}
-              >
-                <DialogPrimitive.Title className="sr-only">
-                  {alt || "Image preview"}
-                </DialogPrimitive.Title>
-                <DialogPrimitive.Description className="sr-only">
-                  Full-size image preview. Press Escape or click outside the
-                  image to close.
-                </DialogPrimitive.Description>
-                {/* Close region: clicking anywhere except the image closes the dialog */}
-                <DialogPrimitive.Close
-                  className="absolute inset-0 cursor-default"
-                  aria-label="Close lightbox"
-                />
-                <ImageContextMenu src={src}>
+        <span data-block-media="">
+          <ImageContextMenu src={src}>
+            <DialogPrimitive.Root>
+              <DialogPrimitive.Trigger asChild>
+                <div className="mt-1 max-w-sm cursor-pointer transition-opacity hover:opacity-90">
                   <img
                     alt={alt}
-                    className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+                    className="max-h-64 max-w-full rounded-xl object-contain"
                     src={resolvedSrc}
                     onContextMenu={(e) => e.preventDefault()}
                   />
-                </ImageContextMenu>
-                <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-white/30">
-                  <svg
-                    aria-hidden="true"
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                  <span className="sr-only">Close</span>
-                </DialogPrimitive.Close>
-              </DialogPrimitive.Content>
-            </DialogPrimitive.Portal>
-          </DialogPrimitive.Root>
-        </ImageContextMenu>
+                </div>
+              </DialogPrimitive.Trigger>
+              <DialogPrimitive.Portal>
+                <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+                <DialogPrimitive.Content
+                  className="fixed inset-0 z-50 flex items-center justify-center p-8"
+                  // Let clicks on the backdrop (the content container itself) close the lightbox
+                  onPointerDownOutside={(e) => e.preventDefault()}
+                  onInteractOutside={(e) => e.preventDefault()}
+                >
+                  <DialogPrimitive.Title className="sr-only">
+                    {alt || "Image preview"}
+                  </DialogPrimitive.Title>
+                  <DialogPrimitive.Description className="sr-only">
+                    Full-size image preview. Press Escape or click outside the
+                    image to close.
+                  </DialogPrimitive.Description>
+                  {/* Close region: clicking anywhere except the image closes the dialog */}
+                  <DialogPrimitive.Close
+                    className="absolute inset-0 cursor-default"
+                    aria-label="Close lightbox"
+                  />
+                  <ImageContextMenu src={src}>
+                    <img
+                      alt={alt}
+                      className="relative max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+                      src={resolvedSrc}
+                      onContextMenu={(e) => e.preventDefault()}
+                    />
+                  </ImageContextMenu>
+                  <DialogPrimitive.Close className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white/80 transition-colors hover:bg-black/70 hover:text-white focus:outline-hidden focus:ring-2 focus:ring-white/30">
+                    <svg
+                      aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                    <span className="sr-only">Close</span>
+                  </DialogPrimitive.Close>
+                </DialogPrimitive.Content>
+              </DialogPrimitive.Portal>
+            </DialogPrimitive.Root>
+          </ImageContextMenu>
+        </span>
       );
     },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,
@@ -368,7 +427,10 @@ function createMarkdownComponents(
       <strong className="font-semibold">{children}</strong>
     ),
     table: ({ children }) => (
-      <div className="overflow-x-auto rounded-2xl border border-border/70">
+      <div
+        className="overflow-x-auto rounded-2xl border border-border/70"
+        data-table-block=""
+      >
         <table className="w-full border-collapse text-left text-sm">
           {children}
         </table>
@@ -442,6 +504,35 @@ function createMarkdownComponents(
         </span>
       );
     },
+    "message-link": ({ children }: { children?: React.ReactNode }) => {
+      const href = String(children ?? "");
+      const parsed = parseMessageLink(href);
+      if (!parsed.ok) {
+        // Malformed `sprout://message?…` — render the raw URL as plain text
+        // rather than a misleading clickable pill.
+        return <span data-message-link="">{href}</span>;
+      }
+
+      const { channelId, messageId } = parsed.value;
+      const channel = channels.find((c) => c.id === channelId);
+      const channelLabel = channel?.name ?? "channel";
+      const shortId = messageId.slice(0, 6);
+
+      return (
+        <button
+          type="button"
+          data-message-link=""
+          aria-label={`Open message in ${channelLabel}`}
+          title={href}
+          className="rounded-md bg-primary/15 px-1 py-0.5 text-sm font-medium text-primary cursor-pointer hover:bg-primary/25 transition-colors"
+          onClick={() => {
+            onOpenMessageLink(parsed.value);
+          }}
+        >
+          #{channelLabel} · {shortId}
+        </button>
+      );
+    },
   } as Components;
 }
 
@@ -472,6 +563,16 @@ function MarkdownInner({
         (channelId) => {
           void goChannel(channelId);
         },
+        (link) => {
+          // Always route through `goChannel` with `messageId` set: the
+          // channel route already handles scroll-into-view + highlight via
+          // `useTimelineScrollManager` + `getEventById` backfill, and works
+          // for both stream-message replies and forum threads. Detecting
+          // "the thread root is a forum post" up front would require an
+          // event lookup we don't currently have synchronously; the brief
+          // explicitly allows skipping that detection and falling through.
+          void goChannel(link.channelId, { messageId: link.messageId });
+        },
         imetaByUrl,
         mentionPubkeysByName,
       ),
@@ -483,6 +584,7 @@ function MarkdownInner({
     () => [
       remarkGfm,
       remarkBreaks,
+      remarkMessageLinks,
       [remarkMentions, { mentionNames }],
       [remarkChannelLinks, { channelNames }],
     ],
@@ -514,6 +616,7 @@ function MarkdownInner({
       components={components}
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
+      urlTransform={messageLinkUrlTransform}
     >
       {processedContent}
     </ReactMarkdown>
@@ -523,10 +626,51 @@ function MarkdownInner({
     <div
       className={cn(
         tight
-          ? "max-w-none break-words text-sm leading-5 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-0.5"
+          ? [
+              "max-w-none break-words text-sm leading-5 text-foreground/90",
+              // Reset first/last
+              "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+              // Base owl: p+p, list+p, etc.
+              "[&>*+*]:mt-2",
+              // Headings: flat push/pull — size does the hierarchy work
+              "[&>*+h1]:mt-2.5 [&>*+h2]:mt-2.5 [&>*+h3]:mt-2.5",
+              "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+              // Blockquotes: breathe above and below
+              "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
+              // Code blocks: breathe above and below
+              "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
+              // Tables: breathe above and below
+              "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
+              // hr: clear section divider
+              "[&>*+hr]:mt-3.5 [&>hr+*]:mt-3.5",
+              // Lists after paragraphs: tighter to feel related
+              "[&>p+ul]:mt-1 [&>p+ol]:mt-1 [&>div+ul]:mt-1 [&>div+ol]:mt-1",
+            ].join(" ")
           : compact
-            ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1.5"
-            : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
+            ? [
+                "max-w-none break-words text-[15px] leading-6 text-foreground/90",
+                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                "[&>*+*]:mt-2",
+                "[&>*+h1]:mt-3 [&>*+h2]:mt-3 [&>*+h3]:mt-3",
+                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+                "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
+                "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
+                "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
+                "[&>*+hr]:mt-3.5 [&>hr+*]:mt-3.5",
+                "[&>p+ul]:mt-1 [&>p+ol]:mt-1 [&>div+ul]:mt-1 [&>div+ol]:mt-1",
+              ].join(" ")
+            : [
+                "max-w-none break-words text-sm leading-7 text-foreground/90",
+                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                "[&>*+*]:mt-3",
+                "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3.5",
+                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+                "[&>*+blockquote]:mt-3.5 [&>blockquote+*]:mt-3.5",
+                "[&>*+[data-code-block]]:mt-3.5 [&>[data-code-block]+*]:mt-3.5",
+                "[&>*+[data-table-block]]:mt-3.5 [&>[data-table-block]+*]:mt-3.5",
+                "[&>*+hr]:mt-4 [&>hr+*]:mt-4",
+                "[&>p+ul]:mt-1.5 [&>p+ol]:mt-1.5 [&>div+ul]:mt-1.5 [&>div+ol]:mt-1.5",
+              ].join(" "),
         className,
       )}
     >

@@ -164,12 +164,18 @@ jobs:
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
       - name: Desktop lint and format
         run: just desktop-check
+      - name: Desktop unit tests
+        run: just desktop-test
       - name: Desktop build
         run: just desktop-build
       - name: Desktop smoke e2e
         run: cd desktop && pnpm exec playwright test --project=smoke
       - name: Desktop Tauri check
         run: just desktop-tauri-check
+        env:
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+      - name: Desktop Tauri tests
+        run: just desktop-tauri-test
         env:
           CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload desktop e2e artifacts
