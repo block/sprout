@@ -6,9 +6,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { useUsersBatchQuery } from "@/features/profile/hooks";
-import { useSearchMessagesQuery } from "@/features/search/hooks";
 import type { Channel, SearchHit } from "@/shared/api/types";
+import {
+  MIN_SEARCH_QUERY_LENGTH,
+  useSearchResults,
+} from "@/features/search/useSearchResults";
 import {
   ChannelResultBody,
   MessageResultBody,
@@ -27,8 +29,6 @@ import {
 } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
-
-const MIN_QUERY_LENGTH = 2;
 
 function SearchState({
   icon: Icon,
@@ -86,70 +86,21 @@ export function SearchDialog({
   onOpenChannel,
   onOpenResult,
 }: SearchDialogProps) {
-  const [query, setQuery] = React.useState("");
-  const [debouncedQuery, setDebouncedQuery] = React.useState("");
-  const [selectedIndex, setSelectedIndex] = React.useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const channelLookup = React.useMemo(
-    () => new Map(channels.map((channel) => [channel.id, channel])),
-    [channels],
-  );
-
-  const searchQuery = useSearchMessagesQuery(debouncedQuery, {
-    enabled: open,
-    limit: 12,
-  });
-
-  const messageResults = searchQuery.data?.hits ?? [];
-  const channelResults = React.useMemo(() => {
-    if (debouncedQuery.length < MIN_QUERY_LENGTH) {
-      return [];
-    }
-
-    const normalizedQuery = debouncedQuery.toLowerCase();
-
-    return channels
-      .filter(
-        (channel) =>
-          channel.channelType !== "dm" &&
-          (channel.archivedAt
-            ? channel.isMember
-            : channel.visibility === "open" || channel.isMember) &&
-          (channel.name.toLowerCase().includes(normalizedQuery) ||
-            channel.description.toLowerCase().includes(normalizedQuery)),
-      )
-      .sort((a, b) => {
-        const aNameMatches = a.name.toLowerCase().includes(normalizedQuery);
-        const bNameMatches = b.name.toLowerCase().includes(normalizedQuery);
-
-        if (aNameMatches !== bNameMatches) {
-          return aNameMatches ? -1 : 1;
-        }
-
-        return a.name.localeCompare(b.name);
-      })
-      .slice(0, 5);
-  }, [channels, debouncedQuery]);
-  const results = React.useMemo<SearchResult[]>(
-    () => [
-      ...channelResults.map((channel) => ({
-        kind: "channel" as const,
-        channel,
-      })),
-      ...messageResults.map((hit) => ({
-        kind: "message" as const,
-        hit,
-      })),
-    ],
-    [channelResults, messageResults],
-  );
-  const resultProfilesQuery = useUsersBatchQuery(
-    messageResults.map((hit) => hit.pubkey),
-    {
-      enabled: open && messageResults.length > 0,
-    },
-  );
-  const resultProfiles = resultProfilesQuery.data?.profiles;
+  const {
+    channelLookup,
+    channelResults,
+    debouncedQuery,
+    messageResults,
+    query,
+    resultProfiles,
+    results,
+    searchQuery,
+    selectedIndex,
+    selectedResult,
+    setQuery,
+    setSelectedIndex,
+  } = useSearchResults({ channels, enabled: open, limit: 12 });
 
   const openResult = React.useCallback(
     (result: SearchResult) => {
@@ -164,42 +115,6 @@ export function SearchDialog({
     },
     [onOpenChange, onOpenChannel, onOpenResult],
   );
-
-  React.useEffect(() => {
-    const trimmed = query.trim();
-    if (trimmed.length < MIN_QUERY_LENGTH) {
-      setDebouncedQuery("");
-      return;
-    }
-
-    const timeout = window.setTimeout(() => {
-      setDebouncedQuery(trimmed);
-    }, 300);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [query]);
-
-  React.useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setDebouncedQuery("");
-      setSelectedIndex(0);
-    }
-  }, [open]);
-
-  React.useEffect(() => {
-    setSelectedIndex((current) => {
-      if (results.length === 0) {
-        return 0;
-      }
-
-      return Math.min(current, results.length - 1);
-    });
-  }, [results]);
-
-  const selectedResult = results[selectedIndex];
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
@@ -266,7 +181,7 @@ export function SearchDialog({
         </DialogHeader>
 
         <div className="max-h-[60vh] overflow-y-auto">
-          {debouncedQuery.length < MIN_QUERY_LENGTH ? (
+          {debouncedQuery.length < MIN_SEARCH_QUERY_LENGTH ? (
             <SearchState
               description="Type at least two characters to search the relay-backed history for streams, forums, DMs, approvals, and agent updates."
               icon={MessagesSquare}

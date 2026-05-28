@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import * as React from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useQueryClient } from "@tanstack/react-query";
@@ -49,6 +49,7 @@ import {
   DEFAULT_SETTINGS_SECTION,
   type SettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
+import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
@@ -640,6 +641,29 @@ export function AppShell() {
                     <ChevronRight className="h-3 w-3" />
                   </Button>
                 </div>
+                <TopbarSearch
+                  channels={channels}
+                  className="fixed left-1/2 top-[7px] z-50 hidden w-[360px] max-w-[42vw] -translate-x-1/2 md:block"
+                  currentPubkey={identityQuery.data?.pubkey}
+                  onOpenChannel={(channelId) => {
+                    void goChannel(channelId);
+                  }}
+                  onOpenResult={handleOpenSearchResult}
+                />
+                <div className="fixed right-3 top-[9px] z-50 flex items-center gap-0.5 md:hidden">
+                  <Button
+                    aria-label="Search everything"
+                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
+                    data-testid="open-search-compact"
+                    onClick={handleOpenSearch}
+                    size="icon"
+                    title="Search everything"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <Search className="h-3 w-3" />
+                  </Button>
+                </div>
                 <AppSidebar
                   activeWorkspace={workspacesHook.activeWorkspace}
                   channels={sidebarChannels}
@@ -721,7 +745,6 @@ export function AppShell() {
                     });
                     await goChannel(directMessage.id);
                   }}
-                  onOpenSearch={handleOpenSearch}
                   onSelectAgents={() => {
                     void goAgents();
                   }}

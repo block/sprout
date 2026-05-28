@@ -161,7 +161,6 @@ export function MessageThreadPanel({
       <aside
         className={cn(
           PANEL_BASE_CLASS,
-          !isOverlay && "pt-11",
           isOverlay && PANEL_OVERLAY_CLASS,
         )}
         data-testid="message-thread-panel"
@@ -185,24 +184,34 @@ export function MessageThreadPanel({
           </button>
         )}
 
-        <div className="flex items-center gap-3 px-4 py-3">
-          <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "z-40 flex min-h-[44px] cursor-default select-none items-center gap-3 bg-background/70 px-4 py-[6px] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55",
+            isOverlay ? "relative shrink-0" : "absolute left-0 top-0",
+          )}
+          data-tauri-drag-region
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
             <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
+            <Button
+              aria-label="Close thread"
+              className="h-4 w-4 rounded-full text-muted-foreground/45 opacity-70 hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+              data-testid="message-thread-close"
+              onClick={onClose}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <X className="h-2.5 w-2.5" />
+            </Button>
           </div>
-          <Button
-            aria-label="Close thread"
-            data-testid="message-thread-close"
-            onClick={onClose}
-            size="icon"
-            type="button"
-            variant="ghost"
-          >
-            <X className="h-4 w-4" />
-          </Button>
         </div>
 
         <div
-          className="min-h-0 flex-1 overflow-y-auto pb-24"
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto pb-24",
+            !isOverlay && "pt-11",
+          )}
           data-testid="message-thread-body"
           onScroll={syncScrollState}
           ref={threadBodyRef}
