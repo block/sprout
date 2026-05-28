@@ -9,7 +9,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { useUserProfileQuery } from "@/features/profile/hooks";
+import {
+  useContactListQuery,
+  useFollowMutation,
+  useUnfollowMutation,
+  useUserProfileQuery,
+} from "@/features/profile/hooks";
 import {
   useRelayAgentsQuery,
   useManagedAgentsQuery,
@@ -102,6 +107,9 @@ export function UserProfilePanel({
       pubkey.toLowerCase() !== currentPubkey.toLowerCase(),
   );
   const isArchived = useIsIdentityArchived(pubkey);
+  const contactListQuery = useContactListQuery(currentPubkey);
+  const followMutation = useFollowMutation(currentPubkey);
+  const unfollowMutation = useUnfollowMutation(currentPubkey);
   const archiveMutation = useArchiveIdentityMutation();
   const unarchiveMutation = useUnarchiveIdentityMutation();
   const { onOpenAgentSession } = useAgentSession();
@@ -121,6 +129,12 @@ export function UserProfilePanel({
   const isSelf =
     currentPubkey !== undefined && pubkeyLower === currentPubkey.toLowerCase();
   const canViewActivity = isBot && Boolean(onOpenAgentSession);
+  const isFollowing =
+    !isSelf &&
+    (contactListQuery.data?.contacts.some(
+      (contact) => contact.pubkey.toLowerCase() === pubkeyLower,
+    ) ??
+      false);
 
   // NIP-IA gates. Button shows when ANY of: self path (acting on own pubkey),
   // admin path (current user is owner/admin in relay_members), or owner path
@@ -323,6 +337,43 @@ export function UserProfilePanel({
 
           {/* Actions */}
           <div className="mt-6 flex flex-col gap-2">
+            {!isSelf ? (
+              isFollowing ? (
+                <Button
+                  className="w-full"
+                  disabled={unfollowMutation.isPending}
+                  onClick={() =>
+                    unfollowMutation.mutate(pubkey, {
+                      onError: (error) =>
+                        toast.error(
+                          `Unfollow failed: ${error instanceof Error ? error.message : String(error)}`,
+                        ),
+                    })
+                  }
+                  type="button"
+                  variant="outline"
+                >
+                  Unfollow
+                </Button>
+              ) : (
+                <Button
+                  className="w-full"
+                  disabled={followMutation.isPending}
+                  onClick={() =>
+                    followMutation.mutate(pubkey, {
+                      onError: (error) =>
+                        toast.error(
+                          `Follow failed: ${error instanceof Error ? error.message : String(error)}`,
+                        ),
+                    })
+                  }
+                  type="button"
+                  variant="default"
+                >
+                  Follow
+                </Button>
+              )
+            ) : null}
             {onOpenDm && !isSelf ? (
               <Button
                 className="w-full"

@@ -465,6 +465,7 @@ pub fn user_notes_from_events(events: &[Event]) -> UserNotesResponse {
             pubkey: ev.pubkey.to_hex(),
             created_at: ev.created_at.as_secs() as i64,
             content: ev.content.clone(),
+            tags: ev.tags.iter().map(|tag| tag.as_slice().to_vec()).collect(),
         })
         .collect();
 

@@ -1,4 +1,8 @@
-import type { InboxFilter, InboxItem } from "@/features/home/lib/inbox";
+import {
+  formatInboxTypeLabel,
+  type InboxFilter,
+  type InboxItem,
+} from "@/features/home/lib/inbox";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -31,20 +35,22 @@ export function InboxListPane({
   return (
     <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-background/60">
       <div className="px-5 pb-3 pt-14">
-        <div className="flex flex-nowrap gap-1">
-          {FILTER_OPTIONS.map((option) => (
-            <Button
-              className="h-7 rounded-full border border-transparent px-1.5 text-[10.5px] font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm"
-              data-active={filter === option.value}
-              key={option.value}
-              onClick={() => onFilterChange(option.value)}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              {option.label}
-            </Button>
-          ))}
+        <div className="-mx-5 overflow-x-auto px-5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex flex-nowrap gap-1">
+            {FILTER_OPTIONS.map((option) => (
+              <Button
+                className="h-7 rounded-full border border-transparent px-1.5 text-[10.5px] font-medium text-muted-foreground data-[active=true]:border-border/70 data-[active=true]:bg-background/80 data-[active=true]:text-foreground data-[active=true]:shadow-xs data-[active=true]:backdrop-blur-sm"
+                data-active={filter === option.value}
+                key={option.value}
+                onClick={() => onFilterChange(option.value)}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -68,6 +74,7 @@ export function InboxListPane({
             {items.map((item) => {
               const isSelected = item.id === selectedId;
               const isDone = doneSet.has(item.id);
+              const typeLabel = formatInboxTypeLabel(item);
 
               return (
                 <button
@@ -130,16 +137,14 @@ export function InboxListPane({
                     </p>
 
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      {item.channelLabel ? (
-                        <span
-                          className={cn(
-                            "text-[11px] text-muted-foreground",
-                            isDone ? "font-normal" : "font-semibold",
-                          )}
-                        >
-                          #{item.channelLabel}
-                        </span>
-                      ) : null}
+                      <span
+                        className={cn(
+                          "text-[11px] text-muted-foreground",
+                          isDone ? "font-normal" : "font-semibold",
+                        )}
+                      >
+                        {typeLabel}
+                      </span>
                     </div>
                   </div>
                 </button>
