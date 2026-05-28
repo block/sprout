@@ -1,9 +1,9 @@
 import {
   Bot,
+  Heart,
   MessageCircle,
   PenSquare,
   SquareArrowOutUpRight,
-  ThumbsUp,
 } from "lucide-react";
 import * as React from "react";
 
@@ -157,7 +157,7 @@ export function NoteCard({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  aria-label={isUpvoted ? "Remove upvote" : "Upvote"}
+                  aria-label={isUpvoted ? "Unlike" : "Like"}
                   aria-pressed={isUpvoted}
                   className={`${actionButtonClass} ${isUpvoted ? activeActionClass : ""} disabled:cursor-not-allowed disabled:opacity-45`}
                   disabled={isUpvotePending}
@@ -168,15 +168,13 @@ export function NoteCard({
                   }}
                   type="button"
                 >
-                  <ThumbsUp
+                  <Heart
                     className={`h-4 w-4 ${isUpvoted ? "fill-current" : ""}`}
                   />
                   {reactionCountLabel}
                 </button>
               </TooltipTrigger>
-              <TooltipContent>
-                {isUpvoted ? "Remove upvote" : "Upvote"}
-              </TooltipContent>
+              <TooltipContent>{isUpvoted ? "Unlike" : "Like"}</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>

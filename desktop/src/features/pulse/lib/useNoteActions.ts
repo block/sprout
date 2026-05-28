@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { useOpenDmMutation } from "@/features/channels/hooks";
 import { useToggleReactionMutation } from "@/features/messages/hooks";
 import {
-  pulseQueryKeys,
+  type pulseQueryKeys,
   type PulseReactionState,
   usePublishNoteMutation,
 } from "@/features/pulse/hooks";
