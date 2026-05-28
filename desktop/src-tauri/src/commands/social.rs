@@ -44,11 +44,17 @@ pub async fn get_contact_list(
     )
     .await?;
 
-    events
-        .first()
-        .map(nostr_convert::contact_list_from_event)
-        .transpose()?
-        .ok_or_else(|| "contact list not found".to_string())
+    if let Some(event) = events.first() {
+        return nostr_convert::contact_list_from_event(event);
+    }
+
+    Ok(ContactListResponse {
+        id: String::new(),
+        pubkey,
+        created_at: 0,
+        tags: Vec::new(),
+        content: String::new(),
+    })
 }
 
 /// Replace the full contact list (kind:3, NIP-02). Read-before-write required
