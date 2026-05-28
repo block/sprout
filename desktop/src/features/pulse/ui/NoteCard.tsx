@@ -37,6 +37,7 @@ type NoteCardProps = {
   currentUserProfile?: UserProfileSummary | null;
   composerProfiles?: Record<string, UserProfileSummary>;
   isReplySending?: boolean;
+  reactionCount?: number;
   isUpvotePending?: boolean;
   isUpvoted?: boolean;
   members?: ChannelMember[];
@@ -71,6 +72,7 @@ export function NoteCard({
   isOwnNote,
   isFollowing,
   isReplySending = false,
+  reactionCount = 0,
   isUpvotePending = false,
   isUpvoted = false,
   members = [],
@@ -83,6 +85,10 @@ export function NoteCard({
     "inline-flex min-w-7 items-center gap-1.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
   const activeActionClass = "text-foreground";
   const countPlaceholder = <span aria-hidden className="w-2.5" />;
+  const reactionCountLabel =
+    reactionCount > 0 ? (
+      <span className="tabular-nums">{reactionCount}</span>
+    ) : null;
   const currentUserAvatarUrl = currentUserProfile?.avatarUrl ?? null;
   const replyParentId = getReplyParent(note);
   const parentNoteQuery = useNoteByIdQuery(replyParentId);
@@ -165,7 +171,7 @@ export function NoteCard({
                   <ThumbsUp
                     className={`h-4 w-4 ${isUpvoted ? "fill-current" : ""}`}
                   />
-                  {countPlaceholder}
+                  {reactionCountLabel}
                 </button>
               </TooltipTrigger>
               <TooltipContent>

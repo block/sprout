@@ -7,8 +7,10 @@ import {
   useContactListQuery,
   useFollowMutation,
   useGlobalNotesQuery,
+  pulseQueryKeys,
   useMyNotesQuery,
   usePublishNoteMutation,
+  usePulseReactionsQuery,
   useTimelineQuery,
   useUnfollowMutation,
 } from "@/features/pulse/hooks";
@@ -114,7 +116,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     activeTab === "mine" ? currentPubkey : undefined,
   );
   const publishMutation = usePublishNoteMutation(currentPubkey);
-  const noteActions = usePulseNoteActions(currentPubkey);
   const followMutation = useFollowMutation(currentPubkey);
   const unfollowMutation = useUnfollowMutation(currentPubkey);
 
@@ -140,6 +141,21 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     myNotesQuery.data,
     agentPubkeySet,
   ]);
+
+  const visibleNoteIds = React.useMemo(
+    () => visibleNotes.map((note) => note.id),
+    [visibleNotes],
+  );
+  const reactionsQuery = usePulseReactionsQuery(visibleNoteIds, currentPubkey);
+  const reactionQueryKey = React.useMemo(
+    () => pulseQueryKeys.reactions(visibleNoteIds),
+    [visibleNoteIds],
+  );
+  const noteActions = usePulseNoteActions({
+    currentPubkey,
+    reactionQueryKey,
+    reactions: reactionsQuery.data ?? new Map(),
+  });
 
   const agentNoteGroups = React.useMemo(
     () => (activeTab === "agents" ? groupAgentNotes(visibleNotes) : []),
@@ -250,6 +266,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
           isReplySending={noteActions.isReplySending}
           isUpvotePending={noteActions.isUpvotePending(note.id)}
           isUpvoted={noteActions.isUpvoted(note.id)}
+          reactionCount={noteActions.reactionCount(note.id)}
           key={note.id}
           members={pulseMentionMembers}
           note={note}

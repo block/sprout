@@ -22,3 +22,35 @@ export function toggleNoteIdInSet(
   }
   return next;
 }
+
+export function applyReactionState(
+  current:
+    | Map<string, { count: number; reactedByCurrentUser: boolean }>
+    | undefined,
+  noteId: string,
+  reactedByCurrentUser: boolean,
+) {
+  const next = new Map(current);
+  const previous = next.get(noteId) ?? {
+    count: 0,
+    reactedByCurrentUser: false,
+  };
+  const count = Math.max(
+    0,
+    previous.count +
+      (reactedByCurrentUser && !previous.reactedByCurrentUser ? 1 : 0) -
+      (!reactedByCurrentUser && previous.reactedByCurrentUser ? 1 : 0),
+  );
+  next.set(noteId, {
+    count,
+    reactedByCurrentUser,
+  });
+  return next;
+}
+
+export function isDuplicateReactionError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.toLowerCase().includes("duplicate: reaction already exists")
+  );
+}
