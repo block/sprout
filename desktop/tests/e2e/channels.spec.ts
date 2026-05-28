@@ -842,11 +842,11 @@ test("members sidebar keeps direct pubkey entry behind a toggle", async ({
 test("open-channel members can add agents from the header", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1280, height: 420 });
   await page.goto("/");
 
   await page.getByTestId("channel-random").click();
   await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await page.setViewportSize({ width: 1280, height: 420 });
 
   const addAgentTrigger = page.getByTestId("channel-add-bot-trigger");
   await expect(addAgentTrigger).toBeEnabled();
