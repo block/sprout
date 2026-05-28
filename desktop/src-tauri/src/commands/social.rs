@@ -403,3 +403,74 @@ pub async fn get_notes_timeline(
         next_cursor: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    fn tag(values: &[&str]) -> Tag {
+        Tag::parse(values.iter().copied()).expect("parse tag")
+    }
+
+    fn event(tags: Vec<Tag>, content: &str) -> Event {
+        EventBuilder::new(Kind::Custom(7), content)
+            .tags(tags)
+            .sign_with_keys(&Keys::generate())
+            .expect("sign event")
+    }
+
+    #[test]
+    fn e_tag_id_returns_only_event_tag_values() {
+        let e = tag(&["e", "a"]);
+        let p = tag(&["p", "b"]);
+        assert_eq!(e_tag_id(&e), Some(&"a".to_string()));
+        assert_eq!(e_tag_id(&p), None);
+    }
+
+    #[test]
+    fn last_event_tag_id_uses_last_e_tag() {
+        let ev = event(
+            vec![tag(&["e", "a"]), tag(&["p", "x"]), tag(&["e", "b"])],
+            "+",
+        );
+        assert_eq!(last_event_tag_id(&ev), Some("b".to_string()));
+    }
+
+    #[test]
+    fn last_matching_event_tag_id_uses_last_visible_target() {
+        let ev = event(
+            vec![tag(&["e", "x"]), tag(&["e", "y"]), tag(&["e", "z"])],
+            "+",
+        );
+        let targets = HashSet::from(["y".to_string(), "z".to_string()]);
+        assert_eq!(
+            last_matching_event_tag_id(&ev, &targets),
+            Some("z".to_string())
+        );
+    }
+
+    #[test]
+    fn deleted_event_ids_collects_all_e_tags() {
+        let first = event(vec![tag(&["e", "a"]), tag(&["e", "b"])], "");
+        let second = event(vec![tag(&["p", "ignored"]), tag(&["e", "c"])], "");
+        let deleted = deleted_event_ids(&[first, second]);
+        assert!(deleted.contains("a"));
+        assert!(deleted.contains("b"));
+        assert!(deleted.contains("c"));
+        assert!(!deleted.contains("ignored"));
+    }
+
+    #[test]
+    fn reaction_emoji_defaults_empty_content_to_plus() {
+        assert_eq!(reaction_emoji(&event(Vec::new(), "")), "+");
+        assert_eq!(reaction_emoji(&event(Vec::new(), "🔥")), "🔥");
+    }
+
+    #[test]
+    fn validate_note_id_requires_hex64() {
+        assert!(validate_note_id(&"a".repeat(64)).is_ok());
+        assert!(validate_note_id(&"g".repeat(64)).is_err());
+        assert!(validate_note_id(&"a".repeat(63)).is_err());
+    }
+}
