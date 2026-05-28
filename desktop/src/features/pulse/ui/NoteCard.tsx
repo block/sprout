@@ -115,7 +115,7 @@ export function NoteCard({
   const [isReplyComposerOpen, setIsReplyComposerOpen] = React.useState(false);
   const actionButtonClass =
     "inline-flex min-w-7 items-center gap-1.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
-  const activeActionClass = "text-foreground";
+  const activeActionClass = "text-primary";
   const countPlaceholder = <span aria-hidden className="w-2.5" />;
   const reactionCountLabel =
     reactionCount > 0 ? (
