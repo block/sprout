@@ -12,6 +12,7 @@ type RawUserNote = {
   pubkey: string;
   created_at: number;
   content: string;
+  tags: string[][];
 };
 
 type RawUserNotesCursor = {
@@ -38,6 +39,7 @@ function fromRawUserNote(note: RawUserNote): UserNote {
     pubkey: note.pubkey,
     createdAt: note.created_at,
     content: note.content,
+    tags: note.tags,
   };
 }
 

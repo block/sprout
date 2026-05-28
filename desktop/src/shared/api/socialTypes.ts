@@ -3,6 +3,7 @@ export type UserNote = {
   pubkey: string;
   createdAt: number;
   content: string;
+  tags: string[][];
 };
 
 export type UserNotesCursor = {

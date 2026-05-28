@@ -51,6 +51,7 @@ pub struct UserNoteInfo {
     pub pubkey: String,
     pub created_at: i64,
     pub content: String,
+    pub tags: Vec<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize)]
