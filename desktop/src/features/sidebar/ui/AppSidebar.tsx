@@ -625,12 +625,13 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col">
         {unreadAboveCount > 0 ? (
           <MoreUnreadButton
             count={unreadAboveCount}
             icon={<ArrowUp />}
             onClick={scrollToNextAbove}
+            position="top"
             testId="sidebar-more-unread-above"
           />
         ) : null}
@@ -740,6 +741,7 @@ export function AppSidebar({
             count={unreadBelowCount}
             icon={<ArrowDown />}
             onClick={scrollToNextBelow}
+            position="bottom"
             testId="sidebar-more-unread-below"
           />
         ) : null}
