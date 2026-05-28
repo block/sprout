@@ -13,6 +13,7 @@ import { getReplyParent, noteSnippet } from "@/features/pulse/lib/replies";
 import type { UserNote } from "@/shared/api/socialTypes";
 import type { ChannelMember, UserProfileSummary } from "@/shared/api/types";
 import { Markdown } from "@/shared/ui/markdown";
+import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
@@ -238,21 +239,23 @@ export function NoteCard({
             ) : null}
             {!isOwnNote ? (
               isFollowing ? (
-                <button
-                  className="text-muted-foreground/60 transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                <Button
                   onClick={() => actions?.unfollow?.(note.pubkey)}
+                  size="sm"
                   type="button"
+                  variant="outline"
                 >
                   Unfollow
-                </button>
+                </Button>
               ) : (
-                <button
-                  className="text-muted-foreground/60 transition-colors hover:text-foreground hover:underline focus-visible:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                <Button
                   onClick={() => actions?.follow?.(note.pubkey)}
+                  size="sm"
                   type="button"
+                  variant="default"
                 >
                   Follow
-                </button>
+                </Button>
               )
             ) : null}
           </div>
