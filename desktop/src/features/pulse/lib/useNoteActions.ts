@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { useOpenDmMutation } from "@/features/channels/hooks";
 import { useToggleReactionMutation } from "@/features/messages/hooks";
 import {
-  type pulseQueryKeys,
+  pulseQueryKeys,
   type PulseReactionState,
   usePublishNoteMutation,
 } from "@/features/pulse/hooks";
@@ -76,12 +76,22 @@ export function usePulseNoteActions({
           emoji: "+",
           remove,
         });
+        if (currentPubkey) {
+          void queryClient.invalidateQueries({
+            queryKey: pulseQueryKeys.likedNotes(currentPubkey),
+          });
+        }
       } catch (error) {
         if (isDuplicateReactionError(error)) {
           queryClient.setQueryData<Map<string, PulseReactionState>>(
             reactionQueryKey,
             (current) => applyReactionState(current, note.id, true),
           );
+          if (currentPubkey) {
+            void queryClient.invalidateQueries({
+              queryKey: pulseQueryKeys.likedNotes(currentPubkey),
+            });
+          }
           return;
         }
 
@@ -96,6 +106,7 @@ export function usePulseNoteActions({
       }
     },
     [
+      currentPubkey,
       pendingUpvoteNoteIds,
       queryClient,
       reactionQueryKey,

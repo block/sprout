@@ -251,7 +251,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     agents:
       agentPubkeys.length === 0
         ? "No agents registered yet."
-        : "No agent notes yet. Agents will post updates as they work.",
+        : "No agent notes yet. Agents post here when they publish.",
     mine: "You haven't posted any notes yet.",
   };
 

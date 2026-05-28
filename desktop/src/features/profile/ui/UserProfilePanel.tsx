@@ -342,7 +342,14 @@ export function UserProfilePanel({
                 <Button
                   className="w-full"
                   disabled={unfollowMutation.isPending}
-                  onClick={() => unfollowMutation.mutate(pubkey)}
+                  onClick={() =>
+                    unfollowMutation.mutate(pubkey, {
+                      onError: (error) =>
+                        toast.error(
+                          `Unfollow failed: ${error instanceof Error ? error.message : String(error)}`,
+                        ),
+                    })
+                  }
                   type="button"
                   variant="outline"
                 >
@@ -352,7 +359,14 @@ export function UserProfilePanel({
                 <Button
                   className="w-full"
                   disabled={followMutation.isPending}
-                  onClick={() => followMutation.mutate(pubkey)}
+                  onClick={() =>
+                    followMutation.mutate(pubkey, {
+                      onError: (error) =>
+                        toast.error(
+                          `Follow failed: ${error instanceof Error ? error.message : String(error)}`,
+                        ),
+                    })
+                  }
                   type="button"
                   variant="default"
                 >

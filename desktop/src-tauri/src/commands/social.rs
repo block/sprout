@@ -232,16 +232,18 @@ pub async fn get_liked_notes(
     limit: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<UserNotesResponse, String> {
-    let cap = limit.unwrap_or(50).min(200);
-    let reactions = query_relay(
+    let cap = limit.unwrap_or(50).min(200) as usize;
+    let reaction_fetch_limit = (cap * 4).min(1000);
+    let mut reactions = query_relay(
         &state,
         &[serde_json::json!({
             "kinds": [7],
             "authors": [author_pubkey],
-            "limit": cap,
+            "limit": reaction_fetch_limit,
         })],
     )
     .await?;
+    reactions.sort_by(|left, right| right.created_at.cmp(&left.created_at));
 
     let reaction_ids: Vec<String> = reactions.iter().map(|event| event.id.to_hex()).collect();
     let deletions = if reaction_ids.is_empty() {
@@ -272,8 +274,12 @@ pub async fn get_liked_notes(
         .collect();
 
     let mut target_ids = Vec::<String>::new();
+    let mut target_liked_at = HashMap::<String, i64>::new();
     let mut seen_targets = HashSet::<String>::new();
     for reaction in reactions {
+        if target_ids.len() >= cap {
+            break;
+        }
         if deleted_reaction_ids.contains(&reaction.id.to_hex()) {
             continue;
         }
@@ -287,6 +293,7 @@ pub async fn get_liked_notes(
             continue;
         };
         if seen_targets.insert(target_id.clone()) {
+            target_liked_at.insert(target_id.clone(), reaction.created_at.as_secs() as i64);
             target_ids.push(target_id);
         }
     }
@@ -307,7 +314,15 @@ pub async fn get_liked_notes(
         })],
     )
     .await?;
-    Ok(nostr_convert::user_notes_from_events(&events))
+    let mut response = nostr_convert::user_notes_from_events(&events);
+    response.notes.sort_by(|left, right| {
+        target_liked_at
+            .get(&right.id)
+            .unwrap_or(&0)
+            .cmp(target_liked_at.get(&left.id).unwrap_or(&0))
+    });
+    response.notes.truncate(cap);
+    Ok(response)
 }
 
 /// Maximum number of pubkeys per timeline request to keep filter size bounded.
