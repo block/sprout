@@ -314,15 +314,18 @@ function createMarkdownComponents(
           ? rewriteRelayUrl(posterUrl)
           : undefined;
         return (
-          <VideoPlayer
-            key={resolvedSrc}
-            src={resolvedSrc}
-            poster={resolvedPoster}
-          />
+          <span data-block-media="">
+            <VideoPlayer
+              key={resolvedSrc}
+              src={resolvedSrc}
+              poster={resolvedPoster}
+            />
+          </span>
         );
       }
       return (
-        <ImageContextMenu src={src}>
+        <span data-block-media="">
+          <ImageContextMenu src={src}>
           <DialogPrimitive.Root>
             <DialogPrimitive.Trigger asChild>
               <div className="mt-1 max-w-sm cursor-pointer transition-opacity hover:opacity-90">
@@ -384,6 +387,7 @@ function createMarkdownComponents(
             </DialogPrimitive.Portal>
           </DialogPrimitive.Root>
         </ImageContextMenu>
+        </span>
       );
     },
     li: ({ children }) => <li className={listItemClassName}>{children}</li>,

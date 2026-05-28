@@ -28,17 +28,19 @@ function isValidElement(obj) {
   );
 }
 
-function fakeElement(type) {
-  return { $$typeof: REACT_ELEMENT_TYPE, type, props: {}, key: null };
+function fakeElement(type, props = {}) {
+  return { $$typeof: REACT_ELEMENT_TYPE, type, props, key: null };
+}
+
+function isBlockMedia(child) {
+  return isValidElement(child) && child.props?.["data-block-media"] != null;
 }
 
 function classifyChildren(childArray) {
-  const imageChildren = childArray.filter(
-    (child) => isValidElement(child) && typeof child.type !== "string",
-  );
+  const imageChildren = childArray.filter(isBlockMedia);
   const nonImageChildren = childArray.filter(
     (child) =>
-      !(isValidElement(child) && typeof child.type !== "string") &&
+      !isBlockMedia(child) &&
       !(typeof child === "string" && child.trim() === "") &&
       !(isValidElement(child) && child.type === "br"),
   );
@@ -153,12 +155,19 @@ test("shallowArrayEqual: empty arrays return true", () => {
 
 // ── classifyChildren ──────────────────────────────────────────────────
 
-test("classifyChildren: React component elements are image children", () => {
-  const ImgComponent = () => null;
-  const children = [fakeElement(ImgComponent)];
+test("classifyChildren: elements with data-block-media are image children", () => {
+  const children = [fakeElement("span", { "data-block-media": "" })];
   const { imageChildren, nonImageChildren } = classifyChildren(children);
   assert.equal(imageChildren.length, 1);
   assert.equal(nonImageChildren.length, 0);
+});
+
+test("classifyChildren: React component elements without data-block-media are non-image", () => {
+  const LinkComponent = () => null;
+  const children = [fakeElement(LinkComponent)];
+  const { imageChildren, nonImageChildren } = classifyChildren(children);
+  assert.equal(imageChildren.length, 0);
+  assert.equal(nonImageChildren.length, 1);
 });
 
 test("classifyChildren: plain HTML elements are non-image children", () => {
@@ -189,26 +198,24 @@ test("classifyChildren: <br> elements are excluded from non-image", () => {
   assert.equal(nonImageChildren.length, 0);
 });
 
-test("classifyChildren: mixed images, text, and br", () => {
-  const Img = () => null;
+test("classifyChildren: mixed media, text, and br", () => {
   const children = [
-    fakeElement(Img),
+    fakeElement("span", { "data-block-media": "" }),
     "some text",
     fakeElement("br"),
-    fakeElement(Img),
+    fakeElement("span", { "data-block-media": "" }),
   ];
   const { imageChildren, nonImageChildren } = classifyChildren(children);
   assert.equal(imageChildren.length, 2);
   assert.equal(nonImageChildren.length, 1); // "some text"
 });
 
-test("classifyChildren: images with only whitespace and br between them", () => {
-  const Img = () => null;
+test("classifyChildren: media with only whitespace and br between them", () => {
   const children = [
-    fakeElement(Img),
+    fakeElement("span", { "data-block-media": "" }),
     "  ",
     fakeElement("br"),
-    fakeElement(Img),
+    fakeElement("span", { "data-block-media": "" }),
   ];
   const { imageChildren, nonImageChildren } = classifyChildren(children);
   assert.equal(imageChildren.length, 2);
@@ -217,21 +224,20 @@ test("classifyChildren: images with only whitespace and br between them", () => 
 
 // ── isImageOnlyParagraph ──────────────────────────────────────────────
 
-test("isImageOnlyParagraph: two images with br returns true", () => {
-  const Img = () => null;
-  const children = [fakeElement(Img), fakeElement("br"), fakeElement(Img)];
+test("isImageOnlyParagraph: two media with br returns true", () => {
+  const media = { "data-block-media": "" };
+  const children = [fakeElement("span", media), fakeElement("br"), fakeElement("span", media)];
   assert.equal(isImageOnlyParagraph(children), true);
 });
 
-test("isImageOnlyParagraph: single image returns false (needs 2+)", () => {
-  const Img = () => null;
-  const children = [fakeElement(Img)];
+test("isImageOnlyParagraph: single media returns false (needs 2+)", () => {
+  const children = [fakeElement("span", { "data-block-media": "" })];
   assert.equal(isImageOnlyParagraph(children), false);
 });
 
-test("isImageOnlyParagraph: images with text returns false", () => {
-  const Img = () => null;
-  const children = [fakeElement(Img), "caption text", fakeElement(Img)];
+test("isImageOnlyParagraph: media with text returns false", () => {
+  const media = { "data-block-media": "" };
+  const children = [fakeElement("span", media), "caption text", fakeElement("span", media)];
   assert.equal(isImageOnlyParagraph(children), false);
 });
 
@@ -239,40 +245,38 @@ test("isImageOnlyParagraph: no children returns false", () => {
   assert.equal(isImageOnlyParagraph([]), false);
 });
 
-test("isImageOnlyParagraph: three images returns true", () => {
-  const Img = () => null;
-  const children = [fakeElement(Img), fakeElement(Img), fakeElement(Img)];
+test("isImageOnlyParagraph: three media returns true", () => {
+  const media = { "data-block-media": "" };
+  const children = [fakeElement("span", media), fakeElement("span", media), fakeElement("span", media)];
   assert.equal(isImageOnlyParagraph(children), true);
 });
 
-test("isImageOnlyParagraph: plain HTML img tags are non-image (string type)", () => {
-  // <img> has type "img" (a string) — classified as non-image
+test("isImageOnlyParagraph: plain HTML img tags without data-block-media are non-image", () => {
   const children = [fakeElement("img"), fakeElement("img")];
   assert.equal(isImageOnlyParagraph(children), false);
 });
 
-test("isImageOnlyParagraph: mention span + images is not image-only", () => {
-  const Img = () => null;
-  const children = [fakeElement("span"), fakeElement(Img), fakeElement(Img)];
+test("isImageOnlyParagraph: non-media component + media is not image-only", () => {
+  const LinkComponent = () => null;
+  const media = { "data-block-media": "" };
+  const children = [fakeElement(LinkComponent), fakeElement("span", media), fakeElement("span", media)];
   assert.equal(isImageOnlyParagraph(children), false);
 });
 
 // ── hasBlockMedia ─────────────────────────────────────────────────────
 
-test("hasBlockMedia: single image component returns true", () => {
-  const Img = () => null;
-  assert.equal(hasBlockMedia([fakeElement(Img)]), true);
+test("hasBlockMedia: single media element returns true", () => {
+  assert.equal(hasBlockMedia([fakeElement("span", { "data-block-media": "" })]), true);
 });
 
-test("hasBlockMedia: two images returns true", () => {
-  const Img = () => null;
-  assert.equal(hasBlockMedia([fakeElement(Img), fakeElement(Img)]), true);
+test("hasBlockMedia: two media returns true", () => {
+  const media = { "data-block-media": "" };
+  assert.equal(hasBlockMedia([fakeElement("span", media), fakeElement("span", media)]), true);
 });
 
-test("hasBlockMedia: image with whitespace and br returns true", () => {
-  const Img = () => null;
+test("hasBlockMedia: media with whitespace and br returns true", () => {
   assert.equal(
-    hasBlockMedia([fakeElement(Img), "  ", fakeElement("br")]),
+    hasBlockMedia([fakeElement("span", { "data-block-media": "" }), "  ", fakeElement("br")]),
     true,
   );
 });
@@ -285,13 +289,17 @@ test("hasBlockMedia: text only returns false", () => {
   assert.equal(hasBlockMedia(["hello"]), false);
 });
 
-test("hasBlockMedia: image with text returns false", () => {
-  const Img = () => null;
-  assert.equal(hasBlockMedia([fakeElement(Img), "caption"]), false);
+test("hasBlockMedia: media with text returns false", () => {
+  assert.equal(hasBlockMedia([fakeElement("span", { "data-block-media": "" }), "caption"]), false);
 });
 
-test("hasBlockMedia: plain HTML img (string type) returns false", () => {
+test("hasBlockMedia: plain HTML img without data-block-media returns false", () => {
   assert.equal(hasBlockMedia([fakeElement("img")]), false);
+});
+
+test("hasBlockMedia: React component without data-block-media returns false", () => {
+  const LinkComponent = () => null;
+  assert.equal(hasBlockMedia([fakeElement(LinkComponent)]), false);
 });
 
 // ── rehypeImageGallery (HAST-level grouping) ──────────────────────────
