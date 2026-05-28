@@ -15,7 +15,6 @@ import { createPortal } from "react-dom";
 import type { ChannelType, ChannelVisibility } from "@/shared/api/types";
 import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import { cn } from "@/shared/lib/cn";
-import { useSidebar } from "@/shared/ui/sidebar";
 
 type ChatHeaderProps = {
   actions?: React.ReactNode;
@@ -92,8 +91,6 @@ export function ChatHeader({
   statusBadge,
 }: ChatHeaderProps) {
   const trimmedDescription = description?.trim() ?? "";
-  const { state: sidebarState } = useSidebar();
-  const reserveGlobalControls = sidebarState === "collapsed";
   const topRightActions = (
     <div className="fixed right-3 top-[9px] z-[70] flex shrink-0 items-center gap-1">
       <UpdateIndicator />
@@ -109,7 +106,6 @@ export function ChatHeader({
           ? "min-h-[32px] py-[4px]"
           : "min-h-[44px] py-[6px]",
         overlaysContent && !belowSystemChrome && "-mb-[44px]",
-        reserveGlobalControls && "md:pl-[160px]",
       )}
       data-testid="chat-header"
       data-tauri-drag-region
