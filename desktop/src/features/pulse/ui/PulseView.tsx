@@ -80,6 +80,10 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     () => contacts.map((c) => c.pubkey),
     [contacts],
   );
+  const contactPubkeySet = React.useMemo(
+    () => new Set(contactPubkeys),
+    [contactPubkeys],
+  );
   const peoplePubkeys = React.useMemo(() => contactPubkeys, [contactPubkeys]);
 
   const relayAgentsQuery = useRelayAgentsQuery();
@@ -154,9 +158,9 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
       return everyoneQuery.data?.notes ?? [];
     }
     if (activeTab === "people") {
-      // Filter out agent notes from the people timeline.
+      // Filter out agent notes from the people timeline unless the user follows them.
       return (peopleQuery.data?.notes ?? []).filter(
-        (n) => !agentPubkeySet.has(n.pubkey),
+        (n) => !agentPubkeySet.has(n.pubkey) || contactPubkeySet.has(n.pubkey),
       );
     }
     if (activeTab === "liked") {
@@ -174,6 +178,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     likedNotesQuery.data,
     myNotesQuery.data,
     agentPubkeySet,
+    contactPubkeySet,
   ]);
 
   const visibleNoteIds = React.useMemo(
