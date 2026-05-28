@@ -43,6 +43,13 @@ function fromRawUserNote(note: RawUserNote): UserNote {
   };
 }
 
+export async function getNote(noteId: string): Promise<UserNote | null> {
+  const response = await invokeTauri<RawUserNote | null>("get_note", {
+    noteId,
+  });
+  return response ? fromRawUserNote(response) : null;
+}
+
 export async function getUserNotes(
   pubkey: string,
   options?: {

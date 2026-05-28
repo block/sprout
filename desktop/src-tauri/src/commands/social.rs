@@ -102,6 +102,28 @@ pub async fn get_global_notes(
     Ok(nostr_convert::user_notes_from_events(&events))
 }
 
+/// Fetch a single NIP-01 kind:1 note by event id.
+#[tauri::command]
+pub async fn get_note(
+    note_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<UserNoteInfo>, String> {
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "kinds": [1],
+            "ids": [note_id],
+            "limit": 1,
+        })],
+    )
+    .await?;
+
+    Ok(nostr_convert::user_notes_from_events(&events)
+        .notes
+        .into_iter()
+        .next())
+}
+
 /// Maximum number of pubkeys per timeline request to keep filter size bounded.
 const MAX_TIMELINE_PUBKEYS: usize = 100;
 

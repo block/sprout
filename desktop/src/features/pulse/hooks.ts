@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getContactList,
   getGlobalNotes,
+  getNote,
   getNotesTimeline,
   getUserNotes,
   publishNote,
@@ -10,6 +11,7 @@ import {
 } from "@/shared/api/social";
 import type {
   ContactListResponse,
+  UserNote,
   UserNotesResponse,
 } from "@/shared/api/socialTypes";
 
@@ -19,6 +21,7 @@ export const pulseQueryKeys = {
   contactList: (pubkey: string) => ["contact-list", pubkey] as const,
   globalNotes: ["global-notes"] as const,
   myNotes: (pubkey: string) => ["my-notes", pubkey] as const,
+  note: (noteId: string) => ["pulse-note", noteId] as const,
   // Use a stable sorted string key to avoid reference-equality refetch churn.
   timeline: (pubkeys: string[]) =>
     ["pulse-timeline", [...pubkeys].sort().join(",")] as const,
@@ -62,6 +65,16 @@ export function useTimelineQuery(contactPubkeys: string[], enabled: boolean) {
     staleTime: 15_000,
     gcTime: 5 * 60_000,
     refetchInterval: 30_000,
+  });
+}
+
+export function useNoteByIdQuery(noteId: string | null) {
+  return useQuery<UserNote | null>({
+    queryKey: pulseQueryKeys.note(noteId ?? ""),
+    queryFn: () => getNote(noteId ?? ""),
+    enabled: !!noteId,
+    staleTime: 5 * 60_000,
+    gcTime: 10 * 60_000,
   });
 }
 

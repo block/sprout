@@ -8,6 +8,8 @@ import {
 import * as React from "react";
 
 import { ForumComposer } from "@/features/forum/ui/ForumComposer";
+import { useNoteByIdQuery } from "@/features/pulse/hooks";
+import { getReplyParent, noteSnippet } from "@/features/pulse/lib/replies";
 import type { UserNote } from "@/shared/api/socialTypes";
 import type { ChannelMember, UserProfileSummary } from "@/shared/api/types";
 import { Markdown } from "@/shared/ui/markdown";
@@ -82,6 +84,16 @@ export function NoteCard({
   const activeActionClass = "text-foreground";
   const countPlaceholder = <span aria-hidden className="w-2.5" />;
   const currentUserAvatarUrl = currentUserProfile?.avatarUrl ?? null;
+  const replyParentId = getReplyParent(note);
+  const parentNoteQuery = useNoteByIdQuery(replyParentId);
+  const parentNote = parentNoteQuery.data ?? null;
+  const parentProfile = parentNote
+    ? composerProfiles[parentNote.pubkey.toLowerCase()]
+    : null;
+  const parentDisplayName = parentNote
+    ? (parentProfile?.displayName ?? `${parentNote.pubkey.slice(0, 8)}...`)
+    : null;
+  const parentSnippet = parentNote ? noteSnippet(parentNote.content) : null;
 
   return (
     <article className="flex items-start gap-2.5 rounded-2xl px-1 pb-1 pt-4 sm:px-2">
@@ -115,6 +127,20 @@ export function NoteCard({
             {formatRelativeTime(note.createdAt)}
           </span>
         </div>
+
+        {replyParentId ? (
+          <div className="mt-2 truncate rounded-xl border border-border/50 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
+            {parentNote ? (
+              <>
+                Replying to {parentDisplayName}: {parentSnippet || "No text"}
+              </>
+            ) : parentNoteQuery.isLoading ? (
+              "Loading reply context…"
+            ) : (
+              "Replying to an unavailable note"
+            )}
+          </div>
+        ) : null}
 
         <div className="mt-0.5 pb-3 text-sm text-foreground">
           <Markdown content={note.content} tight />
