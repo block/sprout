@@ -15,12 +15,10 @@ import { getReplyParent, noteSnippet } from "@/features/pulse/lib/replies";
 import type { UserNote } from "@/shared/api/socialTypes";
 import type { ChannelMember, UserProfileSummary } from "@/shared/api/types";
 import { Markdown } from "@/shared/ui/markdown";
-import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 export type NoteCardActions = {
-  follow?: (pubkey: string) => void;
   reply?: (
     note: UserNote,
     content: string,
@@ -30,7 +28,6 @@ export type NoteCardActions = {
   share?: (note: UserNote) => void;
   startDm?: (pubkey: string) => void;
   toggleUpvote?: (note: UserNote, remove: boolean) => Promise<unknown>;
-  unfollow?: (pubkey: string) => void;
 };
 
 type NoteCardProps = {
@@ -46,7 +43,6 @@ type NoteCardProps = {
   members?: ChannelMember[];
   isAgent?: boolean;
   isOwnNote: boolean;
-  isFollowing: boolean;
   actions?: NoteCardActions;
 };
 
@@ -138,7 +134,6 @@ export function NoteCard({
   composerProfiles = {},
   isAgent,
   isOwnNote,
-  isFollowing,
   isReplySending = false,
   reactionCount = 0,
   isUpvotePending = false,
@@ -289,27 +284,6 @@ export function NoteCard({
                 </TooltipTrigger>
                 <TooltipContent>Start direct message</TooltipContent>
               </Tooltip>
-            ) : null}
-            {!isOwnNote ? (
-              isFollowing ? (
-                <Button
-                  onClick={() => actions?.unfollow?.(note.pubkey)}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  Unfollow
-                </Button>
-              ) : (
-                <Button
-                  onClick={() => actions?.follow?.(note.pubkey)}
-                  size="sm"
-                  type="button"
-                  variant="default"
-                >
-                  Follow
-                </Button>
-              )
             ) : null}
           </div>
         </div>

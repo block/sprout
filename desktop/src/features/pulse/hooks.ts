@@ -1,25 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  getContactList,
   getGlobalNotes,
   getNote,
   getNoteReactions,
   getNotesTimeline,
   getUserNotes,
   publishNote,
-  setContactList,
 } from "@/shared/api/social";
-import type {
-  ContactListResponse,
-  UserNote,
-  UserNotesResponse,
-} from "@/shared/api/socialTypes";
+import { allPulseTimelinesQueryKey } from "@/features/profile/hooks";
+import type { UserNote, UserNotesResponse } from "@/shared/api/socialTypes";
 
 // ── Query keys ──────────────────────────────────────────────────────────────
 
 export const pulseQueryKeys = {
-  contactList: (pubkey: string) => ["contact-list", pubkey] as const,
   globalNotes: ["global-notes"] as const,
   myNotes: (pubkey: string) => ["my-notes", pubkey] as const,
   note: (noteId: string) => ["pulse-note", noteId] as const,
@@ -28,21 +22,8 @@ export const pulseQueryKeys = {
   // Use a stable sorted string key to avoid reference-equality refetch churn.
   timeline: (pubkeys: string[]) =>
     ["pulse-timeline", [...pubkeys].sort().join(",")] as const,
-  allTimelines: ["pulse-timeline"] as const,
+  allTimelines: allPulseTimelinesQueryKey,
 };
-
-// ── Contact list ────────────────────────────────────────────────────────────
-
-export function useContactListQuery(pubkey?: string) {
-  return useQuery<ContactListResponse>({
-    queryKey: pulseQueryKeys.contactList(pubkey ?? ""),
-    // biome-ignore lint/style/noNonNullAssertion: guarded by enabled: !!pubkey
-    queryFn: () => getContactList(pubkey!),
-    enabled: !!pubkey,
-    staleTime: 60_000,
-    gcTime: 5 * 60_000,
-  });
-}
 
 // ── Own notes ───────────────────────────────────────────────────────────────
 
@@ -156,64 +137,6 @@ export function usePublishNoteMutation(currentPubkey?: string) {
       void queryClient.invalidateQueries({
         queryKey: pulseQueryKeys.globalNotes,
       });
-    },
-  });
-}
-
-// ── Follow / unfollow mutations ─────────────────────────────────────────────
-
-/**
- * Follow mutation re-fetches the contact list inside the mutationFn to prevent
- * race conditions when clicking Follow on multiple users quickly. The kind:3
- * contact list is a full-snapshot replaceable event — stale reads cause data loss.
- */
-export function useFollowMutation(currentPubkey?: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (targetPubkey: string) => {
-      if (!currentPubkey) throw new Error("No identity");
-      // Fresh read to avoid overwriting concurrent mutations.
-      const current = await getContactList(currentPubkey);
-      if (current.contacts.some((c) => c.pubkey === targetPubkey)) {
-        return; // already following
-      }
-      const updated = [...current.contacts, { pubkey: targetPubkey }];
-      return setContactList(updated);
-    },
-    onSuccess: () => {
-      if (currentPubkey) {
-        void queryClient.invalidateQueries({
-          queryKey: pulseQueryKeys.contactList(currentPubkey),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: pulseQueryKeys.allTimelines,
-        });
-      }
-    },
-  });
-}
-
-export function useUnfollowMutation(currentPubkey?: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (targetPubkey: string) => {
-      if (!currentPubkey) throw new Error("No identity");
-      // Fresh read to avoid overwriting concurrent mutations.
-      const current = await getContactList(currentPubkey);
-      const updated = current.contacts.filter((c) => c.pubkey !== targetPubkey);
-      return setContactList(updated);
-    },
-    onSuccess: () => {
-      if (currentPubkey) {
-        void queryClient.invalidateQueries({
-          queryKey: pulseQueryKeys.contactList(currentPubkey),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: pulseQueryKeys.allTimelines,
-        });
-      }
     },
   });
 }

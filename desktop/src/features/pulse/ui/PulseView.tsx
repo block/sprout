@@ -5,17 +5,17 @@ import {
   useManagedAgentsQuery,
   useRelayAgentsQuery,
 } from "@/features/agents/hooks";
-import { useUsersBatchQuery } from "@/features/profile/hooks";
 import {
   useContactListQuery,
-  useFollowMutation,
+  useUsersBatchQuery,
+} from "@/features/profile/hooks";
+import {
   useGlobalNotesQuery,
   pulseQueryKeys,
   useMyNotesQuery,
   usePublishNoteMutation,
   usePulseReactionsQuery,
   useTimelineQuery,
-  useUnfollowMutation,
 } from "@/features/pulse/hooks";
 import { groupAgentNotes } from "@/features/pulse/lib/groupAgentNotes";
 import { usePulseNoteActions } from "@/features/pulse/lib/useNoteActions";
@@ -73,11 +73,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     () => contacts.map((c) => c.pubkey),
     [contacts],
   );
-  const followingSet = React.useMemo(
-    () => new Set(contactPubkeys),
-    [contactPubkeys],
-  );
-
   const peoplePubkeys = React.useMemo(() => contactPubkeys, [contactPubkeys]);
 
   const relayAgentsQuery = useRelayAgentsQuery();
@@ -143,9 +138,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     activeTab === "mine" ? currentPubkey : undefined,
   );
   const publishMutation = usePublishNoteMutation(currentPubkey);
-  const followMutation = useFollowMutation(currentPubkey);
-  const unfollowMutation = useUnfollowMutation(currentPubkey);
-
   const visibleNotes: UserNote[] = React.useMemo(() => {
     if (activeTab === "everyone") {
       return everyoneQuery.data?.notes ?? [];
@@ -234,14 +226,6 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
           : myNotesQuery;
   const isLoading = activeQuery.isLoading;
 
-  function handleFollow(pubkey: string) {
-    followMutation.mutate(pubkey);
-  }
-
-  function handleUnfollow(pubkey: string) {
-    unfollowMutation.mutate(pubkey);
-  }
-
   const emptyMessages: Record<PulseTab, string> = {
     search: "Search Pulse notes by author or text.",
     everyone: "No public notes yet.",
@@ -277,18 +261,15 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
       visibleNotes.map((note) => (
         <NoteCard
           actions={{
-            follow: handleFollow,
             reply: noteActions.reply,
             share: noteActions.share,
             startDm: noteActions.startDm,
             toggleUpvote: noteActions.toggleUpvote,
-            unfollow: handleUnfollow,
           }}
           composerProfiles={mentionProfiles}
           currentUserDisplayName={currentDisplayName}
           currentUserProfile={currentProfile}
           isAgent={agentPubkeySet.has(note.pubkey)}
-          isFollowing={followingSet.has(note.pubkey)}
           isOwnNote={note.pubkey === currentPubkey}
           isReplySending={noteActions.isReplySending}
           isUpvotePending={noteActions.isUpvotePending(note.id)}
