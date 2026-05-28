@@ -75,13 +75,7 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
     [contactPubkeys],
   );
 
-  const peoplePubkeys = React.useMemo(
-    () =>
-      currentPubkey
-        ? [...new Set([currentPubkey, ...contactPubkeys])]
-        : contactPubkeys,
-    [currentPubkey, contactPubkeys],
-  );
+  const peoplePubkeys = React.useMemo(() => contactPubkeys, [contactPubkeys]);
 
   const relayAgentsQuery = useRelayAgentsQuery();
   const relayAgents = relayAgentsQuery.data ?? [];
