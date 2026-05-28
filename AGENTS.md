@@ -95,11 +95,11 @@ unit tests + builds. Clippy passing does not mean fmt passes; run both.
 Run `just test` for integration tests if you touched `sprout-relay`,
 `sprout-db`, or `sprout-auth` — these require a running Postgres and Redis.
 
-**Pre-commit and pre-push hooks** are installed automatically by `just setup`.
-Pre-commit runs 5 checks in parallel on every `git commit` (Rust fmt, Tauri Rust
-fmt, desktop lint, web lint, mobile fmt) — a commit will fail if any are dirty.
-Pre-push runs the full CI gate: all pre-commit checks plus clippy, unit tests,
-desktop build, Tauri check, web build, and mobile tests (~minutes). Run
+**Pre-commit hooks** are installed automatically by `just setup`.
+Pre-commit runs checks in parallel on every `git commit` (Rust fmt, Tauri Rust
+fmt, desktop lint, web lint, mobile fmt) — a commit will fail if any are
+dirty. Tests, builds, and clippy run in CI only (not in local hooks) — use
+`just ci` to run the full gate locally before pushing if desired. Run
 `just fmt-all` before committing to auto-fix all formatting in one shot. Run
 `just hooks` to re-install hooks after env changes.
 
