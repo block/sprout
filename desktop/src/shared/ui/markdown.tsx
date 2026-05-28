@@ -294,13 +294,19 @@ function createMarkdownComponents(
       );
     },
     h1: ({ children }) => (
-      <h1 className="text-lg font-semibold tracking-tight">{children}</h1>
+      <h1 className="text-xl font-semibold leading-8 tracking-tight">
+        {children}
+      </h1>
     ),
     h2: ({ children }) => (
-      <h2 className="text-base font-semibold tracking-tight">{children}</h2>
+      <h2 className="text-lg font-semibold leading-7 tracking-tight">
+        {children}
+      </h2>
     ),
     h3: ({ children }) => (
-      <h3 className="font-semibold tracking-tight">{children}</h3>
+      <h3 className="text-base font-semibold leading-6 tracking-tight">
+        {children}
+      </h3>
     ),
     hr: () => <hr className="border-border/80" />,
     img: ({ alt, src }) => {
@@ -613,10 +619,10 @@ function MarkdownInner({
     <div
       className={cn(
         tight
-          ? "max-w-none break-words text-sm leading-5 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-0.5"
+          ? "max-w-none break-words text-sm leading-5 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*+*]:mt-2.5 [&>h1]:mt-4 [&>h2]:mt-3.5 [&>h3]:mt-3 [&>h1+*]:mt-1.5 [&>h2+*]:mt-1 [&>h3+*]:mt-1"
           : compact
-            ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-1.5"
-            : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*]:my-3",
+            ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*+*]:mt-3 [&>h1]:mt-5 [&>h2]:mt-4 [&>h3]:mt-3.5 [&>h1+*]:mt-2 [&>h2+*]:mt-1.5 [&>h3+*]:mt-1.5"
+            : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*+*]:mt-4 [&>h1]:mt-6 [&>h2]:mt-5 [&>h3]:mt-4 [&>h1+*]:mt-2 [&>h2+*]:mt-2 [&>h3+*]:mt-1.5",
         className,
       )}
     >
