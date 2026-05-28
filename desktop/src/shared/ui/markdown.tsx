@@ -625,9 +625,9 @@ function MarkdownInner({
               "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
               // Base owl: p+p, list+p, etc.
               "[&>*+*]:mt-2",
-              // Headings: push away from preceding content, pull next content close
-              "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3 [&>*+h3]:mt-2.5",
-              "[&>h1+*]:mt-1 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+              // Headings: flat push/pull — size does the hierarchy work
+              "[&>*+h1]:mt-2.5 [&>*+h2]:mt-2.5 [&>*+h3]:mt-2.5",
+              "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
               // Blockquotes: breathe above and below
               "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
               // Code blocks: breathe above and below
@@ -644,8 +644,8 @@ function MarkdownInner({
                 "max-w-none break-words text-[15px] leading-6 text-foreground/90",
                 "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
                 "[&>*+*]:mt-2",
-                "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3 [&>*+h3]:mt-2.5",
-                "[&>h1+*]:mt-1 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
+                "[&>*+h1]:mt-3 [&>*+h2]:mt-3 [&>*+h3]:mt-3",
+                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
                 "[&>*+blockquote]:mt-3 [&>blockquote+*]:mt-3",
                 "[&>*+[data-code-block]]:mt-3 [&>[data-code-block]+*]:mt-3",
                 "[&>*+[data-table-block]]:mt-3 [&>[data-table-block]+*]:mt-3",
@@ -656,12 +656,12 @@ function MarkdownInner({
                 "max-w-none break-words text-sm leading-7 text-foreground/90",
                 "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
                 "[&>*+*]:mt-3",
-                "[&>*+h1]:mt-4.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3",
-                "[&>h1+*]:mt-1 [&>h2+*]:mt-1 [&>h3+*]:mt-0.5",
+                "[&>*+h1]:mt-3.5 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3.5",
+                "[&>h1+*]:mt-0.5 [&>h2+*]:mt-0.5 [&>h3+*]:mt-0.5",
                 "[&>*+blockquote]:mt-3.5 [&>blockquote+*]:mt-3.5",
                 "[&>*+[data-code-block]]:mt-3.5 [&>[data-code-block]+*]:mt-3.5",
                 "[&>*+[data-table-block]]:mt-3.5 [&>[data-table-block]+*]:mt-3.5",
-                "[&>*+hr]:mt-4.5 [&>hr+*]:mt-4.5",
+                "[&>*+hr]:mt-4 [&>hr+*]:mt-4",
                 "[&>p+ul]:mt-1.5 [&>p+ol]:mt-1.5 [&>div+ul]:mt-1.5 [&>div+ol]:mt-1.5",
               ].join(" "),
         className,
