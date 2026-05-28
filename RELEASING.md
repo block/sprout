@@ -3,13 +3,16 @@
 ## Quick Start
 
 ```sh
-# Regular release (next minor version)
+# Regular release (next patch version)
 just release
 
 # Patch release
 just release patch
 
-# Explicit version
+# Minor release
+just release 0.4.0
+
+# Any explicit version
 just release 1.0.0
 ```
 
@@ -31,8 +34,9 @@ This creates a `version-bump/<version>` PR that bumps all version manifests, reg
 
 | Command | Version | Example |
 |---------|---------|---------|
-| `just release` | Next minor | `0.3.0` → `0.4.0` |
+| `just release` | Next patch | `0.3.0` → `0.3.1` |
 | `just release patch` | Next patch | `0.3.0` → `0.3.1` |
+| `just release 0.4.0` | Explicit minor | `0.3.1` → `0.4.0` |
 | `just release 1.0.0` | Explicit | `1.0.0` |
 
 ---
