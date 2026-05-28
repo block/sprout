@@ -7,7 +7,7 @@
  * Object URLs for image/binary are created in a local effect and revoked on
  * unmount or input change — they are never cached inside React Query results.
  */
-import { ArrowLeft, Check, Copy, Download, FileText } from "lucide-react";
+import { ArrowLeft, Check, Copy, Download, FileText, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import Markdown from "react-markdown";
@@ -16,7 +16,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/shared/ui/button";
 import type { BlobView } from "../git-client";
-import { useGitBlob } from "../use-git-browse";
+import { useGitBlob, useGitHtmlDoc } from "../use-git-browse";
 import { useRepoContext } from "../use-repo-context";
 
 function formatBytes(n: number): string {
@@ -135,7 +135,40 @@ function ImageView({
   );
 }
 
-function ViewerBody({ view, filename }: { view: BlobView; filename: string }) {
+/**
+ * Runs a repo's HTML in a sandboxed iframe.
+ *
+ * SECURITY — the entire trust boundary is the `sandbox` attribute below.
+ * `allow-scripts` lets the page's JS run; the deliberate ABSENCE of
+ * `allow-same-origin` forces the frame to an opaque (`null`) origin, so its
+ * scripts CANNOT read the parent's cookies, IndexedDB, localStorage, relay
+ * session, or NIP-98 auth — even though we render on the same document origin.
+ * Do not add `allow-same-origin`: that would hand pushed code the user's
+ * session. `srcDoc` carries the asset-inlined doc; nothing reaches the network
+ * for same-repo content.
+ */
+const RUN_SANDBOX = "allow-scripts";
+
+function HtmlRunView({ doc }: { doc: string }) {
+  return (
+    <iframe
+      title="Repository page (sandboxed)"
+      srcDoc={doc}
+      sandbox={RUN_SANDBOX}
+      className="h-[80vh] w-full rounded-lg border border-border bg-white"
+    />
+  );
+}
+
+function ViewerBody({
+  view,
+  filename,
+  htmlDoc,
+}: {
+  view: BlobView;
+  filename: string;
+  htmlDoc: string | null;
+}) {
   switch (view.kind) {
     case "text":
       return <TextView content={view.content} />;
@@ -144,6 +177,14 @@ function ViewerBody({ view, filename }: { view: BlobView; filename: string }) {
         <div className="prose prose-sm dark:prose-invert max-w-none rounded-lg border border-border p-4">
           <Markdown remarkPlugins={[remarkGfm]}>{view.content}</Markdown>
         </div>
+      );
+    case "html":
+      // `htmlDoc` is the asset-inlined doc, present only once the user opts in
+      // via "Run"; until then (and while it resolves) we show the source.
+      return htmlDoc !== null ? (
+        <HtmlRunView doc={htmlDoc} />
+      ) : (
+        <TextView content={view.content} />
       );
     case "image":
       return (
@@ -188,6 +229,17 @@ export function RepoBlobPage() {
     error,
   } = useGitBlob(owner, repoName, defaultRef, filepath);
 
+  const [running, setRunning] = useState(false);
+  const isHtml = view?.kind === "html";
+  const { data: htmlDoc, isFetching: htmlFetching } = useGitHtmlDoc(
+    owner,
+    repoName,
+    defaultRef,
+    filepath,
+    isHtml ? view.content : "",
+    running && isHtml,
+  );
+
   const filename = basename(filepath);
 
   if (ctxError) {
@@ -209,20 +261,36 @@ export function RepoBlobPage() {
         <FileText className="h-5 w-5 text-muted-foreground" />
         <h1 className="min-w-0 truncate font-mono text-sm">{filepath}</h1>
         <div className="ml-auto flex items-center gap-2">
-          {view && (view.kind === "text" || view.kind === "markdown") && (
-            <CopyTextButton content={view.content} />
+          {view &&
+            (view.kind === "text" ||
+              view.kind === "markdown" ||
+              view.kind === "html") && (
+              <CopyTextButton content={view.content} />
+            )}
+          {isHtml && (
+            <Button
+              variant={running ? "secondary" : "default"}
+              size="sm"
+              onClick={() => setRunning((r) => !r)}
+            >
+              <Play className="h-4 w-4" />
+              <span className="ml-2">{running ? "Show source" : "Run"}</span>
+            </Button>
           )}
-          {view && view.kind !== "text" && view.kind !== "markdown" && (
-            <DownloadButton
-              bytes={view.bytes}
-              contentType={
-                view.kind === "image"
-                  ? view.contentType
-                  : "application/octet-stream"
-              }
-              filename={filename}
-            />
-          )}
+          {view &&
+            view.kind !== "text" &&
+            view.kind !== "markdown" &&
+            view.kind !== "html" && (
+              <DownloadButton
+                bytes={view.bytes}
+                contentType={
+                  view.kind === "image"
+                    ? view.contentType
+                    : "application/octet-stream"
+                }
+                filename={filename}
+              />
+            )}
         </div>
       </div>
 
@@ -234,7 +302,11 @@ export function RepoBlobPage() {
             Failed to load file: {(error as Error).message}
           </p>
         ) : view ? (
-          <ViewerBody view={view} filename={filename} />
+          <ViewerBody
+            view={view}
+            filename={filename}
+            htmlDoc={running && !htmlFetching ? (htmlDoc ?? null) : null}
+          />
         ) : null}
       </div>
     </div>

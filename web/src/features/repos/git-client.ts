@@ -185,6 +185,7 @@ export const IMAGE_PREVIEW_LIMIT_BYTES = 10 * 1024 * 1024;
 export type BlobView =
   | { kind: "text"; content: string; sizeBytes: number }
   | { kind: "markdown"; content: string; sizeBytes: number }
+  | { kind: "html"; content: string; sizeBytes: number }
   | { kind: "image"; bytes: Uint8Array; contentType: string; sizeBytes: number }
   | { kind: "binary"; bytes: Uint8Array; sizeBytes: number }
   | {
@@ -204,6 +205,7 @@ const RASTER_IMAGE_MIME: Readonly<Record<string, string>> = {
 };
 
 const MARKDOWN_EXTS = new Set(["md", "markdown"]);
+const HTML_EXTS = new Set(["html", "htm"]);
 
 function extOf(filepath: string): string {
   const base = filepath.split("/").pop() ?? "";
@@ -275,7 +277,117 @@ export async function readBlobView(
   if (MARKDOWN_EXTS.has(ext)) {
     return { kind: "markdown", content, sizeBytes };
   }
+  if (HTML_EXTS.has(ext)) {
+    return { kind: "html", content, sizeBytes };
+  }
   return { kind: "text", content, sizeBytes };
+}
+
+/**
+ * Inline a repo's same-repo relative assets into one self-contained HTML
+ * string, suitable for rendering inside a sandboxed iframe (which has no
+ * notion of the repo's directory tree and cannot fetch siblings).
+ *
+ * Only *relative* `<script src>`, `<link href>`, and `<img src>` are
+ * resolved — against the HTML file's own directory, scoped to paths that
+ * exist in the clone. Absolute paths (`/x`) and external URLs
+ * (`http(s):`, `data:`, `//host`, `#frag`) are left untouched: we never
+ * reach outside the repo or rewrite something the author meant for the
+ * network.
+ *
+ * Assets are inlined as `data:` URLs so the result is fully detached — it
+ * carries no live `blob:` handles that would need revoking. This is a
+ * display transform on a copy; the clone in IndexedDB is unchanged.
+ */
+const ASSET_MIME: Readonly<Record<string, string>> = {
+  ...RASTER_IMAGE_MIME,
+  js: "text/javascript",
+  mjs: "text/javascript",
+  css: "text/css",
+  json: "application/json",
+  svg: "image/svg+xml",
+  woff: "font/woff",
+  woff2: "font/woff2",
+};
+
+function isExternalRef(ref: string): boolean {
+  // Absolute path, protocol URL, protocol-relative, fragment, or empty.
+  return (
+    ref === "" ||
+    ref.startsWith("/") ||
+    ref.startsWith("#") ||
+    ref.startsWith("data:") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(ref) ||
+    ref.startsWith("//")
+  );
+}
+
+/** Resolve `dir`-relative `ref` (e.g. `../js/app.js`) to a clone path. */
+function resolveRelative(baseDir: string, ref: string): string | null {
+  const clean = ref.split(/[?#]/)[0];
+  const parts = baseDir ? baseDir.split("/") : [];
+  for (const seg of clean.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (parts.length === 0) return null; // escapes repo root
+      parts.pop();
+    } else {
+      parts.push(seg);
+    }
+  }
+  return parts.join("/");
+}
+
+function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+export async function resolveHtmlAssets(
+  fs: LightningFS,
+  dir: string,
+  oid: string,
+  htmlPath: string,
+  html: string,
+): Promise<string> {
+  const slash = htmlPath.lastIndexOf("/");
+  const baseDir = slash >= 0 ? htmlPath.slice(0, slash) : "";
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  const targets: Array<{ el: Element; attr: string }> = [
+    ...[...doc.querySelectorAll("script[src]")].map((el) => ({
+      el,
+      attr: "src",
+    })),
+    ...[...doc.querySelectorAll("link[href]")].map((el) => ({
+      el,
+      attr: "href",
+    })),
+    ...[...doc.querySelectorAll("img[src]")].map((el) => ({ el, attr: "src" })),
+  ];
+
+  await Promise.all(
+    targets.map(async ({ el, attr }) => {
+      const ref = el.getAttribute(attr);
+      if (!ref || isExternalRef(ref)) return;
+      const path = resolveRelative(baseDir, ref);
+      if (!path) return;
+      const mime = ASSET_MIME[extOf(path)] ?? "application/octet-stream";
+      try {
+        const { blob } = await readBlob({ fs, dir, oid, filepath: path });
+        el.setAttribute(attr, bytesToDataUrl(blob as Uint8Array, mime));
+      } catch {
+        // Sibling not in the clone (e.g. a deferred subtree): leave the
+        // reference as-is. It will simply fail to load in the sandbox.
+      }
+    }),
+  );
+
+  return `<!doctype html>\n${doc.documentElement.outerHTML}`;
 }
 
 export interface CommitInfo {
