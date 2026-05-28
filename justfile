@@ -406,8 +406,11 @@ release *ARGS:
         echo "Error: must be on main branch (currently on '$CURRENT_BRANCH')"
         exit 1
     fi
-    # Ensure local main is up-to-date
-    git fetch origin main --tags --quiet
+    # Ensure local main and release tags are up-to-date.
+    git fetch origin refs/heads/main:refs/remotes/origin/main --no-tags
+    # Release tags are remote-owned state; sync only v* tags so stale local
+    # tags from older histories do not make release preflight fail.
+    git fetch origin '+refs/tags/v*:refs/tags/v*'
     if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
         echo "Error: local main is not up-to-date with origin/main. Run 'git pull' first."
         exit 1
