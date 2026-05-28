@@ -9,6 +9,7 @@ import * as React from "react";
 
 import { ForumComposer } from "@/features/forum/ui/ForumComposer";
 import { useUserProfileQuery } from "@/features/profile/hooks";
+import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { useNoteByIdQuery } from "@/features/pulse/hooks";
 import { getReplyParent, noteSnippet } from "@/features/pulse/lib/replies";
 import type { UserNote } from "@/shared/api/socialTypes";
@@ -78,15 +79,30 @@ function ReplyParentContext({
     <div className="mt-2 truncate rounded-xl border border-border/50 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
       {parentNote ? (
         <div className="flex min-w-0 items-center gap-1.5">
-          <UserAvatar
-            avatarUrl={parentAvatarUrl}
-            className="!h-4 !w-4 shrink-0 rounded-md"
-            displayName={parentDisplayName ?? "Parent note author"}
-          />
+          <UserProfilePopover pubkey={parentNote.pubkey} triggerElement="span">
+            <button
+              className="flex shrink-0 rounded-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+            >
+              <UserAvatar
+                avatarUrl={parentAvatarUrl}
+                className="!h-4 !w-4 shrink-0 rounded-md"
+                displayName={parentDisplayName ?? "Parent note author"}
+              />
+            </button>
+          </UserProfilePopover>
           <span className="min-w-0 truncate">
-            <span className="font-medium text-foreground/80">
-              {parentDisplayName}
-            </span>
+            <UserProfilePopover
+              pubkey={parentNote.pubkey}
+              triggerElement="span"
+            >
+              <button
+                className="rounded font-medium text-foreground/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                type="button"
+              >
+                {parentDisplayName}
+              </button>
+            </UserProfilePopover>
             : {parentSnippet || "No text"}
           </span>
         </div>
@@ -146,22 +162,40 @@ export function NoteCard({
 
   return (
     <article className="flex items-start gap-2.5 rounded-2xl px-1 pb-1 pt-4 sm:px-2">
-      <div className="relative shrink-0">
-        <UserAvatar
-          avatarUrl={avatarUrl}
-          className="!h-9 !w-9 shrink-0"
-          displayName={displayName}
-        />
-        {isAgent ? (
-          <Bot className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-background p-0.5 text-muted-foreground" />
-        ) : null}
-      </div>
+      <UserProfilePopover
+        botIdenticonValue={displayName}
+        pubkey={note.pubkey}
+        role={isAgent ? "bot" : undefined}
+      >
+        <button
+          className="relative flex shrink-0 rounded-xl focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+          type="button"
+        >
+          <UserAvatar
+            avatarUrl={avatarUrl}
+            className="!h-9 !w-9 shrink-0"
+            displayName={displayName}
+          />
+          {isAgent ? (
+            <Bot className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full bg-background p-0.5 text-muted-foreground" />
+          ) : null}
+        </button>
+      </UserProfilePopover>
 
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0">
-          <span className="truncate text-sm font-semibold leading-none tracking-tight">
-            {displayName}
-          </span>
+          <UserProfilePopover
+            botIdenticonValue={displayName}
+            pubkey={note.pubkey}
+            role={isAgent ? "bot" : undefined}
+          >
+            <button
+              className="truncate rounded text-sm font-semibold leading-none tracking-tight focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+            >
+              {displayName}
+            </button>
+          </UserProfilePopover>
           {isAgent ? (
             <span className="inline-flex h-4 items-center rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
               bot
