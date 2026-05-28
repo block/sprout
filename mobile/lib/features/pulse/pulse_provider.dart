@@ -10,17 +10,18 @@ final globalNotesProvider = FutureProvider<List<UserNote>>((ref) async {
   return _notesFromEvents(events);
 });
 
-final notesTimelineProvider =
-    FutureProvider.family<List<UserNote>, List<String>>((ref, pubkeys) async {
-      if (pubkeys.isEmpty) return const [];
-      final session = ref.watch(relaySessionProvider.notifier);
-      final events = await session.fetchHistory(
-        NostrFilters.notesTimeline(
-          pubkeys.map((p) => p.toLowerCase()).toList(),
-        ),
-      );
-      return _notesFromEvents(events);
-    });
+final notesTimelineProvider = FutureProvider.family<List<UserNote>, String>((
+  ref,
+  pubkeysKey,
+) async {
+  final pubkeys = parsePulseKey(pubkeysKey);
+  if (pubkeys.isEmpty) return const [];
+  final session = ref.watch(relaySessionProvider.notifier);
+  final events = await session.fetchHistory(
+    NostrFilters.notesTimeline(pubkeys),
+  );
+  return _notesFromEvents(events);
+});
 
 final likedNotesProvider = FutureProvider<List<UserNote>>((ref) async {
   final pubkey = ref.watch(myPubkeyProvider);
@@ -29,9 +30,14 @@ final likedNotesProvider = FutureProvider<List<UserNote>>((ref) async {
   final reactions = await session.fetchHistory(
     NostrFilters.userReactions(pubkey),
   );
+  final liveReactions = await _filterDeletedReactions(
+    session,
+    reactions,
+    deletionAuthors: [pubkey],
+  );
   final ids = <String>[];
   final seen = <String>{};
-  for (final reaction in reactions) {
+  for (final reaction in liveReactions) {
     if (reaction.content != '+') continue;
     final noteId = _lastETag(reaction.tags);
     if (noteId != null && seen.add(noteId)) ids.add(noteId);
@@ -42,16 +48,18 @@ final likedNotesProvider = FutureProvider<List<UserNote>>((ref) async {
 });
 
 final noteReactionsProvider =
-    FutureProvider.family<Map<String, PulseReactionState>, List<String>>((
+    FutureProvider.family<Map<String, PulseReactionState>, String>((
       ref,
-      noteIds,
+      noteIdsKey,
     ) async {
+      final noteIds = parsePulseKey(noteIdsKey);
       if (noteIds.isEmpty) return const {};
       final currentPubkey = ref.watch(myPubkeyProvider)?.toLowerCase();
       final session = ref.watch(relaySessionProvider.notifier);
-      final events = await session.fetchHistory(
+      final reactions = await session.fetchHistory(
         NostrFilters.noteReactions(noteIds),
       );
+      final events = await _filterDeletedReactions(session, reactions);
       final pubkeysByNote = <String, Set<String>>{};
       final currentReactionIds = <String, String>{};
 
@@ -85,8 +93,7 @@ final contactListProvider = FutureProvider.family<List<ContactEntry>, String>((
   final events = await session.fetchHistory(
     NostrFilters.contactList(pubkey.toLowerCase()),
   );
-  if (events.isEmpty) return const [];
-  return _contactsFromTags(events.first.tags);
+  return contactsFromEvents(events);
 });
 
 final agentPubkeysProvider = FutureProvider<List<String>>((ref) async {
@@ -104,7 +111,7 @@ final agentPubkeysProvider = FutureProvider<List<String>>((ref) async {
 final agentNotesProvider = FutureProvider<List<UserNote>>((ref) async {
   final pubkeys = await ref.watch(agentPubkeysProvider.future);
   if (pubkeys.isEmpty) return const [];
-  return ref.watch(notesTimelineProvider(pubkeys).future);
+  return ref.watch(notesTimelineProvider(pulseKeyFor(pubkeys)).future);
 });
 
 List<UserNote> _notesFromEvents(List<NostrEvent> events) {
@@ -132,6 +139,50 @@ String? _lastETag(List<List<String>> tags) {
     if (tag.length >= 2 && tag[0] == 'e') return tag[1];
   }
   return null;
+}
+
+String pulseKeyFor(Iterable<String> values) {
+  final normalized =
+      values
+          .map((value) => value.toLowerCase().trim())
+          .where((value) => value.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+  return normalized.join(',');
+}
+
+List<String> parsePulseKey(String key) {
+  if (key.isEmpty) return const [];
+  return key.split(',').where((value) => value.isNotEmpty).toList();
+}
+
+Future<List<NostrEvent>> _filterDeletedReactions(
+  RelaySessionNotifier session,
+  List<NostrEvent> reactions, {
+  List<String>? deletionAuthors,
+}) async {
+  if (reactions.isEmpty) return const [];
+  final reactionIds = reactions.map((event) => event.id).toList();
+  final deletions = await session.fetchHistory(
+    NostrFilters.deletionsByTargetIds(reactionIds, authors: deletionAuthors),
+  );
+  final deletedIds = <String>{};
+  for (final deletion in deletions) {
+    for (final tag in deletion.tags) {
+      if (tag.length >= 2 && tag[0] == 'e') deletedIds.add(tag[1]);
+    }
+  }
+  if (deletedIds.isEmpty) return reactions;
+  return [
+    for (final reaction in reactions)
+      if (!deletedIds.contains(reaction.id)) reaction,
+  ];
+}
+
+List<ContactEntry> contactsFromEvents(List<NostrEvent> events) {
+  if (events.isEmpty) return const [];
+  return _contactsFromTags(events.first.tags);
 }
 
 void preloadPulseProfiles(WidgetRef ref, List<UserNote> notes) {

@@ -62,8 +62,6 @@ Future<void> setContactList(WidgetRef ref, List<ContactEntry> contacts) async {
   final session = ref.read(relaySessionProvider.notifier);
   final relay = SignedEventRelay(session: session, nsec: config.nsec);
 
-  // Read first so callers replace the latest list rather than a stale cache.
-  await session.fetchHistory(NostrFilters.contactList(currentPubkey));
   await relay.submit(
     kind: EventKind.contactList,
     content: '',
@@ -75,7 +73,7 @@ Future<void> setContactList(WidgetRef ref, List<ContactEntry> contacts) async {
 Future<void> followUser(WidgetRef ref, String pubkey) async {
   final currentPubkey = ref.read(myPubkeyProvider);
   if (currentPubkey == null) return;
-  final contacts = await ref.read(contactListProvider(currentPubkey).future);
+  final contacts = await _fetchFreshContacts(ref, currentPubkey);
   final normalized = pubkey.toLowerCase();
   if (contacts.any((entry) => entry.pubkey == normalized)) return;
   await setContactList(ref, [...contacts, ContactEntry(pubkey: normalized)]);
@@ -85,9 +83,20 @@ Future<void> unfollowUser(WidgetRef ref, String pubkey) async {
   final currentPubkey = ref.read(myPubkeyProvider);
   if (currentPubkey == null) return;
   final normalized = pubkey.toLowerCase();
-  final contacts = await ref.read(contactListProvider(currentPubkey).future);
+  final contacts = await _fetchFreshContacts(ref, currentPubkey);
   await setContactList(
     ref,
     contacts.where((entry) => entry.pubkey != normalized).toList(),
   );
+}
+
+Future<List<ContactEntry>> _fetchFreshContacts(
+  WidgetRef ref,
+  String currentPubkey,
+) async {
+  final session = ref.read(relaySessionProvider.notifier);
+  final events = await session.fetchHistory(
+    NostrFilters.contactList(currentPubkey),
+  );
+  return contactsFromEvents(events);
 }

@@ -42,20 +42,21 @@ class PulsePage extends HookConsumerWidget {
 
     final notesAsync = switch (active.value) {
       PulseTab.everyone => ref.watch(globalNotesProvider),
-      PulseTab.following => ref.watch(notesTimelineProvider(contactPubkeys)),
+      PulseTab.following => ref.watch(
+        notesTimelineProvider(pulseKeyFor(contactPubkeys)),
+      ),
       PulseTab.liked => ref.watch(likedNotesProvider),
       PulseTab.agents => ref.watch(agentNotesProvider),
       PulseTab.mine =>
         currentPubkey == null
             ? const AsyncValue<List<UserNote>>.data([])
-            : ref.watch(notesTimelineProvider([currentPubkey])),
+            : ref.watch(notesTimelineProvider(pulseKeyFor([currentPubkey]))),
     };
 
     final visibleNotes = notesAsync.asData?.value ?? const <UserNote>[];
     if (visibleNotes.isNotEmpty) preloadPulseProfiles(ref, visibleNotes);
-    final reactions = ref.watch(
-      noteReactionsProvider(visibleNotes.map((note) => note.id).toList()),
-    );
+    final notesKey = pulseKeyFor(visibleNotes.map((note) => note.id));
+    final reactions = ref.watch(noteReactionsProvider(notesKey));
     final reactionMap =
         reactions.asData?.value ?? const <String, PulseReactionState>{};
 
@@ -92,11 +93,8 @@ class PulsePage extends HookConsumerWidget {
                 agentPubkeys: agentPubkeys,
                 contactPubkeys: contactSet,
                 currentPubkey: currentPubkey,
-                onReactionChanged: () => ref.invalidate(
-                  noteReactionsProvider(
-                    visibleNotes.map((note) => note.id).toList(),
-                  ),
-                ),
+                onReactionChanged: () =>
+                    ref.invalidate(noteReactionsProvider(notesKey)),
               ),
             ),
           ),

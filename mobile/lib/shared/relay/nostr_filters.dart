@@ -123,6 +123,17 @@ abstract final class NostrFilters {
     limit: limit,
   );
 
+  /// Deletions (kind:5) targeting event IDs.
+  static NostrFilter deletionsByTargetIds(
+    List<String> ids, {
+    List<String>? authors,
+  }) => NostrFilter(
+    kinds: [EventKind.deletion],
+    authors: authors,
+    tags: {'#e': ids},
+    limit: ids.length,
+  );
+
   /// User notes (kind:1) for the global Pulse timeline.
   static NostrFilter globalNotes({int limit = 50, int? until}) =>
       NostrFilter(kinds: [EventKind.note], limit: limit, until: until);
