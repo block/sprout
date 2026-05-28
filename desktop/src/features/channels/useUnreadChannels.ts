@@ -381,6 +381,7 @@ export function useUnreadChannels(
           writeAuthoredToStorage(normalizedPubkey, authoredRootIdsRef.current);
         }
       }
+      bumpLatestVersion();
     },
     [normalizedPubkey],
   );
