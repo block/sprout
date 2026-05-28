@@ -226,7 +226,11 @@ test("classifyChildren: media with only whitespace and br between them", () => {
 
 test("isImageOnlyParagraph: two media with br returns true", () => {
   const media = { "data-block-media": "" };
-  const children = [fakeElement("span", media), fakeElement("br"), fakeElement("span", media)];
+  const children = [
+    fakeElement("span", media),
+    fakeElement("br"),
+    fakeElement("span", media),
+  ];
   assert.equal(isImageOnlyParagraph(children), true);
 });
 
@@ -237,7 +241,11 @@ test("isImageOnlyParagraph: single media returns false (needs 2+)", () => {
 
 test("isImageOnlyParagraph: media with text returns false", () => {
   const media = { "data-block-media": "" };
-  const children = [fakeElement("span", media), "caption text", fakeElement("span", media)];
+  const children = [
+    fakeElement("span", media),
+    "caption text",
+    fakeElement("span", media),
+  ];
   assert.equal(isImageOnlyParagraph(children), false);
 });
 
@@ -247,7 +255,11 @@ test("isImageOnlyParagraph: no children returns false", () => {
 
 test("isImageOnlyParagraph: three media returns true", () => {
   const media = { "data-block-media": "" };
-  const children = [fakeElement("span", media), fakeElement("span", media), fakeElement("span", media)];
+  const children = [
+    fakeElement("span", media),
+    fakeElement("span", media),
+    fakeElement("span", media),
+  ];
   assert.equal(isImageOnlyParagraph(children), true);
 });
 
@@ -259,24 +271,38 @@ test("isImageOnlyParagraph: plain HTML img tags without data-block-media are non
 test("isImageOnlyParagraph: non-media component + media is not image-only", () => {
   const LinkComponent = () => null;
   const media = { "data-block-media": "" };
-  const children = [fakeElement(LinkComponent), fakeElement("span", media), fakeElement("span", media)];
+  const children = [
+    fakeElement(LinkComponent),
+    fakeElement("span", media),
+    fakeElement("span", media),
+  ];
   assert.equal(isImageOnlyParagraph(children), false);
 });
 
 // ── hasBlockMedia ─────────────────────────────────────────────────────
 
 test("hasBlockMedia: single media element returns true", () => {
-  assert.equal(hasBlockMedia([fakeElement("span", { "data-block-media": "" })]), true);
+  assert.equal(
+    hasBlockMedia([fakeElement("span", { "data-block-media": "" })]),
+    true,
+  );
 });
 
 test("hasBlockMedia: two media returns true", () => {
   const media = { "data-block-media": "" };
-  assert.equal(hasBlockMedia([fakeElement("span", media), fakeElement("span", media)]), true);
+  assert.equal(
+    hasBlockMedia([fakeElement("span", media), fakeElement("span", media)]),
+    true,
+  );
 });
 
 test("hasBlockMedia: media with whitespace and br returns true", () => {
   assert.equal(
-    hasBlockMedia([fakeElement("span", { "data-block-media": "" }), "  ", fakeElement("br")]),
+    hasBlockMedia([
+      fakeElement("span", { "data-block-media": "" }),
+      "  ",
+      fakeElement("br"),
+    ]),
     true,
   );
 });
@@ -290,7 +316,10 @@ test("hasBlockMedia: text only returns false", () => {
 });
 
 test("hasBlockMedia: media with text returns false", () => {
-  assert.equal(hasBlockMedia([fakeElement("span", { "data-block-media": "" }), "caption"]), false);
+  assert.equal(
+    hasBlockMedia([fakeElement("span", { "data-block-media": "" }), "caption"]),
+    false,
+  );
 });
 
 test("hasBlockMedia: plain HTML img without data-block-media returns false", () => {
