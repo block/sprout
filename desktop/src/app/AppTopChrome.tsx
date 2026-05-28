@@ -72,19 +72,9 @@ export function AppTopChrome({
         >
           <ChevronRight className="h-3 w-3" />
         </Button>
-      </div>
-      <TopbarSearch
-        channels={channels}
-        className="fixed left-1/2 top-[7px] z-[80] hidden w-[360px] max-w-[42vw] -translate-x-1/2 md:block"
-        currentPubkey={currentPubkey}
-        onOpenChannel={onOpenChannel}
-        onOpenFullSearch={onOpenFullSearch}
-        onOpenResult={onOpenResult}
-      />
-      <div className="fixed right-3 top-[9px] z-[80] flex items-center gap-0.5 md:hidden">
         <Button
           aria-label="Search everything"
-          className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
+          className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground md:hidden"
           data-testid="open-search-compact"
           onClick={() => onOpenFullSearch()}
           size="icon"
@@ -95,6 +85,14 @@ export function AppTopChrome({
           <Search className="h-3 w-3" />
         </Button>
       </div>
+      <TopbarSearch
+        channels={channels}
+        className="fixed left-1/2 top-[7px] z-[80] hidden w-[360px] max-w-[42vw] -translate-x-1/2 md:block"
+        currentPubkey={currentPubkey}
+        onOpenChannel={onOpenChannel}
+        onOpenFullSearch={onOpenFullSearch}
+        onOpenResult={onOpenResult}
+      />
     </>
   );
 }
