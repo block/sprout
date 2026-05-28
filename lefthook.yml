@@ -16,14 +16,14 @@ pre-commit:
     mobile-fix:
       run: just mobile-fix
       stage_fixed: true
-    rust-clippy:
-      run: just clippy
-    desktop-tauri-clippy:
-      run: just desktop-tauri-clippy
 
 pre-push:
   parallel: true
   commands:
+    rust-clippy:
+      run: just clippy
+    desktop-tauri-clippy:
+      run: just desktop-tauri-clippy
     rust-tests:
       run: just test-unit
     desktop-test:

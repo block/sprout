@@ -97,13 +97,13 @@ Run `just test` for integration tests if you touched `sprout-relay`,
 
 **Pre-commit hooks** are installed automatically by `just setup` and auto-fix
 formatting via `stage_fixed`. Pre-commit runs fix variants in parallel (Rust
-fmt, Tauri Rust fmt, desktop biome fix, web biome fix, mobile dart format) plus
-clippy and Tauri clippy as check-only. Auto-fixable issues are fixed and
-re-staged; unfixable lint issues block the commit. **Pre-push hooks** run fast
-unit tests in parallel (Rust, desktop JS, Tauri Rust, mobile Flutter) — no
-overlap with pre-commit. Builds are CI-only. Run `just fix-all` to auto-fix
-all formatting in one shot. Run `just ci` for the full local gate. Run
-`just hooks` to re-install hooks after env changes.
+fmt, Tauri Rust fmt, desktop biome fix, web biome fix, mobile dart format).
+Auto-fixable issues are fixed and re-staged; unfixable lint issues block the
+commit. **Pre-push hooks** run clippy (workspace + Tauri) and fast unit tests
+in parallel (Rust, desktop JS, Tauri Rust, mobile Flutter) — no overlap with
+pre-commit. Builds are CI-only. Run `just fix-all` to auto-fix all formatting
+in one shot. Run `just ci` for the full local gate. Run `just hooks` to
+re-install hooks after env changes.
 
 Additional rules:
 - No `unsafe` code
