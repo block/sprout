@@ -96,8 +96,12 @@ export function PulseView({ currentPubkey }: PulseViewProps) {
   }, [relayAgents]);
 
   const mentionPubkeys = React.useMemo(
-    () => [...new Set([...peoplePubkeys, ...agentPubkeys])],
-    [peoplePubkeys, agentPubkeys],
+    () =>
+      [...new Set([currentPubkey, ...peoplePubkeys, ...agentPubkeys])].filter(
+        (pubkey): pubkey is string =>
+          typeof pubkey === "string" && pubkey.length > 0,
+      ),
+    [currentPubkey, peoplePubkeys, agentPubkeys],
   );
 
   const everyoneQuery = useGlobalNotesQuery(activeTab === "everyone");
