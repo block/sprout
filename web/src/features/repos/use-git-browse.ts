@@ -11,7 +11,7 @@ import {
   ensureClone,
   findReadme,
   getCommitLog,
-  readFileContent,
+  readBlobView,
   readTreeEntries,
 } from "./git-client";
 
@@ -87,7 +87,7 @@ export function useGitReadme(owner: string, repoName: string, ref: string) {
   });
 }
 
-/** Read a single file's content. */
+/** Read a single file's content as a classified `BlobView`. */
 export function useGitBlob(
   owner: string,
   repoName: string,
@@ -101,7 +101,7 @@ export function useGitBlob(
     queryFn: async () => {
       const { fs, dir } = cloneQuery.data!;
       const oid = await resolveRef({ fs, dir, ref });
-      return readFileContent(fs, dir, oid, filepath);
+      return readBlobView(fs, dir, oid, filepath);
     },
     enabled: !!cloneQuery.data && !!filepath,
     staleTime: 5 * 60_000,

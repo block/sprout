@@ -158,6 +158,126 @@ export async function readFileContent(
   return { content, isBinary: false };
 }
 
+/**
+ * Inline-preview caps. Different ceilings per kind:
+ * - Text: a 1 MiB string is already big to render in the DOM. Over → download.
+ * - Image: raster decoders handle this cheaply; cap is a sanity ceiling, not
+ *   a perf brake. Normal screenshots (≤ ~few MB) preview just fine.
+ * - Binary: no preview cap — we always offer download, regardless of size.
+ *
+ * The clone in IndexedDB always holds full bytes; these are display caps only.
+ */
+export const TEXT_PREVIEW_LIMIT_BYTES = 1 * 1024 * 1024;
+export const IMAGE_PREVIEW_LIMIT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Discriminated view of a blob, suitable for rendering. The viewer component
+ * is responsible for `URL.createObjectURL` / `revokeObjectURL` over `bytes` —
+ * we deliberately do NOT create object URLs inside the React Query cache.
+ *
+ * Image-by-extension is restricted to raster formats. SVG is intentionally
+ * absent: it can carry active content; we render SVG via the text path
+ * (where applicable) instead.
+ *
+ * `too-large` carries the cap that was hit, so the viewer can explain which
+ * limit applied without re-computing it.
+ */
+export type BlobView =
+  | { kind: "text"; content: string; sizeBytes: number }
+  | { kind: "markdown"; content: string; sizeBytes: number }
+  | { kind: "image"; bytes: Uint8Array; contentType: string; sizeBytes: number }
+  | { kind: "binary"; bytes: Uint8Array; sizeBytes: number }
+  | {
+      kind: "too-large";
+      bytes: Uint8Array;
+      sizeBytes: number;
+      limitBytes: number;
+    };
+
+const RASTER_IMAGE_MIME: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+};
+
+const MARKDOWN_EXTS = new Set(["md", "markdown"]);
+
+function extOf(filepath: string): string {
+  const base = filepath.split("/").pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return base.slice(dot + 1).toLowerCase();
+}
+
+function hasNulByte(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, 512);
+  for (let i = 0; i < n; i++) {
+    if (bytes[i] === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Classify a blob into a `BlobView`. Applies per-kind preview caps.
+ *
+ * Order: image-by-extension first (so a 2 MiB PNG isn't rejected as oversized
+ * text), then binary detection, then text/markdown decode.
+ */
+export async function readBlobView(
+  fs: LightningFS,
+  dir: string,
+  oid: string,
+  filepath: string,
+): Promise<BlobView> {
+  const { blob } = await readBlob({ fs, dir, oid, filepath });
+  const bytes = blob as Uint8Array;
+  const sizeBytes = bytes.length;
+  const ext = extOf(filepath);
+
+  const mime = RASTER_IMAGE_MIME[ext];
+  if (mime) {
+    if (sizeBytes > IMAGE_PREVIEW_LIMIT_BYTES) {
+      return {
+        kind: "too-large",
+        bytes,
+        sizeBytes,
+        limitBytes: IMAGE_PREVIEW_LIMIT_BYTES,
+      };
+    }
+    return { kind: "image", bytes, contentType: mime, sizeBytes };
+  }
+
+  if (hasNulByte(bytes)) {
+    // Binary: no preview cap. Always download.
+    return { kind: "binary", bytes, sizeBytes };
+  }
+
+  if (sizeBytes > TEXT_PREVIEW_LIMIT_BYTES) {
+    return {
+      kind: "too-large",
+      bytes,
+      sizeBytes,
+      limitBytes: TEXT_PREVIEW_LIMIT_BYTES,
+    };
+  }
+  // Fatal decode: anything that *looks* binary-ish but slipped past the NUL
+  // sniff (rare-but-real for non-UTF formats without an early 0x00) falls
+  // through to the binary path instead of being rendered as mojibake.
+  let content: string;
+  try {
+    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return { kind: "binary", bytes, sizeBytes };
+  }
+  if (MARKDOWN_EXTS.has(ext)) {
+    return { kind: "markdown", content, sizeBytes };
+  }
+  return { kind: "text", content, sizeBytes };
+}
+
 export interface CommitInfo {
   oid: string;
   message: string;
