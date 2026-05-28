@@ -8,6 +8,7 @@ import {
 import * as React from "react";
 
 import { ForumComposer } from "@/features/forum/ui/ForumComposer";
+import { useUserProfileQuery } from "@/features/profile/hooks";
 import { useNoteByIdQuery } from "@/features/pulse/hooks";
 import { getReplyParent, noteSnippet } from "@/features/pulse/lib/replies";
 import type { UserNote } from "@/shared/api/socialTypes";
@@ -57,20 +58,38 @@ function ReplyParentContext({
 }) {
   const parentNoteQuery = useNoteByIdQuery(parentId);
   const parentNote = parentNoteQuery.data ?? null;
-  const parentProfile = parentNote
+  const cachedProfile = parentNote
     ? profiles[parentNote.pubkey.toLowerCase()]
     : null;
+  const parentProfileQuery = useUserProfileQuery(
+    parentNote && !cachedProfile ? parentNote.pubkey : undefined,
+  );
+  const fetchedProfile = parentProfileQuery.data ?? null;
   const parentDisplayName = parentNote
-    ? (parentProfile?.displayName ?? `${parentNote.pubkey.slice(0, 8)}...`)
+    ? (cachedProfile?.displayName ??
+      fetchedProfile?.displayName ??
+      `${parentNote.pubkey.slice(0, 8)}...`)
     : null;
+  const parentAvatarUrl =
+    cachedProfile?.avatarUrl ?? fetchedProfile?.avatarUrl ?? null;
   const parentSnippet = parentNote ? noteSnippet(parentNote.content) : null;
 
   return (
     <div className="mt-2 truncate rounded-xl border border-border/50 bg-muted/25 px-3 py-2 text-xs text-muted-foreground">
       {parentNote ? (
-        <>
-          Replying to {parentDisplayName}: {parentSnippet || "No text"}
-        </>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <UserAvatar
+            avatarUrl={parentAvatarUrl}
+            className="!h-4 !w-4 shrink-0 rounded-md"
+            displayName={parentDisplayName ?? "Parent note author"}
+          />
+          <span className="min-w-0 truncate">
+            <span className="font-medium text-foreground/80">
+              {parentDisplayName}
+            </span>
+            : {parentSnippet || "No text"}
+          </span>
+        </div>
       ) : parentNoteQuery.isLoading ? (
         "Loading reply context…"
       ) : (
