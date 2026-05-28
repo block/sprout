@@ -172,7 +172,7 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
   );
 
   return (
-    <div className="group relative">
+    <div className="group relative" data-code-block="">
       <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
         {children}
       </pre>
@@ -257,7 +257,7 @@ function createMarkdownComponents(
       );
     },
     blockquote: ({ children }) => (
-      <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground">
+      <blockquote className="border-l-2 border-border pl-4 italic text-muted-foreground [&>*:first-child]:mt-0 [&>*+*]:mt-2">
         {children}
       </blockquote>
     ),
@@ -423,7 +423,7 @@ function createMarkdownComponents(
       <strong className="font-semibold">{children}</strong>
     ),
     table: ({ children }) => (
-      <div className="overflow-x-auto rounded-2xl border border-border/70">
+      <div className="overflow-x-auto rounded-2xl border border-border/70" data-table-block="">
         <table className="w-full border-collapse text-left text-sm">
           {children}
         </table>
@@ -619,10 +619,47 @@ function MarkdownInner({
     <div
       className={cn(
         tight
-          ? "max-w-none break-words text-sm leading-5 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*+*]:mt-2.5 [&>h1]:mt-4 [&>h2]:mt-3.5 [&>h3]:mt-3 [&>h1+*]:mt-1.5 [&>h2+*]:mt-1 [&>h3+*]:mt-1"
+          ? [
+              "max-w-none break-words text-sm leading-5 text-foreground/90",
+              // Reset first/last
+              "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+              // Base owl: p+p, list+p, etc.
+              "[&>*+*]:mt-2.5",
+              // Headings: push away from preceding content, pull next content close
+              "[&>*+h1]:mt-4 [&>*+h2]:mt-3.5 [&>*+h3]:mt-3",
+              "[&>h1+*]:mt-1.5 [&>h2+*]:mt-1 [&>h3+*]:mt-1",
+              // Blockquotes: breathe above and below
+              "[&>*+blockquote]:mt-3.5 [&>blockquote+*]:mt-3.5",
+              // Code blocks: breathe above and below
+              "[&>*+[data-code-block]]:mt-3.5 [&>[data-code-block]+*]:mt-3.5",
+              // Tables: breathe above and below
+              "[&>*+[data-table-block]]:mt-3.5 [&>[data-table-block]+*]:mt-3.5",
+              // hr: clear section divider
+              "[&>*+hr]:mt-4 [&>hr+*]:mt-4",
+            ].join(" ")
           : compact
-            ? "max-w-none break-words text-[15px] leading-6 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*+*]:mt-3 [&>h1]:mt-5 [&>h2]:mt-4 [&>h3]:mt-3.5 [&>h1+*]:mt-2 [&>h2+*]:mt-1.5 [&>h3+*]:mt-1.5"
-            : "max-w-none break-words text-sm leading-7 text-foreground/90 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&>*+*]:mt-4 [&>h1]:mt-6 [&>h2]:mt-5 [&>h3]:mt-4 [&>h1+*]:mt-2 [&>h2+*]:mt-2 [&>h3+*]:mt-1.5",
+            ? [
+                "max-w-none break-words text-[15px] leading-6 text-foreground/90",
+                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                "[&>*+*]:mt-3",
+                "[&>*+h1]:mt-5 [&>*+h2]:mt-4 [&>*+h3]:mt-3.5",
+                "[&>h1+*]:mt-2 [&>h2+*]:mt-1.5 [&>h3+*]:mt-1.5",
+                "[&>*+blockquote]:mt-4 [&>blockquote+*]:mt-4",
+                "[&>*+[data-code-block]]:mt-4 [&>[data-code-block]+*]:mt-4",
+                "[&>*+[data-table-block]]:mt-4 [&>[data-table-block]+*]:mt-4",
+                "[&>*+hr]:mt-5 [&>hr+*]:mt-5",
+              ].join(" ")
+            : [
+                "max-w-none break-words text-sm leading-7 text-foreground/90",
+                "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+                "[&>*+*]:mt-4",
+                "[&>*+h1]:mt-6 [&>*+h2]:mt-5 [&>*+h3]:mt-4",
+                "[&>h1+*]:mt-2 [&>h2+*]:mt-2 [&>h3+*]:mt-1.5",
+                "[&>*+blockquote]:mt-5 [&>blockquote+*]:mt-5",
+                "[&>*+[data-code-block]]:mt-5 [&>[data-code-block]+*]:mt-5",
+                "[&>*+[data-table-block]]:mt-5 [&>[data-table-block]+*]:mt-5",
+                "[&>*+hr]:mt-6 [&>hr+*]:mt-6",
+              ].join(" "),
         className,
       )}
     >
