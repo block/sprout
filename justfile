@@ -388,7 +388,7 @@ release *ARGS:
         exit 1
     fi
     # Ensure local main is up-to-date
-    git fetch origin main --quiet
+    git fetch origin main --tags --quiet
     if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
         echo "Error: local main is not up-to-date with origin/main. Run 'git pull' first."
         exit 1
