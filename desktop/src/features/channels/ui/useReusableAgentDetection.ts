@@ -6,7 +6,7 @@ import {
 } from "@/features/agents/hooks";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import type { AcpProvider, ManagedAgent } from "@/shared/api/types";
+import type { AcpRuntime, ManagedAgent } from "@/shared/api/types";
 
 type Persona = { id: string };
 
@@ -18,7 +18,7 @@ type Persona = { id: string };
 export function useReusableAgentDetection(
   channelId: string | null,
   enabled: boolean,
-  selectedProvider: AcpProvider | null,
+  selectedProvider: AcpRuntime | null,
   selectedPersonas: readonly Persona[],
   includeGeneric: boolean,
   customPrompt: string,

@@ -259,6 +259,54 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
     }
 }
 
+fn reconcile_mcp_commands_in_file(path: &Path) {
+    patch_json_records(path, |obj| {
+        let agent_command = match obj.get("agent_command").and_then(|v| v.as_str()) {
+            Some(cmd) => cmd.to_string(),
+            None => return false,
+        };
+        let Some(provider) = crate::managed_agents::known_acp_runtime(&agent_command) else {
+            return false;
+        };
+        let expected = provider.mcp_command.unwrap_or("");
+        let current = obj
+            .get("mcp_command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        // Only clear the known stale default — never touch user-customized values.
+        if current == "sprout-mcp-server" {
+            eprintln!(
+                "sprout-desktop: provider-reconcile: {:?} ({:?}): mcp_command {:?} → {:?}",
+                obj.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
+                agent_command,
+                current,
+                expected,
+            );
+            obj.insert(
+                "mcp_command".to_string(),
+                serde_json::Value::String(expected.to_string()),
+            );
+            true
+        } else {
+            false
+        }
+    });
+}
+
+/// Reconcile `mcp_command` values in managed-agents.json against the
+/// discovery table. Known providers get their canonical mcp_command;
+/// unknown/custom agents are left untouched.
+pub fn reconcile_provider_mcp_commands(app: &tauri::AppHandle) {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let path = dir.join("agents/managed-agents.json");
+    if !path.exists() {
+        return;
+    }
+    reconcile_mcp_commands_in_file(&path);
+}
+
 fn reconcile_pack_paths_in_file(path: &Path, canonical_dir: &Path) {
     let canonical_packs = canonical_dir.join("agents/packs");
     patch_json_records(path, |obj| {
@@ -318,6 +366,30 @@ pub fn reconcile_persona_pack_paths(app: &tauri::AppHandle) {
     reconcile_pack_paths_in_file(&path, &canonical_dir);
 }
 
+fn rename_provider_to_runtime_in_personas(path: &Path) {
+    patch_json_records(path, |obj| {
+        if obj.contains_key("runtime") {
+            return false;
+        }
+        if let Some(value) = obj.remove("provider") {
+            obj.insert("runtime".to_string(), value);
+            true
+        } else {
+            false
+        }
+    });
+}
+
+pub fn migrate_persona_provider_to_runtime(app: &tauri::AppHandle) {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let path = dir.join("agents/personas.json");
+    if !path.exists() {
+        return;
+    }
+    rename_provider_to_runtime_in_personas(&path);
+}
 #[cfg(test)]
 mod tests {
     use super::*;

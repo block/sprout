@@ -2,8 +2,8 @@ import { AlertTriangle, ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import {
-  useAcpProvidersQuery,
-  useAvailableAcpProviders,
+  useAcpRuntimesQuery,
+  useAvailableAcpRuntimes,
   useBackendProvidersQuery,
   useCreateManagedAgentMutation,
   useManagedAgentPrereqsQuery,
@@ -26,7 +26,7 @@ import {
 import {
   CreateAgentBasicsFields,
   CreateAgentOptionToggles,
-  CreateAgentRuntimeProviderField,
+  CreateAgentRuntimeField,
   CreateAgentRuntimeFields,
 } from "./CreateAgentDialogSections";
 import { EnvVarsEditor, type EnvVarsValue } from "./EnvVarsEditor";
@@ -38,7 +38,7 @@ import { CreateAgentRespondToField } from "./RespondToField";
 import { RelayMeshAgentSection } from "@/features/mesh-compute/ui/RelayMeshAgentSection";
 import type { MeshServeTarget } from "@/shared/api/tauriMesh";
 import { startRelayMeshClientForTarget } from "@/features/mesh-compute/startRelayMeshClientForTarget";
-import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
+import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
 
@@ -52,10 +52,10 @@ export function CreateAgentDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const createMutation = useCreateManagedAgentMutation();
-  const providersQuery = useAvailableAcpProviders();
-  const allProvidersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpRuntimes();
+  const allProvidersQuery = useAcpRuntimesQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
-  const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
+  const { lastRuntimeId, setLastRuntime } = useLastRuntime();
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
@@ -135,9 +135,9 @@ export function CreateAgentDialog({
       return;
     }
 
-    // Prefer last-used provider from localStorage
-    const remembered = lastProviderId
-      ? providers.find((provider) => provider.id === lastProviderId)
+    // Prefer last-used runtime from localStorage
+    const remembered = lastRuntimeId
+      ? providers.find((provider) => provider.id === lastRuntimeId)
       : null;
     if (remembered) {
       setSelectedProviderId(remembered.id);
@@ -155,7 +155,7 @@ export function CreateAgentDialog({
   }, [
     agentCommand,
     hasSyncedProviderSelection,
-    lastProviderId,
+    lastRuntimeId,
     providers,
     providersQuery.isLoading,
   ]);
@@ -279,7 +279,7 @@ export function CreateAgentDialog({
       return;
     }
 
-    setLastProvider(nextProviderId);
+    setLastRuntime(nextProviderId);
     setAgentCommand(provider.command);
     setAgentArgs(provider.defaultArgs.join(","));
     setMcpCommand(provider.mcpCommand ?? "");
@@ -522,12 +522,12 @@ export function CreateAgentDialog({
 
             {/* Local mode: show the ACP runtime selector */}
             {!isProviderMode && !useMesh ? (
-              <CreateAgentRuntimeProviderField
-                onProviderChange={handleProviderChange}
-                providers={providers}
-                providersLoading={providersQuery.isLoading}
-                selectedProvider={selectedProvider}
-                selectedProviderId={selectedProviderId}
+              <CreateAgentRuntimeField
+                onRuntimeChange={handleProviderChange}
+                runtimes={providers}
+                runtimesLoading={providersQuery.isLoading}
+                selectedRuntime={selectedProvider}
+                selectedRuntimeId={selectedProviderId}
                 unavailableCount={unavailableCount}
               />
             ) : null}

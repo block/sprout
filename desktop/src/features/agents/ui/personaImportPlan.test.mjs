@@ -12,7 +12,7 @@ function createPersona(overrides = {}) {
     displayName: "Alice",
     avatarUrl: null,
     systemPrompt: "Be helpful.",
-    provider: null,
+    runtime: null,
     model: null,
     namePool: [],
     isBuiltIn: false,
@@ -84,14 +84,14 @@ test("buildPersonaImportPlan detects avatar change", () => {
   assert.equal(plan.fields[0]?.field, "avatarUrl");
 });
 
-test("buildPersonaImportPlan detects provider change", () => {
+test("buildPersonaImportPlan detects runtime change", () => {
   const plan = buildPersonaImportPlan({
-    persona: createPersona({ provider: "goose" }),
+    persona: createPersona({ runtime: "goose" }),
     preview: createPreview({ provider: "claude" }),
   });
 
   assert.equal(plan.fields.length, 1);
-  assert.equal(plan.fields[0]?.field, "provider");
+  assert.equal(plan.fields[0]?.field, "runtime");
   assert.equal(plan.fields[0]?.label, "Preferred runtime");
 });
 

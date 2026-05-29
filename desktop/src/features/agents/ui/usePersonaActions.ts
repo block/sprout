@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import {
   personasQueryKey,
-  useAcpProvidersQuery,
+  useAcpRuntimesQuery,
   useCreatePersonaMutation,
   useDeletePersonaMutation,
   useExportPersonaJsonMutation,
@@ -36,7 +36,7 @@ type PersonaFeedbackSurface = "catalog" | "library";
 export function usePersonaActions() {
   const queryClient = useQueryClient();
   const personasQuery = usePersonasQuery();
-  const acpProvidersQuery = useAcpProvidersQuery();
+  const acpProvidersQuery = useAcpRuntimesQuery();
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
