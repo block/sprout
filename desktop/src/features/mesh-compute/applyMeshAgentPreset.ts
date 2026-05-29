@@ -1,4 +1,4 @@
-import type { MeshAgentPreset } from "./types";
+import type { MeshAgentPreset } from "@/shared/api/tauriMesh";
 
 /**
  * Fields a Create-Agent draft needs to overwrite when the "Run on relay mesh"

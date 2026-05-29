@@ -1,7 +1,7 @@
 import * as React from "react";
 
-import { meshNodeStatus } from "../api";
-import type { MeshNodeStatus } from "../types";
+import { meshNodeStatus } from "@/shared/api/tauriMesh";
+import type { MeshNodeStatus } from "@/shared/api/tauriMesh";
 
 /**
  * Polls `mesh_node_status` faster than availability — lifecycle transitions

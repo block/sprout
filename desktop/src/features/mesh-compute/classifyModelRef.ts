@@ -1,4 +1,13 @@
-import type { ModelRefKind } from "./types";
+/**
+ * Classification of a free-text model ref entered into the serve card.
+ * UI shows a hint inline ("Looks like a catalog name") for trust feedback.
+ * Mirrors mesh's own resolve logic at `runtime/mod.rs:3390`.
+ */
+export type ModelRefKind =
+  | { kind: "catalog"; name: string }
+  | { kind: "huggingface"; ref: string }
+  | { kind: "local-path"; path: string }
+  | { kind: "unknown" };
 
 /**
  * Classify a model-ref string the way mesh-llm's runtime does:

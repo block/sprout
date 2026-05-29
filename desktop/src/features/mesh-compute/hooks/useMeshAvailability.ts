@@ -1,7 +1,7 @@
 import * as React from "react";
 
-import { meshAvailability } from "../api";
-import type { MeshAvailability } from "../types";
+import { meshAvailability } from "@/shared/api/tauriMesh";
+import type { MeshAvailability } from "@/shared/api/tauriMesh";
 
 /**
  * Polls `mesh_availability` at a slow cadence — this drives the Settings

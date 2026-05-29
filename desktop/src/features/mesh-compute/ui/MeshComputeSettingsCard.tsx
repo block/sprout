@@ -5,10 +5,14 @@ import { Input } from "@/shared/ui/input";
 import { Switch } from "@/shared/ui/switch";
 import { cn } from "@/shared/lib/cn";
 
-import { meshStartNode, meshStopNode, meshInstalledModels } from "../api";
+import {
+  meshStartNode,
+  meshStopNode,
+  meshInstalledModels,
+} from "@/shared/api/tauriMesh";
+import type { MeshModelOption, MeshNodeStatus } from "@/shared/api/tauriMesh";
 import { classifyModelRef, modelRefHintLabel } from "../classifyModelRef";
 import { useMeshNodeStatus } from "../hooks/useMeshNodeStatus";
-import type { MeshModelOption, MeshNodeStatus } from "../types";
 
 /**
  * Settings → Compute → Share compute.
