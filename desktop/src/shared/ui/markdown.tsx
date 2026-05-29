@@ -59,6 +59,7 @@ type MarkdownProps = {
   compact?: boolean;
   content: string;
   imetaByUrl?: ImetaLookup;
+  interactive?: boolean;
   mentionNames?: string[];
   mentionPubkeysByName?: Record<string, string>;
   searchQuery?: string;
@@ -204,6 +205,7 @@ function createMarkdownComponents(
   onOpenMessageLink: (link: ParsedMessageLink) => void,
   imetaByUrl?: ImetaLookup,
   mentionPubkeysByName?: Record<string, string>,
+  interactive = true,
 ): Components {
   const paragraphClassName =
     variant === "tight"
@@ -220,6 +222,10 @@ function createMarkdownComponents(
 
   return {
     a: ({ children, href, ...props }) => {
+      if (!interactive) {
+        return <span className="font-medium text-current">{children}</span>;
+      }
+
       // Intercept `sprout://message?channel=…&id=…` links so a click navigates
       // in-app instead of opening the URL in the OS browser. http(s) links
       // continue to use the existing target="_blank" behavior.
@@ -422,7 +428,12 @@ function createMarkdownComponents(
 
       return <p className={paragraphClassName}>{children}</p>;
     },
-    pre: ({ children }) => <MarkdownCodeBlock>{children}</MarkdownCodeBlock>,
+    pre: ({ children }) =>
+      interactive ? (
+        <MarkdownCodeBlock>{children}</MarkdownCodeBlock>
+      ) : (
+        <span>{children}</span>
+      ),
     strong: ({ children }) => (
       <strong className="font-semibold">{children}</strong>
     ),
@@ -462,6 +473,10 @@ function createMarkdownComponents(
         </span>
       );
 
+      if (!interactive) {
+        return mentionNode;
+      }
+
       return pubkey ? (
         <UserProfilePopover pubkey={pubkey} triggerElement="span">
           {mentionNode}
@@ -479,7 +494,7 @@ function createMarkdownComponents(
           c.name.toLowerCase() === channelName.toLowerCase(),
       );
 
-      if (channel) {
+      if (channel && interactive) {
         return (
           <button
             type="button"
@@ -518,6 +533,14 @@ function createMarkdownComponents(
       const channelLabel = channel?.name ?? "channel";
       const shortId = messageId.slice(0, 6);
 
+      if (!interactive) {
+        return (
+          <span data-message-link="">
+            #{channelLabel} · {shortId}
+          </span>
+        );
+      }
+
       return (
         <button
           type="button"
@@ -542,6 +565,7 @@ function MarkdownInner({
   compact = false,
   content,
   imetaByUrl,
+  interactive = true,
   mentionNames,
   mentionPubkeysByName,
   searchQuery,
@@ -575,8 +599,16 @@ function MarkdownInner({
         },
         imetaByUrl,
         mentionPubkeysByName,
+        interactive,
       ),
-    [goChannel, variant, channels, imetaByUrl, mentionPubkeysByName],
+    [
+      goChannel,
+      variant,
+      channels,
+      imetaByUrl,
+      mentionPubkeysByName,
+      interactive,
+    ],
   );
 
   // biome-ignore lint/suspicious/noExplicitAny: PluggableList type not directly importable
@@ -685,6 +717,7 @@ export const Markdown = React.memo(
     prev.content === next.content &&
     prev.className === next.className &&
     prev.compact === next.compact &&
+    prev.interactive === next.interactive &&
     prev.tight === next.tight &&
     prev.mentionPubkeysByName === next.mentionPubkeysByName &&
     shallowArrayEqual(prev.mentionNames, next.mentionNames) &&
