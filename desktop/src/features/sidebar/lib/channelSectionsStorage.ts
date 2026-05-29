@@ -12,13 +12,13 @@ export type ChannelSectionStore = {
   assignments: Record<string, string>;
 };
 
-export const DEFAULT_STORE: ChannelSectionStore = {
+export const DEFAULT_STORE: ChannelSectionStore = Object.freeze({
   version: 1,
   sections: [],
   assignments: {},
-};
+});
 
-function storageKey(pubkey: string): string {
+export function storageKey(pubkey: string): string {
   return `${STORAGE_KEY_PREFIX}:${pubkey}`;
 }
 
