@@ -374,6 +374,7 @@ export function ChannelGroupSection({
 export function CustomChannelSection({
   section,
   channels,
+  hasUnread,
   isCollapsed,
   isActiveChannel,
   selectedChannelId,
@@ -386,6 +387,7 @@ export function CustomChannelSection({
   onSelectChannel,
   onMarkChannelRead,
   onMarkChannelUnread,
+  onMarkSectionRead,
   onAssignChannel,
   onUnassignChannel,
   onCreateSectionForChannel,
@@ -396,6 +398,7 @@ export function CustomChannelSection({
 }: {
   section: ChannelSection;
   channels: Channel[];
+  hasUnread: boolean;
   isCollapsed: boolean;
   isActiveChannel: boolean;
   selectedChannelId: string | null;
@@ -414,6 +417,7 @@ export function CustomChannelSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
+  onMarkSectionRead: () => void;
   onAssignChannel: (channelId: string, sectionId: string) => void;
   onUnassignChannel: (channelId: string) => void;
   onCreateSectionForChannel: (channelId: string) => void;
@@ -453,6 +457,20 @@ export function CustomChannelSection({
                 SECTION_ACTION_VISIBILITY_CLASS,
               )}
             >
+              {hasUnread ? (
+                <button
+                  aria-label="Mark all as read"
+                  className={SECTION_ICON_BUTTON_CLASS}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMarkSectionRead();
+                  }}
+                  title="Mark all as read"
+                  type="button"
+                >
+                  <CheckCheck className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
               <button
                 aria-label="Rename section"
                 className={SECTION_ICON_BUTTON_CLASS}

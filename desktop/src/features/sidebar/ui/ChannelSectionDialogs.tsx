@@ -22,39 +22,47 @@ import {
 import { Input } from "@/shared/ui/input";
 
 // ---------------------------------------------------------------------------
-// CreateSectionDialog
+// SectionNameDialog (internal)
 // ---------------------------------------------------------------------------
 
-type CreateSectionDialogProps = {
+type SectionNameDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  title: string;
+  description: string;
+  initialValue: string;
+  confirmLabel: string;
+  isConfirmDisabled: (trimmed: string) => boolean;
   onConfirm: (name: string) => void;
 };
 
-export function CreateSectionDialog({
+function SectionNameDialog({
   open,
   onOpenChange,
+  title,
+  description,
+  initialValue,
+  confirmLabel,
+  isConfirmDisabled,
   onConfirm,
-}: CreateSectionDialogProps) {
-  const [name, setName] = React.useState("");
+}: SectionNameDialogProps) {
+  const [name, setName] = React.useState(initialValue);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (!open) return;
-
-    setName("");
-
+    setName(initialValue);
     // Small delay to let dialog animation start before focusing
     const timerId = globalThis.setTimeout(() => {
       inputRef.current?.focus();
     }, 50);
     return () => globalThis.clearTimeout(timerId);
-  }, [open]);
+  }, [open, initialValue]);
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (isConfirmDisabled(trimmed)) return;
     onConfirm(trimmed);
   }
 
@@ -62,10 +70,8 @@ export function CreateSectionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Create section</DialogTitle>
-          <DialogDescription>
-            Sections let you group related channels in the sidebar.
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <Input
@@ -84,8 +90,8 @@ export function CreateSectionDialog({
                 Cancel
               </Button>
             </DialogClose>
-            <Button type="submit" disabled={name.trim().length === 0}>
-              Create
+            <Button type="submit" disabled={isConfirmDisabled(name.trim())}>
+              {confirmLabel}
             </Button>
           </div>
         </form>
@@ -95,10 +101,39 @@ export function CreateSectionDialog({
 }
 
 // ---------------------------------------------------------------------------
+// CreateSectionDialog
+// ---------------------------------------------------------------------------
+
+export type CreateSectionDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (name: string) => void;
+};
+
+export function CreateSectionDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+}: CreateSectionDialogProps) {
+  return (
+    <SectionNameDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Create section"
+      description="Sections let you group related channels in the sidebar."
+      initialValue=""
+      confirmLabel="Create"
+      isConfirmDisabled={(trimmed) => trimmed.length === 0}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 // RenameSectionDialog
 // ---------------------------------------------------------------------------
 
-type RenameSectionDialogProps = {
+export type RenameSectionDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sectionName: string;
@@ -111,64 +146,19 @@ export function RenameSectionDialog({
   sectionName,
   onConfirm,
 }: RenameSectionDialogProps) {
-  const [name, setName] = React.useState(sectionName);
-  const inputRef = React.useRef<HTMLInputElement>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-
-    setName(sectionName);
-
-    // Small delay to let dialog animation start before focusing
-    const timerId = globalThis.setTimeout(() => {
-      inputRef.current?.focus();
-    }, 50);
-    return () => globalThis.clearTimeout(timerId);
-  }, [open, sectionName]);
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === sectionName) return;
-    onConfirm(trimmed);
-  }
-
-  const trimmed = name.trim();
-  const isDisabled = trimmed.length === 0 || trimmed === sectionName;
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Rename section</DialogTitle>
-          <DialogDescription>
-            Enter a new name for this section.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          <Input
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect="off"
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Section name"
-            ref={inputRef}
-            spellCheck={false}
-            value={name}
-          />
-          <div className="flex justify-end gap-2 mt-4">
-            <DialogClose asChild>
-              <Button variant="ghost" type="button">
-                Cancel
-              </Button>
-            </DialogClose>
-            <Button type="submit" disabled={isDisabled}>
-              Rename
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <SectionNameDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Rename section"
+      description="Enter a new name for this section."
+      initialValue={sectionName}
+      confirmLabel="Rename"
+      isConfirmDisabled={(trimmed) =>
+        trimmed.length === 0 || trimmed === sectionName
+      }
+      onConfirm={onConfirm}
+    />
   );
 }
 
@@ -176,7 +166,7 @@ export function RenameSectionDialog({
 // DeleteSectionAlertDialog
 // ---------------------------------------------------------------------------
 
-type DeleteSectionAlertDialogProps = {
+export type DeleteSectionAlertDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sectionName: string;
