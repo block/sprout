@@ -87,10 +87,6 @@ export async function meshInstalledModels(): Promise<MeshModelOption[]> {
   return await invokeTauri<MeshModelOption[]>("mesh_installed_models");
 }
 
-export async function meshClassifyModelRef(modelId: string): Promise<string> {
-  return await invokeTauri<string>("mesh_classify_model_ref", { modelId });
-}
-
 export async function meshAgentPreset(
   modelId: string,
 ): Promise<MeshAgentPreset> {
