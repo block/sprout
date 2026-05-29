@@ -218,27 +218,23 @@ fn sigterm_then_sigkill(pids: &[i32]) {
 #[cfg(unix)]
 pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32]) {
     let entries = super::read_all_agent_pid_files(app);
-    let orphans: Vec<i32> = entries
+    // Collect live orphans AND dead-leader groups into a single kill batch.
+    // Dead leaders: PGID may have been recycled, but the window is narrow
+    // (PID files are from this session) and the cost of missing surviving
+    // group members outweighs the recycling risk.
+    let targets: Vec<i32> = entries
         .iter()
         .filter(|(_, pid)| {
-            !skip_pids.contains(pid) && process_is_running(*pid) && process_belongs_to_us(*pid)
+            if skip_pids.contains(pid) {
+                return false;
+            }
+            (process_is_running(*pid) && process_belongs_to_us(*pid)) || !process_is_running(*pid)
         })
         .map(|(_, pid)| *pid as i32)
         .collect();
 
-    if !orphans.is_empty() {
-        sigterm_then_sigkill(&orphans);
-    }
-
-    // For PID-file entries whose leader is dead, still try killing the process
-    // group — child processes (e.g. MCP servers) may have survived the leader.
-    let dead_groups: Vec<i32> = entries
-        .iter()
-        .filter(|(_, pid)| !skip_pids.contains(pid) && !process_is_running(*pid))
-        .map(|(_, pid)| *pid as i32)
-        .collect();
-    if !dead_groups.is_empty() {
-        sigterm_then_sigkill(&dead_groups);
+    if !targets.is_empty() {
+        sigterm_then_sigkill(&targets);
     }
 
     // Clean up PID files for processes we just killed or that are already gone.
@@ -277,10 +273,11 @@ pub(crate) fn sweep_system_agent_processes(skip_pids: &[u32]) {
 
     #[repr(C)]
     struct BSDInfo {
-        _pad: [u8; 24],
+        _pad: [u8; 20],
         pbi_uid: u32,
-        _rest: [u8; 104],
+        _rest: [u8; 112],
     }
+    const _: () = assert!(std::mem::size_of::<BSDInfo>() == 136);
     const PROC_PIDTBSDINFO: libc::c_int = 3;
 
     let my_uid = unsafe { libc::getuid() };
