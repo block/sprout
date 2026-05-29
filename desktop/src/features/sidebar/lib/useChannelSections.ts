@@ -3,6 +3,7 @@ import * as React from "react";
 import {
   DEFAULT_STORE,
   readChannelSectionsStore,
+  storageKey,
   writeChannelSectionsStore,
 } from "./channelSectionsStorage";
 
@@ -13,16 +14,10 @@ import type {
   ChannelSectionStore,
 } from "./channelSectionsStorage";
 
-const STORAGE_KEY_PREFIX = "sprout-channel-sections.v1";
-
-function storageKey(pubkey: string): string {
-  return `${STORAGE_KEY_PREFIX}:${pubkey}`;
-}
-
 export function useChannelSections(pubkey: string | undefined): {
   sections: ChannelSection[];
   assignments: Record<string, string>;
-  createSection: (name: string) => ChannelSection;
+  createSection: (name: string) => ChannelSection | null;
   renameSection: (sectionId: string, newName: string) => void;
   deleteSection: (sectionId: string) => void;
   moveSectionUp: (sectionId: string) => void;
@@ -68,12 +63,11 @@ export function useChannelSections(pubkey: string | undefined): {
   );
 
   const createSection = React.useCallback(
-    (name: string): ChannelSection => {
-      let created!: ChannelSection;
+    (name: string): ChannelSection | null => {
       if (!pubkey) {
-        created = { id: crypto.randomUUID(), name, order: 0 };
-        return created;
+        return null;
       }
+      let created: ChannelSection | null = null;
       setStore((prev) => {
         const maxOrder =
           prev.sections.length > 0
@@ -84,7 +78,6 @@ export function useChannelSections(pubkey: string | undefined): {
           name,
           order: maxOrder + 1,
         };
-        created = section;
         const next: ChannelSectionStore = {
           ...prev,
           sections: [...prev.sections, section],
@@ -92,6 +85,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        created = section;
         return next;
       });
       return created;

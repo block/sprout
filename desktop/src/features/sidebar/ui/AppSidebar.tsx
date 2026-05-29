@@ -293,6 +293,9 @@ export function AppSidebar({
   const handleCreateSectionConfirm = React.useCallback(
     (name: string) => {
       const section = createSection(name);
+      if (!section) {
+        return;
+      }
       if (createSectionState.pendingChannelId) {
         assignChannel(createSectionState.pendingChannelId, section.id);
       }
@@ -754,6 +757,11 @@ export function AppSidebar({
         onConfirm={() => {
           if (deleteSectionTarget) {
             deleteSection(deleteSectionTarget.id);
+            setCollapsedSections((prev) => {
+              const next = { ...prev };
+              delete next[deleteSectionTarget.id];
+              return next;
+            });
           }
           setDeleteSectionTarget(null);
         }}
