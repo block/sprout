@@ -118,6 +118,97 @@ pub(crate) fn process_belongs_to_us(_pid: u32) -> bool {
     false
 }
 
+/// Check if a running process has `SPROUT_MANAGED_AGENT=1` in its environment,
+/// distinguishing Sprout-spawned agent trees from independently-launched ones.
+#[cfg(target_os = "macos")]
+fn process_has_sprout_marker(pid: u32) -> bool {
+    const MARKER: &[u8] = b"SPROUT_MANAGED_AGENT=1";
+
+    let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let mut buf_size: libc::size_t = 0;
+
+    // First call: get required buffer size.
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            std::ptr::null_mut(),
+            &mut buf_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return false;
+    }
+
+    let mut buf: Vec<u8> = vec![0; buf_size];
+    if unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            3,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            &mut buf_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return false;
+    }
+    buf.truncate(buf_size);
+
+    // Buffer layout: [i32 argc][exec_path\0][null padding][argv\0...][env\0...]
+    if buf.len() < std::mem::size_of::<libc::c_int>() {
+        return false;
+    }
+    let mut n_args: libc::c_int = 0;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            buf.as_ptr(),
+            &mut n_args as *mut libc::c_int as *mut u8,
+            std::mem::size_of::<libc::c_int>(),
+        );
+    }
+    let mut pos = std::mem::size_of::<libc::c_int>();
+
+    // Skip exec path (scan to first null).
+    while pos < buf.len() && buf[pos] != 0 {
+        pos += 1;
+    }
+    // Skip null padding between exec path and argv[0].
+    while pos < buf.len() && buf[pos] == 0 {
+        pos += 1;
+    }
+    // Skip argc argument strings.
+    let mut args_remaining = n_args;
+    while args_remaining > 0 && pos < buf.len() {
+        while pos < buf.len() && buf[pos] != 0 {
+            pos += 1;
+        }
+        while pos < buf.len() && buf[pos] == 0 {
+            pos += 1;
+        }
+        args_remaining -= 1;
+    }
+    // Remaining bytes are null-delimited environment strings.
+    buf[pos..].split(|&b| b == 0).any(|entry| entry == MARKER)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_has_sprout_marker(pid: u32) -> bool {
+    let Ok(data) = std::fs::read(format!("/proc/{pid}/environ")) else {
+        return false;
+    };
+    data.split(|&b| b == 0)
+        .any(|entry| entry == b"SPROUT_MANAGED_AGENT=1")
+}
+
+#[cfg(not(unix))]
+fn process_has_sprout_marker(_pid: u32) -> bool {
+    false
+}
+
 #[cfg(unix)]
 fn signal_process_group_or_leader(pid: u32, signal: i32, action: &str) -> Result<(), String> {
     let pgid = -(pid as i32);
@@ -202,7 +293,9 @@ fn sigterm_then_sigkill(pids: &[i32]) {
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     for &pid in pids {
-        if process_is_running(pid as u32) {
+        // Check if the group has any living members, not just the leader.
+        // kill(-pid, 0) returns 0 if ANY member of the group is signalable.
+        if unsafe { libc::kill(-pid, 0) } == 0 {
             unsafe {
                 libc::kill(-pid, libc::SIGKILL);
             }
@@ -333,6 +426,9 @@ pub(crate) fn sweep_system_agent_processes(skip_pids: &[u32]) {
         if info.pbi_uid != my_uid {
             continue;
         }
+        if !process_has_sprout_marker(upid) {
+            continue;
+        }
         orphans.push(pid);
     }
 
@@ -377,7 +473,7 @@ pub(crate) fn sweep_system_agent_processes(skip_pids: &[u32]) {
         if meta.uid() != my_uid {
             continue;
         }
-        if process_belongs_to_us(upid) {
+        if process_belongs_to_us(upid) && process_has_sprout_marker(upid) {
             orphans.push(pid);
         }
     }
@@ -885,6 +981,12 @@ pub fn spawn_agent_child(
     for (key, value) in super::env_vars::merged_user_env(&persona_env, &record.env_vars) {
         command.env(key, value);
     }
+
+    // Mark as Sprout-managed so the system-wide orphan sweep can
+    // distinguish our processes from independently-launched agent binaries.
+    // Propagates automatically through the full tree (sprout-acp → goose →
+    // MCP servers) because neither sprout-acp nor goose calls env_clear().
+    command.env("SPROUT_MANAGED_AGENT", "1");
 
     // Spawn the harness in its own process group so we can kill the entire
     // tree (harness + MCP servers + agent subprocesses) on shutdown.
