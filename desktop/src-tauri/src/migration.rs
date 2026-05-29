@@ -852,7 +852,6 @@ mod tests {
         let records = read_agents_json(dir.path());
         assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
     }
-<<<<<<< HEAD
 
     #[test]
     fn sync_creates_packs_directory_symlink() {
