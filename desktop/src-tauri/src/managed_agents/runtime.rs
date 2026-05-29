@@ -4,7 +4,7 @@ use tauri::AppHandle;
 
 use crate::{
     managed_agents::{
-        append_log_marker, known_acp_provider, login_shell_path, managed_agent_log_path,
+        append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
         ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
     },
@@ -593,7 +593,7 @@ pub fn spawn_agent_child(
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "sprout-mcp".
-    if known_acp_provider(&record.agent_command).is_some_and(|p| p.mcp_hooks) {
+    if known_acp_runtime(&record.agent_command).is_some_and(|p| p.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
     // Only emit SPROUT_ACP_IDLE_TIMEOUT when the user has explicitly set an
@@ -873,30 +873,30 @@ pub fn stop_managed_agent_process(
 
 #[cfg(test)]
 mod tests {
-    use crate::managed_agents::known_acp_provider;
+    use crate::managed_agents::known_acp_runtime;
 
     #[test]
     fn sprout_agent_has_mcp_hooks() {
-        let p = known_acp_provider("sprout-agent").expect("should resolve");
+        let p = known_acp_runtime("sprout-agent").expect("should resolve");
         assert!(p.mcp_hooks);
         assert_eq!(p.mcp_command, Some("sprout-dev-mcp"));
     }
 
     #[test]
     fn sprout_agent_resolved_via_path() {
-        assert!(known_acp_provider("/usr/local/bin/sprout-agent").is_some_and(|p| p.mcp_hooks));
+        assert!(known_acp_runtime("/usr/local/bin/sprout-agent").is_some_and(|p| p.mcp_hooks));
     }
 
     #[test]
     fn goose_has_no_mcp_hooks() {
-        let p = known_acp_provider("goose").expect("should resolve");
+        let p = known_acp_runtime("goose").expect("should resolve");
         assert!(!p.mcp_hooks);
         assert_eq!(p.mcp_command, None);
     }
 
     #[test]
     fn unknown_command_returns_none() {
-        assert!(known_acp_provider("custom-agent").is_none());
+        assert!(known_acp_runtime("custom-agent").is_none());
     }
 
     // ── build_respond_to_env tests ───────────────────────────────────────

@@ -270,7 +270,7 @@ fn reconcile_mcp_commands_in_file(path: &Path) {
             Some(cmd) => cmd.to_string(),
             None => return false,
         };
-        let Some(provider) = crate::managed_agents::known_acp_provider(&agent_command) else {
+        let Some(provider) = crate::managed_agents::known_acp_runtime(&agent_command) else {
             return false;
         };
         let expected = provider.mcp_command.unwrap_or("");
@@ -370,6 +370,30 @@ pub fn reconcile_persona_pack_paths(app: &tauri::AppHandle) {
     reconcile_pack_paths_in_file(&path, &canonical_dir);
 }
 
+fn rename_provider_to_runtime_in_personas(path: &Path) {
+    patch_json_records(path, |obj| {
+        if obj.contains_key("runtime") {
+            return false;
+        }
+        if let Some(value) = obj.remove("provider") {
+            obj.insert("runtime".to_string(), value);
+            true
+        } else {
+            false
+        }
+    });
+}
+
+pub fn migrate_persona_provider_to_runtime(app: &tauri::AppHandle) {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let path = dir.join("agents/personas.json");
+    if !path.exists() {
+        return;
+    }
+    rename_provider_to_runtime_in_personas(&path);
+}
 #[cfg(test)]
 mod tests {
     use super::*;

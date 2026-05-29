@@ -5,7 +5,7 @@ import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
 import type {
-  RawAcpProviderCatalogEntry,
+  RawAcpRuntimeCatalogEntry,
   RawInstallRuntimeResult,
 } from "@/shared/api/tauri";
 
@@ -24,7 +24,7 @@ type MockCommandAvailability = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
-    acpProvidersCatalog?: RawAcpProviderCatalogEntry[];
+    acpProvidersCatalog?: RawAcpRuntimeCatalogEntry[];
     installAcpRuntimeResult?: RawInstallRuntimeResult;
     managedAgentPrereqs?: {
       acp?: MockCommandAvailability;
@@ -3552,7 +3552,7 @@ async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
 
 async function handleDiscoverAcpProviders(
   config: E2eConfig | undefined,
-): Promise<RawAcpProviderCatalogEntry[]> {
+): Promise<RawAcpRuntimeCatalogEntry[]> {
   const configured = config?.mock?.acpProvidersCatalog;
   if (configured) {
     return configured;
@@ -3621,7 +3621,7 @@ async function handleDiscoverAcpProviders(
 
 async function handleInstallAcpRuntime(
   args: {
-    providerId?: string;
+    runtimeId?: string;
   },
   config: E2eConfig | undefined,
 ): Promise<RawInstallRuntimeResult> {
@@ -3634,7 +3634,7 @@ async function handleInstallAcpRuntime(
     steps: [
       {
         step: "adapter",
-        command: `mock install ${args.providerId ?? "unknown"}`,
+        command: `mock install ${args.runtimeId ?? "unknown"}`,
         success: true,
         stdout: "mock: installed successfully",
         stderr: "",
@@ -4833,7 +4833,7 @@ export function maybeInstallE2eTauriMocks() {
         return handleDiscoverAcpProviders(activeConfig);
       case "install_acp_runtime":
         return handleInstallAcpRuntime(
-          payload as { providerId?: string },
+          payload as { runtimeId?: string },
           activeConfig,
         );
       case "discover_backend_providers":

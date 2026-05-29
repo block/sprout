@@ -15,7 +15,7 @@ import { useReusableAgentDetection } from "@/features/channels/ui/useReusableAge
 import { AddChannelBotTeamsSection } from "@/features/channels/ui/AddChannelBotTeamsSection";
 import { probeBackendProvider } from "@/shared/api/tauri";
 import type {
-  AcpProvider,
+  AcpRuntime,
   BackendProviderCandidate,
   BackendProviderProbeResult,
   ManagedAgentBackend,
@@ -36,12 +36,12 @@ import {
   ProviderConfigFields,
 } from "@/features/agents/ui/ProviderConfigFields";
 import {
-  collectProviderWarnings,
-  resolvePersonaProvider,
-} from "@/features/agents/lib/resolvePersonaProvider";
+  collectRuntimeWarnings,
+  resolvePersonaRuntime,
+} from "@/features/agents/lib/resolvePersonaRuntime";
 import { getActivePersonas } from "@/features/agents/lib/catalog";
 import { getUsableTeams } from "@/features/agents/lib/teamPersonas";
-import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
+import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
 import { CreateAgentRespondToField } from "@/features/agents/ui/RespondToField";
 
 type AddChannelBotDialogProps = {
@@ -49,24 +49,24 @@ type AddChannelBotDialogProps = {
   backendProvidersLoading?: boolean;
   channelId: string | null;
   open: boolean;
-  providers: AcpProvider[];
+  providers: AcpRuntime[];
   providersErrorMessage?: string | null;
   providersLoading?: boolean;
   onAdded?: (result: CreateChannelManagedAgentResult) => void;
   onOpenChange: (open: boolean) => void;
 };
 
-function defaultBotName(provider: AcpProvider | null) {
-  if (!provider) {
+function defaultBotName(runtime: AcpRuntime | null) {
+  if (!runtime) {
     return "";
   }
 
-  const normalizedId = provider.id.trim().toLowerCase();
+  const normalizedId = runtime.id.trim().toLowerCase();
   if (normalizedId.length > 0) {
     return normalizedId;
   }
 
-  return provider.label.trim().toLowerCase() || "agent";
+  return runtime.label.trim().toLowerCase() || "agent";
 }
 
 function toggleValue(values: readonly string[], value: string) {
@@ -103,7 +103,7 @@ export function AddChannelBotDialog({
   onAdded,
   onOpenChange,
 }: AddChannelBotDialogProps) {
-  const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
+  const { lastRuntimeId, setLastRuntime } = useLastRuntime();
   const personasQuery = usePersonasQuery();
   const teamsQuery = useTeamsQuery();
   const inChannelPersonaIds = useInChannelPersonaIds(
@@ -172,15 +172,14 @@ export function AddChannelBotDialog({
     customPrompt,
   );
 
-  // Surface warnings when a persona's preferred provider differs from the
-  // user-selected provider. In this dialog the user explicitly picks a
+  // Surface warnings when a persona's preferred runtime differs from the
+  // user-selected runtime. In this dialog the user explicitly picks a
   // runtime via the dropdown, so the fallback is `selectedProvider` (their
   // choice), NOT `providers[0]`. This differs intentionally from
-  // AddTeamToChannelDialog which has no provider selector and falls back
+  // AddTeamToChannelDialog which has no runtime selector and falls back
   // to the first available runtime.
-  const providerWarnings = React.useMemo(
-    () =>
-      collectProviderWarnings(selectedPersonas, providers, selectedProvider),
+  const runtimeWarnings = React.useMemo(
+    () => collectRuntimeWarnings(selectedPersonas, providers, selectedProvider),
     [selectedPersonas, providers, selectedProvider],
   );
 
@@ -204,12 +203,12 @@ export function AddChannelBotDialog({
     }
 
     if (!selectedProviderId && providers.length > 0) {
-      const remembered = lastProviderId
-        ? providers.find((p) => p.id === lastProviderId)
+      const remembered = lastRuntimeId
+        ? providers.find((p) => p.id === lastRuntimeId)
         : null;
       setSelectedProviderId(remembered ? remembered.id : providers[0].id);
     }
-  }, [open, providers, selectedProviderId, lastProviderId]);
+  }, [open, providers, selectedProviderId, lastRuntimeId]);
 
   React.useEffect(() => {
     if (!selectedProvider || hasEditedCustomName) {
@@ -347,7 +346,7 @@ export function AddChannelBotDialog({
       ...(includeGeneric
         ? [
             {
-              provider: selectedProvider,
+              runtime: selectedProvider,
               name: customName,
               systemPrompt: customPrompt,
               role: "bot" as const,
@@ -358,13 +357,13 @@ export function AddChannelBotDialog({
           ]
         : []),
       ...selectedPersonas.map((persona) => {
-        const resolved = resolvePersonaProvider(
-          persona.provider,
+        const resolved = resolvePersonaRuntime(
+          persona.runtime,
           providers,
           selectedProvider,
         );
         return {
-          provider: resolved.provider ?? selectedProvider,
+          runtime: resolved.runtime ?? selectedProvider,
           name: persona.displayName,
           personaId: persona.id,
           systemPrompt: persona.systemPrompt,
@@ -551,7 +550,7 @@ export function AddChannelBotDialog({
               <DropdownMenuRadioGroup
                 onValueChange={(id) => {
                   setSelectedProviderId(id);
-                  setLastProvider(id);
+                  setLastRuntime(id);
                 }}
                 value={selectedProvider?.id ?? ""}
               >
@@ -564,7 +563,7 @@ export function AddChannelBotDialog({
             </DropdownMenuContent>
           </DropdownMenu>
           <p className="text-xs text-muted-foreground">
-            {selectedPersonas.some((p) => p.provider)
+            {selectedPersonas.some((p) => p.runtime)
               ? "Personas with a preferred runtime will use their own instead of this selection."
               : "Default runtime for all deployed agents."}
           </p>
@@ -647,8 +646,8 @@ export function AddChannelBotDialog({
           </p>
         ) : null}
 
-        {providerWarnings.length > 0
-          ? providerWarnings.map((warning) => (
+        {runtimeWarnings.length > 0
+          ? runtimeWarnings.map((warning) => (
               <div
                 className="flex gap-3 rounded-2xl border border-warning/30 bg-warning-bg px-4 py-3"
                 key={warning}
