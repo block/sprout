@@ -182,7 +182,7 @@ impl DesktopMeshRuntime {
                     .publish(false)
                     .auto_join(false)
                     .discovery_mode(MeshDiscoveryMode::Nostr)
-                    .console_ui(false);
+                    .console_ui(true);
                 if let Some(max_vram_gb) = request.max_vram_gb {
                     builder = builder.max_vram_gb(max_vram_gb as f64);
                 }
@@ -204,7 +204,7 @@ impl DesktopMeshRuntime {
                     .publish(false)
                     .auto_join(false)
                     .discovery_mode(MeshDiscoveryMode::Nostr)
-                    .console_ui(false);
+                    .console_ui(true);
                 if let Some(join_token) = request.join_token.as_deref() {
                     builder = builder.join_token(join_token);
                 }
@@ -266,8 +266,11 @@ fn validate_no_leak_request(request: &StartMeshNodeRequest) -> anyhow::Result<()
     if request.join_token.as_deref().is_some_and(str::is_empty) {
         anyhow::bail!("joinToken cannot be empty when provided");
     }
-    if request.iroh_relay_auth.is_some() && request.iroh_relay_url.is_none() {
-        anyhow::bail!("irohRelayAuth requires irohRelayUrl");
+    if request.iroh_relay_url.as_deref().is_none_or(str::is_empty) {
+        anyhow::bail!("relay NIP-11 must advertise iroh_relay_url before starting mesh");
+    }
+    if request.iroh_relay_auth.as_deref().is_none_or(str::is_empty) {
+        anyhow::bail!("iroh relay admission bearer is required before starting mesh");
     }
     Ok(())
 }
