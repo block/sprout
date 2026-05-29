@@ -169,8 +169,7 @@ export function AppShell() {
 
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
-  const [isSearchOpen, setIsSearchOpen] = React.useState(false);
-  const [searchInitialQuery, setSearchInitialQuery] = React.useState("");
+  const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
@@ -360,14 +359,10 @@ export function AppShell() {
     setBrowseDialogType("forum");
     void refetchChannels();
   }, [refetchChannels]);
-  const handleOpenSearch = React.useCallback(
-    (initialQuery = "") => {
-      setSearchInitialQuery(initialQuery);
-      setIsSearchOpen(true);
-      void refetchChannels();
-    },
-    [refetchChannels],
-  );
+  const handleOpenSearch = React.useCallback(() => {
+    setSearchFocusRequest((request) => request + 1);
+    void refetchChannels();
+  }, [refetchChannels]);
 
   const handleBrowseDialogOpenChange = React.useCallback((open: boolean) => {
     if (!open) {
@@ -400,7 +395,6 @@ export function AppShell() {
 
   const handleOpenSettings = React.useCallback(
     (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
-      setIsSearchOpen(false);
       setIsChannelManagementOpen(false);
       setSettingsSection(section);
       setSettingsOpen(true);
@@ -669,8 +663,8 @@ export function AppShell() {
                   onOpenChannel={(channelId) => {
                     void goChannel(channelId);
                   }}
-                  onOpenFullSearch={handleOpenSearch}
                   onOpenResult={handleOpenSearchResult}
+                  searchFocusRequest={searchFocusRequest}
                 />
                 <AppSidebar
                   activeWorkspace={workspacesHook.activeWorkspace}
@@ -803,8 +797,6 @@ export function AppShell() {
                   channels={channels}
                   currentPubkey={identityQuery.data?.pubkey}
                   isChannelManagementOpen={isChannelManagementOpen}
-                  isSearchOpen={isSearchOpen}
-                  searchInitialQuery={searchInitialQuery}
                   onBrowseChannelJoin={handleBrowseChannelJoin}
                   onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                   onChannelManagementOpenChange={setIsChannelManagementOpen}
@@ -812,8 +804,6 @@ export function AppShell() {
                     setIsChannelManagementOpen(false);
                     void goHome({ replace: true });
                   }}
-                  onOpenSearchResult={handleOpenSearchResult}
-                  onSearchOpenChange={setIsSearchOpen}
                   onSelectChannel={(channelId) => {
                     void goChannel(channelId);
                   }}

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import type { Channel, SearchHit } from "@/shared/api/types";
@@ -13,8 +13,8 @@ type AppTopChromeProps = {
   onGoBack: () => void;
   onGoForward: () => void;
   onOpenChannel: (channelId: string) => void;
-  onOpenFullSearch: (query?: string) => void;
   onOpenResult: (hit: SearchHit) => void;
+  searchFocusRequest: number;
 };
 
 function GlobalTopDivider() {
@@ -37,8 +37,8 @@ export function AppTopChrome({
   onGoBack,
   onGoForward,
   onOpenChannel,
-  onOpenFullSearch,
   onOpenResult,
+  searchFocusRequest,
 }: AppTopChromeProps) {
   return (
     <>
@@ -72,25 +72,13 @@ export function AppTopChrome({
         >
           <ChevronRight className="h-3 w-3" />
         </Button>
-        <Button
-          aria-label="Search everything"
-          className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground md:hidden"
-          data-testid="open-search-compact"
-          onClick={() => onOpenFullSearch()}
-          size="icon"
-          title="Search everything"
-          type="button"
-          variant="ghost"
-        >
-          <Search className="h-3 w-3" />
-        </Button>
       </div>
       <TopbarSearch
         channels={channels}
-        className="fixed left-1/2 top-[7px] z-[80] hidden w-[360px] max-w-[42vw] -translate-x-1/2 md:block"
+        className="fixed left-1/2 top-[7px] z-[80] hidden w-[300px] max-w-[34vw] -translate-x-1/2 md:block lg:w-[360px] lg:max-w-[38vw] xl:w-[420px] xl:max-w-[42vw] 2xl:w-[480px] 2xl:max-w-[44vw]"
         currentPubkey={currentPubkey}
+        focusRequest={searchFocusRequest}
         onOpenChannel={onOpenChannel}
-        onOpenFullSearch={onOpenFullSearch}
         onOpenResult={onOpenResult}
       />
     </>

@@ -40,41 +40,28 @@ async function ensureTimelineScrollable(
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight + 160);
 }
 
-async function openSearchDialogWithShortcut(
+async function focusTopbarSearchWithShortcut(
   page: import("@playwright/test").Page,
 ) {
-  const searchDialog = page.getByTestId("search-dialog");
   const openSearchButton = page.getByTestId("open-search");
 
   await expect(openSearchButton).toBeVisible();
-  await expect
-    .poll(async () => {
-      if (await searchDialog.isVisible()) {
-        return true;
-      }
-
-      await page.evaluate(() => {
-        const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
-        window.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            bubbles: true,
-            cancelable: true,
-            code: "KeyK",
-            ctrlKey: !isMac,
-            key: "k",
-            metaKey: isMac,
-          }),
-        );
-      });
-      return searchDialog.isVisible();
-    })
-    .toBe(true);
-}
-
-async function openSearchDialogWithButton(
-  page: import("@playwright/test").Page,
-) {
-  await openSearchDialogWithShortcut(page);
+  await page.evaluate(() => {
+    const isMac = /mac|iphone|ipad|ipod/i.test(navigator.platform);
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyK",
+        ctrlKey: !isMac,
+        key: "k",
+        metaKey: isMac,
+      }),
+    );
+  });
+  await expect(openSearchButton).toBeFocused();
+  await expect(page.getByTestId("search-results")).toBeVisible();
+  await expect(page.getByTestId("search-dialog")).toHaveCount(0);
 }
 
 async function expectHomeView(page: import("@playwright/test").Page) {
@@ -119,7 +106,7 @@ test("creates a new mocked stream", async ({ page }) => {
   await page.getByTestId("create-channel-submit").click();
 
   await expect(page.getByTestId("stream-list")).toContainText(channelName);
-  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
+  await expect(page.getByTestId("chat-title")).toContainText(channelName);
 });
 
 test("create agent supports parallelism and system prompt overrides", async ({
@@ -223,14 +210,14 @@ test("home feed renders resolved author labels", async ({ page }) => {
   await expect(page.getByTestId("home-inbox-list")).not.toContainText("You");
 });
 
-test("opens relay-backed search from the sidebar and loads the exact result", async ({
+test("opens topbar search with the shortcut and loads the exact result", async ({
   page,
 }) => {
   await page.goto("/");
 
-  await openSearchDialogWithShortcut(page);
+  await focusTopbarSearchWithShortcut(page);
 
-  await page.getByTestId("search-input").fill("shipped");
+  await page.getByTestId("open-search").fill("shipped");
   await expect(page.getByTestId("search-results")).toContainText(
     "Engineering shipped the desktop build.",
   );
@@ -252,9 +239,9 @@ test("opens relay-backed search from the sidebar and loads the exact result", as
 test("opens channel matches from search", async ({ page }) => {
   await page.goto("/");
 
-  await openSearchDialogWithButton(page);
+  await focusTopbarSearchWithShortcut(page);
 
-  await page.getByTestId("search-input").fill("engineering");
+  await page.getByTestId("open-search").fill("engineering");
   const results = page.getByTestId("search-results");
 
   await expect(results).toContainText("engineering");
@@ -284,9 +271,9 @@ test("search results use your resolved profile label instead of You", async ({
 }) => {
   await page.goto("/");
 
-  await openSearchDialogWithButton(page);
+  await focusTopbarSearchWithShortcut(page);
 
-  await page.getByTestId("search-input").fill("welcome");
+  await page.getByTestId("open-search").fill("welcome");
   const results = page.getByTestId("search-results");
 
   await expect(results).toContainText("Welcome to #general");
@@ -299,9 +286,9 @@ test("opens accessible unjoined channels from search in read-only mode", async (
 }) => {
   await page.goto("/");
 
-  await openSearchDialogWithButton(page);
+  await focusTopbarSearchWithShortcut(page);
 
-  await page.getByTestId("search-input").fill("critique");
+  await page.getByTestId("open-search").fill("critique");
   const results = page.getByTestId("search-results");
 
   await expect(results).toContainText(

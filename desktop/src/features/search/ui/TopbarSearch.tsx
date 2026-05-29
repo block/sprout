@@ -20,8 +20,8 @@ type TopbarSearchProps = {
   channels: Channel[];
   className?: string;
   currentPubkey?: string;
+  focusRequest?: number;
   onOpenChannel: (channelId: string) => void;
-  onOpenFullSearch: (query: string) => void;
   onOpenResult: (hit: SearchHit) => void;
 };
 
@@ -80,12 +80,13 @@ export function TopbarSearch({
   channels,
   className,
   currentPubkey,
+  focusRequest = 0,
   onOpenChannel,
-  onOpenFullSearch,
   onOpenResult,
 }: TopbarSearchProps) {
   const [isOpen, setIsOpen] = React.useState(false);
   const [selectedMenuIndex, setSelectedMenuIndex] = React.useState(0);
+  const inputRef = React.useRef<HTMLInputElement>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
   const {
     channelLookup,
@@ -97,8 +98,8 @@ export function TopbarSearch({
     setQuery,
   } = useSearchResults({ channels, enabled: isOpen, limit: 8 });
   const trimmedQuery = query.trim();
-  const showSuggestions = isOpen && trimmedQuery.length > 0;
-  const selectableCount = showSuggestions ? results.length + 1 : 0;
+  const showSuggestions = isOpen;
+  const selectableCount = showSuggestions ? results.length : 0;
 
   const openResult = React.useCallback(
     (result: SearchResult) => {
@@ -114,16 +115,6 @@ export function TopbarSearch({
     },
     [onOpenChannel, onOpenResult, setQuery],
   );
-
-  const openFullSearch = React.useCallback(() => {
-    if (trimmedQuery.length === 0) {
-      return;
-    }
-
-    setIsOpen(false);
-    setQuery("");
-    onOpenFullSearch(trimmedQuery);
-  }, [onOpenFullSearch, setQuery, trimmedQuery]);
 
   React.useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
@@ -144,6 +135,16 @@ export function TopbarSearch({
   }, []);
 
   React.useEffect(() => {
+    if (focusRequest === 0) {
+      return;
+    }
+
+    setIsOpen(true);
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [focusRequest]);
+
+  React.useEffect(() => {
     setSelectedMenuIndex((current) => {
       if (selectableCount === 0) {
         return 0;
@@ -161,6 +162,7 @@ export function TopbarSearch({
           aria-label="Search everything"
           className="min-w-0 flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
           data-testid="open-search"
+          ref={inputRef}
           onChange={(event) => {
             setIsOpen(true);
             setQuery(event.target.value);
@@ -190,12 +192,7 @@ export function TopbarSearch({
 
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
-              if (selectedMenuIndex === 0) {
-                openFullSearch();
-                return;
-              }
-
-              const result = results[selectedMenuIndex - 1];
+              const result = results[selectedMenuIndex];
               if (result) {
                 openResult(result);
               }
@@ -210,32 +207,13 @@ export function TopbarSearch({
       </div>
 
       {showSuggestions ? (
-        <div className="absolute left-1/2 top-full z-50 mt-1 w-[620px] max-w-[min(82vw,620px)] -translate-x-1/2 overflow-hidden rounded-xl border border-border/80 bg-popover text-popover-foreground shadow-xl">
+        <div
+          className="absolute left-1/2 top-full z-50 mt-1 w-[620px] max-w-[min(82vw,620px)] -translate-x-1/2 overflow-hidden rounded-xl border border-border/80 bg-popover text-popover-foreground shadow-xl"
+          data-testid="search-results"
+        >
           {debouncedQuery.length < MIN_SEARCH_QUERY_LENGTH ? (
-            <div className="p-1.5">
-              <button
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                  selectedMenuIndex === 0
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-accent/70",
-                )}
-                onClick={openFullSearch}
-                onMouseEnter={() => setSelectedMenuIndex(0)}
-                type="button"
-              >
-                <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  Search for{" "}
-                  <span className="font-semibold">{trimmedQuery}</span>
-                </span>
-                <span className="rounded border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  Enter
-                </span>
-              </button>
-              <p className="px-3 pb-2 pt-1 text-[11px] text-muted-foreground">
-                Type at least two characters for live suggestions.
-              </p>
+            <div className="px-3 py-3 text-[11px] text-muted-foreground">
+              <p>Type at least two characters for live suggestions.</p>
             </div>
           ) : searchQuery.isLoading && results.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
@@ -247,64 +225,23 @@ export function TopbarSearch({
               {searchQuery.error.message}
             </p>
           ) : results.length === 0 ? (
-            <div className="p-1.5">
-              <button
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                  selectedMenuIndex === 0
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-accent/70",
-                )}
-                onClick={openFullSearch}
-                onMouseEnter={() => setSelectedMenuIndex(0)}
-                type="button"
-              >
-                <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  Show results for{" "}
-                  <span className="font-semibold">{trimmedQuery}</span>
-                </span>
-                <span className="rounded border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  Enter
-                </span>
-              </button>
-              <p className="px-3 pb-2 pt-1 text-[11px] text-muted-foreground">
-                No quick matches. Open full search for broader results.
-              </p>
-            </div>
+            <p className="px-3 py-3 text-xs text-muted-foreground">
+              No matches for{" "}
+              <span className="font-semibold">{trimmedQuery}</span>.
+            </p>
           ) : (
             <div className="max-h-[360px] overflow-y-auto p-1.5">
-              <button
-                className={cn(
-                  "mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                  selectedMenuIndex === 0
-                    ? "bg-accent text-accent-foreground"
-                    : "hover:bg-accent/70",
-                )}
-                onClick={openFullSearch}
-                onMouseEnter={() => setSelectedMenuIndex(0)}
-                type="button"
-              >
-                <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  Show results for{" "}
-                  <span className="font-semibold">{trimmedQuery}</span>
-                </span>
-                <span className="rounded border border-border/70 bg-muted/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                  Enter
-                </span>
-              </button>
               {results.map((result, index) => (
                 <button
                   className={cn(
                     "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors",
-                    index + 1 === selectedMenuIndex
+                    index === selectedMenuIndex
                       ? "bg-accent text-accent-foreground"
                       : "hover:bg-accent/70",
                   )}
                   key={resultKey(result)}
                   onClick={() => openResult(result)}
-                  onMouseEnter={() => setSelectedMenuIndex(index + 1)}
+                  onMouseEnter={() => setSelectedMenuIndex(index)}
                   type="button"
                   data-testid={resultTestId(result)}
                 >
