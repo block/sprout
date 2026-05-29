@@ -145,6 +145,12 @@ pub const KIND_NIP29_GROUP_ROLES: u32 = 39003;
 /// Workflow definition (parameterized replaceable, d=workflow_uuid).
 pub const KIND_WORKFLOW_DEF: u32 = 30620;
 
+/// Mesh-LLM relay status (relay-signed, parameterized replaceable, d=sprout-relay-mesh).
+///
+/// Published only by the relay. Carries a sanitized, member-readable projection
+/// of mesh status, including EndpointAddr dial pointers for serving nodes.
+pub const KIND_MESH_LLM_RELAY_STATUS: u32 = 30621;
+
 /// Lower bound of the NIP-33 parameterized replaceable range (30000–39999).
 pub const PARAM_REPLACEABLE_KIND_MIN: u32 = 30000;
 /// Upper bound of the NIP-33 parameterized replaceable range (30000–39999).
@@ -370,6 +376,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_SYSTEM_MESSAGE,
     KIND_CHANNEL_SUMMARY,
     KIND_PRESENCE_SNAPSHOT,
+    KIND_MESH_LLM_RELAY_STATUS,
     KIND_DM_OPEN,
     KIND_DM_ADD_MEMBER,
     KIND_DM_HIDE,
@@ -480,7 +487,10 @@ pub const fn is_command_kind(kind: u32) -> bool {
 /// Returns `true` if `kind` is a relay-only sidecar kind.
 /// Client submission of these kinds must be rejected.
 pub const fn is_relay_only_kind(kind: u32) -> bool {
-    matches!(kind, KIND_CHANNEL_SUMMARY | KIND_PRESENCE_SNAPSHOT)
+    matches!(
+        kind,
+        KIND_CHANNEL_SUMMARY | KIND_PRESENCE_SNAPSHOT | KIND_MESH_LLM_RELAY_STATUS
+    )
 }
 
 /// Extract the kind from a nostr Event as u32.
@@ -498,6 +508,7 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 // Compile-time: new kinds are in the expected ranges.
 const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
 const _: () = assert!(is_parameterized_replaceable(KIND_WORKFLOW_DEF)); // 30620 ∈ 30000–39999
+const _: () = assert!(is_parameterized_replaceable(KIND_MESH_LLM_RELAY_STATUS)); // 30621 ∈ 30000–39999
 
 // Compile-time: NIP-34 parameterized replaceable kinds are in the correct range.
 const _: () = assert!(
