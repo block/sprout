@@ -148,6 +148,12 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     // All tracked PIDs have already been killed above, so pass an empty skip list.
     managed_agents::sweep_orphaned_agent_processes(app, &[]);
 
+    // System-wide sweep: agent workers (goose, sprout-agent, etc.) are spawned
+    // in their own process groups by sprout-acp, so group-kills above only
+    // reach the harness, not the workers. Scan all user processes and kill any
+    // known agent binaries that are still running.
+    managed_agents::sweep_system_agent_processes(&[]);
+
     if changed {
         save_managed_agents(app, &records)?;
     }
@@ -645,11 +651,35 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    let shutdown_done = AtomicBool::new(false);
+    let shutdown_done = Arc::new(AtomicBool::new(false));
+
+    // Agent cleanup on SIGINT (Ctrl+C), SIGTERM, and SIGHUP (terminal close).
+    // The ctrlc crate with the "termination" feature covers all three signals
+    // and runs the handler on a dedicated thread (safe for mutex operations).
+    // `shutdown_done` prevents double-execution with the RunEvent handler.
+    // `process::exit(0)` intentionally skips Drop impls to avoid re-entrant
+    // locking in destructors during signal teardown.
+    #[cfg(unix)]
+    {
+        let signal_app = app.handle().clone();
+        let signal_shutdown_done = Arc::clone(&shutdown_done);
+        let signal_shutdown_started = Arc::clone(&shutdown_started);
+        if let Err(e) = ctrlc::set_handler(move || {
+            signal_shutdown_started.store(true, Ordering::SeqCst);
+            if !signal_shutdown_done.swap(true, Ordering::SeqCst) {
+                let _ = shutdown_managed_agents(&signal_app);
+            }
+            std::process::exit(0);
+        }) {
+            eprintln!("sprout-desktop: failed to register signal handler: {e}");
+        }
+    }
+
+    let run_shutdown_done = Arc::clone(&shutdown_done);
     app.run(move |app_handle, event| match event {
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
             shutdown_started.store(true, Ordering::SeqCst);
-            if !shutdown_done.swap(true, Ordering::SeqCst) {
+            if !run_shutdown_done.swap(true, Ordering::SeqCst) {
                 prevent_sleep::release(&app_handle.state::<AppState>().prevent_sleep);
                 if let Err(error) = shutdown_managed_agents(app_handle) {
                     eprintln!("sprout-desktop: failed to stop managed agents: {error}");

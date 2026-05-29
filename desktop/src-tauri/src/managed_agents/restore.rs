@@ -53,6 +53,12 @@ pub fn restore_managed_agents_on_launch(
             .collect();
         super::sweep_orphaned_agent_processes(app, &tracked_pids);
 
+        // System-wide sweep: enumerate all user processes and kill any known
+        // agent binaries not tracked by this session. Catches orphans whose
+        // PID files were already cleaned up (e.g. agent workers in their own
+        // process group whose parent harness exited).
+        super::sweep_system_agent_processes(&tracked_pids);
+
         let candidates: Vec<String> = records
             .iter()
             .filter(|record| record.start_on_app_launch && record.backend == BackendKind::Local)
