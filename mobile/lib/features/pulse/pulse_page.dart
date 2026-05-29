@@ -56,6 +56,7 @@ class PulsePage extends HookConsumerWidget {
       resizeToAvoidBottomInset: true,
       appBar: const FrostedAppBar(title: Text('Pulse')),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'pulse-compose-fab',
         onPressed: () => Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const ComposeNotePage()),
         ),

@@ -5,8 +5,10 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
+import '../channels/message_content.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
+import 'note_card.dart';
 import 'pulse_actions.dart';
 import 'pulse_models.dart';
 
@@ -147,7 +149,9 @@ class ComposeNotePage extends HookConsumerWidget {
   }
 }
 
-/// Compact preview of the note being replied to, shown above the editor.
+/// A read-only preview of the note being replied to, laid out like a list
+/// row (avatar + name + time + content) but non-interactive. Capped in
+/// height so a long note doesn't push the editor off-screen.
 class _ReplyContext extends ConsumerWidget {
   final UserNote note;
 
@@ -161,8 +165,7 @@ class _ReplyContext extends ConsumerWidget {
         ref.read(userCacheProvider.notifier).get(pubkey);
     final displayName = profile?.label ?? _shortPubkey(pubkey);
 
-    return Container(
-      width: double.infinity,
+    return Padding(
       padding: const EdgeInsets.fromLTRB(Grid.xs, Grid.xs, Grid.xs, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -174,15 +177,63 @@ class _ReplyContext extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: Grid.half),
-          Text(
-            note.content,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: context.textTheme.bodyMedium?.copyWith(
-              color: context.colors.onSurfaceVariant,
+          // Mirror the NoteCard list-row layout, read-only.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 140),
+            child: ClipRect(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: context.colors.primaryContainer,
+                    backgroundImage: profile?.avatarUrl != null
+                        ? NetworkImage(profile!.avatarUrl!)
+                        : null,
+                    child: profile?.avatarUrl == null
+                        ? Text(
+                            (profile?.initial ?? displayName[0]).toUpperCase(),
+                            style: context.textTheme.labelMedium?.copyWith(
+                              color: context.colors.onPrimaryContainer,
+                            ),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: Grid.xs),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                displayName,
+                                style: context.textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: Grid.half),
+                            Text(
+                              formatPulseRelativeTime(note.createdAt),
+                              style: context.textTheme.labelSmall?.copyWith(
+                                color: context.colors.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: Grid.half),
+                        MessageContent(content: note.content, tags: note.tags),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: Grid.xxs),
+          const SizedBox(height: Grid.xs),
           Divider(
             height: 1,
             color: context.colors.outlineVariant.withValues(alpha: 0.5),
