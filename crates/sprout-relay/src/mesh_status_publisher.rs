@@ -24,6 +24,11 @@ pub const MESH_STATUS_D_TAG: &str = "sprout-relay-mesh";
 pub const MESH_STATUS_TYPE: &str = "sprout-mesh-status";
 
 /// Sanitized relay-published mesh status.
+///
+/// Carries dial metadata (mesh identity + per-target `endpoint_addr` invite
+/// tokens), not access grants. iroh admission via NIP-98 → relay membership is
+/// the only gate; possession of these fields confers no ability to dial a
+/// serving node that has not admitted the caller's pubkey.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SproutMeshStatus {

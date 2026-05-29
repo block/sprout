@@ -51,6 +51,10 @@ pub async fn decide_admission(
             IrohAdmissionDecision::Allow { pubkey }
         }
         Ok(MembershipDecision::ViaOwner(_)) => IrohAdmissionDecision::Deny(
+            // v1 deliberately denies NIP-OA owner-delegated agents even when their
+            // owner is a relay member. HTTP endpoints accept that delegation; iroh
+            // admission does not, keeping the mesh-compute trust boundary tighter
+            // and legible. Lifting this is a follow-up gated on NIP-OA scope review.
             "owner-delegated mesh admission is not enabled in v1".to_string(),
         ),
         Ok(MembershipDecision::Denied) => {
@@ -135,5 +139,26 @@ mod tests {
 
         let error = verify_bearer("https://relay.example/iroh/relay", Some(&token)).unwrap_err();
         assert!(error.contains("URL"), "{error}");
+    }
+
+    #[test]
+    fn verify_bearer_rejects_expired_timestamp() {
+        // NIP-98's ±60s window must reject stale bearers — guards against
+        // observed-token replay outside the live admission moment.
+        let keys = Keys::generate();
+        let url = "https://relay.example/iroh/relay";
+        let stale = Timestamp::now() - 120u64;
+        let event = EventBuilder::new(Kind::HttpAuth, "")
+            .tags([
+                Tag::parse(["u", url]).unwrap(),
+                Tag::parse(["method", NIP98_METHOD]).unwrap(),
+            ])
+            .custom_created_at(stale)
+            .sign_with_keys(&keys)
+            .unwrap();
+        let token = STANDARD.encode(serde_json::to_string(&event).unwrap());
+
+        let error = verify_bearer(url, Some(&token)).unwrap_err();
+        assert!(error.contains("window"), "{error}");
     }
 }
