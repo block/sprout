@@ -34,16 +34,12 @@ pub(crate) struct KnownAcpRuntime {
     /// pointing to the canonical `.agents/skills/sprout-cli`. `None` → this
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
-    // Phase 3: these fields are consumed by runtime.rs spawn logic to replace ad-hoc env var injection.
-    #[allow(dead_code)]
     pub supports_acp_model_switching: bool,
-    #[allow(dead_code)]
     pub model_env_var: Option<&'static str>,
     #[allow(dead_code)]
     pub provider_env_var: Option<&'static str>,
     #[allow(dead_code)]
     pub provider_locked: bool,
-    #[allow(dead_code)]
     pub default_env: &'static [(&'static str, &'static str)],
 }
 

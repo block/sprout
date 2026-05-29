@@ -593,7 +593,8 @@ pub fn spawn_agent_child(
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
     // Uses "*" because build_mcp_servers() hard-codes the server name to "sprout-mcp".
-    if known_acp_runtime(&record.agent_command).is_some_and(|p| p.mcp_hooks) {
+    let runtime_meta = known_acp_runtime(&record.agent_command);
+    if runtime_meta.is_some_and(|r| r.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
     // Only emit SPROUT_ACP_IDLE_TIMEOUT when the user has explicitly set an
@@ -613,10 +614,13 @@ pub fn spawn_agent_child(
     command.env("SPROUT_ACP_AGENTS", record.parallelism.to_string());
     command.env("SPROUT_ACP_MULTIPLE_EVENT_HANDLING", "owner-interrupt");
     command.env("SPROUT_ACP_DEDUP", "queue");
-    command.env(
-        "GOOSE_MODE",
-        std::env::var("GOOSE_MODE").unwrap_or_else(|_| "auto".to_string()),
-    );
+    if let Some(meta) = runtime_meta {
+        for (key, value) in meta.default_env {
+            if std::env::var(key).is_err() {
+                command.env(key, value);
+            }
+        }
+    }
     if let (Some(pack_path), Some(persona_name)) =
         (&record.persona_pack_path, &record.persona_name_in_pack)
     {
@@ -658,6 +662,13 @@ pub fn spawn_agent_child(
         command.env("SPROUT_ACP_MODEL", model);
     } else {
         command.env_remove("SPROUT_ACP_MODEL");
+    }
+    if let Some(meta) = runtime_meta {
+        if !meta.supports_acp_model_switching {
+            if let (Some(env_key), Some(model)) = (meta.model_env_var, &effective_model) {
+                command.env(env_key, model);
+            }
+        }
     }
     if let Some(toolsets) = &record.mcp_toolsets {
         command.env("SPROUT_TOOLSETS", toolsets);
