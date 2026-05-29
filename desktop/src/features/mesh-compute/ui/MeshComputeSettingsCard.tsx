@@ -1,0 +1,303 @@
+import * as React from "react";
+import { ChevronDown, Cpu } from "lucide-react";
+
+import { Input } from "@/shared/ui/input";
+import { Switch } from "@/shared/ui/switch";
+import { cn } from "@/shared/lib/cn";
+
+import { meshStartNode, meshStopNode, meshInstalledModels } from "../api";
+import { classifyModelRef, modelRefHintLabel } from "../classifyModelRef";
+import { useMeshNodeStatus } from "../hooks/useMeshNodeStatus";
+import type { MeshModelOption, MeshNodeStatus } from "../types";
+
+/**
+ * Settings → Compute → Share compute.
+ *
+ * One toggle, one model field, an "Already installed" picklist, an Advanced
+ * group. Honest copy throughout — no kind:30621, no "endpoint id", no raw
+ * mesh knobs.
+ *
+ * The architectural-trust footer is load-bearing: it tells a privacy-aware
+ * user that *not publishing* is enforced by the build, not by a default they
+ * have to verify. (Source of the invariants this copy claims: Max's no-leak
+ * builder defaults — publish=false, no Nostr relays, no auto-discovery.)
+ */
+export function MeshComputeSettingsCard() {
+  const { status, error, refresh } = useMeshNodeStatus();
+  const [installedModels, setInstalledModels] = React.useState<
+    MeshModelOption[]
+  >([]);
+  const [modelInput, setModelInput] = React.useState("");
+  const [maxVramGb, setMaxVramGb] = React.useState<string>("");
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const [actionInFlight, setActionInFlight] = React.useState(false);
+  const [actionError, setActionError] = React.useState<string | null>(null);
+
+  // Fetch installed models. Called on mount and whenever the running state
+  // changes (a fresh start may have downloaded a new model). Stale-tolerant —
+  // the picklist is a convenience, not load-bearing.
+  const refreshInstalled = React.useCallback(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await meshInstalledModels();
+        if (!cancelled) setInstalledModels(list);
+      } catch {
+        // Non-fatal — picklist just stays empty; user can still type a ref.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: status?.state is the intentional trigger — re-fetch installed models when the node transitions (a fresh start may have downloaded a new model)
+  React.useEffect(() => refreshInstalled(), [refreshInstalled, status?.state]);
+
+  // Mirror the running node's modelId back into the field so the card shows
+  // what's actually being served, even after a fresh app load.
+  React.useEffect(() => {
+    if (status?.state === "running" && status.modelId && modelInput === "") {
+      setModelInput(status.modelId);
+    }
+  }, [status?.state, status?.modelId, modelInput]);
+
+  const isOn = status?.state === "running" || status?.state === "starting";
+  const refClass = classifyModelRef(modelInput);
+  const refHint = modelRefHintLabel(refClass);
+  const canStart =
+    refClass.kind !== "unknown" &&
+    !actionInFlight &&
+    status?.state !== "starting";
+
+  async function handleToggle(next: boolean) {
+    setActionError(null);
+    setActionInFlight(true);
+    try {
+      if (next) {
+        const maxVram =
+          maxVramGb.trim() === "" ? undefined : Number.parseFloat(maxVramGb);
+        await meshStartNode({
+          mode: "serve",
+          modelId: modelInput.trim() || undefined,
+          maxVramGb:
+            typeof maxVram === "number" && !Number.isNaN(maxVram)
+              ? maxVram
+              : undefined,
+        });
+      } else {
+        await meshStopNode();
+      }
+      refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionInFlight(false);
+    }
+  }
+
+  return (
+    <section className="min-w-0" data-testid="settings-mesh-share-compute">
+      <div className="mb-3 min-w-0">
+        <h2 className="text-sm font-semibold tracking-tight">Share compute</h2>
+        <p className="text-sm text-muted-foreground">
+          Share this machine with your relay. When on, other members can run
+          their agents here.
+        </p>
+      </div>
+
+      {error ? (
+        <p className="mb-3 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          Couldn't load mesh status: {error}
+        </p>
+      ) : null}
+      {actionError ? (
+        <p className="mb-3 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+          {actionError}
+        </p>
+      ) : null}
+
+      <div className="flex flex-col gap-4">
+        {/* ── Master toggle + status row ─────────────────────────────── */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <label
+              className="text-sm font-medium"
+              htmlFor="mesh-share-compute-toggle"
+            >
+              Share this machine
+            </label>
+            <StatusLine status={status} />
+          </div>
+          <Switch
+            checked={isOn}
+            data-testid="mesh-share-compute-toggle"
+            disabled={actionInFlight || (!isOn && !canStart)}
+            id="mesh-share-compute-toggle"
+            onCheckedChange={handleToggle}
+          />
+        </div>
+
+        {/* ── Model field ──────────────────────────────────────────── */}
+        <fieldset
+          className="flex flex-col gap-2"
+          disabled={isOn || actionInFlight}
+        >
+          <legend className="flex items-center gap-2 text-sm font-medium">
+            <Cpu className="h-4 w-4 text-muted-foreground" />
+            Model
+          </legend>
+          <Input
+            data-testid="mesh-share-compute-model"
+            onChange={(e) => setModelInput(e.target.value)}
+            placeholder="Qwen3-8B-Q4_K_M or hf://meshllm/qwen3-8b@main"
+            value={modelInput}
+          />
+          {refHint ? (
+            <p className="text-xs text-muted-foreground">{refHint}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Catalog name, HuggingFace ref, or a local file path.
+            </p>
+          )}
+          {installedModels.length > 0 ? (
+            <div className="mt-1">
+              <p className="text-xs text-muted-foreground">
+                Already installed on this machine:
+              </p>
+              <ul
+                className="mt-1 flex flex-wrap gap-1.5"
+                data-testid="mesh-share-compute-installed-list"
+              >
+                {installedModels.map((m) => (
+                  <li key={m.id}>
+                    <button
+                      className="rounded border border-border/60 bg-muted/20 px-2 py-0.5 text-xs hover:bg-muted/40"
+                      onClick={() => setModelInput(m.id)}
+                      type="button"
+                    >
+                      {m.name ?? m.id}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </fieldset>
+
+        {/* ── Advanced ─────────────────────────────────────────────── */}
+        <details
+          className="rounded border border-border/40 px-3 py-2"
+          onToggle={(e) =>
+            setAdvancedOpen((e.target as HTMLDetailsElement).open)
+          }
+          open={advancedOpen}
+        >
+          <summary className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+            <ChevronDown
+              className={cn(
+                "h-3 w-3 transition-transform",
+                advancedOpen ? "rotate-0" : "-rotate-90",
+              )}
+            />
+            Advanced
+          </summary>
+          <div className="mt-2 flex flex-col gap-2">
+            <label
+              className="text-xs text-muted-foreground"
+              htmlFor="mesh-vram"
+            >
+              Max VRAM (GB)
+            </label>
+            <Input
+              data-testid="mesh-share-compute-vram"
+              id="mesh-vram"
+              inputMode="decimal"
+              onChange={(e) => setMaxVramGb(e.target.value)}
+              placeholder="No limit"
+              value={maxVramGb}
+            />
+            {status?.consoleUrl ? (
+              <p className="text-xs text-muted-foreground">
+                Debug console:{" "}
+                <a
+                  className="underline"
+                  href={status.consoleUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  {status.consoleUrl}
+                </a>
+              </p>
+            ) : null}
+          </div>
+        </details>
+
+        {/* ── Architectural-trust footer ───────────────────────────── */}
+        <p className="rounded bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          Sprout will not publish your machine to public Nostr relays,
+          auto-discover other networks, or share your endpoint outside this
+          relay's members. Only members of this relay can dial in.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Renders the lifecycle/health text under the toggle. Maps Max's `state` ×
+ * `health` matrix to honest copy — no "starting…" stuck forever when mesh
+ * is actually downloading weights or has failed.
+ */
+function StatusLine({ status }: { status: MeshNodeStatus | null }) {
+  if (!status) {
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
+  }
+  const { state, health, modelId, modelName } = status;
+  const modelLabel = modelName ?? modelId ?? "";
+
+  if (state === "off") {
+    return (
+      <p className="text-sm text-muted-foreground">Not sharing right now.</p>
+    );
+  }
+  if (state === "starting") {
+    const reason =
+      health.status === "degraded" || health.status === "failed"
+        ? health.reason
+        : "Starting…";
+    return <p className="text-sm text-muted-foreground">{reason}</p>;
+  }
+  if (state === "running") {
+    if (health.status === "failed") {
+      return (
+        <p className="text-sm text-destructive">
+          Couldn't load: {health.reason}
+        </p>
+      );
+    }
+    if (health.status === "degraded") {
+      return (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          Active{modelLabel ? ` — ${modelLabel}` : ""}. {health.reason}
+        </p>
+      );
+    }
+    return (
+      <p className="text-sm text-muted-foreground">
+        Active{modelLabel ? ` — serving ${modelLabel}` : ""}.
+      </p>
+    );
+  }
+  if (state === "stopping") {
+    return <p className="text-sm text-muted-foreground">Stopping…</p>;
+  }
+  if (state === "failed") {
+    const reason =
+      health.status === "failed" || health.status === "degraded"
+        ? health.reason
+        : "Couldn't start.";
+    return <p className="text-sm text-destructive">{reason}</p>;
+  }
+  return null;
+}
