@@ -28,6 +28,11 @@ pub struct PersonaRecord {
     /// direct). Sprout stores and passes through without interpretation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// LLM inference provider (e.g., 'databricks', 'anthropic', 'openai'). Optional — when set,
+    /// injected as the runtime's provider env var at agent creation time. When absent, the runtime
+    /// falls back to auto-detection (e.g., goose config file or available credentials).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// Pool of short, thematic names for bot instances created from this persona.
     /// When a new copy is added to a channel, a random unused name is picked from this pool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -240,6 +245,8 @@ pub struct CreatePersonaRequest {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
     pub name_pool: Vec<String>,
     /// Environment variables for agents created from this persona.
     #[serde(default)]
@@ -257,6 +264,8 @@ pub struct UpdatePersonaRequest {
     pub runtime: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default)]
     pub name_pool: Vec<String>,
     /// Environment variables for agents created from this persona.

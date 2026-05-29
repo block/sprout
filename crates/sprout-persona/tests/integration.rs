@@ -461,8 +461,8 @@ fn resolve_full_pipeline() {
     assert!(lep.triggers.keywords.contains(&"vulnerability".to_string()));
     assert!(!lep.triggers.all_messages);
 
-    // Goose env vars projected from model
-    let pip_env: std::collections::HashMap<_, _> = pip.goose_env_vars.iter().cloned().collect();
+    // Env vars projected from model
+    let pip_env: std::collections::HashMap<_, _> = pip.runtime_env_vars.iter().cloned().collect();
     assert_eq!(
         pip_env.get("GOOSE_PROVIDER").map(|s| s.as_str()),
         Some("anthropic")

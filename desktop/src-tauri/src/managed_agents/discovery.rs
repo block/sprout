@@ -34,11 +34,10 @@ pub(crate) struct KnownAcpRuntime {
     /// pointing to the canonical `.agents/skills/sprout-cli`. `None` → this
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
+    #[allow(dead_code)]
     pub supports_acp_model_switching: bool,
     pub model_env_var: Option<&'static str>,
-    #[allow(dead_code)]
     pub provider_env_var: Option<&'static str>,
-    #[allow(dead_code)]
     pub provider_locked: bool,
     pub default_env: &'static [(&'static str, &'static str)],
 }
@@ -151,7 +150,7 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         adapter_install_hint: "",
         skill_dir: None,
         supports_acp_model_switching: true,
-        model_env_var: None,
+        model_env_var: Some("SPROUT_AGENT_MODEL"),
         provider_env_var: Some("SPROUT_AGENT_PROVIDER"),
         provider_locked: false,
         default_env: &[],

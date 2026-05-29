@@ -136,9 +136,9 @@ pub fn cmd_inspect(path: &str) -> Result<(), CliError> {
             prompt_preview.replace('\n', " ")
         );
 
-        if !persona.goose_env_vars.is_empty() {
+        if !persona.runtime_env_vars.is_empty() {
             let env_str: Vec<String> = persona
-                .goose_env_vars
+                .runtime_env_vars
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect();

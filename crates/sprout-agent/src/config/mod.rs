@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+mod goose_compat;
+use goose_compat::GooseDatabricksConfig;
+
+use std::time::Duration;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -89,6 +92,12 @@ impl Config {
             databricks_host.as_deref(),
             databricks_model.as_deref(),
         )?;
+
+        // Universal model override — any provider will use this when its own
+        // model env var is absent. Useful for wrapper scripts that set a single
+        // var regardless of which provider is active.
+        let sprout_agent_model = env("SPROUT_AGENT_MODEL");
+
         // OPENAI_COMPAT_API is only read when provider=openai, so a stray
         // bad value can't break an Anthropic-only deployment.
         //
@@ -98,23 +107,26 @@ impl Config {
         let (api_key, model, base_url, openai_api) = match provider {
             Provider::Anthropic => (
                 req("ANTHROPIC_API_KEY")?,
-                req("ANTHROPIC_MODEL")?,
+                resolve_model(env("ANTHROPIC_MODEL").as_deref(), sprout_agent_model.as_deref())
+                    .ok_or_else(|| "config: ANTHROPIC_MODEL required".to_string())?,
                 env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
                 OpenAiApi::Auto, // unused for Anthropic
             ),
             Provider::OpenAi => (
                 req("OPENAI_COMPAT_API_KEY")?,
-                req("OPENAI_COMPAT_MODEL")?,
+                resolve_model(env("OPENAI_COMPAT_MODEL").as_deref(), sprout_agent_model.as_deref())
+                    .ok_or_else(|| "config: OPENAI_COMPAT_MODEL required".to_string())?,
                 env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
                 parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
             ),
             Provider::Databricks => (
                 env("DATABRICKS_TOKEN").unwrap_or_default(),
-                databricks_model.ok_or_else(|| {
-                    "config: DATABRICKS_MODEL required (or set GOOSE_MODEL in goose config with GOOSE_PROVIDER=databricks)".to_string()
-                })?,
+                resolve_model(databricks_model.as_deref(), sprout_agent_model.as_deref())
+                    .ok_or_else(|| {
+                        "config: DATABRICKS_MODEL required (or configure Databricks in ~/.config/goose/config.yaml)".to_string()
+                    })?,
                 databricks_host.ok_or_else(|| {
-                    "config: DATABRICKS_HOST required (or set DATABRICKS_HOST in goose config)".to_string()
+                    "config: DATABRICKS_HOST required (or configure Databricks in ~/.config/goose/config.yaml)".to_string()
                 })?,
                 OpenAiApi::Chat, // Databricks invocations is chat-shaped
             ),
@@ -224,64 +236,11 @@ fn req(k: &str) -> Result<String, String> {
     env(k).ok_or_else(|| format!("config: {k} required"))
 }
 
-#[derive(Default)]
-struct GooseDatabricksConfig {
-    host: Option<String>,
-    model: Option<String>,
-}
-
-impl GooseDatabricksConfig {
-    fn load_default() -> Self {
-        goose_config_path()
-            .and_then(|p| Self::load_from_path(&p))
-            .unwrap_or_default()
-    }
-
-    fn load_from_path(path: &std::path::Path) -> Option<Self> {
-        let raw = std::fs::read_to_string(path).ok()?;
-        let map: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(&raw).ok()?;
-        Some(Self::from_map(&map))
-    }
-
-    fn from_map(map: &HashMap<String, serde_yaml::Value>) -> Self {
-        let host = yaml_string(map, "DATABRICKS_HOST");
-        let explicit_model = yaml_string(map, "DATABRICKS_MODEL");
-        let goose_provider = yaml_string(map, "GOOSE_PROVIDER");
-        let goose_model = yaml_string(map, "GOOSE_MODEL");
-        let goose_mode = yaml_string(map, "GOOSE_MODE");
-        let model = explicit_model.or_else(|| {
-            if goose_provider
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case("databricks"))
-            {
-                goose_model.or(goose_mode)
-            } else {
-                None
-            }
-        });
-        Self { host, model }
-    }
-}
-
-fn yaml_string(map: &HashMap<String, serde_yaml::Value>, key: &str) -> Option<String> {
-    map.get(key)?
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn goose_config_path() -> Option<PathBuf> {
-    if let Ok(root) = std::env::var("GOOSE_PATH_ROOT") {
-        return Some(PathBuf::from(root).join("config").join("config.yaml"));
-    }
-    let home = std::env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".config")
-            .join("goose")
-            .join("config.yaml"),
-    )
+/// Returns the first of `provider_model` or `universal_fallback` that is
+/// `Some`, converting to an owned `String`. Returns `None` when both are
+/// absent so the caller can supply a provider-specific error message.
+fn resolve_model(provider_model: Option<&str>, universal_fallback: Option<&str>) -> Option<String> {
+    provider_model.or(universal_fallback).map(str::to_owned)
 }
 
 fn present_nonempty(v: Option<&str>) -> bool {
@@ -543,72 +502,6 @@ mod tests {
     }
 
     #[test]
-    fn goose_databricks_config_reads_host_and_model() {
-        let map = HashMap::from([
-            (
-                "DATABRICKS_HOST".to_string(),
-                serde_yaml::Value::String("https://dbc.example".into()),
-            ),
-            (
-                "GOOSE_PROVIDER".to_string(),
-                serde_yaml::Value::String("databricks".into()),
-            ),
-            (
-                "GOOSE_MODEL".to_string(),
-                serde_yaml::Value::String("goose-claude-4-6-sonnet".into()),
-            ),
-        ]);
-        let cfg = GooseDatabricksConfig::from_map(&map);
-        assert_eq!(cfg.host.as_deref(), Some("https://dbc.example"));
-        assert_eq!(cfg.model.as_deref(), Some("goose-claude-4-6-sonnet"));
-    }
-
-    #[test]
-    fn goose_databricks_config_prefers_explicit_databricks_model() {
-        let map = HashMap::from([
-            (
-                "DATABRICKS_HOST".to_string(),
-                serde_yaml::Value::String("https://dbc.example".into()),
-            ),
-            (
-                "DATABRICKS_MODEL".to_string(),
-                serde_yaml::Value::String("explicit-db-model".into()),
-            ),
-            (
-                "GOOSE_PROVIDER".to_string(),
-                serde_yaml::Value::String("databricks".into()),
-            ),
-            (
-                "GOOSE_MODEL".to_string(),
-                serde_yaml::Value::String("goose-model".into()),
-            ),
-        ]);
-        let cfg = GooseDatabricksConfig::from_map(&map);
-        assert_eq!(cfg.model.as_deref(), Some("explicit-db-model"));
-    }
-
-    #[test]
-    fn goose_databricks_config_ignores_goose_model_for_other_provider() {
-        let map = HashMap::from([
-            (
-                "DATABRICKS_HOST".to_string(),
-                serde_yaml::Value::String("https://dbc.example".into()),
-            ),
-            (
-                "GOOSE_PROVIDER".to_string(),
-                serde_yaml::Value::String("anthropic".into()),
-            ),
-            (
-                "GOOSE_MODEL".to_string(),
-                serde_yaml::Value::String("claude".into()),
-            ),
-        ]);
-        let cfg = GooseDatabricksConfig::from_map(&map);
-        assert_eq!(cfg.host.as_deref(), Some("https://dbc.example"));
-        assert!(cfg.model.is_none());
-    }
-
-    #[test]
     fn resolve_provider_keeps_requested_provider_when_token_present() {
         assert_eq!(
             resolve_provider(
@@ -713,5 +606,23 @@ mod tests {
         ] {
             assert_eq!(is_openai_host(url), want, "url={url}");
         }
+    }
+
+    #[test]
+    fn resolve_model_prefers_provider_specific() {
+        let result = resolve_model(Some("anthropic-model"), Some("universal-model"));
+        assert_eq!(result.as_deref(), Some("anthropic-model"));
+    }
+
+    #[test]
+    fn resolve_model_falls_back_to_universal() {
+        let result = resolve_model(None, Some("universal-model"));
+        assert_eq!(result.as_deref(), Some("universal-model"));
+    }
+
+    #[test]
+    fn resolve_model_returns_none_when_both_absent() {
+        let result = resolve_model(None, None);
+        assert!(result.is_none());
     }
 }

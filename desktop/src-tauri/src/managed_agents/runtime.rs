@@ -6,7 +6,7 @@ use crate::{
     managed_agents::{
         append_log_marker, known_acp_runtime, login_shell_path, managed_agent_log_path,
         missing_command_message, normalize_agent_args, open_log_file, resolve_command,
-        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary,
+        ManagedAgentProcess, ManagedAgentRecord, ManagedAgentSummary, PersonaRecord,
     },
     util::now_iso,
 };
@@ -628,29 +628,31 @@ pub fn spawn_agent_child(
         command.env("SPROUT_ACP_PERSONA_NAME", persona_name);
     }
 
-    // Resolve system prompt and model: prefer the persona definition (if a
-    // persona pack is configured and the persona matched), otherwise fall back
-    // to the record-level overrides.
+    // Resolve system prompt, model, and provider: prefer the persona definition
+    // (if a persona pack is configured and the persona matched), otherwise fall
+    // back to the record-level overrides. Provider always flows from the persona
+    // when one is linked (the record has no provider field of its own).
     let has_persona_pack =
         record.persona_pack_path.is_some() && record.persona_name_in_pack.is_some();
-    let persona_prompt_and_model: Option<(String, Option<String>)> = has_persona_pack
-        .then(|| {
-            record
-                .persona_id
-                .as_deref()
-                .and_then(|pid| {
-                    super::load_personas(app)
-                        .ok()?
-                        .into_iter()
-                        .find(|p| p.id == pid)
-                })
-                .map(|p| (p.system_prompt, p.model))
-        })
-        .flatten();
+    let persona_record: Option<PersonaRecord> = record.persona_id.as_deref().and_then(|pid| {
+        super::load_personas(app)
+            .ok()?
+            .into_iter()
+            .find(|p| p.id == pid)
+    });
 
-    let (effective_prompt, effective_model) = match persona_prompt_and_model {
-        Some((prompt, model)) => (Some(prompt), model),
-        None => (record.system_prompt.clone(), record.model.clone()),
+    let (effective_prompt, effective_model, effective_provider) = if has_persona_pack {
+        match &persona_record {
+            Some(p) => (
+                Some(p.system_prompt.clone()),
+                p.model.clone(),
+                p.provider.clone(),
+            ),
+            None => (record.system_prompt.clone(), record.model.clone(), None),
+        }
+    } else {
+        let provider = persona_record.as_ref().and_then(|p| p.provider.clone());
+        (record.system_prompt.clone(), record.model.clone(), provider)
     };
 
     if let Some(prompt) = &effective_prompt {
@@ -664,10 +666,14 @@ pub fn spawn_agent_child(
         command.env_remove("SPROUT_ACP_MODEL");
     }
     if let Some(meta) = runtime_meta {
-        if !meta.supports_acp_model_switching {
-            if let (Some(env_key), Some(model)) = (meta.model_env_var, &effective_model) {
-                command.env(env_key, model);
-            }
+        for (key, value) in runtime_metadata_env_vars(
+            meta.model_env_var,
+            meta.provider_env_var,
+            meta.provider_locked,
+            effective_model.as_deref(),
+            effective_provider.as_deref(),
+        ) {
+            command.env(key, value);
         }
     }
     if let Some(toolsets) = &record.mcp_toolsets {
@@ -882,6 +888,32 @@ pub fn stop_managed_agent_process(
     Ok(())
 }
 
+/// Returns the (key, value) env var pairs that should be forwarded to the
+/// agent process for model and provider selection.
+///
+/// Model injection is unconditional — even agents that support ACP model
+/// switching need the initial bootstrap value. Provider injection is skipped
+/// when `provider_locked` is true (e.g. Claude runtimes that only work with
+/// Anthropic).
+fn runtime_metadata_env_vars<'a>(
+    model_env_var: Option<&'a str>,
+    provider_env_var: Option<&'a str>,
+    provider_locked: bool,
+    effective_model: Option<&'a str>,
+    effective_provider: Option<&'a str>,
+) -> Vec<(&'a str, &'a str)> {
+    let mut vars = Vec::new();
+    if let (Some(env_key), Some(model)) = (model_env_var, effective_model) {
+        vars.push((env_key, model));
+    }
+    if !provider_locked {
+        if let (Some(env_key), Some(provider)) = (provider_env_var, effective_provider) {
+            vars.push((env_key, provider));
+        }
+    }
+    vars
+}
+
 #[cfg(test)]
 mod tests {
     use crate::managed_agents::known_acp_runtime;
@@ -1046,5 +1078,56 @@ mod tests {
         let rec = fixture(RespondTo::Allowlist, vec![], Some("tag".into()));
         let err = build_respond_to_env(&rec, Some("owner")).unwrap_err();
         assert!(err.contains("at least one pubkey"));
+    }
+
+    // ── runtime_metadata_env_vars tests ─────────────────────────────────────
+
+    use super::runtime_metadata_env_vars;
+
+    #[test]
+    fn runtime_metadata_env_vars_injects_model_and_provider() {
+        let vars = runtime_metadata_env_vars(
+            Some("GOOSE_MODEL"),
+            Some("GOOSE_PROVIDER"),
+            false,
+            Some("gpt-4o"),
+            Some("openai"),
+        );
+        assert_eq!(
+            vars,
+            vec![("GOOSE_MODEL", "gpt-4o"), ("GOOSE_PROVIDER", "openai")]
+        );
+    }
+
+    #[test]
+    fn runtime_metadata_env_vars_skips_provider_when_locked() {
+        let vars = runtime_metadata_env_vars(
+            None, // claude has no model_env_var
+            None, // claude has no provider_env_var
+            true, // provider_locked = true
+            Some("claude-opus-4-7"),
+            Some("anthropic"),
+        );
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn runtime_metadata_env_vars_injects_model_even_with_acp_model_switching() {
+        // sprout-agent has supports_acp_model_switching=true but we still inject
+        // the model env var because ACP model switching is post-bootstrap
+        let vars = runtime_metadata_env_vars(
+            Some("SPROUT_AGENT_MODEL"),
+            Some("SPROUT_AGENT_PROVIDER"),
+            false,
+            Some("goose-claude-4-6-opus"),
+            Some("databricks"),
+        );
+        assert_eq!(
+            vars,
+            vec![
+                ("SPROUT_AGENT_MODEL", "goose-claude-4-6-opus"),
+                ("SPROUT_AGENT_PROVIDER", "databricks"),
+            ]
+        );
     }
 }
