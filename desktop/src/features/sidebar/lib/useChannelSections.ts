@@ -1,11 +1,18 @@
 import * as React from "react";
 
+import { relayClient } from "@/shared/api/relayClient";
 import {
   DEFAULT_STORE,
   readChannelSectionsStore,
   storageKey,
   writeChannelSectionsStore,
 } from "./channelSectionsStorage";
+import {
+  fetchRemoteSections,
+  publishSections,
+  resetSyncState,
+  subscribeToSections,
+} from "./channelSectionsSync";
 
 export type { ChannelSection } from "./channelSectionsStorage";
 
@@ -33,12 +40,19 @@ export function useChannelSections(pubkey: string | undefined): {
     return readChannelSectionsStore(pubkey);
   });
 
+  const lastAppliedRemoteTs = React.useRef(0);
+
   React.useEffect(() => {
     if (!pubkey) {
       setStore(DEFAULT_STORE);
+      lastAppliedRemoteTs.current = 0;
       return;
     }
     setStore(readChannelSectionsStore(pubkey));
+    lastAppliedRemoteTs.current = 0;
+    return () => {
+      resetSyncState();
+    };
   }, [pubkey]);
 
   React.useEffect(() => {
@@ -56,6 +70,70 @@ export function useChannelSections(pubkey: string | undefined): {
     return () => {
       window.removeEventListener("storage", handler);
     };
+  }, [pubkey]);
+
+  React.useEffect(() => {
+    if (!pubkey) return;
+    let cancelled = false;
+    void fetchRemoteSections(pubkey).then((remote) => {
+      if (cancelled) return;
+      if (remote) {
+        setStore((prev) => {
+          if (remote.createdAt <= lastAppliedRemoteTs.current) return prev;
+          lastAppliedRemoteTs.current = remote.createdAt;
+          if (!writeChannelSectionsStore(pubkey, remote.store)) return prev;
+          return remote.store;
+        });
+      } else {
+        const local = readChannelSectionsStore(pubkey);
+        if (local.sections.length > 0) {
+          publishSections(local);
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pubkey]);
+
+  React.useEffect(() => {
+    if (!pubkey) return;
+    let unsub: (() => Promise<void>) | null = null;
+    let cancelled = false;
+    void subscribeToSections(pubkey, (remote) => {
+      if (cancelled) return;
+      setStore((prev) => {
+        if (remote.createdAt <= lastAppliedRemoteTs.current) return prev;
+        lastAppliedRemoteTs.current = remote.createdAt;
+        if (!writeChannelSectionsStore(pubkey, remote.store)) return prev;
+        return remote.store;
+      });
+    }).then((dispose) => {
+      if (cancelled) {
+        void dispose();
+      } else {
+        unsub = dispose;
+      }
+    });
+    return () => {
+      cancelled = true;
+      if (unsub) void unsub();
+    };
+  }, [pubkey]);
+
+  React.useEffect(() => {
+    if (!pubkey) return;
+    return relayClient.subscribeToReconnects(() => {
+      void fetchRemoteSections(pubkey).then((remote) => {
+        if (!remote) return;
+        setStore((prev) => {
+          if (remote.createdAt <= lastAppliedRemoteTs.current) return prev;
+          lastAppliedRemoteTs.current = remote.createdAt;
+          if (!writeChannelSectionsStore(pubkey, remote.store)) return prev;
+          return remote.store;
+        });
+      });
+    });
   }, [pubkey]);
 
   const sections = React.useMemo<ChannelSection[]>(
@@ -87,6 +165,7 @@ export function useChannelSections(pubkey: string | undefined): {
           return prev;
         }
         created = section;
+        publishSections(next);
         return next;
       });
       return created;
@@ -109,6 +188,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -135,6 +215,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -170,6 +251,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -205,6 +287,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -240,6 +323,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -258,6 +342,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
