@@ -1,11 +1,22 @@
 import * as React from "react";
 
+import { relayClient } from "@/shared/api/relayClient";
 import {
   DEFAULT_STORE,
   readChannelSectionsStore,
   storageKey,
   writeChannelSectionsStore,
 } from "./channelSectionsStorage";
+import {
+  cancelPendingPublish,
+  fetchRemoteSections,
+  getPendingStore,
+  publishSections,
+  resetSyncState,
+  subscribeToSections,
+} from "./channelSectionsSync";
+import type { RemoteSections } from "./channelSectionsSync";
+import { swapSectionOrder } from "./channelSectionsHelpers";
 
 export type { ChannelSection } from "./channelSectionsStorage";
 
@@ -33,12 +44,22 @@ export function useChannelSections(pubkey: string | undefined): {
     return readChannelSectionsStore(pubkey);
   });
 
+  const lastAppliedRemoteTs = React.useRef(0);
+  const lastAppliedEventId = React.useRef("");
+
   React.useEffect(() => {
     if (!pubkey) {
       setStore(DEFAULT_STORE);
+      lastAppliedRemoteTs.current = 0;
+      lastAppliedEventId.current = "";
       return;
     }
     setStore(readChannelSectionsStore(pubkey));
+    lastAppliedRemoteTs.current = 0;
+    lastAppliedEventId.current = "";
+    return () => {
+      resetSyncState();
+    };
   }, [pubkey]);
 
   React.useEffect(() => {
@@ -58,6 +79,87 @@ export function useChannelSections(pubkey: string | undefined): {
     };
   }, [pubkey]);
 
+  const applyRemote = React.useCallback(
+    (
+      remote: RemoteSections,
+    ): ((prev: ChannelSectionStore) => ChannelSectionStore) => {
+      return (prev) => {
+        if (remote.createdAt < lastAppliedRemoteTs.current) return prev;
+        if (
+          remote.createdAt === lastAppliedRemoteTs.current &&
+          remote.eventId >= lastAppliedEventId.current
+        )
+          return prev;
+        lastAppliedRemoteTs.current = remote.createdAt;
+        lastAppliedEventId.current = remote.eventId;
+        cancelPendingPublish();
+        if (!writeChannelSectionsStore(pubkey!, remote.store)) return prev;
+        return remote.store;
+      };
+    },
+    [pubkey],
+  );
+
+  React.useEffect(() => {
+    if (!pubkey) return;
+    let cancelled = false;
+    void fetchRemoteSections(pubkey).then((remote) => {
+      if (cancelled) return;
+      if (remote) {
+        setStore(applyRemote(remote));
+      } else {
+        const local = readChannelSectionsStore(pubkey);
+        if (local.sections.length > 0) {
+          publishSections(local);
+        }
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pubkey, applyRemote]);
+
+  React.useEffect(() => {
+    if (!pubkey) return;
+    let unsub: (() => Promise<void>) | null = null;
+    let cancelled = false;
+    void subscribeToSections(pubkey, (remote) => {
+      if (cancelled) return;
+      setStore(applyRemote(remote));
+    }).then((dispose) => {
+      if (cancelled) {
+        void dispose();
+      } else {
+        unsub = dispose;
+      }
+    });
+    return () => {
+      cancelled = true;
+      if (unsub) void unsub();
+    };
+  }, [pubkey, applyRemote]);
+
+  React.useEffect(() => {
+    if (!pubkey) return;
+    let cancelled = false;
+    const unsub = relayClient.subscribeToReconnects(() => {
+      void fetchRemoteSections(pubkey).then((remote) => {
+        if (cancelled) return;
+        if (remote) {
+          setStore(applyRemote(remote));
+        }
+        const pending = getPendingStore();
+        if (pending) {
+          publishSections(pending);
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [pubkey, applyRemote]);
+
   const sections = React.useMemo<ChannelSection[]>(
     () => store.sections.slice().sort((a, b) => a.order - b.order),
     [store.sections],
@@ -65,31 +167,27 @@ export function useChannelSections(pubkey: string | undefined): {
 
   const createSection = React.useCallback(
     (name: string): ChannelSection | null => {
-      if (!pubkey) {
-        return null;
-      }
-      let created: ChannelSection | null = null;
-      setStore((prev) => {
-        const maxOrder =
-          prev.sections.length > 0
-            ? Math.max(...prev.sections.map((s) => s.order))
-            : -1;
-        const section: ChannelSection = {
-          id: crypto.randomUUID(),
-          name,
-          order: maxOrder + 1,
-        };
+      if (!pubkey) return null;
+      const prev = readChannelSectionsStore(pubkey);
+      const maxOrder =
+        prev.sections.length > 0
+          ? Math.max(...prev.sections.map((s) => s.order))
+          : -1;
+      const section: ChannelSection = {
+        id: crypto.randomUUID(),
+        name,
+        order: maxOrder + 1,
+      };
+      setStore((current) => {
         const next: ChannelSectionStore = {
-          ...prev,
-          sections: [...prev.sections, section],
+          ...current,
+          sections: [...current.sections, section],
         };
-        if (!writeChannelSectionsStore(pubkey, next)) {
-          return prev;
-        }
-        created = section;
+        if (!writeChannelSectionsStore(pubkey, next)) return current;
+        publishSections(next);
         return next;
       });
-      return created;
+      return section;
     },
     [pubkey],
   );
@@ -109,6 +207,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -135,6 +234,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -143,33 +243,11 @@ export function useChannelSections(pubkey: string | undefined): {
 
   const moveSectionUp = React.useCallback(
     (sectionId: string) => {
-      if (!pubkey) {
-        return;
-      }
+      if (!pubkey) return;
       setStore((prev) => {
-        const target = prev.sections.find((s) => s.id === sectionId);
-        if (!target) {
-          return prev;
-        }
-        const sorted = prev.sections.slice().sort((a, b) => a.order - b.order);
-        const idx = sorted.findIndex((s) => s.id === sectionId);
-        if (idx <= 0) {
-          return prev;
-        }
-        const neighbor = sorted[idx - 1];
-        const sections = prev.sections.map((s) => {
-          if (s.id === target.id) {
-            return { ...s, order: neighbor.order };
-          }
-          if (s.id === neighbor.id) {
-            return { ...s, order: target.order };
-          }
-          return s;
-        });
-        const next: ChannelSectionStore = { ...prev, sections };
-        if (!writeChannelSectionsStore(pubkey, next)) {
-          return prev;
-        }
+        const next = swapSectionOrder(prev, sectionId, "up");
+        if (!next || !writeChannelSectionsStore(pubkey, next)) return prev;
+        publishSections(next);
         return next;
       });
     },
@@ -178,33 +256,11 @@ export function useChannelSections(pubkey: string | undefined): {
 
   const moveSectionDown = React.useCallback(
     (sectionId: string) => {
-      if (!pubkey) {
-        return;
-      }
+      if (!pubkey) return;
       setStore((prev) => {
-        const target = prev.sections.find((s) => s.id === sectionId);
-        if (!target) {
-          return prev;
-        }
-        const sorted = prev.sections.slice().sort((a, b) => a.order - b.order);
-        const idx = sorted.findIndex((s) => s.id === sectionId);
-        if (idx < 0 || idx >= sorted.length - 1) {
-          return prev;
-        }
-        const neighbor = sorted[idx + 1];
-        const sections = prev.sections.map((s) => {
-          if (s.id === target.id) {
-            return { ...s, order: neighbor.order };
-          }
-          if (s.id === neighbor.id) {
-            return { ...s, order: target.order };
-          }
-          return s;
-        });
-        const next: ChannelSectionStore = { ...prev, sections };
-        if (!writeChannelSectionsStore(pubkey, next)) {
-          return prev;
-        }
+        const next = swapSectionOrder(prev, sectionId, "down");
+        if (!next || !writeChannelSectionsStore(pubkey, next)) return prev;
+        publishSections(next);
         return next;
       });
     },
@@ -240,6 +296,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
@@ -258,6 +315,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
+        publishSections(next);
         return next;
       });
     },
