@@ -40,7 +40,7 @@ import type {
   AgentModelsResponse,
   UpdateManagedAgentInput,
   AcpAvailabilityStatus,
-  AcpProviderCatalogEntry,
+  AcpRuntimeCatalogEntry,
   CommandAvailability,
   InstallRuntimeResult,
   OpenDmInput,
@@ -248,7 +248,7 @@ type RawManagedAgentLog = {
   log_path: string;
 };
 
-export type RawAcpProviderCatalogEntry = {
+export type RawAcpRuntimeCatalogEntry = {
   id: string;
   label: string;
   avatar_url: string;
@@ -880,9 +880,9 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
   };
 }
 
-function fromRawAcpProviderCatalogEntry(
-  entry: RawAcpProviderCatalogEntry,
-): AcpProviderCatalogEntry {
+function fromRawAcpRuntimeCatalogEntry(
+  entry: RawAcpRuntimeCatalogEntry,
+): AcpRuntimeCatalogEntry {
   return {
     id: entry.id,
     label: entry.label,
@@ -1067,20 +1067,18 @@ export async function getManagedAgentLog(pubkey: string, lineCount?: number) {
   };
 }
 
-export async function discoverAcpProviders(): Promise<
-  AcpProviderCatalogEntry[]
-> {
+export async function discoverAcpRuntimes(): Promise<AcpRuntimeCatalogEntry[]> {
   return (
-    await invokeTauri<RawAcpProviderCatalogEntry[]>("discover_acp_providers")
-  ).map(fromRawAcpProviderCatalogEntry);
+    await invokeTauri<RawAcpRuntimeCatalogEntry[]>("discover_acp_providers")
+  ).map(fromRawAcpRuntimeCatalogEntry);
 }
 
 export async function installAcpRuntime(
-  providerId: string,
+  runtimeId: string,
 ): Promise<InstallRuntimeResult> {
   const raw = await invokeTauri<RawInstallRuntimeResult>(
     "install_acp_runtime",
-    { providerId },
+    { runtimeId },
   );
   return fromRawInstallRuntimeResult(raw);
 }

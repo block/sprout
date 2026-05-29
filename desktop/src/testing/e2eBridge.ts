@@ -5,7 +5,7 @@ import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
 import type {
-  RawAcpProviderCatalogEntry,
+  RawAcpRuntimeCatalogEntry,
   RawInstallRuntimeResult,
 } from "@/shared/api/tauri";
 
@@ -24,7 +24,7 @@ type MockCommandAvailability = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
-    acpProvidersCatalog?: RawAcpProviderCatalogEntry[];
+    acpRuntimesCatalog?: RawAcpRuntimeCatalogEntry[];
     installAcpRuntimeResult?: RawInstallRuntimeResult;
     managedAgentPrereqs?: {
       acp?: MockCommandAvailability;
@@ -3550,10 +3550,10 @@ async function handleListRelayAgents(): Promise<RawRelayAgent[]> {
   return mockRelayAgents.map(cloneRelayAgent);
 }
 
-async function handleDiscoverAcpProviders(
+async function handleDiscoverAcpRuntimes(
   config: E2eConfig | undefined,
-): Promise<RawAcpProviderCatalogEntry[]> {
-  const configured = config?.mock?.acpProvidersCatalog;
+): Promise<RawAcpRuntimeCatalogEntry[]> {
+  const configured = config?.mock?.acpRuntimesCatalog;
   if (configured) {
     return configured;
   }
@@ -3621,7 +3621,7 @@ async function handleDiscoverAcpProviders(
 
 async function handleInstallAcpRuntime(
   args: {
-    providerId?: string;
+    runtimeId?: string;
   },
   config: E2eConfig | undefined,
 ): Promise<RawInstallRuntimeResult> {
@@ -3634,7 +3634,7 @@ async function handleInstallAcpRuntime(
     steps: [
       {
         step: "adapter",
-        command: `mock install ${args.providerId ?? "unknown"}`,
+        command: `mock install ${args.runtimeId ?? "unknown"}`,
         success: true,
         stdout: "mock: installed successfully",
         stderr: "",
@@ -4830,10 +4830,10 @@ export function maybeInstallE2eTauriMocks() {
       case "get_relay_http_url":
         return getRelayHttpUrl(activeConfig);
       case "discover_acp_providers":
-        return handleDiscoverAcpProviders(activeConfig);
+        return handleDiscoverAcpRuntimes(activeConfig);
       case "install_acp_runtime":
         return handleInstallAcpRuntime(
-          payload as { providerId?: string },
+          payload as { runtimeId?: string },
           activeConfig,
         );
       case "discover_backend_providers":

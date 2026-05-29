@@ -2,8 +2,8 @@ import { AlertTriangle, ChevronDown } from "lucide-react";
 import * as React from "react";
 
 import {
-  useAcpProvidersQuery,
-  useAvailableAcpProviders,
+  useAcpRuntimesQuery,
+  useAvailableAcpRuntimes,
   useBackendProvidersQuery,
   useCreateManagedAgentMutation,
   useManagedAgentPrereqsQuery,
@@ -26,7 +26,7 @@ import {
 import {
   CreateAgentBasicsFields,
   CreateAgentOptionToggles,
-  CreateAgentRuntimeProviderField,
+  CreateAgentRuntimeField,
   CreateAgentRuntimeFields,
 } from "./CreateAgentDialogSections";
 import { EnvVarsEditor, type EnvVarsValue } from "./EnvVarsEditor";
@@ -35,7 +35,7 @@ import {
   ProviderConfigFields,
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
-import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
+import { useLastRuntime } from "@/features/agents/lib/useLastRuntime";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
 
@@ -49,10 +49,10 @@ export function CreateAgentDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const createMutation = useCreateManagedAgentMutation();
-  const providersQuery = useAvailableAcpProviders();
-  const allProvidersQuery = useAcpProvidersQuery();
+  const providersQuery = useAvailableAcpRuntimes();
+  const allProvidersQuery = useAcpRuntimesQuery();
   const backendProvidersQuery = useBackendProvidersQuery();
-  const { lastProviderId, setLastProvider } = useLastRuntimeProvider();
+  const { lastRuntimeId, setLastRuntime } = useLastRuntime();
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
@@ -67,7 +67,7 @@ export function CreateAgentDialog({
   const [parallelism, setParallelism] = React.useState("24");
   const [systemPrompt, setSystemPrompt] = React.useState("");
   const [envVars, setEnvVars] = React.useState<EnvVarsValue>({});
-  const [selectedProviderId, setSelectedProviderId] =
+  const [selectedRuntimeId, setSelectedRuntimeId] =
     React.useState<string>("custom");
   const [hasSyncedProviderSelection, setHasSyncedProviderSelection] =
     React.useState(false);
@@ -86,17 +86,16 @@ export function CreateAgentDialog({
     React.useState<BackendProviderProbeResult | null>(null);
   const [probeError, setProbeError] = React.useState<string | null>(null);
 
-  const providers = providersQuery.data ?? [];
+  const runtimes = providersQuery.data ?? [];
   const allProviders = allProvidersQuery.data ?? [];
   const unavailableCount = allProviders.filter(
     (p) => p.availability !== "available",
   ).length;
   const backendProviders = backendProvidersQuery.data ?? [];
   const prereqs = prereqsQuery.data ?? null;
-  const selectedProvider = React.useMemo(
-    () =>
-      providers.find((provider) => provider.id === selectedProviderId) ?? null,
-    [providers, selectedProviderId],
+  const selectedRuntime = React.useMemo(
+    () => runtimes.find((runtime) => runtime.id === selectedRuntimeId) ?? null,
+    [runtimes, selectedRuntimeId],
   );
   const selectedBackendProvider = React.useMemo(
     () => backendProviders.find((p) => p.id === runOn) ?? null,
@@ -115,28 +114,28 @@ export function CreateAgentDialog({
       return;
     }
 
-    // Prefer last-used provider from localStorage
-    const remembered = lastProviderId
-      ? providers.find((provider) => provider.id === lastProviderId)
+    // Prefer last-used runtime from localStorage
+    const remembered = lastRuntimeId
+      ? runtimes.find((runtime) => runtime.id === lastRuntimeId)
       : null;
     if (remembered) {
-      setSelectedProviderId(remembered.id);
+      setSelectedRuntimeId(remembered.id);
       setAgentCommand(remembered.command);
       setAgentArgs(remembered.defaultArgs.join(","));
       setMcpCommand(remembered.mcpCommand ?? "sprout-mcp-server");
     } else {
       const matchingProvider =
-        providers.find((provider) => provider.command === agentCommand) ?? null;
+        runtimes.find((runtime) => runtime.command === agentCommand) ?? null;
       if (matchingProvider) {
-        setSelectedProviderId(matchingProvider.id);
+        setSelectedRuntimeId(matchingProvider.id);
       }
     }
     setHasSyncedProviderSelection(true);
   }, [
     agentCommand,
     hasSyncedProviderSelection,
-    lastProviderId,
-    providers,
+    lastRuntimeId,
+    runtimes,
     providersQuery.isLoading,
   ]);
 
@@ -221,7 +220,7 @@ export function CreateAgentDialog({
     setParallelism("24");
     setSystemPrompt("");
     setEnvVars({});
-    setSelectedProviderId("custom");
+    setSelectedRuntimeId("custom");
     setHasSyncedProviderSelection(false);
     setShowAdvanced(false);
     setRunOn("local");
@@ -242,21 +241,21 @@ export function CreateAgentDialog({
   }
 
   function handleProviderChange(nextProviderId: string) {
-    setSelectedProviderId(nextProviderId);
+    setSelectedRuntimeId(nextProviderId);
 
     if (nextProviderId === "custom") {
       setShowAdvanced(true);
       return;
     }
 
-    const provider = providers.find(
+    const provider = runtimes.find(
       (candidate) => candidate.id === nextProviderId,
     );
     if (!provider) {
       return;
     }
 
-    setLastProvider(nextProviderId);
+    setLastRuntime(nextProviderId);
     setAgentCommand(provider.command);
     setAgentArgs(provider.defaultArgs.join(","));
     setMcpCommand(provider.mcpCommand ?? "sprout-mcp-server");
@@ -443,12 +442,12 @@ export function CreateAgentDialog({
 
             {/* Local mode: show the ACP runtime selector */}
             {!isProviderMode ? (
-              <CreateAgentRuntimeProviderField
-                onProviderChange={handleProviderChange}
-                providers={providers}
-                providersLoading={providersQuery.isLoading}
-                selectedProvider={selectedProvider}
-                selectedProviderId={selectedProviderId}
+              <CreateAgentRuntimeField
+                onRuntimeChange={handleProviderChange}
+                runtimes={runtimes}
+                runtimesLoading={providersQuery.isLoading}
+                selectedRuntime={selectedRuntime}
+                selectedRuntimeId={selectedRuntimeId}
                 unavailableCount={unavailableCount}
               />
             ) : null}
@@ -520,7 +519,7 @@ export function CreateAgentDialog({
                       onTurnTimeoutChange={setTurnTimeoutSeconds}
                       parallelism={parallelism}
                       relayUrl={relayUrl}
-                      selectedProviderId={selectedProviderId}
+                      selectedRuntimeId={selectedRuntimeId}
                       systemPrompt={systemPrompt}
                       turnTimeoutSeconds={turnTimeoutSeconds}
                     />
