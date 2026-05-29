@@ -166,7 +166,6 @@ export const FormattingToolbar = React.memo(function FormattingToolbar({
     {
       icon: SquareCode,
       label: "Code block",
-      shortcut: "⌘⌥C",
       action: toggleCodeBlock,
       active: activeStates.codeBlock,
     },
