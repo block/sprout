@@ -35,15 +35,15 @@ pub(crate) struct KnownAcpRuntime {
     /// runtime reads the canonical path directly or has no skill support.
     pub skill_dir: Option<&'static str>,
     // Phase 3: these fields are consumed by runtime.rs spawn logic to replace ad-hoc env var injection.
-    /// Whether this runtime supports ACP model switching mid-session.
+    #[allow(dead_code)]
     pub supports_acp_model_switching: bool,
-    /// Environment variable name used to set the model for this runtime, if any.
+    #[allow(dead_code)]
     pub model_env_var: Option<&'static str>,
-    /// Environment variable name used to set the LLM provider for this runtime, if any.
+    #[allow(dead_code)]
     pub provider_env_var: Option<&'static str>,
-    /// Whether the LLM provider is locked (not user-selectable) for this runtime.
+    #[allow(dead_code)]
     pub provider_locked: bool,
-    /// Default environment variables injected when spawning agents using this runtime.
+    #[allow(dead_code)]
     pub default_env: &'static [(&'static str, &'static str)],
 }
 
