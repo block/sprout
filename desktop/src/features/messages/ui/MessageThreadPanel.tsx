@@ -165,18 +165,14 @@ export function MessageThreadPanel({
     <>
       {isOverlay && <OverlayPanelBackdrop onClose={onClose} />}
       <aside
-        className={cn(
-          PANEL_BASE_CLASS,
-          !isOverlay && "pt-11",
-          isOverlay && PANEL_OVERLAY_CLASS,
-        )}
+        className={cn(PANEL_BASE_CLASS, isOverlay && PANEL_OVERLAY_CLASS)}
         data-testid="message-thread-panel"
         style={{ width: `${widthPx}px` }}
       >
         {!isOverlay && (
           <button
             aria-label="Resize thread panel"
-            className="group absolute inset-y-0 left-0 z-20 w-3 -translate-x-1/2 cursor-col-resize"
+            className="peer/thread-resize group/thread-resize absolute inset-y-0 left-0 z-[60] w-3 -translate-x-1/2 cursor-col-resize"
             data-testid="message-thread-resize-handle"
             onDoubleClick={canResetWidth ? onResetWidth : undefined}
             onPointerDown={onResizeStart}
@@ -187,28 +183,47 @@ export function MessageThreadPanel({
             }
             type="button"
           >
-            <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border/80" />
+            <span className="absolute bottom-0 left-1/2 top-10 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/thread-resize:bg-border/80 group-focus-visible/thread-resize:bg-border/80" />
           </button>
         )}
 
-        <div className="flex items-center gap-3 px-4 py-3">
-          <div className="min-w-0 flex-1">
+        {!isOverlay ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-transparent after:absolute after:bottom-0 after:-left-px after:top-10 after:w-px after:bg-border/45 after:transition-colors peer-hover/thread-resize:after:bg-border/80 peer-focus-visible/thread-resize:after:bg-border/80"
+          />
+        ) : null}
+
+        <div
+          className={cn(
+            "z-50 flex cursor-default select-none items-center gap-3 px-3",
+            isOverlay
+              ? "relative min-h-[44px] shrink-0 bg-background/70 py-[6px] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55"
+              : "absolute inset-x-0 top-11 min-h-[32px] py-[4px]",
+          )}
+          data-tauri-drag-region
+        >
+          <div className="flex min-w-0 items-center gap-1.5">
             <h2 className="text-sm font-semibold tracking-tight">Thread</h2>
           </div>
           <Button
             aria-label="Close thread"
+            className="ml-auto h-4 w-4 rounded-full text-muted-foreground/45 opacity-70 hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
             data-testid="message-thread-close"
             onClick={onClose}
             size="icon"
             type="button"
             variant="ghost"
           >
-            <X className="h-4 w-4" />
+            <X className="h-2.5 w-2.5" />
           </Button>
         </div>
 
         <div
-          className="min-h-0 flex-1 overflow-y-auto pb-24"
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto pb-24",
+            isOverlay ? "" : "pt-[76px]",
+          )}
           data-testid="message-thread-body"
           onScroll={syncScrollState}
           ref={threadBodyRef}

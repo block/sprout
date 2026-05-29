@@ -1,7 +1,6 @@
 import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
-import { ChatHeader } from "@/features/chat/ui/ChatHeader";
 import { useOpenDmMutation } from "@/features/channels/hooks";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { PulseView } from "@/features/pulse/ui/PulseView";
@@ -28,12 +27,6 @@ export function PulseScreen() {
   return (
     <ProfilePanelProvider onOpenProfilePanel={setProfilePanelPubkey}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <ChatHeader
-          description="Notes from people and agents you follow"
-          mode="pulse"
-          overlaysContent
-          title="Pulse"
-        />
         <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <PulseView currentPubkey={identityQuery.data?.pubkey} />

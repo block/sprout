@@ -1,4 +1,3 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import * as React from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useQueryClient } from "@tanstack/react-query";
@@ -9,6 +8,7 @@ import {
   AppShellOverlays,
   type BrowseDialogType,
 } from "@/app/AppShellOverlays";
+import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
@@ -62,12 +62,7 @@ import type { Channel, RelayEvent, SearchHit } from "@/shared/api/types";
 import { ChannelNavigationProvider } from "@/shared/context/ChannelNavigationContext";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { useMessageDeepLinks } from "@/shared/useMessageDeepLinks";
-import { Button } from "@/shared/ui/button";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "@/shared/ui/sidebar";
+import { SidebarInset, SidebarProvider } from "@/shared/ui/sidebar";
 
 type AppView =
   | "home"
@@ -174,7 +169,7 @@ export function AppShell() {
 
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
-  const [isSearchOpen, setIsSearchOpen] = React.useState(false);
+  const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
@@ -365,7 +360,7 @@ export function AppShell() {
     void refetchChannels();
   }, [refetchChannels]);
   const handleOpenSearch = React.useCallback(() => {
-    setIsSearchOpen(true);
+    setSearchFocusRequest((request) => request + 1);
     void refetchChannels();
   }, [refetchChannels]);
 
@@ -400,7 +395,6 @@ export function AppShell() {
 
   const handleOpenSettings = React.useCallback(
     (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
-      setIsSearchOpen(false);
       setIsChannelManagementOpen(false);
       setSettingsSection(section);
       setSettingsOpen(true);
@@ -659,36 +653,19 @@ export function AppShell() {
           <HuddleProvider>
             <div className="flex h-dvh flex-col overflow-hidden overscroll-none">
               <SidebarProvider className="min-h-0 flex-1 overflow-hidden">
-                <div
-                  aria-hidden="true"
-                  className="fixed inset-x-0 top-0 z-20 h-10 cursor-default select-none"
-                  data-tauri-drag-region
+                <AppTopChrome
+                  canGoBack={canGoBack}
+                  canGoForward={canGoForward}
+                  channels={channels}
+                  currentPubkey={identityQuery.data?.pubkey}
+                  onGoBack={goBack}
+                  onGoForward={goForward}
+                  onOpenChannel={(channelId) => {
+                    void goChannel(channelId);
+                  }}
+                  onOpenResult={handleOpenSearchResult}
+                  searchFocusRequest={searchFocusRequest}
                 />
-                <div className="fixed left-[80px] top-[9px] z-50 flex items-center gap-0.5">
-                  <SidebarTrigger className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
-                  <Button
-                    aria-label="Go back"
-                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
-                    data-testid="global-back"
-                    disabled={!canGoBack}
-                    onClick={goBack}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <ChevronLeft className="h-3 w-3" />
-                  </Button>
-                  <Button
-                    aria-label="Go forward"
-                    className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
-                    data-testid="global-forward"
-                    disabled={!canGoForward}
-                    onClick={goForward}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <ChevronRight className="h-3 w-3" />
-                  </Button>
-                </div>
                 <AppSidebar
                   activeWorkspace={workspacesHook.activeWorkspace}
                   channels={sidebarChannels}
@@ -770,7 +747,6 @@ export function AppShell() {
                     });
                     await goChannel(directMessage.id);
                   }}
-                  onOpenSearch={handleOpenSearch}
                   onSelectAgents={() => {
                     void goAgents();
                   }}
@@ -821,7 +797,6 @@ export function AppShell() {
                   channels={channels}
                   currentPubkey={identityQuery.data?.pubkey}
                   isChannelManagementOpen={isChannelManagementOpen}
-                  isSearchOpen={isSearchOpen}
                   onBrowseChannelJoin={handleBrowseChannelJoin}
                   onBrowseDialogOpenChange={handleBrowseDialogOpenChange}
                   onChannelManagementOpenChange={setIsChannelManagementOpen}
@@ -829,8 +804,6 @@ export function AppShell() {
                     setIsChannelManagementOpen(false);
                     void goHome({ replace: true });
                   }}
-                  onOpenSearchResult={handleOpenSearchResult}
-                  onSearchOpenChange={setIsSearchOpen}
                   onSelectChannel={(channelId) => {
                     void goChannel(channelId);
                   }}
