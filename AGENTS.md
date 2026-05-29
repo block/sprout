@@ -199,6 +199,31 @@ Desktop E2E: `cd desktop && pnpm exec playwright test`
 
 See [TESTING.md](TESTING.md) for the full multi-agent E2E guide.
 
+### Desktop Screenshots (Playwright)
+
+The desktop app is a Tauri app that cannot render in a plain browser without the
+E2E mock bridge. A standalone screenshot helper at
+`desktop/tests/helpers/screenshot.mjs` wraps the same mock bridge setup the E2E
+tests use (`addInitScript` + `window.__SPROUT_E2E__`) into a CLI tool.
+
+```bash
+just desktop-build   # build the frontend first
+cd desktop
+node tests/helpers/screenshot.mjs --name home
+node tests/helpers/screenshot.mjs --name channel --route /channels/general
+node tests/helpers/screenshot.mjs --name search --click open-search
+node tests/helpers/screenshot.mjs --name settings --click open-settings
+```
+
+Options: `--name` (filename), `--route` (client route), `--click` (data-testid
+or CSS selector), `--wait` (ms, default 2000), `--viewport` (WxH, default
+1280x720), `--outdir` (default `test-results/screenshots`). Screenshots are
+saved as PNGs and the path is printed to stdout.
+
+The Playwright MCP browser (`@playwright/mcp`) is also configured but cannot
+drive the desktop app directly because it evaluates JS after page load — too
+late for the mock bridge. Use the MCP browser for non-Tauri pages only.
+
 ---
 
 ## Common Gotchas
