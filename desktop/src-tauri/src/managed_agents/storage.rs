@@ -209,3 +209,16 @@ mod tests {
         );
     }
 }
+
+pub fn meaningful_agent_error_from_log(path: &Path) -> Option<String> {
+    let tail = read_log_tail(path, 200).ok()?;
+    tail.lines().rev().map(str::trim).find_map(|line| {
+        if let Some(idx) = line.find("Agent reported error:") {
+            return Some(line[idx..].to_string());
+        }
+        if let Some(idx) = line.find("llm auth:") {
+            return Some(format!("Agent reported error: {}", &line[idx..]));
+        }
+        None
+    })
+}

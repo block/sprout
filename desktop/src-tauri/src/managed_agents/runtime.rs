@@ -553,7 +553,9 @@ pub fn sync_managed_agent_processes(
             record.last_error = if status.success() {
                 None
             } else {
-                Some(format!("harness exited with status {status}"))
+                super::meaningful_agent_error_from_log(&runtime.log_path)
+                    .unwrap_or_else(|| format!("harness exited with status {status}"))
+                    .into()
             };
         }
 

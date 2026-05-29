@@ -4,6 +4,7 @@ mod events;
 mod huddle;
 mod managed_agents;
 mod media_proxy;
+mod mesh_llm;
 mod migration;
 mod models;
 pub mod nostr_convert;
@@ -579,6 +580,12 @@ pub fn run() {
             delete_managed_agent,
             get_managed_agent_log,
             get_agent_models,
+            mesh_availability,
+            mesh_start_node,
+            mesh_stop_node,
+            mesh_node_status,
+            mesh_installed_models,
+            mesh_agent_preset,
             update_managed_agent,
             discover_backend_providers,
             probe_backend_provider,

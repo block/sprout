@@ -60,6 +60,9 @@ url             = { workspace = true }
 moka            = { workspace = true }
 metrics         = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "bd16da4955a9dceee8f1e0a02c5814944f4e12a5", package = "mesh-llm-sdk", default-features = false, features = ["client", "serve"] }
+iroh = "=1.0.0-rc.0"
+iroh-relay = { version = "=1.0.0-rc.0", features = ["server"] }
 
 [features]
 dev = ["sprout-auth/dev"]
