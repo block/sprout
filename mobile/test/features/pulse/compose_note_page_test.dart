@@ -79,4 +79,33 @@ void main() {
       reason: 'reply preview should hug its content, not reserve tall space',
     );
   });
+
+  testWidgets('reply preview with an image note clips to a bounded height', (
+    tester,
+  ) async {
+    final imageNote = UserNote(
+      id: 'note2',
+      pubkey: 'alice_pk',
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000 - 60,
+      content: '#sprout\n![image](https://example.com/big.png)',
+      tags: const [
+        [
+          'imeta',
+          'url https://example.com/big.png',
+          'm image/png',
+          'dim 800x1600',
+        ],
+      ],
+    );
+    await tester.pumpWidget(buildTestable(ComposeNotePage(replyTo: imageNote)));
+    await tester.pump();
+
+    // Renders the rich content (not the raw "![image](...)" markdown).
+    expect(find.textContaining('![image]'), findsNothing);
+    // The whole reply context stays bounded: divider sits within a screen of
+    // the "Replying to" label (guards a tall image blowing up the page).
+    final labelTop = tester.getRect(find.text('Replying to Alice')).top;
+    final dividerTop = tester.getRect(find.byType(Divider)).top;
+    expect(dividerTop - labelTop, lessThan(220));
+  });
 }

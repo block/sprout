@@ -5,6 +5,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import '../../shared/theme/theme.dart';
 import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
+import '../channels/message_content.dart';
 import '../profile/profile_provider.dart';
 import '../profile/user_cache_provider.dart';
 import 'note_card.dart';
@@ -223,12 +224,20 @@ class _ReplyContext extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: Grid.half),
-                    Text(
-                      note.content,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: context.textTheme.bodyMedium?.copyWith(
-                        color: context.colors.onSurface,
+                    // Rich content (images, links, mentions) like the list
+                    // row, but clipped to a compact max height so a tall
+                    // image or long note can't blow up the page.
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 132),
+                      child: ClipRect(
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          heightFactor: 1,
+                          child: MessageContent(
+                            content: note.content,
+                            tags: note.tags,
+                          ),
+                        ),
                       ),
                     ),
                   ],
