@@ -230,6 +230,17 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
         sigterm_then_sigkill(&orphans);
     }
 
+    // For PID-file entries whose leader is dead, still try killing the process
+    // group — child processes (e.g. MCP servers) may have survived the leader.
+    let dead_groups: Vec<i32> = entries
+        .iter()
+        .filter(|(_, pid)| !skip_pids.contains(pid) && !process_is_running(*pid))
+        .map(|(_, pid)| *pid as i32)
+        .collect();
+    if !dead_groups.is_empty() {
+        sigterm_then_sigkill(&dead_groups);
+    }
+
     // Clean up PID files for processes we just killed or that are already gone.
     for (pubkey, pid) in &entries {
         if skip_pids.contains(pid) {
@@ -245,6 +256,146 @@ pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, skip_pids: &[u32])
 pub(crate) fn sweep_orphaned_agent_processes(app: &AppHandle, _skip_pids: &[u32]) {
     let _ = app;
 }
+
+/// Enumerate all processes on the system owned by the current user and kill any
+/// that match `KNOWN_AGENT_BINARIES` but aren't in `skip_pids`. This catches
+/// orphans that escaped PID-file-based cleanup (e.g. agent workers spawned with
+/// their own process group whose parent harness already exited and had its PID
+/// file removed).
+#[cfg(target_os = "macos")]
+pub(crate) fn sweep_system_agent_processes(skip_pids: &[u32]) {
+    extern "C" {
+        fn proc_listallpids(buffer: *mut libc::c_int, buffersize: libc::c_int) -> libc::c_int;
+        fn proc_pidinfo(
+            pid: libc::c_int,
+            flavor: libc::c_int,
+            arg: u64,
+            buffer: *mut libc::c_void,
+            buffersize: libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    #[repr(C)]
+    struct BSDInfo {
+        _pad: [u8; 24],
+        pbi_uid: u32,
+        _rest: [u8; 104],
+    }
+    const PROC_PIDTBSDINFO: libc::c_int = 3;
+
+    let my_uid = unsafe { libc::getuid() };
+
+    let count = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return;
+    }
+
+    let buf_len = (count as usize) * 2;
+    let mut pids: Vec<libc::c_int> = vec![0; buf_len];
+    let actual = unsafe {
+        proc_listallpids(
+            pids.as_mut_ptr(),
+            (buf_len * std::mem::size_of::<libc::c_int>()) as libc::c_int,
+        )
+    };
+    if actual <= 0 {
+        return;
+    }
+    pids.truncate(actual as usize);
+
+    let my_pid = std::process::id() as i32;
+    let mut orphans: Vec<i32> = Vec::new();
+
+    for &pid in &pids {
+        if pid <= 0 {
+            continue;
+        }
+        let upid = pid as u32;
+        if skip_pids.contains(&upid) || pid == my_pid {
+            continue;
+        }
+        // Check binary name first (cheap proc_name call) before UID lookup.
+        if !process_belongs_to_us(upid) {
+            continue;
+        }
+        // Verify UID to avoid killing another user's identically-named binary.
+        let mut info = std::mem::MaybeUninit::<BSDInfo>::zeroed();
+        let ret = unsafe {
+            proc_pidinfo(
+                pid,
+                PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr() as *mut libc::c_void,
+                std::mem::size_of::<BSDInfo>() as libc::c_int,
+            )
+        };
+        if ret <= 0 {
+            continue;
+        }
+        let info = unsafe { info.assume_init() };
+        if info.pbi_uid != my_uid {
+            continue;
+        }
+        orphans.push(pid);
+    }
+
+    if !orphans.is_empty() {
+        eprintln!(
+            "sprout-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            orphans.len()
+        );
+        sigterm_then_sigkill(&orphans);
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn sweep_system_agent_processes(skip_pids: &[u32]) {
+    let my_uid = unsafe { libc::getuid() };
+    let mut orphans: Vec<i32> = Vec::new();
+    let my_pid = std::process::id() as i32;
+
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = name_str.parse::<i32>() else {
+            continue;
+        };
+        if pid <= 0 || pid == my_pid {
+            continue;
+        }
+        let upid = pid as u32;
+        if skip_pids.contains(&upid) {
+            continue;
+        }
+        // Check ownership via /proc/<pid> metadata.
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        use std::os::unix::fs::MetadataExt;
+        if meta.uid() != my_uid {
+            continue;
+        }
+        if process_belongs_to_us(upid) {
+            orphans.push(pid);
+        }
+    }
+
+    if !orphans.is_empty() {
+        eprintln!(
+            "sprout-desktop: system sweep found {} orphaned agent process(es), cleaning up",
+            orphans.len()
+        );
+        sigterm_then_sigkill(&orphans);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn sweep_system_agent_processes(_skip_pids: &[u32]) {}
 
 /// Kill stale agent processes from a previous session whose PID is still alive
 /// but not tracked in the current `runtimes` map. Updates the record fields and

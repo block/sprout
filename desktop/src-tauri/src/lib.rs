@@ -148,6 +148,12 @@ fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     // All tracked PIDs have already been killed above, so pass an empty skip list.
     managed_agents::sweep_orphaned_agent_processes(app, &[]);
 
+    // System-wide sweep: agent workers (goose, sprout-agent, etc.) are spawned
+    // in their own process groups by sprout-acp, so group-kills above only
+    // reach the harness, not the workers. Scan all user processes and kill any
+    // known agent binaries that are still running.
+    managed_agents::sweep_system_agent_processes(&[]);
+
     if changed {
         save_managed_agents(app, &records)?;
     }
@@ -645,11 +651,67 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    let shutdown_done = AtomicBool::new(false);
+    let shutdown_done = Arc::new(AtomicBool::new(false));
+
+    // Register signal handlers so agent cleanup runs even when the process is
+    // killed by SIGINT (Ctrl+C), SIGTERM, or SIGHUP (terminal close) before
+    // Tauri's RunEvent::Exit fires. The `shutdown_done` guard prevents
+    // double-execution with the RunEvent handler.
+    #[cfg(unix)]
+    {
+        let signal_app = app.handle().clone();
+        let signal_shutdown_done = Arc::clone(&shutdown_done);
+        let signal_shutdown_started = Arc::clone(&shutdown_started);
+        // ctrlc handles SIGINT. For SIGTERM and SIGHUP we use raw libc
+        // handlers that set a flag, and a background thread that waits on it.
+        // This avoids pulling in extra crates and works with the ctrlc crate.
+        static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+        extern "C" fn signal_flag_handler(_sig: libc::c_int) {
+            SIGNAL_RECEIVED.store(true, Ordering::SeqCst);
+        }
+
+        unsafe {
+            libc::signal(
+                libc::SIGTERM,
+                signal_flag_handler as *const () as libc::sighandler_t,
+            );
+            libc::signal(
+                libc::SIGHUP,
+                signal_flag_handler as *const () as libc::sighandler_t,
+            );
+        }
+
+        // Background thread polls for SIGTERM/SIGHUP and runs cleanup.
+        let term_app = signal_app.clone();
+        let term_done = Arc::clone(&signal_shutdown_done);
+        let term_started = Arc::clone(&signal_shutdown_started);
+        std::thread::spawn(move || {
+            while !SIGNAL_RECEIVED.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            term_started.store(true, Ordering::SeqCst);
+            if !term_done.swap(true, Ordering::SeqCst) {
+                let _ = shutdown_managed_agents(&term_app);
+            }
+            std::process::exit(0);
+        });
+
+        // SIGINT (Ctrl+C) via ctrlc crate — runs handler on a dedicated thread.
+        let _ = ctrlc::set_handler(move || {
+            signal_shutdown_started.store(true, Ordering::SeqCst);
+            if !signal_shutdown_done.swap(true, Ordering::SeqCst) {
+                let _ = shutdown_managed_agents(&signal_app);
+            }
+            std::process::exit(0);
+        });
+    }
+
+    let run_shutdown_done = Arc::clone(&shutdown_done);
     app.run(move |app_handle, event| match event {
         RunEvent::ExitRequested { .. } | RunEvent::Exit => {
             shutdown_started.store(true, Ordering::SeqCst);
-            if !shutdown_done.swap(true, Ordering::SeqCst) {
+            if !run_shutdown_done.swap(true, Ordering::SeqCst) {
                 prevent_sleep::release(&app_handle.state::<AppState>().prevent_sleep);
                 if let Err(error) = shutdown_managed_agents(app_handle) {
                     eprintln!("sprout-desktop: failed to stop managed agents: {error}");
