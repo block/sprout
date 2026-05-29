@@ -28,7 +28,7 @@ function createPreview(overrides = {}) {
     displayName: "Alice",
     systemPrompt: "Be helpful.",
     avatarDataUrl: null,
-    provider: null,
+    runtime: null,
     model: null,
     namePool: [],
     sourceFile: "alice.persona.json",
@@ -87,7 +87,7 @@ test("buildPersonaImportPlan detects avatar change", () => {
 test("buildPersonaImportPlan detects runtime change", () => {
   const plan = buildPersonaImportPlan({
     persona: createPersona({ runtime: "goose" }),
-    preview: createPreview({ provider: "claude" }),
+    preview: createPreview({ runtime: "claude" }),
   });
 
   assert.equal(plan.fields.length, 1);

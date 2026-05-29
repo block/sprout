@@ -17,7 +17,7 @@ test("createPersonaDialogState returns a fresh empty draft", () => {
     displayName: "",
     avatarUrl: "",
     systemPrompt: "",
-    provider: undefined,
+    runtime: undefined,
     model: undefined,
   });
   assert.notStrictEqual(first.initialValues, second.initialValues);
@@ -41,7 +41,7 @@ test("duplicatePersonaDialogState copies persona fields into a new draft", () =>
     displayName: "Solo copy",
     avatarUrl: "avatar://solo",
     systemPrompt: "Be direct.",
-    provider: "provider-a",
+    runtime: "provider-a",
     model: "model-a",
     namePool: [],
     envVars: {},
@@ -96,7 +96,7 @@ test("editPersonaDialogState preserves the persona id for updates", () => {
     displayName: "Kit",
     avatarUrl: "",
     systemPrompt: "Keep it weird.",
-    provider: undefined,
+    runtime: undefined,
     model: undefined,
     namePool: [],
     envVars: {},

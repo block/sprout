@@ -238,7 +238,7 @@ export function PersonaDialog({
       displayName,
       avatarUrl: avatarUrl.trim() || undefined,
       systemPrompt,
-      provider: runtime.trim() || undefined,
+      runtime: runtime.trim() || undefined,
       model: model.trim() || undefined,
       namePool: namePool.length > 0 ? namePool : undefined,
       envVars,
