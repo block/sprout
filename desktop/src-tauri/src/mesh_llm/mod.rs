@@ -19,6 +19,7 @@ pub mod endpoint;
 pub mod nip11;
 pub mod nip98;
 pub mod offer;
+pub mod runtime;
 
 // Wildcard re-exports are deliberately avoided so that adding an
 // unused-by-design helper to a submodule (e.g. a publisher that hasn't been

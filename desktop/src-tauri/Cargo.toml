@@ -27,6 +27,7 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [dependencies]
 atomic-write-file = "0.3"
+anyhow = "1"
 dirs = "6"
 tauri = { version = "2", features = [] }
 tauri-plugin-deep-link = "2"
@@ -56,6 +57,7 @@ sprout-auth = { path = "../../crates/sprout-auth" }
 sprout-core = { path = "../../crates/sprout-core" }
 sprout-persona = { path = "../../crates/sprout-persona" }
 sprout-sdk = { path = "../../crates/sprout-sdk" }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "fd949ebdfc8d2abba9792cbad0be744d55366300", package = "mesh-llm-host-runtime", default-features = false }
 iroh-base = { version = "=1.0.0-rc.0", features = ["key"] }
 base64 = "0.22"
 sha2 = "0.11"

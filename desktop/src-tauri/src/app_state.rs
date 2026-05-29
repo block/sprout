@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
     io::Write,
-    sync::{atomic::AtomicU16, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU16},
 };
 
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, Manager};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::huddle::HuddleState;
 use crate::managed_agents::ManagedAgentProcess;
@@ -33,6 +34,9 @@ pub struct AppState {
     pub media_proxy_port: AtomicU16,
     /// IOKit power assertion state — prevents idle sleep while agents run.
     pub prevent_sleep: Arc<Mutex<crate::prevent_sleep::PreventSleepState>>,
+    /// In-process mesh-llm runtime started by Sprout. This is deliberately not
+    /// a sidecar process; the handle owns the embedded serve task and local API.
+    pub mesh_llm_runtime: AsyncMutex<Option<crate::mesh_llm::runtime::SproutMeshRuntime>>,
 }
 
 pub fn build_app_state() -> AppState {
@@ -78,6 +82,7 @@ pub fn build_app_state() -> AppState {
         prevent_sleep: Arc::new(Mutex::new(
             crate::prevent_sleep::PreventSleepState::default(),
         )),
+        mesh_llm_runtime: AsyncMutex::new(None),
     }
 }
 

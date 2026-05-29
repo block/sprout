@@ -75,6 +75,59 @@ pub async fn mesh_relay_iroh_url(
         .map_err(|e| e.to_string())
 }
 
+/// Start a local mesh-llm node inside the Sprout process.
+///
+/// This exposes the same localhost OpenAI-compatible API shape as
+/// `mesh-llm serve`, but it calls the mesh-llm Rust SDK directly instead of
+/// launching a sidecar binary.
+#[tauri::command]
+pub async fn mesh_start_node(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: mesh_llm::runtime::StartMeshNodeRequest,
+) -> CmdResult<mesh_llm::runtime::MeshNodeStatus> {
+    let prefs = mesh_llm::offer::load_prefs(&app).map_err(|e| e.to_string())?;
+    let mut runtime = state.mesh_llm_runtime.lock().await;
+    if runtime.is_some() {
+        return Err("mesh-llm node is already running".to_string());
+    }
+
+    let started = mesh_llm::runtime::SproutMeshRuntime::start(request, &prefs)
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = match started.status().await {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = started.stop().await;
+            return Err(error.to_string());
+        }
+    };
+    *runtime = Some(started);
+    Ok(status)
+}
+
+/// Stop the in-process mesh-llm node if Sprout started one.
+#[tauri::command]
+pub async fn mesh_stop_node(state: State<'_, AppState>) -> CmdResult<()> {
+    let runtime = state.mesh_llm_runtime.lock().await.take();
+    if let Some(runtime) = runtime {
+        runtime.stop().await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Return the embedded node status, including the local OpenAI API URL.
+#[tauri::command]
+pub async fn mesh_node_status(
+    state: State<'_, AppState>,
+) -> CmdResult<mesh_llm::runtime::MeshNodeStatus> {
+    let runtime = state.mesh_llm_runtime.lock().await;
+    match runtime.as_ref() {
+        Some(runtime) => runtime.status().await.map_err(|e| e.to_string()),
+        None => Ok(mesh_llm::runtime::stopped_status()),
+    }
+}
+
 // ── Publisher ──────────────────────────────────────────────────────────────
 
 /// Result of `mesh_publish_offer` — surface enough state so the frontend
@@ -111,8 +164,7 @@ pub async fn mesh_publish_offer(
 ) -> CmdResult<PublishOfferResult> {
     // Load prefs + endpoint key. These are sync; complete before any await.
     let prefs = mesh_llm::offer::load_prefs(&app).map_err(|e| e.to_string())?;
-    let endpoint_key =
-        mesh_llm::load_or_create_endpoint_key(&app).map_err(|e| e.to_string())?;
+    let endpoint_key = mesh_llm::load_or_create_endpoint_key(&app).map_err(|e| e.to_string())?;
     let endpoint_id_str = endpoint_key.public().to_string();
 
     let d_tag = prefs.d_tag.clone();

@@ -1,9 +1,10 @@
 import * as React from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Cpu, Users } from "lucide-react";
+import { Cpu, Play, Square, Users } from "lucide-react";
 
 import { useMeshLlmOffers } from "@/features/settings/hooks/useMeshLlmOffers";
 import { useMeshOfferHeartbeat } from "@/features/settings/hooks/useMeshOfferHeartbeat";
+import { Button } from "@/shared/ui/button";
 import { Switch } from "@/shared/ui/switch";
 import { Input } from "@/shared/ui/input";
 
@@ -34,6 +35,14 @@ interface MeshEndpointInfo {
   endpoint_id: string;
 }
 
+interface MeshNodeStatus {
+  running: boolean;
+  apiBaseUrl: string | null;
+  consoleUrl: string | null;
+  inviteToken: string | null;
+  status: unknown | null;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -58,9 +67,11 @@ function formatCap(value: number | null): string {
 export function MeshComputeSettingsCard() {
   const [prefs, setPrefs] = React.useState<ComputeSharingPrefs | null>(null);
   const [endpoint, setEndpoint] = React.useState<MeshEndpointInfo | null>(null);
+  const [meshNode, setMeshNode] = React.useState<MeshNodeStatus | null>(null);
   const [irohRelayUrl, setIrohRelayUrl] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const [meshBusy, setMeshBusy] = React.useState(false);
   const { offers, error: offersError } = useMeshLlmOffers();
 
   // While the card is mounted AND the user has compute-sharing enabled,
@@ -80,13 +91,15 @@ export function MeshComputeSettingsCard() {
     let cancelled = false;
     (async () => {
       try {
-        const [p, e] = await Promise.all([
+        const [p, e, node] = await Promise.all([
           invoke<ComputeSharingPrefs>("mesh_get_sharing_prefs"),
           invoke<MeshEndpointInfo>("mesh_get_endpoint_id"),
+          invoke<MeshNodeStatus>("mesh_node_status"),
         ]);
         if (cancelled) return;
         setPrefs(p);
         setEndpoint(e);
+        setMeshNode(node);
         // Probe the relay's iroh_relay_url so the heartbeat hook has
         // something to publish against. Failures here are non-fatal —
         // the user can still see/edit prefs; we just won't heartbeat.
@@ -161,6 +174,47 @@ export function MeshComputeSettingsCard() {
     });
   };
 
+  const startMeshNode = async () => {
+    setMeshBusy(true);
+    setError(null);
+    try {
+      const model = prefs.models[0]?.id ?? null;
+      const maxVramGb =
+        prefs.caps.max_vram_mb == null ? null : prefs.caps.max_vram_mb / 1024;
+      const node = await invoke<MeshNodeStatus>("mesh_start_node", {
+        request: {
+          apiPort: 9337,
+          auto: !model,
+          consolePort: 3131,
+          maxVramGb,
+          meshName: "sprout",
+          mode: model ? "serve" : "client",
+          model,
+          publish: false,
+        },
+      });
+      setMeshNode(node);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setMeshBusy(false);
+    }
+  };
+
+  const stopMeshNode = async () => {
+    setMeshBusy(true);
+    setError(null);
+    try {
+      await invoke("mesh_stop_node");
+      const node = await invoke<MeshNodeStatus>("mesh_node_status");
+      setMeshNode(node);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setMeshBusy(false);
+    }
+  };
+
   return (
     <section className="min-w-0" data-testid="settings-compute">
       <div className="mb-3 min-w-0">
@@ -179,6 +233,47 @@ export function MeshComputeSettingsCard() {
       ) : null}
 
       <div className="flex flex-col gap-4">
+        {/* ── Local node ─────────────────────────────────────────── */}
+        <section className="rounded border border-border/60 bg-muted/20 px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="text-sm font-medium">Local mesh node</h3>
+              <p className="truncate text-xs text-muted-foreground">
+                {meshNode?.running
+                  ? `OpenAI endpoint: ${meshNode.apiBaseUrl ?? "starting"}`
+                  : "Stopped"}
+              </p>
+            </div>
+            {meshNode?.running ? (
+              <Button
+                disabled={meshBusy}
+                onClick={stopMeshNode}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                <Square className="h-4 w-4" />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                disabled={meshBusy}
+                onClick={startMeshNode}
+                size="sm"
+                type="button"
+              >
+                <Play className="h-4 w-4" />
+                Start
+              </Button>
+            )}
+          </div>
+          {meshNode?.running && meshNode.consoleUrl ? (
+            <div className="mt-1 text-[10px] text-muted-foreground">
+              Console: <code>{meshNode.consoleUrl}</code>
+            </div>
+          ) : null}
+        </section>
+
         {/* ── Master toggle ────────────────────────────────────────── */}
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
