@@ -35,6 +35,7 @@ import {
   ProviderConfigFields,
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
+import { RelayMeshAgentSection } from "@/features/mesh-compute/ui/RelayMeshAgentSection";
 import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
@@ -86,6 +87,14 @@ export function CreateAgentDialog({
     React.useState<BackendProviderProbeResult | null>(null);
   const [probeError, setProbeError] = React.useState<string | null>(null);
 
+  // ── Relay-mesh flow state ──────────────────────────────────────────────────
+  // When `useMesh` is on, the agent runs sprout-agent against a member's
+  // shared compute. The ACP runtime + backend selectors are hidden; runtime
+  // fields are driven by `mesh_agent_preset(meshModelId)` and the submit
+  // input carries `model: meshModelId`.
+  const [useMesh, setUseMesh] = React.useState(false);
+  const [meshModelId, setMeshModelId] = React.useState("");
+
   const providers = providersQuery.data ?? [];
   const allProviders = allProvidersQuery.data ?? [];
   const unavailableCount = allProviders.filter(
@@ -102,7 +111,10 @@ export function CreateAgentDialog({
     () => backendProviders.find((p) => p.id === runOn) ?? null,
     [backendProviders, runOn],
   );
-  const isProviderMode = runOn !== "local";
+  // Relay mesh always runs in local mode (sprout-agent + OpenAI-compat env);
+  // when on, it suppresses the backend "Run on" branch even if a stale
+  // `runOn` value remains. The relay-mesh path is its own thing.
+  const isProviderMode = !useMesh && runOn !== "local";
 
   const isSpawnSupported =
     prereqs?.acp.available === true && prereqs?.mcp.available === true;
@@ -228,6 +240,8 @@ export function CreateAgentDialog({
     setProviderConfig({});
     setProbedProvider(null);
     setProbeError(null);
+    setUseMesh(false);
+    setMeshModelId("");
     setRespondTo("owner-only");
     setRespondToAllowlist([]);
     createMutation.reset();
@@ -298,6 +312,9 @@ export function CreateAgentDialog({
     // fields and config schema are only known after a successful probe.
     !(isProviderMode && !probedProvider) &&
     providerConfigComplete &&
+    // Relay-mesh mode requires the user to have picked a model from the
+    // availability dropdown — without a model the preset is empty.
+    !(useMesh && meshModelId.trim().length === 0) &&
     respondToValid &&
     !createMutation.isPending;
 
@@ -359,6 +376,7 @@ export function CreateAgentDialog({
                 : undefined,
             systemPrompt: systemPrompt.trim() || undefined,
             envVars,
+            model: useMesh ? meshModelId.trim() || undefined : undefined,
             spawnAfterCreate,
             startOnAppLaunch,
             backend: { type: "local" },
@@ -388,8 +406,46 @@ export function CreateAgentDialog({
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <CreateAgentBasicsFields name={name} onNameChange={setName} />
 
+            <RelayMeshAgentSection
+              current={{
+                acpCommand,
+                agentCommand,
+                agentArgs: agentArgs
+                  .split(",")
+                  .map((v) => v.trim())
+                  .filter((v) => v.length > 0),
+                mcpCommand,
+                model: meshModelId || null,
+                envVars,
+              }}
+              modelId={meshModelId}
+              onModelIdChange={(nextId, patch) => {
+                setMeshModelId(nextId);
+                if (patch == null) return;
+                // Fan out the preset into the existing setters so the rest
+                // of the dialog (and the submit branch) see normal local-mode
+                // values — relay-mesh is a curated local agent.
+                setAcpCommand(patch.acpCommand);
+                setAgentCommand(patch.agentCommand);
+                setAgentArgs(patch.agentArgs.join(","));
+                setMcpCommand(patch.mcpCommand);
+                setEnvVars(patch.envVars);
+              }}
+              onUseMeshChange={(next) => {
+                setUseMesh(next);
+                if (!next) {
+                  // Clearing the toggle: drop the model selection so the
+                  // submit guard doesn't fire on a stale value. The runtime
+                  // fields keep whatever the user had — they can re-pick
+                  // ACP runtime or stay with the preset values, their call.
+                  setMeshModelId("");
+                }
+              }}
+              useMesh={useMesh}
+            />
+
             {/* Run on selector — only shown when backend providers are discovered */}
-            {backendProviders.length > 0 ? (
+            {!useMesh && backendProviders.length > 0 ? (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="agent-run-on">
                   Run on
@@ -442,7 +498,7 @@ export function CreateAgentDialog({
             ) : null}
 
             {/* Local mode: show the ACP runtime selector */}
-            {!isProviderMode ? (
+            {!isProviderMode && !useMesh ? (
               <CreateAgentRuntimeProviderField
                 onProviderChange={handleProviderChange}
                 providers={providers}
