@@ -171,6 +171,51 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         }
     }
 
+    // Ensure shared directories exist in canonical before symlinking.
+    // Packs may have been installed in a sibling instance (e.g., `.main`)
+    // before shared-dir syncing existed — migrate them to canonical.
+    for rel in SHARED_AGENT_DIRS {
+        let canonical_target = canonical_dir.join(rel);
+        if !canonical_target.exists() {
+            if let Err(e) = std::fs::create_dir_all(&canonical_target) {
+                eprintln!(
+                    "sprout-desktop: shared-agent-sync: failed to create {}: {e}",
+                    canonical_target.display()
+                );
+            }
+            // Migrate from whichever sibling has real (non-symlink) content.
+            if let Some(parent) = canonical_dir.parent() {
+                if let Ok(entries) = std::fs::read_dir(parent) {
+                    for entry in entries.flatten() {
+                        let sibling = entry.path();
+                        if sibling == canonical_dir {
+                            continue;
+                        }
+                        let sibling_dir = sibling.join(rel);
+                        if sibling_dir.is_dir() && !sibling_dir.is_symlink() {
+                            if let Ok(children) = std::fs::read_dir(&sibling_dir) {
+                                for child in children.flatten() {
+                                    let dest = canonical_target.join(child.file_name());
+                                    if !dest.exists() {
+                                        let _ = std::fs::rename(child.path(), &dest);
+                                    }
+                                }
+                            }
+                            // Replace the sibling's dir with a symlink to canonical.
+                            let _ = std::fs::remove_dir_all(&sibling_dir);
+                            let _ = std::os::unix::fs::symlink(&canonical_target, &sibling_dir);
+                            eprintln!(
+                                "sprout-desktop: shared-agent-sync: migrated {rel} from {}",
+                                sibling.display()
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for rel in SHARED_AGENT_DIRS {
         let src = canonical_dir.join(rel);
         let dst = current_dir.join(rel);
@@ -348,13 +393,14 @@ mod tests {
     }
 
     /// Helper: create a temp dir structure mimicking canonical + worktree layout.
+    /// Packs live in a `.main` sibling (not canonical) to match real-world state.
     /// Returns `(parent_dir_handle, canonical_dir, worktree_dir)`.
     fn setup_sync_layout() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let parent = tempfile::tempdir().unwrap();
         let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
         let worktree = parent.path().join("xyz.block.sprout.app.dev.my-branch");
+        let main_instance = parent.path().join("xyz.block.sprout.app.dev.main");
 
-        // Populate canonical with agent data.
         std::fs::create_dir_all(canonical.join("agents")).unwrap();
         std::fs::write(
             canonical.join("agents/managed-agents.json"),
@@ -368,7 +414,8 @@ mod tests {
         .unwrap();
         std::fs::write(canonical.join("agents/teams.json"), r#"[{"id":"team-1"}]"#).unwrap();
 
-        let pack_dir = canonical.join("agents/packs/com.example.test-pack");
+        // Packs installed from `.main` — canonical has no packs dir.
+        let pack_dir = main_instance.join("agents/packs/com.example.test-pack");
         std::fs::create_dir_all(&pack_dir).unwrap();
         std::fs::write(pack_dir.join("instructions.md"), "# Test pack").unwrap();
         std::fs::write(pack_dir.join("solo.persona.md"), "# Solo").unwrap();
@@ -404,6 +451,38 @@ mod tests {
             std::os::unix::fs::symlink(&src, &dst).unwrap();
             synced += 1;
         }
+        // Migrate packs from siblings to canonical (mirrors production logic).
+        for rel in SHARED_AGENT_DIRS {
+            let canonical_target = canonical.join(rel);
+            if !canonical_target.exists() {
+                std::fs::create_dir_all(&canonical_target).unwrap();
+                if let Some(parent) = canonical.parent() {
+                    if let Ok(entries) = std::fs::read_dir(parent) {
+                        for entry in entries.flatten() {
+                            let sibling = entry.path();
+                            if sibling == canonical {
+                                continue;
+                            }
+                            let sibling_dir = sibling.join(rel);
+                            if sibling_dir.is_dir() && !sibling_dir.is_symlink() {
+                                if let Ok(children) = std::fs::read_dir(&sibling_dir) {
+                                    for child in children.flatten() {
+                                        let dest = canonical_target.join(child.file_name());
+                                        if !dest.exists() {
+                                            let _ = std::fs::rename(child.path(), &dest);
+                                        }
+                                    }
+                                }
+                                let _ = std::fs::remove_dir_all(&sibling_dir);
+                                let _ = std::os::unix::fs::symlink(&canonical_target, &sibling_dir);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         for rel in SHARED_AGENT_DIRS {
             let src = canonical.join(rel);
             let dst = worktree.join(rel);
@@ -767,6 +846,33 @@ mod tests {
             )
             .unwrap(),
             "# Test pack"
+        );
+    }
+
+    #[test]
+    fn sync_migrates_packs_from_sibling_to_canonical() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        let main_instance = canonical
+            .parent()
+            .unwrap()
+            .join("xyz.block.sprout.app.dev.main");
+
+        // Before sync: canonical has no packs, .main has the real pack.
+        assert!(!canonical.join("agents/packs").exists());
+        assert!(main_instance
+            .join("agents/packs/com.example.test-pack")
+            .is_dir());
+
+        sync_files(&canonical, &worktree);
+
+        // After sync: canonical has the pack, .main is now a symlink.
+        assert!(canonical
+            .join("agents/packs/com.example.test-pack/instructions.md")
+            .exists());
+        assert!(main_instance.join("agents/packs").is_symlink());
+        assert_eq!(
+            std::fs::read_link(main_instance.join("agents/packs")).unwrap(),
+            canonical.join("agents/packs")
         );
     }
 
