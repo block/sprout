@@ -70,9 +70,16 @@ export function ChannelRouteScreen({
       }),
     ).then((events) => {
       if (!isCancelled) {
-        setTargetMessageEvents(
-          events.filter((event): event is RelayEvent => event !== null),
-        );
+        setTargetMessageEvents((currentEvents) => {
+          const fetchedEvents = events.filter(
+            (event): event is RelayEvent => event !== null,
+          );
+          const eventsById = new Map<string, RelayEvent>();
+          for (const event of [...currentEvents, ...fetchedEvents]) {
+            eventsById.set(event.id, event);
+          }
+          return Array.from(eventsById.values());
+        });
       }
     });
 
