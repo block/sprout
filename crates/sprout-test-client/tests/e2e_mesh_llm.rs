@@ -18,8 +18,13 @@
 //! # 3. run the trust assertions (no GPU needed):
 //! RELAY_URL=ws://localhost:3000 \
 //!   cargo test --test e2e_mesh_llm trust -- --ignored --nocapture
-//! # 4. run the live A->B inference rows (needs 2 mesh nodes + a small model):
-//! cargo test --test e2e_mesh_llm live -- --ignored --nocapture
+//! # 4. run the live A->B inference row (needs 2 mesh nodes + a small model):
+//! #    point at B's local OpenAI endpoint; without it the test SKIPS (no silent pass):
+//! MESH_OPENAI_BASE=http://127.0.0.1:9337/v1 \
+//!   cargo test --test e2e_mesh_llm live_agent_completes -- --ignored --nocapture
+//! # trust rows need real relay identities, not generated keys:
+//! MEMBER_NSEC=nsec1... STRANGER_NSEC=nsec1... \
+//!   cargo test --test e2e_mesh_llm trust -- --ignored --nocapture
 //! ```
 //!
 //! ## Acceptance matrix (= the demo, as a test)
@@ -46,6 +51,30 @@ fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
 }
 
+/// Load a relay identity from an env-provided nsec. Returns `None` (and prints
+/// why) when the fixture is absent, so the caller skips rather than running
+/// against a `Keys::generate()` identity whose membership is undefined —
+/// asserting "member sees status" against a random key is the bug Perci caught.
+fn keys_from_env(var: &str) -> Option<Keys> {
+    match std::env::var(var) {
+        Ok(nsec) if !nsec.trim().is_empty() => match Keys::parse(nsec.trim()) {
+            Ok(keys) => Some(keys),
+            Err(e) => panic!("{var} is set but not a valid nsec/hex secret key: {e}"),
+        },
+        _ => {
+            eprintln!(
+                "SKIP: {var} not set — provision a relay {} identity and re-run (see module docs)",
+                if var.contains("MEMBER") {
+                    "member"
+                } else {
+                    "non-member"
+                }
+            );
+            None
+        }
+    }
+}
+
 fn sub_id(name: &str) -> String {
     format!("e2e-mesh-{name}-{}", uuid::Uuid::new_v4().simple())
 }
@@ -68,7 +97,9 @@ fn mesh_status_filter() -> Filter {
 #[ignore]
 async fn trust_member_reads_mesh_status() {
     let url = relay_url();
-    let member = Keys::generate(); // NOTE: must be a relay member; runbook seeds membership.
+    let Some(member) = keys_from_env("MEMBER_NSEC") else {
+        return;
+    };
     let mut client = SproutTestClient::connect(&url, &member)
         .await
         .expect("member connect+auth");
@@ -140,7 +171,9 @@ async fn trust_member_reads_mesh_status() {
 #[ignore]
 async fn trust_nonmember_read_denied() {
     let url = relay_url();
-    let stranger = Keys::generate(); // deliberately NOT a relay member.
+    let Some(stranger) = keys_from_env("STRANGER_NSEC") else {
+        return;
+    };
     let mut client = match SproutTestClient::connect(&url, &stranger).await {
         Ok(c) => c,
         // A closed relay may refuse NIP-42 auth for a non-member outright —
@@ -183,12 +216,55 @@ async fn trust_nonmember_read_denied() {
 #[ignore]
 async fn live_agent_completes_chat_over_mesh() {
     // RUNBOOK (M1 hardware): see module docs.
-    // 1. desktop A: Share compute → serve `qwen2.5-0.5b-instruct` (tiny for CI budget).
-    // 2. desktop B (same relay member): Create Agent → "Run on relay mesh" → pick A's model.
-    // 3. drive one chat turn through B's sprout-agent; assert the completion is non-empty.
-    // Asserting against live inference requires the running desktops; this test
-    // is the contract those steps satisfy. Eva wires the driver at M1.
-    eprintln!("live_agent_completes_chat_over_mesh: runbook test — see module docs");
+    //   A: Share compute → serve a small model. B: mesh client up on :9337.
+    // Point this test at B's local OpenAI endpoint via MESH_OPENAI_BASE
+    // (e.g. http://127.0.0.1:9337/v1). When set, we drive a real completion
+    // over the mesh and assert non-empty output — no endpoint, no silent pass.
+    let Ok(base) = std::env::var("MESH_OPENAI_BASE") else {
+        eprintln!(
+            "SKIP: MESH_OPENAI_BASE not set — needs a live mesh client endpoint (see module docs)"
+        );
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let http = reqwest::Client::new();
+
+    // Resolve the served model id (the node assigns its own, not our ref).
+    let models: serde_json::Value = http
+        .get(format!("{base}/models"))
+        .send()
+        .await
+        .expect("GET /models")
+        .json()
+        .await
+        .expect("/models JSON");
+    let model_id = models["data"][0]["id"]
+        .as_str()
+        .expect("at least one model served over the mesh")
+        .to_string();
+
+    let resp: serde_json::Value = http
+        .post(format!("{base}/chat/completions"))
+        .json(&serde_json::json!({
+            "model": model_id,
+            "messages": [{"role": "user", "content": "Reply with exactly one word: PONG"}],
+            "max_tokens": 512,
+            "temperature": 0.0,
+        }))
+        .send()
+        .await
+        .expect("POST /chat/completions over mesh")
+        .json()
+        .await
+        .expect("completion JSON");
+
+    let content = resp["choices"][0]["message"]["content"]
+        .as_str()
+        .expect("completion has message content");
+    assert!(
+        !content.trim().is_empty(),
+        "chat completion over the mesh must return non-empty content"
+    );
 }
 
 // ── (6) split variant ────────────────────────────────────────────────────────
@@ -204,5 +280,7 @@ async fn live_agent_completes_chat_over_mesh() {
 async fn live_split_model_completes() {
     // RUNBOOK: A + C both serve the oversized model into the same mesh; B's
     // agent completes a chat; mesh elects a split topology (>=2 stage participants).
-    eprintln!("live_split_model_completes: runbook test — see module docs");
+    // Genuinely multi-node — cannot be automated single-process. Left unwired
+    // so `--ignored` can never report it green without a real split harness.
+    panic!("live_split_model_completes: not implemented — runbook only (see module docs)");
 }
