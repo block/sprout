@@ -502,6 +502,53 @@ pub(crate) fn build_respond_to_env(
     Ok((set, remove))
 }
 
+/// Resolve the effective system prompt and model for a managed agent.
+///
+/// Precedence (Option A — agent override wins when explicitly set):
+/// 1. If the agent record has an explicit `system_prompt` / `model` → use it.
+///    These are only populated when a user explicitly sets an override via the
+///    Edit Agent dialog (persona-backed agents have these fields cleared at
+///    creation time to avoid stale snapshots).
+/// 2. Else if `persona_id` resolves to a persona → use the persona's live values.
+/// 3. Else → None (no prompt / no model).
+///
+/// This matches how env_vars work: per-agent overrides persona on collision.
+///
+/// Extracted from `spawn_agent_child` for testability.
+pub(crate) fn resolve_effective_prompt_and_model(
+    persona_id: Option<&str>,
+    personas: &[super::PersonaRecord],
+    record_prompt: Option<&str>,
+    record_model: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    // Agent-record values win when explicitly set (user override via Edit dialog).
+    let effective_prompt = if record_prompt.is_some() {
+        record_prompt.map(|s| s.to_owned())
+    } else {
+        // Fall back to persona's live value.
+        persona_id.and_then(|pid| {
+            personas
+                .iter()
+                .find(|p| p.id == pid)
+                .map(|p| p.system_prompt.clone())
+        })
+    };
+
+    let effective_model = if record_model.is_some() {
+        record_model.map(|s| s.to_owned())
+    } else {
+        // Fall back to persona's live value.
+        persona_id.and_then(|pid| {
+            personas
+                .iter()
+                .find(|p| p.id == pid)
+                .and_then(|p| p.model.clone())
+        })
+    };
+
+    (effective_prompt, effective_model)
+}
+
 /// Spawn an agent process without holding any locks on records or runtimes.
 /// Returns the child process and log path on success. The caller is responsible
 /// for updating `ManagedAgentRecord` fields and inserting into the runtimes map.
@@ -624,30 +671,22 @@ pub fn spawn_agent_child(
         command.env("SPROUT_ACP_PERSONA_NAME", persona_name);
     }
 
-    // Resolve system prompt and model: prefer the persona definition (if a
-    // persona pack is configured and the persona matched), otherwise fall back
-    // to the record-level overrides.
-    let has_persona_pack =
-        record.persona_pack_path.is_some() && record.persona_name_in_pack.is_some();
-    let persona_prompt_and_model: Option<(String, Option<String>)> = has_persona_pack
-        .then(|| {
-            record
-                .persona_id
-                .as_deref()
-                .and_then(|pid| {
-                    super::load_personas(app)
-                        .ok()?
-                        .into_iter()
-                        .find(|p| p.id == pid)
-                })
-                .map(|p| (p.system_prompt, p.model))
-        })
-        .flatten();
-
-    let (effective_prompt, effective_model) = match persona_prompt_and_model {
-        Some((prompt, model)) => (Some(prompt), model),
-        None => (record.system_prompt.clone(), record.model.clone()),
-    };
+    // Resolve system prompt and model via the extracted helper. Re-reads
+    // the persona store at spawn time so edits take effect without
+    // deleting and recreating the agent.
+    let personas = super::load_personas(app).unwrap_or_else(|e| {
+        eprintln!(
+            "sprout-desktop: failed to load personas for agent {} — spawning with no persona context: {e}",
+            record.name
+        );
+        Vec::new()
+    });
+    let (effective_prompt, effective_model) = resolve_effective_prompt_and_model(
+        record.persona_id.as_deref(),
+        &personas,
+        record.system_prompt.as_deref(),
+        record.model.as_deref(),
+    );
 
     if let Some(prompt) = &effective_prompt {
         command.env("SPROUT_ACP_SYSTEM_PROMPT", prompt);
@@ -872,168 +911,4 @@ pub fn stop_managed_agent_process(
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::managed_agents::known_acp_provider;
-
-    #[test]
-    fn sprout_agent_has_mcp_hooks() {
-        let p = known_acp_provider("sprout-agent").expect("should resolve");
-        assert!(p.mcp_hooks);
-        assert_eq!(p.mcp_command, Some("sprout-dev-mcp"));
-    }
-
-    #[test]
-    fn sprout_agent_resolved_via_path() {
-        assert!(known_acp_provider("/usr/local/bin/sprout-agent").is_some_and(|p| p.mcp_hooks));
-    }
-
-    #[test]
-    fn goose_has_no_mcp_hooks() {
-        let p = known_acp_provider("goose").expect("should resolve");
-        assert!(!p.mcp_hooks);
-        assert_eq!(p.mcp_command, None);
-    }
-
-    #[test]
-    fn unknown_command_returns_none() {
-        assert!(known_acp_provider("custom-agent").is_none());
-    }
-
-    // ── build_respond_to_env tests ───────────────────────────────────────
-
-    use super::build_respond_to_env;
-    use crate::managed_agents::types::{ManagedAgentRecord, RespondTo};
-
-    /// Construct a minimal record fixture for env-building tests. Only the
-    /// fields read by `build_respond_to_env` matter here.
-    fn fixture(
-        respond_to: RespondTo,
-        allowlist: Vec<String>,
-        auth_tag: Option<String>,
-    ) -> ManagedAgentRecord {
-        ManagedAgentRecord {
-            pubkey: "p".into(),
-            name: "n".into(),
-            persona_id: None,
-            private_key_nsec: "nsec1fake".into(),
-            auth_tag,
-            relay_url: "ws://localhost:3000".into(),
-            acp_command: "sprout-acp".into(),
-            agent_command: "goose".into(),
-            agent_args: vec![],
-            mcp_command: "sprout-mcp-server".into(),
-            turn_timeout_seconds: 320,
-            idle_timeout_seconds: None,
-            max_turn_duration_seconds: None,
-            parallelism: 1,
-            system_prompt: None,
-            model: None,
-            mcp_toolsets: None,
-            env_vars: std::collections::BTreeMap::new(),
-            start_on_app_launch: false,
-            runtime_pid: None,
-            backend: Default::default(),
-            backend_agent_id: None,
-            provider_binary_path: None,
-            persona_pack_path: None,
-            persona_name_in_pack: None,
-            created_at: "now".into(),
-            updated_at: "now".into(),
-            last_started_at: None,
-            last_stopped_at: None,
-            last_exit_code: None,
-            last_error: None,
-            respond_to,
-            respond_to_allowlist: allowlist,
-        }
-    }
-
-    #[test]
-    fn build_env_owner_only_sets_mode_and_removes_others() {
-        let rec = fixture(RespondTo::OwnerOnly, vec![], Some("tag".into()));
-        let (set, remove) = build_respond_to_env(&rec, Some("owner")).unwrap();
-        let set_map: std::collections::HashMap<_, _> = set.into_iter().collect();
-        assert_eq!(
-            set_map.get("SPROUT_ACP_RESPOND_TO").map(String::as_str),
-            Some("owner-only")
-        );
-        assert!(!set_map.contains_key("SPROUT_ACP_RESPOND_TO_ALLOWLIST"));
-        assert!(remove.contains(&"SPROUT_ACP_RESPOND_TO_ALLOWLIST"));
-        // auth_tag is present → no AGENT_OWNER fallback fires.
-        assert!(remove.contains(&"SPROUT_ACP_AGENT_OWNER"));
-    }
-
-    #[test]
-    fn build_env_allowlist_sets_both_envs_and_joins() {
-        let a = "a".repeat(64);
-        let b = "b".repeat(64);
-        let rec = fixture(
-            RespondTo::Allowlist,
-            vec![a.clone(), b.clone()],
-            Some("tag".into()),
-        );
-        let (set, _remove) = build_respond_to_env(&rec, Some("owner")).unwrap();
-        let set_map: std::collections::HashMap<_, _> = set.into_iter().collect();
-        assert_eq!(
-            set_map.get("SPROUT_ACP_RESPOND_TO").map(String::as_str),
-            Some("allowlist")
-        );
-        assert_eq!(
-            set_map
-                .get("SPROUT_ACP_RESPOND_TO_ALLOWLIST")
-                .map(String::as_str),
-            Some(format!("{a},{b}").as_str()),
-        );
-    }
-
-    #[test]
-    fn build_env_anyone_omits_allowlist_var() {
-        let rec = fixture(RespondTo::Anyone, vec![], Some("tag".into()));
-        let (set, remove) = build_respond_to_env(&rec, Some("owner")).unwrap();
-        let set_map: std::collections::HashMap<_, _> = set.into_iter().collect();
-        assert_eq!(
-            set_map.get("SPROUT_ACP_RESPOND_TO").map(String::as_str),
-            Some("anyone")
-        );
-        assert!(!set_map.contains_key("SPROUT_ACP_RESPOND_TO_ALLOWLIST"));
-        assert!(remove.contains(&"SPROUT_ACP_RESPOND_TO_ALLOWLIST"));
-    }
-
-    #[test]
-    fn build_env_legacy_record_without_auth_tag_emits_agent_owner() {
-        let rec = fixture(RespondTo::OwnerOnly, vec![], None);
-        let (set, remove) = build_respond_to_env(&rec, Some("ownerhex")).unwrap();
-        let set_map: std::collections::HashMap<_, _> = set.into_iter().collect();
-        assert_eq!(
-            set_map.get("SPROUT_ACP_AGENT_OWNER").map(String::as_str),
-            Some("ownerhex")
-        );
-        assert!(!remove.contains(&"SPROUT_ACP_AGENT_OWNER"));
-    }
-
-    #[test]
-    fn build_env_legacy_record_without_owner_hex_removes_agent_owner() {
-        // No owner available to forward → make sure we don't inherit a leaked
-        // env var from the parent.
-        let rec = fixture(RespondTo::OwnerOnly, vec![], None);
-        let (_set, remove) = build_respond_to_env(&rec, None).unwrap();
-        assert!(remove.contains(&"SPROUT_ACP_AGENT_OWNER"));
-    }
-
-    #[test]
-    fn build_env_rejects_corrupted_allowlist() {
-        let rec = fixture(
-            RespondTo::Allowlist,
-            vec!["not-hex".into()],
-            Some("tag".into()),
-        );
-        assert!(build_respond_to_env(&rec, Some("owner")).is_err());
-    }
-
-    #[test]
-    fn build_env_rejects_empty_allowlist_in_allowlist_mode() {
-        let rec = fixture(RespondTo::Allowlist, vec![], Some("tag".into()));
-        let err = build_respond_to_env(&rec, Some("owner")).unwrap_err();
-        assert!(err.contains("at least one pubkey"));
-    }
-}
+mod tests;

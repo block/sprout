@@ -1,6 +1,7 @@
 use super::{
-    find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
-    spawn_agent_child, sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
+    find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, load_personas,
+    save_managed_agents, spawn_agent_child, storage::migrate_clear_persona_defaults,
+    sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
 };
 use crate::app_state::AppState;
 use crate::util;
@@ -39,11 +40,17 @@ pub fn restore_managed_agents_on_launch(
         }
 
         let mut records = load_managed_agents(app)?;
+
+        // One-shot migration: clear persona-default snapshots only when the
+        // stored value still matches the persona's current default.
+        let personas = load_personas(app).unwrap_or_default();
+        let mut changed = migrate_clear_persona_defaults(&mut records, &personas);
+
         let mut runtimes = state
             .managed_agent_processes
             .lock()
             .map_err(|error| error.to_string())?;
-        let mut changed = sync_managed_agent_processes(&mut records, &mut runtimes);
+        changed |= sync_managed_agent_processes(&mut records, &mut runtimes);
         changed |= kill_stale_tracked_processes(&mut records, &runtimes);
 
         let tracked_pids: Vec<u32> = records

@@ -44,6 +44,23 @@ fn build_deploy_payload(
         crate::managed_agents::resolve_persona_env(app, record.persona_id.as_deref())?;
     let merged_env = crate::managed_agents::merged_user_env(&persona_env, &record.env_vars);
 
+    // Resolve system prompt and model via the persona (same as local spawn).
+    // Re-reads the persona store so edits take effect without recreating the agent.
+    let personas = load_personas(app).unwrap_or_else(|e| {
+        eprintln!(
+            "sprout-desktop: failed to load personas for deploy payload (agent {}) — proceeding without persona context: {e}",
+            record.name
+        );
+        Vec::new()
+    });
+    let (effective_prompt, effective_model) =
+        crate::managed_agents::resolve_effective_prompt_and_model(
+            record.persona_id.as_deref(),
+            &personas,
+            record.system_prompt.as_deref(),
+            record.model.as_deref(),
+        );
+
     Ok(serde_json::json!({
         "name": &record.name,
         "relay_url": &record.relay_url,
@@ -51,8 +68,8 @@ fn build_deploy_payload(
         "auth_tag": &record.auth_tag,
         "agent_command": &record.agent_command,
         "agent_args": &record.agent_args,
-        "system_prompt": &record.system_prompt,
-        "model": &record.model,
+        "system_prompt": &effective_prompt,
+        "model": &effective_model,
         "turn_timeout_seconds": record.turn_timeout_seconds,
         "idle_timeout_seconds": record.idle_timeout_seconds,
         "max_turn_duration_seconds": record.max_turn_duration_seconds,
@@ -392,18 +409,32 @@ pub async fn create_managed_agent(
                 .parallelism
                 .filter(|count| (1..=32).contains(count))
                 .unwrap_or(DEFAULT_AGENT_PARALLELISM),
-            system_prompt: input
-                .system_prompt
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string),
-            model: input
-                .model
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string),
+            // When persona_id is set, do NOT snapshot the persona's system_prompt
+            // or model onto the agent record. These fields are reserved for explicit
+            // per-agent overrides set via the Edit Agent dialog. At spawn time,
+            // resolve_effective_prompt_and_model() reads the live persona values as
+            // the default and only uses agent-record values when they're Some (i.e.
+            // the user explicitly set an override).
+            system_prompt: if requested_persona_id.is_some() {
+                None
+            } else {
+                input
+                    .system_prompt
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            },
+            model: if requested_persona_id.is_some() {
+                None
+            } else {
+                input
+                    .model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            },
             mcp_toolsets: input
                 .mcp_toolsets
                 .as_deref()

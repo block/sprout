@@ -6,7 +6,7 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 
-use crate::managed_agents::ManagedAgentRecord;
+use crate::managed_agents::{ManagedAgentRecord, PersonaRecord};
 
 pub fn managed_agents_base_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -40,7 +40,10 @@ pub fn load_managed_agents(app: &AppHandle) -> Result<Vec<ManagedAgentRecord>, S
 
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("failed to read agent store: {error}"))?;
-    serde_json::from_str(&content).map_err(|error| format!("failed to parse agent store: {error}"))
+    let records: Vec<ManagedAgentRecord> = serde_json::from_str(&content)
+        .map_err(|error| format!("failed to parse agent store: {error}"))?;
+
+    Ok(records)
 }
 
 pub fn save_managed_agents(app: &AppHandle, records: &[ManagedAgentRecord]) -> Result<(), String> {
@@ -198,8 +201,41 @@ fn bytecount_newlines(buf: &[u8]) -> usize {
     buf.iter().filter(|&&b| b == b'\n').count()
 }
 
+/// Clear `system_prompt` and `model` on persona-backed agents only when the
+/// stored value matches the persona's current default. Returns `true` if any
+/// record was modified.
+pub(crate) fn migrate_clear_persona_defaults(
+    records: &mut [ManagedAgentRecord],
+    personas: &[PersonaRecord],
+) -> bool {
+    let mut changed = false;
+    for record in records.iter_mut() {
+        if let Some(persona_id) = record.persona_id.as_deref() {
+            let persona = personas.iter().find(|p| p.id == persona_id);
+            if let Some(persona) = persona {
+                if let Some(ref prompt) = record.system_prompt {
+                    if prompt == &persona.system_prompt {
+                        record.system_prompt = None;
+                        changed = true;
+                    }
+                }
+                if let Some(ref model) = record.model {
+                    if persona.model.as_deref() == Some(model.as_str()) {
+                        record.model = None;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::managed_agents::types::PersonaRecord;
+
     #[test]
     fn strips_ansi_from_typical_tracing_line() {
         let input = "\x1b[2m2026-05-27T15:16:32\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2msprout_acp\x1b[0m\x1b[2m:\x1b[0m starting";
@@ -207,5 +243,146 @@ mod tests {
             strip_ansi_escapes::strip_str(input),
             "2026-05-27T15:16:32  INFO sprout_acp: starting"
         );
+    }
+
+    fn persona(id: &str, prompt: &str, model: Option<&str>) -> PersonaRecord {
+        PersonaRecord {
+            id: id.to_string(),
+            display_name: "Test".into(),
+            avatar_url: None,
+            system_prompt: prompt.to_string(),
+            provider: None,
+            model: model.map(|s| s.to_string()),
+            name_pool: vec![],
+            is_builtin: false,
+            is_active: true,
+            source_pack: None,
+            source_pack_persona_slug: None,
+            env_vars: Default::default(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        }
+    }
+
+    fn agent(
+        persona_id: Option<&str>,
+        prompt: Option<&str>,
+        model: Option<&str>,
+    ) -> ManagedAgentRecord {
+        ManagedAgentRecord {
+            pubkey: "p".into(),
+            name: "n".into(),
+            persona_id: persona_id.map(|s| s.to_string()),
+            private_key_nsec: "nsec1fake".into(),
+            auth_tag: None,
+            relay_url: "ws://localhost:3000".into(),
+            acp_command: "sprout-acp".into(),
+            agent_command: "goose".into(),
+            agent_args: vec![],
+            mcp_command: "sprout-mcp-server".into(),
+            turn_timeout_seconds: 320,
+            idle_timeout_seconds: None,
+            max_turn_duration_seconds: None,
+            parallelism: 1,
+            system_prompt: prompt.map(|s| s.to_string()),
+            model: model.map(|s| s.to_string()),
+            mcp_toolsets: None,
+            env_vars: std::collections::BTreeMap::new(),
+            start_on_app_launch: false,
+            runtime_pid: None,
+            backend: Default::default(),
+            backend_agent_id: None,
+            provider_binary_path: None,
+            persona_pack_path: None,
+            persona_name_in_pack: None,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            last_started_at: None,
+            last_stopped_at: None,
+            last_exit_code: None,
+            last_error: None,
+            respond_to: Default::default(),
+            respond_to_allowlist: vec![],
+        }
+    }
+
+    #[test]
+    fn migration_clears_matching_defaults() {
+        let personas = vec![persona("p1", "default prompt", Some("gpt-4o"))];
+        let mut records = vec![agent(Some("p1"), Some("default prompt"), Some("gpt-4o"))];
+
+        let changed = migrate_clear_persona_defaults(&mut records, &personas);
+
+        assert!(changed);
+        assert_eq!(records[0].system_prompt, None);
+        assert_eq!(records[0].model, None);
+    }
+
+    #[test]
+    fn migration_preserves_user_overrides() {
+        let personas = vec![persona("p1", "default prompt", Some("gpt-4o"))];
+        let mut records = vec![agent(
+            Some("p1"),
+            Some("my custom prompt"),
+            Some("claude-sonnet"),
+        )];
+
+        let changed = migrate_clear_persona_defaults(&mut records, &personas);
+
+        assert!(!changed);
+        assert_eq!(
+            records[0].system_prompt.as_deref(),
+            Some("my custom prompt")
+        );
+        assert_eq!(records[0].model.as_deref(), Some("claude-sonnet"));
+    }
+
+    #[test]
+    fn migration_skips_agents_without_persona() {
+        let personas = vec![persona("p1", "default prompt", Some("gpt-4o"))];
+        let mut records = vec![agent(None, Some("standalone prompt"), Some("gpt-4o"))];
+
+        let changed = migrate_clear_persona_defaults(&mut records, &personas);
+
+        assert!(!changed);
+        assert_eq!(
+            records[0].system_prompt.as_deref(),
+            Some("standalone prompt")
+        );
+        assert_eq!(records[0].model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn migration_partial_match_clears_only_matching_field() {
+        let personas = vec![persona("p1", "default prompt", Some("gpt-4o"))];
+        // prompt matches default, model is user-overridden
+        let mut records = vec![agent(
+            Some("p1"),
+            Some("default prompt"),
+            Some("claude-sonnet"),
+        )];
+
+        let changed = migrate_clear_persona_defaults(&mut records, &personas);
+
+        assert!(changed);
+        assert_eq!(records[0].system_prompt, None);
+        assert_eq!(records[0].model.as_deref(), Some("claude-sonnet"));
+    }
+
+    #[test]
+    fn migration_handles_persona_with_no_model() {
+        let personas = vec![persona("p1", "default prompt", None)];
+        let mut records = vec![agent(
+            Some("p1"),
+            Some("default prompt"),
+            Some("user-model"),
+        )];
+
+        let changed = migrate_clear_persona_defaults(&mut records, &personas);
+
+        assert!(changed); // prompt cleared
+        assert_eq!(records[0].system_prompt, None);
+        // model stays — persona has no model, so it can't match
+        assert_eq!(records[0].model.as_deref(), Some("user-model"));
     }
 }
