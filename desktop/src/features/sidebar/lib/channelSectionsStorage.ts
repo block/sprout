@@ -22,6 +22,46 @@ export function storageKey(pubkey: string): string {
   return `${STORAGE_KEY_PREFIX}:${pubkey}`;
 }
 
+export function stripOrphanedAssignments(
+  store: ChannelSectionStore,
+): ChannelSectionStore {
+  const sectionIds = new Set(store.sections.map((s) => s.id));
+  const cleaned = Object.fromEntries(
+    Object.entries(store.assignments).filter(([, sid]) => sectionIds.has(sid)),
+  );
+  if (Object.keys(cleaned).length === Object.keys(store.assignments).length)
+    return store;
+  return { ...store, assignments: cleaned };
+}
+
+export function parseChannelSectionPayload(
+  json: unknown,
+): ChannelSectionStore | null {
+  if (typeof json !== "object" || json === null) return null;
+  const obj = json as Record<string, unknown>;
+  const sections: ChannelSection[] = Array.isArray(obj.sections)
+    ? obj.sections.filter(
+        (entry: unknown): entry is ChannelSection =>
+          typeof entry === "object" &&
+          entry !== null &&
+          typeof (entry as Record<string, unknown>).id === "string" &&
+          typeof (entry as Record<string, unknown>).name === "string" &&
+          typeof (entry as Record<string, unknown>).order === "number",
+      )
+    : [];
+  const assignments: Record<string, string> =
+    typeof obj.assignments === "object" &&
+    obj.assignments !== null &&
+    !Array.isArray(obj.assignments)
+      ? Object.fromEntries(
+          Object.entries(obj.assignments as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        )
+      : {};
+  return stripOrphanedAssignments({ version: 1, sections, assignments });
+}
+
 export function readChannelSectionsStore(pubkey: string): ChannelSectionStore {
   try {
     const raw = window.localStorage.getItem(storageKey(pubkey));
@@ -32,28 +72,7 @@ export function readChannelSectionsStore(pubkey: string): ChannelSectionStore {
     if (typeof parsed !== "object" || parsed === null || parsed.version !== 1) {
       return DEFAULT_STORE;
     }
-    const sections: ChannelSection[] = Array.isArray(parsed.sections)
-      ? parsed.sections.filter(
-          (entry: unknown): entry is ChannelSection =>
-            typeof entry === "object" &&
-            entry !== null &&
-            typeof (entry as Record<string, unknown>).id === "string" &&
-            typeof (entry as Record<string, unknown>).name === "string" &&
-            typeof (entry as Record<string, unknown>).order === "number",
-        )
-      : [];
-    const assignments: Record<string, string> =
-      typeof parsed.assignments === "object" &&
-      parsed.assignments !== null &&
-      !Array.isArray(parsed.assignments)
-        ? Object.fromEntries(
-            Object.entries(parsed.assignments).filter(
-              (entry): entry is [string, string] =>
-                typeof entry[1] === "string",
-            ),
-          )
-        : {};
-    return { version: 1, sections, assignments };
+    return parseChannelSectionPayload(parsed) ?? DEFAULT_STORE;
   } catch {
     return DEFAULT_STORE;
   }

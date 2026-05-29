@@ -508,6 +508,11 @@ export function AppSidebar({
                   key={section.id}
                   section={section}
                   channels={sectionBuckets.bySection[section.id] ?? []}
+                  hasUnread={
+                    sectionBuckets.bySection[section.id]?.some((c) =>
+                      unreadChannelIds.has(c.id),
+                    ) ?? false
+                  }
                   isCollapsed={collapsedSections[section.id] ?? false}
                   isActiveChannel={selectedView === "channel"}
                   selectedChannelId={selectedChannelId}
@@ -520,6 +525,13 @@ export function AppSidebar({
                   onSelectChannel={onSelectChannel}
                   onMarkChannelRead={onMarkChannelRead}
                   onMarkChannelUnread={onMarkChannelUnread}
+                  onMarkSectionRead={() => {
+                    for (const channel of sectionBuckets.bySection[
+                      section.id
+                    ] ?? []) {
+                      onMarkChannelRead(channel.id, channel.lastMessageAt);
+                    }
+                  }}
                   onAssignChannel={assignChannel}
                   onUnassignChannel={unassignChannel}
                   onCreateSectionForChannel={handleCreateSectionForChannel}
