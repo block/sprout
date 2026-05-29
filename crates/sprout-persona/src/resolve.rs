@@ -60,8 +60,8 @@ pub struct ResolvedPersona {
     // Skills (bare names — reserved for future use, not yet wired)
     pub skills: Vec<String>,
 
-    // Env var projection for goose subprocess
-    pub goose_env_vars: Vec<(String, String)>,
+    // Env var projection for agent subprocess
+    pub runtime_env_vars: Vec<(String, String)>,
 }
 
 /// An MCP server with env values as literals (no interpolation in this PR).
@@ -106,7 +106,7 @@ pub struct ResolvedPack {
 /// Returns a `ResolvedPack` with fully typed, ACP-ready output for each
 /// persona. All merge policy (levels 3-5) is applied. MCP servers are
 /// merged with literal env passthrough (no `${VAR}` interpolation).
-/// Goose env vars are projected from model/temperature/context config.
+/// Env vars are projected from model/temperature/context config.
 pub fn resolve_pack(pack_dir: &Path) -> Result<ResolvedPack, PackError> {
     let loaded = pack::load_pack(pack_dir)?;
     resolve_loaded_pack(&loaded)
@@ -218,7 +218,7 @@ fn resolve_one_persona(
     let triggers = resolve_triggers(lp.triggers.as_ref());
     let mcp_servers = merge_mcp_servers(shared_mcp, &lp.mcp_servers);
     let hooks = resolve_hooks(lp.hooks.as_ref());
-    let goose_env_vars = project_env_vars(lp);
+    let runtime_env_vars = runtime_env_vars(lp);
 
     // Version: LoadedPersona has no per-persona version field — persona files
     // don't declare a version in frontmatter. The pack version is used as-is.
@@ -246,7 +246,7 @@ fn resolve_one_persona(
         mcp_servers,
         hooks,
         skills: lp.skills.clone(),
-        goose_env_vars,
+        runtime_env_vars,
     }
 }
 
@@ -381,17 +381,30 @@ fn resolve_hooks(hooks: Option<&crate::merge::HooksData>) -> Option<ResolvedHook
 /// ACP is responsible for filtering based on operator precedence (level 1):
 /// if the operator already set an env var, ACP skips injection so the
 /// operator's value wins.
-fn project_env_vars(persona: &LoadedPersona) -> Vec<(String, String)> {
+fn runtime_env_vars(persona: &LoadedPersona) -> Vec<(String, String)> {
     let mut vars = Vec::new();
+    let runtime = persona.runtime.as_deref();
 
     if let Some(model_str) = &persona.model {
         let (provider, model_id) = split_model(model_str);
-        if let Some(p) = provider {
-            vars.push(("GOOSE_PROVIDER".to_owned(), p.to_owned()));
+
+        match runtime {
+            Some("sprout-agent") => {
+                vars.push(("SPROUT_AGENT_MODEL".to_owned(), model_id.to_owned()));
+                if let Some(p) = provider {
+                    vars.push(("SPROUT_AGENT_PROVIDER".to_owned(), p.to_owned()));
+                }
+            }
+            _ => {
+                if let Some(p) = provider {
+                    vars.push(("GOOSE_PROVIDER".to_owned(), p.to_owned()));
+                }
+                vars.push(("GOOSE_MODEL".to_owned(), model_id.to_owned()));
+            }
         }
-        vars.push(("GOOSE_MODEL".to_owned(), model_id.to_owned()));
     }
 
+    // temperature and context_limit stay as GOOSE_* (only goose reads them)
     if let Some(temp) = persona.temperature {
         vars.push(("GOOSE_TEMPERATURE".to_owned(), temp.to_string()));
     }
@@ -570,12 +583,12 @@ mod tests {
         assert!(resolve_hooks(None).is_none());
     }
 
-    // ── project_env_vars ──────────────────────────────────────────────────
+    // ── runtime_env_vars ──────────────────────────────────────────────────
 
     #[test]
     fn env_vars_projected_from_model() {
         let lp = stub_persona(Some("anthropic:claude-sonnet-4-20250514"), None, None);
-        let vars = project_env_vars(&lp);
+        let vars = runtime_env_vars(&lp);
         let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         assert_eq!(map["GOOSE_PROVIDER"], "anthropic");
         assert_eq!(map["GOOSE_MODEL"], "claude-sonnet-4-20250514");
@@ -584,7 +597,7 @@ mod tests {
     #[test]
     fn env_vars_model_without_provider() {
         let lp = stub_persona(Some("gpt-4o"), None, None);
-        let vars = project_env_vars(&lp);
+        let vars = runtime_env_vars(&lp);
         let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         assert!(!map.contains_key("GOOSE_PROVIDER"));
         assert_eq!(map["GOOSE_MODEL"], "gpt-4o");
@@ -593,7 +606,7 @@ mod tests {
     #[test]
     fn env_vars_temperature_and_context() {
         let lp = stub_persona(None, Some(0.7), Some(8192));
-        let vars = project_env_vars(&lp);
+        let vars = runtime_env_vars(&lp);
         let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         assert_eq!(map["GOOSE_TEMPERATURE"], "0.7");
         assert_eq!(map["GOOSE_CONTEXT_LIMIT"], "8192");
@@ -602,15 +615,57 @@ mod tests {
     #[test]
     fn env_vars_empty_when_no_config() {
         let lp = stub_persona(None, None, None);
-        let vars = project_env_vars(&lp);
+        let vars = runtime_env_vars(&lp);
         assert!(vars.is_empty());
     }
 
     #[test]
     fn env_vars_full_projection() {
         let lp = stub_persona(Some("openai:gpt-4o"), Some(0.5), Some(16384));
-        let vars = project_env_vars(&lp);
+        let vars = runtime_env_vars(&lp);
         assert_eq!(vars.len(), 4); // PROVIDER, MODEL, TEMPERATURE, CONTEXT_LIMIT
+    }
+
+    #[test]
+    fn runtime_env_vars_sprout_agent_emits_sprout_agent_vars() {
+        let mut lp = stub_persona(Some("databricks:goose-claude-4-6-opus"), None, None);
+        lp.runtime = Some("sprout-agent".to_owned());
+        let vars = runtime_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map["SPROUT_AGENT_MODEL"], "goose-claude-4-6-opus");
+        assert_eq!(map["SPROUT_AGENT_PROVIDER"], "databricks");
+        assert!(!map.contains_key("GOOSE_MODEL"));
+        assert!(!map.contains_key("GOOSE_PROVIDER"));
+    }
+
+    #[test]
+    fn runtime_env_vars_goose_emits_goose_vars() {
+        let mut lp = stub_persona(Some("databricks:goose-claude-4-6-opus"), None, None);
+        lp.runtime = Some("goose".to_owned());
+        let vars = runtime_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map["GOOSE_MODEL"], "goose-claude-4-6-opus");
+        assert_eq!(map["GOOSE_PROVIDER"], "databricks");
+        assert!(!map.contains_key("SPROUT_AGENT_MODEL"));
+    }
+
+    #[test]
+    fn runtime_env_vars_no_runtime_defaults_to_goose() {
+        let lp = stub_persona(Some("anthropic:claude-sonnet-4-20250514"), None, None);
+        let vars = runtime_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map["GOOSE_PROVIDER"], "anthropic");
+        assert_eq!(map["GOOSE_MODEL"], "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn runtime_env_vars_sprout_agent_model_without_provider() {
+        let mut lp = stub_persona(Some("gpt-4o"), None, None);
+        lp.runtime = Some("sprout-agent".to_owned());
+        let vars = runtime_env_vars(&lp);
+        let map: HashMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        assert_eq!(map["SPROUT_AGENT_MODEL"], "gpt-4o");
+        assert!(!map.contains_key("SPROUT_AGENT_PROVIDER"));
     }
 
     // ── Full pipeline (resolve_pack via filesystem) ───────────────────────
@@ -650,7 +705,7 @@ mod tests {
         assert!(p.llm_provider.is_none());
         assert!(p.triggers.mentions); // built-in default
         assert!(p.mcp_servers.is_empty());
-        assert!(p.goose_env_vars.is_empty());
+        assert!(p.runtime_env_vars.is_empty());
     }
 
     #[test]
@@ -694,7 +749,7 @@ mod tests {
 
         // Env vars projected
         let env_map: HashMap<&str, &str> = p
-            .goose_env_vars
+            .runtime_env_vars
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();

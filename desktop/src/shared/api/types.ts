@@ -465,6 +465,8 @@ export type AgentPersona = {
   runtime: string | null;
   /** Opaque, harness-specific model identifier string. Sprout stores and passes through without interpretation. */
   model: string | null;
+  /** LLM inference provider (e.g. "databricks", "anthropic"). Injected as the runtime's provider env var at spawn time. */
+  provider: string | null;
   namePool: string[];
   isBuiltIn: boolean;
   isActive: boolean;
@@ -483,6 +485,7 @@ export type CreatePersonaInput = {
   systemPrompt: string;
   runtime?: string;
   model?: string;
+  provider?: string;
   namePool?: string[];
   envVars?: Record<string, string>;
 };
@@ -494,6 +497,7 @@ export type UpdatePersonaInput = {
   systemPrompt: string;
   runtime?: string;
   model?: string;
+  provider?: string;
   namePool?: string[];
   envVars?: Record<string, string>;
 };

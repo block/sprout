@@ -53,6 +53,7 @@ pub fn create_persona(
     let avatar_url = trim_optional(input.avatar_url);
     let runtime = trim_optional(input.runtime);
     let model = trim_optional(input.model);
+    let provider = trim_optional(input.provider);
     let now = now_iso();
 
     let _store_guard = state
@@ -74,6 +75,7 @@ pub fn create_persona(
         system_prompt,
         runtime,
         model,
+        provider,
         name_pool,
         is_builtin: false,
         is_active: true,
@@ -100,6 +102,7 @@ pub fn update_persona(
     let avatar_url = trim_optional(input.avatar_url);
     let runtime = trim_optional(input.runtime);
     let model = trim_optional(input.model);
+    let provider = trim_optional(input.provider);
 
     let _store_guard = state
         .managed_agents_store_lock
@@ -119,6 +122,7 @@ pub fn update_persona(
     persona.system_prompt = system_prompt;
     persona.runtime = runtime;
     persona.model = model;
+    persona.provider = provider;
     persona.name_pool = input
         .name_pool
         .into_iter()
