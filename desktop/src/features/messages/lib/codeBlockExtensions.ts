@@ -60,7 +60,7 @@ export const CodeBlockAfterHardBreak = Extension.create({
     const codeBlockType = this.editor.schema.nodes.codeBlock;
     return [
       new InputRule({
-        find: /￼(?:```|~~~)([a-z+]*)[\s]$/,
+        find: /\n(?:```|~~~)([a-z+]*)[\s]$/,
         handler: ({ state, range, match }) => {
           const $from = state.doc.resolve(range.from);
           if ($from.parent.type.name === "codeBlock") return null;
