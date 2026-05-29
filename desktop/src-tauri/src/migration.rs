@@ -21,16 +21,15 @@ const CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
 /// dev data directory. Only data files — never `agent-pids/` or `logs/`.
 /// `identity.key` is deliberately excluded because worktree instances
 /// receive their identity via the `SPROUT_PRIVATE_KEY` env var.
-///
-/// NOTE: `agents/packs/` is intentionally excluded — recursive directory
-/// symlink is out of scope. Pack personas will appear in the worktree but
-/// agents with `persona_pack_path` may fail if the ACP reads pack files
-/// at runtime. Install packs in the worktree separately if needed.
 const SHARED_AGENT_FILES: &[&str] = &[
     "agents/managed-agents.json",
     "agents/personas.json",
     "agents/teams.json",
 ];
+
+/// Directories symlinked from worktree data directories to the canonical
+/// dev data directory. Each entry becomes a single directory symlink.
+const SHARED_AGENT_DIRS: &[&str] = &["agents/packs"];
 
 fn canonical_dev_data_dir(current: &Path) -> Option<PathBuf> {
     current.parent().map(|p| p.join(CANONICAL_DEV_IDENTIFIER))
@@ -172,9 +171,49 @@ pub fn sync_shared_agent_data(app: &tauri::AppHandle) {
         }
     }
 
+    for rel in SHARED_AGENT_DIRS {
+        let src = canonical_dir.join(rel);
+        let dst = current_dir.join(rel);
+
+        if !src.exists() {
+            continue;
+        }
+
+        if let Some(parent) = dst.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "sprout-desktop: shared-agent-sync: failed to create {}: {e}",
+                    parent.display()
+                );
+                continue;
+            }
+        }
+
+        if dst.is_symlink() {
+            if let Ok(target) = std::fs::read_link(&dst) {
+                if target == src {
+                    continue;
+                }
+            }
+        }
+
+        if dst.is_symlink() {
+            let _ = std::fs::remove_file(&dst);
+        } else if dst.exists() {
+            let _ = std::fs::remove_dir_all(&dst);
+        }
+
+        match std::os::unix::fs::symlink(&src, &dst) {
+            Ok(_) => synced += 1,
+            Err(e) => {
+                eprintln!("sprout-desktop: shared-agent-sync: failed to symlink {rel}: {e}");
+            }
+        }
+    }
+
     if synced > 0 {
         eprintln!(
-            "sprout-desktop: shared-agent-sync: {synced} file(s) linked to {}",
+            "sprout-desktop: shared-agent-sync: {synced} item(s) linked to {}",
             canonical_dir.display()
         );
     }
@@ -227,6 +266,65 @@ pub fn reconcile_provider_mcp_commands(app: &tauri::AppHandle) {
     reconcile_mcp_commands_in_file(&path);
 }
 
+fn reconcile_pack_paths_in_file(path: &Path, canonical_dir: &Path) {
+    let canonical_packs = canonical_dir.join("agents/packs");
+    patch_json_records(path, |obj| {
+        let pack_path = match obj.get("persona_pack_path").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => return false,
+        };
+        let pack_path = Path::new(pack_path);
+        let mut found_packs = false;
+        let mut pack_id: Option<&std::ffi::OsStr> = None;
+        for component in pack_path.components() {
+            if found_packs {
+                pack_id = Some(component.as_os_str());
+                break;
+            }
+            if component.as_os_str() == "packs" {
+                found_packs = true;
+            }
+        }
+        let Some(id) = pack_id else {
+            return false;
+        };
+        let expected = canonical_packs.join(id);
+        if pack_path == expected {
+            return false;
+        }
+        eprintln!(
+            "sprout-desktop: pack-path-reconcile: {:?}: {:?} → {:?}",
+            obj.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
+            pack_path,
+            expected,
+        );
+        obj.insert(
+            "persona_pack_path".to_string(),
+            serde_json::Value::String(expected.to_string_lossy().into_owned()),
+        );
+        true
+    });
+}
+
+/// Reconcile `persona_pack_path` values in managed-agents.json to point
+/// to the canonical dev data directory's `agents/packs/` prefix. Fixes
+/// stale paths left when agents were created from worktree instances
+/// whose data directories don't have local pack copies.
+pub fn reconcile_persona_pack_paths(app: &tauri::AppHandle) {
+    let Ok(current_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let canonical_dir = match canonical_dev_data_dir(&current_dir) {
+        Some(dir) if dir.exists() => dir,
+        _ => current_dir,
+    };
+    let path = canonical_dir.join("agents/managed-agents.json");
+    if !path.exists() {
+        return;
+    }
+    reconcile_pack_paths_in_file(&path, &canonical_dir);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +368,11 @@ mod tests {
         .unwrap();
         std::fs::write(canonical.join("agents/teams.json"), r#"[{"id":"team-1"}]"#).unwrap();
 
+        let pack_dir = canonical.join("agents/packs/com.example.test-pack");
+        std::fs::create_dir_all(&pack_dir).unwrap();
+        std::fs::write(pack_dir.join("instructions.md"), "# Test pack").unwrap();
+        std::fs::write(pack_dir.join("solo.persona.md"), "# Solo").unwrap();
+
         (parent, canonical, worktree)
     }
 
@@ -301,6 +404,30 @@ mod tests {
             std::os::unix::fs::symlink(&src, &dst).unwrap();
             synced += 1;
         }
+        for rel in SHARED_AGENT_DIRS {
+            let src = canonical.join(rel);
+            let dst = worktree.join(rel);
+            if !src.exists() {
+                continue;
+            }
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            if dst.is_symlink() {
+                if let Ok(target) = std::fs::read_link(&dst) {
+                    if target == src {
+                        continue;
+                    }
+                }
+            }
+            if dst.is_symlink() {
+                let _ = std::fs::remove_file(&dst);
+            } else if dst.exists() {
+                let _ = std::fs::remove_dir_all(&dst);
+            }
+            std::os::unix::fs::symlink(&src, &dst).unwrap();
+            synced += 1;
+        }
         synced
     }
 
@@ -308,13 +435,17 @@ mod tests {
     fn sync_creates_symlinks_to_fresh_worktree() {
         let (_parent, canonical, worktree) = setup_sync_layout();
         let synced = sync_files(&canonical, &worktree);
-        assert_eq!(synced, 3);
+        assert_eq!(synced, 4);
         for rel in SHARED_AGENT_FILES {
             let dst = worktree.join(rel);
             assert!(dst.is_symlink(), "{rel} should be a symlink");
             assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
         }
-        // Content is readable through symlinks.
+        for rel in SHARED_AGENT_DIRS {
+            let dst = worktree.join(rel);
+            assert!(dst.is_symlink(), "{rel} should be a symlink");
+            assert_eq!(std::fs::read_link(&dst).unwrap(), canonical.join(rel));
+        }
         assert_eq!(
             std::fs::read_to_string(worktree.join("agents/managed-agents.json")).unwrap(),
             r#"[{"id":"agent-1"}]"#,
@@ -331,7 +462,7 @@ mod tests {
 
         let synced = sync_files(&canonical, &worktree);
 
-        assert_eq!(synced, 3);
+        assert_eq!(synced, 4);
         for rel in SHARED_AGENT_FILES {
             let dst = worktree.join(rel);
             assert!(
@@ -349,9 +480,7 @@ mod tests {
     #[test]
     fn sync_preserves_correct_symlinks() {
         let (_parent, canonical, worktree) = setup_sync_layout();
-        // First sync creates symlinks.
-        assert_eq!(sync_files(&canonical, &worktree), 3);
-        // Second sync should be a no-op.
+        assert_eq!(sync_files(&canonical, &worktree), 4);
         assert_eq!(sync_files(&canonical, &worktree), 0);
         for rel in SHARED_AGENT_FILES {
             let dst = worktree.join(rel);
@@ -369,7 +498,7 @@ mod tests {
             std::os::unix::fs::symlink(&wrong_target, worktree.join(rel)).unwrap();
         }
         let synced = sync_files(&canonical, &worktree);
-        assert_eq!(synced, 3);
+        assert_eq!(synced, 4);
         for rel in SHARED_AGENT_FILES {
             assert_eq!(
                 std::fs::read_link(worktree.join(rel)).unwrap(),
@@ -387,7 +516,7 @@ mod tests {
             std::os::unix::fs::symlink(&broken_target, worktree.join(rel)).unwrap();
         }
         let synced = sync_files(&canonical, &worktree);
-        assert_eq!(synced, 3);
+        assert_eq!(synced, 4);
         for rel in SHARED_AGENT_FILES {
             let dst = worktree.join(rel);
             assert!(dst.is_symlink());
@@ -619,5 +748,151 @@ mod tests {
         reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
         let records = read_agents_json(dir.path());
         assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
+    }
+
+    #[test]
+    fn sync_creates_packs_directory_symlink() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        sync_files(&canonical, &worktree);
+
+        let packs_link = worktree.join("agents/packs");
+        assert!(packs_link.is_symlink());
+        assert_eq!(
+            std::fs::read_link(&packs_link).unwrap(),
+            canonical.join("agents/packs")
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                worktree.join("agents/packs/com.example.test-pack/instructions.md")
+            )
+            .unwrap(),
+            "# Test pack"
+        );
+    }
+
+    #[test]
+    fn sync_replaces_real_packs_dir_with_symlink() {
+        let (_parent, canonical, worktree) = setup_sync_layout();
+        let real_packs = worktree.join("agents/packs");
+        std::fs::create_dir_all(&real_packs).unwrap();
+        std::fs::write(real_packs.join("stale-file.txt"), "stale").unwrap();
+
+        sync_files(&canonical, &worktree);
+
+        assert!(worktree.join("agents/packs").is_symlink());
+        assert_eq!(
+            std::fs::read_link(worktree.join("agents/packs")).unwrap(),
+            canonical.join("agents/packs")
+        );
+    }
+
+    #[test]
+    fn pack_path_reconcile_rewrites_worktree_path() {
+        let parent = tempfile::tempdir().unwrap();
+        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+        std::fs::create_dir_all(canonical.join("agents")).unwrap();
+
+        let worktree_pack_path = format!(
+            "{}/agents/packs/com.wpfleger.sietch-tabr",
+            parent
+                .path()
+                .join("xyz.block.sprout.app.dev.worktree-my-branch")
+                .display()
+        );
+        let expected_path = format!(
+            "{}/agents/packs/com.wpfleger.sietch-tabr",
+            canonical.display()
+        );
+
+        write_agents_json(
+            &canonical,
+            &serde_json::json!([{
+                "name": "Paul",
+                "persona_pack_path": worktree_pack_path
+            }]),
+        );
+
+        reconcile_pack_paths_in_file(&canonical.join("agents/managed-agents.json"), &canonical);
+
+        let records = read_agents_json(&canonical);
+        assert_eq!(records[0]["persona_pack_path"], expected_path);
+    }
+
+    #[test]
+    fn pack_path_reconcile_leaves_canonical_path_unchanged() {
+        let parent = tempfile::tempdir().unwrap();
+        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+        std::fs::create_dir_all(canonical.join("agents")).unwrap();
+
+        let canonical_path = format!(
+            "{}/agents/packs/com.wpfleger.sietch-tabr",
+            canonical.display()
+        );
+
+        write_agents_json(
+            &canonical,
+            &serde_json::json!([{
+                "name": "Duncan",
+                "persona_pack_path": canonical_path
+            }]),
+        );
+
+        let before = std::fs::read_to_string(canonical.join("agents/managed-agents.json")).unwrap();
+        reconcile_pack_paths_in_file(&canonical.join("agents/managed-agents.json"), &canonical);
+        let after = std::fs::read_to_string(canonical.join("agents/managed-agents.json")).unwrap();
+
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn pack_path_reconcile_skips_records_without_pack_path() {
+        let parent = tempfile::tempdir().unwrap();
+        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+        std::fs::create_dir_all(canonical.join("agents")).unwrap();
+
+        write_agents_json(
+            &canonical,
+            &serde_json::json!([{
+                "name": "Test Agent",
+                "agent_command": "sprout-agent"
+            }]),
+        );
+
+        let before = std::fs::read_to_string(canonical.join("agents/managed-agents.json")).unwrap();
+        reconcile_pack_paths_in_file(&canonical.join("agents/managed-agents.json"), &canonical);
+        let after = std::fs::read_to_string(canonical.join("agents/managed-agents.json")).unwrap();
+
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn pack_path_reconcile_is_idempotent() {
+        let parent = tempfile::tempdir().unwrap();
+        let canonical = parent.path().join(CANONICAL_DEV_IDENTIFIER);
+        std::fs::create_dir_all(canonical.join("agents")).unwrap();
+
+        let worktree_pack_path = format!(
+            "{}/agents/packs/com.wpfleger.sietch-tabr",
+            parent
+                .path()
+                .join("xyz.block.sprout.app.dev.worktree-my-branch")
+                .display()
+        );
+
+        write_agents_json(
+            &canonical,
+            &serde_json::json!([{
+                "name": "Paul",
+                "persona_pack_path": worktree_pack_path
+            }]),
+        );
+
+        let path = canonical.join("agents/managed-agents.json");
+        reconcile_pack_paths_in_file(&path, &canonical);
+        let after_first = std::fs::read_to_string(&path).unwrap();
+        reconcile_pack_paths_in_file(&path, &canonical);
+        let after_second = std::fs::read_to_string(&path).unwrap();
+
+        assert_eq!(after_first, after_second);
     }
 }
