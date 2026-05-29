@@ -15,6 +15,11 @@ import {
   mentionHighlightKey,
 } from "./mentionHighlightExtension";
 import { buildPlainTextProjection } from "./plainTextProjection";
+import {
+  CodeBlockAfterHardBreak,
+  handleCodeFenceEnter,
+  insertNewlineInCodeBlock,
+} from "./codeBlockExtensions";
 
 /**
  * Plain-text edit descriptor returned by autocomplete hooks
@@ -199,6 +204,9 @@ export function useRichTextEditor({
 
             return {
               "Shift-Enter": ({ editor: ed }) => {
+                if (ed.isActive("codeBlock")) {
+                  return insertNewlineInCodeBlock(ed);
+                }
                 // Empty last list item → exit list to paragraph below.
                 if (exitListIfEmptyLast(ed)) return true;
                 // Non-empty or non-last list item → split.
@@ -231,17 +239,20 @@ export function useRichTextEditor({
           name: "submitOnEnter",
           addKeyboardShortcuts() {
             return {
-              Enter: () => {
-                // Let autocomplete dropdowns consume Enter first.
+              Enter: ({ editor: ed }) => {
                 if (isAutocompleteOpen?.current) return false;
-                // No submit callback → fall through to default behaviour.
                 if (!onSubmitRef.current) return false;
+
+                const fenceResult = handleCodeFenceEnter(ed);
+                if (fenceResult !== undefined) return fenceResult;
+
                 onSubmitRef.current();
-                return true; // prevents splitBlock
+                return true;
               },
             };
           },
         }),
+        CodeBlockAfterHardBreak,
         MentionHighlightExtension,
         Placeholder.configure({
           placeholder: () => placeholderRef.current ?? "Write a message…",

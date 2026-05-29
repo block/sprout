@@ -263,11 +263,12 @@ function createMarkdownComponents(
     ),
     br: () => <br />,
     code: ({ children, className, ...props }: React.ComponentProps<"code">) => {
-      const code = String(children).replace(/\n$/, "");
+      const rawCode = String(children);
+      const code = rawCode.replace(/\n$/, "");
       const isFencedCodeBlock =
         typeof className === "string" && className.includes("language-");
 
-      if (isFencedCodeBlock || code.includes("\n")) {
+      if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
         return (
           <code
             {...props}
