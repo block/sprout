@@ -840,7 +840,6 @@ mod tests {
         reconcile_mcp_commands_in_file(&path);
         assert_eq!(before, std::fs::read_to_string(&path).unwrap());
     }
-<<<<<<< HEAD
 
     #[test]
     fn sync_creates_packs_directory_symlink() {
