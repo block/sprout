@@ -122,6 +122,40 @@ _ensure-sidecar-stubs:
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 
+# Ensure Docker dev services (Postgres, Redis, etc.) are running and healthy
+_ensure-services:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pg=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' sprout-postgres 2>/dev/null || echo "not_found")
+    redis=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' sprout-redis 2>/dev/null || echo "not_found")
+    if [[ "$pg" == "healthy" && "$redis" == "healthy" ]]; then
+        echo "Services already healthy"
+        exit 0
+    fi
+    echo "Starting services..."
+    docker compose up -d || true
+    echo -n "Waiting for services"
+    for i in $(seq 1 40); do
+        pg=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' sprout-postgres 2>/dev/null || echo "not_found")
+        redis=$(docker inspect --format '{{"{{"}}.State.Health.Status{{"}}"}}' sprout-redis 2>/dev/null || echo "not_found")
+        if [[ "$pg" == "healthy" && "$redis" == "healthy" ]]; then
+            echo " ready"
+            exit 0
+        fi
+        echo -n "."
+        sleep 3
+    done
+    echo " timed out"
+    exit 1
+
+# Apply database migrations if pgschema is available
+_ensure-migrations: _ensure-services
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -x bin/pgschema && -f schema/schema.sql ]]; then
+        bin/pgschema apply --file schema/schema.sql --auto-approve 2>/dev/null || true
+    fi
+
 # Run clippy on the desktop Tauri Rust crate
 desktop-tauri-clippy: _ensure-sidecar-stubs
     cargo clippy --manifest-path {{desktop_tauri_manifest}} --all-targets -- -D warnings
@@ -188,8 +222,8 @@ test-integration:
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
-# Start the relay server
-relay:
+# Start the relay server (auto-starts Docker services if needed)
+relay: _ensure-migrations
     cargo run -p sprout-relay
 
 # Start the relay with the built web UI served from it
@@ -317,6 +351,29 @@ mobile-check:
 # Run mobile tests
 mobile-test:
     unset GIT_DIR GIT_WORK_TREE; cd {{mobile_dir}} && flutter test
+
+# Run the mobile app on iOS simulator (starts infra + relay automatically)
+mobile-dev:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just _ensure-migrations
+    # Start relay in background if not already running
+    if ! lsof -i :3000 -sTCP:LISTEN -t &>/dev/null; then
+        echo "Starting relay in background (log: /tmp/sprout-relay.log)..."
+        cargo run -p sprout-relay &>/tmp/sprout-relay.log &
+        sleep 3
+    else
+        echo "Relay already running on :3000"
+    fi
+    # Open iOS simulator if not already running
+    if ! pgrep -x Simulator &>/dev/null; then
+        open -a Simulator
+        sleep 3
+    fi
+    # Run Flutter
+    cd {{mobile_dir}}
+    unset GIT_DIR GIT_WORK_TREE
+    flutter run
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 
