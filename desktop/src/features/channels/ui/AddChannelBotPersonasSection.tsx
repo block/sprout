@@ -63,8 +63,34 @@ function SelectionChipButton({
   );
 }
 
+function RuntimeBadge({
+  label,
+  isOverridden,
+}: {
+  label: string;
+  isOverridden: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
+        isOverridden
+          ? "bg-warning/15 text-warning"
+          : "bg-muted/60 text-muted-foreground",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 type AddChannelBotPersonasSectionProps = {
   canToggleSelections: boolean;
+  /** Map of personaId → effective runtime label for badge display */
+  effectiveRuntimes?: ReadonlyMap<
+    string,
+    { label: string; isOverridden: boolean }
+  >;
   inChannelPersonaIds?: ReadonlySet<string>;
   includeGeneric: boolean;
   isLoading: boolean;
@@ -78,6 +104,7 @@ type AddChannelBotPersonasSectionProps = {
 
 export function AddChannelBotPersonasSection({
   canToggleSelections,
+  effectiveRuntimes,
   inChannelPersonaIds,
   includeGeneric,
   isLoading,
@@ -128,6 +155,7 @@ export function AddChannelBotPersonasSection({
             {personas.map((persona) => {
               const isSelected = selectedPersonaIds.includes(persona.id);
               const isInChannel = inChannelPersonaIds?.has(persona.id) ?? false;
+              const runtimeBadge = effectiveRuntimes?.get(persona.id);
               return (
                 <Tooltip key={persona.id}>
                   <TooltipTrigger asChild>
@@ -140,6 +168,9 @@ export function AddChannelBotPersonasSection({
                         selected={isSelected}
                       >
                         {persona.displayName}
+                        {runtimeBadge ? (
+                          <RuntimeBadge {...runtimeBadge} />
+                        ) : null}
                         {isInChannel ? (
                           <span
                             className={cn(
