@@ -56,13 +56,14 @@ impl Llm {
     pub async fn complete(
         &self,
         cfg: &Config,
+        system_prompt: &str,
         history: &[HistoryItem],
         tools: &[ToolDef],
     ) -> Result<LlmResponse, AgentError> {
         match cfg.provider {
             Provider::Anthropic => {
                 let v = self
-                    .post_anthropic(cfg, &anthropic_body(cfg, history, tools))
+                    .post_anthropic(cfg, &anthropic_body(cfg, system_prompt, history, tools))
                     .await?;
                 parse_anthropic(v)
             }
@@ -70,12 +71,12 @@ impl Llm {
                 self.openai_request(cfg, |use_responses| {
                     if use_responses {
                         (
-                            responses_body(cfg, history, tools),
+                            responses_body(cfg, system_prompt, history, tools),
                             parse_responses as OpenAiParse,
                         )
                     } else {
                         (
-                            openai_body(cfg, history, tools),
+                            openai_body(cfg, system_prompt, history, tools),
                             parse_openai as OpenAiParse,
                         )
                     }
@@ -227,7 +228,12 @@ impl Llm {
     }
 }
 
-fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
+fn anthropic_body(
+    cfg: &Config,
+    system_prompt: &str,
+    history: &[HistoryItem],
+    tools: &[ToolDef],
+) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     let mut pending: Vec<Value> = Vec::new();
     let flush = |out: &mut Vec<Value>, p: &mut Vec<Value>| {
@@ -275,7 +281,7 @@ fn anthropic_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
         })
         .collect();
     let mut body = json!({ "model": cfg.model, "max_tokens": cfg.max_output_tokens,
-        "system": cfg.system_prompt, "messages": messages });
+        "system": system_prompt, "messages": messages });
     if !tools_json.is_empty() {
         body["tools"] = Value::Array(tools_json);
     }
@@ -295,8 +301,13 @@ fn anthropic_tool_result_content(content: &[ToolResultContent]) -> Vec<Value> {
         .collect()
 }
 
-fn openai_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
-    let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": cfg.system_prompt })];
+fn openai_body(
+    cfg: &Config,
+    system_prompt: &str,
+    history: &[HistoryItem],
+    tools: &[ToolDef],
+) -> Value {
+    let mut messages: Vec<Value> = vec![json!({ "role": "system", "content": system_prompt })];
     // Images returned from tool calls ride on a trailing `role:"user"`
     // message because OpenAI Chat's `role:"tool"` content is text-only. We
     // batch them across a run of adjacent ToolResult items so that all
@@ -399,7 +410,12 @@ fn openai_image_user_content(content: &[ToolResultContent]) -> Vec<Value> {
 // "No tool call found for call_id ...". `HistoryItem` ordering already
 // guarantees this.
 
-fn responses_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> Value {
+fn responses_body(
+    cfg: &Config,
+    system_prompt: &str,
+    history: &[HistoryItem],
+    tools: &[ToolDef],
+) -> Value {
     let mut input: Vec<Value> = Vec::with_capacity(history.len());
     for item in history {
         match item {
@@ -463,7 +479,7 @@ fn responses_body(cfg: &Config, history: &[HistoryItem], tools: &[ToolDef]) -> V
 
     let mut body = json!({
         "model": cfg.model,
-        "instructions": cfg.system_prompt,
+        "instructions": system_prompt,
         "max_output_tokens": cfg.max_output_tokens,
         "input": input,
     });
@@ -864,6 +880,7 @@ mod tests {
             base_url: "http://example.invalid".into(),
             anthropic_api_version: "2023-06-01".into(),
             openai_api: OpenAiApi::Chat,
+            hints_enabled: true,
         }
     }
 
@@ -894,7 +911,7 @@ mod tests {
 
     #[test]
     fn anthropic_tool_result_preserves_image_block() {
-        let body = anthropic_body(&cfg(Provider::Anthropic), &image_history(), &[]);
+        let body = anthropic_body(&cfg(Provider::Anthropic), "system", &image_history(), &[]);
         let content = &body["messages"][2]["content"][0]["content"];
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[1]["type"], "image");
@@ -940,7 +957,12 @@ mod tests {
                 "properties": {"command": {"type": "string"}},
             }),
         }];
-        let body = responses_body(&cfg_responses(), &[HistoryItem::User("hi".into())], &tools);
+        let body = responses_body(
+            &cfg_responses(),
+            "system",
+            &[HistoryItem::User("hi".into())],
+            &tools,
+        );
         assert_eq!(body["model"], "model");
         assert_eq!(body["instructions"], "system");
         assert_eq!(body["max_output_tokens"], 1024);
@@ -968,7 +990,7 @@ mod tests {
         // function_call item *must* appear in `input[]` before its matching
         // function_call_output, otherwise the API rejects with
         // "No tool call found for call_id ...".
-        let body = responses_body(&cfg_responses(), &tool_call_history(), &[]);
+        let body = responses_body(&cfg_responses(), "system", &tool_call_history(), &[]);
         let input = body["input"].as_array().unwrap();
 
         // [0] user, [1] assistant text, [2] function_call, [3] function_call_output
@@ -1007,7 +1029,7 @@ mod tests {
                 }],
             },
         ];
-        let body = responses_body(&cfg_responses(), &history, &[]);
+        let body = responses_body(&cfg_responses(), "system", &history, &[]);
         let input = body["input"].as_array().unwrap();
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["role"], "user");
@@ -1016,7 +1038,7 @@ mod tests {
 
     #[test]
     fn responses_body_image_tool_result_attaches_input_image() {
-        let body = responses_body(&cfg_responses(), &image_history(), &[]);
+        let body = responses_body(&cfg_responses(), "system", &image_history(), &[]);
         let input = body["input"].as_array().unwrap();
         // function_call_output carries the text part; image rides on a
         // trailing user message as `input_image`.
@@ -1118,7 +1140,7 @@ mod tests {
 
     #[test]
     fn openai_tool_result_adds_followup_image_user_message() {
-        let body = openai_body(&cfg(Provider::OpenAi), &image_history(), &[]);
+        let body = openai_body(&cfg(Provider::OpenAi), "system", &image_history(), &[]);
         assert_eq!(body["messages"][3]["role"], "tool");
         assert!(body["messages"][3]["content"]
             .as_str()
@@ -1189,7 +1211,7 @@ mod tests {
                 is_error: false,
             }),
         ];
-        let body = openai_body(&cfg(Provider::OpenAi), &history, &[]);
+        let body = openai_body(&cfg(Provider::OpenAi), "system", &history, &[]);
         let messages = body["messages"].as_array().unwrap();
         // [0] system, [1] user, [2] assistant(tool_calls), [3] tool A, [4] tool B, [5] user(images)
         assert_eq!(messages.len(), 6, "messages: {messages:#?}");

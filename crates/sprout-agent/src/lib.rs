@@ -3,6 +3,7 @@ mod agent;
 pub mod auth;
 mod config;
 mod handoff;
+mod hints;
 mod llm;
 mod mcp;
 mod types;
@@ -41,6 +42,7 @@ struct Session {
     original_task: Option<String>,
     handoff_count: usize,
     stop_rejections: u32,
+    effective_system_prompt: Arc<str>,
 }
 
 fn die(msg: String) -> ! {
@@ -253,6 +255,16 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             .await;
         }
     }
+    let effective_system_prompt: Arc<str> = if app.cfg.hints_enabled {
+        let hints = hints::build_hints_section(std::path::Path::new(&p.cwd));
+        if hints.is_empty() {
+            Arc::from(app.cfg.system_prompt.as_str())
+        } else {
+            Arc::from(format!("{}\n\n{}", app.cfg.system_prompt, hints))
+        }
+    } else {
+        Arc::from(app.cfg.system_prompt.as_str())
+    };
     let mcp = match McpRegistry::spawn_all(&app.cfg, &p.mcp_servers, &p.cwd).await {
         Ok(m) => Arc::new(m),
         Err(e) => return reject(wire_tx, id, e.json_rpc_code(), &e.to_string()).await,
@@ -284,6 +296,7 @@ async fn session_new(app: &Arc<App>, id: Value, params: Value, wire_tx: &WireSen
             original_task: None,
             handoff_count: 0,
             stop_rejections: 0,
+            effective_system_prompt,
         },
     );
     drop(sessions);
@@ -323,6 +336,7 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
         mut handoff_count,
         mut stop_rejections,
         mut cancel_rx,
+        effective_system_prompt,
     ) = match acquire_session(&app, &p.session_id).await {
         Ok(v) => v,
         Err(reason) => {
@@ -338,6 +352,7 @@ async fn run_prompt(app: Arc<App>, id: Value, params: Value, wire_tx: WireSender
     let mut ctx = RunCtx {
         cfg: &app.cfg,
         session_id: &sid,
+        system_prompt: &effective_system_prompt,
         llm: &app.llm,
         mcp: &mcp,
         wire: &wire_tx,
@@ -379,6 +394,7 @@ async fn acquire_session(
         usize,
         u32,
         watch::Receiver<bool>,
+        Arc<str>,
     ),
     &'static str,
 > {
@@ -398,6 +414,7 @@ async fn acquire_session(
         s.handoff_count,
         s.stop_rejections,
         rx,
+        Arc::clone(&s.effective_system_prompt),
     ))
 }
 
