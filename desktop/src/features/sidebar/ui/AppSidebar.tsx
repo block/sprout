@@ -10,6 +10,7 @@ import {
   Zap,
 } from "lucide-react";
 import * as React from "react";
+import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import type { Workspace } from "@/features/workspaces/types";
@@ -246,6 +247,7 @@ export function AppSidebar({
     deleteSection,
     moveSectionUp,
     moveSectionDown,
+    reorderSections,
     assignChannel,
     unassignChannel,
   } = useChannelSections(currentPubkey);
@@ -258,6 +260,11 @@ export function AppSidebar({
     React.useState<ChannelSection | null>(null);
   const [deleteSectionTarget, setDeleteSectionTarget] =
     React.useState<ChannelSection | null>(null);
+
+  const sectionIds = React.useMemo(
+    () => channelSections.map((s) => s.id),
+    [channelSections],
+  );
 
   const streamChannels = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "stream"),
@@ -488,70 +495,82 @@ export function AppSidebar({
 
           {!isLoading ? (
             <>
-              {channelSections.map((section, idx) => (
-                <CustomChannelSection
-                  key={section.id}
-                  section={section}
-                  channels={sectionBuckets.bySection[section.id] ?? []}
-                  hasUnread={
-                    sectionBuckets.bySection[section.id]?.some((c) =>
-                      unreadChannelIds.has(c.id),
-                    ) ?? false
+              <SidebarDndContext
+                channels={channels}
+                sections={channelSections}
+                sectionIds={sectionIds}
+                onAssignChannel={assignChannel}
+                onUnassignChannel={unassignChannel}
+                onReorderSections={reorderSections}
+              >
+                {channelSections.map((section, idx) => (
+                  <CustomChannelSection
+                    key={section.id}
+                    section={section}
+                    channels={sectionBuckets.bySection[section.id] ?? []}
+                    hasUnread={
+                      sectionBuckets.bySection[section.id]?.some((c) =>
+                        unreadChannelIds.has(c.id),
+                      ) ?? false
+                    }
+                    isCollapsed={collapsedSections[section.id] ?? false}
+                    isActiveChannel={selectedView === "channel"}
+                    selectedChannelId={selectedChannelId}
+                    unreadChannelIds={unreadChannelIds}
+                    sections={channelSections}
+                    assignments={channelAssignments}
+                    isFirst={idx === 0}
+                    isLast={idx === channelSections.length - 1}
+                    onToggleCollapsed={() => toggleCollapsedSection(section.id)}
+                    onSelectChannel={onSelectChannel}
+                    onMarkChannelRead={onMarkChannelRead}
+                    onMarkChannelUnread={onMarkChannelUnread}
+                    onMarkSectionRead={() => {
+                      for (const channel of sectionBuckets.bySection[
+                        section.id
+                      ] ?? []) {
+                        onMarkChannelRead(channel.id, channel.lastMessageAt);
+                      }
+                    }}
+                    onAssignChannel={assignChannel}
+                    onUnassignChannel={unassignChannel}
+                    onCreateSectionForChannel={handleCreateSectionForChannel}
+                    onRenameSection={() => setRenameSectionTarget(section)}
+                    onDeleteSection={() => setDeleteSectionTarget(section)}
+                    onMoveSectionUp={() => moveSectionUp(section.id)}
+                    onMoveSectionDown={() => moveSectionDown(section.id)}
+                  />
+                ))}
+                <ChannelGroupSection
+                  browseAriaLabel="Browse channels"
+                  browseTestId="browse-channels"
+                  createAriaLabel="Create a channel"
+                  draggable
+                  groupClassName={
+                    channelSections.length > 0 ? undefined : "pt-1"
                   }
-                  isCollapsed={collapsedSections[section.id] ?? false}
+                  hasUnread={unreadChannelIds.size > 0}
+                  isCollapsed={collapsedGroups.channels}
                   isActiveChannel={selectedView === "channel"}
+                  items={sectionBuckets.unassigned}
+                  listTestId="stream-list"
+                  onBrowse={onOpenBrowseChannels}
+                  onCreateClick={() => setCreateDialogKind("stream")}
+                  onMarkAllRead={onMarkAllChannelsRead}
+                  onMarkChannelRead={onMarkChannelRead}
+                  onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectChannel={onSelectChannel}
+                  onToggleCollapsed={() => toggleCollapsedGroup("channels")}
                   selectedChannelId={selectedChannelId}
+                  title="Channels"
                   unreadChannelIds={unreadChannelIds}
                   sections={channelSections}
                   assignments={channelAssignments}
-                  isFirst={idx === 0}
-                  isLast={idx === channelSections.length - 1}
-                  onToggleCollapsed={() => toggleCollapsedSection(section.id)}
-                  onSelectChannel={onSelectChannel}
-                  onMarkChannelRead={onMarkChannelRead}
-                  onMarkChannelUnread={onMarkChannelUnread}
-                  onMarkSectionRead={() => {
-                    for (const channel of sectionBuckets.bySection[
-                      section.id
-                    ] ?? []) {
-                      onMarkChannelRead(channel.id, channel.lastMessageAt);
-                    }
-                  }}
                   onAssignChannel={assignChannel}
                   onUnassignChannel={unassignChannel}
                   onCreateSectionForChannel={handleCreateSectionForChannel}
-                  onRenameSection={() => setRenameSectionTarget(section)}
-                  onDeleteSection={() => setDeleteSectionTarget(section)}
-                  onMoveSectionUp={() => moveSectionUp(section.id)}
-                  onMoveSectionDown={() => moveSectionDown(section.id)}
                 />
-              ))}
-              <ChannelGroupSection
-                browseAriaLabel="Browse channels"
-                browseTestId="browse-channels"
-                createAriaLabel="Create a channel"
-                groupClassName={channelSections.length > 0 ? undefined : "pt-1"}
-                hasUnread={unreadChannelIds.size > 0}
-                isCollapsed={collapsedGroups.channels}
-                isActiveChannel={selectedView === "channel"}
-                items={sectionBuckets.unassigned}
-                listTestId="stream-list"
-                onBrowse={onOpenBrowseChannels}
-                onCreateClick={() => setCreateDialogKind("stream")}
-                onMarkAllRead={onMarkAllChannelsRead}
-                onMarkChannelRead={onMarkChannelRead}
-                onMarkChannelUnread={onMarkChannelUnread}
-                onSelectChannel={onSelectChannel}
-                onToggleCollapsed={() => toggleCollapsedGroup("channels")}
-                selectedChannelId={selectedChannelId}
-                title="Channels"
-                unreadChannelIds={unreadChannelIds}
-                sections={channelSections}
-                assignments={channelAssignments}
-                onAssignChannel={assignChannel}
-                onUnassignChannel={unassignChannel}
-                onCreateSectionForChannel={handleCreateSectionForChannel}
-              />
+              </SidebarDndContext>
               <ChannelGroupSection
                 browseAriaLabel="Browse forums"
                 browseTestId="browse-forums"

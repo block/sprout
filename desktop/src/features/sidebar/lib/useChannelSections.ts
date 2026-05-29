@@ -22,6 +22,7 @@ export function useChannelSections(pubkey: string | undefined): {
   deleteSection: (sectionId: string) => void;
   moveSectionUp: (sectionId: string) => void;
   moveSectionDown: (sectionId: string) => void;
+  reorderSections: (orderedIds: string[]) => void;
   assignChannel: (channelId: string, sectionId: string) => void;
   unassignChannel: (channelId: string) => void;
 } {
@@ -210,6 +211,22 @@ export function useChannelSections(pubkey: string | undefined): {
     [pubkey],
   );
 
+  const reorderSections = React.useCallback(
+    (orderedIds: string[]) => {
+      if (!pubkey) return;
+      setStore((prev) => {
+        const sections = prev.sections.map((s) => {
+          const newOrder = orderedIds.indexOf(s.id);
+          return newOrder === -1 ? s : { ...s, order: newOrder };
+        });
+        const next: ChannelSectionStore = { ...prev, sections };
+        if (!writeChannelSectionsStore(pubkey, next)) return prev;
+        return next;
+      });
+    },
+    [pubkey],
+  );
+
   const assignChannel = React.useCallback(
     (channelId: string, sectionId: string) => {
       if (!pubkey) {
@@ -255,6 +272,7 @@ export function useChannelSections(pubkey: string | undefined): {
     deleteSection,
     moveSectionUp,
     moveSectionDown,
+    reorderSections,
     assignChannel,
     unassignChannel,
   };
