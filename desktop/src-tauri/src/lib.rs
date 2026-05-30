@@ -582,6 +582,7 @@ pub fn run() {
             get_agent_models,
             mesh_availability,
             mesh_start_node,
+            mesh_ensure_client_node,
             mesh_stop_node,
             mesh_node_status,
             mesh_installed_models,
