@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:gpt_markdown/custom_widgets/markdown_config.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -120,6 +121,8 @@ class MessageContent extends StatelessWidget {
       finalContent,
       style: style,
       followLinkColor: false,
+      codeBuilder: (context, name, code, closed) =>
+          _MessageCodeBlock(name: name, code: code),
       linkBuilder: (context, linkText, url, linkStyle) =>
           _buildLink(context, linkText, url, linkStyle, style),
       imageBuilder: (context, imageUrl) =>
@@ -438,6 +441,116 @@ class _MediaPreviewFallback extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _MessageCodeBlock extends StatefulWidget {
+  final String name;
+  final String code;
+
+  const _MessageCodeBlock({required this.name, required this.code});
+
+  @override
+  State<_MessageCodeBlock> createState() => _MessageCodeBlockState();
+}
+
+class _MessageCodeBlockState extends State<_MessageCodeBlock> {
+  bool _copied = false;
+
+  Future<void> _handleCopy() async {
+    await Clipboard.setData(ClipboardData(text: widget.code));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Copied code to clipboard'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: Grid.half),
+      decoration: BoxDecoration(
+        color: context.colors.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: context.colors.outline.withValues(alpha: 0.7),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.name.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: Grid.twelve,
+                top: Grid.half + Grid.quarter,
+              ),
+              child: Text(
+                widget.name,
+                style: context.textTheme.labelSmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ),
+            ),
+          Stack(
+            children: [
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  Grid.twelve,
+                  widget.name.isEmpty ? Grid.half + Grid.quarter : Grid.quarter,
+                  44,
+                  Grid.half + Grid.quarter,
+                ),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Text(
+                    widget.code,
+                    softWrap: false,
+                    style: TextStyle(
+                      fontFamily: 'GeistMono',
+                      fontSize: 13,
+                      height: 1.5,
+                      color: context.colors.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                right: Grid.quarter,
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: IconButton(
+                    onPressed: _handleCopy,
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    style: IconButton.styleFrom(
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: Icon(
+                      _copied ? LucideIcons.check : LucideIcons.copy,
+                      size: 14,
+                      color: _copied
+                          ? context.colors.primary
+                          : context.colors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

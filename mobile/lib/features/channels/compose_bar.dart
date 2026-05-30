@@ -89,10 +89,13 @@ class ComposeBar extends HookConsumerWidget {
 
     // Typing indicator broadcast — throttled to one event per 3 seconds.
     final lastTypingSentMs = useRef(0);
+    final isModifyingText = useRef(false);
 
     // Detect @mention query and broadcast typing on text / selection change.
     useEffect(() {
       void listener() {
+        if (isModifyingText.value) return;
+        if (_expandFenceIfNeeded(controller, isModifyingText)) return;
         final text = controller.text;
         final sel = controller.selection;
 
@@ -316,26 +319,31 @@ class ComposeBar extends HookConsumerWidget {
       final sel = controller.selection;
       if (!sel.isValid) return;
 
-      if (sel.isCollapsed) {
-        final offset = sel.baseOffset;
-        const open = '```\n';
-        const close = '\n```';
-        final updated =
-            '${text.substring(0, offset)}$open$close${text.substring(offset)}';
-        controller.text = updated;
-        controller.selection = TextSelection.collapsed(
-          offset: offset + open.length,
-        );
-      } else {
-        final selected = text.substring(sel.start, sel.end);
-        const open = '```\n';
-        const close = '\n```';
-        final updated =
-            '${text.substring(0, sel.start)}$open$selected$close${text.substring(sel.end)}';
-        controller.text = updated;
-        controller.selection = TextSelection.collapsed(
-          offset: sel.start + open.length + selected.length + close.length,
-        );
+      isModifyingText.value = true;
+      try {
+        if (sel.isCollapsed) {
+          final offset = sel.baseOffset;
+          const open = '```\n';
+          const close = '\n```';
+          final updated =
+              '${text.substring(0, offset)}$open$close${text.substring(offset)}';
+          controller.text = updated;
+          controller.selection = TextSelection.collapsed(
+            offset: offset + open.length,
+          );
+        } else {
+          final selected = text.substring(sel.start, sel.end);
+          const open = '```\n';
+          const close = '\n```';
+          final updated =
+              '${text.substring(0, sel.start)}$open$selected$close${text.substring(sel.end)}';
+          controller.text = updated;
+          controller.selection = TextSelection.collapsed(
+            offset: sel.start + open.length + selected.length + close.length,
+          );
+        }
+      } finally {
+        isModifyingText.value = false;
       }
       focusNode.requestFocus();
     }
@@ -582,6 +590,51 @@ void spliceAndMoveCursor(
     offset: start + replacement.length,
   );
   focusNode.requestFocus();
+}
+
+bool _expandFenceIfNeeded(
+  TextEditingController controller,
+  ObjectRef<bool> guard,
+) {
+  final text = controller.text;
+  final sel = controller.selection;
+  if (!sel.isValid || !sel.isCollapsed) return false;
+  final cursor = sel.baseOffset;
+  if (cursor == 0) return false;
+  if (text[cursor - 1] != '\n') return false;
+
+  var lineStart = 0;
+  for (var i = cursor - 2; i >= 0; i--) {
+    if (text[i] == '\n') {
+      lineStart = i + 1;
+      break;
+    }
+  }
+
+  final line = text.substring(lineStart, cursor - 1);
+  final match = RegExp(r'^```([a-zA-Z+#]*)$').firstMatch(line);
+  if (match == null) return false;
+
+  final before = text.substring(0, lineStart);
+  var fenceCount = 0;
+  var searchFrom = 0;
+  while (true) {
+    final idx = before.indexOf('```', searchFrom);
+    if (idx == -1) break;
+    fenceCount++;
+    searchFrom = idx + 3;
+  }
+  if (fenceCount.isOdd) return false;
+
+  final lang = match.group(1)!;
+  final newText =
+      '${text.substring(0, lineStart)}```$lang\n\n```${text.substring(cursor)}';
+  final cursorPos = lineStart + '```$lang\n'.length;
+  guard.value = true;
+  controller.text = newText;
+  controller.selection = TextSelection.collapsed(offset: cursorPos);
+  guard.value = false;
+  return true;
 }
 
 /// Insert [trigger] (e.g. `@` or `#`) at the cursor position, prefixed with
