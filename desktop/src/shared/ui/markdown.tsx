@@ -317,6 +317,13 @@ function createMarkdownComponents(
     hr: () => <hr className="border-border/80" />,
     img: ({ alt, src }) => {
       const resolvedSrc = src ? rewriteRelayUrl(src) : src;
+      if (!interactive) {
+        const fallbackLabel = resolvedSrc?.endsWith(".mp4")
+          ? "Video attachment"
+          : "Image attachment";
+        return <span>{alt?.trim() || fallbackLabel}</span>;
+      }
+
       if (resolvedSrc?.endsWith(".mp4")) {
         // Look up poster frame from imeta tags (NIP-71 `image` field).
         // Fall back to `thumb` for compatibility with older events.

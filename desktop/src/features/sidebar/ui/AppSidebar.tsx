@@ -713,6 +713,7 @@ export function AppSidebar({
 
         {unreadBelowCount > 0 ? (
           <MoreUnreadButton
+            bottomClassName="bottom-28"
             count={unreadBelowCount}
             icon={<ArrowDown />}
             onClick={scrollToNextBelow}
