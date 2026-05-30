@@ -36,6 +36,7 @@ import {
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
 import { RelayMeshAgentSection } from "@/features/mesh-compute/ui/RelayMeshAgentSection";
+import { meshEnsureClientNode } from "@/shared/api/tauriMesh";
 import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
@@ -94,6 +95,9 @@ export function CreateAgentDialog({
   // input carries `model: meshModelId`.
   const [useMesh, setUseMesh] = React.useState(false);
   const [meshModelId, setMeshModelId] = React.useState("");
+  const [meshClientError, setMeshClientError] = React.useState<string | null>(
+    null,
+  );
 
   const providers = providersQuery.data ?? [];
   const allProviders = allProvidersQuery.data ?? [];
@@ -242,6 +246,7 @@ export function CreateAgentDialog({
     setProbeError(null);
     setUseMesh(false);
     setMeshModelId("");
+    setMeshClientError(null);
     setRespondTo("owner-only");
     setRespondToAllowlist([]);
     createMutation.reset();
@@ -319,7 +324,17 @@ export function CreateAgentDialog({
     !createMutation.isPending;
 
   async function handleSubmit() {
+    setMeshClientError(null);
     try {
+      if (useMesh) {
+        try {
+          await meshEnsureClientNode(meshModelId.trim());
+        } catch (err) {
+          setMeshClientError(err instanceof Error ? err.message : String(err));
+          return;
+        }
+      }
+
       // Only send the allowlist when the mode is actually "allowlist".
       // Other modes ignore it server-side, but keeping the wire clean makes
       // the agent record easier to inspect.
@@ -608,6 +623,12 @@ export function CreateAgentDialog({
               onChange={setEnvVars}
               value={envVars}
             />
+
+            {meshClientError ? (
+              <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                Mesh client failed to start: {meshClientError}
+              </p>
+            ) : null}
 
             {createMutation.error instanceof Error ? (
               <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

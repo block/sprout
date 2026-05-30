@@ -41,6 +41,71 @@ pub async fn mesh_start_node(
     Ok(status)
 }
 
+#[tauri::command]
+pub async fn mesh_ensure_client_node(
+    state: State<'_, AppState>,
+    request: mesh_llm::EnsureMeshClientRequest,
+) -> CmdResult<mesh_llm::MeshNodeStatus> {
+    let requested_model = request.model_id.trim();
+    if requested_model.is_empty() {
+        return Err("modelId is required".to_string());
+    }
+
+    {
+        let runtime = state.mesh_llm_runtime.lock().await;
+        if let Some(runtime) = runtime.as_ref() {
+            let status = runtime.status().await.map_err(|error| error.to_string())?;
+            return match status.mode {
+                Some(mesh_llm::MeshNodeMode::Client) => Ok(status),
+                Some(mesh_llm::MeshNodeMode::Serve) => Err(
+                    "this desktop is currently sharing compute; stop sharing before using relay mesh as a client"
+                        .to_string(),
+                ),
+                None => Ok(status),
+            };
+        }
+    }
+
+    let availability = match relay::query_relay(&state, &[mesh_llm::mesh_status_filter()]).await {
+        Ok(events) => mesh_llm::availability_from_events(events),
+        Err(error) => return Err(format!("failed to read relay mesh status: {error}")),
+    };
+    if !availability.available {
+        return Err(availability
+            .reason
+            .unwrap_or_else(|| "relay mesh is not available".to_string()));
+    }
+    let target = availability
+        .serve_targets
+        .iter()
+        .find(|target| target.model_id == requested_model)
+        .ok_or_else(|| format!("relay mesh has no serve target for model {requested_model}"))?;
+
+    let mut start = mesh_llm::StartMeshNodeRequest {
+        mode: mesh_llm::MeshNodeMode::Client,
+        model_id: None,
+        max_vram_gb: None,
+        join_token: Some(target.endpoint_addr.clone()),
+        iroh_relay_url: None,
+        iroh_relay_auth: None,
+    };
+    hydrate_private_relay_config(&state, &mut start).await?;
+
+    let mut runtime = state.mesh_llm_runtime.lock().await;
+    if runtime.is_some() {
+        return Err("mesh node changed while starting relay mesh client".to_string());
+    }
+    let started = mesh_llm::DesktopMeshRuntime::start(start)
+        .await
+        .map_err(|error| format!("mesh client failed to start: {error}"))?;
+    let status = started
+        .status()
+        .await
+        .map_err(|error| format!("mesh client started but status probe failed: {error}"))?;
+    *runtime = Some(started);
+    Ok(status)
+}
+
 async fn hydrate_private_relay_config(
     state: &AppState,
     request: &mut mesh_llm::StartMeshNodeRequest,

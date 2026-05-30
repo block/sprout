@@ -75,6 +75,14 @@ export async function meshStartNode(
   return await invokeTauri<MeshNodeStatus>("mesh_start_node", { request });
 }
 
+export async function meshEnsureClientNode(
+  modelId: string,
+): Promise<MeshNodeStatus> {
+  return await invokeTauri<MeshNodeStatus>("mesh_ensure_client_node", {
+    request: { modelId },
+  });
+}
+
 export async function meshStopNode(): Promise<MeshNodeStatus> {
   return await invokeTauri<MeshNodeStatus>("mesh_stop_node");
 }

@@ -128,6 +128,12 @@ pub struct StartMeshNodeRequest {
     pub iroh_relay_auth: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsureMeshClientRequest {
+    pub model_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MeshNodeStatus {
