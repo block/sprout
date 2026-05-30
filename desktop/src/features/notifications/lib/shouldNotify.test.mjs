@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { shouldNotifyForEvent } from "./shouldNotify.ts";
+import {
+  isHighPriorityEventForUser,
+  shouldNotifyForEvent,
+} from "./shouldNotify.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -316,4 +319,37 @@ test("empty currentPubkey with participated thread still notifies (no mute)", ()
     shouldNotifyForEvent(event, "", new Set([ROOT_ID]), EMPTY, EMPTY),
     true,
   );
+});
+
+// ── isHighPriorityEventForUser ────────────────────────────────────────────────
+
+test("isHighPriorityEventForUser returns true when p-tag matches currentPubkey", () => {
+  const event = makeEvent([replyTag(ROOT_ID), pTag(PUBKEY)]);
+  assert.equal(isHighPriorityEventForUser(event, PUBKEY), true);
+});
+
+test("isHighPriorityEventForUser returns true for broadcast reply", () => {
+  const event = makeEvent([replyTag(ROOT_ID), broadcastTag()]);
+  assert.equal(isHighPriorityEventForUser(event, PUBKEY), true);
+});
+
+test("isHighPriorityEventForUser returns false when no matching p-tag and no broadcast tag", () => {
+  const event = makeEvent([replyTag(ROOT_ID), pTag(OTHER_PUBKEY)]);
+  assert.equal(isHighPriorityEventForUser(event, PUBKEY), false);
+});
+
+test("isHighPriorityEventForUser p-tag matching is case-insensitive", () => {
+  const event = makeEvent([replyTag(ROOT_ID), pTag(PUBKEY.toUpperCase())]);
+  assert.equal(isHighPriorityEventForUser(event, PUBKEY), true);
+});
+
+test("isHighPriorityEventForUser returns false when currentPubkey is empty", () => {
+  // Short-circuits before p-tag check; broadcast absent so also false
+  const event = makeEvent([replyTag(ROOT_ID), pTag(PUBKEY)]);
+  assert.equal(isHighPriorityEventForUser(event, ""), false);
+});
+
+test("isHighPriorityEventForUser returns false for event with no tags at all", () => {
+  const event = makeEvent([]);
+  assert.equal(isHighPriorityEventForUser(event, PUBKEY), false);
 });

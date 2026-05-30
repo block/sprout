@@ -49,3 +49,21 @@ export function shouldNotifyForEvent(
 
   return false;
 }
+
+export function isHighPriorityEventForUser(
+  event: RelayEvent,
+  currentPubkey: string,
+): boolean {
+  if (
+    currentPubkey.length > 0 &&
+    event.tags.some(
+      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === currentPubkey,
+    )
+  ) {
+    return true;
+  }
+  if (isBroadcastReply(event.tags)) {
+    return true;
+  }
+  return false;
+}
