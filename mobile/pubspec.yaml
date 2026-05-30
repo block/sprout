@@ -28,6 +28,7 @@ dependencies:
   image_picker: ^1.1.2
   video_player: ^2.10.1
   package_info_plus: ^10.0.0
+  app_badge_plus: ^1.2.10
 
 dev_dependencies:
   flutter_test:

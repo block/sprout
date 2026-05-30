@@ -32,7 +32,7 @@ import {
   requestDockBounce,
   revealDesktopAppWindow,
   sendDesktopNotification,
-  setDesktopAppBadgeCount,
+  setDesktopAppBadge,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
 import { playNotificationSound } from "@/features/notifications/lib/sound";
@@ -289,6 +289,7 @@ export function AppShell() {
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
+    highPriorityUnreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
     participatedRootIds,
@@ -492,8 +493,19 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
-  }, [homeBadgeCount, unreadChannelIds.size]);
+    const numericCount = highPriorityUnreadChannelIds.size + homeBadgeCount;
+    if (numericCount > 0) {
+      void setDesktopAppBadge({ kind: "count", count: numericCount });
+    } else if (unreadChannelIds.size > 0) {
+      void setDesktopAppBadge({ kind: "dot" });
+    } else {
+      void setDesktopAppBadge({ kind: "none" });
+    }
+  }, [
+    homeBadgeCount,
+    highPriorityUnreadChannelIds.size,
+    unreadChannelIds.size,
+  ]);
 
   // Dispatch `sprout://message` deep links into the router.
   useMessageDeepLinks();

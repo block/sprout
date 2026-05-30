@@ -1,8 +1,10 @@
+import 'package:app_badge_plus/app_badge_plus.dart';
 import 'package:flutter/material.dart';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'features/channels/unread_badge/unread_badge_provider.dart';
 import 'features/home/home_page.dart';
 import 'features/pairing/pairing_page.dart';
 import 'features/channels/agent_activity/observer_subscription.dart';
@@ -36,6 +38,16 @@ class App extends HookConsumerWidget {
       ref.watch(appLifecycleProvider);
       ref.watch(userStatusCacheProvider);
     }
+
+    ref.listen<UnreadBadgeState>(unreadBadgeProvider, (_, next) {
+      if (next.highPriorityCount > 0) {
+        AppBadgePlus.updateBadge(next.highPriorityCount);
+      } else if (next.generalUnreadCount > 0) {
+        AppBadgePlus.updateBadge(1);
+      } else {
+        AppBadgePlus.updateBadge(0);
+      }
+    });
 
     return MaterialApp(
       title: 'Sprout',
