@@ -294,9 +294,13 @@ fn health_from_payload(payload: &serde_json::Value) -> MeshHealth {
 }
 
 fn find_progressish_reason(value: &serde_json::Value) -> Option<String> {
-    let text = value.to_string().to_ascii_lowercase();
+    // Match a typed phase field (not stringify-and-grep over the whole payload).
+    let phase = ["phase", "status", "state", "stage"]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(serde_json::Value::as_str))?
+        .to_ascii_lowercase();
     for needle in ["download", "fetch", "resolv", "prepar"] {
-        if text.contains(needle) {
+        if phase.contains(needle) {
             return Some(match needle {
                 "download" => "downloading model".to_string(),
                 "fetch" => "fetching model".to_string(),
@@ -352,13 +356,10 @@ fn collect_model_options(value: &serde_json::Value, out: &mut Vec<MeshModelOptio
 }
 
 fn looks_like_model_ref(value: &str) -> bool {
+    // Family-agnostic: a bare string is a ref only via URI scheme or .gguf ext.
     let trimmed = value.trim();
     !trimmed.is_empty()
-        && (trimmed.starts_with("hf://")
-            || trimmed.ends_with(".gguf")
-            || trimmed.contains("Qwen")
-            || trimmed.contains("Llama")
-            || trimmed.contains("GGUF"))
+        && (trimmed.starts_with("hf://") || trimmed.to_ascii_lowercase().ends_with(".gguf"))
 }
 
 fn push_model(out: &mut Vec<MeshModelOption>, id: &str, name: Option<String>) {
@@ -491,3 +492,7 @@ pub fn mesh_status_filter() -> serde_json::Value {
         "limit": 1
     })
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod mod_tests;
