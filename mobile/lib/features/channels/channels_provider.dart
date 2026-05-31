@@ -7,6 +7,7 @@ import '../../shared/relay/relay.dart';
 import '../../shared/utils/string_utils.dart';
 import 'channel.dart';
 import 'channel_management_provider.dart' show channelDetailsProvider;
+import 'unread_badge/is_high_priority_event.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
@@ -26,6 +27,10 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   final List<void Function()> _unsubscribers = [];
   int _subscriptionVersion = 0;
   Timer? _backstopTimer;
+  final Map<String, int> _latestHighPriorityByChannel = {};
+
+  Map<String, int> get latestHighPriorityByChannel =>
+      Map.unmodifiable(_latestHighPriorityByChannel);
 
   @override
   Future<List<Channel>> build() {
@@ -293,7 +298,6 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     state = state.whenData((channels) {
       final idx = channels.indexWhere((c) => c.id == channelId);
       if (idx == -1) {
-        // Unknown channel — queue a full refresh to pick it up.
         refresh();
         return channels;
       }
@@ -307,6 +311,16 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
           eventTime.isAfter(channel.lastMessageAt!)) {
         updated[idx] = channel.copyWith(lastMessageAt: eventTime);
       }
+
+      final myPk = ref.read(myPubkeyProvider);
+      if (myPk != null &&
+          (channel.isDm || isHighPriorityEvent(event.tags, myPk))) {
+        final current = _latestHighPriorityByChannel[channelId] ?? 0;
+        if (event.createdAt > current) {
+          _latestHighPriorityByChannel[channelId] = event.createdAt;
+        }
+      }
+
       return updated;
     });
   }
@@ -341,6 +355,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       unsubscribe();
     }
     _unsubscribers.clear();
+    _latestHighPriorityByChannel.clear();
     _backstopTimer?.cancel();
     _backstopTimer = null;
   }
