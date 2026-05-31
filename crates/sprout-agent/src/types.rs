@@ -190,6 +190,7 @@ impl AgentError {
     pub fn json_rpc_code(&self) -> i32 {
         match self {
             Self::InvalidParams(_) => -32602,
+            Self::LlmAuth(_) => -32001,
             _ => -32000,
         }
     }

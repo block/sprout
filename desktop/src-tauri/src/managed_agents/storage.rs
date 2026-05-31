@@ -198,8 +198,55 @@ fn bytecount_newlines(buf: &[u8]) -> usize {
     buf.iter().filter(|&&b| b == b'\n').count()
 }
 
+pub fn meaningful_agent_error_from_log(path: &Path) -> Option<String> {
+    let tail = read_log_tail(path, 200).ok()?;
+    tail.lines().rev().map(str::trim).find_map(|line| {
+        if line.starts_with("Agent reported error:") {
+            return Some(line.to_string());
+        }
+        if line.starts_with("llm auth:") {
+            return Some(format!("Agent reported error: {line}"));
+        }
+        None
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
+    use tempfile::NamedTempFile;
+
+    fn write_log(content: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("temp log");
+        file.write_all(content.as_bytes()).expect("write log");
+        file
+    }
+
+    #[test]
+    fn meaningful_agent_error_from_log_promotes_wrapped_llm_auth() {
+        let file = write_log("noise\nAgent reported error: llm auth: denied\n");
+        assert_eq!(
+            super::meaningful_agent_error_from_log(file.path()).as_deref(),
+            Some("Agent reported error: llm auth: denied")
+        );
+    }
+
+    #[test]
+    fn meaningful_agent_error_from_log_promotes_unwrapped_llm_auth() {
+        let file = write_log("noise\nllm auth: denied\n");
+        assert_eq!(
+            super::meaningful_agent_error_from_log(file.path()).as_deref(),
+            Some("Agent reported error: llm auth: denied")
+        );
+    }
+
+    #[test]
+    fn meaningful_agent_error_from_log_does_not_promote_midline_auth_text() {
+        let file = write_log("noise before llm auth: denied\n");
+        assert!(super::meaningful_agent_error_from_log(file.path()).is_none());
+    }
+
     #[test]
     fn strips_ansi_from_typical_tracing_line() {
         let input = "\x1b[2m2026-05-27T15:16:32\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2msprout_acp\x1b[0m\x1b[2m:\x1b[0m starting";

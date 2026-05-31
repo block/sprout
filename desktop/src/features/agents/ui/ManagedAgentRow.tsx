@@ -31,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { EditAgentDialog } from "./EditAgentDialog";
+import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ModelPicker } from "./ModelPicker";
 import { truncatePubkey } from "./agentUi";
@@ -86,6 +87,13 @@ export function ManagedAgentRow({
         : isLocal
           ? "Ready to launch"
           : "Managed remotely";
+  // When the harness recovered a meaningful error string from the agent's
+  // log tail (Max's seam in `managed_agents/storage.rs`), promote it to
+  // user-visible copy below the process detail. Specifically renders the
+  // friendly "Relay mesh denied this agent — check your relay membership."
+  // for auth failures so the user knows it's a membership thing, not a
+  // crash. Generic exits stay verbatim so we don't lie about other failures.
+  const friendlyError = friendlyAgentLastError(agent.lastError);
 
   return (
     <div
@@ -115,6 +123,7 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
+                friendlyError={friendlyError}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
@@ -135,6 +144,7 @@ export function ManagedAgentRow({
                 presenceStatus={presenceStatus}
               />
               <StatusBlock
+                friendlyError={friendlyError}
                 presenceLoaded={presenceLoaded}
                 presenceStatus={presenceStatus}
                 processDetail={processDetail}
@@ -249,11 +259,13 @@ function AgentSummary({
 }
 
 function StatusBlock({
+  friendlyError,
   presenceLoaded,
   presenceStatus,
   processDetail,
   status,
 }: {
+  friendlyError: ReturnType<typeof friendlyAgentLastError>;
   presenceLoaded: boolean;
   presenceStatus: PresenceStatus | undefined;
   processDetail: string;
@@ -270,6 +282,19 @@ function StatusBlock({
         status={status}
       />
       <p className="text-xs text-muted-foreground">{processDetail}</p>
+      {friendlyError ? (
+        <p
+          className={cn(
+            "text-xs",
+            friendlyError.severity === "denied"
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+          data-testid="managed-agent-last-error"
+        >
+          {friendlyError.copy}
+        </p>
+      ) : null}
     </div>
   );
 }
