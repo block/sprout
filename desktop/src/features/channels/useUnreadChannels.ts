@@ -306,16 +306,25 @@ export function useUnreadChannels(
 
   const markChannelRead = React.useCallback(
     (channelId: string, readAt: string | null | undefined) => {
+      const callerUnix = toUnixSeconds(readAt);
+      const observedLatest = latestByChannelRef.current.get(channelId);
       const unixSeconds =
-        toUnixSeconds(readAt) ??
-        latestByChannelRef.current.get(channelId) ??
-        null;
+        Math.max(callerUnix ?? 0, observedLatest ?? 0) || null;
       if (unixSeconds === null) return;
-      // Reading clears any prior manual mark-unread.
       if (forcedUnreadRef.current.delete(channelId)) {
         bumpLatestVersion();
       }
       markContextRead(channelId, unixSeconds);
+      // Clear observed-latest refs when the read marker covers them so the
+      // unread memo sees `latest === undefined` until a genuinely new event
+      // arrives. Without this, `latest > readAt` resolves to `T > T` (false)
+      // but the channel lingers in the set when advanceContext's monotonic
+      // guard suppresses the readStateVersion bump.
+      if (observedLatest !== undefined && observedLatest <= unixSeconds) {
+        latestByChannelRef.current.delete(channelId);
+        latestHighPriorityByChannelRef.current.delete(channelId);
+        bumpLatestVersion();
+      }
     },
     [markContextRead],
   );
@@ -788,6 +797,8 @@ export function useUnreadChannels(
       if (unixSeconds !== null) {
         markContextRead(channelId, unixSeconds);
       }
+      latestByChannelRef.current.delete(channelId);
+      latestHighPriorityByChannelRef.current.delete(channelId);
     }
     bumpLatestVersion();
   }, [getEffectiveTimestamp, markContextRead]);

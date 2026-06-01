@@ -328,6 +328,7 @@ export function AppShell() {
     selectedView === "home",
     getChannelReadAt,
     readStateVersion,
+    highPriorityUnreadChannelIds,
     feedProfilesQuery.data?.profiles,
   );
 

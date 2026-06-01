@@ -41,6 +41,7 @@ type DesktopNotificationOptions = NotificationOptions & {
 
 type TestWindow = Window & {
   __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+  __SPROUT_E2E_APP_BADGE_STATE__?: AppBadgeState["kind"];
 };
 
 function hasNotificationApi() {
@@ -200,8 +201,10 @@ export async function listenForDesktopNotificationActions(
 
 export async function setDesktopAppBadge(state: AppBadgeState): Promise<void> {
   if (typeof window !== "undefined") {
-    (window as TestWindow).__SPROUT_E2E_APP_BADGE_COUNT__ =
+    const testWindow = window as TestWindow;
+    testWindow.__SPROUT_E2E_APP_BADGE_COUNT__ =
       state.kind === "count" ? state.count : 0;
+    testWindow.__SPROUT_E2E_APP_BADGE_STATE__ = state.kind;
   }
 
   if (!isTauri()) {

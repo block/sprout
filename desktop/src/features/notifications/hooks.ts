@@ -268,6 +268,7 @@ export function useHomeFeedNotificationState(
   // Invalidation signal for the channel-marker projection; bump triggers
   // recompute. Pass 0 to opt out.
   readStateVersion: number,
+  highPriorityChannelIds: ReadonlySet<string>,
   profiles?: UserProfileLookup,
 ) {
   useFeedDesktopNotifications(
@@ -323,6 +324,11 @@ export function useHomeFeedNotificationState(
 
     const seenFeedIdSet = new Set(seenFeedIds);
     return currentFeedItems.filter((item) => {
+      if (item.channelId && highPriorityChannelIds.has(item.channelId)) {
+        // Already counted in the high-priority sidebar badge; skip to avoid
+        // double-counting the same @mention event in both totals.
+        return false;
+      }
       if (item.channelId) {
         // Channel-backed items: trust the NIP-RS marker when we have one.
         // If the channel has no marker yet (cold start, mock mode without a
@@ -338,6 +344,7 @@ export function useHomeFeedNotificationState(
   }, [
     currentFeedItems,
     getChannelReadAt,
+    highPriorityChannelIds,
     isHomeActive,
     readStateVersion,
     seenFeedIds,
