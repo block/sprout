@@ -1,5 +1,6 @@
 import 'package:app_badge_plus/app_badge_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
 
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -39,14 +40,22 @@ class App extends HookConsumerWidget {
       ref.watch(userStatusCacheProvider);
     }
 
-    ref.listen<UnreadBadgeState>(unreadBadgeProvider, (_, next) {
-      if (next.highPriorityCount > 0) {
-        AppBadgePlus.updateBadge(next.highPriorityCount);
-      } else if (next.generalUnreadCount > 0) {
+    void applyBadge(UnreadBadgeState state) {
+      if (state.highPriorityCount > 0) {
+        AppBadgePlus.updateBadge(state.highPriorityCount);
+      } else if (state.generalUnreadCount > 0) {
         AppBadgePlus.updateBadge(1);
       } else {
         AppBadgePlus.updateBadge(0);
       }
+    }
+
+    useEffect(() {
+      applyBadge(ref.read(unreadBadgeProvider));
+      return null;
+    }, const []);
+    ref.listen<UnreadBadgeState>(unreadBadgeProvider, (_, next) {
+      applyBadge(next);
     });
 
     return MaterialApp(

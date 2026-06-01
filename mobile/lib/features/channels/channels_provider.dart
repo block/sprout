@@ -70,7 +70,10 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     );
   }
 
-  Future<List<Channel>> _fetch({bool subscribeLive = false}) async {
+  Future<List<Channel>> _fetch({
+    bool subscribeLive = false,
+    bool fetchLastMessage = true,
+  }) async {
     final myPk = ref.read(myPubkeyProvider);
     if (myPk == null) throw StateError('No signing identity available');
 
@@ -152,6 +155,52 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       // hidden. Desktop shows them too. Previously dropped here unconditionally,
       // which made TTL channels invisible on iOS even when the user was a member.
       channels.add(channel);
+    }
+
+    // Step 3: fetch the most recent message per channel to populate lastMessageAt.
+    // kind:39000 metadata doesn't carry message timestamps, so channels load with
+    // lastMessageAt: null. Without this, unread detection and badge computation
+    // see every channel as having no messages. Skipped on backstop refreshes since
+    // live subscriptions keep lastMessageAt current after the initial load.
+    if (fetchLastMessage) {
+      final lastMessageResults = await Future.wait(
+        channels.map((channel) async {
+          if (!channel.isMember || channel.isArchived) return null;
+          try {
+            final events = await session.fetchHistory(
+              NostrFilter(
+                kinds: EventKind.channelEventKinds,
+                tags: {
+                  '#h': [channel.id],
+                },
+                limit: 1,
+              ),
+            );
+            if (events.isEmpty) return null;
+            return MapEntry(channel.id, events.first.createdAt);
+          } catch (_) {
+            return null;
+          }
+        }),
+      );
+
+      final lastMessageMap = <String, int>{};
+      for (final entry
+          in lastMessageResults.whereType<MapEntry<String, int>>()) {
+        lastMessageMap[entry.key] = entry.value;
+      }
+
+      for (var i = 0; i < channels.length; i++) {
+        final ts = lastMessageMap[channels[i].id];
+        if (ts != null) {
+          channels[i] = channels[i].copyWith(
+            lastMessageAt: DateTime.fromMillisecondsSinceEpoch(
+              ts * 1000,
+              isUtc: true,
+            ),
+          );
+        }
+      }
     }
 
     channels.sort((left, right) {
@@ -388,9 +437,21 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
   Future<void> _backstopRefresh() async {
     try {
       final sessionState = ref.read(relaySessionProvider);
+      final prevChannels = state.value ?? const [];
+      final prevLastMessage = {
+        for (final c in prevChannels)
+          if (c.lastMessageAt != null) c.id: c.lastMessageAt,
+      };
       final channels = await _fetch(
         subscribeLive: sessionState.status == SessionStatus.connected,
+        fetchLastMessage: false,
       );
+      for (var i = 0; i < channels.length; i++) {
+        final prev = prevLastMessage[channels[i].id];
+        if (channels[i].lastMessageAt == null && prev != null) {
+          channels[i] = channels[i].copyWith(lastMessageAt: prev);
+        }
+      }
       state = AsyncData(channels);
     } catch (error) {
       debugPrint('[ChannelsNotifier] backstop refresh failed: $error');
