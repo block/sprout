@@ -175,6 +175,7 @@ export function AppShell() {
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
+  const [isCreateChannelOpen, setIsCreateChannelOpen] = React.useState(false);
   const location = useLocation();
   const queryClient = useQueryClient();
   const {
@@ -522,6 +523,10 @@ export function AppShell() {
     setIsNewDmOpen(true);
   }, []);
 
+  const handleOpenCreateChannel = React.useCallback(() => {
+    setIsCreateChannelOpen(true);
+  }, []);
+
   React.useLayoutEffect(() => {
     if (settingsOpen) {
       return;
@@ -545,6 +550,12 @@ export function AppShell() {
         return;
       }
 
+      if (key === "n" && event.shiftKey) {
+        event.preventDefault();
+        handleOpenCreateChannel();
+        return;
+      }
+
       if (key === "o" && event.shiftKey) {
         event.preventDefault();
         handleOpenBrowseChannels();
@@ -565,6 +576,7 @@ export function AppShell() {
   }, [
     handleOpenBrowseChannels,
     handleOpenNewDm,
+    handleOpenCreateChannel,
     handleOpenSearch,
     goHome,
     settingsOpen,
@@ -688,6 +700,7 @@ export function AppShell() {
                   isLoading={channelsQuery.isLoading}
                   isOpeningDm={openDmMutation.isPending}
                   isNewDmOpen={isNewDmOpen}
+                  isCreateChannelOpen={isCreateChannelOpen}
                   isPresencePending={presenceSession.isPending}
                   onAddWorkspace={(workspace) => {
                     const id = workspacesHook.addWorkspace(workspace);
@@ -695,6 +708,7 @@ export function AppShell() {
                   }}
                   onAddWorkspaceOpenChange={setIsAddWorkspaceOpen}
                   onNewDmOpenChange={setIsNewDmOpen}
+                  onCreateChannelOpenChange={setIsCreateChannelOpen}
                   onOpenAddWorkspace={() => setIsAddWorkspaceOpen(true)}
                   onUpdateWorkspace={workspacesHook.updateWorkspace}
                   onRemoveWorkspace={workspacesHook.removeWorkspace}
