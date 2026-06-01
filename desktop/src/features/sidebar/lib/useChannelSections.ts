@@ -84,6 +84,7 @@ export function useChannelSections(pubkey: string | undefined): {
       remote: RemoteSections,
     ): ((prev: ChannelSectionStore) => ChannelSectionStore) => {
       return (prev) => {
+        if (!pubkey) return prev;
         if (remote.createdAt < lastAppliedRemoteTs.current) return prev;
         if (
           remote.createdAt === lastAppliedRemoteTs.current &&
@@ -93,7 +94,7 @@ export function useChannelSections(pubkey: string | undefined): {
         lastAppliedRemoteTs.current = remote.createdAt;
         lastAppliedEventId.current = remote.eventId;
         cancelPendingPublish();
-        if (!writeChannelSectionsStore(pubkey!, remote.store)) return prev;
+        if (!writeChannelSectionsStore(pubkey, remote.store)) return prev;
         return remote.store;
       };
     },

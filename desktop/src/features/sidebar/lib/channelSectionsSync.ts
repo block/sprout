@@ -84,6 +84,7 @@ export function publishSections(store: ChannelSectionStore): void {
 async function doPublish(store: ChannelSectionStore): Promise<void> {
   try {
     const payload = {
+      version: 1,
       sections: store.sections,
       assignments: store.assignments,
     };
