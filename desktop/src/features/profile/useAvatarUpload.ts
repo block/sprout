@@ -57,6 +57,14 @@ export function useAvatarUpload({
       try {
         const buffer = await file.arrayBuffer();
         const uploaded = await uploadMediaBytes([...new Uint8Array(buffer)]);
+        // The shared upload path is now generic (accepts any non-denied file),
+        // so the browser-provided `file.type` check above is no longer a
+        // backstop. Verify the server-detected MIME is actually an image before
+        // accepting it as an avatar — defends against spoofed/blank picker MIME.
+        if (!uploaded.type.startsWith("image/")) {
+          setErrorMessage("Choose a PNG, JPG, GIF, or WebP image.");
+          return;
+        }
         onUploadSuccess(uploaded.url);
       } catch (error) {
         setErrorMessage(

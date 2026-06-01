@@ -73,7 +73,8 @@ type MockBridgeOptions = {
   /**
    * Descriptors returned by the mocked `pick_and_upload_media` /
    * `upload_media_bytes` commands. When omitted, the bridge returns a single
-   * generic PDF so the file-attachment flow can be exercised by default.
+   * generic PDF so the file-attachment flow can be exercised by default. An
+   * explicit `[]` is honoured (models a picker cancel / no files selected).
    */
   uploadDescriptors?: {
     url: string;

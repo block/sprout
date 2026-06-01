@@ -104,10 +104,11 @@ export function buildImetaTags(
 const MEDIA_LINE_RE = /^!\[(?:image|video)\]\(([^)\s]+)\)\s*$/;
 /**
  * Matches a generic file-attachment line `[label](url)` (no leading `!`, so it's
- * a link not an image). The label can contain spaces; the URL must be paren- and
- * space-free. Used to strip file attachments from the body in edit mode.
+ * a link not an image). The label can contain spaces and backslash-escaped
+ * brackets (e.g. `a\]`); the URL must be paren- and space-free. Used to strip
+ * file attachments from the body in edit mode.
  */
-const FILE_LINE_RE = /^\[[^\]]*\]\(([^)\s]+)\)\s*$/;
+const FILE_LINE_RE = /^\[(?:\\.|[^\]\\])*\]\(([^)\s]+)\)\s*$/;
 
 /**
  * Remove trailing `![image|video](url)` lines whose URL matches an entry in
@@ -159,7 +160,11 @@ export function formatImetaMediaLine({
   if (type.startsWith("image/")) return `\n![image](${url})`;
   // Generic file: plain link, label is the original filename (fallback to url tail).
   const label = filename || url.split("/").pop() || "file";
-  return `\n[${label}](${url})`;
+  // Escape markdown link-label metacharacters so filenames containing `[`, `]`,
+  // or `\` (e.g. `a].pdf`) still render as a FileCard with the correct label
+  // rather than breaking the link or mangling the visible text.
+  const escaped = label.replace(/[\\[\]]/g, "\\$&");
+  return `\n[${escaped}](${url})`;
 }
 
 /**

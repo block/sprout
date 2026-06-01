@@ -4292,7 +4292,10 @@ function resolveMockUploadDescriptors(
   config: E2eConfig | undefined,
 ): RawBlobDescriptor[] {
   const configured = config?.mock?.uploadDescriptors;
-  if (configured && configured.length > 0) return configured;
+  // `undefined` means "not configured" → default PDF. An explicit `[]` is a
+  // valid override (e.g. modelling a picker cancel / no-files-selected), so it
+  // must pass through rather than fall back to the default.
+  if (configured !== undefined) return configured;
   return [
     {
       url: "https://mock.relay/media/" + "a".repeat(64) + ".pdf",
