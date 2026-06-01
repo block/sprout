@@ -47,12 +47,14 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     ref.onDispose(() {
       _clearLiveSubscriptions();
+      _latestHighPriorityByChannel.clear();
       _backstopTimer?.cancel();
       _backstopTimer = null;
     });
 
     if (sessionState.status != SessionStatus.connected) {
       _clearLiveSubscriptions();
+      _latestHighPriorityByChannel.clear();
       // Preserve the last successfully loaded channels while reconnecting
       // instead of re-entering a loading/error state. The UI will show cached
       // channels with a "Reconnecting…" banner overlay, which is far better
@@ -284,11 +286,68 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
     _unsubscribers.addAll(subscriptions.whereType<void Function()>());
 
+    // Backfill high-priority map from recent history so unread @mentions that
+    // arrived before app launch are correctly classified as high-priority tier.
+    unawaited(_backfillHighPriority(channels));
+
     _backstopTimer?.cancel();
     _backstopTimer = Timer.periodic(
       _backstopInterval,
       (_) => _backstopRefresh(),
     );
+  }
+
+  Future<void> _backfillHighPriority(List<Channel> channels) async {
+    final myPk = ref.read(myPubkeyProvider);
+    if (myPk == null) return;
+
+    final session = ref.read(relaySessionProvider.notifier);
+
+    for (final channel in channels) {
+      if (!channel.isMember || channel.isArchived) continue;
+
+      // All DM messages are high-priority — no need to scan event history.
+      if (channel.isDm) {
+        final lastMsg = channel.lastMessageAt;
+        if (lastMsg != null) {
+          _latestHighPriorityByChannel[channel.id] =
+              lastMsg.millisecondsSinceEpoch ~/ 1000;
+        }
+        continue;
+      }
+
+      // For non-DM channels, fetch recent events and scan for high-priority ones.
+      try {
+        final events = await session.fetchHistory(
+          NostrFilter(
+            kinds: EventKind.channelEventKinds,
+            tags: {
+              '#h': [channel.id],
+            },
+            limit: 50,
+          ),
+        );
+
+        var maxHighPriority = 0;
+        for (final event in events) {
+          if (isHighPriorityEvent(event.tags, myPk) &&
+              event.createdAt > maxHighPriority) {
+            maxHighPriority = event.createdAt;
+          }
+        }
+
+        if (maxHighPriority > 0) {
+          final current = _latestHighPriorityByChannel[channel.id] ?? 0;
+          if (maxHighPriority > current) {
+            _latestHighPriorityByChannel[channel.id] = maxHighPriority;
+          }
+        }
+      } catch (error) {
+        debugPrint(
+          '[ChannelsNotifier] backfill failed for ${channel.id}: $error',
+        );
+      }
+    }
   }
 
   void _handleLiveEvent(NostrEvent event) {
@@ -355,7 +414,6 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       unsubscribe();
     }
     _unsubscribers.clear();
-    _latestHighPriorityByChannel.clear();
     _backstopTimer?.cancel();
     _backstopTimer = null;
   }

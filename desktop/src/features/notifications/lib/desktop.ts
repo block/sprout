@@ -198,22 +198,6 @@ export async function listenForDesktopNotificationActions(
   };
 }
 
-export async function setDesktopAppBadgeCount(count: number): Promise<void> {
-  if (typeof window !== "undefined") {
-    (window as TestWindow).__SPROUT_E2E_APP_BADGE_COUNT__ = count;
-  }
-
-  if (!isTauri()) {
-    return;
-  }
-
-  try {
-    await getCurrentWindow().setBadgeCount(count > 0 ? count : undefined);
-  } catch {
-    // Ignore unsupported platforms and best-effort badge sync failures.
-  }
-}
-
 export async function setDesktopAppBadge(state: AppBadgeState): Promise<void> {
   if (typeof window !== "undefined") {
     (window as TestWindow).__SPROUT_E2E_APP_BADGE_COUNT__ =

@@ -173,7 +173,6 @@ export function useLiveChannelUpdates(
     // reactions / edits / system messages aren't "new content".
     if (
       UNREAD_TRIGGER_KINDS.has(event.kind) &&
-      channelId !== activeChannelId &&
       (normalizedCurrentPubkey.length === 0 ||
         event.pubkey.toLowerCase() !== normalizedCurrentPubkey) &&
       shouldNotifyForEvent(
@@ -186,11 +185,13 @@ export function useLiveChannelUpdates(
       )
     ) {
       options.onChannelMessage?.(channelId, event);
-      const ref = getThreadReference(event.tags);
-      const isThreadReply =
-        ref.parentId !== null && !isBroadcastReply(event.tags);
-      if (isThreadReply) {
-        options.onThreadReplyNotification?.(channelId, event);
+      if (channelId !== activeChannelId) {
+        const ref = getThreadReference(event.tags);
+        const isThreadReply =
+          ref.parentId !== null && !isBroadcastReply(event.tags);
+        if (isThreadReply) {
+          options.onThreadReplyNotification?.(channelId, event);
+        }
       }
     }
 
