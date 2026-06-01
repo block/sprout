@@ -240,6 +240,7 @@ function FileCard({
     <a
       href={href}
       download={filename}
+      data-testid="file-card"
       className="my-1 inline-flex max-w-sm items-center gap-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2 no-underline transition-colors hover:bg-muted/70"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">

@@ -70,6 +70,19 @@ type MockBridgeOptions = {
    * evaluates false).
    */
   relayRole?: "owner" | "admin" | "member" | null;
+  /**
+   * Descriptors returned by the mocked `pick_and_upload_media` /
+   * `upload_media_bytes` commands. When omitted, the bridge returns a single
+   * generic PDF so the file-attachment flow can be exercised by default.
+   */
+  uploadDescriptors?: {
+    url: string;
+    sha256: string;
+    size: number;
+    type: string;
+    uploaded: number;
+    filename?: string;
+  }[];
 };
 
 type BridgeOptions = {
