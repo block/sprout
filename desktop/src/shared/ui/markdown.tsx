@@ -4,7 +4,7 @@ import ReactMarkdown, {
   defaultUrlTransform,
 } from "react-markdown";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Copy } from "lucide-react";
+import { Copy, Download, FileText } from "lucide-react";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
@@ -36,9 +36,18 @@ import {
   isImageOnlyParagraph,
   shallowArrayEqual,
 } from "./markdownUtils";
+import { resolveFileCard } from "./markdownFileCard";
 import { VideoPlayer } from "./VideoPlayer";
 
-type ImetaLookup = Map<string, { image?: string; thumb?: string }>;
+type ImetaEntry = {
+  image?: string;
+  thumb?: string;
+  m?: string;
+  size?: number;
+  filename?: string;
+};
+
+type ImetaLookup = Map<string, ImetaEntry>;
 
 /**
  * `urlTransform` for `<ReactMarkdown>` that preserves `sprout://message?…`
@@ -198,6 +207,60 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
   );
 }
 
+/** Human-readable byte size: "820 B", "12.4 KB", "3.1 MB". */
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let size = bytes / 1024;
+  let i = 0;
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024;
+    i += 1;
+  }
+  return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${units[i]}`;
+}
+
+/**
+ * File card for a generic (non-image, non-video) attachment: icon, filename,
+ * size, and a download action. The blob is served with
+ * `Content-Disposition: attachment`, so following the link downloads it.
+ */
+function FileCard({
+  href,
+  filename,
+  size,
+}: {
+  href: string;
+  filename: string;
+  size?: number;
+}) {
+  const sizeLabel = size != null ? formatFileSize(size) : "";
+  return (
+    <a
+      href={href}
+      download={filename}
+      data-testid="file-card"
+      className="my-1 inline-flex max-w-sm items-center gap-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2 no-underline transition-colors hover:bg-muted/70"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
+        <FileText className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">
+          {filename}
+        </span>
+        {sizeLabel ? (
+          <span className="block text-xs text-muted-foreground">
+            {sizeLabel}
+          </span>
+        ) : null}
+      </span>
+      <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
+    </a>
+  );
+}
+
 function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
@@ -224,6 +287,24 @@ function createMarkdownComponents(
     a: ({ children, href, ...props }) => {
       if (!interactive) {
         return <span className="font-medium text-current">{children}</span>;
+      }
+
+      // Generic file attachment: a `[filename](url)` link whose href matches an
+      // imeta entry with a non-image, non-video MIME. Render a download card
+      // instead of a plain link. (Media uses the `img` renderer, not this path.)
+      const card = resolveFileCard(
+        href ? imetaByUrl?.get(href) : undefined,
+        href,
+        getReactNodeText(children),
+      );
+      if (card) {
+        return (
+          <FileCard
+            href={card.href}
+            filename={card.filename}
+            size={card.size}
+          />
+        );
       }
 
       // Intercept `sprout://message?channel=…&id=…` links so a click navigates

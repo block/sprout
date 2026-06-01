@@ -65,6 +65,7 @@ export function imetaMediaFromTags(
       ...(entry.thumb ? { thumb: entry.thumb } : {}),
       ...(entry.duration != null ? { duration: entry.duration } : {}),
       ...(entry.image ? { image: entry.image } : {}),
+      ...(entry.filename ? { filename: entry.filename } : {}),
     });
   }
   return out;
@@ -96,10 +97,18 @@ export function buildImetaTags(
     ...(d.thumb ? [`thumb ${d.thumb}`] : []),
     ...(d.duration != null ? [`duration ${d.duration}`] : []),
     ...(d.image ? [`image ${d.image}`] : []),
+    ...(d.filename ? [`filename ${d.filename}`] : []),
   ]);
 }
 
 const MEDIA_LINE_RE = /^!\[(?:image|video)\]\(([^)\s]+)\)\s*$/;
+/**
+ * Matches a generic file-attachment line `[label](url)` (no leading `!`, so it's
+ * a link not an image). The label can contain spaces and backslash-escaped
+ * brackets (e.g. `a\]`); the URL must be paren- and space-free. Used to strip
+ * file attachments from the body in edit mode.
+ */
+const FILE_LINE_RE = /^\[(?:\\.|[^\]\\])*\]\(([^)\s]+)\)\s*$/;
 
 /**
  * Remove trailing `![image|video](url)` lines whose URL matches an entry in
@@ -123,7 +132,7 @@ export function stripImetaMediaLines(
       end -= 1;
       continue;
     }
-    const match = line.match(MEDIA_LINE_RE);
+    const match = line.match(MEDIA_LINE_RE) ?? line.match(FILE_LINE_RE);
     if (match && urls.has(match[1])) {
       end -= 1;
       continue;
@@ -135,12 +144,27 @@ export function stripImetaMediaLines(
 }
 
 /**
- * Format a single imeta entry as a leading-newline markdown line. Mime-driven
- * so the alt label is correct regardless of URL suffix.
+ * Format a single imeta entry as a leading-newline markdown line.
+ *
+ * Images and video use `![image|video](url)` so the renderer draws them inline.
+ * Generic files use a plain `[filename](url)` link — the renderer recognises the
+ * href as a local media blob with a non-media MIME and upgrades it to a file
+ * card. Mime-driven so the form is correct regardless of URL suffix.
  */
-export function formatImetaMediaLine({ url, type }: ImetaMedia): string {
-  const isVideo = type.startsWith("video/");
-  return isVideo ? `\n![video](${url})` : `\n![image](${url})`;
+export function formatImetaMediaLine({
+  url,
+  type,
+  filename,
+}: ImetaMedia): string {
+  if (type.startsWith("video/")) return `\n![video](${url})`;
+  if (type.startsWith("image/")) return `\n![image](${url})`;
+  // Generic file: plain link, label is the original filename (fallback to url tail).
+  const label = filename || url.split("/").pop() || "file";
+  // Escape markdown link-label metacharacters so filenames containing `[`, `]`,
+  // or `\` (e.g. `a].pdf`) still render as a FileCard with the correct label
+  // rather than breaking the link or mangling the visible text.
+  const escaped = label.replace(/[\\[\]]/g, "\\$&");
+  return `\n[${escaped}](${url})`;
 }
 
 /**

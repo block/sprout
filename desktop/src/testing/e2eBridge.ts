@@ -43,10 +43,24 @@ type E2eConfig = {
     archivedIdentities?: string[];
     oaOwnerIsMe?: boolean;
     relayRole?: "owner" | "admin" | "member" | null;
+    // Descriptors returned by the mocked `pick_and_upload_media` /
+    // `upload_media_bytes` commands. Lets a spec drive the attachment flow
+    // (e.g. a generic PDF) without a real upload pipeline. See
+    // tests/helpers/bridge.ts:MockBridgeOptions.uploadDescriptors.
+    uploadDescriptors?: RawBlobDescriptor[];
   };
   relayHttpUrl?: string;
   relayWsUrl?: string;
   identity?: TestIdentity;
+};
+
+type RawBlobDescriptor = {
+  url: string;
+  sha256: string;
+  size: number;
+  type: string;
+  uploaded: number;
+  filename?: string;
 };
 
 type RawRelayMember = {
@@ -4308,6 +4322,32 @@ async function handleSearchMessages(
   return { hits, found: hits.length };
 }
 
+/**
+ * Descriptors returned by the mocked upload commands. A spec can override via
+ * `MockBridgeOptions.uploadDescriptors`; otherwise we return a single generic
+ * PDF so the file-attachment flow (chip → send → FileCard) can be exercised
+ * out of the box.
+ */
+function resolveMockUploadDescriptors(
+  config: E2eConfig | undefined,
+): RawBlobDescriptor[] {
+  const configured = config?.mock?.uploadDescriptors;
+  // `undefined` means "not configured" → default PDF. An explicit `[]` is a
+  // valid override (e.g. modelling a picker cancel / no-files-selected), so it
+  // must pass through rather than fall back to the default.
+  if (configured !== undefined) return configured;
+  return [
+    {
+      url: "https://mock.relay/media/" + "a".repeat(64) + ".pdf",
+      sha256: "a".repeat(64),
+      size: 12345,
+      type: "application/pdf",
+      uploaded: Math.floor(Date.now() / 1000),
+      filename: "quarterly-report.pdf",
+    },
+  ];
+}
+
 async function handleSendChannelMessage(
   args: {
     channelId: string;
@@ -4315,25 +4355,29 @@ async function handleSendChannelMessage(
     parentEventId?: string | null;
     kind?: number | null;
     mentionPubkeys?: string[];
+    mediaTags?: string[][] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
   const kind = args.kind ?? 9;
+  // NIP-92 imeta attachments. The real relay echoes these back on the stored
+  // event; mirror that here so attachment renderers (FileCard, images, video)
+  // have the imeta tags they key on. `null`/empty → no extra tags.
+  const mediaTags = args.mediaTags ?? [];
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
     const mockPubkey = getMockMemberPubkey(config);
 
     if (!args.parentEventId) {
-      const event = createMockEvent(
-        kind,
-        args.content,
-        buildTopLevelMessageTags(
+      const event = createMockEvent(kind, args.content, [
+        ...buildTopLevelMessageTags(
           args.channelId,
           args.mentionPubkeys,
           mockPubkey,
         ),
-      );
+        ...mediaTags,
+      ]);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
 
@@ -4383,13 +4427,16 @@ async function handleSendChannelMessage(
       pubkey: mockPubkey,
       created_at: createdAt,
       kind,
-      tags: buildReplyMessageTags(
-        args.channelId,
-        mockPubkey,
-        args.parentEventId,
-        rootEventId,
-        args.mentionPubkeys,
-      ),
+      tags: [
+        ...buildReplyMessageTags(
+          args.channelId,
+          mockPubkey,
+          args.parentEventId,
+          rootEventId,
+          args.mentionPubkeys,
+        ),
+        ...mediaTags,
+      ],
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),
     };
@@ -4424,7 +4471,7 @@ async function handleSendChannelMessage(
   const result = await submitSignedEvent(config, {
     kind,
     content: args.content.trim(),
-    tags,
+    tags: [...tags, ...mediaTags],
   });
 
   return {
@@ -5145,6 +5192,10 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleSendChannelMessage>[0],
           activeConfig,
         );
+      case "pick_and_upload_media":
+        return resolveMockUploadDescriptors(activeConfig);
+      case "upload_media_bytes":
+        return resolveMockUploadDescriptors(activeConfig)[0];
       case "get_event":
         return handleGetEvent(
           payload as Parameters<typeof handleGetEvent>[0],

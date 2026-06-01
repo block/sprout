@@ -21,6 +21,8 @@ import '../pairing/pairing_provider.dart';
 import 'channel.dart';
 import 'channel_detail_page.dart';
 import 'channel_management_provider.dart';
+import 'channel_sections/channel_sections_provider.dart';
+import 'channel_sections/channel_sections_storage.dart';
 import 'channels_provider.dart';
 import 'read_state/deferred_read_state_update.dart';
 import 'read_state/read_state_provider.dart';
@@ -272,6 +274,7 @@ class _SliverChannelsList extends HookConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final readState = ref.watch(readStateProvider);
+    final sectionsState = ref.watch(channelSectionsProvider);
     final visibleChannels = channels
         .where((channel) => channel.isMember && !channel.isArchived)
         .toList();
@@ -333,6 +336,33 @@ class _SliverChannelsList extends HookConsumerWidget {
           }
         : const <String>{};
 
+    // Build sorted user-defined sections and compute which stream channels
+    // belong to each section. Channels not assigned to any valid section fall
+    // through to the built-in "Channels" list.
+    final userSections = sectionsState.store.sections.toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+    final sectionAssignments = sectionsState.store.assignments;
+    final validSectionIds = {for (final s in userSections) s.id};
+    final assignedChannelIds = {
+      for (final entry in sectionAssignments.entries)
+        if (validSectionIds.contains(entry.value)) entry.key,
+    };
+    final ungroupedStreamChannels = streamChannels
+        .where((c) => !assignedChannelIds.contains(c.id))
+        .toList();
+
+    final sectionExpandedStates = useState<Map<String, bool>>({});
+
+    bool sectionExpanded(String sectionId) =>
+        sectionExpandedStates.value[sectionId] ?? true;
+
+    void toggleSection(String sectionId) {
+      sectionExpandedStates.value = {
+        ...sectionExpandedStates.value,
+        sectionId: !sectionExpanded(sectionId),
+      };
+    }
+
     return SliverPadding(
       padding: const EdgeInsets.only(top: Grid.xxs, bottom: 80),
       sliver: SliverList.list(
@@ -340,12 +370,87 @@ class _SliverChannelsList extends HookConsumerWidget {
           if (visibleChannels.isEmpty)
             const _EmptyState()
           else ...[
+            // User-defined sections for stream channels, in user-defined order.
+            for (final section in userSections)
+              _CustomChannelSection(
+                section: section,
+                channels: streamChannels
+                    .where((c) => sectionAssignments[c.id] == section.id)
+                    .toList(),
+                unreadChannelIds: unreadChannelIds,
+                currentPubkey: currentPubkey,
+                expanded: sectionExpanded(section.id),
+                isFirst: userSections.first.id == section.id,
+                isLast: userSections.last.id == section.id,
+                onToggle: () => toggleSection(section.id),
+                onRename: () async {
+                  final name = await showDialog<String>(
+                    context: context,
+                    builder: (_) => _SectionNameDialog(
+                      title: 'Rename Section',
+                      confirmLabel: 'Rename',
+                      initialValue: section.name,
+                    ),
+                  );
+                  if (name != null && name.isNotEmpty) {
+                    ref
+                        .read(channelSectionsProvider.notifier)
+                        .renameSection(section.id, name);
+                  }
+                },
+                onDelete: () async {
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: Text('Delete "${section.name}"?'),
+                      content: const Text(
+                        'Channels in this section will move back to the main list.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: Text(
+                            'Delete',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true) {
+                    ref
+                        .read(channelSectionsProvider.notifier)
+                        .deleteSection(section.id);
+                  }
+                },
+                onMoveUp: () => ref
+                    .read(channelSectionsProvider.notifier)
+                    .moveSectionUp(section.id),
+                onMoveDown: () => ref
+                    .read(channelSectionsProvider.notifier)
+                    .moveSectionDown(section.id),
+                onSelectChannel: onSelectChannel,
+                onMarkChannelRead: (channel) {
+                  final ts = dateTimeToUnixSeconds(channel.lastMessageAt);
+                  if (ts != null) {
+                    ref
+                        .read(readStateProvider.notifier)
+                        .markContextRead(channel.id, ts);
+                  }
+                },
+              ),
             _ChannelSection(
               title: 'Channels',
               icon: LucideIcons.hash,
               expanded: channelsExpanded.value,
               onToggle: () => channelsExpanded.value = !channelsExpanded.value,
-              channels: streamChannels,
+              channels: ungroupedStreamChannels,
               unreadChannelIds: unreadChannelIds,
               currentPubkey: currentPubkey,
               emptyLabel: 'No stream channels yet',
@@ -379,6 +484,230 @@ class _SliverChannelsList extends HookConsumerWidget {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// User-defined channel sections
+// ---------------------------------------------------------------------------
+
+class _CustomChannelSection extends StatelessWidget {
+  final ChannelSection section;
+  final List<Channel> channels;
+  final Set<String> unreadChannelIds;
+  final String? currentPubkey;
+  final bool expanded;
+  final bool isFirst;
+  final bool isLast;
+  final VoidCallback onToggle;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+  final VoidCallback onMoveUp;
+  final VoidCallback onMoveDown;
+  final Future<void> Function(Channel channel) onSelectChannel;
+  final void Function(Channel channel) onMarkChannelRead;
+
+  const _CustomChannelSection({
+    required this.section,
+    required this.channels,
+    required this.unreadChannelIds,
+    required this.currentPubkey,
+    required this.expanded,
+    required this.isFirst,
+    required this.isLast,
+    required this.onToggle,
+    required this.onRename,
+    required this.onDelete,
+    required this.onMoveUp,
+    required this.onMoveDown,
+    required this.onSelectChannel,
+    required this.onMarkChannelRead,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _CustomSectionHeader(
+          section: section,
+          expanded: expanded,
+          isFirst: isFirst,
+          isLast: isLast,
+          onToggle: onToggle,
+          onRename: onRename,
+          onDelete: onDelete,
+          onMoveUp: onMoveUp,
+          onMoveDown: onMoveDown,
+        ),
+        if (expanded)
+          for (final channel in channels)
+            _ChannelTile(
+              channel: channel,
+              isUnread: unreadChannelIds.contains(channel.id),
+              currentPubkey: currentPubkey,
+              onTap: () => onSelectChannel(channel),
+              onMarkRead: () => onMarkChannelRead(channel),
+              sectionId: section.id,
+            ),
+      ],
+    );
+  }
+}
+
+class _CustomSectionHeader extends StatelessWidget {
+  final ChannelSection section;
+  final bool expanded;
+  final bool isFirst;
+  final bool isLast;
+  final VoidCallback onToggle;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+  final VoidCallback onMoveUp;
+  final VoidCallback onMoveDown;
+
+  const _CustomSectionHeader({
+    required this.section,
+    required this.expanded,
+    required this.isFirst,
+    required this.isLast,
+    required this.onToggle,
+    required this.onRename,
+    required this.onDelete,
+    required this.onMoveUp,
+    required this.onMoveDown,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onToggle,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          Grid.xs,
+          Grid.twelve,
+          Grid.xs,
+          Grid.half,
+        ),
+        child: Row(
+          children: [
+            Icon(
+              LucideIcons.folder,
+              size: 14,
+              color: context.colors.onSurfaceVariant,
+            ),
+            const SizedBox(width: Grid.half),
+            Text(
+              section.name.toUpperCase(),
+              style: context.textTheme.labelSmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.8,
+              ),
+            ),
+            const Spacer(),
+            GestureDetector(
+              onTapUp: (details) async {
+                final overlay =
+                    Overlay.of(context).context.findRenderObject()!
+                        as RenderBox;
+                final position = RelativeRect.fromRect(
+                  details.globalPosition & Size.zero,
+                  Offset.zero & overlay.size,
+                );
+                final value = await showMenu<String>(
+                  context: context,
+                  position: position,
+                  items: [
+                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                    PopupMenuItem(
+                      value: 'move_up',
+                      enabled: !isFirst,
+                      child: const Text('Move Up'),
+                    ),
+                    PopupMenuItem(
+                      value: 'move_down',
+                      enabled: !isLast,
+                      child: const Text('Move Down'),
+                    ),
+                    const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
+                );
+                switch (value) {
+                  case 'rename':
+                    onRename();
+                  case 'move_up':
+                    onMoveUp();
+                  case 'move_down':
+                    onMoveDown();
+                  case 'delete':
+                    onDelete();
+                }
+              },
+              child: Icon(
+                LucideIcons.ellipsisVertical,
+                size: 14,
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: Grid.quarter),
+            Icon(
+              expanded ? LucideIcons.chevronDown : LucideIcons.chevronRight,
+              size: 14,
+              color: context.colors.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Section name dialog (create / rename)
+// ---------------------------------------------------------------------------
+
+class _SectionNameDialog extends HookWidget {
+  final String title;
+  final String confirmLabel;
+  final String initialValue;
+
+  const _SectionNameDialog({
+    required this.title,
+    required this.confirmLabel,
+    this.initialValue = '',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = useTextEditingController(text: initialValue);
+
+    void confirm() {
+      final name = controller.text.trim();
+      if (name.isNotEmpty) Navigator.of(context).pop(name);
+    }
+
+    return AlertDialog(
+      title: Text(title),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Name'),
+        onSubmitted: (_) => confirm(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(onPressed: confirm, child: Text(confirmLabel)),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Built-in channel sections (Channels / Forums / DMs)
+// ---------------------------------------------------------------------------
 
 class _ChannelSection extends StatelessWidget {
   final String title;
@@ -437,6 +766,8 @@ class _ChannelSection extends StatelessWidget {
                 isUnread: unreadChannelIds.contains(channel.id),
                 currentPubkey: currentPubkey,
                 onTap: () => onSelectChannel(channel),
+                onMarkRead: null,
+                sectionId: null,
               ),
         ],
       ],
@@ -530,11 +861,20 @@ class _ChannelTile extends ConsumerWidget {
   final String? currentPubkey;
   final VoidCallback onTap;
 
+  /// Called when the user requests to mark this channel read (from long-press
+  /// actions menu). Null for channels in built-in sections.
+  final VoidCallback? onMarkRead;
+
+  /// The user-defined section this channel currently belongs to, or null.
+  final String? sectionId;
+
   const _ChannelTile({
     required this.channel,
     required this.isUnread,
     required this.currentPubkey,
     required this.onTap,
+    this.onMarkRead,
+    this.sectionId,
   });
 
   @override
@@ -544,6 +884,7 @@ class _ChannelTile extends ConsumerWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(Radii.md),
       onTap: onTap,
+      onLongPress: () => _showChannelActions(context, ref),
       child: Padding(
         padding: const EdgeInsets.only(
           left: Grid.xs + Grid.xxs,
@@ -624,6 +965,153 @@ class _ChannelTile extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+
+  void _showChannelActions(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final sections = ref.read(channelSectionsProvider).store.sections
+          ..sort((a, b) => a.order.compareTo(b.order));
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Grid.xs, 0, Grid.xs, Grid.xs),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(LucideIcons.folderInput),
+                  title: const Text('Move to section'),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await _showMoveSectionSheet(context, ref, sections);
+                  },
+                ),
+                ListTile(
+                  leading: Icon(
+                    isUnread ? LucideIcons.checkCheck : LucideIcons.circleDot,
+                  ),
+                  title: Text(isUnread ? 'Mark as read' : 'Mark as unread'),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    final ts = dateTimeToUnixSeconds(channel.lastMessageAt);
+                    if (ts != null) {
+                      if (isUnread) {
+                        onMarkRead?.call();
+                        ref
+                            .read(readStateProvider.notifier)
+                            .markContextRead(channel.id, ts);
+                      } else {
+                        ref
+                            .read(readStateProvider.notifier)
+                            .markContextUnread(channel.id, ts);
+                      }
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showMoveSectionSheet(
+    BuildContext context,
+    WidgetRef ref,
+    List<ChannelSection> sections,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Grid.xs, 0, Grid.xs, Grid.xs),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final section in sections)
+                  ListTile(
+                    leading: Icon(
+                      LucideIcons.folder,
+                      color: sectionId == section.id
+                          ? Theme.of(sheetContext).colorScheme.primary
+                          : null,
+                    ),
+                    title: Text(section.name),
+                    trailing: sectionId == section.id
+                        ? Icon(
+                            LucideIcons.check,
+                            color: Theme.of(sheetContext).colorScheme.primary,
+                          )
+                        : null,
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      ref
+                          .read(channelSectionsProvider.notifier)
+                          .assignChannel(channel.id, section.id);
+                    },
+                  ),
+                ListTile(
+                  leading: const Icon(LucideIcons.folderPlus),
+                  title: const Text('New section…'),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    if (!context.mounted) return;
+                    final name = await showDialog<String>(
+                      context: context,
+                      builder: (_) => const _SectionNameDialog(
+                        title: 'New Section',
+                        confirmLabel: 'Create',
+                      ),
+                    );
+                    if (name != null && name.isNotEmpty) {
+                      ref
+                          .read(channelSectionsProvider.notifier)
+                          .createSection(name);
+                      // Assign after create — sections list has been mutated,
+                      // re-read to find the new section by name.
+                      final newSection = ref
+                          .read(channelSectionsProvider)
+                          .store
+                          .sections
+                          .lastWhere(
+                            (s) => s.name == name.trim(),
+                            orElse: () => const ChannelSection(
+                              id: '',
+                              name: '',
+                              order: -1,
+                            ),
+                          );
+                      if (newSection.id.isNotEmpty) {
+                        ref
+                            .read(channelSectionsProvider.notifier)
+                            .assignChannel(channel.id, newSection.id);
+                      }
+                    }
+                  },
+                ),
+                if (sectionId != null)
+                  ListTile(
+                    leading: const Icon(LucideIcons.folderMinus),
+                    title: const Text('Remove from section'),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      ref
+                          .read(channelSectionsProvider.notifier)
+                          .unassignChannel(channel.id);
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

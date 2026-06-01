@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.6
+
+5cbedb180af feat(mobile): add channel sections with relay sync (#800)
+753d0fe264d feat(desktop): sync channel sections across devices via Nostr (#792)
+2b052eb465f feat(media): support arbitrary file types with download cards (#810)
+247ac523915 feat(desktop): add user-defined channel sections to sidebar (#789)
+d810608d859 feat(desktop): keyboard shortcuts — ⌘⇧N new channel + ↑-to-edit last message (#809)
+39911e42859 fix(desktop): scope agent sweep to the owning app instance (#808)
+f2c266bac23 fix(desktop): route notification clicks to thread context (#790)
+33e37de6e37 chore(deps): update all non-major dependencies (#804)
+5670ffc6a6e fix(deps): re-pin isomorphic-git patch to 1.38.3 (#807)
+033d92f103e chore(deps): update dependency @tanstack/react-query to v5.100.14 (#805)
+bc23620fcfa Fix desktop glass chrome and inbox previews (#793)
+9b9cf461278 refactor(just): slim down mobile-dev to just run Flutter (#801)
+2a03851527f refactor: consolidate infra management into justfile + add mobile-dev (#797)
+
+
 ## v0.3.5
 
 b820420909d feat(mobile): Pulse polish — flat feed, compose page, shared filter chips, like + accent fixes (#796)

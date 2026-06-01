@@ -11,6 +11,7 @@ mod identity;
 mod identity_archive;
 mod media;
 mod media_download;
+mod media_transcode;
 mod mesh_llm;
 mod messages;
 pub mod pairing;
