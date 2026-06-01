@@ -7,9 +7,15 @@
 export const PANEL_BASE_CLASS =
   "relative flex h-full shrink-0 flex-col border-l border-border/80 bg-background";
 
-/** Extra classes applied when the panel is rendered as a floating overlay. */
+/**
+ * Extra classes applied when the panel is rendered as a floating overlay.
+ *
+ * Starts below the fixed top chrome (window drag region + global search and
+ * channel actions, ~44px tall) so the panel header doesn't collide with it at
+ * narrow widths. Matches the inline layout where the header sits below chrome.
+ */
 export const PANEL_OVERLAY_CLASS =
-  "fixed inset-y-0 right-0 z-40 shadow-xl max-w-[calc(100vw-2rem)]";
+  "fixed bottom-0 right-0 top-11 z-40 shadow-xl max-w-[calc(100vw-2rem)]";
 
 type OverlayPanelBackdropProps = {
   onClose: () => void;

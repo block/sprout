@@ -362,10 +362,6 @@ export function ChannelScreen({
     setThreadReplyTargetId,
     setThreadScrollTargetId,
   });
-  const isRightContextPanelOpen =
-    openThreadHeadMessage !== null ||
-    openAgentSessionPubkey !== null ||
-    profilePanelPubkey !== null;
 
   const { handleOpenProfilePanel, handleCloseProfilePanel, handleOpenDm } =
     useChannelProfilePanel({
@@ -451,7 +447,6 @@ export function ChannelScreen({
           activeChannelEphemeralDisplay={activeChannelEphemeralDisplay}
           activeChannelTitle={activeChannelTitle}
           activeDmPresenceStatus={activeDmPresenceStatus}
-          actionsRightInsetPx={isRightContextPanelOpen ? threadPanelWidthPx : 0}
           currentPubkey={currentPubkey}
           isJoining={joinChannelMutation.isPending}
           onJoinChannel={joinChannelMutation.mutateAsync}
