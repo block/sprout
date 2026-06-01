@@ -164,7 +164,7 @@ export function AgentSessionThreadPanel({
             </Tooltip>
             <Button
               aria-label="Close activity panel"
-              className="h-6 w-6"
+              className="h-6 w-6 text-foreground hover:bg-muted/60 hover:text-foreground"
               data-testid="agent-session-close"
               onClick={onClose}
               size="icon"

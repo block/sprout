@@ -245,7 +245,7 @@ export function MessageThreadPanel({
           </div>
           <Button
             aria-label="Close thread"
-            className="ml-auto h-4 w-4 rounded-full text-muted-foreground/45 opacity-70 hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100"
+            className="ml-auto h-4 w-4 rounded-full text-foreground hover:bg-muted/60 hover:text-foreground"
             data-testid="message-thread-close"
             onClick={onClose}
             size="icon"
