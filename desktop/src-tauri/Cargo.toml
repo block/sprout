@@ -76,3 +76,6 @@ tempfile = "3"
 strip-ansi-escapes = "0.2"
 
 [dev-dependencies]
+# Network integration tests (serverless WS roundtrip) need an explicit rustls
+# CryptoProvider — the app installs one via tauri/wry at startup, tests don't.
+rustls = { version = "0.23", features = ["aws_lc_rs"] }

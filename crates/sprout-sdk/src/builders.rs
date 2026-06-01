@@ -544,7 +544,12 @@ pub fn build_channel_metadata_serverless(
     for pk in participants {
         tags.push(tag(&["p", &pk.to_ascii_lowercase()])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(39000), "").tags(tags))
+    // `.allow_self_tagging()`: self-participant channels p-tag the signer;
+    // nostr 0.44 strips self-`p` tags by default. See
+    // build_channel_members_serverless for the full rationale.
+    Ok(EventBuilder::new(Kind::Custom(39000), "")
+        .tags(tags)
+        .allow_self_tagging())
 }
 
 /// Kind 39002 — channel membership, published directly (serverless mode).
@@ -559,7 +564,13 @@ pub fn build_channel_members_serverless(
     for pk in member_pubkeys {
         tags.push(tag(&["p", &pk.to_ascii_lowercase()])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(39002), "").tags(tags))
+    // `.allow_self_tagging()` is REQUIRED: a user joining/creating a channel
+    // p-tags themselves (the signer). nostr 0.44 strips self-`p` tags by
+    // default, publishing an empty member list and breaking the get_channels
+    // `#p:[me]` membership query → "join to participate" forever.
+    Ok(EventBuilder::new(Kind::Custom(39002), "")
+        .tags(tags)
+        .allow_self_tagging())
 }
 
 // ── Builder 20: build_join ───────────────────────────────────────────────────
@@ -2141,5 +2152,44 @@ mod tests {
     fn presence_update_rejects_invalid_status() {
         let err = build_presence_update("dnd").unwrap_err();
         assert!(matches!(err, SdkError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn serverless_members_keeps_self_p_tag() {
+        // Regression: joining/creating a serverless channel p-tags the signer.
+        // nostr 0.44 strips self-`p` tags unless `.allow_self_tagging()` is set,
+        // which previously published an empty member list and broke the
+        // get_channels `#p:[me]` membership query ("join to participate" bug).
+        let keys = nostr::Keys::generate();
+        let me = keys.public_key().to_hex();
+        let ev = build_channel_members_serverless("chan-self", &[me.clone()])
+            .unwrap()
+            .sign_with_keys(&keys)
+            .unwrap();
+        assert!(
+            has_tag(&ev, "p", &me),
+            "self p-tag stripped from 39002 — .allow_self_tagging() missing"
+        );
+    }
+
+    #[test]
+    fn serverless_metadata_keeps_self_p_tag() {
+        let keys = nostr::Keys::generate();
+        let me = keys.public_key().to_hex();
+        let ev = build_channel_metadata_serverless(
+            "dm-self",
+            "DM",
+            "private",
+            "dm",
+            None,
+            &[me.clone()],
+        )
+        .unwrap()
+        .sign_with_keys(&keys)
+        .unwrap();
+        assert!(
+            has_tag(&ev, "p", &me),
+            "self p-tag stripped from 39000 metadata"
+        );
     }
 }

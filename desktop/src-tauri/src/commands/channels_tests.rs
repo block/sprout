@@ -92,3 +92,174 @@ fn empty_input_yields_empty_map() {
     let membership = collect_members_by_channel(&[]);
     assert!(membership.is_empty());
 }
+
+// ── Serverless integration test (hits a real public relay) ───────────────────
+//
+// Run with:
+//   cargo test --manifest-path desktop/src-tauri/Cargo.toml \
+//     -- --ignored --nocapture serverless_create_join_roundtrip
+//
+// Drives the EXACT serverless code paths (query_relay/submit_event over WS +
+// the 39000/39002 builders + serverless_set_members read-modify-write) against
+// wss://relay.damus.io to reproduce the "join does nothing" bug.
+
+#[tokio::test]
+#[ignore = "network: hits wss://relay.damus.io"]
+async fn serverless_create_join_roundtrip() {
+    use crate::app_state::build_app_state;
+    use crate::relay::{query_relay, submit_event};
+    use std::sync::atomic::Ordering;
+
+    // The app installs a rustls CryptoProvider via tauri/wry at startup; tests
+    // don't, and both aws-lc-rs and ring are present (ambiguous). Pick one.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Two independent identities: a creator and a joiner.
+    let creator_keys = nostr::Keys::generate();
+    let joiner_keys = nostr::Keys::generate();
+    let creator_pk = creator_keys.public_key().to_hex();
+    let joiner_pk = joiner_keys.public_key().to_hex();
+    eprintln!("creator={creator_pk}\njoiner={joiner_pk}");
+
+    let relay = "wss://relay.damus.io";
+
+    // Build a serverless AppState for the CREATOR.
+    let creator_state = build_app_state();
+    *creator_state.keys.lock().unwrap() = creator_keys.clone();
+    *creator_state.relay_url_override.lock().unwrap() = Some(relay.to_string());
+    creator_state.serverless.store(true, Ordering::Relaxed);
+
+    // ── Step 1: create a channel (publish 39000 + 39002 self) ──────────────
+    let channel_id = uuid::Uuid::new_v4().to_string();
+    let name = format!("it-{}", &channel_id[..8]);
+    eprintln!("creating channel {channel_id} ({name})");
+
+    let meta = events::build_channel_metadata_serverless(
+        &channel_id,
+        &name,
+        "open",
+        "stream",
+        Some("integration test"),
+        &[],
+    )
+    .expect("build metadata");
+    let r1 = submit_event(meta, &creator_state)
+        .await
+        .expect("publish 39000");
+    eprintln!("39000 publish: accepted={} msg={}", r1.accepted, r1.message);
+
+    let members = events::build_channel_members_serverless(&channel_id, &[creator_pk.clone()])
+        .expect("build members");
+    let r2 = submit_event(members, &creator_state)
+        .await
+        .expect("publish 39002");
+    eprintln!("39002 publish: accepted={} msg={}", r2.accepted, r2.message);
+
+    // Give the relay a moment to index.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // ── Diagnostics: is the 39002 readable at all, and by which filter? ────
+    let by_d = query_relay(
+        &creator_state,
+        &[serde_json::json!({"kinds":[39002],"#d":[channel_id],"limit":10})],
+    )
+    .await
+    .expect("query 39002 by #d");
+    eprintln!("39002 by #d only: {} event(s)", by_d.len());
+    if let Some(ev) = by_d.first() {
+        eprintln!("  39002 author = {}", ev.pubkey.to_hex());
+        eprintln!(
+            "  39002 tags   = {:?}",
+            ev.tags
+                .iter()
+                .map(|t| t.as_slice().to_vec())
+                .collect::<Vec<_>>()
+        );
+        eprintln!("  creator_pk   = {creator_pk}");
+    }
+
+    let by_kind_author = query_relay(
+        &creator_state,
+        &[serde_json::json!({"kinds":[39002],"authors":[creator_pk],"limit":10})],
+    )
+    .await
+    .expect("query 39002 by author");
+    eprintln!("39002 by author: {} event(s)", by_kind_author.len());
+
+    let meta_by_d = query_relay(
+        &creator_state,
+        &[serde_json::json!({"kinds":[39000],"#d":[channel_id],"limit":10})],
+    )
+    .await
+    .expect("query 39000 by #d");
+    eprintln!("39000 by #d (control): {} event(s)", meta_by_d.len());
+
+    // ── Step 2: read it back as the creator (should be a member) ───────────
+    let creator_member_events = query_relay(
+        &creator_state,
+        &[serde_json::json!({"kinds":[39002],"#p":[creator_pk],"#d":[channel_id],"limit":10})],
+    )
+    .await
+    .expect("query creator membership");
+    eprintln!(
+        "creator sees {} membership event(s)",
+        creator_member_events.len()
+    );
+    assert!(
+        !creator_member_events.is_empty(),
+        "BUG: creator's own 39002 membership not found after create — \
+         either the publish was rejected or the read filter is wrong"
+    );
+
+    // ── Step 3: JOINER joins (read-modify-write of 39002) ──────────────────
+    let joiner_state = build_app_state();
+    *joiner_state.keys.lock().unwrap() = joiner_keys.clone();
+    *joiner_state.relay_url_override.lock().unwrap() = Some(relay.to_string());
+    joiner_state.serverless.store(true, Ordering::Relaxed);
+
+    // This is exactly what join_channel does in serverless mode.
+    serverless_set_members(&joiner_state, &channel_id, &[joiner_pk.clone()], &[])
+        .await
+        .expect("join (set members)");
+    eprintln!("joiner published updated membership");
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // ── Step 4: read membership — BOTH should be present ───────────────────
+    let final_members = serverless_current_members(&joiner_state, &channel_id)
+        .await
+        .expect("read final members");
+    eprintln!("final members ({}): {final_members:?}", final_members.len());
+
+    assert!(
+        final_members.contains(&creator_pk.to_ascii_lowercase()),
+        "creator missing from member list after joiner joined — \
+         read-modify-write clobbered the creator (the real bug?)"
+    );
+    assert!(
+        final_members.contains(&joiner_pk.to_ascii_lowercase()),
+        "joiner missing from member list after join — join didn't persist"
+    );
+
+    // ── Step 5: joiner's get_channels-style membership lookup ──────────────
+    let joiner_member_events = query_relay(
+        &joiner_state,
+        &[serde_json::json!({"kinds":[39002],"#p":[joiner_pk],"limit":50})],
+    )
+    .await
+    .expect("query joiner membership");
+    let joined_this_channel = joiner_member_events.iter().any(|ev| {
+        ev.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.len() >= 2 && s[0] == "d" && s[1] == channel_id
+        })
+    });
+    assert!(
+        joined_this_channel,
+        "BUG REPRODUCED: after join, get_channels' #p-filtered 39002 query \
+         does not return this channel for the joiner → UI still shows \
+         'join to participate'"
+    );
+
+    eprintln!("✅ roundtrip OK: create → join → both members visible");
+}

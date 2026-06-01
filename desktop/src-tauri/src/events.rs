@@ -767,7 +767,12 @@ pub fn build_channel_metadata_serverless(
         tags.push(tag(vec!["p", &pk.to_ascii_lowercase()])?);
     }
 
-    Ok(EventBuilder::new(Kind::Custom(39000), "").tags(tags))
+    // `.allow_self_tagging()`: DM-to-self / self-participant channels p-tag the
+    // signer; nostr 0.44 would otherwise strip it. See
+    // build_channel_members_serverless for the full rationale.
+    Ok(EventBuilder::new(Kind::Custom(39000), "")
+        .tags(tags)
+        .allow_self_tagging())
 }
 
 /// Kind 39002 — channel membership, published directly (serverless mode).
@@ -783,7 +788,13 @@ pub fn build_channel_members_serverless(
         check_pubkey(pk)?;
         tags.push(tag(vec!["p", &pk.to_ascii_lowercase()])?);
     }
-    Ok(EventBuilder::new(Kind::Custom(39002), "").tags(tags))
+    // `.allow_self_tagging()` is REQUIRED: when a user creates/joins a channel
+    // they p-tag themselves (the signer). nostr 0.44 strips self-`p` tags by
+    // default, which would publish an empty member list and break the
+    // get_channels `#p:[me]` membership query → "join to participate" forever.
+    Ok(EventBuilder::new(Kind::Custom(39002), "")
+        .tags(tags)
+        .allow_self_tagging())
 }
 
 // ── Transport ────────────────────────────────────────────────────────────────
@@ -940,5 +951,48 @@ mod tests {
         assert_eq!(tags[0], vec!["d".to_string(), "chan-1".to_string()]);
         assert!(tags.contains(&vec!["p".into(), PK_A.to_string()]));
         assert!(tags.contains(&vec!["p".into(), PK_B.to_string()]));
+    }
+
+    #[test]
+    fn serverless_members_keeps_self_p_tag() {
+        // Regression: when a user joins/creates a channel they p-tag THEMSELVES
+        // (the signer). nostr 0.44 strips self-`p` tags unless
+        // `.allow_self_tagging()` is set — which previously published an empty
+        // member list and broke the get_channels `#p:[me]` query, leaving the
+        // UI stuck on "join to participate". This guards that fix.
+        let keys = Keys::generate();
+        let me = keys.public_key().to_hex();
+        let event = build_channel_members_serverless("chan-self", &[me.clone()])
+            .unwrap()
+            .sign_with_keys(&keys)
+            .unwrap();
+        let tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
+        assert!(
+            tags.contains(&vec!["p".into(), me.clone()]),
+            "self p-tag was stripped — .allow_self_tagging() missing; tags={tags:?}"
+        );
+    }
+
+    #[test]
+    fn serverless_metadata_keeps_self_p_tag() {
+        // Same self-tagging hazard for DM/self-participant 39000 metadata.
+        let keys = Keys::generate();
+        let me = keys.public_key().to_hex();
+        let event = build_channel_metadata_serverless(
+            "dm-self",
+            "DM",
+            "private",
+            "dm",
+            None,
+            &[me.clone()],
+        )
+        .unwrap()
+        .sign_with_keys(&keys)
+        .unwrap();
+        let tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
+        assert!(
+            tags.contains(&vec!["p".into(), me.clone()]),
+            "self p-tag stripped from 39000 metadata; tags={tags:?}"
+        );
     }
 }
