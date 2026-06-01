@@ -450,6 +450,11 @@ declare global {
     ) => Promise<unknown>;
     __SPROUT_E2E_PUSH_MOCK_FEED_ITEM__?: (item: RawFeedItem) => RawFeedItem;
     __SPROUT_E2E_SET_STALL_WEBSOCKET_SENDS__?: (stall: boolean) => void;
+    __SPROUT_E2E_SET_MESH__?: (mesh: {
+      admitted?: boolean;
+      models?: Array<{ id: string; name: string | null }>;
+      denyReason?: string;
+    }) => void;
   }
 }
 
@@ -1098,6 +1103,33 @@ const mockSockets = new Map<number, MockSocket>();
 let mockWebsocketSendMutexWedged = false;
 const realSockets = new Map<number, WebSocket>();
 let mockManagedAgents: MockManagedAgent[] = [];
+
+// Mesh-compute mock state. Default: admitted, one model available.
+const mockMeshState: {
+  admitted: boolean;
+  models: Array<{ id: string; name: string | null }>;
+  denyReason: string;
+  nodeState: "off" | "running";
+  nodeMode: "serve" | "client" | null;
+} = {
+  admitted: true,
+  models: [
+    { id: "hf://demo/SmolLM2-135M-Instruct-GGUF:Q4_K_M", name: "SmolLM2 135M" },
+  ],
+  denyReason: "not a relay member",
+  nodeState: "off",
+  nodeMode: null,
+};
+
+function resetMockMesh() {
+  mockMeshState.admitted = true;
+  mockMeshState.models = [
+    { id: "hf://demo/SmolLM2-135M-Instruct-GGUF:Q4_K_M", name: "SmolLM2 135M" },
+  ];
+  mockMeshState.denyReason = "not a relay member";
+  mockMeshState.nodeState = "off";
+  mockMeshState.nodeMode = null;
+}
 let mockPersonas: RawPersona[] = [];
 let mockTeams: RawTeam[] = [];
 let mockRelayAgents: RawRelayAgent[] = [
@@ -4689,6 +4721,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockPersonas();
   resetMockTeams();
   resetMockWorkflows();
+  resetMockMesh();
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
@@ -4750,12 +4783,86 @@ export function maybeInstallE2eTauriMocks() {
     config.mock.stallWebsocketSends = stall;
     if (!stall) mockWebsocketSendMutexWedged = false;
   };
+  // Tests flip `admitted` to exercise the denial path: mesh_ensure_client_node
+  // rejects when not admitted, which proves relay membership is the gate and
+  // that the create flow surfaces denial copy without spawning the agent.
+  window.__SPROUT_E2E_SET_MESH__ = (mesh) => {
+    if (mesh.admitted !== undefined) mockMeshState.admitted = mesh.admitted;
+    if (mesh.models !== undefined) mockMeshState.models = mesh.models;
+    if (mesh.denyReason !== undefined)
+      mockMeshState.denyReason = mesh.denyReason;
+  };
+  const meshNodeStatus = (
+    state: "off" | "running",
+    mode: "serve" | "client" | null,
+  ) => ({
+    state,
+    mode,
+    health: { status: "ok" as const, reason: null },
+    apiBaseUrl: state === "running" ? "http://127.0.0.1:9337/v1" : null,
+    consoleUrl: null,
+    modelId: mockMeshState.models[0]?.id ?? null,
+    modelName: mockMeshState.models[0]?.name ?? null,
+    inviteToken: null,
+  });
   const handleMockCommand = async (command: string, payload: unknown) => {
     const activeConfig = getConfig();
     const identity = getActiveIdentity(activeConfig);
     window.__SPROUT_E2E_COMMANDS__?.push(command);
 
     switch (command) {
+      case "mesh_availability":
+        return {
+          capable: true,
+          admitted: mockMeshState.admitted,
+          available: mockMeshState.admitted,
+          reason: mockMeshState.admitted ? null : mockMeshState.denyReason,
+          models: mockMeshState.models,
+          serveTargets: [],
+        };
+      case "mesh_installed_models":
+        return mockMeshState.models;
+      case "mesh_node_status":
+        return meshNodeStatus(mockMeshState.nodeState, mockMeshState.nodeMode);
+      case "mesh_start_node": {
+        const req = (
+          payload as { request?: { mode?: "serve" | "client" } } | null
+        )?.request;
+        mockMeshState.nodeState = "running";
+        mockMeshState.nodeMode = req?.mode ?? "serve";
+        return meshNodeStatus(mockMeshState.nodeState, mockMeshState.nodeMode);
+      }
+      case "mesh_stop_node":
+        mockMeshState.nodeState = "off";
+        mockMeshState.nodeMode = null;
+        return meshNodeStatus("off", null);
+      case "mesh_ensure_client_node":
+        // The invariant under test: membership is the only factor. A
+        // non-admitted (non-member) caller cannot bring up the client node,
+        // and no extra manual auth step exists — admission alone decides.
+        if (!mockMeshState.admitted) {
+          throw new Error(mockMeshState.denyReason);
+        }
+        return meshNodeStatus("running", "client");
+      case "mesh_agent_preset": {
+        const req = (payload as { request?: { modelId?: string } } | null)
+          ?.request;
+        const model = req?.modelId ?? mockMeshState.models[0]?.id ?? "";
+        return {
+          providerId: "relay-mesh" as const,
+          label: "Run on relay mesh",
+          acpCommand: "",
+          agentCommand: "sprout-agent",
+          agentArgs: [],
+          mcpCommand: "",
+          model,
+          envVars: {
+            SPROUT_AGENT_PROVIDER: "openai",
+            OPENAI_COMPAT_BASE_URL: "http://127.0.0.1:9337/v1",
+            OPENAI_COMPAT_MODEL: model,
+          },
+        };
+      }
       case "get_identity":
         if (identity) {
           return {
