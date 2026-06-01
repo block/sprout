@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { Activity, Bot, CircleDot, Octagon, X } from "lucide-react";
+import { CircleDot, Octagon, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ManagedAgentSessionPanel } from "@/features/agents/ui/ManagedAgentSessionPanel";
@@ -12,6 +12,8 @@ import { useStickToBottom } from "@/shared/hooks/useStickToBottom";
 import { cn } from "@/shared/lib/cn";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
+import type { UserProfileLookup } from "@/features/profile/lib/identity";
+import { UserAvatar } from "@/shared/ui/UserAvatar";
 import {
   OverlayPanelBackdrop,
   PANEL_BASE_CLASS,
@@ -27,6 +29,7 @@ type AgentSessionThreadPanelProps = {
   canInterruptTurn: boolean;
   isWorking: boolean;
   isSinglePanelView?: boolean;
+  profiles?: UserProfileLookup;
   onClose: () => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
@@ -40,12 +43,14 @@ export function AgentSessionThreadPanel({
   channel,
   isWorking,
   isSinglePanelView = false,
+  profiles,
   onClose,
   onResetWidth,
   onResizeStart,
   widthPx,
 }: AgentSessionThreadPanelProps) {
   const isLive = isManagedAgentActive(agent);
+  const avatarUrl = profiles?.[agent.pubkey.toLowerCase()]?.avatarUrl ?? null;
   const isOverlay = useIsThreadPanelOverlay();
   const isFloatingOverlay = isOverlay && !isSinglePanelView;
   useEscapeKey(onClose, isOverlay || isSinglePanelView);
@@ -100,85 +105,91 @@ export function AgentSessionThreadPanel({
         {!isOverlay ? (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md after:absolute after:bottom-0 after:left-0 after:top-10 after:w-px after:bg-border/80 supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
+            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md before:absolute before:left-0 before:right-0 before:top-10 before:h-px before:bg-border/35 after:absolute after:bottom-0 after:-left-px after:top-10 after:w-px after:bg-border/80 supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
           />
         ) : null}
 
         <div
           className={cn(
-            "cursor-default select-none px-4",
+            "flex cursor-default select-none items-center",
             isSinglePanelView
-              ? "relative z-30 min-h-[88px] shrink-0 border-b border-border/70 bg-background/80 pb-2.5 pt-[42px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
+              ? "relative z-30 -mb-[76px] min-h-[76px] shrink-0 gap-[10px] bg-background/80 pb-[4px] pl-[16px] pr-[8px] pt-[42px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:pl-[24px] sm:pr-[12px] dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
               : isOverlay
-                ? "relative z-50 min-h-[56px] shrink-0 border-b border-border/70 bg-background/80 py-2.5 backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
-                : "absolute inset-x-0 top-10 z-50 min-h-[44px] py-[4px]",
+                ? "relative z-50 min-h-[44px] shrink-0 gap-3 bg-background/80 px-3 py-[6px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
+                : "absolute inset-x-0 top-[42px] z-50 min-h-[32px] gap-3 px-3 py-[4px]",
           )}
           data-tauri-drag-region
         >
-          <div className="flex min-w-0 items-center gap-2">
-            <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <h2 className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight">
-              {agent.name}
-            </h2>
-            {isLive ? (
-              <Badge
-                className="shrink-0 gap-1 px-2 py-0 text-[10px]"
-                variant="default"
-              >
-                <CircleDot className="h-2.5 w-2.5" />
-                Live
-              </Badge>
-            ) : (
-              <Badge
-                className="shrink-0 px-2 py-0 text-[10px]"
-                variant="secondary"
-              >
-                Idle
-              </Badge>
-            )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Stop current agent turn"
-                  className="h-6 px-2 text-[11px]"
-                  data-testid="agent-session-stop-turn"
-                  disabled={!canInterruptTurn || !isLive || !isWorking}
-                  onClick={() => {
-                    void handleInterruptTurn();
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <Octagon className="h-3 w-3" />
-                  Stop
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                {isWorking
-                  ? canInterruptTurn
-                    ? "Interrupt the current ACP turn without stopping the agent process."
-                    : "This agent cannot be interrupted from this workspace."
-                  : "No active turn to interrupt."}
-              </TooltipContent>
-            </Tooltip>
-            <Button
-              aria-label="Close activity panel"
-              className="h-6 w-6 text-foreground hover:bg-muted/60 hover:text-foreground"
-              data-testid="agent-session-close"
-              onClick={onClose}
-              size="icon"
-              type="button"
-              variant="ghost"
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2",
+                isSinglePanelView && "translate-y-px",
+              )}
             >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 pl-[22px]">
-            <Activity className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <p className="truncate text-xs text-muted-foreground">
-              Agent activity log
-            </p>
+              <UserAvatar
+                avatarUrl={avatarUrl}
+                className="h-5 w-5 shrink-0 rounded-full text-[8px]"
+                displayName={agent.name}
+                size="xs"
+              />
+              <h2 className="min-w-0 flex-1 translate-y-px truncate text-sm font-semibold leading-5 tracking-tight">
+                {agent.name}
+              </h2>
+            </div>
+            <div
+              className={cn(
+                "flex shrink-0 items-center gap-2",
+                isSinglePanelView && "translate-y-px",
+              )}
+            >
+              {isLive && isWorking ? (
+                <Badge
+                  className="shrink-0 gap-1 px-2 py-0 text-[10px]"
+                  variant="default"
+                >
+                  <CircleDot className="h-2.5 w-2.5" />
+                  Live
+                </Badge>
+              ) : null}
+              {isLive && isWorking ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label="Stop current agent turn"
+                      className="h-6 px-2 text-[11px]"
+                      data-testid="agent-session-stop-turn"
+                      disabled={!canInterruptTurn}
+                      onClick={() => {
+                        void handleInterruptTurn();
+                      }}
+                      size="sm"
+                      type="button"
+                      variant="outline"
+                    >
+                      <Octagon className="h-3 w-3" />
+                      Stop
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">
+                    {canInterruptTurn
+                      ? "Interrupt the current ACP turn without stopping the agent process."
+                      : "This agent cannot be interrupted from this workspace."}
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              <Button
+                aria-label="Close activity panel"
+                className="h-6 w-6 text-foreground hover:bg-muted/60 hover:text-foreground"
+                data-testid="agent-session-close"
+                onClick={onClose}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -187,7 +198,7 @@ export function AgentSessionThreadPanel({
           onScroll={onScroll}
           className={cn(
             "min-h-0 flex-1 overflow-y-auto px-3 pb-4",
-            isOverlay ? "pt-4" : "pt-[84px]",
+            isOverlay ? "pt-4" : "pt-[76px]",
           )}
         >
           <ManagedAgentSessionPanel

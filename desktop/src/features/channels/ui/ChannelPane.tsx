@@ -491,6 +491,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               entry.pubkey.toLowerCase() === selectedAgent.pubkey.toLowerCase(),
           )}
           isSinglePanelView={isSinglePanelView}
+          profiles={profiles}
           onClose={onCloseAgentSession}
           onResetWidth={onResetThreadPanelWidth}
           onResizeStart={onThreadPanelResizeStart}

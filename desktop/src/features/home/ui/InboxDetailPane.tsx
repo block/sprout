@@ -219,7 +219,7 @@ export function InboxDetailPane({
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
         />
-        <div className="absolute inset-x-0 top-[38px] z-40 flex min-h-[32px] items-center justify-between gap-3 py-[4px] pl-6 pr-3">
+        <div className="absolute inset-x-0 top-[42px] z-40 flex min-h-[32px] items-center justify-between gap-3 py-[4px] pl-6 pr-3">
           <div className="flex min-w-0 items-center gap-1">
             {onBack ? (
               <Button
@@ -236,7 +236,7 @@ export function InboxDetailPane({
             <div className="min-w-0">
               {canOpenChannel && contextChannelId && onOpenContext ? (
                 <button
-                  className="flex min-w-0 items-center gap-[4px] text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="flex min-w-0 translate-y-px items-center gap-[4px] text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   onClick={() => onOpenContext(contextChannelId, item.id)}
                   title={item.fullTimestampLabel}
                   type="button"
@@ -248,7 +248,7 @@ export function InboxDetailPane({
                 </button>
               ) : (
                 <h2
-                  className="flex min-w-0 items-center gap-[4px] text-sm font-semibold leading-5 tracking-tight text-foreground"
+                  className="flex min-w-0 translate-y-px items-center gap-[4px] text-sm font-semibold leading-5 tracking-tight text-foreground"
                   title={item.fullTimestampLabel}
                 >
                   {hasChannelContext ? (

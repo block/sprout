@@ -54,7 +54,7 @@ export function InboxListPane({
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-[6px]">
             <Inbox className="h-[14px] w-[14px] shrink-0 text-muted-foreground" />
-            <h2 className="truncate text-sm font-semibold leading-5 tracking-tight">
+            <h2 className="translate-y-px truncate text-sm font-semibold leading-5 tracking-tight">
               Inbox
             </h2>
           </div>
