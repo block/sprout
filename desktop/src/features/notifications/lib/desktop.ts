@@ -215,7 +215,7 @@ export async function setDesktopAppBadge(state: AppBadgeState): Promise<void> {
     if (state.kind === "count") {
       await getCurrentWindow().setBadgeCount(state.count);
     } else if (state.kind === "dot" && isMacPlatform()) {
-      await getCurrentWindow().setBadgeLabel("");
+      await getCurrentWindow().setBadgeLabel(" ");
     } else {
       await getCurrentWindow().setBadgeCount(undefined);
     }
