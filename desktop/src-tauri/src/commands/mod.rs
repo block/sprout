@@ -11,6 +11,7 @@ mod identity;
 mod identity_archive;
 mod media;
 mod media_download;
+mod media_transcode;
 mod messages;
 pub mod pairing;
 mod personas;

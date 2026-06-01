@@ -10,7 +10,9 @@ use crate::error::MediaError;
 use crate::storage::{BlobMeta, MediaStorage};
 use crate::thumbnail::generate_image_metadata_sync;
 use crate::types::BlobDescriptor;
-use crate::validation::{mime_to_ext, validate_content, validate_video_file};
+use crate::validation::{
+    mime_to_ext, validate_content, validate_file_content, validate_video_file,
+};
 
 /// Process an upload end-to-end: validate, store, thumbnail, return descriptor.
 ///
@@ -86,6 +88,86 @@ pub async fn process_upload(
             Err(e)
         }
     }
+}
+
+/// Process a generic (non-image, non-video) file upload end-to-end.
+///
+/// This is the catch-all attachment path: documents, archives, audio, text,
+/// data — anything that isn't a previewable image or an H.264 MP4. The body is
+/// fully buffered in RAM (bounded by `config.max_file_bytes` at the transport
+/// layer), validated against the deny-list + size cap, stored, and recorded in
+/// a minimal sidecar. No thumbnail, no dimensions, no duration.
+///
+/// The resulting blob is served with `Content-Disposition: attachment`, so the
+/// client always downloads it rather than rendering it inline.
+pub async fn process_file_upload(
+    storage: &MediaStorage,
+    config: &MediaConfig,
+    auth_event: &nostr::Event,
+    body: Bytes,
+) -> Result<BlobDescriptor, MediaError> {
+    let auth = auth_event.clone();
+    let bytes = body.clone();
+    let cfg = config.clone();
+    let (mime, sha256, ext) = tokio::task::spawn_blocking(move || -> Result<_, MediaError> {
+        let (mime, ext) = validate_file_content(&bytes, &cfg)?;
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        // Files: 10-minute auth window, same as images (buffered, not streamed).
+        verify_blossom_upload_auth(&auth, &sha256, cfg.server_domain.as_deref(), 600)?;
+        Ok((mime, sha256, ext))
+    })
+    .await
+    .map_err(|_| MediaError::Internal)??;
+
+    let key = format!("{sha256}.{ext}");
+    let meta_key = format!("_meta/{sha256}.json");
+
+    // Idempotent: short-circuit only if BOTH sidecar and blob exist.
+    let sidecar_exists = storage.head(&meta_key).await?;
+    let blob_exists = storage.head(&key).await?;
+    if sidecar_exists && blob_exists {
+        let meta = storage.get_sidecar(&sha256).await?;
+        return Ok(build_descriptor(
+            config,
+            &sha256,
+            &ext,
+            &mime,
+            body.len() as u64,
+            Some(&meta),
+            meta.uploaded_at,
+        ));
+    }
+
+    let uploaded_at = chrono::Utc::now().timestamp();
+
+    // Store blob first; orphan blobs (no sidecar) are bounded and GC-able.
+    storage.put(&key, &body, &mime).await?;
+
+    // Minimal sidecar — no thumbnail/dim/blurhash/duration for generic files.
+    let meta = BlobMeta {
+        dim: String::new(),
+        blurhash: String::new(),
+        thumb_url: String::new(),
+        ext: ext.clone(),
+        mime_type: mime.clone(),
+        size: body.len() as u64,
+        uploaded_at,
+        duration_secs: None,
+    };
+    let meta_json = serde_json::to_vec(&meta)?;
+    storage
+        .put(&meta_key, &meta_json, "application/json")
+        .await?;
+
+    Ok(build_descriptor(
+        config,
+        &sha256,
+        &ext,
+        &mime,
+        body.len() as u64,
+        Some(&meta),
+        uploaded_at,
+    ))
 }
 
 /// Process a video upload end-to-end using a streaming pipeline.
@@ -356,6 +438,7 @@ mod tests {
             max_image_bytes: 50 * 1024 * 1024,
             max_gif_bytes: 10 * 1024 * 1024,
             max_video_bytes: 524_288_000,
+            max_file_bytes: 104_857_600,
             public_base_url: "https://media.example.com".to_string(),
             server_domain: None,
         }

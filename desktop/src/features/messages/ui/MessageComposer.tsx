@@ -14,10 +14,7 @@ import {
   stripImetaMediaLines,
 } from "@/features/messages/lib/imetaMediaMarkdown";
 
-import {
-  ALLOWED_MEDIA_TYPES,
-  useMediaUpload,
-} from "@/features/messages/lib/useMediaUpload";
+import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import {
@@ -576,11 +573,12 @@ export function MessageComposer({
       editorProps: {
         ...richText.editor.options.editorProps,
         handlePaste: (_view, event) => {
-          // --- Media paste ---
+          // --- File paste ---
+          // Any actual file (image, video, document, …) pastes as an
+          // attachment. String/text items have kind "string", so plain-text
+          // and code-block paste fall through to the handlers below.
           const items = Array.from(event.clipboardData?.items ?? []);
-          const mediaItem = items.find((item) =>
-            ALLOWED_MEDIA_TYPES.includes(item.type),
-          );
+          const mediaItem = items.find((item) => item.kind === "file");
           if (mediaItem) {
             const file = mediaItem.getAsFile();
             if (file) {

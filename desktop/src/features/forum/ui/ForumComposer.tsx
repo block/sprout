@@ -3,10 +3,7 @@ import * as React from "react";
 import { EditorContent } from "@tiptap/react";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
-import {
-  ALLOWED_MEDIA_TYPES,
-  useMediaUpload,
-} from "@/features/messages/lib/useMediaUpload";
+import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
 import { useMentions } from "@/features/messages/lib/useMentions";
 import {
   hasMentionClipboardHtml,
@@ -299,9 +296,9 @@ export function ForumComposer({
         ...richText.editor.options.editorProps,
         handlePaste: (_view, event) => {
           const items = Array.from(event.clipboardData?.items ?? []);
-          const mediaItem = items.find((item) =>
-            ALLOWED_MEDIA_TYPES.includes(item.type),
-          );
+          // Any actual file pastes as an attachment; text/string items fall
+          // through to the handlers below.
+          const mediaItem = items.find((item) => item.kind === "file");
           if (mediaItem) {
             const file = mediaItem.getAsFile();
             if (file) {

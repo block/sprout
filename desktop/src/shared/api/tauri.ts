@@ -759,6 +759,8 @@ export type BlobDescriptor = {
   thumb?: string;
   duration?: number;
   image?: string;
+  /** Original filename for generic (non-media) file attachments. */
+  filename?: string;
 };
 
 export async function uploadMedia(
@@ -777,8 +779,9 @@ export async function pickAndUploadMedia(): Promise<BlobDescriptor[]> {
 
 export async function uploadMediaBytes(
   data: number[],
+  filename?: string,
 ): Promise<BlobDescriptor> {
-  return invokeTauri<BlobDescriptor>("upload_media_bytes", { data });
+  return invokeTauri<BlobDescriptor>("upload_media_bytes", { data, filename });
 }
 
 export async function editMessage(
