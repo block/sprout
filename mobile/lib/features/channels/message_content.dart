@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:gpt_markdown/custom_widgets/markdown_config.dart';
+import 'package:highlight/highlight.dart' show highlight, Node;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -13,6 +14,64 @@ import 'message_media.dart';
 
 const _messageMediaMaxInlineWidth = 320.0;
 const _messageMediaMaxImageHeight = 240.0;
+
+const _highlightLightTheme = <String, TextStyle>{
+  'keyword': TextStyle(color: Color(0xFFa626a4)),
+  'built_in': TextStyle(color: Color(0xFF0184bc)),
+  'type': TextStyle(color: Color(0xFF0184bc)),
+  'literal': TextStyle(color: Color(0xFF0184bc)),
+  'number': TextStyle(color: Color(0xFF986801)),
+  'string': TextStyle(color: Color(0xFF50a14f)),
+  'symbol': TextStyle(color: Color(0xFF50a14f)),
+  'comment': TextStyle(color: Color(0xFFa0a1a7), fontStyle: FontStyle.italic),
+  'doctag': TextStyle(color: Color(0xFFa0a1a7), fontStyle: FontStyle.italic),
+  'meta': TextStyle(color: Color(0xFF986801)),
+  'attr': TextStyle(color: Color(0xFF986801)),
+  'attribute': TextStyle(color: Color(0xFF986801)),
+  'title': TextStyle(color: Color(0xFF4078f2)),
+  'title.class_': TextStyle(color: Color(0xFFc18401)),
+  'title.function_': TextStyle(color: Color(0xFF4078f2)),
+  'name': TextStyle(color: Color(0xFFe45649)),
+  'tag': TextStyle(color: Color(0xFFe45649)),
+  'selector-tag': TextStyle(color: Color(0xFFe45649)),
+  'params': TextStyle(color: Color(0xFF383a42)),
+  'variable': TextStyle(color: Color(0xFFe45649)),
+  'subst': TextStyle(color: Color(0xFFe45649)),
+  'section': TextStyle(color: Color(0xFF4078f2)),
+  'bullet': TextStyle(color: Color(0xFF4078f2)),
+  'link': TextStyle(color: Color(0xFF4078f2)),
+  'addition': TextStyle(color: Color(0xFF50a14f)),
+  'deletion': TextStyle(color: Color(0xFFe45649)),
+};
+
+const _highlightDarkTheme = <String, TextStyle>{
+  'keyword': TextStyle(color: Color(0xFFc678dd)),
+  'built_in': TextStyle(color: Color(0xFF56b6c2)),
+  'type': TextStyle(color: Color(0xFF56b6c2)),
+  'literal': TextStyle(color: Color(0xFF56b6c2)),
+  'number': TextStyle(color: Color(0xFFd19a66)),
+  'string': TextStyle(color: Color(0xFF98c379)),
+  'symbol': TextStyle(color: Color(0xFF98c379)),
+  'comment': TextStyle(color: Color(0xFF5c6370), fontStyle: FontStyle.italic),
+  'doctag': TextStyle(color: Color(0xFF5c6370), fontStyle: FontStyle.italic),
+  'meta': TextStyle(color: Color(0xFFd19a66)),
+  'attr': TextStyle(color: Color(0xFFd19a66)),
+  'attribute': TextStyle(color: Color(0xFFd19a66)),
+  'title': TextStyle(color: Color(0xFF61afef)),
+  'title.class_': TextStyle(color: Color(0xFFe5c07b)),
+  'title.function_': TextStyle(color: Color(0xFF61afef)),
+  'name': TextStyle(color: Color(0xFFe06c75)),
+  'tag': TextStyle(color: Color(0xFFe06c75)),
+  'selector-tag': TextStyle(color: Color(0xFFe06c75)),
+  'params': TextStyle(color: Color(0xFFabb2bf)),
+  'variable': TextStyle(color: Color(0xFFe06c75)),
+  'subst': TextStyle(color: Color(0xFFe06c75)),
+  'section': TextStyle(color: Color(0xFF61afef)),
+  'bullet': TextStyle(color: Color(0xFF61afef)),
+  'link': TextStyle(color: Color(0xFF61afef)),
+  'addition': TextStyle(color: Color(0xFF98c379)),
+  'deletion': TextStyle(color: Color(0xFFe06c75)),
+};
 
 /// Renders message content with markdown formatting, @mentions, #channel links,
 /// and media-aware markdown images/videos.
@@ -476,6 +535,20 @@ class _MessageCodeBlockState extends State<_MessageCodeBlock> {
 
   @override
   Widget build(BuildContext context) {
+    final codeBaseStyle = TextStyle(
+      fontFamily: 'GeistMono',
+      fontSize: 13,
+      height: 1.5,
+      color: context.colors.onSurface,
+    );
+    final isDark = context.theme.brightness == Brightness.dark;
+    final codeTheme = isDark ? _highlightDarkTheme : _highlightLightTheme;
+    final codeSpans = _highlightCode(
+      widget.code,
+      widget.name,
+      codeTheme,
+      codeBaseStyle,
+    );
     return Container(
       margin: const EdgeInsets.only(top: Grid.half),
       decoration: BoxDecoration(
@@ -513,15 +586,9 @@ class _MessageCodeBlockState extends State<_MessageCodeBlock> {
                 ),
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
-                  child: Text(
-                    widget.code,
+                  child: RichText(
                     softWrap: false,
-                    style: TextStyle(
-                      fontFamily: 'GeistMono',
-                      fontSize: 13,
-                      height: 1.5,
-                      color: context.colors.onSurface,
-                    ),
+                    text: TextSpan(style: codeBaseStyle, children: codeSpans),
                   ),
                 ),
               ),
@@ -554,6 +621,45 @@ class _MessageCodeBlockState extends State<_MessageCodeBlock> {
       ),
     );
   }
+}
+
+List<InlineSpan> _highlightCode(
+  String code,
+  String language,
+  Map<String, TextStyle> theme,
+  TextStyle baseStyle,
+) {
+  try {
+    final result = language.isNotEmpty
+        ? highlight.parse(code, language: language)
+        : highlight.parse(code, autoDetection: true);
+    if (result.nodes == null) return [TextSpan(text: code, style: baseStyle)];
+    return _buildSpans(result.nodes!, theme, baseStyle);
+  } catch (_) {
+    return [TextSpan(text: code, style: baseStyle)];
+  }
+}
+
+List<InlineSpan> _buildSpans(
+  List<Node> nodes,
+  Map<String, TextStyle> theme,
+  TextStyle baseStyle,
+) {
+  final spans = <InlineSpan>[];
+  for (final node in nodes) {
+    if (node.children != null && node.children!.isNotEmpty) {
+      final childStyle = node.className != null
+          ? baseStyle.merge(theme[node.className])
+          : baseStyle;
+      spans.addAll(_buildSpans(node.children!, theme, childStyle));
+    } else if (node.value != null) {
+      final style = node.className != null
+          ? baseStyle.merge(theme[node.className])
+          : baseStyle;
+      spans.add(TextSpan(text: node.value, style: style));
+    }
+  }
+  return spans;
 }
 
 class _MentionMd extends InlineMd {

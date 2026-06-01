@@ -9,6 +9,15 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 
+import {
+  getSingletonHighlighter,
+  type HighlighterGeneric,
+  type BundledLanguage,
+  type BundledTheme,
+  type ThemedToken,
+} from "shiki";
+
+import { useTheme } from "@/shared/theme/ThemeProvider";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   isMessageLink,
@@ -48,6 +57,23 @@ type ImetaEntry = {
 };
 
 type ImetaLookup = Map<string, ImetaEntry>;
+
+let shikiHighlighter: HighlighterGeneric<BundledLanguage, BundledTheme> | null =
+  null;
+let shikiInitPromise: Promise<void> | null = null;
+
+function ensureHighlighter(): Promise<void> {
+  if (shikiHighlighter) return Promise.resolve();
+  if (!shikiInitPromise) {
+    shikiInitPromise = getSingletonHighlighter({
+      themes: [],
+      langs: [],
+    }).then((h) => {
+      shikiHighlighter = h;
+    });
+  }
+  return shikiInitPromise;
+}
 
 /**
  * `urlTransform` for `<ReactMarkdown>` that preserves `sprout://message?…`
@@ -261,6 +287,99 @@ function FileCard({
   );
 }
 
+function SyntaxHighlightedCode({
+  code,
+  language,
+  className,
+  ...props
+}: {
+  code: string;
+  language: string;
+  className?: string;
+} & React.ComponentProps<"code">) {
+  const { themeName } = useTheme();
+  const [tokens, setTokens] = React.useState<ThemedToken[][] | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function highlight() {
+      try {
+        await ensureHighlighter();
+        if (!shikiHighlighter || cancelled) return;
+
+        const loadedLangs = shikiHighlighter.getLoadedLanguages();
+        if (!loadedLangs.includes(language as BundledLanguage)) {
+          try {
+            await shikiHighlighter.loadLanguage(language as BundledLanguage);
+          } catch {
+            if (!cancelled) setTokens(null);
+            return;
+          }
+        }
+
+        const loadedThemes = shikiHighlighter.getLoadedThemes();
+        if (!loadedThemes.includes(themeName as BundledTheme)) {
+          try {
+            await shikiHighlighter.loadTheme(themeName as BundledTheme);
+          } catch {
+            if (!cancelled) setTokens(null);
+            return;
+          }
+        }
+
+        if (cancelled) return;
+
+        const result = shikiHighlighter.codeToTokens(code, {
+          lang: language as BundledLanguage,
+          theme: themeName as BundledTheme,
+        });
+
+        if (!cancelled) setTokens(result.tokens);
+      } catch {
+        if (!cancelled) setTokens(null);
+      }
+    }
+
+    highlight();
+    return () => {
+      cancelled = true;
+    };
+  }, [code, language, themeName]);
+
+  const codeClassName = cn(
+    "block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground",
+    className,
+  );
+
+  if (!tokens) {
+    return (
+      <code {...props} className={codeClassName}>
+        {code}
+      </code>
+    );
+  }
+
+  return (
+    <code {...props} className={codeClassName}>
+      {tokens.map((line, lineIdx) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
+        <React.Fragment key={lineIdx}>
+          {lineIdx > 0 && "\n"}
+          {line.map((token, tokenIdx) => (
+            <span
+              // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
+              key={tokenIdx}
+              style={token.color ? { color: token.color } : undefined}
+            >
+              {token.content}
+            </span>
+          ))}
+        </React.Fragment>
+      ))}
+    </code>
+  );
+}
 function createMarkdownComponents(
   variant: MarkdownVariant,
   channels: Channel[],
@@ -356,6 +475,22 @@ function createMarkdownComponents(
         typeof className === "string" && className.includes("language-");
 
       if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
+        const language =
+          typeof className === "string"
+            ? className.replace(/^language-/, "")
+            : "";
+
+        if (language) {
+          return (
+            <SyntaxHighlightedCode
+              code={code}
+              language={language}
+              className={className}
+              {...props}
+            />
+          );
+        }
+
         return (
           <code
             {...props}
