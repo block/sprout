@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { EditorContent } from "@tiptap/react";
+import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown";
 import { useChannelLinks } from "@/features/messages/lib/useChannelLinks";
 import type { ChannelSuggestion } from "@/features/messages/lib/useChannelLinks";
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
@@ -186,27 +187,14 @@ export function ForumComposer({
 
     const pubkeys = mentions.extractMentionPubkeys(trimmed);
 
-    const mediaTags =
-      currentPendingImeta.length > 0
-        ? currentPendingImeta.map((d) => [
-            "imeta",
-            `url ${d.url}`,
-            `m ${d.type}`,
-            `x ${d.sha256}`,
-            `size ${d.size}`,
-            ...(d.dim ? [`dim ${d.dim}`] : []),
-            ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
-            ...(d.thumb ? [`thumb ${d.thumb}`] : []),
-            ...(d.duration != null ? [`duration ${d.duration}`] : []),
-            ...(d.image ? [`image ${d.image}`] : []),
-          ])
-        : undefined;
-
-    let finalContent = trimmed;
-    for (const d of currentPendingImeta) {
-      const isVideo = d.type.startsWith("video/");
-      finalContent += isVideo ? `\n![video](${d.url})` : `\n![image](${d.url})`;
-    }
+    // Reuse the shared send-path builder so forum/notes posts emit the same
+    // body + imeta as chat: generic files become `[filename](url)` links with a
+    // `filename` imeta tag (FileCard renderer), images/video stay inline. Send
+    // semantics use `undefined` for "no attachments" (no imeta tags emitted).
+    const { content: finalContent, mediaTags } = buildOutgoingMessage(
+      trimmed,
+      currentPendingImeta,
+    );
 
     // Save draft state so we can restore on failure.
     const savedContent = contentRef.current;

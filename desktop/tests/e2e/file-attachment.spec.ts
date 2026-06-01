@@ -50,3 +50,39 @@ test("upload a file and see a FileCard in the timeline", async ({ page }) => {
   );
   await expect(card).toHaveAttribute("download", "quarterly-report.pdf");
 });
+
+test("forum posts emit a FileCard for generic attachments, not a broken image", async ({
+  page,
+}) => {
+  // Regression guard for the ForumComposer bug: it used to hand-build content
+  // as `![image](url)` for every non-video attachment (and omit the `filename`
+  // imeta tag), so a PDF posted in a forum rendered as a broken inline image
+  // and lost its label. The fix routes forum/notes posts through the same
+  // `buildOutgoingMessage` builder as chat. This test would fail (no FileCard)
+  // if ForumComposer ever drifts back to hand-building media markdown.
+  await page.goto("/");
+
+  // "watercooler" is a seeded forum the mock identity is a member of.
+  await page.getByTestId("channel-watercooler").click();
+
+  // Open the new-post composer ("Start a new post...").
+  await page.getByRole("button", { name: "Start a new post..." }).click();
+
+  // Paperclip → mocked pick_and_upload_media returns the PDF descriptor.
+  await page.getByRole("button", { name: "Attach image" }).click();
+
+  // Submit the (attachment-only) forum post.
+  await page.getByTestId("send-message").click();
+
+  // The post renders through the shared Markdown component as a FileCard —
+  // a download link carrying the filename and pointing at the blob URL — NOT
+  // an inline image.
+  const card = page.getByTestId("file-card");
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("quarterly-report.pdf");
+  await expect(card).toHaveAttribute(
+    "href",
+    `https://mock.relay/media/${"a".repeat(64)}.pdf`,
+  );
+  await expect(card).toHaveAttribute("download", "quarterly-report.pdf");
+});
