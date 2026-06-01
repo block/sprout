@@ -95,7 +95,6 @@ class ComposeBar extends HookConsumerWidget {
     useEffect(() {
       void listener() {
         if (isModifyingText.value) return;
-        if (_expandFenceIfNeeded(controller, isModifyingText)) return;
         final text = controller.text;
         final sel = controller.selection;
 
@@ -590,51 +589,6 @@ void spliceAndMoveCursor(
     offset: start + replacement.length,
   );
   focusNode.requestFocus();
-}
-
-bool _expandFenceIfNeeded(
-  TextEditingController controller,
-  ObjectRef<bool> guard,
-) {
-  final text = controller.text;
-  final sel = controller.selection;
-  if (!sel.isValid || !sel.isCollapsed) return false;
-  final cursor = sel.baseOffset;
-  if (cursor == 0) return false;
-  if (text[cursor - 1] != '\n') return false;
-
-  var lineStart = 0;
-  for (var i = cursor - 2; i >= 0; i--) {
-    if (text[i] == '\n') {
-      lineStart = i + 1;
-      break;
-    }
-  }
-
-  final line = text.substring(lineStart, cursor - 1);
-  final match = RegExp(r'^```([a-zA-Z+#]*)$').firstMatch(line);
-  if (match == null) return false;
-
-  final before = text.substring(0, lineStart);
-  var fenceCount = 0;
-  var searchFrom = 0;
-  while (true) {
-    final idx = before.indexOf('```', searchFrom);
-    if (idx == -1) break;
-    fenceCount++;
-    searchFrom = idx + 3;
-  }
-  if (fenceCount.isOdd) return false;
-
-  final lang = match.group(1)!;
-  final newText =
-      '${text.substring(0, lineStart)}```$lang\n\n```${text.substring(cursor)}';
-  final cursorPos = lineStart + '```$lang\n'.length;
-  guard.value = true;
-  controller.text = newText;
-  controller.selection = TextSelection.collapsed(offset: cursorPos);
-  guard.value = false;
-  return true;
 }
 
 /// Insert [trigger] (e.g. `@` or `#`) at the cursor position, prefixed with

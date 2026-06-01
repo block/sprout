@@ -184,7 +184,13 @@ function getCodeBlockText(children: React.ReactNode) {
   return getReactNodeText(children).replace(/\n$/, "");
 }
 
-function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
+function MarkdownCodeBlock({
+  children,
+  language,
+}: {
+  children?: React.ReactNode;
+  language?: string;
+}) {
   const [isCopying, setIsCopying] = React.useState(false);
   const code = React.useMemo(() => getCodeBlockText(children), [children]);
 
@@ -210,6 +216,11 @@ function MarkdownCodeBlock({ children }: { children?: React.ReactNode }) {
   return (
     <div className="group relative" data-code-block="">
       <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
+        {language && (
+          <div className="mb-1 text-xs text-muted-foreground/70">
+            {language}
+          </div>
+        )}
         {children}
       </pre>
       <Tooltip>
@@ -652,12 +663,24 @@ function createMarkdownComponents(
 
       return <p className={paragraphClassName}>{children}</p>;
     },
-    pre: ({ children }) =>
-      interactive ? (
-        <MarkdownCodeBlock>{children}</MarkdownCodeBlock>
-      ) : (
-        <span>{children}</span>
-      ),
+    pre: ({ children }) => {
+      if (!interactive) return <span>{children}</span>;
+      let language = "";
+      React.Children.forEach(children, (child) => {
+        if (
+          React.isValidElement(child) &&
+          typeof child.props?.className === "string"
+        ) {
+          const match = (child.props.className as string).match(
+            /language-(\S+)/,
+          );
+          if (match) language = match[1];
+        }
+      });
+      return (
+        <MarkdownCodeBlock language={language}>{children}</MarkdownCodeBlock>
+      );
+    },
     strong: ({ children }) => (
       <strong className="font-semibold">{children}</strong>
     ),
