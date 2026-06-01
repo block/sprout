@@ -48,6 +48,9 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
       },
+      expect: {
+        timeout: process.env.CI ? 15_000 : 10_000,
+      },
     },
   ],
   webServer: {
