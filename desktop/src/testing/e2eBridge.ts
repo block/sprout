@@ -502,6 +502,7 @@ declare global {
       parentEventId?: string | null;
       pubkey?: string;
       kind?: number;
+      mentionPubkeys?: string[];
     }) => RelayEvent;
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
@@ -1946,13 +1947,18 @@ function emitMockChannelMessage(
   parentEventId?: string | null,
   pubkey?: string,
   kind?: number,
+  mentionPubkeys?: string[],
 ) {
   const eventKind = kind ?? 9;
   if (!parentEventId) {
     const event = createMockEvent(
       eventKind,
       content,
-      [["h", channelId]],
+      buildTopLevelMessageTags(
+        channelId,
+        mentionPubkeys,
+        pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
+      ),
       pubkey,
     );
     recordMockMessage(channelId, event);
@@ -1979,7 +1985,7 @@ function emitMockChannelMessage(
       authorPubkey,
       parentEventId,
       rootEventId,
-      undefined,
+      mentionPubkeys,
     ),
     authorPubkey,
   );
@@ -5114,6 +5120,7 @@ export function maybeInstallE2eTauriMocks() {
     parentEventId,
     pubkey,
     kind,
+    mentionPubkeys,
   }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
@@ -5128,6 +5135,7 @@ export function maybeInstallE2eTauriMocks() {
       parentEventId,
       pubkey,
       kind,
+      mentionPubkeys,
     );
   };
   window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {
@@ -5652,6 +5660,7 @@ export function maybeInstallE2eTauriMocks() {
       case "plugin:window|unminimize":
       case "plugin:window|set_focus":
       case "plugin:window|set_badge_count":
+      case "plugin:window|set_badge_label":
         return null;
       case "get_channel_workflows":
         return handleGetChannelWorkflows(

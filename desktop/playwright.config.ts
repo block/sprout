@@ -21,6 +21,7 @@ export default defineConfig({
       testMatch: [
         "**/smoke.spec.ts",
         "**/channels.spec.ts",
+        "**/badge.spec.ts",
         "**/channel-browser.spec.ts",
         "**/messaging.spec.ts",
         "**/custom-emoji.spec.ts",

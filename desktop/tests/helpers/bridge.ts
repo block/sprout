@@ -190,6 +190,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
       const testWindow = window as Window & {
         __SPROUT_E2E__?: Record<string, unknown>;
         __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+        __SPROUT_E2E_APP_BADGE_STATE__?: string;
         __SPROUT_E2E_CLICK_NOTIFICATION__?: (index: number) => boolean;
         __SPROUT_E2E_NOTIFICATIONS__?: Array<{
           body: string | null;
@@ -207,6 +208,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
         relayWsUrl: relayWsUrl ?? currentConfig.relayWsUrl,
       };
       testWindow.__SPROUT_E2E_APP_BADGE_COUNT__ = 0;
+      testWindow.__SPROUT_E2E_APP_BADGE_STATE__ = "none";
       testWindow.__SPROUT_E2E_CLICK_NOTIFICATION__ = (index: number) => {
         const notification = notificationInstances[index];
         if (!notification) {
