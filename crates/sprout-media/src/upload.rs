@@ -14,25 +14,43 @@ use crate::validation::{
     mime_to_ext, validate_content, validate_file_content, validate_video_file,
 };
 
-/// Process an upload end-to-end: validate, store, thumbnail, return descriptor.
+/// Shared buffered-upload pipeline for the image and generic-file paths.
 ///
-/// This is the image path — body is already fully buffered in RAM. Do NOT use
-/// this for video uploads; use [`process_video_upload`] instead.
-pub async fn process_upload(
+/// Both paths are identical except for two steps, which are injected:
+/// - `validate`: a CPU-bound check (run inside `spawn_blocking`) that returns
+///   the `(mime, ext)` pair for the body. Images derive `ext` from the MIME;
+///   generic files get both from the deny-list validator.
+/// - `store_metadata`: stores the sidecar (and any derived artifacts such as a
+///   thumbnail) and returns the resulting [`BlobMeta`]. Images run the full
+///   image-metadata pipeline; generic files write a minimal sidecar. It
+///   receives the already-computed `(sha256, ext, mime, uploaded_at)` so no
+///   work is repeated.
+///
+/// Everything else — hash, Blossom auth (10-minute window), content-addressed
+/// key, the both-exist idempotency short-circuit, blob store, orphan-blob
+/// handling, and descriptor build — is common. The streaming video path stays
+/// separate (see [`process_video_upload`]) because it never buffers in RAM.
+async fn process_buffered_upload<V, M, Fut>(
     storage: &MediaStorage,
     config: &MediaConfig,
     auth_event: &nostr::Event,
     body: Bytes,
-) -> Result<BlobDescriptor, MediaError> {
-    // CPU-bound: validate content, compute hash, verify auth
+    validate: V,
+    store_metadata: M,
+) -> Result<BlobDescriptor, MediaError>
+where
+    V: FnOnce(&Bytes, &MediaConfig) -> Result<(String, String), MediaError> + Send + 'static,
+    M: FnOnce(MetadataInput) -> Fut,
+    Fut: std::future::Future<Output = Result<BlobMeta, MediaError>>,
+{
+    // CPU-bound: validate content, compute hash, verify auth.
     let auth = auth_event.clone();
     let bytes = body.clone();
     let cfg = config.clone();
     let (mime, sha256, ext) = tokio::task::spawn_blocking(move || -> Result<_, MediaError> {
-        let mime = validate_content(&bytes, &cfg)?;
+        let (mime, ext) = validate(&bytes, &cfg)?;
         let sha256 = hex::encode(Sha256::digest(&bytes));
-        let ext = mime_to_ext(&mime).to_string();
-        // Images: 10-minute auth window is plenty.
+        // Buffered uploads (image + file): 10-minute auth window is plenty.
         verify_blossom_upload_auth(&auth, &sha256, cfg.server_domain.as_deref(), 600)?;
         Ok((mime, sha256, ext))
     })
@@ -40,10 +58,10 @@ pub async fn process_upload(
     .map_err(|_| MediaError::Internal)??;
 
     let key = format!("{sha256}.{ext}");
-    let meta_key = format!("_meta/{sha256}.json"); // used in idempotency check below
+    let meta_key = format!("_meta/{sha256}.json");
 
-    // Idempotent: check BOTH sidecar AND blob exist before short-circuiting.
-    // If sidecar exists but blob is missing, fall through to re-upload.
+    // Idempotent: short-circuit only if BOTH sidecar and blob exist. If the
+    // sidecar exists but the blob is missing, fall through to re-upload.
     let sidecar_exists = storage.head(&meta_key).await?;
     let blob_exists = storage.head(&key).await?;
     if sidecar_exists && blob_exists {
@@ -62,7 +80,7 @@ pub async fn process_upload(
     // Compute uploaded_at once — single source of truth for sidecar and response.
     let uploaded_at = chrono::Utc::now().timestamp();
 
-    // Store blob first, then generate metadata.
+    // Store blob first, then metadata.
     // On failure we intentionally do NOT delete the orphan blob — concurrent
     // uploads of the same hash could race and delete a blob that another
     // request is about to reference via its sidecar. Orphan blobs are
@@ -71,9 +89,16 @@ pub async fn process_upload(
     // matching sidecar after a grace period.
     storage.put(&key, &body, &mime).await?;
 
-    match generate_and_store_metadata(storage, config, &sha256, &ext, &mime, &body, uploaded_at)
-        .await
-    {
+    let meta_result = store_metadata(MetadataInput {
+        sha256: sha256.clone(),
+        ext: ext.clone(),
+        mime: mime.clone(),
+        body: body.clone(),
+        uploaded_at,
+    })
+    .await;
+
+    match meta_result {
         Ok(meta) => Ok(build_descriptor(
             config,
             &sha256,
@@ -88,6 +113,54 @@ pub async fn process_upload(
             Err(e)
         }
     }
+}
+
+/// Inputs handed to a buffered-upload metadata builder, after the shared
+/// pipeline has already validated, hashed, and stored the blob. Owned so the
+/// builder's future doesn't borrow the pipeline's locals; `body` is a `Bytes`
+/// handle, so cloning it is a refcount bump, not a copy.
+struct MetadataInput {
+    sha256: String,
+    ext: String,
+    mime: String,
+    body: Bytes,
+    uploaded_at: i64,
+}
+
+/// Process an upload end-to-end: validate, store, thumbnail, return descriptor.
+///
+/// This is the image path — body is already fully buffered in RAM. Do NOT use
+/// this for video uploads; use [`process_video_upload`] instead.
+pub async fn process_upload(
+    storage: &MediaStorage,
+    config: &MediaConfig,
+    auth_event: &nostr::Event,
+    body: Bytes,
+) -> Result<BlobDescriptor, MediaError> {
+    process_buffered_upload(
+        storage,
+        config,
+        auth_event,
+        body,
+        |bytes, cfg| {
+            let mime = validate_content(bytes, cfg)?;
+            let ext = mime_to_ext(&mime).to_string();
+            Ok((mime, ext))
+        },
+        |input| async move {
+            generate_and_store_metadata(
+                storage,
+                config,
+                &input.sha256,
+                &input.ext,
+                &input.mime,
+                &input.body,
+                input.uploaded_at,
+            )
+            .await
+        },
+    )
+    .await
 }
 
 /// Process a generic (non-image, non-video) file upload end-to-end.
@@ -106,68 +179,33 @@ pub async fn process_file_upload(
     auth_event: &nostr::Event,
     body: Bytes,
 ) -> Result<BlobDescriptor, MediaError> {
-    let auth = auth_event.clone();
-    let bytes = body.clone();
-    let cfg = config.clone();
-    let (mime, sha256, ext) = tokio::task::spawn_blocking(move || -> Result<_, MediaError> {
-        let (mime, ext) = validate_file_content(&bytes, &cfg)?;
-        let sha256 = hex::encode(Sha256::digest(&bytes));
-        // Files: 10-minute auth window, same as images (buffered, not streamed).
-        verify_blossom_upload_auth(&auth, &sha256, cfg.server_domain.as_deref(), 600)?;
-        Ok((mime, sha256, ext))
-    })
-    .await
-    .map_err(|_| MediaError::Internal)??;
-
-    let key = format!("{sha256}.{ext}");
-    let meta_key = format!("_meta/{sha256}.json");
-
-    // Idempotent: short-circuit only if BOTH sidecar and blob exist.
-    let sidecar_exists = storage.head(&meta_key).await?;
-    let blob_exists = storage.head(&key).await?;
-    if sidecar_exists && blob_exists {
-        let meta = storage.get_sidecar(&sha256).await?;
-        return Ok(build_descriptor(
-            config,
-            &sha256,
-            &ext,
-            &mime,
-            body.len() as u64,
-            Some(&meta),
-            meta.uploaded_at,
-        ));
-    }
-
-    let uploaded_at = chrono::Utc::now().timestamp();
-
-    // Store blob first; orphan blobs (no sidecar) are bounded and GC-able.
-    storage.put(&key, &body, &mime).await?;
-
-    // Minimal sidecar — no thumbnail/dim/blurhash/duration for generic files.
-    let meta = BlobMeta {
-        dim: String::new(),
-        blurhash: String::new(),
-        thumb_url: String::new(),
-        ext: ext.clone(),
-        mime_type: mime.clone(),
-        size: body.len() as u64,
-        uploaded_at,
-        duration_secs: None,
-    };
-    let meta_json = serde_json::to_vec(&meta)?;
-    storage
-        .put(&meta_key, &meta_json, "application/json")
-        .await?;
-
-    Ok(build_descriptor(
+    process_buffered_upload(
+        storage,
         config,
-        &sha256,
-        &ext,
-        &mime,
-        body.len() as u64,
-        Some(&meta),
-        uploaded_at,
-    ))
+        auth_event,
+        body,
+        |bytes, cfg| validate_file_content(bytes, cfg),
+        |input| async move {
+            // Minimal sidecar — no thumbnail/dim/blurhash/duration for generic files.
+            let meta = BlobMeta {
+                dim: String::new(),
+                blurhash: String::new(),
+                thumb_url: String::new(),
+                size: input.body.len() as u64,
+                ext: input.ext,
+                mime_type: input.mime,
+                uploaded_at: input.uploaded_at,
+                duration_secs: None,
+            };
+            let meta_key = format!("_meta/{}.json", input.sha256);
+            let meta_json = serde_json::to_vec(&meta)?;
+            storage
+                .put(&meta_key, &meta_json, "application/json")
+                .await?;
+            Ok(meta)
+        },
+    )
+    .await
 }
 
 /// Process a video upload end-to-end using a streaming pipeline.

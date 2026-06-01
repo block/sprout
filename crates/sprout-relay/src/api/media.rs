@@ -229,7 +229,7 @@ pub async fn upload_blob(
 /// overlong, non-alphanumeric) before any storage lookup. Accepts 1–8 lowercase
 /// alphanumeric chars, which covers every extension the generic file path emits
 /// (jpg, png, mp4, pdf, docx, xlsx, tar, 7z, mp3, flac, json, bin, …).
-fn is_safe_ext(ext: &str) -> bool {
+pub(crate) fn is_safe_ext(ext: &str) -> bool {
     !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9'))
 }
 

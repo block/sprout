@@ -373,10 +373,9 @@ fn extract_ext_from_media_url(url: &str) -> Option<&str> {
 fn is_local_media_url(url: &str, media_base_url: &str) -> bool {
     // A safe extension token: 1–8 lowercase alphanumeric chars. Covers media
     // (jpg, png, mp4) and every generic file ext (pdf, docx, zip, mp3, bin, …).
-    // The blob's authoritative ext lives in the sidecar; this is a structural gate.
-    fn is_safe_ext(ext: &str) -> bool {
-        !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| matches!(c, 'a'..='z' | '0'..='9'))
-    }
+    // The blob's authoritative ext lives in the sidecar; this is a structural
+    // gate. Shared with the serve/resolve paths so the predicate can't drift.
+    use crate::api::media::is_safe_ext;
 
     let path_after_media = if let Some(rest) = url.strip_prefix("/media/") {
         rest
