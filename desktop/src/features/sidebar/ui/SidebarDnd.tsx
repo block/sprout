@@ -262,8 +262,10 @@ export function SidebarDndContext({
           onUnassignChannel(channelId);
         }
       } else if (activeData.type === "section") {
+        const overSectionId =
+          (overData?.sectionId as string | undefined) ?? (over.id as string);
         const oldIdx = sectionIds.indexOf(active.id as string);
-        const newIdx = sectionIds.indexOf(over.id as string);
+        const newIdx = sectionIds.indexOf(overSectionId);
         if (oldIdx !== -1 && newIdx !== -1 && oldIdx !== newIdx) {
           onReorderSections(arrayMove(sectionIds, oldIdx, newIdx));
         }
