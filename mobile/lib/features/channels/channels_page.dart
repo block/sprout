@@ -605,14 +605,33 @@ class _CustomSectionHeader extends StatelessWidget {
               ),
             ),
             const Spacer(),
-            PopupMenuButton<String>(
-              icon: Icon(
-                LucideIcons.ellipsisVertical,
-                size: 14,
-                color: context.colors.onSurfaceVariant,
-              ),
-              padding: EdgeInsets.zero,
-              onSelected: (value) {
+            GestureDetector(
+              onTapUp: (details) async {
+                final overlay =
+                    Overlay.of(context).context.findRenderObject()!
+                        as RenderBox;
+                final position = RelativeRect.fromRect(
+                  details.globalPosition & Size.zero,
+                  Offset.zero & overlay.size,
+                );
+                final value = await showMenu<String>(
+                  context: context,
+                  position: position,
+                  items: [
+                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                    PopupMenuItem(
+                      value: 'move_up',
+                      enabled: !isFirst,
+                      child: const Text('Move Up'),
+                    ),
+                    PopupMenuItem(
+                      value: 'move_down',
+                      enabled: !isLast,
+                      child: const Text('Move Down'),
+                    ),
+                    const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
+                );
                 switch (value) {
                   case 'rename':
                     onRename();
@@ -624,20 +643,11 @@ class _CustomSectionHeader extends StatelessWidget {
                     onDelete();
                 }
               },
-              itemBuilder: (_) => [
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                PopupMenuItem(
-                  value: 'move_up',
-                  enabled: !isFirst,
-                  child: const Text('Move Up'),
-                ),
-                PopupMenuItem(
-                  value: 'move_down',
-                  enabled: !isLast,
-                  child: const Text('Move Down'),
-                ),
-                const PopupMenuItem(value: 'delete', child: Text('Delete')),
-              ],
+              child: Icon(
+                LucideIcons.ellipsisVertical,
+                size: 14,
+                color: context.colors.onSurfaceVariant,
+              ),
             ),
             const SizedBox(width: Grid.quarter),
             Icon(
