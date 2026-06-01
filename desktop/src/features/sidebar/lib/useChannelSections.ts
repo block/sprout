@@ -87,7 +87,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (remote.createdAt < lastAppliedRemoteTs.current) return prev;
         if (
           remote.createdAt === lastAppliedRemoteTs.current &&
-          remote.eventId >= lastAppliedEventId.current
+          remote.eventId <= lastAppliedEventId.current
         )
           return prev;
         lastAppliedRemoteTs.current = remote.createdAt;
@@ -277,6 +277,7 @@ export function useChannelSections(pubkey: string | undefined): {
         });
         const next: ChannelSectionStore = { ...prev, sections };
         if (!writeChannelSectionsStore(pubkey, next)) return prev;
+        publishSections(next);
         return next;
       });
     },
