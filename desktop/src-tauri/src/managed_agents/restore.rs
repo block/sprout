@@ -1,7 +1,8 @@
+#[cfg(feature = "mesh-llm")]
+use super::relay_mesh_model_id;
 use super::{
-    find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, relay_mesh_model_id,
-    save_managed_agents, spawn_agent_child, sync_managed_agent_processes, BackendKind,
-    ManagedAgentProcess,
+    find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
+    spawn_agent_child, sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
 };
 use crate::app_state::AppState;
 use crate::util;
@@ -103,16 +104,21 @@ pub async fn restore_managed_agents_on_launch(
         .ok()
         .map(|k| k.public_key().to_hex());
 
+    #[cfg(feature = "mesh-llm")]
     let mut mesh_preflight_failures = std::collections::HashSet::new();
+    #[cfg(feature = "mesh-llm")]
     for record in &agents_to_start {
         let Some(model_id) = relay_mesh_model_id(record) else {
             continue;
         };
-        if let Err(error) = crate::commands::ensure_client_node_for_model(&state, model_id).await {
+        if let Err(error) =
+            crate::commands::mesh_llm::ensure_client_node_for_model(&state, model_id).await
+        {
             persist_restore_error(app, &state, &record.pubkey, error)?;
             mesh_preflight_failures.insert(record.pubkey.clone());
         }
     }
+    #[cfg(feature = "mesh-llm")]
     let agents_to_start: Vec<_> = agents_to_start
         .into_iter()
         .filter(|record| !mesh_preflight_failures.contains(&record.pubkey))
@@ -183,6 +189,7 @@ pub async fn restore_managed_agents_on_launch(
     Ok(())
 }
 
+#[cfg(feature = "mesh-llm")]
 fn persist_restore_error(
     app: &tauri::AppHandle,
     state: &AppState,

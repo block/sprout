@@ -1046,6 +1046,7 @@ fn child_rust_log_filter() -> String {
 /// Returns the relay-mesh model id for agents whose provider env points at the
 /// local mesh client endpoint. The caller is responsible for ensuring that
 /// endpoint is alive before spawning the agent process.
+#[cfg(feature = "mesh-llm")]
 pub fn relay_mesh_model_id(record: &ManagedAgentRecord) -> Option<String> {
     let base_url = record.env_vars.get("OPENAI_COMPAT_BASE_URL")?.trim();
     if base_url.trim_end_matches('/') != "http://127.0.0.1:9337/v1" {
@@ -1169,6 +1170,7 @@ pub fn stop_managed_agent_process(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "mesh-llm")]
     use super::relay_mesh_model_id;
     use crate::managed_agents::known_acp_provider;
 
@@ -1261,6 +1263,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mesh-llm")]
     #[test]
     fn relay_mesh_model_id_detects_mesh_preset_env() {
         let mut rec = fixture(RespondTo::OwnerOnly, vec![], Some("tag".into()));
@@ -1276,6 +1279,7 @@ mod tests {
         assert_eq!(relay_mesh_model_id(&rec).as_deref(), Some("Qwen3"));
     }
 
+    #[cfg(feature = "mesh-llm")]
     #[test]
     fn relay_mesh_model_id_ignores_non_mesh_openai_env() {
         let mut rec = fixture(RespondTo::OwnerOnly, vec![], Some("tag".into()));

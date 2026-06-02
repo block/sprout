@@ -181,7 +181,7 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-$TARGET"
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --target {{target}}
+    cd {{desktop_dir}} && TAURI_CLI_EXTRA_CARGO_ARGS="--features=mesh-llm" pnpm tauri build --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test
@@ -263,7 +263,7 @@ dev *ARGS: _ensure-sidecar-stubs
     [[ -d node_modules ]] || pnpm install
     source ../scripts/instance-env.sh
     echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
-    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
+    TAURI_CLI_EXTRA_CARGO_ARGS="--features=mesh-llm" pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
 staging *ARGS: _ensure-sidecar-stubs
@@ -279,7 +279,7 @@ staging *ARGS: _ensure-sidecar-stubs
     source ../scripts/instance-env.sh
     export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
     echo "Starting staging on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
-    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
+    TAURI_CLI_EXTRA_CARGO_ARGS="--features=mesh-llm" pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop frontend dev server (port derived from worktree)
 desktop-dev:

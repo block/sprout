@@ -1,6 +1,0 @@
-[env]
-# Workaround for mesh-llm prepare-llama.sh `git -C` directory-escape bug.
-# The script's git commands walk upward into the enclosing Sprout repo when
-# .deps/llama.cpp/.git is missing. Disabling auto-build prevents the script
-# from running. Remove once mesh-llm-sdk is bumped past Mesh-LLM/mesh-llm#780.
-SKIPPY_LLAMA_AUTO_BUILD = "0"

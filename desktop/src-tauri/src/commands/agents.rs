@@ -1,19 +1,21 @@
 use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, State};
 
+#[cfg(feature = "mesh-llm")]
+use crate::managed_agents::relay_mesh_model_id;
 use crate::{
     app_state::AppState,
     managed_agents::{
         build_managed_agent_summary, discover_provider_candidates, ensure_persona_is_active,
         find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
         managed_agent_avatar_url, managed_agent_log_path, managed_agents_base_dir,
-        normalize_agent_args, provider_deploy, read_log_tail, relay_mesh_model_id,
-        resolve_provider_binary, save_managed_agents, start_managed_agent_process,
-        stop_managed_agent_process, sync_managed_agent_processes, try_regenerate_nest,
-        validate_provider_config, BackendKind, BackendProviderInfo, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentLogResponse, ManagedAgentRecord,
-        ManagedAgentSummary, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
-        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        normalize_agent_args, provider_deploy, read_log_tail, resolve_provider_binary,
+        save_managed_agents, start_managed_agent_process, stop_managed_agent_process,
+        sync_managed_agent_processes, try_regenerate_nest, validate_provider_config, BackendKind,
+        BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
+        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary, DEFAULT_ACP_COMMAND,
+        DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
@@ -27,6 +29,7 @@ fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
+#[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
     state: &AppState,
     record: &ManagedAgentRecord,
@@ -35,6 +38,14 @@ async fn ensure_relay_mesh_for_record(
         return Ok(());
     };
     crate::commands::mesh_llm::ensure_client_node_for_model(state, model_id).await?;
+    Ok(())
+}
+
+#[cfg(not(feature = "mesh-llm"))]
+async fn ensure_relay_mesh_for_record(
+    _state: &AppState,
+    _record: &ManagedAgentRecord,
+) -> Result<(), String> {
     Ok(())
 }
 
