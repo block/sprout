@@ -22,7 +22,7 @@ function ev(tags) {
 test("parses emoji tags into shortcode/url pairs", () => {
   const out = customEmojiFromEvent(
     ev([
-      ["d", "sprout:relay-emoji"],
+      ["d", "sprout:custom-emoji"],
       ["emoji", "party_parrot", "https://relay/p.gif"],
       ["emoji", "shipit", "https://relay/s.png"],
     ]),
@@ -101,4 +101,36 @@ test("reactionEmojiUrl returns undefined for unicode / unknown / no set", () => 
   assert.equal(reactionEmojiUrl("👍", SET), undefined);
   assert.equal(reactionEmojiUrl(":nope:", SET), undefined);
   assert.equal(reactionEmojiUrl(":shipit:", undefined), undefined);
+});
+
+import { unionCustomEmoji } from "./customEmoji.ts";
+
+test("unionCustomEmoji merges members and sorts by shortcode", () => {
+  const out = unionCustomEmoji([
+    ev([["emoji", "shipit", "https://relay/s.png"]]),
+    ev([["emoji", "ahoy", "https://relay/a.png"]]),
+  ]);
+  assert.deepEqual(out, [
+    { shortcode: "ahoy", url: "https://relay/a.png" },
+    { shortcode: "shipit", url: "https://relay/s.png" },
+  ]);
+});
+
+test("unionCustomEmoji collapses a shortcode to ONE deterministic winner", () => {
+  // Two members claim :party_parrot: with different URLs. The palette must
+  // expose exactly one (lexicographically-smallest URL), since downstream
+  // identity is shortcode-only and cannot disambiguate two URLs.
+  const out = unionCustomEmoji([
+    ev([["emoji", "party_parrot", "https://relay/zebra.gif"]]),
+    ev([["emoji", "party_parrot", "https://relay/alpha.gif"]]),
+  ]);
+  assert.deepEqual(out, [
+    { shortcode: "party_parrot", url: "https://relay/alpha.gif" },
+  ]);
+});
+
+test("unionCustomEmoji winner is independent of member order", () => {
+  const a = ev([["emoji", "dup", "https://relay/alpha.gif"]]);
+  const b = ev([["emoji", "dup", "https://relay/zebra.gif"]]);
+  assert.deepEqual(unionCustomEmoji([a, b]), unionCustomEmoji([b, a]));
 });

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   KIND_EMOJI_SET,
   CUSTOM_EMOJI_SET_D_TAG,
+  fetchOwnEmoji,
   listCustomEmoji,
   removeCustomEmoji,
   setCustomEmoji,
@@ -23,6 +24,9 @@ import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
 export const customEmojiQueryKey = ["custom-emoji"] as const;
 
+/** Query key for the caller's OWN editable 30030 set (distinct from the union). */
+export const ownCustomEmojiQueryKey = ["custom-emoji-own"] as const;
+
 export function useCustomEmojiQuery() {
   return useQuery<CustomEmoji[]>({
     queryKey: customEmojiQueryKey,
@@ -31,6 +35,19 @@ export function useCustomEmojiQuery() {
     // but poll every 2 minutes as a backstop for any missed live event.
     staleTime: 60_000,
     refetchInterval: 120_000,
+  });
+}
+
+/**
+ * The caller's OWN custom emoji set — the only thing the settings card may add
+ * to or remove from. Distinct from the workspace union (`useCustomEmojiQuery`),
+ * which is read-only across members.
+ */
+export function useOwnCustomEmojiQuery() {
+  return useQuery<CustomEmoji[]>({
+    queryKey: ownCustomEmojiQueryKey,
+    queryFn: fetchOwnEmoji,
+    staleTime: 60_000,
   });
 }
 
@@ -96,6 +113,7 @@ export function useSetCustomEmojiMutation() {
       setCustomEmoji(shortcode, url),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: customEmojiQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ownCustomEmojiQueryKey });
     },
   });
 }
@@ -106,6 +124,7 @@ export function useRemoveCustomEmojiMutation() {
     mutationFn: (shortcode: string) => removeCustomEmoji(shortcode),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: customEmojiQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ownCustomEmojiQueryKey });
     },
   });
 }

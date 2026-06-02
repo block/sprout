@@ -406,9 +406,11 @@ function createMockRelayMembershipEvent(): RelayEvent {
  * Per-user custom emoji sets (kind:30030) the mock WS serves for
  * `listCustomEmoji` REQs. The workspace palette is the client-side UNION of
  * every member's own set (d=`sprout:custom-emoji`). We serve TWO member-authored
- * sets from distinct pubkeys so the e2e exercises the union/dedup path, not a
- * single relay-owned set. `:sprout:` is the stable shortcode exercised by
- * custom-emoji.spec.ts; `:narf:` proves a second member's emoji unions in.
+ * sets from distinct pubkeys so the e2e exercises the union/collapse path, not
+ * a single relay-owned set. `:sprout:` is the stable shortcode exercised by
+ * custom-emoji.spec.ts (claimed by BOTH members with different URLs, so the
+ * palette must collapse it to one deterministic winner); `:narf:` proves a
+ * second member's distinct emoji unions in.
  */
 function createMockCustomEmojiSetEvents(): RelayEvent[] {
   return [
@@ -419,7 +421,9 @@ function createMockCustomEmojiSetEvents(): RelayEvent[] {
         ["d", CUSTOM_EMOJI_SET_D_TAG],
         ["emoji", "sprout", "https://example.com/e2e/sprout.png"],
       ],
-      "a".repeat(64),
+      // The current mock identity owns this set, so the settings card's
+      // "My emoji" section is non-empty and removable.
+      MOCK_IDENTITY_PUBKEY,
     ),
     createMockEvent(
       KIND_EMOJI_SET,
@@ -427,8 +431,9 @@ function createMockCustomEmojiSetEvents(): RelayEvent[] {
       [
         ["d", CUSTOM_EMOJI_SET_D_TAG],
         ["emoji", "narf", "https://example.com/e2e/narf.png"],
-        // duplicate of member A's :sprout: (same shortcode+url) — must dedup
-        ["emoji", "sprout", "https://example.com/e2e/sprout.png"],
+        // member B claims :sprout: with a DIFFERENT url — unionCustomEmoji must
+        // collapse it to one deterministic winner, never expose two URLs.
+        ["emoji", "sprout", "https://example.com/e2e/sprout-b.png"],
       ],
       "b".repeat(64),
     ),
@@ -4762,7 +4767,11 @@ function sendToMockSocket(args: {
       return;
     }
 
-    const filter = rest[1] as { "#h"?: string[]; kinds?: number[] };
+    const filter = rest[1] as {
+      "#h"?: string[];
+      kinds?: number[];
+      authors?: string[];
+    };
     if (filter.kinds?.includes(13534)) {
       sendWsText(socket.handler, [
         "EVENT",
@@ -4774,7 +4783,14 @@ function sendToMockSocket(args: {
     }
 
     if (filter.kinds?.includes(KIND_EMOJI_SET)) {
+      // Honor `authors` so `fetchOwnEmoji` (authors:[me]) sees only the
+      // caller's set, while the union fetch (no authors) sees every member's —
+      // matching the real relay and the own-vs-workspace split in the UI.
+      const authors = filter.authors?.map((a) => a.toLowerCase());
       for (const emojiEvent of createMockCustomEmojiSetEvents()) {
+        if (authors && !authors.includes(emojiEvent.pubkey.toLowerCase())) {
+          continue;
+        }
         sendWsText(socket.handler, ["EVENT", subId, emojiEvent]);
       }
       sendWsText(socket.handler, ["EOSE", subId]);

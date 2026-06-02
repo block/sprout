@@ -4,8 +4,11 @@
  * Each member publishes their OWN kind:30030 parameterized-replaceable event,
  * signed as themselves, keyed by `(pubkey, 30030, "sprout:custom-emoji")`. The
  * "workspace palette" shown in the picker/renderer is the client-side UNION of
- * every member's set, deduped by `(shortcode, url)` — a view computed on read,
- * not stored state. Adding an emoji is a read-my-own-set → mutate → republish
+ * every member's set, collapsed to one entry per shortcode (deterministic
+ * winner) — a view computed on read, not stored state. Downstream identity is
+ * shortcode-only (emoji-mart id, autocomplete key, reaction lookup, send tag),
+ * so the palette must never expose two URLs under one shortcode. Adding an
+ * emoji is a read-my-own-set → mutate → republish
  * of my own 30030 (relay ingest allowlists member-authored 30030/10030 as
  * UsersWrite, and the generic NIP-33 replace path keeps only the latest per
  * `(pubkey, d_tag)`).
@@ -82,28 +85,28 @@ export function customEmojiFromEvent(event: RelayEvent | null): CustomEmoji[] {
 }
 
 /**
- * Union every member's kind:30030 set into the workspace palette, deduped by
- * `(shortcode, url)`. Stable order: sorted by shortcode then url, so the same
- * set of events always yields the same list (no picker reshuffle).
+ * Union every member's kind:30030 set into the workspace palette, collapsed to
+ * one entry per shortcode. When members disagree on a shortcode's URL, the
+ * winner is the lexicographically-smallest URL: deterministic and stable across
+ * reloads, so the same set of events always yields the same palette (no picker
+ * reshuffle, no ambiguous shortcode→url resolution downstream). Output is
+ * sorted by shortcode.
  */
 export function unionCustomEmoji(
   events: ReadonlyArray<RelayEvent>,
 ): CustomEmoji[] {
-  const seen = new Set<string>();
-  const out: CustomEmoji[] = [];
+  const urlByShortcode = new Map<string, string>();
   for (const event of events) {
     for (const { shortcode, url } of customEmojiFromTags(event.tags)) {
-      const key = `${shortcode}\u0000${url}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ shortcode, url });
+      const existing = urlByShortcode.get(shortcode);
+      if (existing === undefined || url < existing) {
+        urlByShortcode.set(shortcode, url);
+      }
     }
   }
-  out.sort(
-    (a, b) =>
-      a.shortcode.localeCompare(b.shortcode) || a.url.localeCompare(b.url),
-  );
-  return out;
+  return [...urlByShortcode]
+    .map(([shortcode, url]) => ({ shortcode, url }))
+    .sort((a, b) => a.shortcode.localeCompare(b.shortcode));
 }
 
 /** Fetch every member's 30030 set (catch-up). */
@@ -125,7 +128,7 @@ export async function listCustomEmoji(): Promise<CustomEmoji[]> {
 }
 
 /** Fetch the caller's OWN current set (latest 30030 under the d-tag). */
-async function fetchOwnEmoji(): Promise<CustomEmoji[]> {
+export async function fetchOwnEmoji(): Promise<CustomEmoji[]> {
   const { pubkey: me } = await getIdentity();
   if (!me) return [];
   const events = await relayClient.fetchEvents({
