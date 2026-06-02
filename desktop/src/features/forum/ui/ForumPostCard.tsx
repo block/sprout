@@ -8,6 +8,7 @@ import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import type { ForumPost } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { parseImetaTags } from "@/features/messages/lib/parseImeta";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
 import { Markdown } from "@/shared/ui/markdown";
 
@@ -109,6 +110,7 @@ export function ForumPostCard({
         <Markdown
           compact
           content={previewContent}
+          imetaByUrl={parseImetaTags(post.tags)}
           mentionNames={mentionNames}
         />
       </div>

@@ -6,7 +6,6 @@ import { assertRelaySeeded } from "../helpers/seed";
 
 const isCi = Boolean(process.env.CI);
 const relaySeedHookTimeoutMs = isCi ? 90_000 : 30_000;
-const relayDeliveryTimeoutMs = isCi ? 15_000 : 10_000;
 
 async function createStream(
   page: import("@playwright/test").Page,
@@ -276,11 +275,7 @@ test("live mentions refetch the home feed without waiting for polling", async ({
       message,
     );
 
-    await expect
-      .poll(() => getLoggedNotificationCount(targetPage), {
-        timeout: relayDeliveryTimeoutMs,
-      })
-      .toBe(1);
+    await expect.poll(() => getLoggedNotificationCount(targetPage)).toBe(1);
 
     const notifications = await getLoggedNotifications(targetPage);
 
@@ -300,14 +295,9 @@ test("live mentions refetch the home feed without waiting for polling", async ({
     await expect(targetPage.getByTestId("home-inbox-list")).toBeVisible();
     await expect(targetPage.getByTestId("home-inbox-list")).toContainText(
       message,
-      { timeout: relayDeliveryTimeoutMs },
     );
     await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
-    await expect
-      .poll(() => getLoggedNotificationCount(targetPage), {
-        timeout: relayDeliveryTimeoutMs,
-      })
-      .toBe(1);
+    await expect.poll(() => getLoggedNotificationCount(targetPage)).toBe(1);
   } finally {
     await targetContext.close();
     await senderContext.close();
@@ -345,15 +335,9 @@ test("live forum mentions refetch the home feed without waiting for polling", as
       mentionPubkeys: [TEST_IDENTITIES.tyler.pubkey],
     });
 
-    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveText("1", {
-      timeout: relayDeliveryTimeoutMs,
-    });
+    await expect(targetPage.getByTestId("sidebar-home-count")).toHaveText("1");
 
-    await expect
-      .poll(() => getLoggedNotificationCount(targetPage), {
-        timeout: relayDeliveryTimeoutMs,
-      })
-      .toBe(1);
+    await expect.poll(() => getLoggedNotificationCount(targetPage)).toBe(1);
 
     const notifications = await getLoggedNotifications(targetPage);
 
@@ -371,11 +355,7 @@ test("live forum mentions refetch the home feed without waiting for polling", as
       message,
     );
     await expect(targetPage.getByTestId("sidebar-home-count")).toHaveCount(0);
-    await expect
-      .poll(() => getLoggedNotificationCount(targetPage), {
-        timeout: relayDeliveryTimeoutMs,
-      })
-      .toBe(1);
+    await expect.poll(() => getLoggedNotificationCount(targetPage)).toBe(1);
   } finally {
     await targetContext.close();
     await senderContext.close();

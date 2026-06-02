@@ -23,6 +23,7 @@ export default defineConfig({
         "**/channels.spec.ts",
         "**/channel-browser.spec.ts",
         "**/messaging.spec.ts",
+        "**/file-attachment.spec.ts",
         "**/mentions.spec.ts",
         "**/relay-reconnect.spec.ts",
         "**/workflows.spec.ts",
@@ -46,6 +47,9 @@ export default defineConfig({
       ],
       use: {
         ...devices["Desktop Chrome"],
+      },
+      expect: {
+        timeout: process.env.CI ? 15_000 : 10_000,
       },
     },
   ],

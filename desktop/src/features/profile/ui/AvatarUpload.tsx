@@ -147,6 +147,7 @@ export function AvatarUpload({
         <input
           accept="image/gif,image/jpeg,image/png,image/webp"
           className="hidden"
+          data-testid={`${testIdPrefix}-input`}
           onChange={(event) => {
             void handleFileChange(event);
           }}
@@ -183,7 +184,10 @@ export function AvatarUpload({
       </div>
 
       {errorMessage ? (
-        <p className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <p
+          className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          data-testid={`${testIdPrefix}-error`}
+        >
           {errorMessage}
         </p>
       ) : null}

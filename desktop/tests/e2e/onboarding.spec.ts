@@ -144,6 +144,77 @@ test("page 1 accepts an avatar URL as the secondary avatar path", async ({
   await expect(page.getByTestId("onboarding-provider-goose")).toBeVisible();
 });
 
+test("avatar upload rejects a file whose server-detected MIME is not an image", async ({
+  page,
+}) => {
+  // Models a spoofed/blank picker MIME: the picked file claims to be an image
+  // (passes the browser-side accept filter) but the shared generic upload path
+  // returns a non-image descriptor. The post-upload backstop must reject it so
+  // a non-image can't become an avatar (regression guard — the shared upload
+  // path no longer rejects non-images server-side).
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      uploadDescriptors: [
+        {
+          url: `https://mock.relay/media/${"b".repeat(64)}.pdf`,
+          sha256: "b".repeat(64),
+          size: 4096,
+          type: "application/pdf",
+          uploaded: Math.floor(Date.now() / 1000),
+          filename: "not-an-image.pdf",
+        },
+      ],
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-avatar-input").setInputFiles({
+    name: "looks-like.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("not really a png"),
+  });
+
+  await expect(page.getByTestId("onboarding-avatar-error")).toContainText(
+    "Choose a PNG, JPG, GIF, or WebP image.",
+  );
+  await expect(page.getByTestId("onboarding-avatar-url")).toHaveValue("");
+});
+
+test("avatar upload accepts a file whose server-detected MIME is an image", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  const url = `https://mock.relay/media/${"c".repeat(64)}.png`;
+  await installMockBridge(
+    page,
+    {
+      uploadDescriptors: [
+        {
+          url,
+          sha256: "c".repeat(64),
+          size: 2048,
+          type: "image/png",
+          uploaded: Math.floor(Date.now() / 1000),
+        },
+      ],
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-avatar-input").setInputFiles({
+    name: "avatar.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("png bytes"),
+  });
+
+  await expect(page.getByTestId("onboarding-avatar-url")).toHaveValue(url);
+  await expect(page.getByTestId("onboarding-avatar-error")).toHaveCount(0);
+});
+
 test("first-run onboarding keeps the shell hidden through both pages and only marks Home seen after finish", async ({
   page,
 }) => {

@@ -1,112 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-// ── Inlined pure functions from imetaMediaMarkdown.ts ─────────────────
-// Inlined to avoid importing from .ts files (no TS loader in node:test).
-// Same pattern as markdown.test.mjs / useMediaUpload.test.mjs.
-
-const MEDIA_LINE_RE = /^!\[(?:image|video)\]\(([^)\s]+)\)\s*$/;
-
-function stripImetaMediaLines(body, imetaMedia) {
-  if (imetaMedia.length === 0) return body;
-  const urls = new Set(imetaMedia.map((m) => m.url));
-  const lines = body.split("\n");
-  let end = lines.length;
-  while (end > 0) {
-    const line = lines[end - 1];
-    if (line.trim() === "") {
-      end -= 1;
-      continue;
-    }
-    const match = line.match(MEDIA_LINE_RE);
-    if (match && urls.has(match[1])) {
-      end -= 1;
-      continue;
-    }
-    break;
-  }
-  return lines.slice(0, end).join("\n").replace(/\s+$/, "");
-}
-
-function formatImetaMediaLine({ url, type }) {
-  const isVideo = type.startsWith("video/");
-  return isVideo ? `\n![video](${url})` : `\n![image](${url})`;
-}
-
-function buildImetaTags(imetaMedia) {
-  return imetaMedia.map((d) => [
-    "imeta",
-    `url ${d.url}`,
-    `m ${d.type}`,
-    ...(d.sha256 ? [`x ${d.sha256}`] : []),
-    ...(typeof d.size === "number" && d.size > 0 ? [`size ${d.size}`] : []),
-    ...(d.dim ? [`dim ${d.dim}`] : []),
-    ...(d.blurhash ? [`blurhash ${d.blurhash}`] : []),
-    ...(d.thumb ? [`thumb ${d.thumb}`] : []),
-    ...(d.duration != null ? [`duration ${d.duration}`] : []),
-    ...(d.image ? [`image ${d.image}`] : []),
-  ]);
-}
-
-function buildOutgoingMessage(body, pendingImeta) {
-  let content = body;
-  for (const d of pendingImeta) content += formatImetaMediaLine(d);
-  const mediaTags =
-    pendingImeta.length > 0 ? buildImetaTags(pendingImeta) : undefined;
-  return { content, mediaTags };
-}
-
-// Mirror of `parseImetaTags` + `imetaMediaFromTags` so the projection's
-// type/x/size/dim/blurhash/thumb/duration/image fields can be tested without
-// a TS loader.
-function parseImetaTagsInline(tags) {
-  const map = new Map();
-  for (const tag of tags) {
-    if (tag[0] !== "imeta") continue;
-    const entry = {};
-    for (const part of tag.slice(1)) {
-      const i = part.indexOf(" ");
-      if (i === -1) continue;
-      const key = part.slice(0, i);
-      const val = part.slice(i + 1);
-      if (key === "url") entry.url = val;
-      else if (key === "m") entry.m = val;
-      else if (key === "x") entry.x = val;
-      else if (key === "size") entry.size = parseInt(val, 10);
-      else if (key === "dim") entry.dim = val;
-      else if (key === "blurhash") entry.blurhash = val;
-      else if (key === "thumb") entry.thumb = val;
-      else if (key === "duration") entry.duration = parseFloat(val);
-      else if (key === "image") entry.image = val;
-    }
-    if (entry.url) map.set(entry.url, entry);
-  }
-  return map;
-}
-
-function imetaMediaFromTags(tags) {
-  if (!tags || tags.length === 0) return [];
-  const entries = parseImetaTagsInline(tags);
-  const out = [];
-  for (const e of entries.values()) {
-    if (!e.url) continue;
-    out.push({
-      url: e.url,
-      type: e.m ?? "image/jpeg",
-      sha256: e.x ?? "",
-      size: e.size ?? 0,
-      uploaded: 0,
-      ...(e.dim ? { dim: e.dim } : {}),
-      ...(e.blurhash ? { blurhash: e.blurhash } : {}),
-      ...(e.thumb ? { thumb: e.thumb } : {}),
-      ...(e.duration != null ? { duration: e.duration } : {}),
-      ...(e.image ? { image: e.image } : {}),
-    });
-  }
-  return out;
-}
-
-// ── stripImetaMediaLines ──────────────────────────────────────────────
+// Import the REAL implementations (the runner strips TS types via
+// test-loader.mjs). Earlier this file inlined stale copies of these functions,
+// which silently drifted from source — the inlined formatImetaMediaLine had no
+// generic-file branch at all, so it could never catch a regression there.
+// Importing the real module closes that blind spot.
+import {
+  buildImetaTags,
+  buildOutgoingMessage,
+  formatImetaMediaLine,
+  imetaMediaFromTags,
+  stripImetaMediaLines,
+} from "./imetaMediaMarkdown.ts";
 
 test("strip: removes trailing image line whose URL is in imetaMedia", () => {
   const body = "Look at this\n![image](https://blossom/abc.png)";
@@ -178,6 +84,40 @@ test("formatImetaMediaLine: video mime → ![video] line (regardless of URL suff
     formatImetaMediaLine({ url: "https://cdn/blob/xyz", type: "video/mp4" }),
     "\n![video](https://cdn/blob/xyz)",
   );
+});
+
+test("formatImetaMediaLine: generic mime → [filename](url) link", () => {
+  assert.equal(
+    formatImetaMediaLine({
+      url: "https://b/blob",
+      type: "application/pdf",
+      filename: "report.pdf",
+    }),
+    "\n[report.pdf](https://b/blob)",
+  );
+});
+
+test("formatImetaMediaLine: escapes markdown brackets/backslash in filename", () => {
+  // `a].pdf` would otherwise close the link label early and break the FileCard.
+  assert.equal(
+    formatImetaMediaLine({
+      url: "https://b/blob",
+      type: "application/zip",
+      filename: "a]b[c\\d.zip",
+    }),
+    "\n[a\\]b\\[c\\\\d.zip](https://b/blob)",
+  );
+});
+
+test("strip: removes an escaped-bracket generic file line on edit", () => {
+  // The escaped label must still be recognised by FILE_LINE_RE so the body is
+  // cleaned in edit mode (regression guard for the FILE_LINE_RE escape support).
+  const url = "https://b/blob";
+  const body = `note${formatImetaMediaLine({ url, type: "application/pdf", filename: "a].pdf" })}`;
+  const stripped = stripImetaMediaLines(body, [
+    { url, type: "application/pdf" },
+  ]);
+  assert.equal(stripped, "note");
 });
 
 // ── imetaMediaFromTags (full BlobDescriptor projection) ───────────────
