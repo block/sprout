@@ -106,7 +106,7 @@ test("Run-on-relay-mesh ensures the client node BEFORE spawning the agent", asyn
   await toggle.click();
   await page
     .getByTestId("agent-relay-mesh-model")
-    .selectOption("hf://demo/SmolLM2-135M-Instruct-GGUF:Q4_K_M");
+    .selectOption({ label: "SmolLM2 135M — Mock desktop" });
 
   await expect(page.getByTestId("create-agent-submit")).toBeEnabled({
     timeout: 10_000,

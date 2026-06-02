@@ -4827,6 +4827,16 @@ function sendToMockSocket(args: {
       return;
     }
 
+    // Mesh control events (24620 status report, 24621 connect request) are not
+    // channel messages — they carry a `p` tag, not an `h` tag. The real relay
+    // accepts them after membership/shape checks; the mock just ACKs so the
+    // desktop mesh flow (publishMeshConnectRequest) can proceed. We do not model
+    // the paired 24622 here; that belongs in a dedicated call-me-now test.
+    if (event.kind === 24620 || event.kind === 24621) {
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId) {
       sendWsText(socket.handler, [
