@@ -201,6 +201,7 @@ export function formatTimelineMessages(
       targetId: string;
       actorPubkey: string;
       emoji: string;
+      emojiUrl?: string;
     }
   >();
 
@@ -221,18 +222,34 @@ export function formatTimelineMessages(
       requireChannelTagForPTags: true,
     }).toLowerCase();
     const emoji = event.content.trim() || "+";
+    // Custom-emoji reaction (NIP-30): content is `:shortcode:` and the URL
+    // rides on a matching `["emoji", shortcode, url]` tag.
+    let emojiUrl: string | undefined;
+    if (emoji.startsWith(":") && emoji.endsWith(":")) {
+      const shortcode = emoji.slice(1, -1);
+      emojiUrl = event.tags.find(
+        (t) => t[0] === "emoji" && t[1] === shortcode && t[2],
+      )?.[2];
+    }
     reactionPresence.set(`${targetId}:${actorPubkey}:${emoji}`, {
       targetId,
       actorPubkey,
       emoji,
+      emojiUrl,
     });
   }
 
   const reactionsByEventId = new Map<string, Map<string, TimelineReaction>>();
-  for (const { targetId, actorPubkey, emoji } of reactionPresence.values()) {
+  for (const {
+    targetId,
+    actorPubkey,
+    emoji,
+    emojiUrl,
+  } of reactionPresence.values()) {
     const current = reactionsByEventId.get(targetId) ?? new Map();
     const existing = current.get(emoji) ?? {
       emoji,
+      emojiUrl,
       count: 0,
       reactedByCurrentUser: false,
       users: [],
