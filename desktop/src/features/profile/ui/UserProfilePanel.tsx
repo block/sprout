@@ -33,6 +33,7 @@ import { BotIdenticon } from "@/features/messages/ui/BotIdenticon";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
+import { THREAD_PANEL_MIN_WIDTH_PX } from "@/shared/hooks/useThreadPanelWidth";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
@@ -198,7 +199,11 @@ export function UserProfilePanel({
           isFloatingOverlay && PANEL_OVERLAY_CLASS,
         )}
         data-testid="user-profile-panel"
-        style={{ width: isSinglePanelView ? "100%" : `${widthPx}px` }}
+        style={{
+          width: isSinglePanelView
+            ? "100%"
+            : `min(${widthPx}px, calc(100% - ${THREAD_PANEL_MIN_WIDTH_PX}px))`,
+        }}
       >
         {!isOverlay && !isSinglePanelView && (
           <button
@@ -229,7 +234,7 @@ export function UserProfilePanel({
           className={cn(
             "flex cursor-default select-none items-center",
             isSinglePanelView
-              ? "relative z-30 -mb-[76px] min-h-[76px] shrink-0 gap-[10px] bg-transparent pb-[4px] pl-[16px] pr-[8px] pt-[42px] sm:pl-[24px] sm:pr-[12px]"
+              ? "relative z-[41] -mb-[76px] min-h-[76px] shrink-0 gap-[10px] bg-transparent pb-[4px] pl-[16px] pr-[8px] pt-[42px] sm:pl-[24px] sm:pr-[12px]"
               : isOverlay
                 ? "relative z-50 min-h-[44px] shrink-0 gap-3 bg-background/80 px-3 py-[6px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
                 : "absolute inset-x-0 top-[42px] z-50 min-h-[32px] gap-3 bg-transparent px-3 py-[4px] after:absolute after:bottom-0 after:-left-px after:top-0 after:w-px after:bg-border/45 after:transition-colors peer-hover/profile-resize:after:bg-border/80 peer-focus-visible/profile-resize:after:bg-border/80",

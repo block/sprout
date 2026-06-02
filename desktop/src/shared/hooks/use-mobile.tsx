@@ -1,7 +1,8 @@
 import * as React from "react";
 
+import { THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX } from "@/shared/hooks/useThreadPanelWidth";
+
 const MOBILE_BREAKPOINT = 768;
-const THREAD_PANEL_OVERLAY_BREAKPOINT = 860;
 
 /**
  * Returns `true` when the viewport is narrower than `breakpointPx`.
@@ -25,10 +26,47 @@ export function useMediaBreakpoint(breakpointPx: number): boolean {
   return isBelow;
 }
 
+export function useElementWidthBreakpoint<T extends HTMLElement>(
+  breakpointPx: number,
+): [React.RefObject<T | null>, boolean] {
+  const [ref, widthPx] = useElementWidth<T>();
+
+  return [ref, widthPx > 0 && widthPx < breakpointPx];
+}
+
+export function useElementWidth<T extends HTMLElement>(): [
+  React.RefObject<T | null>,
+  number,
+] {
+  const ref = React.useRef<T>(null);
+  const [widthPx, setWidthPx] = React.useState(0);
+
+  React.useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const updateWidth = () => {
+      setWidthPx(element.getBoundingClientRect().width);
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, widthPx];
+}
+
 export function useIsMobile() {
   return useMediaBreakpoint(MOBILE_BREAKPOINT);
 }
 
 export function useIsThreadPanelOverlay() {
-  return useMediaBreakpoint(THREAD_PANEL_OVERLAY_BREAKPOINT);
+  return useMediaBreakpoint(THREAD_PANEL_SINGLE_COLUMN_BREAKPOINT_PX);
 }

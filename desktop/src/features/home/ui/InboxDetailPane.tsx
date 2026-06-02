@@ -21,6 +21,7 @@ import {
 } from "@/features/home/ui/InboxMessageRow";
 import type { TimelineMessage } from "@/features/messages/types";
 import { MessageComposer } from "@/features/messages/ui/MessageComposer";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -44,6 +45,7 @@ type InboxDetailPaneProps = {
   isDone: boolean;
   isDeletingMessage?: boolean;
   isSendingReply?: boolean;
+  isSinglePanelView?: boolean;
   isThreadContextLoading?: boolean;
   item: InboxItem | null;
   messages?: InboxContextMessage[];
@@ -74,6 +76,7 @@ export function InboxDetailPane({
   isDone,
   isDeletingMessage = false,
   isSendingReply = false,
+  isSinglePanelView = false,
   isThreadContextLoading = false,
   item,
   messages = [],
@@ -219,58 +222,95 @@ export function InboxDetailPane({
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
         />
-        <div className="absolute inset-x-0 top-[42px] z-40 flex min-h-[32px] items-center justify-between gap-3 py-[4px] pl-6 pr-3">
-          <div className="flex min-w-0 items-center gap-1">
-            {onBack ? (
-              <Button
-                aria-label="Back to inbox list"
-                className="h-6 w-6 rounded-full p-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                onClick={onBack}
-                size="icon"
-                type="button"
-                variant="ghost"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-              </Button>
-            ) : null}
-            <div className="min-w-0">
-              {canOpenChannel && contextChannelId && onOpenContext ? (
-                <button
-                  className="flex min-w-0 translate-y-px items-center gap-[4px] text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  onClick={() => onOpenContext(contextChannelId, item.id)}
-                  title={item.fullTimestampLabel}
-                  type="button"
-                >
-                  {hasChannelContext ? (
-                    <Hash className="h-[14px] w-[14px] shrink-0" color="gray" />
-                  ) : null}
-                  <span className="min-w-0 truncate">{contextLabel}</span>
-                </button>
-              ) : (
-                <h2
-                  className="flex min-w-0 translate-y-px items-center gap-[4px] text-sm font-semibold leading-5 tracking-tight text-foreground"
-                  title={item.fullTimestampLabel}
-                >
-                  {hasChannelContext ? (
-                    <Hash className="h-[14px] w-[14px] shrink-0" color="gray" />
-                  ) : null}
-                  <span className="min-w-0 truncate">{contextLabel}</span>
-                </h2>
+        <div
+          className={cn(
+            "absolute inset-x-0 top-[42px] z-40 min-h-[32px] py-[4px] pr-3",
+            "pl-5",
+          )}
+        >
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <div
+              className={cn(
+                "flex min-w-0 -translate-y-[4px] items-center",
+                isSinglePanelView ? "gap-[4px]" : "gap-1",
               )}
+            >
+              {onBack ? (
+                isSinglePanelView ? (
+                  <div className="relative h-[14px] w-[14px] shrink-0">
+                    <Button
+                      aria-label="Back to inbox list"
+                      className="absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full p-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                      onClick={onBack}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    aria-label="Back to inbox list"
+                    className="h-6 w-6 rounded-full p-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    onClick={onBack}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                  </Button>
+                )
+              ) : null}
+              <div className="min-w-0">
+                {canOpenChannel && contextChannelId && onOpenContext ? (
+                  <button
+                    className="flex min-w-0 items-center gap-[4px] text-left text-sm font-semibold leading-5 tracking-tight text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    onClick={() => onOpenContext(contextChannelId, item.id)}
+                    title={item.fullTimestampLabel}
+                    type="button"
+                  >
+                    {hasChannelContext ? (
+                      <Hash
+                        className="h-[14px] w-[14px] shrink-0"
+                        color="gray"
+                      />
+                    ) : null}
+                    <span className="min-w-0 translate-y-px truncate">
+                      {contextLabel}
+                    </span>
+                  </button>
+                ) : (
+                  <h2
+                    className="flex min-w-0 items-center gap-[4px] text-sm font-semibold leading-5 tracking-tight text-foreground"
+                    title={item.fullTimestampLabel}
+                  >
+                    {hasChannelContext ? (
+                      <Hash
+                        className="h-[14px] w-[14px] shrink-0"
+                        color="gray"
+                      />
+                    ) : null}
+                    <span className="min-w-0 translate-y-px truncate">
+                      {contextLabel}
+                    </span>
+                  </h2>
+                )}
+              </div>
             </div>
-          </div>
 
-          <TooltipProvider delayDuration={200}>
-            <div className="flex shrink-0 items-center gap-1">
-              <HeaderMoreMenu
-                canDelete={canDelete}
-                isDeletingMessage={isDeletingMessage}
-                isDone={isDone}
-                onDelete={onDelete}
-                onToggleDone={onToggleDone}
-              />
-            </div>
-          </TooltipProvider>
+            <TooltipProvider delayDuration={200}>
+              <div className="flex shrink-0 items-center gap-1">
+                <HeaderMoreMenu
+                  canDelete={canDelete}
+                  isDeletingMessage={isDeletingMessage}
+                  isDone={isDone}
+                  onDelete={onDelete}
+                  onToggleDone={onToggleDone}
+                />
+              </div>
+            </TooltipProvider>
+          </div>
         </div>
 
         <div className="absolute inset-0 overflow-y-auto overscroll-contain pb-32 pt-[76px]">
@@ -304,7 +344,7 @@ export function InboxDetailPane({
             <MessageComposer
               channelId={item.item.channelId}
               channelName={item.channelLabel ?? "channel"}
-              containerClassName="px-6 pb-4 sm:px-6 [&>div]:max-w-none"
+              containerClassName="px-4 pb-4 sm:px-4 [&>div]:mx-auto [&>div]:max-w-4xl"
               disabled={!canReply}
               draftKey={`inbox-reply:${item.id}`}
               isSending={isSendingReply}

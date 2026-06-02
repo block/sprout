@@ -63,7 +63,7 @@ export function InboxMessageRow({
   } = useReactionHandler(timelineMessage, onToggleReaction);
 
   return (
-    <div className="relative px-6 py-2">
+    <div className="relative px-5 py-2">
       {message.isSelected ? (
         <div
           aria-hidden="true"
@@ -77,7 +77,7 @@ export function InboxMessageRow({
       ) : null}
       <article
         className={cn(
-          "group/message relative flex items-start gap-2.5 px-2 py-1",
+          "group/message relative flex items-start gap-2.5 px-0 py-0",
           !message.isSelected && "hover:bg-muted/20",
         )}
         data-testid={
@@ -105,29 +105,26 @@ export function InboxMessageRow({
           </div>
         ) : null}
 
-        <UserAvatar
-          avatarUrl={message.avatarUrl}
-          className="!h-9 !w-9 shrink-0"
-          displayName={message.authorLabel}
-          size="md"
-        />
+        <div className="relative shrink-0">
+          <UserAvatar
+            avatarUrl={message.avatarUrl}
+            className="h-8 w-8 shrink-0 rounded-xl"
+            displayName={message.authorLabel}
+            size="md"
+          />
+        </div>
 
-        <div className="-mt-1 min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0">
-            <p className="truncate text-sm font-semibold leading-none tracking-tight text-foreground">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0">
+            <p className="truncate text-sm font-semibold text-foreground">
               {message.authorLabel}
             </p>
-            <p className="shrink-0 text-xs font-normal leading-none tabular-nums text-muted-foreground/55">
+            <p className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground/55">
               {message.fullTimestampLabel}
             </p>
-            {message.isSelected ? (
-              <span className="text-[10px] font-semibold uppercase leading-none tracking-[0.14em] text-muted-foreground/70">
-                Inbox item
-              </span>
-            ) : null}
           </div>
 
-          <div className="mt-1">
+          <div className="mt-0.5">
             <Markdown
               className="max-w-full text-left text-sm text-foreground"
               content={message.content}

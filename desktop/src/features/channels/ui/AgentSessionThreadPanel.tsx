@@ -19,6 +19,7 @@ import {
   PANEL_BASE_CLASS,
   PANEL_OVERLAY_CLASS,
 } from "@/shared/ui/OverlayPanelBackdrop";
+import { THREAD_PANEL_MIN_WIDTH_PX } from "@/shared/hooks/useThreadPanelWidth";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import type { ChannelAgentSessionAgent } from "./useChannelAgentSessions";
 
@@ -82,7 +83,11 @@ export function AgentSessionThreadPanel({
           isFloatingOverlay && PANEL_OVERLAY_CLASS,
         )}
         data-testid="agent-session-thread-panel"
-        style={{ width: isSinglePanelView ? "100%" : `${widthPx}px` }}
+        style={{
+          width: isSinglePanelView
+            ? "100%"
+            : `min(${widthPx}px, calc(100% - ${THREAD_PANEL_MIN_WIDTH_PX}px))`,
+        }}
       >
         {!isOverlay && !isSinglePanelView && (
           <button
@@ -113,7 +118,7 @@ export function AgentSessionThreadPanel({
           className={cn(
             "flex cursor-default select-none items-center",
             isSinglePanelView
-              ? "relative z-30 -mb-[76px] min-h-[76px] shrink-0 gap-[10px] bg-background/80 pb-[4px] pl-[16px] pr-[8px] pt-[42px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:pl-[24px] sm:pr-[12px] dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
+              ? "relative z-[41] -mb-[76px] min-h-[76px] shrink-0 gap-[10px] bg-background/80 pb-[4px] pl-[16px] pr-[8px] pt-[42px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 sm:pl-[24px] sm:pr-[12px] dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
               : isOverlay
                 ? "relative z-50 min-h-[44px] shrink-0 gap-3 bg-background/80 px-3 py-[6px] backdrop-blur-md supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55"
                 : "absolute inset-x-0 top-[42px] z-50 min-h-[32px] gap-3 px-3 py-[4px]",

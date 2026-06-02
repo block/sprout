@@ -8,6 +8,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { Channel } from "@/shared/api/types";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
+import { THREAD_PANEL_MIN_WIDTH_PX } from "@/shared/hooks/useThreadPanelWidth";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import {
@@ -180,7 +181,11 @@ export function MessageThreadPanel({
           isFloatingOverlay && PANEL_OVERLAY_CLASS,
         )}
         data-testid="message-thread-panel"
-        style={{ width: isSinglePanelView ? "100%" : `${widthPx}px` }}
+        style={{
+          width: isSinglePanelView
+            ? "100%"
+            : `min(${widthPx}px, calc(100% - ${THREAD_PANEL_MIN_WIDTH_PX}px))`,
+        }}
       >
         {!isOverlay && !isSinglePanelView && (
           <button

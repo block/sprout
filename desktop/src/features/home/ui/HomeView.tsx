@@ -10,10 +10,19 @@ import {
   buildInboxItems,
   formatInboxFullTimestamp,
 } from "@/features/home/lib/inbox";
+import {
+  getContextMessageDepth,
+  getReactionTargetId,
+  matchesInboxFilter,
+} from "@/features/home/lib/inboxViewHelpers";
 import { useFeedItemState } from "@/features/home/useFeedItemState";
 import { useHomeInboxReadState } from "@/features/home/useHomeInboxReadState";
 import { useInboxThreadContext } from "@/features/home/useInboxThreadContext";
-import { useResizableInboxListWidth } from "@/features/home/useResizableInboxListWidth";
+import {
+  INBOX_COLUMN_MIN_WIDTH_PX,
+  INBOX_SINGLE_COLUMN_BREAKPOINT_PX,
+  useResizableInboxListWidth,
+} from "@/features/home/useResizableInboxListWidth";
 import { HomeChannelActions } from "@/features/home/ui/HomeChannelActions";
 import { HomeLoadingState } from "@/features/home/ui/HomeLoadingState";
 import { InboxDetailPane } from "@/features/home/ui/InboxDetailPane";
@@ -23,54 +32,15 @@ import {
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
 import { formatTimelineMessages } from "@/features/messages/lib/formatTimelineMessages";
-import { getThreadReference } from "@/features/messages/lib/threading";
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
-import type { HomeFeedResponse, RelayEvent } from "@/shared/api/types";
+import type { HomeFeedResponse } from "@/shared/api/types";
 import { KIND_REACTION } from "@/shared/constants/kinds";
+import { cn } from "@/shared/lib/cn";
 import { resolveMentionNames } from "@/shared/lib/resolveMentionNames";
-import { useMediaBreakpoint } from "@/shared/hooks/use-mobile";
+import { useElementWidth } from "@/shared/hooks/use-mobile";
 import { Button } from "@/shared/ui/button";
-
-function matchesInboxFilter(
-  item: { categories: InboxFilter[] },
-  filter: InboxFilter,
-) {
-  if (filter === "all") {
-    return true;
-  }
-
-  return item.categories.includes(filter);
-}
-
-function getContextMessageDepth(
-  event: RelayEvent,
-  eventById: ReadonlyMap<string, RelayEvent>,
-): number {
-  let depth = 0;
-  let parentId = getThreadReference(event.tags).parentId;
-  const seen = new Set<string>([event.id]);
-
-  while (parentId && eventById.has(parentId) && !seen.has(parentId)) {
-    depth += 1;
-    seen.add(parentId);
-    parentId = getThreadReference(eventById.get(parentId)?.tags ?? []).parentId;
-  }
-
-  return depth;
-}
-
-function getReactionTargetId(tags: string[][]) {
-  for (let index = tags.length - 1; index >= 0; index -= 1) {
-    const tag = tags[index];
-    if (tag?.[0] === "e" && typeof tag[1] === "string") {
-      return tag[1];
-    }
-  }
-
-  return null;
-}
 
 type HomeViewProps = {
   feed?: HomeFeedResponse;
@@ -93,7 +63,10 @@ export function HomeView({
   onOpenContext,
   onRefresh,
 }: HomeViewProps) {
-  const isNarrowHomeViewport = useMediaBreakpoint(1024);
+  const [homeInboxRef, homeInboxWidthPx] = useElementWidth<HTMLDivElement>();
+  const isNarrowHomeViewport =
+    homeInboxWidthPx > 0 &&
+    homeInboxWidthPx < INBOX_SINGLE_COLUMN_BREAKPOINT_PX;
   const [filter, setFilter] = React.useState<InboxFilter>("all");
   const [selectedItemId, setSelectedItemId] = React.useState<string | null>(
     null,
@@ -331,6 +304,20 @@ export function HomeView({
     isNarrowHomeViewport && selectedItemId !== null;
   const showListPane = !isSinglePanelDetailView;
   const showDetailPane = !isNarrowHomeViewport || isSinglePanelDetailView;
+  const maxEffectiveInboxListWidthPx =
+    homeInboxWidthPx > 0
+      ? Math.max(
+          INBOX_COLUMN_MIN_WIDTH_PX,
+          homeInboxWidthPx - INBOX_COLUMN_MIN_WIDTH_PX,
+        )
+      : undefined;
+  const effectiveInboxListWidthPx =
+    homeInboxWidthPx > 0
+      ? Math.min(
+          inboxListWidthPx,
+          maxEffectiveInboxListWidthPx ?? inboxListWidthPx,
+        )
+      : inboxListWidthPx;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -340,11 +327,17 @@ export function HomeView({
         onOpenChannel={onOpenChannel}
       />
       <div
-        className="relative grid min-h-0 flex-1 w-full lg:grid-cols-[var(--home-inbox-list-width)_minmax(0,1fr)]"
+        className={cn(
+          "relative grid min-h-0 w-full flex-1",
+          showListPane && showDetailPane
+            ? "grid-cols-[var(--home-inbox-list-width)_minmax(0,1fr)]"
+            : "grid-cols-1",
+        )}
         data-testid="home-inbox"
+        ref={homeInboxRef}
         style={
           {
-            "--home-inbox-list-width": `${inboxListWidthPx}px`,
+            "--home-inbox-list-width": `${effectiveInboxListWidthPx}px`,
           } as React.CSSProperties
         }
       >
@@ -364,13 +357,16 @@ export function HomeView({
 
         <button
           aria-label="Resize inbox list"
-          className="group absolute inset-y-0 z-40 hidden w-3 -translate-x-1/2 cursor-col-resize lg:block"
+          className={cn(
+            "group absolute inset-y-0 z-40 w-3 -translate-x-1/2 cursor-col-resize",
+            showListPane && showDetailPane ? "block" : "hidden",
+          )}
           data-testid="home-inbox-list-resize-handle"
           onDoubleClick={
             canResetInboxListWidth ? handleInboxListWidthReset : undefined
           }
           onPointerDown={handleInboxListResizeStart}
-          style={{ left: `${inboxListWidthPx}px` }}
+          style={{ left: `${effectiveInboxListWidthPx}px` }}
           title={
             canResetInboxListWidth
               ? "Drag to resize. Double-click to reset width."
@@ -396,6 +392,7 @@ export function HomeView({
               selectedItem ? effectiveDoneSet.has(selectedItem.id) : false
             }
             isSendingReply={isSendingReply}
+            isSinglePanelView={isSinglePanelDetailView}
             isThreadContextLoading={threadContext.isLoading}
             item={selectedItem}
             messages={contextMessages}

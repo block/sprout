@@ -116,7 +116,7 @@ export function InboxListPane({
                   className={cn(
                     "flex w-full items-start gap-2.5 border-l px-5 py-2 text-left transition-colors",
                     isSelected
-                      ? "border-l-primary bg-muted/30"
+                      ? "border-l-transparent bg-muted/30"
                       : "border-l-transparent hover:bg-muted/25 active:bg-muted/40",
                   )}
                   data-testid={`home-inbox-item-${item.id}`}
