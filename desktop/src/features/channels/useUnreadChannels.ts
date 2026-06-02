@@ -306,14 +306,14 @@ export function useUnreadChannels(
 
   const markChannelRead = React.useCallback(
     (channelId: string, readAt: string | null | undefined) => {
+      if (forcedUnreadRef.current.delete(channelId)) {
+        bumpLatestVersion();
+      }
       const callerUnix = toUnixSeconds(readAt);
       const observedLatest = latestByChannelRef.current.get(channelId);
       const unixSeconds =
         Math.max(callerUnix ?? 0, observedLatest ?? 0) || null;
       if (unixSeconds === null) return;
-      if (forcedUnreadRef.current.delete(channelId)) {
-        bumpLatestVersion();
-      }
       markContextRead(channelId, unixSeconds);
       // Clear observed-latest refs when the read marker covers them so the
       // unread memo sees `latest === undefined` until a genuinely new event
@@ -661,21 +661,27 @@ export function useUnreadChannels(
           result;
         allThreadReplies.push(...threadReplies);
         if (maxExternal > 0) {
-          const current = latestByChannelRef.current.get(channelId) ?? 0;
-          if (maxExternal > current) {
-            latestByChannelRef.current.set(channelId, maxExternal);
-            didAdvance = true;
+          const readAtNow = getEffectiveTimestamp(channelId) ?? 0;
+          if (maxExternal > readAtNow) {
+            const current = latestByChannelRef.current.get(channelId) ?? 0;
+            if (maxExternal > current) {
+              latestByChannelRef.current.set(channelId, maxExternal);
+              didAdvance = true;
+            }
           }
         }
         if (maxHighPriority > 0) {
-          const currentHigh =
-            latestHighPriorityByChannelRef.current.get(channelId) ?? 0;
-          if (maxHighPriority > currentHigh) {
-            latestHighPriorityByChannelRef.current.set(
-              channelId,
-              maxHighPriority,
-            );
-            didAdvance = true;
+          const readAtNow = getEffectiveTimestamp(channelId) ?? 0;
+          if (maxHighPriority > readAtNow) {
+            const currentHigh =
+              latestHighPriorityByChannelRef.current.get(channelId) ?? 0;
+            if (maxHighPriority > currentHigh) {
+              latestHighPriorityByChannelRef.current.set(
+                channelId,
+                maxHighPriority,
+              );
+              didAdvance = true;
+            }
           }
         }
       }

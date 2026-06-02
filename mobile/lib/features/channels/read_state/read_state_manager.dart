@@ -61,6 +61,8 @@ class ReadStateManager {
   bool _isPublishing = false;
   bool _remoteUnsupported = false;
   int _maxFetchedCreatedAt = 0;
+  final Set<String> _forcedContextIds = {};
+  final Map<String, int> _contextSourceCreatedAt = {};
 
   ReadStateManager({
     required this.pubkey,
@@ -104,7 +106,12 @@ class ReadStateManager {
   }
 
   void markContextRead(String contextId, int unixTimestamp) {
+    _forcedContextIds.remove(contextId);
     _advanceContext(contextId, unixTimestamp, publishable: true);
+    _contextSourceCreatedAt[contextId] = max(
+      currentUnixSeconds(),
+      _maxFetchedCreatedAt + 1,
+    );
   }
 
   void markContextUnread(String contextId, int lastMessageTimestamp) {
@@ -112,6 +119,7 @@ class ReadStateManager {
     final rollbackTo = lastMessageTimestamp - 1;
     _effectiveState[contextId] = rollbackTo;
     _publishableContextIds.add(contextId);
+    _forcedContextIds.add(contextId);
     _persistLocalState();
     _onChanged();
     _schedulePublish();
@@ -233,8 +241,14 @@ class ReadStateManager {
       }
 
       for (final entry in decoded.blob.contexts.entries) {
+        if (_forcedContextIds.contains(entry.key)) continue;
+        final sourceCreatedAt = _contextSourceCreatedAt[entry.key] ?? 0;
         final current = _effectiveState[entry.key] ?? 0;
-        if (entry.value > current) {
+        if (event.createdAt > sourceCreatedAt) {
+          _effectiveState[entry.key] = entry.value;
+          _contextSourceCreatedAt[entry.key] = event.createdAt;
+        } else if (event.createdAt == sourceCreatedAt &&
+            entry.value > current) {
           _effectiveState[entry.key] = entry.value;
         }
         _publishableContextIds.add(entry.key);
@@ -292,8 +306,16 @@ class ReadStateManager {
 
     var changed = false;
     for (final entry in decoded.blob.contexts.entries) {
+      if (_forcedContextIds.contains(entry.key)) continue;
+      final sourceCreatedAt = _contextSourceCreatedAt[entry.key] ?? 0;
       final current = _effectiveState[entry.key] ?? 0;
-      if (entry.value > current) {
+      if (event.createdAt > sourceCreatedAt) {
+        if (_effectiveState[entry.key] != entry.value) {
+          _effectiveState[entry.key] = entry.value;
+          changed = true;
+        }
+        _contextSourceCreatedAt[entry.key] = event.createdAt;
+      } else if (event.createdAt == sourceCreatedAt && entry.value > current) {
         _effectiveState[entry.key] = entry.value;
         changed = true;
       }
@@ -312,7 +334,7 @@ class ReadStateManager {
     }
 
     if (decoded.blob.clientId != _clientId &&
-        _contextsExceedLastPublished(decoded.blob.contexts)) {
+        !_isIdenticalToLastPublished(_currentContexts())) {
       _schedulePublish();
     }
   }
@@ -360,7 +382,12 @@ class ReadStateManager {
       );
 
       _lastPublishedContexts = contexts;
+      _forcedContextIds.clear();
+      for (final key in contexts.keys) {
+        _contextSourceCreatedAt[key] = createdAt;
+      }
       _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, createdAt);
+      _persistLocalState();
     } catch (error) {
       if (_isPermanentReadStateRemoteError(error)) {
         _remoteUnsupported = true;
@@ -402,16 +429,6 @@ class ReadStateManager {
     }
   }
 
-  bool _contextsExceedLastPublished(Map<String, int> contexts) {
-    for (final entry in contexts.entries) {
-      final last = _lastPublishedContexts[entry.key];
-      if (last == null || entry.value > last) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   bool _isIdenticalToLastPublished(Map<String, int> contexts) {
     if (_lastPublishedContexts.length != contexts.length) {
       return false;
@@ -442,11 +459,19 @@ class ReadStateManager {
     _publishableContextIds
       ..clear()
       ..addAll(stored.publishableContextIds);
+    _forcedContextIds
+      ..clear()
+      ..addAll(stored.forcedContextIds);
     _persistLocalState();
   }
 
   void _persistLocalState() {
-    _storage.write(pubkey, _effectiveState, _publishableContextIds);
+    _storage.write(
+      pubkey,
+      _effectiveState,
+      _publishableContextIds,
+      _forcedContextIds,
+    );
   }
 
   void _rotateSlotId() {
