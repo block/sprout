@@ -30,6 +30,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { TopChromeBackdrop } from "@/shared/ui/TopChromeBackdrop";
 import {
   Tooltip,
   TooltipContent,
@@ -218,10 +219,7 @@ export function InboxDetailPane({
       ref={detailPaneRef}
     >
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
-        />
+        <TopChromeBackdrop className="h-[76px]" />
         <div
           className={cn(
             "absolute inset-x-0 top-[42px] z-40 min-h-[32px] py-[4px] pr-3",

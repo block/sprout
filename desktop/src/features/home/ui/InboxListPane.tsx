@@ -8,6 +8,7 @@ import {
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
+import { TopChromeBackdrop } from "@/shared/ui/TopChromeBackdrop";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,10 +47,7 @@ export function InboxListPane({
 
   return (
     <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background/60">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/75 backdrop-blur-md supports-[backdrop-filter]:bg-background/65 dark:bg-background/45 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/35"
-      />
+      <TopChromeBackdrop className="h-[76px]" />
       <div className="absolute inset-x-0 top-[42px] z-40 min-h-[32px] px-5 py-[4px]">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-[6px]">
