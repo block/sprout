@@ -7,7 +7,8 @@ use tracing::{debug, error, info, warn};
 use nostr::{Event, PublicKey};
 use sprout_core::event::StoredEvent;
 use sprout_core::kind::{
-    event_kind_u32, is_ephemeral, KIND_AGENT_OBSERVER_FRAME, KIND_GIFT_WRAP, KIND_PRESENCE_UPDATE,
+    event_kind_u32, is_ephemeral, KIND_AGENT_OBSERVER_FRAME, KIND_GIFT_WRAP,
+    KIND_MESH_CONNECT_REQUEST, KIND_PRESENCE_UPDATE,
 };
 use sprout_core::observer::{
     content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
@@ -381,6 +382,25 @@ async fn handle_ephemeral_event(
         }
 
         conn.send(RelayMessage::ok(event_id_hex, true, ""));
+        return;
+    }
+
+    // Mesh hole-punch signaling (kind:24621). An authenticated relay member
+    // asks the relay to coordinate a direct iroh hole-punch to a peer it found
+    // via kind:30621. The relay validates the target is also a member, then
+    // emits the paired call-me-now (kind:24622). This is the relay's ONLY role
+    // in the v1 direct-iroh mesh — validate membership + pair + fan out. It
+    // never carries iroh traffic and stores no endpoint state.
+    if event_kind_u32(&event) == KIND_MESH_CONNECT_REQUEST {
+        let requester_hex = auth_pubkey.to_hex();
+        match super::mesh_signaling::handle_connect_request(&state, &requester_hex, &event).await {
+            Ok(()) => {
+                conn.send(RelayMessage::ok(event_id_hex, true, ""));
+            }
+            Err(reason) => {
+                conn.send(RelayMessage::ok(event_id_hex, false, &reason));
+            }
+        }
         return;
     }
 
