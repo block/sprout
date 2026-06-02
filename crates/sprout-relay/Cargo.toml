@@ -65,7 +65,7 @@ metrics-exporter-prometheus = { workspace = true }
 dev = ["sprout-auth/dev"]
 
 [dev-dependencies]
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "bd16da4955a9dceee8f1e0a02c5814944f4e12a5", package = "mesh-llm-sdk", default-features = false, features = ["client", "serve"] }
+mesh-llm-sdk = { git = "https://github.com/tlongwell-block/mesh-llm.git", rev = "bc2f110625ccad2c3f8557b125c063bdc030fd21", package = "mesh-llm-sdk", default-features = false, features = ["client", "serve"] }
 sprout-core = { workspace = true, features = ["test-utils"] }
 sprout-auth = { workspace = true, features = ["dev"] }
 reqwest = { workspace = true }
