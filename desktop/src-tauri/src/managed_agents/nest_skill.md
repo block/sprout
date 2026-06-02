@@ -10,9 +10,9 @@ version: 1
 
 ## Environment
 
-`SPROUT_PRIVATE_KEY` is pre-set by the harness. Never prompt for it, never read it, never echo it.
+`SPROUT_PRIVATE_KEY` is set by the harness at runtime or by the developer's environment. If missing, tell the user to set it (hex or nsec format). Never read or echo the value.
 
-`SPROUT_RELAY_URL` defaults to `http://localhost:3000`. Override only if explicitly instructed.
+`SPROUT_RELAY_URL` defaults to `http://localhost:3000`. In development, the user may need to set this to a staging or production relay URL.
 
 Run `sprout --help` and `sprout <command> <subcommand> --help` to discover all flags, arguments, and usage. This skill documents only what `--help` cannot tell you.
 

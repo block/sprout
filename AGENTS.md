@@ -165,7 +165,30 @@ check existing reply handlers for the pattern.
 
 `sprout` is the agent-first CLI replacing `sprout-mcp`. Auth env vars
 (`SPROUT_RELAY_URL`, `SPROUT_PRIVATE_KEY`, `SPROUT_AUTH_TAG`) are auto-injected
-by the ACP harness into managed agent subprocesses.
+by the ACP harness into managed agent subprocesses. In development, set
+`SPROUT_PRIVATE_KEY` and `SPROUT_RELAY_URL` in your environment manually.
+
+### Building the CLI
+
+```bash
+cargo build --release -p sprout-cli
+```
+
+Binary location: `./target/release/sprout`. Add `./target/release` to `PATH`
+or invoke with the full path.
+
+### Deep Links
+
+`sprout://message?channel=<uuid>&id=<hex>` links reference a specific message
+thread. To read the linked thread:
+
+```bash
+sprout messages thread --channel <uuid> --event <hex> --format compact
+```
+
+Extract `channel` and `id` from the URL query parameters. The optional
+`thread` parameter (root event ID) can be ignored — `messages thread` resolves
+the full thread from the event ID alone.
 
 All reads return sig-stripped JSON arrays; all writes return
 `{event_id, accepted, message}`; creates add the entity ID. Exit codes:
