@@ -254,6 +254,7 @@ void main() {
         );
 
         expect(_findRich('void main() {}'), findsWidgets);
+        expect(find.text('dart'), findsOneWidget);
       });
     });
 

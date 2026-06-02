@@ -29,6 +29,7 @@ Thumbs.db
 playwright-report/
 test-results/
 blob-report/
+.playwright-mcp/
 
 # Node modules (pnpm workspace hoists to root)
 node_modules/
