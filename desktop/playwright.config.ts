@@ -23,6 +23,7 @@ export default defineConfig({
         "**/channels.spec.ts",
         "**/channel-browser.spec.ts",
         "**/messaging.spec.ts",
+        "**/custom-emoji.spec.ts",
         "**/file-attachment.spec.ts",
         "**/mentions.spec.ts",
         "**/relay-reconnect.spec.ts",

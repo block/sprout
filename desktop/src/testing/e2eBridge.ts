@@ -4,6 +4,10 @@ import { finalizeEvent } from "nostr-tools/pure";
 import { parse as yamlParse } from "yaml";
 
 import type { RelayEvent } from "@/shared/api/types";
+import {
+  KIND_EMOJI_SET,
+  RELAY_EMOJI_SET_D_TAG,
+} from "@/shared/api/customEmoji";
 import type {
   RawAcpProviderCatalogEntry,
   RawInstallRuntimeResult,
@@ -395,6 +399,24 @@ function createMockRelayMembershipEvent(): RelayEvent {
     "",
     mockRelayMembers.map((member) => ["member", member.pubkey, member.role]),
     "f".repeat(64),
+  );
+}
+
+/**
+ * Relay-owned custom emoji set (kind:30030) the mock WS serves for
+ * `listCustomEmoji` REQs. Mirrors the real relay-signed canonical set: one
+ * `["d", sprout:relay-emoji]` tag plus `["emoji", shortcode, url]` entries.
+ * `:sprout:` is the stable shortcode exercised by custom-emoji.spec.ts.
+ */
+function createMockCustomEmojiSetEvent(): RelayEvent {
+  return createMockEvent(
+    KIND_EMOJI_SET,
+    "",
+    [
+      ["d", RELAY_EMOJI_SET_D_TAG],
+      ["emoji", "sprout", "https://example.com/e2e/sprout.png"],
+    ],
+    "e".repeat(64),
   );
 }
 
@@ -4731,6 +4753,16 @@ function sendToMockSocket(args: {
         "EVENT",
         subId,
         createMockRelayMembershipEvent(),
+      ]);
+      sendWsText(socket.handler, ["EOSE", subId]);
+      return;
+    }
+
+    if (filter.kinds?.includes(KIND_EMOJI_SET)) {
+      sendWsText(socket.handler, [
+        "EVENT",
+        subId,
+        createMockCustomEmojiSetEvent(),
       ]);
       sendWsText(socket.handler, ["EOSE", subId]);
       return;
