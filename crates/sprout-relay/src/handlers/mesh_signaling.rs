@@ -83,6 +83,8 @@ pub fn parse_connect_request(content: &str) -> Result<ConnectRequest, RequestErr
 }
 
 /// Extract the single `#p` target pubkey (hex) from the request event's tags.
+/// If multiple `#p` tags are present, the first wins; multi-target mesh-connect
+/// is not supported in v1.
 pub fn extract_target_pubkey(event: &nostr::Event) -> Option<String> {
     event.tags.iter().find_map(|t| {
         let s = t.as_slice();
@@ -231,6 +233,13 @@ fn build_call_me_now(
 /// Publish a channel-less ephemeral event over the same path NIP-AB pairing uses:
 /// Redis fan-out (nil-UUID global routing key) for cross-pod, plus direct local
 /// WS fan-out. The recipient's desktop receives it via a REQ on `#p=self kind:24622`.
+///
+/// Observability note: call-me-now is delivered via `#p` subscription matching,
+/// so it is NOT private to the recipient — any member can REQ `kind:24622
+/// #p=<other_member>` and observe who that member is mesh-connecting to (and the
+/// endpoint addrs). This matches presence/typing being broadly observable and is
+/// intentional for v1. A conn-scoped private delivery channel would be needed to
+/// hide it.
 async fn publish_channelless_ephemeral(state: &Arc<AppState>, event: &nostr::Event) {
     state.mark_local_event(&event.id);
     if let Err(e) = state.pubsub.publish_event(uuid::Uuid::nil(), event).await {
@@ -404,5 +413,172 @@ mod tests {
             .sign_with_keys(&keys)
             .unwrap();
         assert_eq!(extract_target_pubkey(&event), None);
+    }
+
+
+    fn p_tag() -> nostr::SingleLetterTag {
+        nostr::SingleLetterTag::lowercase(nostr::Alphabet::P)
+    }
+
+    fn test_config() -> crate::config::Config {
+        let mut config = crate::config::Config::from_env().expect("default config loads");
+        config.require_relay_membership = false;
+        config.redis_url = "redis://127.0.0.1:1".to_string();
+        config
+    }
+
+    async fn test_state() -> std::sync::Arc<AppState> {
+        let config = test_config();
+        let pool = sqlx::PgPool::connect_lazy(&config.database_url).expect("lazy pg pool");
+        let db = sprout_db::Db::from_pool(pool.clone());
+        let redis_pool = deadpool_redis::Config::from_url(&config.redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("redis pool");
+        let pubsub = std::sync::Arc::new(
+            sprout_pubsub::PubSubManager::new(&config.redis_url, redis_pool.clone())
+                .await
+                .expect("pubsub manager"),
+        );
+        let audit = sprout_audit::AuditService::new(pool);
+        let auth = sprout_auth::AuthService::new(config.auth.clone());
+        let search = sprout_search::SearchService::new(sprout_search::SearchConfig {
+            url: config.typesense_url.clone(),
+            api_key: config.typesense_key.clone(),
+            collection: "events".to_string(),
+        });
+        let workflow_engine = std::sync::Arc::new(sprout_workflow::WorkflowEngine::new(
+            db.clone(),
+            sprout_workflow::WorkflowConfig::default(),
+        ));
+        let media_storage = sprout_media::MediaStorage::new(&config.media).expect("media storage");
+        let (state, _audit_shutdown) = crate::state::AppState::new(
+            config,
+            db,
+            redis_pool,
+            audit,
+            pubsub,
+            auth,
+            search,
+            workflow_engine,
+            nostr::Keys::generate(),
+            media_storage,
+        );
+        std::sync::Arc::new(state)
+    }
+
+    fn register_call_me_now_sub(
+        state: &AppState,
+        recipient_hex: &str,
+        sub_id: &str,
+    ) -> (uuid::Uuid, tokio::sync::mpsc::Receiver<axum::extract::ws::Message>) {
+        let conn_id = uuid::Uuid::new_v4();
+        let (tx, rx) = tokio::sync::mpsc::channel(10);
+        state.conn_manager.register(
+            conn_id,
+            tx,
+            tokio_util::sync::CancellationToken::new(),
+            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        );
+        state.sub_registry.register(
+            conn_id,
+            sub_id.to_string(),
+            vec![nostr::Filter::new()
+                .kind(nostr::Kind::Custom(KIND_MESH_CALL_ME_NOW as u16))
+                .custom_tags(p_tag(), [recipient_hex])],
+            None,
+        );
+        (conn_id, rx)
+    }
+
+    fn connect_request_event(target_hex: &str) -> nostr::Event {
+        let content = serde_json::json!({
+            "self_endpoint_addr": "SELF_ADDR",
+            "peer_endpoint_addr": "PEER_ADDR",
+            "self_endpoint_id": "SELF_ID",
+            "peer_endpoint_id": "PEER_ID",
+            "attempt_id": "attempt-1"
+        })
+        .to_string();
+        nostr::EventBuilder::new(nostr::Kind::Custom(24621), content)
+            .tags([nostr::Tag::parse(["p", target_hex]).unwrap()])
+            .sign_with_keys(&nostr::Keys::generate())
+            .unwrap()
+    }
+
+    fn event_from_ws_message(msg: axum::extract::ws::Message) -> nostr::Event {
+        let axum::extract::ws::Message::Text(text) = msg else {
+            panic!("expected text ws message");
+        };
+        let v: serde_json::Value = serde_json::from_str(&text).expect("EVENT frame JSON");
+        assert_eq!(v[0], "EVENT");
+        serde_json::from_value(v[2].clone()).expect("nostr event")
+    }
+
+    #[tokio::test]
+    async fn accepted_connect_request_emits_two_relay_signed_call_me_now_events() {
+        let state = test_state().await;
+        let requester_hex = nostr::Keys::generate().public_key().to_hex();
+        let target_hex = nostr::Keys::generate().public_key().to_hex();
+        let (_requester_conn, mut requester_rx) =
+            register_call_me_now_sub(&state, &requester_hex, "mesh_requester");
+        let (_target_conn, mut target_rx) = register_call_me_now_sub(&state, &target_hex, "mesh_target");
+
+        handle_connect_request(&state, &requester_hex, &connect_request_event(&target_hex))
+            .await
+            .expect("open relay admits both peers and emits pair");
+
+        let requester_event = event_from_ws_message(
+            requester_rx
+                .try_recv()
+                .expect("requester receives call-me-now"),
+        );
+        let target_event = event_from_ws_message(
+            target_rx.try_recv().expect("target receives call-me-now"),
+        );
+        assert!(requester_rx.try_recv().is_err(), "requester gets exactly one event");
+        assert!(target_rx.try_recv().is_err(), "target gets exactly one event");
+
+        for event in [&requester_event, &target_event] {
+            assert_eq!(event.kind, nostr::Kind::Custom(KIND_MESH_CALL_ME_NOW as u16));
+            assert_eq!(event.pubkey, state.relay_keypair.public_key());
+            event.verify().expect("relay-signed event verifies");
+        }
+
+        assert_eq!(extract_target_pubkey(&requester_event).as_deref(), Some(requester_hex.as_str()));
+        assert_eq!(extract_target_pubkey(&target_event).as_deref(), Some(target_hex.as_str()));
+
+        let requester_content: serde_json::Value =
+            serde_json::from_str(&requester_event.content).expect("requester content JSON");
+        assert_eq!(requester_content["type"], "sprout-iroh-call-me-now");
+        assert_eq!(requester_content["peer_endpoint_addr"], "PEER_ADDR");
+        assert_eq!(requester_content["peer_endpoint_id"], "PEER_ID");
+        assert_eq!(requester_content["attempt_id"], "attempt-1");
+        assert!(requester_content["expires_at"].as_u64().is_some());
+
+        let target_content: serde_json::Value =
+            serde_json::from_str(&target_event.content).expect("target content JSON");
+        assert_eq!(target_content["type"], "sprout-iroh-call-me-now");
+        assert_eq!(target_content["peer_endpoint_addr"], "SELF_ADDR");
+        assert_eq!(target_content["peer_endpoint_id"], "SELF_ID");
+        assert_eq!(target_content["attempt_id"], "attempt-1");
+        assert_eq!(target_content["expires_at"], requester_content["expires_at"]);
+    }
+
+    #[tokio::test]
+    async fn self_target_connect_request_emits_no_call_me_now_events() {
+        let state = test_state().await;
+        let requester_hex = nostr::Keys::generate().public_key().to_hex();
+        let target_hex = nostr::Keys::generate().public_key().to_hex();
+        let (_requester_conn, mut requester_rx) =
+            register_call_me_now_sub(&state, &requester_hex, "mesh_requester");
+        let (_target_conn, mut target_rx) = register_call_me_now_sub(&state, &target_hex, "mesh_target");
+
+        let err = handle_connect_request(&state, &requester_hex, &connect_request_event(&requester_hex))
+            .await
+            .expect_err("self-target is rejected before emitting");
+        assert!(err.contains("self"), "unexpected error: {err}");
+        assert!(requester_rx.try_recv().is_err(), "requester receives no event");
+        assert!(target_rx.try_recv().is_err(), "target receives no event");
     }
 }
