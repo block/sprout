@@ -91,3 +91,11 @@ test("plain text without shortcodes is unchanged", () => {
   assert.equal(k[0].type, "text");
   assert.equal(k[0].value, "just a normal sentence");
 });
+
+test("mixed-case :Party_Parrot: renders via the lowercase set key", () => {
+  const k = kids(runPlugin(paragraph(text("yo :Party_Parrot: yo"))));
+  const emoji = k.find((c) => c.type === "emoji");
+  assert.ok(emoji, "expected an emoji node for mixed-case shortcode");
+  assert.equal(emoji.data.hProperties["data-shortcode"], "party_parrot");
+  assert.equal(emoji.data.hProperties.src, "https://relay/blob/parrot.gif");
+});

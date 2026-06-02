@@ -38,7 +38,10 @@ function buildShortcodePattern(shortcodes: string[]): RegExp | null {
     .sort((a, b) => b.length - a.length);
   if (sorted.length === 0) return null;
   const alternatives = sorted.map((s) => escapeRegExp(s)).join("|");
-  return new RegExp(`:(?:${alternatives}):`, "g");
+  // Case-insensitive: the set keys are lowercase, but message content may use
+  // mixed case (manual typing, other clients). NIP-30 renders by the emoji
+  // tag's shortcode, so we match case-insensitively and resolve via lowercase.
+  return new RegExp(`:(?:${alternatives}):`, "gi");
 }
 
 export default function remarkCustomEmoji(options?: RemarkCustomEmojiOptions) {
@@ -110,8 +113,8 @@ function splitByPattern(
       parts.push({ type: "text", value: text.slice(lastIndex, match.index) });
     }
 
-    const matchText = match[0]; // e.g. ":party_parrot:"
-    const shortcode = matchText.slice(1, -1);
+    const matchText = match[0]; // e.g. ":party_parrot:" or ":Party_Parrot:"
+    const shortcode = matchText.slice(1, -1).toLowerCase();
     const url = urlByShortcode.get(shortcode);
     if (url) {
       parts.push(buildEmojiNode(shortcode, url));
