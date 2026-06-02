@@ -16,12 +16,13 @@ use crate::{
 // the current list, add/remove the pubkey, and re-publish the whole event.
 // See docs/SPROUT_LITE_MODE.md.
 
-/// Fetch the current member pubkeys (hex, lowercased) for a serverless channel
-/// from its kind:39002 event. Returns an empty list if none exists yet.
+/// Fetch the current members `(pubkey, role)` for a serverless channel from its
+/// kind:39002 event. Role is the 4th element of the `p` tag (NIP-29), defaulting
+/// to `member`. Returns an empty list if no members event exists yet.
 async fn serverless_current_members(
     state: &AppState,
     channel_id: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<(String, String)>, String> {
     let events = query_relay(
         state,
         &[serde_json::json!({
@@ -41,7 +42,13 @@ async fn serverless_current_members(
         .filter_map(|t| {
             let parts = t.as_slice();
             if parts.first().map(String::as_str) == Some("p") {
-                parts.get(1).map(|p| p.to_ascii_lowercase())
+                let pk = parts.get(1)?.to_ascii_lowercase();
+                let role = parts
+                    .get(3)
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| "member".to_string());
+                Some((pk, role))
             } else {
                 None
             }
@@ -51,28 +58,30 @@ async fn serverless_current_members(
 }
 
 /// Re-publish the kind:39002 member list for a serverless channel after adding
-/// or removing the given pubkeys.
+/// or removing the given pubkeys. Existing members keep their roles; newly
+/// added pubkeys get the `add_role` (default `member`).
 async fn serverless_set_members(
     state: &AppState,
     channel_id: &str,
     add: &[String],
     remove: &[String],
+    add_role: &str,
 ) -> Result<(), String> {
     let mut members = serverless_current_members(state, channel_id).await?;
     for pk in remove {
         let pk = pk.to_ascii_lowercase();
-        members.retain(|m| m != &pk);
+        members.retain(|(m, _)| m != &pk);
     }
     for pk in add {
         let pk = pk.to_ascii_lowercase();
-        if !members.contains(&pk) {
-            members.push(pk);
+        if !members.iter().any(|(m, _)| m == &pk) {
+            members.push((pk, add_role.to_string()));
         }
     }
     members.sort();
-    members.dedup();
+    members.dedup_by(|a, b| a.0 == b.0);
 
-    let builder = events::build_channel_members_serverless(channel_id, &members)?;
+    let builder = events::build_channel_members_serverless_with_roles(channel_id, &members)?;
     submit_event(builder, state).await?;
     Ok(())
 }
@@ -383,7 +392,11 @@ pub async fn create_channel(
             .sign_with_keys(&keys)
             .map_err(|e| format!("failed to sign channel metadata: {e}"))?;
         submit_event(meta, &state).await?;
-        let members = events::build_channel_members_serverless(&channel_uuid_string, &[my_pubkey])?;
+        // The creator is the channel owner.
+        let members = events::build_channel_members_serverless_with_roles(
+            &channel_uuid_string,
+            &[(my_pubkey, "owner".to_string())],
+        )?;
         submit_event(members, &state).await?;
         // Return ChannelInfo derived from the event we just published (member,
         // since we created it). No relay round-trip required.
@@ -520,7 +533,14 @@ pub async fn add_channel_members(
             .filter(|p| p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()))
             .map(|p| p.to_ascii_lowercase())
             .collect();
-        serverless_set_members(&state, &uuid.to_string(), &valid, &[]).await?;
+        serverless_set_members(
+            &state,
+            &uuid.to_string(),
+            &valid,
+            &[],
+            role_str.unwrap_or("member"),
+        )
+        .await?;
         return Ok(serde_json::json!({ "added": valid, "errors": [] }));
     }
 
@@ -552,7 +572,7 @@ pub async fn remove_channel_member(
 ) -> Result<(), String> {
     let uuid = parse_channel_uuid(&channel_id)?;
     if state.is_serverless() {
-        return serverless_set_members(&state, &uuid.to_string(), &[], &[pubkey]).await;
+        return serverless_set_members(&state, &uuid.to_string(), &[], &[pubkey], "member").await;
     }
     let builder = events::build_remove_member(uuid, &pubkey)?;
     submit_event(builder, &state).await?;
@@ -575,8 +595,11 @@ pub async fn change_channel_member_role(
         other => return Err(format!("invalid role: {other}")),
     };
     if state.is_serverless() {
-        // Roles aren't enforced on a generic relay; just ensure membership.
-        return serverless_set_members(&state, &uuid.to_string(), &[pubkey], &[]).await;
+        // Re-add with the requested role: remove then re-add (set_members
+        // processes removals before additions), so the new role takes effect.
+        let targets = [pubkey];
+        return serverless_set_members(&state, &uuid.to_string(), &targets, &targets, role_str)
+            .await;
     }
     let builder = events::build_add_member(uuid, &pubkey, Some(role_str))?;
     submit_event(builder, &state).await?;
@@ -591,7 +614,7 @@ pub async fn join_channel(channel_id: String, state: State<'_, AppState>) -> Res
             let keys = state.keys.lock().map_err(|e| e.to_string())?;
             keys.public_key().to_hex()
         };
-        return serverless_set_members(&state, &uuid.to_string(), &[me], &[]).await;
+        return serverless_set_members(&state, &uuid.to_string(), &[me], &[], "member").await;
     }
     let builder = events::build_join(uuid)?;
     submit_event(builder, &state).await?;
@@ -606,7 +629,7 @@ pub async fn leave_channel(channel_id: String, state: State<'_, AppState>) -> Re
             let keys = state.keys.lock().map_err(|e| e.to_string())?;
             keys.public_key().to_hex()
         };
-        return serverless_set_members(&state, &uuid.to_string(), &[], &[me]).await;
+        return serverless_set_members(&state, &uuid.to_string(), &[], &[me], "member").await;
     }
     let builder = events::build_leave(uuid)?;
     submit_event(builder, &state).await?;

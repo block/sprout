@@ -225,6 +225,7 @@ async fn serverless_create_join_roundtrip() {
         &channel_id,
         std::slice::from_ref(&joiner_pk),
         &[],
+        "member",
     )
     .await
     .expect("join (set members)");
@@ -239,12 +240,16 @@ async fn serverless_create_join_roundtrip() {
     eprintln!("final members ({}): {final_members:?}", final_members.len());
 
     assert!(
-        final_members.contains(&creator_pk.to_ascii_lowercase()),
+        final_members
+            .iter()
+            .any(|(pk, _)| pk == &creator_pk.to_ascii_lowercase()),
         "creator missing from member list after joiner joined — \
          read-modify-write clobbered the creator (the real bug?)"
     );
     assert!(
-        final_members.contains(&joiner_pk.to_ascii_lowercase()),
+        final_members
+            .iter()
+            .any(|(pk, _)| pk == &joiner_pk.to_ascii_lowercase()),
         "joiner missing from member list after join — join didn't persist"
     );
 
@@ -334,7 +339,7 @@ async fn serverless_multi_relay_fanout() {
         .await
         .expect("read members");
     assert!(
-        mems.contains(&pk.to_ascii_lowercase()),
+        mems.iter().any(|(m, _)| m == &pk.to_ascii_lowercase()),
         "membership not found across relays"
     );
 

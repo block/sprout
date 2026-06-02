@@ -783,10 +783,28 @@ pub fn build_channel_members_serverless(
     channel_id: &str,
     member_pubkeys: &[String],
 ) -> Result<EventBuilder, String> {
+    // Default role for plain pubkey input. Callers that need explicit roles
+    // (e.g. marking the creator as owner) should use
+    // `build_channel_members_serverless_with_roles`.
+    let with_roles: Vec<(String, String)> = member_pubkeys
+        .iter()
+        .map(|pk| (pk.clone(), "member".to_string()))
+        .collect();
+    build_channel_members_serverless_with_roles(channel_id, &with_roles)
+}
+
+/// Build a kind:39002 channel-members event preserving each member's role.
+/// Roles are stored as the 4th element of the `p` tag (`["p", pubkey, "",
+/// role]`), the NIP-29 convention that `channel_members_from_event` reads.
+pub fn build_channel_members_serverless_with_roles(
+    channel_id: &str,
+    members: &[(String, String)],
+) -> Result<EventBuilder, String> {
     let mut tags = vec![tag(vec!["d", channel_id])?];
-    for pk in member_pubkeys {
+    for (pk, role) in members {
         check_pubkey(pk)?;
-        tags.push(tag(vec!["p", &pk.to_ascii_lowercase()])?);
+        // ["p", pubkey, <relay-hint = "">, role] — relay hint left blank.
+        tags.push(tag(vec!["p", &pk.to_ascii_lowercase(), "", role])?);
     }
     // `.allow_self_tagging()` is REQUIRED: when a user creates/joins a channel
     // they p-tag themselves (the signer). nostr 0.44 strips self-`p` tags by
@@ -949,8 +967,15 @@ mod tests {
         assert_eq!(event.kind, Kind::Custom(39002));
         let tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
         assert_eq!(tags[0], vec!["d".to_string(), "chan-1".to_string()]);
-        assert!(tags.contains(&vec!["p".into(), PK_A.to_string()]));
-        assert!(tags.contains(&vec!["p".into(), PK_B.to_string()]));
+        // p tags now carry a role at index 3: ["p", pubkey, "", role].
+        assert!(tags
+            .iter()
+            .any(|t| t.first().map(String::as_str) == Some("p")
+                && t.get(1) == Some(&PK_A.to_string())));
+        assert!(tags
+            .iter()
+            .any(|t| t.first().map(String::as_str) == Some("p")
+                && t.get(1) == Some(&PK_B.to_string())));
     }
 
     #[test]
@@ -968,9 +993,31 @@ mod tests {
             .unwrap();
         let tags: Vec<Vec<String>> = event.tags.iter().map(|t| t.as_slice().to_vec()).collect();
         assert!(
-            tags.contains(&vec!["p".into(), me.clone()]),
+            tags.iter()
+                .any(|t| t.first().map(String::as_str) == Some("p") && t.get(1) == Some(&me)),
             "self p-tag was stripped — .allow_self_tagging() missing; tags={tags:?}"
         );
+    }
+
+    #[test]
+    fn serverless_members_with_roles_records_owner() {
+        // The creator must be recorded as `owner` (4th element of the p tag) so
+        // the members UI shows them as a manager and the invite card appears.
+        let event = sign(
+            build_channel_members_serverless_with_roles(
+                "chan-r",
+                &[(PK_A.to_string(), "owner".to_string())],
+            )
+            .unwrap(),
+        );
+        let p = event
+            .tags
+            .iter()
+            .map(|t| t.as_slice().to_vec())
+            .find(|t| t.first().map(String::as_str) == Some("p"))
+            .expect("a p tag");
+        assert_eq!(p.get(1), Some(&PK_A.to_string()));
+        assert_eq!(p.get(3), Some(&"owner".to_string()), "role must be owner");
     }
 
     #[test]
