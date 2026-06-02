@@ -342,10 +342,18 @@ pub async fn send_channel_message(
 pub async fn add_reaction(
     event_id: String,
     emoji: String,
+    emoji_url: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let target_eid = EventId::from_hex(&event_id).map_err(|e| format!("invalid event ID: {e}"))?;
-    let builder = events::build_reaction(target_eid, emoji.trim())?;
+    let builder = match emoji_url {
+        // Custom-emoji reaction (NIP-30): kind:7 with `:shortcode:` content and
+        // an `["emoji", shortcode, url]` tag. Delegates to the SDK builder so
+        // shortcode normalization + validation match the relay exactly.
+        Some(url) => sprout_sdk::build_custom_emoji_reaction(target_eid, emoji.trim(), &url)
+            .map_err(|e| format!("invalid custom emoji reaction: {e}"))?,
+        None => events::build_reaction(target_eid, emoji.trim())?,
+    };
     submit_event(builder, &state).await?;
     Ok(())
 }
