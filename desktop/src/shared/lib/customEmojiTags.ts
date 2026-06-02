@@ -10,12 +10,14 @@
 
 import type { CustomEmoji } from "./remarkCustomEmoji";
 
-const SHORTCODE_SCAN = /:([a-z0-9_+-]+):/gi;
+const SHORTCODE_SCAN = /:([a-z0-9_-]+):/gi;
 
 /**
  * Return one `["emoji", shortcode, url]` tag per *distinct* known custom emoji
- * referenced in `content`. Unknown `:foo:` sequences are ignored. Order follows
- * first appearance; each shortcode is emitted at most once.
+ * referenced in `content`. Shortcodes are matched case-insensitively against
+ * the (lowercase) emoji set; the canonical lowercase shortcode is emitted.
+ * Unknown `:foo:` sequences are ignored. Order follows first appearance; each
+ * shortcode is emitted at most once.
  */
 export function buildCustomEmojiTags(
   content: string,
@@ -32,7 +34,7 @@ export function buildCustomEmojiTags(
   while (true) {
     match = SHORTCODE_SCAN.exec(content);
     if (!match) break;
-    const shortcode = match[1];
+    const shortcode = match[1].toLowerCase();
     if (emitted.has(shortcode)) continue;
     const url = urlByShortcode.get(shortcode);
     if (!url) continue;

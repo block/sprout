@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
-  addCustomEmoji,
   listCustomEmoji,
   removeCustomEmoji,
+  setCustomEmoji,
 } from "@/shared/api/customEmoji";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
@@ -33,11 +33,11 @@ export function useCustomEmoji(): CustomEmoji[] {
   return useCustomEmojiQuery().data ?? [];
 }
 
-export function useAddCustomEmojiMutation() {
+export function useSetCustomEmojiMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ shortcode, url }: { shortcode: string; url: string }) =>
-      addCustomEmoji(shortcode, url),
+      setCustomEmoji(shortcode, url),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: customEmojiQueryKey });
     },

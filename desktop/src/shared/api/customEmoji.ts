@@ -4,16 +4,13 @@
  * The authoritative emoji set is a single kind:30030 parameterized-replaceable
  * event signed by the *relay* keypair (channel_id = NULL, one canonical set —
  * the "workspace" emoji list, Slack-style). Members add/remove emoji by sending
- * a relay-processed command event; the relay validates membership and re-signs
- * the set. Clients only ever read the set and emit the command — they never
- * author the kind:30030 directly.
+ * a member-signed kind:9037 command; the relay validates membership and
+ * re-signs the set. Clients only ever read the set and emit commands — they
+ * never author the kind:30030 directly (relay ingest rejects member-authored
+ * 30030).
  *
- * Mirrors `relayMembers.ts` (NIP-43 relay-signed global list) for fetch/parse.
- *
- * NOTE (integration point with Pinky / crates side): the d-tag constant
- * (`RELAY_EMOJI_SET_D_TAG`) and the add/remove command kind + tag shape are
- * owned by the Rust contract. Values below match the locked plan; confirm
- * against `crates/**` before the client emits commands.
+ * Contract locked with Pinky (Rust side) 2026-06-01 — see
+ * PLANS/CUSTOM_EMOJI_DESKTOP.md "LOCKED CONTRACT".
  */
 
 import { relayClient } from "@/shared/api/relayClient";
@@ -21,28 +18,37 @@ import { signRelayEvent } from "@/shared/api/tauri";
 import type { RelayEvent } from "@/shared/api/types";
 import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
-/** NIP-30 emoji set (parameterized-replaceable). */
+/** NIP-30 emoji set (parameterized-replaceable), relay-owned. */
 export const KIND_EMOJI_SET = 30030;
 
-/**
- * Fixed d-tag for the single relay-owned set. The relay is the only author of
- * kind:30030, so (kind, relay_pubkey, d_tag) addresses exactly one event.
- */
+/** d-tag of the single canonical relay-owned set. */
 export const RELAY_EMOJI_SET_D_TAG = "sprout:relay-emoji";
 
 /**
- * Member command to mutate the relay-owned set. Relay-processed (not stored as
- * a regular event): the relay validates membership, applies the op, re-signs
- * the kind:30030. TODO(pinky): confirm kind number + tag shape against crates.
+ * Member-signed command to mutate the relay-owned set. Relay-processed (not
+ * stored): the relay validates membership, applies the op, and re-signs the
+ * kind:30030. Tags: `["action","set"]` + `["emoji", shortcode, url]` to
+ * add/update; `["action","remove"]` + `["emoji", shortcode]` to remove.
  */
-export const KIND_EMOJI_COMMAND = 9040;
+export const KIND_RELAY_EMOJI_COMMAND = 9037;
 
-const SHORTCODE_RE = /^[a-z0-9_+-]+$/i;
+/** NIP-30 shortcode chars. Matches the relay's `[A-Za-z0-9_-]` validation. */
+const SHORTCODE_RE = /^[a-z0-9_-]+$/;
 
 /**
- * Parse a relay-owned kind:30030 event into the custom-emoji list. NIP-30 body
- * tags are `["emoji", shortcode, url]`. Malformed/duplicate entries are skipped
- * (first writer wins on a shortcode collision within the single set).
+ * Normalize a shortcode the same way the relay does: strip surrounding colons
+ * and lowercase. Returns null if the result is empty or has invalid chars.
+ */
+export function normalizeShortcode(raw: string): string | null {
+  const stripped = raw.trim().replace(/^:+/, "").replace(/:+$/, "");
+  const lower = stripped.toLowerCase();
+  return SHORTCODE_RE.test(lower) ? lower : null;
+}
+
+/**
+ * Parse NIP-30 `["emoji", shortcode, url]` tags into a custom-emoji list.
+ * Shortcodes are normalized (lowercase, no colons). Malformed/duplicate
+ * entries are skipped (first wins on a collision).
  */
 export function customEmojiFromTags(
   tags: ReadonlyArray<ReadonlyArray<string>>,
@@ -51,10 +57,11 @@ export function customEmojiFromTags(
   const emoji: CustomEmoji[] = [];
 
   for (const tag of tags) {
-    const [name, shortcode, url] = tag;
+    const [name, rawShortcode, url] = tag;
     if (name !== "emoji") continue;
-    if (!shortcode || !url) continue;
-    if (!SHORTCODE_RE.test(shortcode)) continue;
+    if (!rawShortcode || !url) continue;
+    const shortcode = normalizeShortcode(rawShortcode);
+    if (!shortcode) continue;
     if (seen.has(shortcode)) continue;
     seen.add(shortcode);
     emoji.push({ shortcode, url });
@@ -71,6 +78,7 @@ export function customEmojiFromEvent(event: RelayEvent | null): CustomEmoji[] {
 async function fetchEmojiSetEvent(): Promise<RelayEvent | null> {
   const events = await relayClient.fetchEvents({
     kinds: [KIND_EMOJI_SET],
+    "#d": [RELAY_EMOJI_SET_D_TAG],
     limit: 1,
   });
   return events[events.length - 1] ?? null;
@@ -83,32 +91,48 @@ export async function listCustomEmoji(): Promise<CustomEmoji[]> {
 }
 
 /**
- * Add a custom emoji to the relay-owned set. Emits the member command; the
- * relay validates membership and re-signs the canonical set.
- * `url` should be a Blossom blob URL (uploaded via the existing upload path).
+ * Add/update a custom emoji in the relay-owned set. Emits a kind:9037 command;
+ * the relay validates membership and re-signs the canonical set. `url` should
+ * be a Blossom blob URL (uploaded via the existing upload path). Returns the
+ * normalized (lowercase) shortcode the relay will store.
  */
-export async function addCustomEmoji(
+export async function setCustomEmoji(
   shortcode: string,
   url: string,
-): Promise<void> {
+): Promise<string> {
+  const normalized = normalizeShortcode(shortcode);
+  if (!normalized) {
+    throw new Error(
+      "Invalid emoji name. Use letters, numbers, hyphen, or underscore.",
+    );
+  }
   const event = await signRelayEvent({
-    kind: KIND_EMOJI_COMMAND,
+    kind: KIND_RELAY_EMOJI_COMMAND,
     content: "",
-    tags: [["emoji", shortcode, url, "add"]],
+    tags: [
+      ["action", "set"],
+      ["emoji", normalized, url],
+    ],
   });
   await relayClient.publishEvent(
     event,
     "Timed out while adding emoji.",
     "Failed to add emoji.",
   );
+  return normalized;
 }
 
 /** Remove a custom emoji from the relay-owned set by shortcode. */
 export async function removeCustomEmoji(shortcode: string): Promise<void> {
+  const normalized = normalizeShortcode(shortcode);
+  if (!normalized) return;
   const event = await signRelayEvent({
-    kind: KIND_EMOJI_COMMAND,
+    kind: KIND_RELAY_EMOJI_COMMAND,
     content: "",
-    tags: [["emoji", shortcode, "", "remove"]],
+    tags: [
+      ["action", "remove"],
+      ["emoji", normalized],
+    ],
   });
   await relayClient.publishEvent(
     event,

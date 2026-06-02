@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { customEmojiFromEvent } from "./customEmoji.ts";
+import {
+  customEmojiFromEvent,
+  customEmojiFromTags,
+  normalizeShortcode,
+} from "./customEmoji.ts";
 
 function ev(tags) {
   return {
@@ -64,4 +68,22 @@ test("ignores non-emoji tags", () => {
     ]),
   );
   assert.deepEqual(out, [{ shortcode: "yes", url: "https://relay/y.png" }]);
+});
+
+test("normalizeShortcode strips colons and lowercases", () => {
+  assert.equal(normalizeShortcode(":PartyParrot:"), "partyparrot");
+  assert.equal(normalizeShortcode("ship_it"), "ship_it");
+  assert.equal(normalizeShortcode("  :Foo-Bar:  "), "foo-bar");
+});
+
+test("normalizeShortcode rejects invalid chars and empties", () => {
+  assert.equal(normalizeShortcode("bad space"), null);
+  assert.equal(normalizeShortcode("emoji!"), null);
+  assert.equal(normalizeShortcode("::"), null);
+  assert.equal(normalizeShortcode(""), null);
+});
+
+test("customEmojiFromTags normalizes shortcodes (case-fold)", () => {
+  const out = customEmojiFromTags([["emoji", "ShipIt", "https://relay/s.png"]]);
+  assert.deepEqual(out, [{ shortcode: "shipit", url: "https://relay/s.png" }]);
 });
