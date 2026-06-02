@@ -68,7 +68,9 @@ const MAX_CACHE_ENTRIES = 100;
 const MAX_LOADED_LANGUAGES = 30;
 const MAX_HIGHLIGHT_LINES = 150;
 const CODE_BLOCK_CLASS =
-  "block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground";
+  "code-block-lines block min-w-full whitespace-pre font-mono text-[13px] leading-6 text-foreground";
+const DIFF_ADD_RE = /\s*\/\/\s*\[!code\s*\+\+\]\s*$/;
+const DIFF_REMOVE_RE = /\s*\/\/\s*\[!code\s*--\]\s*$/;
 
 function ensureHighlighter(): Promise<void> {
   if (shikiHighlighter) return Promise.resolve();
@@ -87,6 +89,15 @@ function extractLanguage(className?: string): string {
   if (typeof className !== "string") return "";
   const match = className.match(/language-(\S+)/);
   return match ? match[1] : "";
+}
+
+function stripDiffMarker(tokens: ThemedToken[], marker: RegExp): ThemedToken[] {
+  const last = tokens[tokens.length - 1];
+  if (!last) return tokens;
+  const stripped = last.content.replace(marker, "");
+  if (stripped === last.content) return tokens;
+  if (stripped === "") return tokens.slice(0, -1);
+  return [...tokens.slice(0, -1), { ...last, content: stripped }];
 }
 
 function useStableArray<T>(arr: T[]): T[] {
@@ -240,7 +251,7 @@ function MarkdownCodeBlock({
 
   return (
     <div className="group relative" data-code-block="">
-      <pre className="overflow-x-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
+      <pre className="max-h-[400px] overflow-x-auto overflow-y-auto rounded-xl border border-border/70 bg-muted/60 px-3 py-1.5 pr-12 shadow-xs">
         {language && (
           <div className="mb-1 text-xs text-muted-foreground/70">
             {language}
@@ -404,30 +415,55 @@ function SyntaxHighlightedCode({
   const codeClassName = CODE_BLOCK_CLASS;
 
   if (!tokens) {
+    const lines = code.split("\n");
     return (
       <code {...props} className={codeClassName}>
-        {code}
+        {lines.map((line, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional
+          <span key={i} data-line="">
+            {line}
+          </span>
+        ))}
       </code>
     );
   }
 
   return (
     <code {...props} className={codeClassName}>
-      {tokens.map((line, lineIdx) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
-        <React.Fragment key={lineIdx}>
-          {lineIdx > 0 && "\n"}
-          {line.map((token, tokenIdx) => (
-            <span
-              // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
-              key={tokenIdx}
-              style={token.color ? { color: token.color } : undefined}
-            >
-              {token.content}
-            </span>
-          ))}
-        </React.Fragment>
-      ))}
+      {tokens.map((line, lineIdx) => {
+        const lineText = line.map((t) => t.content).join("");
+        const isAdd = DIFF_ADD_RE.test(lineText);
+        const isRemove = DIFF_REMOVE_RE.test(lineText);
+        const diffClass = isAdd
+          ? "code-line-diff-add"
+          : isRemove
+            ? "code-line-diff-remove"
+            : undefined;
+
+        const renderedTokens =
+          isAdd || isRemove
+            ? stripDiffMarker(line, isAdd ? DIFF_ADD_RE : DIFF_REMOVE_RE)
+            : line;
+
+        return (
+          <span
+            // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
+            key={lineIdx}
+            data-line=""
+            className={diffClass}
+          >
+            {renderedTokens.map((token, tokenIdx) => (
+              <span
+                // biome-ignore lint/suspicious/noArrayIndexKey: tokens are positional and never reordered
+                key={tokenIdx}
+                style={token.color ? { color: token.color } : undefined}
+              >
+                {token.content}
+              </span>
+            ))}
+          </span>
+        );
+      })}
     </code>
   );
 }
@@ -534,9 +570,15 @@ function createMarkdownComponents(
           );
         }
 
+        const lines = code.split("\n");
         return (
           <code {...props} className={CODE_BLOCK_CLASS}>
-            {code}
+            {lines.map((line, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines are positional
+              <span key={i} data-line="">
+                {line}
+              </span>
+            ))}
           </code>
         );
       }

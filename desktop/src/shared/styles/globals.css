@@ -173,6 +173,43 @@
   }
 }
 
+/* ── Code block line numbers & diff ────────────────────────────────── */
+.code-block-lines {
+  counter-reset: code-line;
+}
+
+.code-block-lines [data-line] {
+  display: block;
+  counter-increment: code-line;
+}
+
+.code-block-lines [data-line]::before {
+  content: counter(code-line);
+  display: inline-block;
+  width: 2.5ch;
+  margin-right: 1.5ch;
+  text-align: right;
+  color: hsl(var(--muted-foreground) / 0.4);
+  user-select: none;
+  pointer-events: none;
+}
+
+.code-line-diff-add {
+  background-color: hsl(120 40% 50% / 0.15);
+}
+
+.code-line-diff-remove {
+  background-color: hsl(0 60% 50% / 0.15);
+}
+
+.dark .code-line-diff-add {
+  background-color: hsl(120 40% 50% / 0.12);
+}
+
+.dark .code-line-diff-remove {
+  background-color: hsl(0 60% 50% / 0.12);
+}
+
 @layer base {
   :root {
     /* Catppuccin Latte (mauve accent) */

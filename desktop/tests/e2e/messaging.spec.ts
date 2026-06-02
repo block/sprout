@@ -71,12 +71,12 @@ test("copy a rendered code block and paste it back as code", async ({
   await page.keyboard.press("ControlOrMeta+V");
   await page.getByTestId("send-message").click();
 
-  const copiedCodeBlock = page.locator("pre", { hasText: code });
-  await expect(copiedCodeBlock).toHaveCount(1);
+  const codeBlock = page.locator("[data-code-block]");
+  await expect(codeBlock).toHaveCount(1);
 
   const copyButton = page.getByLabel("Copy code block");
   await expect(copyButton).toHaveCSS("opacity", "0");
-  await copiedCodeBlock.hover();
+  await codeBlock.hover();
   await expect(copyButton).toHaveCSS("opacity", "1");
   await copyButton.click();
   await expect
@@ -87,7 +87,7 @@ test("copy a rendered code block and paste it back as code", async ({
   await page.keyboard.press("ControlOrMeta+V");
   await input.press("Enter");
 
-  await expect(copiedCodeBlock).toHaveCount(2);
+  await expect(codeBlock).toHaveCount(2);
 });
 
 test("pasting a long copied code block scrolls composer to cursor", async ({
@@ -115,7 +115,7 @@ test("pasting a long copied code block scrolls composer to cursor", async ({
   await page.keyboard.press("ControlOrMeta+V");
   await page.getByTestId("send-message").click();
 
-  const copiedCodeBlock = page.locator("pre", { hasText: longCode });
+  const copiedCodeBlock = page.locator("[data-code-block]");
   await expect(copiedCodeBlock).toHaveCount(1);
   await copiedCodeBlock.hover();
   await page.getByLabel("Copy code block").click();
@@ -132,6 +132,52 @@ test("pasting a long copied code block scrolls composer to cursor", async ({
       ),
     )
     .toBeLessThanOrEqual(1);
+});
+
+test("code block shows language label when language is specified", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+    origin: "http://127.0.0.1:4173",
+  });
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await page.evaluate(
+    (text) => navigator.clipboard.writeText(text),
+    "```typescript\nconst x = 1;\n```",
+  );
+
+  await input.click();
+  await page.keyboard.press("ControlOrMeta+V");
+  await page.getByTestId("send-message").click();
+
+  const codeBlock = page.locator("[data-code-block]");
+  await expect(codeBlock).toBeVisible();
+  await expect(codeBlock.getByText("typescript")).toBeVisible();
+});
+
+test("typing triple backticks and Enter creates a code block in composer", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  const input = page.getByTestId("message-input");
+  await input.click();
+  await page.keyboard.type("```");
+  await page.keyboard.press("Enter");
+
+  // A <pre> code block should appear inside the ProseMirror editor
+  const editorPre = input.locator("pre");
+  await expect(editorPre).toBeVisible();
+
+  // The literal backticks should be consumed (not visible as text)
+  await expect(input).not.toContainText("```");
 });
 
 test("message input clears after send", async ({ page }) => {
