@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { relayClient } from "@/shared/api/relayClient";
 import {
@@ -21,17 +20,17 @@ import type { Workspace } from "./types";
  * cache or singleton that holds workspace data, add its reset here.
  * See AGENTS.md "Workspace Switching" for the full contract.
  */
-function resetWorkspaceState(queryClient: QueryClient): void {
+function resetWorkspaceState(): void {
   relayClient.disconnect();
   resetAgentObserverStore();
   resetMediaCaches();
   clearSearchHitEventCache();
   clearAllDrafts();
-  // Clear ALL React Query caches. Channel lists, message timelines, members,
-  // agents, etc. are keyed without the workspace id, so without this the
-  // previous workspace's data (e.g. its channels) bleeds into the new one on
-  // switch. The key-based remount of <AppReady> refetches everything fresh.
-  queryClient.clear();
+  // NOTE: the React Query cache is intentionally NOT cleared here.
+  // `useWorkspaceInit` runs ABOVE the QueryClientProvider, so it has no query
+  // client. The cache is made per-workspace by `WorkspaceQueryProvider` /
+  // `AppReady` being keyed on `workspaceKey` in App.tsx — switching workspaces
+  // remounts them with a brand-new QueryClient, so no cross-workspace bleed.
 }
 
 type WorkspaceInitResult =
@@ -61,8 +60,6 @@ export function useWorkspaceInit(
     needsSetup: false,
     appliedKey: null,
   });
-
-  const queryClient = useQueryClient();
 
   // Track whether this is the initial mount or a workspace switch.
   // On the initial mount we skip resetting singletons (they're fresh).
@@ -119,7 +116,7 @@ export function useWorkspaceInit(
       // On workspace switch (not initial mount), reset module singletons
       // so the new tree starts with a clean slate.
       if (hasInitializedRef.current) {
-        resetWorkspaceState(queryClient);
+        resetWorkspaceState();
       }
       hasInitializedRef.current = true;
 
