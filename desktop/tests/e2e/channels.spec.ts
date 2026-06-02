@@ -872,6 +872,34 @@ test("open-channel members can add agents from the header", async ({
   await expect(page.getByTestId("add-channel-bot-dialog-footer")).toBeVisible();
 });
 
+test("private-channel members can add members and bots without admin", async ({
+  page,
+}) => {
+  await page.goto("/");
+  // secret-projects is a private (non-DM) channel where the current user is a
+  // plain member, not owner/admin. They should still be able to add members
+  // and bots — only granting elevated roles is reserved for owners/admins.
+  await openMembersSidebar(page, "secret-projects");
+
+  // The invite card is shown to any member, not just owners/admins.
+  await expect(
+    page.getByTestId("channel-management-search-users"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("channel-management-add-members"),
+  ).toBeVisible();
+
+  // The role dropdown hides the elevated "admin" option for non-admins — the
+  // relay rejects it anyway — while keeping the non-elevated roles a member
+  // may grant (member, guest, bot).
+  const roleSelect = page.getByTestId("channel-management-add-role");
+  await expect(roleSelect.locator("option")).toHaveText([
+    "member",
+    "guest",
+    "bot",
+  ]);
+});
+
 test("removing a channel-scoped agent preserves the managed agent record", async ({
   page,
 }) => {

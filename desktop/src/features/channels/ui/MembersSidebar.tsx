@@ -228,9 +228,10 @@ export function MembersSidebar({
           </SheetHeader>
 
           <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
-            {(canManageMembers || channel.visibility === "open") &&
+            {(selfMember !== null || channel.visibility === "open") &&
             channel.channelType !== "dm" ? (
               <ChannelMemberInviteCard
+                canAssignElevatedRoles={canManageMembers}
                 existingMembers={rawMembers}
                 isPending={addMembersMutation.isPending}
                 onSubmit={(input) => addMembersMutation.mutateAsync(input)}
