@@ -195,6 +195,7 @@ export function MessageComposer({
     editable: !disabled,
     mentionNames: mentions.knownNames,
     channelNames: channelLinks.knownChannelNames,
+    customEmoji,
     onSubmit: () => submitMessageRef.current(),
     onEditLastOwnMessage: () => {
       // Never re-enter edit from an empty edit (e.g. image-only edit whose

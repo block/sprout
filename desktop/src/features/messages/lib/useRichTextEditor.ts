@@ -9,11 +9,16 @@ import { Extension, type KeyboardShortcutCommand } from "@tiptap/core";
 import { Selection, TextSelection } from "@tiptap/pm/state";
 
 import { isMacPlatform } from "@/shared/lib/platform";
+import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
 import {
   MentionHighlightExtension,
   mentionHighlightKey,
 } from "./mentionHighlightExtension";
+import {
+  CustomEmojiDecorationExtension,
+  customEmojiDecorationKey,
+} from "./customEmojiDecorationExtension";
 import { buildPlainTextProjection } from "./plainTextProjection";
 import {
   CodeBlockAfterHardBreak,
@@ -38,6 +43,8 @@ export type RichTextEditorOptions = {
   editable?: boolean;
   mentionNames?: string[];
   channelNames?: string[];
+  /** Known custom-emoji set; used to render `:shortcode:` inline as images. */
+  customEmoji?: CustomEmoji[];
   /** Called on plain Enter (submit). Handled inside Tiptap's extension system
    *  so it fires *before* ProseMirror's default splitBlock behaviour. */
   onSubmit?: () => void;
@@ -74,6 +81,7 @@ export function useRichTextEditor({
   editable = true,
   mentionNames,
   channelNames,
+  customEmoji,
   onSubmit,
   onEditLastOwnMessage,
   isAutocompleteOpen,
@@ -272,6 +280,7 @@ export function useRichTextEditor({
         }),
         CodeBlockAfterHardBreak,
         MentionHighlightExtension,
+        CustomEmojiDecorationExtension,
         Placeholder.configure({
           placeholder: () => placeholderRef.current ?? "Write a message…",
         }),
@@ -415,6 +424,21 @@ export function useRichTextEditor({
       editor.view.dispatch(tr.setMeta(mentionHighlightKey, true));
     }
   }, [editor, mentionNames, channelNames]);
+
+  // Custom-emoji decoration storage. Same pattern as mentions above: mutate the
+  // shared storage object then dispatch a metadata transaction to re-decorate.
+  React.useEffect(() => {
+    if (!editor) return;
+    // biome-ignore lint/suspicious/noExplicitAny: TipTap's Storage type doesn't include dynamic extension keys
+    const storage = (editor.storage as any).customEmojiDecoration as
+      | { customEmoji: CustomEmoji[] }
+      | undefined;
+    if (storage) {
+      storage.customEmoji = customEmoji ?? [];
+      const { tr } = editor.state;
+      editor.view.dispatch(tr.setMeta(customEmojiDecorationKey, true));
+    }
+  }, [editor, customEmoji]);
 
   const getMarkdown = React.useCallback((): string => {
     if (!editor) return "";

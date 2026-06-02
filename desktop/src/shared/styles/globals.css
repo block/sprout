@@ -121,6 +121,23 @@
   font-weight: 600;
 }
 
+/* Custom-emoji shortcode source text. The literal `:shortcode:` stays in the
+ * document (selectable, deletable, serialized verbatim) but is collapsed to
+ * zero width so only the decoration <img> shows — see
+ * customEmojiDecorationExtension.ts. */
+.rich-text-composer .tiptap .custom-emoji-source {
+  font-size: 0;
+}
+
+.rich-text-composer .tiptap img[data-custom-emoji] {
+  display: inline-block;
+  height: 1.25em;
+  width: auto;
+  max-width: none;
+  vertical-align: text-bottom;
+  margin: 0 1px;
+}
+
 .agent-activity-shimmer {
   display: inline-block;
   color: transparent;
