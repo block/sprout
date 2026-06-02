@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.8
+
+
+
 ## v0.3.7
 
 2349421304d feat: custom emoji — user-owned NIP-30 sets with a client-side union (#816)
