@@ -1156,6 +1156,18 @@ async fn tokio_main() -> Result<()> {
     let maintenance_interval = Duration::from_secs(30);
     let mut last_maintenance = std::time::Instant::now();
 
+    // Serverless channel re-discovery. A generic public relay does NOT emit the
+    // kind:44100 "member added" notification that the agent normally relies on
+    // to learn it was added to a new channel (that's a Sprout-relay side
+    // effect). So in serverless mode we periodically re-run discovery and
+    // subscribe to any newly-joined channels. Without this, a channel created /
+    // joined after the agent started is never watched and the agent appears
+    // dead there.
+    let serverless_rediscover_interval = Duration::from_secs(20);
+    let mut last_rediscover = std::time::Instant::now();
+    let mut subscribed_channels: std::collections::HashSet<Uuid> =
+        channel_ids.iter().copied().collect();
+
     // Channel for background respawn tasks to return completed agents.
     // Bounded to agent count — at most one respawn per slot in flight.
     let (respawn_tx, mut respawn_rx) = mpsc::channel::<RespawnResult>(config.agents as usize);
@@ -1239,6 +1251,37 @@ async fn tokio_main() -> Result<()> {
     }
 
     loop {
+        // ── Serverless: periodic channel re-discovery (no 44100 push) ────────
+        if config.serverless && last_rediscover.elapsed() >= serverless_rediscover_interval {
+            last_rediscover = std::time::Instant::now();
+            match relay.discover_channels().await {
+                Ok(found) => {
+                    for ch in found.keys() {
+                        if subscribed_channels.contains(ch) {
+                            continue;
+                        }
+                        if let Some(filter) =
+                            config::resolve_dynamic_channel_filter(&config, *ch, &rules)
+                        {
+                            match relay.subscribe_channel(*ch, filter).await {
+                                Ok(()) => {
+                                    tracing::info!(channel_id = %ch, "serverless re-discovery: subscribed to new channel");
+                                    subscribed_channels.insert(*ch);
+                                }
+                                Err(e) => tracing::warn!(
+                                    "serverless re-discovery: failed to subscribe {ch}: {e}"
+                                ),
+                            }
+                        } else {
+                            // No matching rule, but track it so we don't retry every tick.
+                            subscribed_channels.insert(*ch);
+                        }
+                    }
+                }
+                Err(e) => tracing::debug!("serverless re-discovery failed: {e}"),
+            }
+        }
+
         // ── Maintenance (runs at loop top — cannot be starved by biased select) ──
         if last_maintenance.elapsed() >= maintenance_interval {
             last_maintenance = std::time::Instant::now();
