@@ -27,11 +27,12 @@ use sprout_core::kind::{
     KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
     KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
     KIND_NIP65_RELAY_LIST_METADATA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE, KIND_PROFILE,
-    KIND_REACTION, KIND_READ_STATE, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE,
-    KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER,
-    RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
+    KIND_REACTION, KIND_READ_STATE, KIND_RELAY_EMOJI_COMMAND, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF,
+    KIND_WORKFLOW_TRIGGER, RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE,
+    RELAY_ADMIN_REMOVE_MEMBER,
 };
 use sprout_core::verification::verify_event;
 
@@ -188,6 +189,8 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         {
             Ok(Scope::AdminUsers)
         }
+        // Relay-global custom emoji commands are member-gated in the handler.
+        KIND_RELAY_EMOJI_COMMAND => Ok(Scope::MessagesWrite),
         // NIP-IA: identity archive/unarchive requests (9035/9036).
         // Scope is intentionally UsersWrite, not AdminUsers: NIP-IA's self and
         // owner-of-agent paths are open to ordinary users (a user retiring their
@@ -348,6 +351,7 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | RELAY_ADMIN_REMOVE_MEMBER
             | RELAY_ADMIN_CHANGE_ROLE
             | KIND_NIP43_LEAVE_REQUEST
+            | KIND_RELAY_EMOJI_COMMAND
             // NIP-IA: identity archive/unarchive requests drive relay-global
             // archive state (8002/8003/13535) and are audited as global request
             // events. A stray `h` tag must not channel-scope them.
@@ -1058,6 +1062,13 @@ pub async fn ingest_event(
             "restricted: leave requests require a global token".into(),
         ));
     }
+    // Relay-global emoji commands mutate relay-owned global state — channel-scoped
+    // tokens cannot issue them.
+    if kind_u32 == KIND_RELAY_EMOJI_COMMAND && auth.channel_ids().is_some() {
+        return Err(IngestError::AuthFailed(
+            "restricted: custom emoji commands require a global token".into(),
+        ));
+    }
     if !auth.has_proxy_scope() && !auth.scopes().contains(&required) {
         return Err(IngestError::AuthFailed(format!(
             "restricted: insufficient scope (need {})",
@@ -1178,6 +1189,18 @@ pub async fn ingest_event(
     // Handled directly — these mutate relay_members and do NOT get stored.
     if is_relay_admin_kind(event.kind.as_u16() as u32) {
         crate::handlers::relay_admin::handle_relay_admin_event(state, &event)
+            .await
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+        return Ok(IngestResult {
+            event_id: event_id_hex,
+            accepted: true,
+            message: String::new(),
+        });
+    }
+
+    // ── 9a2. Relay-global custom emoji command (kind 9037) ───────────────
+    if kind_u32 == KIND_RELAY_EMOJI_COMMAND {
+        crate::handlers::custom_emoji::handle_custom_emoji_command(state, &event)
             .await
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
         return Ok(IngestResult {
@@ -1905,6 +1928,7 @@ mod tests {
             KIND_BOOKMARK_LIST,
             KIND_FOLLOW_SET,
             KIND_BOOKMARK_SET,
+            KIND_RELAY_EMOJI_COMMAND,
             KIND_AGENT_ENGRAM,
         ];
         for kind in migrated {
