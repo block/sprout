@@ -36,7 +36,8 @@ import {
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
 import { RelayMeshAgentSection } from "@/features/mesh-compute/ui/RelayMeshAgentSection";
-import { meshEnsureClientNode } from "@/shared/api/tauriMesh";
+import type { MeshServeTarget } from "@/shared/api/tauriMesh";
+import { startRelayMeshClientForTarget } from "@/features/mesh-compute/startRelayMeshClientForTarget";
 import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
@@ -95,6 +96,9 @@ export function CreateAgentDialog({
   // input carries `model: meshModelId`.
   const [useMesh, setUseMesh] = React.useState(false);
   const [meshModelId, setMeshModelId] = React.useState("");
+  const [meshTarget, setMeshTarget] = React.useState<MeshServeTarget | null>(
+    null,
+  );
   const [meshClientError, setMeshClientError] = React.useState<string | null>(
     null,
   );
@@ -317,9 +321,8 @@ export function CreateAgentDialog({
     // fields and config schema are only known after a successful probe.
     !(isProviderMode && !probedProvider) &&
     providerConfigComplete &&
-    // Relay-mesh mode requires the user to have picked a model from the
-    // availability dropdown — without a model the preset is empty.
-    !(useMesh && meshModelId.trim().length === 0) &&
+    // Relay-mesh mode requires a concrete serve target, not just a model name.
+    !(useMesh && (meshModelId.trim().length === 0 || meshTarget == null)) &&
     respondToValid &&
     !createMutation.isPending;
 
@@ -328,7 +331,7 @@ export function CreateAgentDialog({
     try {
       if (useMesh) {
         try {
-          await meshEnsureClientNode(meshModelId.trim());
+          await startRelayMeshClientForTarget(meshModelId.trim(), meshTarget);
         } catch (err) {
           setMeshClientError(err instanceof Error ? err.message : String(err));
           return;
@@ -434,6 +437,7 @@ export function CreateAgentDialog({
                 envVars,
               }}
               modelId={meshModelId}
+              targetEndpointAddr={meshTarget?.endpointAddr ?? ""}
               onModelIdChange={(nextId, patch) => {
                 setMeshModelId(nextId);
                 if (patch == null) return;
@@ -446,6 +450,7 @@ export function CreateAgentDialog({
                 setMcpCommand(patch.mcpCommand);
                 setEnvVars(patch.envVars);
               }}
+              onTargetChange={setMeshTarget}
               onUseMeshChange={(next) => {
                 setUseMesh(next);
                 if (!next) {
@@ -454,6 +459,7 @@ export function CreateAgentDialog({
                   // fields keep whatever the user had — they can re-pick
                   // ACP runtime or stay with the preset values, their call.
                   setMeshModelId("");
+                  setMeshTarget(null);
                 }
               }}
               useMesh={useMesh}

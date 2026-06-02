@@ -53,6 +53,7 @@ import {
   type SettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
+import { useMeshRelayOrchestrator } from "@/features/mesh-compute/hooks/useMeshRelayOrchestrator";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
@@ -198,6 +199,7 @@ export function AppShell() {
   const startupReady = useDeferredStartup();
 
   const identityQuery = useIdentityQuery();
+  useMeshRelayOrchestrator(identityQuery.data?.pubkey);
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   usePresenceSubscription();

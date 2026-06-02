@@ -4542,7 +4542,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-api-client"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "hex",
  "mesh-llm-client",
@@ -4552,7 +4552,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-api-server"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "mesh-llm-api-client",
@@ -4563,7 +4563,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-client"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4595,7 +4595,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-config"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4609,7 +4609,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-gpu-bench"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "cc",
@@ -4622,7 +4622,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-guardrails"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "serde",
  "serde_json",
@@ -4631,7 +4631,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-host-runtime"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
@@ -4716,7 +4716,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-identity"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "crypto_box",
  "ed25519-dalek",
@@ -4731,7 +4731,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-node"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "mesh-llm-types",
@@ -4745,7 +4745,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-plugin"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4762,7 +4762,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-plugin-manager"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4780,7 +4780,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-protocol"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "hex",
@@ -4793,7 +4793,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-routing"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "iroh",
 ]
@@ -4801,7 +4801,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-sdk"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "mesh-llm-host-runtime",
@@ -4811,7 +4811,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-skills"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4822,7 +4822,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-system"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4844,7 +4844,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-types"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "hex",
  "serde",
@@ -4855,12 +4855,12 @@ dependencies = [
 [[package]]
 name = "mesh-llm-ui"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 
 [[package]]
 name = "mesh-mixture-of-agents"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "async-trait",
  "mesh-llm-guardrails",
@@ -4924,7 +4924,7 @@ dependencies = [
 [[package]]
 name = "model-artifact"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4935,7 +4935,7 @@ dependencies = [
 [[package]]
 name = "model-hf"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4949,7 +4949,7 @@ dependencies = [
 [[package]]
 name = "model-package"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4969,7 +4969,7 @@ dependencies = [
 [[package]]
 name = "model-ref"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "serde",
 ]
@@ -4977,7 +4977,7 @@ dependencies = [
 [[package]]
 name = "model-resolver"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "model-artifact",
@@ -6001,7 +6001,7 @@ dependencies = [
 [[package]]
 name = "openai-frontend"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "async-trait",
  "axum",
@@ -8410,7 +8410,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 [[package]]
 name = "skippy-cache"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "blake3",
@@ -8420,7 +8420,7 @@ dependencies = [
 [[package]]
 name = "skippy-coordinator"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -8428,17 +8428,17 @@ dependencies = [
 [[package]]
 name = "skippy-ffi"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 
 [[package]]
 name = "skippy-metrics"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 
 [[package]]
 name = "skippy-protocol"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "prost",
  "prost-build",
@@ -8449,7 +8449,7 @@ dependencies = [
 [[package]]
 name = "skippy-runtime"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "libc",
@@ -8463,7 +8463,7 @@ dependencies = [
 [[package]]
 name = "skippy-server"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8491,7 +8491,7 @@ dependencies = [
 [[package]]
 name = "skippy-topology"
 version = "0.68.0"
-source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=bd16da4955a9dceee8f1e0a02c5814944f4e12a5#bd16da4955a9dceee8f1e0a02c5814944f4e12a5"
+source = "git+https://github.com/tlongwell-block/mesh-llm.git?rev=94c46d7d3c5a1b9eb1585a16cd6f47616d101686#94c46d7d3c5a1b9eb1585a16cd6f47616d101686"
 dependencies = [
  "serde",
  "serde_json",

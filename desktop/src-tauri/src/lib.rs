@@ -640,6 +640,8 @@ pub fn run() {
             mesh_availability,
             mesh_start_node,
             mesh_ensure_client_node,
+            mesh_dial_endpoint_addr,
+            mesh_status_report_payload,
             mesh_stop_node,
             mesh_node_status,
             mesh_installed_models,

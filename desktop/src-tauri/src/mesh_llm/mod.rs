@@ -1,12 +1,17 @@
 use std::collections::BTreeMap;
 
+mod discovery;
+pub use discovery::{availability_from_events, mesh_status_filter};
+use discovery::{device_name_from_status, endpoint_id_from_status, enrich_status_payload_identity};
+
 use mesh_llm_sdk::{client, serve, EmbeddedNodeHandle, MeshDiscoveryMode};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_MESH_API_PORT: u16 = 9337;
 const DEFAULT_MESH_CONSOLE_PORT: u16 = 3131;
 const MESH_STATUS_KIND: u64 = 30_621;
-const RELAY_MESH_API_BASE_URL: &str = "http://127.0.0.1:9337/v1";
+const MESH_API_PORT_ENV: &str = "SPROUT_MESH_API_PORT";
+const MESH_CONSOLE_PORT_ENV: &str = "SPROUT_MESH_CONSOLE_PORT";
 const RELAY_MESH_API_KEY_PLACEHOLDER: &str = "sprout-mesh-local";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -24,6 +29,14 @@ pub struct MeshServeTarget {
     pub endpoint_addr: String,
     pub node_name: Option<String>,
     pub capacity: Option<MeshTargetCapacity>,
+    #[serde(default)]
+    pub reporter_pubkey: Option<String>,
+    #[serde(default)]
+    pub endpoint_id: Option<String>,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -122,16 +135,14 @@ pub struct StartMeshNodeRequest {
     pub max_vram_gb: Option<u64>,
     #[serde(default)]
     pub join_token: Option<String>,
-    #[serde(default)]
-    pub iroh_relay_url: Option<String>,
-    #[serde(default)]
-    pub iroh_relay_auth: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EnsureMeshClientRequest {
     pub model_id: String,
+    #[serde(default)]
+    pub endpoint_addr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -146,6 +157,12 @@ pub struct MeshNodeStatus {
     pub model_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invite_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
 }
 
 pub fn stopped_status() -> MeshNodeStatus {
@@ -158,6 +175,9 @@ pub fn stopped_status() -> MeshNodeStatus {
         model_id: None,
         model_name: None,
         invite_token: None,
+        endpoint_id: None,
+        device_id: None,
+        device_name: None,
     }
 }
 
@@ -183,10 +203,11 @@ impl DesktopMeshRuntime {
                     .ok_or_else(|| anyhow::anyhow!("modelId is required for serve mode"))?;
                 let mut builder = serve::EmbeddedServeConfig::builder()
                     .model(model)
-                    .api_port(DEFAULT_MESH_API_PORT)
-                    .console_port(DEFAULT_MESH_CONSOLE_PORT)
+                    .api_port(mesh_api_port()?)
+                    .console_port(mesh_console_port()?)
                     .publish(false)
                     .auto_join(false)
+                    .disable_iroh_relays(true)
                     .discovery_mode(MeshDiscoveryMode::Nostr)
                     .console_ui(true);
                 if let Some(max_vram_gb) = request.max_vram_gb {
@@ -195,30 +216,19 @@ impl DesktopMeshRuntime {
                 if let Some(join_token) = request.join_token.as_deref() {
                     builder = builder.join_token(join_token);
                 }
-                if let Some(relay) = request.iroh_relay_url.as_deref() {
-                    builder = builder.iroh_relay(relay);
-                    if let Some(auth) = request.iroh_relay_auth.as_deref() {
-                        builder = builder.iroh_relay_auth(relay, auth);
-                    }
-                }
                 serve::start(builder.build()).await?
             }
             MeshNodeMode::Client => {
                 let mut builder = client::EmbeddedClientConfig::builder()
-                    .api_port(DEFAULT_MESH_API_PORT)
-                    .console_port(DEFAULT_MESH_CONSOLE_PORT)
+                    .api_port(mesh_api_port()?)
+                    .console_port(mesh_console_port()?)
                     .publish(false)
                     .auto_join(false)
+                    .disable_iroh_relays(true)
                     .discovery_mode(MeshDiscoveryMode::Nostr)
                     .console_ui(true);
                 if let Some(join_token) = request.join_token.as_deref() {
                     builder = builder.join_token(join_token);
-                }
-                if let Some(relay) = request.iroh_relay_url.as_deref() {
-                    builder = builder.iroh_relay(relay);
-                    if let Some(auth) = request.iroh_relay_auth.as_deref() {
-                        builder = builder.iroh_relay_auth(relay, auth);
-                    }
                 }
                 client::start(builder.build()).await?
             }
@@ -237,6 +247,17 @@ impl DesktopMeshRuntime {
         self.status_from_sdk(status)
     }
 
+    pub async fn status_report_payload(&self) -> anyhow::Result<serde_json::Value> {
+        let status = self.handle.status().await?;
+        let mut payload = status.payload;
+        enrich_status_payload_identity(&mut payload, status.invite_token.as_deref());
+        Ok(payload)
+    }
+
+    pub async fn dial_endpoint_addr(&self, endpoint_addr: impl Into<String>) -> anyhow::Result<()> {
+        self.handle.join_token(endpoint_addr).await
+    }
+
     pub async fn installed_models(&self) -> anyhow::Result<Vec<MeshModelOption>> {
         let status = self.handle.status().await?;
         Ok(models_from_status_payload(Some(&status.payload)))
@@ -247,6 +268,9 @@ impl DesktopMeshRuntime {
         status: mesh_llm_sdk::EmbeddedNodeStatus,
     ) -> anyhow::Result<MeshNodeStatus> {
         let health = health_from_payload(&status.payload);
+        let endpoint_id = endpoint_id_from_status(&status.payload, status.invite_token.as_deref());
+        let device_name = device_name_from_status(&status.payload, endpoint_id.as_deref());
+        let device_id = endpoint_id.clone();
         Ok(MeshNodeStatus {
             state: if matches!(health.status, MeshHealthStatus::Failed) {
                 MeshNodeState::Failed
@@ -260,6 +284,9 @@ impl DesktopMeshRuntime {
             model_id: self.model_id.clone(),
             model_name: self.model_name.clone(),
             invite_token: status.invite_token,
+            endpoint_id,
+            device_id,
+            device_name,
         })
     }
 
@@ -268,15 +295,39 @@ impl DesktopMeshRuntime {
     }
 }
 
+fn mesh_api_port() -> anyhow::Result<u16> {
+    mesh_port_from_env(MESH_API_PORT_ENV, DEFAULT_MESH_API_PORT)
+}
+
+fn mesh_console_port() -> anyhow::Result<u16> {
+    mesh_port_from_env(MESH_CONSOLE_PORT_ENV, DEFAULT_MESH_CONSOLE_PORT)
+}
+
+fn mesh_port_from_env(name: &str, default: u16) -> anyhow::Result<u16> {
+    let Some(raw) = std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(default);
+    };
+    let port = raw
+        .parse::<u16>()
+        .map_err(|error| anyhow::anyhow!("{name} must be a TCP port (got {raw:?}): {error}"))?;
+    if port == 0 {
+        anyhow::bail!("{name} must be a non-zero TCP port");
+    }
+    Ok(port)
+}
+
+fn relay_mesh_api_base_url() -> Result<String, String> {
+    let port = mesh_api_port().map_err(|error| error.to_string())?;
+    Ok(format!("http://127.0.0.1:{port}/v1"))
+}
+
 fn validate_no_leak_request(request: &StartMeshNodeRequest) -> anyhow::Result<()> {
     if request.join_token.as_deref().is_some_and(str::is_empty) {
         anyhow::bail!("joinToken cannot be empty when provided");
-    }
-    if request.iroh_relay_url.as_deref().is_none_or(str::is_empty) {
-        anyhow::bail!("relay NIP-11 must advertise iroh_relay_url before starting mesh");
-    }
-    if request.iroh_relay_auth.as_deref().is_none_or(str::is_empty) {
-        anyhow::bail!("iroh relay admission bearer is required before starting mesh");
     }
     Ok(())
 }
@@ -373,7 +424,7 @@ fn push_model(out: &mut Vec<MeshModelOption>, id: &str, name: Option<String>) {
     });
 }
 
-fn dedupe_models(models: Vec<MeshModelOption>) -> Vec<MeshModelOption> {
+pub(super) fn dedupe_models(models: Vec<MeshModelOption>) -> Vec<MeshModelOption> {
     let mut by_id = BTreeMap::<String, Option<String>>::new();
     for model in models {
         by_id
@@ -427,7 +478,7 @@ pub fn agent_preset(request: MeshAgentPresetRequest) -> Result<MeshAgentPreset, 
             ("SPROUT_AGENT_PROVIDER".to_string(), "openai".to_string()),
             (
                 "OPENAI_COMPAT_BASE_URL".to_string(),
-                RELAY_MESH_API_BASE_URL.to_string(),
+                relay_mesh_api_base_url()?,
             ),
             ("OPENAI_COMPAT_MODEL".to_string(), model.to_string()),
             (
@@ -436,60 +487,6 @@ pub fn agent_preset(request: MeshAgentPresetRequest) -> Result<MeshAgentPreset, 
             ),
             ("OPENAI_COMPAT_API".to_string(), "chat".to_string()),
         ]),
-    })
-}
-
-pub fn availability_from_events(events: Vec<nostr::Event>) -> MeshAvailability {
-    let Some(event) = events.into_iter().max_by_key(|event| event.created_at) else {
-        return MeshAvailability::unavailable("relay mesh status is not published yet");
-    };
-
-    let Ok(content) = serde_json::from_str::<serde_json::Value>(&event.content) else {
-        return MeshAvailability::unavailable("relay mesh status is malformed");
-    };
-
-    let serve_targets = content
-        .get("serveTargets")
-        .or_else(|| content.get("serve_targets"))
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<MeshServeTarget>>(value).ok())
-        .unwrap_or_default();
-    let models = content
-        .get("models")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<MeshModelOption>>(value).ok())
-        .unwrap_or_else(|| {
-            dedupe_models(
-                serve_targets
-                    .iter()
-                    .map(|target| MeshModelOption {
-                        id: target.model_id.clone(),
-                        name: target.model_name.clone(),
-                    })
-                    .collect(),
-            )
-        });
-
-    let available = !serve_targets.is_empty();
-    MeshAvailability {
-        capable: true,
-        admitted: true,
-        available,
-        reason: if available {
-            None
-        } else {
-            Some("no relay mesh serve targets are available".to_string())
-        },
-        models,
-        serve_targets,
-    }
-}
-
-pub fn mesh_status_filter() -> serde_json::Value {
-    serde_json::json!({
-        "kinds": [MESH_STATUS_KIND],
-        "#d": ["sprout-relay-mesh"],
-        "limit": 1
     })
 }
 

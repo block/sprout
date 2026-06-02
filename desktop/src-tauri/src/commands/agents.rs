@@ -37,7 +37,7 @@ async fn ensure_relay_mesh_for_record(
     let Some(model_id) = relay_mesh_model_id(record) else {
         return Ok(());
     };
-    crate::commands::mesh_llm::ensure_client_node_for_model(state, model_id).await?;
+    crate::commands::mesh_llm::ensure_client_node_for_model(state, model_id, None).await?;
     Ok(())
 }
 

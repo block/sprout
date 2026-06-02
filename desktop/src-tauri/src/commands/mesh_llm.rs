@@ -1,6 +1,3 @@
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use nostr::{EventBuilder, JsonUtil, Kind, Tag};
-use reqwest::Method;
 use tauri::{AppHandle, State};
 
 use crate::{app_state::AppState, mesh_llm, relay};
@@ -21,14 +18,12 @@ pub async fn mesh_availability(
 pub async fn mesh_start_node(
     _app: AppHandle,
     state: State<'_, AppState>,
-    mut request: mesh_llm::StartMeshNodeRequest,
+    request: mesh_llm::StartMeshNodeRequest,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
     let mut runtime = state.mesh_llm_runtime.lock().await;
     if runtime.is_some() {
         return Err("mesh node is already running".to_string());
     }
-
-    hydrate_private_relay_config(&state, &mut request).await?;
 
     let started = mesh_llm::DesktopMeshRuntime::start(request)
         .await
@@ -46,12 +41,13 @@ pub async fn mesh_ensure_client_node(
     state: State<'_, AppState>,
     request: mesh_llm::EnsureMeshClientRequest,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
-    ensure_client_node_for_model(&state, request.model_id).await
+    ensure_client_node_for_model(&state, request.model_id, request.endpoint_addr).await
 }
 
 pub(crate) async fn ensure_client_node_for_model(
     state: &AppState,
     model_id: impl AsRef<str>,
+    endpoint_addr: Option<String>,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
     let requested_model = model_id.as_ref().trim();
     if requested_model.is_empty() {
@@ -73,31 +69,40 @@ pub(crate) async fn ensure_client_node_for_model(
         }
     }
 
-    let availability = match relay::query_relay(state, &[mesh_llm::mesh_status_filter()]).await {
-        Ok(events) => mesh_llm::availability_from_events(events),
-        Err(error) => return Err(format!("failed to read relay mesh status: {error}")),
+    let join_token = match endpoint_addr
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => {
+            let availability =
+                match relay::query_relay(state, &[mesh_llm::mesh_status_filter()]).await {
+                    Ok(events) => mesh_llm::availability_from_events(events),
+                    Err(error) => return Err(format!("failed to read relay mesh status: {error}")),
+                };
+            if !availability.available {
+                return Err(availability
+                    .reason
+                    .unwrap_or_else(|| "relay mesh is not available".to_string()));
+            }
+            let target = availability
+                .serve_targets
+                .iter()
+                .find(|target| target.model_id == requested_model)
+                .cloned()
+                .ok_or_else(|| {
+                    format!("relay mesh has no serve target for model {requested_model}")
+                })?;
+            target.endpoint_addr
+        }
     };
-    if !availability.available {
-        return Err(availability
-            .reason
-            .unwrap_or_else(|| "relay mesh is not available".to_string()));
-    }
-    let target = availability
-        .serve_targets
-        .iter()
-        .find(|target| target.model_id == requested_model)
-        .ok_or_else(|| format!("relay mesh has no serve target for model {requested_model}"))?;
 
-    let mut start = mesh_llm::StartMeshNodeRequest {
+    let start = mesh_llm::StartMeshNodeRequest {
         mode: mesh_llm::MeshNodeMode::Client,
         model_id: None,
         max_vram_gb: None,
-        join_token: Some(target.endpoint_addr.clone()),
-        iroh_relay_url: None,
-        iroh_relay_auth: None,
+        join_token: Some(join_token),
     };
-    hydrate_private_relay_config(state, &mut start).await?;
-
     let mut runtime = state.mesh_llm_runtime.lock().await;
     if runtime.is_some() {
         return Err("mesh node changed while starting relay mesh client".to_string());
@@ -113,80 +118,45 @@ pub(crate) async fn ensure_client_node_for_model(
     Ok(status)
 }
 
-async fn hydrate_private_relay_config(
-    state: &AppState,
-    request: &mut mesh_llm::StartMeshNodeRequest,
-) -> Result<(), String> {
-    if request.iroh_relay_url.is_none() {
-        request.iroh_relay_url = Some(fetch_iroh_relay_url(state).await?);
-    }
-    if request.iroh_relay_auth.is_none() {
-        let relay = request
-            .iroh_relay_url
-            .as_deref()
-            .ok_or_else(|| "relay did not advertise iroh_relay_url".to_string())?;
-        request.iroh_relay_auth = Some(build_iroh_relay_bearer(state, relay)?);
-    }
-    Ok(())
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshDialEndpointRequest {
+    pub endpoint_addr: String,
 }
 
-async fn fetch_iroh_relay_url(state: &AppState) -> Result<String, String> {
-    #[derive(serde::Deserialize)]
-    struct Nip11Info {
-        iroh_relay_url: Option<String>,
+#[tauri::command]
+pub async fn mesh_dial_endpoint_addr(
+    state: State<'_, AppState>,
+    request: MeshDialEndpointRequest,
+) -> CmdResult<mesh_llm::MeshNodeStatus> {
+    let endpoint_addr = request.endpoint_addr.trim();
+    if endpoint_addr.is_empty() {
+        return Err("endpointAddr is required".to_string());
     }
-
-    let url = relay::relay_api_base_url_with_override(state);
-    let response = state
-        .http_client
-        .get(&url)
-        .header("Accept", "application/nostr+json")
-        .send()
+    let runtime = state.mesh_llm_runtime.lock().await;
+    let Some(runtime) = runtime.as_ref() else {
+        return Err("mesh node is not running".to_string());
+    };
+    runtime
+        .dial_endpoint_addr(endpoint_addr)
         .await
-        .map_err(|error| format!("failed to fetch relay NIP-11: {error}"))?;
-    if !response.status().is_success() {
-        return Err(relay::relay_error_message(response).await);
-    }
-    let info = response
-        .json::<Nip11Info>()
-        .await
-        .map_err(|error| format!("failed to parse relay NIP-11: {error}"))?;
-    info.iroh_relay_url
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "relay NIP-11 does not advertise iroh_relay_url".to_string())
+        .map_err(|error| format!("mesh dial failed: {error}"))?;
+    runtime.status().await.map_err(|error| error.to_string())
 }
 
-fn build_iroh_relay_bearer(state: &AppState, relay_url: &str) -> Result<String, String> {
-    let canonical = canonical_iroh_relay_auth_url(relay_url)?;
-    let tags = vec![
-        Tag::parse(vec!["u", canonical.as_str()])
-            .map_err(|error| format!("url tag failed: {error}"))?,
-        Tag::parse(vec!["method", Method::GET.as_str()])
-            .map_err(|error| format!("method tag failed: {error}"))?,
-    ];
-    let keys = state.keys.lock().map_err(|error| error.to_string())?;
-    let event = EventBuilder::new(Kind::HttpAuth, "")
-        .tags(tags)
-        .sign_with_keys(&keys)
-        .map_err(|error| format!("sign failed: {error}"))?;
-    Ok(BASE64.encode(event.as_json().as_bytes()))
-}
-
-fn canonical_iroh_relay_auth_url(relay_url: &str) -> Result<String, String> {
-    let mut parsed = url::Url::parse(relay_url)
-        .map_err(|error| format!("invalid iroh relay URL {relay_url:?}: {error}"))?;
-    parsed.set_query(None);
-    parsed.set_fragment(None);
-    let mut path = parsed.path().trim_end_matches('/').to_string();
-    if !path.ends_with("/relay") {
-        if path.is_empty() {
-            path = "/relay".to_string();
-        } else {
-            path.push_str("/relay");
-        }
+#[tauri::command]
+pub async fn mesh_status_report_payload(
+    state: State<'_, AppState>,
+) -> CmdResult<Option<serde_json::Value>> {
+    let runtime = state.mesh_llm_runtime.lock().await;
+    match runtime.as_ref() {
+        Some(runtime) => runtime
+            .status_report_payload()
+            .await
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        None => Ok(None),
     }
-    parsed.set_path(&path);
-    Ok(parsed.to_string().trim_end_matches('/').to_string())
 }
 
 #[tauri::command]
