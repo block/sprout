@@ -4381,6 +4381,7 @@ async function handleSendChannelMessage(
     kind?: number | null;
     mentionPubkeys?: string[];
     mediaTags?: string[][] | null;
+    emojiTags?: string[][] | null;
   },
   config: E2eConfig | undefined,
 ): Promise<RawSendChannelMessageResponse> {
@@ -4389,6 +4390,12 @@ async function handleSendChannelMessage(
   // event; mirror that here so attachment renderers (FileCard, images, video)
   // have the imeta tags they key on. `null`/empty → no extra tags.
   const mediaTags = args.mediaTags ?? [];
+  // NIP-30 custom-emoji tags ride their own validated arg server-side; the
+  // relay echoes them back on the stored event too, so mirror that here so the
+  // emoji renderer keeps resolving `:shortcode:` after the round-trip.
+  const emojiTags = args.emojiTags ?? [];
+  // Both kinds end up on the stored event's tag set, just like the real relay.
+  const extraTags = [...mediaTags, ...emojiTags];
   const identity = getIdentity(config);
   if (!identity) {
     const createdAt = Math.floor(Date.now() / 1000);
@@ -4401,7 +4408,7 @@ async function handleSendChannelMessage(
           args.mentionPubkeys,
           mockPubkey,
         ),
-        ...mediaTags,
+        ...extraTags,
       ]);
       recordMockMessage(args.channelId, event);
       emitMockLiveEvent(args.channelId, event);
@@ -4460,7 +4467,7 @@ async function handleSendChannelMessage(
           rootEventId,
           args.mentionPubkeys,
         ),
-        ...mediaTags,
+        ...extraTags,
       ],
       content: args.content.trim(),
       sig: "mocksig".repeat(20).slice(0, 128),
@@ -4496,7 +4503,7 @@ async function handleSendChannelMessage(
   const result = await submitSignedEvent(config, {
     kind,
     content: args.content.trim(),
-    tags: [...tags, ...mediaTags],
+    tags: [...tags, ...extraTags],
   });
 
   return {

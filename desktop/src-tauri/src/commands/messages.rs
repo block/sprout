@@ -265,11 +265,13 @@ async fn resolve_thread_ref(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_channel_message(
     channel_id: String,
     content: String,
     parent_event_id: Option<String>,
     media_tags: Option<Vec<Vec<String>>>,
+    emoji_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
     state: State<'_, AppState>,
@@ -279,6 +281,7 @@ pub async fn send_channel_message(
     let mentions = mention_pubkeys.unwrap_or_default();
     let mention_refs: Vec<&str> = mentions.iter().map(|s| s.as_str()).collect();
     let media = media_tags.unwrap_or_default();
+    let emoji = emoji_tags.unwrap_or_default();
     let kind_num = kind.unwrap_or(sprout_core::kind::KIND_STREAM_MESSAGE);
 
     let mut resolved_root: Option<String> = None;
@@ -316,6 +319,7 @@ pub async fn send_channel_message(
                 thread_ref.as_ref(),
                 &mention_refs,
                 &media,
+                &emoji,
             )?
         }
     };

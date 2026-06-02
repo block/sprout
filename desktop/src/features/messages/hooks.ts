@@ -12,6 +12,7 @@ import {
   normalizeMentionPubkeys,
   resolveReplyRootId,
 } from "@/features/messages/lib/threading";
+import { splitOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import { relayClient } from "@/shared/api/relayClient";
 import { customEmojiQueryKey } from "@/features/custom-emoji/hooks";
 import { reactionEmojiUrl } from "@/shared/api/customEmoji";
@@ -299,9 +300,16 @@ export function useSendMessageMutation(
         throw new Error("No identity available for sending messages.");
       }
 
-      // Media-bearing messages MUST go through REST so the relay's imeta
-      // validation runs. The WebSocket path does not validate imeta tags.
-      if (parentEventId || (mediaTags && mediaTags.length > 0)) {
+      // `mediaTags` arrives as the merged outgoing tag set (imeta + NIP-30
+      // emoji). Split it so each kind goes to its own validated Tauri arg —
+      // emoji tags must NOT ride the imeta-only `media` channel (that gate
+      // rejects any non-imeta prefix, which silently dropped emoji sends).
+      const { mediaTags: imetaTags, emojiTags } = splitOutgoingTags(mediaTags);
+
+      // Messages carrying media OR custom-emoji tags MUST go through REST so
+      // the relay's tag validation runs. The WebSocket path emits no extra
+      // tags, so emoji-only messages would otherwise lose their emoji tag.
+      if (parentEventId || imetaTags.length > 0 || emojiTags.length > 0) {
         const cachedMessages =
           queryClient.getQueryData<RelayEvent[]>(
             channelMessagesKey(channel.id),
@@ -310,11 +318,13 @@ export function useSendMessageMutation(
           channel.id,
           content,
           parentEventId ?? null,
-          mediaTags,
+          imetaTags,
           mentionPubkeys,
+          undefined,
+          emojiTags,
         );
 
-        // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta.
+        // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta, emoji.
         // For replies, buildReplyTags already includes ["p", author] and ["h", channel].
         // For non-replies (media-only), we add them ourselves.
         const replyTags = parentEventId
@@ -347,7 +357,8 @@ export function useSendMessageMutation(
                   identity.pubkey,
                 ).map((pk) => ["p", pk])
               : []),
-            ...(mediaTags ?? []),
+            ...imetaTags,
+            ...emojiTags,
           ],
           content: content.trim(),
           sig: "",

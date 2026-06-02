@@ -231,13 +231,19 @@ pub async fn handle_custom_emoji_command(
         ));
     }
 
+    // Only gate emoji edits on relay membership when the relay actually
+    // enforces membership. On open relays (`require_relay_membership = false`)
+    // the `relay_members` table is empty by design, so requiring membership
+    // here would lock out every user — including the owner. Mirror how auth.rs
+    // and ingest.rs scope membership checks to the enforcement flag.
     let sender_hex = event.pubkey.to_hex();
-    if state
-        .db
-        .get_relay_member(&sender_hex)
-        .await
-        .map_err(|e| format!("database error: {e}"))?
-        .is_none()
+    if state.config.require_relay_membership
+        && state
+            .db
+            .get_relay_member(&sender_hex)
+            .await
+            .map_err(|e| format!("database error: {e}"))?
+            .is_none()
     {
         return Err("actor not authorized: must be a relay member".to_string());
     }

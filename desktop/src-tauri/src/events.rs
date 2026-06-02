@@ -92,6 +92,23 @@ fn imeta_tags(media_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), Str
     Ok(())
 }
 
+/// Validate and append NIP-30 custom-emoji tags. Mirrors `imeta_tags`: rejects
+/// any tag whose first element is not "emoji" so this path can't be used to
+/// smuggle forged "h"/"e"/"p" tags. Each tag is `["emoji", shortcode, url]`.
+fn emoji_tags(emoji_tags: &[Vec<String>], tags: &mut Vec<Tag>) -> Result<(), String> {
+    for et in emoji_tags {
+        if et.first().map(String::as_str) != Some("emoji") {
+            return Err(format!(
+                "emoji tags must use 'emoji' prefix (got {:?})",
+                et.first()
+            ));
+        }
+        let parts: Vec<&str> = et.iter().map(String::as_str).collect();
+        tags.push(Tag::parse(parts).map_err(|e| format!("invalid emoji tag: {e}"))?);
+    }
+    Ok(())
+}
+
 /// Validate a hex pubkey is exactly 64 hex characters.
 fn check_pubkey(pubkey: &str) -> Result<(), String> {
     if pubkey.len() != 64 || !pubkey.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -240,6 +257,7 @@ pub fn build_message(
     thread_ref: Option<&ThreadRef>,
     mentions: &[&str],
     media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![tag(vec!["h", &channel_id.to_string()])?];
@@ -248,6 +266,7 @@ pub fn build_message(
     }
     tags.extend(mention_tags(mentions)?);
     imeta_tags(media_tags, &mut tags)?;
+    emoji_tags(custom_emoji_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
 }
 
