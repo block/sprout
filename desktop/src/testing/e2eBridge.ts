@@ -503,6 +503,7 @@ declare global {
       pubkey?: string;
       kind?: number;
       mentionPubkeys?: string[];
+      extraTags?: string[][];
     }) => RelayEvent;
     __SPROUT_E2E_EMIT_MOCK_TYPING__?: (input: {
       channelName: string;
@@ -1948,19 +1949,17 @@ function emitMockChannelMessage(
   pubkey?: string,
   kind?: number,
   mentionPubkeys?: string[],
+  extraTags?: string[][],
 ) {
   const eventKind = kind ?? 9;
   if (!parentEventId) {
-    const event = createMockEvent(
-      eventKind,
-      content,
-      buildTopLevelMessageTags(
-        channelId,
-        mentionPubkeys,
-        pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
-      ),
-      pubkey,
+    const tags = buildTopLevelMessageTags(
+      channelId,
+      mentionPubkeys,
+      pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey,
     );
+    if (extraTags) tags.push(...extraTags);
+    const event = createMockEvent(eventKind, content, tags, pubkey);
     recordMockMessage(channelId, event);
     emitMockLiveEvent(channelId, event);
     return event;
@@ -1977,18 +1976,15 @@ function emitMockChannelMessage(
       };
   const rootEventId = parentThread.rootEventId ?? parentEventId;
   const authorPubkey = pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey;
-  const event = createMockEvent(
-    eventKind,
-    content,
-    buildReplyMessageTags(
-      channelId,
-      authorPubkey,
-      parentEventId,
-      rootEventId,
-      mentionPubkeys,
-    ),
+  const tags = buildReplyMessageTags(
+    channelId,
     authorPubkey,
+    parentEventId,
+    rootEventId,
+    mentionPubkeys,
   );
+  if (extraTags) tags.push(...extraTags);
+  const event = createMockEvent(eventKind, content, tags, authorPubkey);
   recordMockMessage(channelId, event);
   emitMockLiveEvent(channelId, event);
   return event;
@@ -5121,6 +5117,7 @@ export function maybeInstallE2eTauriMocks() {
     pubkey,
     kind,
     mentionPubkeys,
+    extraTags,
   }) => {
     const channel = mockChannels.find(
       (candidate) => candidate.name === channelName,
@@ -5136,6 +5133,7 @@ export function maybeInstallE2eTauriMocks() {
       pubkey,
       kind,
       mentionPubkeys,
+      extraTags,
     );
   };
   window.__SPROUT_E2E_EMIT_MOCK_TYPING__ = ({ channelName, pubkey }) => {

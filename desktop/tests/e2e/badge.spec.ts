@@ -130,6 +130,34 @@ test("numeric badge for DM message", async ({ page }) => {
   await waitForBadgeState(page, { state: "count", count: 1 });
 });
 
+test("numeric badge for broadcast reply in inactive channel", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await waitForMockLiveSubscription(page, "random");
+
+  await page.evaluate(
+    ({ pubkey }) => {
+      window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "random",
+        content: "Broadcast reply to the channel",
+        kind: 40002,
+        pubkey,
+        extraTags: [
+          ["broadcast", "1"],
+          ["e", "some-root-event-id"],
+        ],
+      });
+    },
+    { pubkey: TEST_IDENTITIES.alice.pubkey },
+  );
+
+  await expect(page.getByTestId("channel-unread-random")).toBeVisible();
+  await waitForBadgeState(page, { state: "count", count: 1 });
+});
+
 test("mark-as-read via context menu clears channel unread indicator", async ({
   page,
 }) => {
@@ -156,6 +184,7 @@ test("mark-as-read via context menu clears channel unread indicator", async ({
   await page.getByText("Mark as read").click();
 
   await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+  await waitForBadgeState(page, { state: "none" });
 });
 
 test("mark-as-unread via context menu shows dot badge", async ({ page }) => {

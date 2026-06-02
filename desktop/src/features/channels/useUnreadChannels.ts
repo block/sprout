@@ -583,10 +583,9 @@ export function useUnreadChannels(
           let maxExternal = 0;
           let maxHighPriority = 0;
           const threadReplies: ThreadActivityItem[] = [];
-          const chType = channels.find(
-            (ch) => ch.id === channelId,
-          )?.channelType;
-          const chName = channels.find((ch) => ch.id === channelId)?.name ?? "";
+          const ch = channels.find((c) => c.id === channelId);
+          const chType = ch?.channelType;
+          const chName = ch?.name ?? "";
           for (const event of events) {
             if (
               normalizedPubkey !== null &&
@@ -613,7 +612,7 @@ export function useUnreadChannels(
             if (
               chType === "dm" ||
               (normalizedPubkey !== null &&
-                isHighPriorityEventForUser(event, normalizedPubkey ?? ""))
+                isHighPriorityEventForUser(event, normalizedPubkey))
             ) {
               if (event.created_at > maxHighPriority) {
                 maxHighPriority = event.created_at;
@@ -726,69 +725,69 @@ export function useUnreadChannels(
   // Unread = channels (excluding active) that have either been manually
   // marked unread this session, or whose observed latest external trigger
   // timestamp is strictly newer than their NIP-RS read marker.
-  // readStateVersion and latestVersion are intentional invalidation signals.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion and latestVersion are intentional invalidation signals
-  const unreadChannelIds = React.useMemo(() => {
-    if (!isReadStateReady) {
-      return new Set<string>();
-    }
+  // High-priority unread = DMs or channels with a mention/broadcast newer
+  // than the read marker. Forced-unread channels are dot tier only (not
+  // high-priority). Both sets share identical deps and always invalidate
+  // together, so they are computed in a single memo.
+  const { unreadChannelIds, highPriorityUnreadChannelIds } =
+    // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion and latestVersion are intentional invalidation signals
+    React.useMemo(() => {
+      if (!isReadStateReady) {
+        return {
+          unreadChannelIds: new Set<string>(),
+          highPriorityUnreadChannelIds: new Set<string>(),
+        };
+      }
 
-    return new Set(
-      channels
-        .filter((channel) => channel.id !== activeChannelId)
-        .filter((channel) => {
-          if (forcedUnreadRef.current.has(channel.id)) return true;
-          const latest = latestByChannelRef.current.get(channel.id);
-          if (latest === undefined) return false;
+      const unread = new Set<string>();
+      const highPriority = new Set<string>();
 
-          const readAt = getEffectiveTimestamp(channel.id);
-          return readAt === null || latest > readAt;
-        })
-        .map((channel) => channel.id),
-    );
-  }, [
-    activeChannelId,
-    channels,
-    getEffectiveTimestamp,
-    isReadStateReady,
-    latestVersion,
-    readStateVersion,
-  ]);
+      for (const channel of channels) {
+        if (channel.id === activeChannelId) continue;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion and latestVersion are intentional invalidation signals
-  const highPriorityUnreadChannelIds = React.useMemo(() => {
-    if (!isReadStateReady) {
-      return new Set<string>();
-    }
+        if (forcedUnreadRef.current.has(channel.id)) {
+          // Forced-unread is dot tier only — not high-priority.
+          unread.add(channel.id);
+          continue;
+        }
 
-    return new Set(
-      channels
-        .filter((channel) => channel.id !== activeChannelId)
-        .filter((channel) => {
-          // Forced-unread channels are NOT high-priority (dot tier only).
-          // DM channels: any unread DM is high-priority.
-          if (channel.channelType === "dm") {
-            const latest = latestByChannelRef.current.get(channel.id);
-            if (latest === undefined) return false;
-            const readAt = getEffectiveTimestamp(channel.id);
-            return readAt === null || latest > readAt;
+        const latest = latestByChannelRef.current.get(channel.id);
+        if (latest === undefined) continue;
+
+        const readAt = getEffectiveTimestamp(channel.id);
+        if (readAt !== null && latest <= readAt) continue;
+
+        unread.add(channel.id);
+
+        // DM channels: any unread DM is high-priority.
+        if (channel.channelType === "dm") {
+          highPriority.add(channel.id);
+        } else {
+          // Non-DM: high-priority only if there's a mention/broadcast newer than read marker.
+          const latestHigh = latestHighPriorityByChannelRef.current.get(
+            channel.id,
+          );
+          if (
+            latestHigh !== undefined &&
+            (readAt === null || latestHigh > readAt)
+          ) {
+            highPriority.add(channel.id);
           }
-          // Non-DM: check if there's a high-priority event newer than read marker.
-          const latest = latestHighPriorityByChannelRef.current.get(channel.id);
-          if (latest === undefined) return false;
-          const readAt = getEffectiveTimestamp(channel.id);
-          return readAt === null || latest > readAt;
-        })
-        .map((channel) => channel.id),
-    );
-  }, [
-    activeChannelId,
-    channels,
-    getEffectiveTimestamp,
-    isReadStateReady,
-    latestVersion,
-    readStateVersion,
-  ]);
+        }
+      }
+
+      return {
+        unreadChannelIds: unread,
+        highPriorityUnreadChannelIds: highPriority,
+      };
+    }, [
+      activeChannelId,
+      channels,
+      getEffectiveTimestamp,
+      isReadStateReady,
+      latestVersion,
+      readStateVersion,
+    ]);
 
   const unreadChannelIdsRef = React.useRef(unreadChannelIds);
   unreadChannelIdsRef.current = unreadChannelIds;

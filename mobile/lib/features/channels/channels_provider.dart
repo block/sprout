@@ -351,6 +351,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     if (myPk == null) return;
 
     final session = ref.read(relaySessionProvider.notifier);
+    final futures = <Future<void>>[];
 
     for (final channel in channels) {
       if (!channel.isMember || channel.isArchived) continue;
@@ -365,37 +366,51 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         continue;
       }
 
-      // For non-DM channels, fetch recent events and scan for high-priority ones.
-      try {
-        final events = await session.fetchHistory(
-          NostrFilter(
-            kinds: EventKind.channelEventKinds,
-            tags: {
-              '#h': [channel.id],
-            },
-            limit: 50,
-          ),
-        );
+      futures.add(_backfillHighPriorityForChannel(session, channel, myPk));
+    }
 
-        var maxHighPriority = 0;
-        for (final event in events) {
-          if (isHighPriorityEvent(event.tags, myPk) &&
-              event.createdAt > maxHighPriority) {
-            maxHighPriority = event.createdAt;
-          }
-        }
+    await Future.wait(futures);
 
-        if (maxHighPriority > 0) {
-          final current = _latestHighPriorityByChannel[channel.id] ?? 0;
-          if (maxHighPriority > current) {
-            _latestHighPriorityByChannel[channel.id] = maxHighPriority;
-          }
+    // Trigger unreadBadgeProvider to re-evaluate now that the map is populated.
+    state = state.whenData((channels) => List<Channel>.of(channels));
+  }
+
+  Future<void> _backfillHighPriorityForChannel(
+    RelaySessionNotifier session,
+    Channel channel,
+    String myPk,
+  ) async {
+    // For non-DM channels, fetch recent events and scan for high-priority ones.
+    try {
+      final events = await session.fetchHistory(
+        NostrFilter(
+          kinds: EventKind.channelEventKinds,
+          tags: {
+            '#h': [channel.id],
+          },
+          limit: 50,
+        ),
+      );
+
+      var maxHighPriority = 0;
+      for (final event in events) {
+        if (event.pubkey == myPk) continue;
+        if (isHighPriorityEvent(event.tags, myPk) &&
+            event.createdAt > maxHighPriority) {
+          maxHighPriority = event.createdAt;
         }
-      } catch (error) {
-        debugPrint(
-          '[ChannelsNotifier] backfill failed for ${channel.id}: $error',
-        );
       }
+
+      if (maxHighPriority > 0) {
+        final current = _latestHighPriorityByChannel[channel.id] ?? 0;
+        if (maxHighPriority > current) {
+          _latestHighPriorityByChannel[channel.id] = maxHighPriority;
+        }
+      }
+    } catch (error) {
+      debugPrint(
+        '[ChannelsNotifier] backfill failed for ${channel.id}: $error',
+      );
     }
   }
 
@@ -422,6 +437,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
 
       final myPk = ref.read(myPubkeyProvider);
       if (myPk != null &&
+          event.pubkey != myPk &&
           (channel.isDm || isHighPriorityEvent(event.tags, myPk))) {
         final current = _latestHighPriorityByChannel[channelId] ?? 0;
         if (event.createdAt > current) {

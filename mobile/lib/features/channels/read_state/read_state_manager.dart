@@ -233,7 +233,9 @@ class ReadStateManager {
         continue;
       }
 
-      _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+      if (_isPlausibleCreatedAt(event.createdAt)) {
+        _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+      }
 
       if (decoded.dTag == '$readStateDTagPrefix$_slotId' &&
           decoded.blob.clientId != _clientId) {
@@ -297,7 +299,9 @@ class ReadStateManager {
       return;
     }
 
-    _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+    if (_isPlausibleCreatedAt(event.createdAt)) {
+      _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, event.createdAt);
+    }
 
     if (decoded.dTag == '$readStateDTagPrefix$_slotId' &&
         decoded.blob.clientId != _clientId) {
@@ -478,6 +482,9 @@ class ReadStateManager {
     _slotId = generateReadStateSlotId();
     _storage.writeSlotId(pubkey, _slotId);
   }
+
+  bool _isPlausibleCreatedAt(int createdAt) =>
+      createdAt <= currentUnixSeconds() + readStateMaxClockDriftSeconds;
 
   bool _isPermanentReadStateRemoteError(Object error) {
     // Relay rejections come back as `Exception("<message>")` from the
