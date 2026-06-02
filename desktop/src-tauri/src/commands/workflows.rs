@@ -93,12 +93,14 @@ pub async fn get_workflow_runs(
     limit: Option<u32>,
     _state: State<'_, AppState>,
 ) -> Result<Vec<Value>, String> {
-    // Run reconstruction is a clearly-scoped follow-up. The relay emits run
-    // lifecycle events (kinds 46001–46007, …) but the authoritative run record
-    // the frontend's `WorkflowRun` shape needs (status / current_step /
-    // execution_trace / error_message) lives in the relay DB and is not exposed
-    // to the desktop client as a single queryable record. Folding the event
-    // stream into `WorkflowRun` is tracked separately.
+    // TODO(workflow-runs): Run reconstruction is a clearly-scoped follow-up.
+    // The authoritative run record the frontend's `WorkflowRun` shape needs
+    // (status / current_step / execution_trace / error_message) lives in the
+    // relay DB and is not exposed to the desktop client as a single queryable
+    // record. If the relay starts emitting lifecycle events (46001–46007, …),
+    // folding that stream into `WorkflowRun` would be another viable design.
+    // The important bit for this command is that raw lifecycle events are not
+    // the `RawWorkflowRun` contract.
     //
     // Until then we return a bare empty array — NOT a raw-event wrapper. The
     // frontend wrapper (`getWorkflowRuns`) does `raw.map(fromRawWorkflowRun)`,
@@ -224,10 +226,11 @@ pub async fn get_run_approvals(
     run_id: String,
     _state: State<'_, AppState>,
 ) -> Result<Vec<Value>, String> {
-    // Like runs (see `get_workflow_runs`), reconstructing approvals into the
-    // frontend's `WorkflowApproval` shape from lifecycle events (46010/46011/
-    // 46012) is a clearly-scoped follow-up. Return a bare empty array so the
-    // frontend's `getRunApprovals` (`raw.map(fromRawApproval)`) is safe.
+    // TODO(workflow-runs): Like runs (see `get_workflow_runs`), reconstructing
+    // approvals into the frontend's `WorkflowApproval` shape from lifecycle
+    // events (46010/46011/46012) is a clearly-scoped follow-up tracked under
+    // TODO(workflow-runs). Return a bare empty array so the frontend's
+    // `getRunApprovals` (`raw.map(fromRawApproval)`) is safe.
     let _ = (workflow_id, run_id);
     Ok(Vec::new())
 }
