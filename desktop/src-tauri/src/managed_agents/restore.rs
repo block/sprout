@@ -105,24 +105,24 @@ pub async fn restore_managed_agents_on_launch(
         .map(|k| k.public_key().to_hex());
 
     #[cfg(feature = "mesh-llm")]
-    let mut mesh_preflight_failures = std::collections::HashSet::new();
-    #[cfg(feature = "mesh-llm")]
-    for record in &agents_to_start {
-        let Some(model_id) = relay_mesh_model_id(record) else {
-            continue;
-        };
-        if let Err(error) =
-            crate::commands::mesh_llm::ensure_client_node_for_model(&state, model_id).await
-        {
-            persist_restore_error(app, &state, &record.pubkey, error)?;
-            mesh_preflight_failures.insert(record.pubkey.clone());
+    let agents_to_start = {
+        let mut mesh_preflight_failures = std::collections::HashSet::new();
+        for record in &agents_to_start {
+            let Some(model_id) = relay_mesh_model_id(record) else {
+                continue;
+            };
+            if let Err(error) =
+                crate::commands::mesh_llm::ensure_client_node_for_model(&state, model_id).await
+            {
+                persist_restore_error(app, &state, &record.pubkey, error)?;
+                mesh_preflight_failures.insert(record.pubkey.clone());
+            }
         }
-    }
-    #[cfg(feature = "mesh-llm")]
-    let agents_to_start: Vec<_> = agents_to_start
-        .into_iter()
-        .filter(|record| !mesh_preflight_failures.contains(&record.pubkey))
-        .collect();
+        agents_to_start
+            .into_iter()
+            .filter(|record| !mesh_preflight_failures.contains(&record.pubkey))
+            .collect::<Vec<_>>()
+    };
     if agents_to_start.is_empty() {
         return Ok(());
     }
