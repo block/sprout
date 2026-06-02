@@ -37,6 +37,13 @@ pub struct ConnectRequest {
     /// Peer's iroh EndpointAddr (base64 invite token), read by the requester from
     /// the peer's kind:30621 serve target — sent back to the requester.
     pub peer_endpoint_addr: String,
+    /// Requester's own iroh endpoint id (optional) — correlation/instrumentation
+    /// only, never trusted for auth. Copied into the peer's call-me-now.
+    pub self_endpoint_id: Option<String>,
+    /// Peer's iroh endpoint id (optional) — correlation/instrumentation only.
+    /// Copied into the requester's call-me-now so the desktop can target the
+    /// exact peer endpoint it picked from 30621 (multi-endpoint disambiguation).
+    pub peer_endpoint_id: Option<String>,
     /// Correlates the two halves of one punch attempt.
     pub attempt_id: String,
 }
@@ -69,6 +76,8 @@ pub fn parse_connect_request(content: &str) -> Result<ConnectRequest, RequestErr
     Ok(ConnectRequest {
         self_endpoint_addr,
         peer_endpoint_addr,
+        self_endpoint_id: get("self_endpoint_id"),
+        peer_endpoint_id: get("peer_endpoint_id"),
         attempt_id,
     })
 }
@@ -86,16 +95,38 @@ pub fn extract_target_pubkey(event: &nostr::Event) -> Option<String> {
 }
 
 /// Build the JSON content for one call-me-now (24622) directed at `recipient`,
-/// telling it to dial `peer_endpoint_addr`. Pure — no I/O.
-pub fn call_me_now_content(peer_endpoint_addr: &str, attempt_id: &str, expires_at: u64) -> String {
-    serde_json::json!({
+/// telling it to dial `peer_endpoint_addr` (optionally `peer_endpoint_id` for
+/// multi-endpoint disambiguation). Pure — no I/O.
+pub fn call_me_now_content(
+    peer_endpoint_addr: &str,
+    peer_endpoint_id: Option<&str>,
+    attempt_id: &str,
+    expires_at: u64,
+) -> String {
+    let mut obj = serde_json::json!({
         "v": 1,
         "type": "sprout-iroh-call-me-now",
         "peer_endpoint_addr": peer_endpoint_addr,
         "attempt_id": attempt_id,
         "expires_at": expires_at,
-    })
-    .to_string()
+    });
+    if let Some(eid) = peer_endpoint_id {
+        obj["peer_endpoint_id"] = serde_json::Value::String(eid.to_string());
+    }
+    obj.to_string()
+}
+
+/// Pure: does a membership decision admit a peer into the v1 mesh? Direct relay
+/// members (or open relays) only — `ViaOwner` (NIP-OA delegated) is intentionally
+/// NOT admitted in v1, keeping the mesh trust boundary tighter and legible. This
+/// is applied identically to BOTH the requester and the target, so the two ends
+/// are symmetric. Isolated as a pure fn so the trust gate is unit-testable
+/// without an `AppState`.
+pub fn membership_admits_mesh(decision: &MembershipDecision) -> bool {
+    matches!(
+        decision,
+        MembershipDecision::OpenRelay | MembershipDecision::Member
+    )
 }
 
 /// Seconds a call-me-now is valid; iroh's punch loop runs ~60s, so this bounds
@@ -121,33 +152,31 @@ pub async fn handle_connect_request(
         return Err("invalid: cannot mesh-connect to self".to_string());
     }
 
-    // Membership gate: the requester is already a member (authenticated on the
-    // WS under SPROUT_REQUIRE_RELAY_MEMBERSHIP). We must independently confirm
-    // the TARGET is a member too — both ends gated by relay access, nothing else.
-    let target_bytes =
-        hex::decode(&target_hex).map_err(|_| "invalid: malformed #p target pubkey".to_string())?;
-    match check_relay_membership(state, &target_bytes, None).await {
-        Ok(MembershipDecision::OpenRelay) | Ok(MembershipDecision::Member) => {}
-        // ViaOwner (NIP-OA delegated) is intentionally NOT admitted to mesh in v1,
-        // matching the tighter mesh trust boundary.
-        Ok(MembershipDecision::ViaOwner(_)) | Ok(MembershipDecision::Denied) => {
-            return Err("restricted: target is not a relay member".to_string());
-        }
-        Err(e) => {
-            // Fail closed: an internal membership-check blip must not admit.
-            tracing::warn!("mesh connect: target membership check failed: {e}");
-            return Err("error: membership check unavailable".to_string());
-        }
-    }
+    // Membership gate, applied SYMMETRICALLY to both ends — direct relay members
+    // only, gated purely by relay access. The requester reached this handler via
+    // a NIP-42-authed WS, but that auth can be ViaOwner (NIP-OA delegated) when
+    // SPROUT_ALLOW_NIP_OA_AUTH is on; v1 mesh excludes delegated identities, so we
+    // re-check the requester here with no auth tag (which makes ViaOwner
+    // unreachable — only Member/OpenRelay/Denied) to match the target check.
+    require_mesh_member(state, requester_pubkey_hex)
+        .await
+        .map_err(|_| "restricted: delegated identities cannot initiate mesh in v1".to_string())?;
+
+    require_mesh_member(state, &target_hex)
+        .await
+        .map_err(|_| "restricted: target is not a relay member".to_string())?;
 
     let expires_at = (chrono::Utc::now().timestamp().max(0) as u64) + CALL_ME_NOW_TTL_SECS;
 
     // Pair: tell the requester to dial the peer's addr, and the peer to dial the
     // requester's addr. Each is a relay-signed ephemeral #p-addressed event.
+    // endpoint_id (if supplied) is copied through for desktop multi-endpoint
+    // disambiguation — it is correlation metadata, never trusted for auth.
     let to_requester = build_call_me_now(
         state,
         requester_pubkey_hex,
         &req.peer_endpoint_addr,
+        req.peer_endpoint_id.as_deref(),
         &req.attempt_id,
         expires_at,
     )?;
@@ -155,6 +184,7 @@ pub async fn handle_connect_request(
         state,
         &target_hex,
         &req.self_endpoint_addr,
+        req.self_endpoint_id.as_deref(),
         &req.attempt_id,
         expires_at,
     )?;
@@ -164,15 +194,32 @@ pub async fn handle_connect_request(
     Ok(())
 }
 
+/// Async: confirm `pubkey_hex` is a direct relay member admissible to the mesh.
+/// `None` auth_tag → ViaOwner is unreachable, so only Member/OpenRelay admit;
+/// everything else (Denied, ViaOwner-if-it-somehow-appeared, or a check error)
+/// FAILS CLOSED. Used symmetrically for requester and target.
+async fn require_mesh_member(state: &Arc<AppState>, pubkey_hex: &str) -> Result<(), ()> {
+    let bytes = hex::decode(pubkey_hex).map_err(|_| ())?;
+    match check_relay_membership(state, &bytes, None).await {
+        Ok(d) if membership_admits_mesh(&d) => Ok(()),
+        Ok(_) => Err(()),
+        Err(e) => {
+            tracing::warn!("mesh connect: membership check failed (fail-closed): {e}");
+            Err(())
+        }
+    }
+}
+
 /// Mint one relay-signed call-me-now (24622) addressed to `recipient_hex`.
 fn build_call_me_now(
     state: &Arc<AppState>,
     recipient_hex: &str,
     peer_endpoint_addr: &str,
+    peer_endpoint_id: Option<&str>,
     attempt_id: &str,
     expires_at: u64,
 ) -> Result<nostr::Event, String> {
-    let content = call_me_now_content(peer_endpoint_addr, attempt_id, expires_at);
+    let content = call_me_now_content(peer_endpoint_addr, peer_endpoint_id, attempt_id, expires_at);
     let p_tag = Tag::parse(["p", recipient_hex])
         .map_err(|e| format!("error: failed to build p tag: {e}"))?;
     EventBuilder::new(Kind::Custom(KIND_MESH_CALL_ME_NOW as u16), content)
@@ -212,6 +259,18 @@ pub async fn handle_status_report(
     reporter_pubkey_hex: &str,
     event: &nostr::Event,
 ) -> Result<(), String> {
+    // Same membership symmetry as handle_connect_request: a NIP-OA delegated
+    // (ViaOwner) identity is authed on the WS but is NOT a v1 mesh participant.
+    // If we let it report, the relay would advertise a serve_target under that
+    // pubkey that the connect path (which denies ViaOwner) then refuses — broken
+    // discovery. So gate the reporter the same way: direct members only, fail
+    // closed. Keeps all three desktop-facing mesh kinds consistent on delegation.
+    require_mesh_member(state, reporter_pubkey_hex)
+        .await
+        .map_err(|_| {
+            "restricted: delegated identities cannot report mesh status in v1".to_string()
+        })?;
+
     let payload: serde_json::Value = serde_json::from_str(&event.content)
         .map_err(|e| format!("invalid: mesh status report content is not JSON ({e})"))?;
     crate::mesh_status_publisher::publish_mesh_status_from_payload(
@@ -267,12 +326,83 @@ mod tests {
 
     #[test]
     fn call_me_now_content_shape() {
-        let s = call_me_now_content("ENDPOINT", "att-1", 1234);
+        let s = call_me_now_content("ENDPOINT", None, "att-1", 1234);
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["type"], "sprout-iroh-call-me-now");
         assert_eq!(v["peer_endpoint_addr"], "ENDPOINT");
         assert_eq!(v["attempt_id"], "att-1");
         assert_eq!(v["expires_at"], 1234);
         assert_eq!(v["v"], 1);
+        // No endpoint id supplied → field omitted entirely.
+        assert!(v.get("peer_endpoint_id").is_none());
+    }
+
+    #[test]
+    fn call_me_now_content_includes_endpoint_id_when_present() {
+        let s = call_me_now_content("ENDPOINT", Some("EID-7"), "att-1", 1234);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["peer_endpoint_id"], "EID-7");
+    }
+
+    #[test]
+    fn parse_round_trips_optional_endpoint_ids() {
+        let c = r#"{"self_endpoint_addr":"A","peer_endpoint_addr":"B","self_endpoint_id":"SI","peer_endpoint_id":"PI","attempt_id":"x"}"#;
+        let r = parse_connect_request(c).unwrap();
+        assert_eq!(r.self_endpoint_id.as_deref(), Some("SI"));
+        assert_eq!(r.peer_endpoint_id.as_deref(), Some("PI"));
+        // endpoint ids are optional — absent is fine.
+        let c2 = r#"{"self_endpoint_addr":"A","peer_endpoint_addr":"B","attempt_id":"x"}"#;
+        let r2 = parse_connect_request(c2).unwrap();
+        assert_eq!(r2.self_endpoint_id, None);
+        assert_eq!(r2.peer_endpoint_id, None);
+    }
+
+    // ── Trust gate: membership_admits_mesh ──────────────────────────────────
+    // This is the single pure predicate behind the requester, target, AND
+    // reporter gates. v1 admits only direct relay members (or open relays);
+    // NIP-OA-delegated (ViaOwner) and Denied are excluded, symmetrically.
+
+    #[test]
+    fn member_and_open_relay_are_admitted() {
+        assert!(membership_admits_mesh(&MembershipDecision::Member));
+        assert!(membership_admits_mesh(&MembershipDecision::OpenRelay));
+    }
+
+    #[test]
+    fn denied_is_not_admitted() {
+        assert!(!membership_admits_mesh(&MembershipDecision::Denied));
+    }
+
+    #[test]
+    fn via_owner_is_not_admitted_in_v1() {
+        // Delegated identities are excluded from v1 mesh on every desktop-facing
+        // path (requester / target / reporter all run through this predicate).
+        let owner = nostr::Keys::generate().public_key();
+        assert!(!membership_admits_mesh(&MembershipDecision::ViaOwner(
+            owner
+        )));
+    }
+
+    #[test]
+    fn extract_target_takes_the_p_tag() {
+        let keys = nostr::Keys::generate();
+        let target = nostr::Keys::generate().public_key().to_hex();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(24621), "{}")
+            .tags([nostr::Tag::parse(["p", &target]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
+        assert_eq!(
+            extract_target_pubkey(&event).as_deref(),
+            Some(target.as_str())
+        );
+    }
+
+    #[test]
+    fn extract_target_none_without_p_tag() {
+        let keys = nostr::Keys::generate();
+        let event = nostr::EventBuilder::new(nostr::Kind::Custom(24621), "{}")
+            .sign_with_keys(&keys)
+            .unwrap();
+        assert_eq!(extract_target_pubkey(&event), None);
     }
 }

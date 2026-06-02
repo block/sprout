@@ -250,6 +250,22 @@ pub async fn handle_event(event: Event, conn: Arc<ConnectionState>, state: Arc<A
             ));
             return;
         }
+        // Mesh signaling kinds are direct desktop-user actions: the resulting
+        // call-me-now routes to the *authenticated connection's* pubkey, so a
+        // proxy-submitted mesh request would point the dial at the proxy, not the
+        // user's desktop. Reject mesh kinds under proxy scope — they must come
+        // from the member's own session.
+        if has_proxy_scope
+            && (kind_u32 == KIND_MESH_CONNECT_REQUEST || kind_u32 == KIND_MESH_STATUS_REPORT)
+        {
+            reject("scope");
+            conn.send(RelayMessage::ok(
+                &event_id_hex,
+                false,
+                "restricted: mesh signaling cannot be proxy-submitted",
+            ));
+            return;
+        }
         handle_ephemeral_event(
             event,
             conn_id,
@@ -409,6 +425,33 @@ async fn handle_ephemeral_event(
     // in the v1 direct-iroh mesh — validate membership + pair + fan out. It
     // never carries iroh traffic and stores no endpoint state.
     if event_kind_u32(&event) == KIND_MESH_CONNECT_REQUEST {
+        // Generous per-requester rate limit: each accepted 24621 makes the relay
+        // sign + fan TWO 24622s, so bound the amplification. 20/sec is far above
+        // any real interactive use; a buggy desktop loop can't storm the relay.
+        {
+            let key: [u8; 32] = auth_pubkey.to_bytes();
+            let now = std::time::Instant::now();
+            let mut entry = state
+                .mesh_connect_rate_limiter
+                .entry(key)
+                .or_insert((0, now));
+            let (count, window_start) = entry.value_mut();
+            if now.duration_since(*window_start).as_secs() >= 1 {
+                *count = 1;
+                *window_start = now;
+            } else {
+                *count += 1;
+                if *count > 20 {
+                    drop(entry);
+                    conn.send(RelayMessage::ok(
+                        event_id_hex,
+                        false,
+                        "rate-limited: mesh connect request rate exceeded (20/sec)",
+                    ));
+                    return;
+                }
+            }
+        }
         let requester_hex = auth_pubkey.to_hex();
         match super::mesh_signaling::handle_connect_request(&state, &requester_hex, &event).await {
             Ok(()) => {
