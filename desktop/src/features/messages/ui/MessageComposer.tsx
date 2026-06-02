@@ -24,6 +24,7 @@ import {
   hasMentionClipboardHtml,
   normalizeMentionClipboardHtml,
 } from "@/features/messages/lib/normalizeMentionClipboard";
+import { CUSTOM_EMOJI_NODE_NAME } from "@/features/messages/lib/customEmojiNode";
 import {
   type AutocompleteEdit,
   useRichTextEditor,
@@ -323,6 +324,7 @@ export function MessageComposer({
         edit.replaceFromOffset,
         edit.replaceToOffset,
         edit.insertText,
+        edit.customEmojiShortcode,
       );
     },
     [richText.replacePlainTextRange],
@@ -368,11 +370,37 @@ export function MessageComposer({
   const insertEmoji = React.useCallback(
     (emoji: string) => {
       if (!richText.editor) return;
-      richText.editor.chain().focus().insertContent(emoji).run();
+      // A `:shortcode:` for a known custom emoji becomes a selectable atom
+      // node (same as the input rule / autocomplete), so it can be selected,
+      // copied, and deleted as one unit. Everything else (native unicode)
+      // inserts as plain content.
+      const match = /^:([^:\s]+):$/.exec(emoji);
+      const shortcode = match?.[1]?.toLowerCase();
+      const known =
+        shortcode &&
+        customEmoji.some((e) => e.shortcode.toLowerCase() === shortcode);
+      if (known && shortcode) {
+        richText.editor
+          .chain()
+          .focus()
+          .insertContent({
+            type: CUSTOM_EMOJI_NODE_NAME,
+            attrs: {
+              shortcode,
+              src:
+                customEmoji.find((e) => e.shortcode.toLowerCase() === shortcode)
+                  ?.url ?? "",
+            },
+          })
+          .insertContent(" ")
+          .run();
+      } else {
+        richText.editor.chain().focus().insertContent(emoji).run();
+      }
       setIsEmojiPickerOpen(false);
       mentions.clearMentions();
     },
-    [richText.editor, mentions.clearMentions],
+    [richText.editor, mentions.clearMentions, customEmoji],
   );
 
   // ── @ mention picker (toolbar button) ───────────────────────────────

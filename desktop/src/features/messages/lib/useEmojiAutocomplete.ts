@@ -134,10 +134,11 @@ export function useEmojiAutocomplete(customEmoji: CustomEmoji[] = []) {
         debounceTimerRef.current = null;
       }
 
-      // Custom emoji insert their `:shortcode:` (id == shortcode); standard
-      // emoji insert their native unicode. Both get a trailing space.
-      const token = suggestion.url ? `:${suggestion.id}:` : suggestion.native;
-      const insertText = `${token} `;
+      // Custom emoji insert as a selectable atom node (id == shortcode);
+      // standard emoji insert their native unicode. Both get a trailing
+      // space.
+      const isCustom = Boolean(suggestion.url);
+      const insertText = isCustom ? " " : `${suggestion.native} `;
 
       setEmojiQuery(null);
       setEmojiSelectedIndex(0);
@@ -146,6 +147,7 @@ export function useEmojiAutocomplete(customEmoji: CustomEmoji[] = []) {
         replaceFromOffset: emojiStartIndex,
         replaceToOffset: selectionEnd,
         insertText,
+        ...(isCustom ? { customEmojiShortcode: suggestion.id } : {}),
       };
     },
     [emojiStartIndex],
