@@ -57,15 +57,34 @@ pub(crate) async fn ensure_client_node_for_model(
     {
         let runtime = state.mesh_llm_runtime.lock().await;
         if let Some(runtime) = runtime.as_ref() {
-            let status = runtime.status().await.map_err(|error| error.to_string())?;
-            return match status.mode {
-                Some(mesh_llm::MeshNodeMode::Client) => Ok(status),
-                Some(mesh_llm::MeshNodeMode::Serve) => Err(
-                    "this desktop is currently sharing compute; stop sharing before using relay mesh as a client"
-                        .to_string(),
-                ),
-                None => Ok(status),
-            };
+            // A running runtime — in any mode — is the mesh's local OpenAI
+            // ingress on `9337`. mesh-llm's router already resolves the
+            // requested model to a local, remote, or split target at request
+            // time (see `route_missing_local_model` -> `hosts_for_model`), so
+            // "serving" and "using the mesh as a client" are not mutually
+            // exclusive: a serve node can host model A and route model B to a
+            // peer through the same ingress. Hand the agent the existing
+            // runtime; the router decides routability per request rather than
+            // this preflight second-guessing it (a `/v1/models` check here
+            // would race model gossip and wrongly reject freshly-discovered
+            // remote/split models).
+            //
+            // If the caller selected a specific target, still dial it: that is
+            // how the runtime joins the chosen peer's mesh. Skipping it would
+            // let a serve runtime not yet connected to that target fail its
+            // first inference while the frontend has already signalled the
+            // peer to expect us.
+            if let Some(endpoint_addr) = endpoint_addr
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                runtime
+                    .dial_endpoint_addr(endpoint_addr)
+                    .await
+                    .map_err(|error| format!("mesh dial failed: {error}"))?;
+            }
+            return runtime.status().await.map_err(|error| error.to_string());
         }
     }
 
@@ -196,4 +215,81 @@ pub fn mesh_agent_preset(
     request: mesh_llm::MeshAgentPresetRequest,
 ) -> CmdResult<mesh_llm::MeshAgentPreset> {
     mesh_llm::agent_preset(request)
+}
+
+#[cfg(all(test, feature = "mesh-llm"))]
+mod tests {
+    use super::*;
+    use crate::app_state::build_app_state;
+
+    /// Acceptance-critical regression for dropping the serve-vs-client guard.
+    ///
+    /// Before this change, `ensure_client_node_for_model` hard-errored whenever
+    /// the running runtime was in `Serve` mode ("stop sharing before using
+    /// relay mesh as a client"). That forbade the exact thing a user should be
+    /// able to do: host model A while pointing an agent at a different model B
+    /// through the same `9337` ingress.
+    ///
+    /// This test starts a real serve runtime and asserts that a follow-up
+    /// preflight for a *different* model:
+    ///   1. does NOT reject on mode, and
+    ///   2. returns the existing runtime's status (same `9337` ingress), so the
+    ///      agent keeps talking to the running node and mesh-llm's router
+    ///      resolves the model per request.
+    ///
+    /// Hardware-gated (`#[ignore]`): loads a real model. Run with:
+    ///   cargo test -p sprout-desktop --features mesh-llm \
+    ///     ensure_serve_runtime_serves_other_model -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "loads a real model; run manually with --ignored"]
+    async fn ensure_serve_runtime_serves_other_model() {
+        const HOSTED_MODEL: &str = "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M";
+        const OTHER_MODEL: &str = "some/other-model-not-hosted-locally:Q4_K_M";
+
+        let state = build_app_state();
+
+        // Start a serve runtime hosting HOSTED_MODEL — this is the "Share
+        // compute" path.
+        let serve = mesh_llm::DesktopMeshRuntime::start(mesh_llm::StartMeshNodeRequest {
+            mode: mesh_llm::MeshNodeMode::Serve,
+            model_id: Some(HOSTED_MODEL.to_string()),
+            max_vram_gb: None,
+            join_token: None,
+        })
+        .await
+        .expect("serve runtime should start");
+
+        let serve_status = serve.status().await.expect("serve status");
+        let serve_base = serve_status.api_base_url.clone();
+        assert_eq!(serve_status.mode, Some(mesh_llm::MeshNodeMode::Serve));
+
+        {
+            let mut runtime = state.mesh_llm_runtime.lock().await;
+            *runtime = Some(serve);
+        }
+
+        // Preflight for a DIFFERENT model with no explicit target. Old code:
+        // Err(...sharing compute...). New code: reuse the running ingress.
+        let status = ensure_client_node_for_model(&state, OTHER_MODEL, None)
+            .await
+            .expect("serve runtime must not reject a different-model preflight");
+
+        // It returns the SAME running node — agents keep using A's 9337, and
+        // the router decides routability for OTHER_MODEL per request.
+        assert_eq!(
+            status.mode,
+            Some(mesh_llm::MeshNodeMode::Serve),
+            "preflight should reuse the existing serve runtime, not spin up a client"
+        );
+        assert_eq!(
+            status.api_base_url, serve_base,
+            "agent must be pointed at the existing serve node's ingress"
+        );
+
+        // Clean up the runtime.
+        let taken = state.mesh_llm_runtime.lock().await.take();
+        if let Some(runtime) = taken {
+            let _ = runtime.stop().await;
+        }
+    }
 }
