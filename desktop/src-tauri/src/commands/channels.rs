@@ -29,7 +29,7 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
             }
             let page = query_relay(&state, &[f]).await?;
             let done = page.len() < 500;
-            if let Some(t) = page.iter().map(|e| e.created_at.as_u64()).min() {
+            if let Some(t) = page.iter().map(|e| e.created_at.as_secs()).min() {
                 until = Some(t.saturating_sub(1));
             }
             all.extend(page);
