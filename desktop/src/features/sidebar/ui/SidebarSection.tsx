@@ -231,7 +231,7 @@ export function SidebarSection({
   selectedChannelId: string | null;
   title: string;
   testId: string;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   onHideDm?: (channelId: string) => void;
   onMarkChannelRead?: (
     channelId: string,

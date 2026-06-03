@@ -83,9 +83,26 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     final session = ref.read(relaySessionProvider.notifier);
 
     // Step 1: find the channels I'm a member of via kind:39002.
-    final memberships = await session.fetchHistory(
-      NostrFilters.myChannels(myPk),
-    );
+    final memberships = <NostrEvent>[];
+    {
+      int? until;
+      const pageSize = 500;
+      while (true) {
+        final page = await session.fetchHistory(
+          NostrFilter(
+            kinds: const [39002],
+            tags: {
+              '#p': [myPk],
+            },
+            limit: pageSize,
+            until: until,
+          ),
+        );
+        memberships.addAll(page);
+        if (page.length < pageSize) break;
+        until = page.map((e) => e.createdAt).reduce(min) - 1;
+      }
+    }
     final channelIds = memberships
         .map((e) => e.getTagValue('d'))
         .whereType<String>()
@@ -170,17 +187,34 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
         channels.map((channel) async {
           if (!channel.isMember || channel.isArchived) return null;
           try {
+            if (channel.isDm) {
+              final events = await session.fetchHistory(
+                NostrFilter(
+                  kinds: EventKind.channelMessageEventKinds,
+                  tags: {
+                    '#h': [channel.id],
+                  },
+                  limit: 1,
+                ),
+              );
+              if (events.isEmpty) return null;
+              return MapEntry(channel.id, events.first.createdAt);
+            }
             final events = await session.fetchHistory(
               NostrFilter(
-                kinds: EventKind.channelEventKinds,
+                kinds: EventKind.channelMessageEventKinds,
                 tags: {
                   '#h': [channel.id],
                 },
-                limit: 1,
+                limit: 20,
               ),
             );
-            if (events.isEmpty) return null;
-            return MapEntry(channel.id, events.first.createdAt);
+            for (final event in events) {
+              if (shouldNotifyForEvent(event, myPk)) {
+                return MapEntry(channel.id, event.createdAt);
+              }
+            }
+            return null;
           } catch (_) {
             return null;
           }

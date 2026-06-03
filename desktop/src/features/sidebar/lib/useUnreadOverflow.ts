@@ -23,7 +23,7 @@ function getChannelId(element: Element): string | null {
 
 function getUnreadElements(
   root: HTMLDivElement,
-  unreadChannelIds: Set<string>,
+  unreadChannelIds: ReadonlySet<string>,
 ): HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>("[data-channel-id]"),
@@ -44,7 +44,7 @@ function findNextUnreadElement({
 }: {
   direction: UnreadDirection;
   root: HTMLDivElement;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
 }): HTMLElement | null {
   const rootHeight = root.getBoundingClientRect().height;
   let nextElement: HTMLElement | null = null;
@@ -97,7 +97,7 @@ function deriveCounts(
 
 export function useUnreadOverflow(args: {
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
 }): UnreadOverflowCounts & {
   scrollToNextAbove: () => void;
   scrollToNextBelow: () => void;

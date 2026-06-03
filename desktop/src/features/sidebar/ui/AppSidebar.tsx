@@ -97,7 +97,7 @@ type AppSidebarProps = {
     | "workflows"
     | "pulse"
     | "projects";
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   workspaces: Workspace[];
   onAddWorkspace: (workspace: Workspace) => void;
   onAddWorkspaceOpenChange?: (open: boolean) => void;

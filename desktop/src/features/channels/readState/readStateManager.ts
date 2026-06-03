@@ -230,7 +230,7 @@ export class ReadStateManager {
         if (event.created_at > sourceCreatedAt) {
           this.effectiveState.set(ctx, ts);
           this.contextSourceCreatedAt.set(ctx, event.created_at);
-        } else if (event.created_at === sourceCreatedAt && ts > current) {
+        } else if (event.created_at === sourceCreatedAt && ts !== current) {
           this.effectiveState.set(ctx, ts);
         }
         this.publishableContextIds.add(ctx);
@@ -335,7 +335,7 @@ export class ReadStateManager {
           anyAdvanced = true;
         }
         this.contextSourceCreatedAt.set(ctx, event.created_at);
-      } else if (event.created_at === sourceCreatedAt && ts > current) {
+      } else if (event.created_at === sourceCreatedAt && ts !== current) {
         this.effectiveState.set(ctx, ts);
         anyAdvanced = true;
       }

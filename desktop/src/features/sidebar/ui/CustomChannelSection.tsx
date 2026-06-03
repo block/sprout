@@ -292,7 +292,7 @@ export function ChannelGroupSection({
   onToggleCollapsed: () => void;
   selectedChannelId: string | null;
   title: string;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   hasUnread?: boolean;
   onMarkAllRead?: () => void;
   sections?: ChannelSection[];
@@ -431,7 +431,7 @@ export function CustomChannelSection({
   isCollapsed: boolean;
   isActiveChannel: boolean;
   selectedChannelId: string | null;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   sections: ChannelSection[];
   assignments: Record<string, string>;
   isFirst: boolean;

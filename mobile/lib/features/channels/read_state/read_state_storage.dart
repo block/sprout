@@ -17,9 +17,6 @@ String localReadStateKey(String pubkey) =>
 String localPublishableContextKey(String pubkey) =>
     'sprout.channel-read-state.publishable.v1:$pubkey';
 
-String localForcedContextKey(String pubkey) =>
-    'sprout.channel-read-state.forced.v1:$pubkey';
-
 String localSourceCreatedAtKey(String pubkey) =>
     'sprout.channel-read-state.source-created-at.v1:$pubkey';
 
@@ -30,17 +27,14 @@ String slotIdKey(String pubkey) => '$_slotIdKeyPrefix:$pubkey';
 class StoredReadState {
   final Map<String, int> contexts;
   final Set<String> publishableContextIds;
-  final Set<String> forcedContextIds;
   final Map<String, int> sourceCreatedAt;
 
   StoredReadState({
     required Map<String, int> contexts,
     required Set<String> publishableContextIds,
-    required Set<String> forcedContextIds,
     required Map<String, int> sourceCreatedAt,
   }) : contexts = Map.unmodifiable(contexts),
        publishableContextIds = Set.unmodifiable(publishableContextIds),
-       forcedContextIds = Set.unmodifiable(forcedContextIds),
        sourceCreatedAt = Map.unmodifiable(sourceCreatedAt);
 }
 
@@ -81,7 +75,6 @@ class ReadStateStorage {
     return StoredReadState(
       contexts: _readContexts(pubkey),
       publishableContextIds: _readPublishableContextIds(pubkey),
-      forcedContextIds: _readForcedContextIds(pubkey),
       sourceCreatedAt: _readSourceCreatedAt(pubkey),
     );
   }
@@ -90,7 +83,6 @@ class ReadStateStorage {
     String pubkey,
     Map<String, int> contexts,
     Set<String> publishableContextIds,
-    Set<String> forcedContextIds,
     Map<String, int> sourceCreatedAt,
   ) {
     final state = <String, String>{};
@@ -102,10 +94,6 @@ class ReadStateStorage {
     _prefs.setString(
       localPublishableContextKey(pubkey),
       jsonEncode(publishableContextIds.toList()),
-    );
-    _prefs.setString(
-      localForcedContextKey(pubkey),
-      jsonEncode(forcedContextIds.toList()),
     );
     _prefs.setString(
       localSourceCreatedAtKey(pubkey),
@@ -146,29 +134,6 @@ class ReadStateStorage {
 
   Set<String> _readPublishableContextIds(String pubkey) {
     final raw = _prefs.getString(localPublishableContextKey(pubkey));
-    if (raw == null || raw.isEmpty) {
-      return {};
-    }
-
-    final Object? parsed;
-    try {
-      parsed = jsonDecode(raw);
-    } catch (_) {
-      return {};
-    }
-
-    if (parsed is! List) {
-      return {};
-    }
-
-    return {
-      for (final value in parsed)
-        if (value is String) value,
-    };
-  }
-
-  Set<String> _readForcedContextIds(String pubkey) {
-    final raw = _prefs.getString(localForcedContextKey(pubkey));
     if (raw == null || raw.isEmpty) {
       return {};
     }

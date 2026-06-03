@@ -254,7 +254,7 @@ class ReadStateManager {
           _effectiveState[entry.key] = entry.value;
           _contextSourceCreatedAt[entry.key] = event.createdAt;
         } else if (event.createdAt == sourceCreatedAt &&
-            entry.value > current) {
+            entry.value != current) {
           _effectiveState[entry.key] = entry.value;
         }
         _publishableContextIds.add(entry.key);
@@ -323,7 +323,7 @@ class ReadStateManager {
           changed = true;
         }
         _contextSourceCreatedAt[entry.key] = event.createdAt;
-      } else if (event.createdAt == sourceCreatedAt && entry.value > current) {
+      } else if (event.createdAt == sourceCreatedAt && entry.value != current) {
         _effectiveState[entry.key] = entry.value;
         changed = true;
       }
@@ -473,9 +473,7 @@ class ReadStateManager {
     _publishableContextIds
       ..clear()
       ..addAll(stored.publishableContextIds);
-    _forcedContextIds
-      ..clear()
-      ..addAll(stored.forcedContextIds);
+    _forcedContextIds.clear();
     _contextSourceCreatedAt
       ..clear()
       ..addAll(stored.sourceCreatedAt);
@@ -487,7 +485,6 @@ class ReadStateManager {
       pubkey,
       _effectiveState,
       _publishableContextIds,
-      _forcedContextIds,
       _contextSourceCreatedAt,
     );
   }

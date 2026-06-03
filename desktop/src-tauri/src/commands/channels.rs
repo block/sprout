@@ -19,15 +19,26 @@ pub async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>
 
     // Step 1: find all kind:39002 (members) events that mention me, then
     // pull the channel ids out of their `d` tags.
-    let member_events = query_relay(
-        &state,
-        &[serde_json::json!({
-            "kinds": [39002],
-            "#p": [my_pubkey],
-            "limit": 1000,
-        })],
-    )
-    .await?;
+    let member_events = {
+        let mut all = Vec::new();
+        let mut until: Option<u64> = None;
+        loop {
+            let mut f = serde_json::json!({"kinds": [39002], "#p": [&my_pubkey], "limit": 500});
+            if let Some(u) = until {
+                f["until"] = serde_json::json!(u);
+            }
+            let page = query_relay(&state, &[f]).await?;
+            let done = page.len() < 500;
+            if let Some(t) = page.iter().map(|e| e.created_at.as_u64()).min() {
+                until = Some(t.saturating_sub(1));
+            }
+            all.extend(page);
+            if done {
+                break;
+            }
+        }
+        all
+    };
 
     let mut channel_ids: Vec<String> = member_events
         .iter()
