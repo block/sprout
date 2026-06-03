@@ -765,6 +765,9 @@ export async function sendChannelMessage(
   mediaTags?: string[][],
   mentionPubkeys?: string[],
   kind?: number,
+  // Thread root for encrypted replies (resolved locally from decrypted
+  // messages, since the parent rumor isn't queryable in plaintext).
+  rootEventId?: string | null,
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -775,6 +778,7 @@ export async function sendChannelMessage(
       mediaTags: mediaTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,
+      rootEventId: rootEventId ?? null,
     },
   );
 

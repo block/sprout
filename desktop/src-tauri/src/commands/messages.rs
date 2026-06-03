@@ -89,6 +89,7 @@ async fn send_encrypted_message(
     state: &AppState,
     channel_id: Uuid,
     content: &str,
+    thread_ref: Option<&events::ThreadRef>,
     mention_refs: &[&str],
     media: &[Vec<String>],
     members_hex: &[String],
@@ -98,9 +99,10 @@ async fn send_encrypted_message(
         guard.clone()
     };
 
-    // The rumor is a normal kind:9 channel message (with the `h` tag), so once
-    // unwrapped it renders through the standard message pipeline.
-    let builder = events::build_message(channel_id, content, None, mention_refs, media)?;
+    // The rumor is a normal kind:9 channel message (with the `h` tag and any
+    // NIP-10 thread tags), so once unwrapped it renders through the standard
+    // message pipeline — including threaded replies.
+    let builder = events::build_message(channel_id, content, thread_ref, mention_refs, media)?;
     let rumor = builder.build(keys.public_key());
     let rumor_id = rumor.id.map(|id| id.to_hex()).unwrap_or_default();
 
@@ -379,6 +381,9 @@ async fn resolve_thread_ref(
     })
 }
 
+// Tauri commands take flat args (each maps to a JS object field), so a high
+// arg count is idiomatic here rather than a struct.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn send_channel_message(
     channel_id: String,
@@ -387,6 +392,11 @@ pub async fn send_channel_message(
     media_tags: Option<Vec<Vec<String>>>,
     mention_pubkeys: Option<Vec<String>>,
     kind: Option<u32>,
+    // Thread root for encrypted replies. In an encrypted channel the parent is
+    // a gift-wrapped rumor not queryable in plaintext, so the caller resolves
+    // the root locally (from decrypted messages) and passes it here. Ignored on
+    // the plaintext path (which resolves the root via `resolve_thread_ref`).
+    root_event_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<SendChannelMessageResponse, String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
@@ -399,12 +409,40 @@ pub async fn send_channel_message(
     // Encrypted serverless channels (DM / private): gift-wrap to all members.
     // Only plain messages (kind 9) are encrypted; forum posts/comments fall
     // through to the plaintext path (private forums aren't a serverless model).
-    if kind_num == sprout_core::kind::KIND_STREAM_MESSAGE && parent_event_id.is_none() {
+    // Replies ARE encrypted too: the NIP-10 thread tags live INSIDE the rumor
+    // (the encrypted inner event), so threading is preserved without leaking
+    // the reply as plaintext to the relays.
+    if kind_num == sprout_core::kind::KIND_STREAM_MESSAGE {
         if let Some(members) = encrypted_recipients(&state, &channel_id).await? {
+            // Build the in-rumor thread ref from caller-supplied ids (no relay
+            // lookup — the parent rumor isn't stored plaintext on the relay).
+            let thread_ref = match &parent_event_id {
+                Some(parent) => {
+                    let parent_eid = EventId::from_hex(parent)
+                        .map_err(|e| format!("invalid parent event ID: {e}"))?;
+                    let root_eid = match &root_event_id {
+                        Some(root) if root != parent => EventId::from_hex(root)
+                            .map_err(|e| format!("invalid root event ID: {e}"))?,
+                        _ => parent_eid,
+                    };
+                    Some(events::ThreadRef {
+                        root_event_id: root_eid,
+                        parent_event_id: parent_eid,
+                    })
+                }
+                None => None,
+            };
+            let depth = match (&parent_event_id, &root_event_id) {
+                (None, _) => 0,
+                (Some(p), Some(r)) if p == r => 1,
+                (Some(_), Some(_)) => 2,
+                (Some(_), None) => 1,
+            };
             let rumor_id = send_encrypted_message(
                 &state,
                 channel_uuid,
                 content.trim(),
+                thread_ref.as_ref(),
                 &mention_refs,
                 &media,
                 &members,
@@ -412,9 +450,9 @@ pub async fn send_channel_message(
             .await?;
             return Ok(SendChannelMessageResponse {
                 event_id: rumor_id,
-                root_event_id: None,
-                parent_event_id: None,
-                depth: 0,
+                root_event_id: thread_ref.as_ref().map(|t| t.root_event_id.to_hex()),
+                parent_event_id: parent_event_id.clone(),
+                depth,
                 created_at: chrono::Utc::now().timestamp(),
             });
         }

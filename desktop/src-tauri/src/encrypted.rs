@@ -295,4 +295,93 @@ mod tests {
         let got = unwrap_gift(&a, wrap_for_a).await.unwrap();
         assert_eq!(got.rumor.content, "echo");
     }
+
+    /// Proves the encrypted-reply privacy fix: a THREADED reply in an encrypted
+    /// channel is gift-wrapped (kind 1059) — NOT leaked as a plaintext kind-9 —
+    /// and the NIP-10 thread tags travel INSIDE the rumor, so threading is
+    /// preserved after decryption. This mirrors what `send_channel_message`
+    /// does for an encrypted reply: build via `events::build_message` with a
+    /// `ThreadRef`, then gift-wrap.
+    #[tokio::test]
+    async fn encrypted_threaded_reply_is_wrapped_and_preserves_thread() {
+        use crate::events::{self, ThreadRef};
+        use nostr::EventId;
+
+        let a = Keys::generate(); // replier
+        let b = Keys::generate(); // other member
+        let channel = uuid::Uuid::new_v4();
+
+        // A reply two levels deep: root != parent.
+        let root =
+            EventId::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
+                .unwrap();
+        let parent =
+            EventId::from_hex("2222222222222222222222222222222222222222222222222222222222222222")
+                .unwrap();
+        let thread_ref = ThreadRef {
+            root_event_id: root,
+            parent_event_id: parent,
+        };
+
+        // Build the rumor exactly as the command does for an encrypted reply.
+        let builder =
+            events::build_message(channel, "threaded reply", Some(&thread_ref), &[], &[]).unwrap();
+        let rumor = builder.build(a.public_key());
+
+        let recipients = [a.public_key(), b.public_key()];
+        let wraps = build_gift_wraps(&a, rumor, &recipients).await.unwrap();
+
+        // 1. Privacy: every wire event is a kind-1059 gift wrap, NOT a
+        //    plaintext kind-9. The reply content never appears unencrypted.
+        for w in &wraps {
+            assert_eq!(
+                w.kind,
+                Kind::Custom(KIND_GIFT_WRAP),
+                "reply must be gift-wrapped, not plaintext"
+            );
+            assert!(
+                !w.content.contains("threaded reply"),
+                "plaintext reply content leaked into the wrapper!"
+            );
+        }
+
+        // 2. Threading preserved: B decrypts and the rumor carries the NIP-10
+        //    root + reply `e` tags.
+        let b_pk = b.public_key().to_hex();
+        let wrap_for_b = wraps
+            .iter()
+            .find(|w| {
+                w.tags.iter().any(|t| {
+                    t.as_slice().len() >= 2 && t.as_slice()[0] == "p" && t.as_slice()[1] == b_pk
+                })
+            })
+            .expect("a wrap addressed to B");
+        let got = unwrap_gift(&b, wrap_for_b).await.unwrap();
+        assert_eq!(got.rumor.content, "threaded reply");
+        assert_eq!(
+            got.channel_id().as_deref(),
+            Some(channel.to_string().as_str())
+        );
+
+        let mut found_root = false;
+        let mut found_reply = false;
+        for t in got.rumor.tags.iter() {
+            let s = t.as_slice();
+            if s.len() >= 4 && s[0] == "e" {
+                match s[3].as_str() {
+                    "root" => {
+                        assert_eq!(s[1], root.to_hex());
+                        found_root = true;
+                    }
+                    "reply" => {
+                        assert_eq!(s[1], parent.to_hex());
+                        found_reply = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(found_root, "rumor missing NIP-10 root e-tag");
+        assert!(found_reply, "rumor missing NIP-10 reply e-tag");
+    }
 }

@@ -421,12 +421,20 @@ export function useSendMessageMutation(
           queryClient.getQueryData<RelayEvent[]>(
             channelMessagesKey(channel.id),
           ) ?? [];
+        // Resolve the thread root locally (works for both plaintext and
+        // encrypted channels — in encrypted channels the parent rumor isn't
+        // queryable in plaintext, so the backend relies on this).
+        const resolvedRoot = parentEventId
+          ? resolveReplyRootId(parentEventId, cachedMessages)
+          : null;
         const result = await sendChannelMessage(
           channel.id,
           content,
           parentEventId ?? null,
           mediaTags,
           mentionPubkeys,
+          undefined,
+          resolvedRoot,
         );
 
         // Build tags matching relay-emitted shape: h, author p, mention ps, reply es, imeta.
