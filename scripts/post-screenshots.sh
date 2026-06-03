@@ -47,17 +47,38 @@ TREE=$(echo "$COMBINED" | git mktree)
 COMMIT=$(git commit-tree "$TREE" -m "screenshots: PR #${PR}")
 git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
 
-IMAGES_SECTION=""
+declare -A IMAGE_URL_MAP
 for URL in "${IMAGE_URLS[@]}"; do
   FILENAME=$(basename "$URL")
   NAME="${FILENAME%.png}"
-  IMAGES_SECTION+="![${NAME}](${URL})"$'\n\n'
+  IMAGE_URL_MAP["$NAME"]="$URL"
 done
 
 if [[ -n "$BODY_FILE" ]]; then
-  COMMENT_BODY="$(cat "$BODY_FILE")"$'\n\n'"${IMAGES_SECTION}"
+  COMMENT_BODY="$(cat "$BODY_FILE")"
+  UNREFERENCED=()
+  for NAME in "${!IMAGE_URL_MAP[@]}"; do
+    URL="${IMAGE_URL_MAP[$NAME]}"
+    PLACEHOLDER="{{${NAME}}}"
+    if [[ "$COMMENT_BODY" == *"$PLACEHOLDER"* ]]; then
+      COMMENT_BODY="${COMMENT_BODY//"$PLACEHOLDER"/![$NAME]($URL)}"
+    else
+      UNREFERENCED+=("$NAME")
+    fi
+  done
+  if [[ ${#UNREFERENCED[@]} -gt 0 ]]; then
+    IFS=$'\n' SORTED=($(printf '%s\n' "${UNREFERENCED[@]}" | sort)); unset IFS
+    for NAME in "${SORTED[@]}"; do
+      COMMENT_BODY+=$'\n\n'"![${NAME}](${IMAGE_URL_MAP[$NAME]})"
+    done
+  fi
 else
-  COMMENT_BODY="## Screenshots"$'\n\n'"${IMAGES_SECTION}"
+  COMMENT_BODY="## Screenshots"$'\n\n'
+  for URL in "${IMAGE_URLS[@]}"; do
+    FILENAME=$(basename "$URL")
+    NAME="${FILENAME%.png}"
+    COMMENT_BODY+="![${NAME}](${URL})"$'\n\n'
+  done
 fi
 
 gh pr comment "$PR" --repo "$REPO" --body "$COMMENT_BODY"

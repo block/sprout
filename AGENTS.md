@@ -238,7 +238,8 @@ just desktop-screenshot --name settings --click open-settings
 Options: `--name` (filename), `--route` (client route), `--active-channel`
 (channel to view), `--click` (left-click data-testid or CSS selector),
 `--right-click` (right-click for context menus), `--hover` (hover before
-capture), `--wait` (ms, default 2000), `--viewport` (WxH, default 1280x720),
+capture), `--clip` (crop region as `x,y,w,h` — e.g. `0,0,256,720` for sidebar
+only), `--wait` (ms, default 2000), `--viewport` (WxH, default 1280x720),
 `--outdir` (default `test-results/screenshots`), `--messages` (JSON file path).
 Output is a PNG path on stdout.
 
@@ -273,14 +274,15 @@ just desktop-screenshot --name code-blocks --messages /tmp/msgs.json
 just desktop-screenshot --name unread-dot \
   --active-channel general --messages /tmp/badge-msgs.json
 
-# Context menu on an unread channel
+# Cropped to sidebar only (256px wide)
+just desktop-screenshot --name sidebar-unread \
+  --active-channel general --messages /tmp/badge-msgs.json \
+  --clip 0,0,256,720
+
+# Context menu on an unread channel (wider crop to include popup)
 just desktop-screenshot --name ctx-mark-read \
   --active-channel general --messages /tmp/badge-msgs.json \
-  --right-click channel-random
-
-# Context menu on a read channel
-just desktop-screenshot --name ctx-mark-unread \
-  --active-channel general --right-click channel-random
+  --right-click channel-random --clip 0,200,320,300
 
 # Hover state (e.g. copy button reveal)
 just desktop-screenshot --name copy-hover \
@@ -296,6 +298,23 @@ Available mock channels: `general`, `random`, `design`, `sales`, `engineering`,
 ```bash
 ./scripts/post-screenshots.sh 803 test-results/screenshots
 ./scripts/post-screenshots.sh 803 test-results/screenshots body.md  # custom body prepended
+```
+
+The body file supports `{{filename}}` placeholders (without `.png`) to inline
+images at specific positions. Images not referenced by any placeholder are
+appended at the end. Without placeholders, all images are appended (backward
+compatible).
+
+```markdown
+### Unread dot
+A message arrives in `#random`.
+
+{{01-unread-dot}}
+
+### Context menu
+Right-click shows "Mark as read".
+
+{{02-context-menu}}
 ```
 
 Re-runs for the same PR overwrite previous images. Cleanup:

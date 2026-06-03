@@ -16,6 +16,7 @@
 //   --click <selector>         CSS selector or data-testid to click before capture
 //   --right-click <selector>   Right-click a selector (for context menus)
 //   --hover <selector>         Hover over a selector before capture
+//   --clip <x,y,w,h>           Crop to a region (e.g. 0,0,256,720 for sidebar)
 //   --wait <ms>                Milliseconds to wait before capture (default: 2000)
 //   --viewport <WxH>           Viewport dimensions (default: 1280x720)
 //   --outdir <path>            Output directory (default: test-results/screenshots)
@@ -34,6 +35,7 @@ const { values: args } = parseArgs({
     click: { type: "string" },
     "right-click": { type: "string" },
     hover: { type: "string" },
+    clip: { type: "string" },
     wait: { type: "string", default: "2000" },
     viewport: { type: "string", default: "1280x720" },
     outdir: { type: "string", default: "test-results/screenshots" },
@@ -231,7 +233,13 @@ try {
   }
 
   const filepath = join(outdir, `${args.name}.png`);
-  await page.screenshot({ path: filepath });
+  const clipOpts = args.clip
+    ? (() => {
+        const [x, y, w, h] = args.clip.split(",").map(Number);
+        return { clip: { x, y, width: w, height: h } };
+      })()
+    : {};
+  await page.screenshot({ path: filepath, ...clipOpts });
   console.log(filepath);
 } finally {
   await browser.close();
