@@ -2,7 +2,7 @@ use nostr::{Keys, ToBech32};
 use tauri::{AppHandle, State};
 
 #[cfg(feature = "mesh-llm")]
-use crate::managed_agents::relay_mesh_model_id;
+use crate::managed_agents::{relay_mesh_model_id, RELAY_MESH_API_BASE_URL};
 use crate::{
     app_state::AppState,
     managed_agents::{
@@ -31,14 +31,16 @@ fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
 
 #[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
-    state: &AppState,
+    _state: &AppState,
     record: &ManagedAgentRecord,
 ) -> Result<(), String> {
-    let Some(model_id) = relay_mesh_model_id(record) else {
+    if relay_mesh_model_id(record).is_none() {
         return Ok(());
-    };
-    crate::commands::mesh_llm::ensure_client_node_for_model(state, model_id, None).await?;
-    Ok(())
+    }
+
+    Err(format!(
+        "relay mesh agents cannot be started from saved state because the selected serve target is not persisted. Create a new agent with Run on relay mesh selected to refresh the target for {RELAY_MESH_API_BASE_URL}."
+    ))
 }
 
 #[cfg(not(feature = "mesh-llm"))]

@@ -314,4 +314,23 @@ test("saved relay-mesh agents require a fresh serve target before manual start",
     "start_managed_agent",
   );
   await expect(row).toContainText("stopped");
+
+  await expect(
+    page.evaluate(async (agentPubkey) => {
+      const invoke = (window as E2eWindow).__SPROUT_E2E_INVOKE_MOCK_COMMAND__ as
+        | ((
+            command: string,
+            payload?: Record<string, unknown>,
+          ) => Promise<unknown>)
+        | undefined;
+      if (!invoke) throw new Error("Mock invoke bridge is unavailable.");
+      try {
+        await invoke("start_managed_agent", { pubkey: agentPubkey });
+        return "started";
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    }, pubkey),
+  ).resolves.toContain("selected serve target is not persisted");
+  await expect(row).toContainText("stopped");
 });

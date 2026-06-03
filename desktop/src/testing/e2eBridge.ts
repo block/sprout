@@ -4234,10 +4234,27 @@ function getMockManagedAgent(pubkey: string): MockManagedAgent {
   return agent;
 }
 
+function isRelayMeshManagedAgent(agent: MockManagedAgent): boolean {
+  const env = agent.env_vars ?? {};
+  return (
+    agent.backend.type === "local" &&
+    env.SPROUT_AGENT_PROVIDER === "openai" &&
+    env.OPENAI_COMPAT_BASE_URL?.replace(/\/+$/, "") ===
+      "http://127.0.0.1:9337/v1" &&
+    env.OPENAI_COMPAT_API_KEY === "sprout-mesh-local"
+  );
+}
+
 async function handleStartManagedAgent(args: {
   pubkey: string;
 }): Promise<RawManagedAgent> {
   const agent = getMockManagedAgent(args.pubkey);
+  if (isRelayMeshManagedAgent(agent)) {
+    throw new Error(
+      "relay mesh agents cannot be started from saved state because the selected serve target is not persisted. Create a new agent with Run on relay mesh selected to refresh the target for http://127.0.0.1:9337/v1.",
+    );
+  }
+
   const now = new Date().toISOString();
   agent.status = "running";
   agent.pid = agent.pid ?? 42000 + mockManagedAgents.indexOf(agent);
@@ -5220,6 +5237,8 @@ export function maybeInstallE2eTauriMocks() {
             SPROUT_AGENT_PROVIDER: "openai",
             OPENAI_COMPAT_BASE_URL: "http://127.0.0.1:9337/v1",
             OPENAI_COMPAT_MODEL: model,
+            OPENAI_COMPAT_API_KEY: "sprout-mesh-local",
+            OPENAI_COMPAT_API: "chat",
           },
         };
       }
