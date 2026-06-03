@@ -181,6 +181,35 @@ test("Run-on-relay-mesh ensures the client node BEFORE spawning the agent", asyn
   expect(ensureIdx).toBeLessThan(createIdx);
 });
 
+test("Run-on-relay-mesh skips connect signaling for own serve target", async ({
+  page,
+}) => {
+  await gotoApp(page);
+  await page.getByTestId("open-agents-view").click();
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByText("Custom Agent").click();
+  await page.getByTestId("agent-name-input").fill("Own Mesh Agent");
+
+  const toggle = page.getByTestId("agent-relay-mesh-toggle");
+  await expect(toggle).toBeEnabled({ timeout: 10_000 });
+  await toggle.click();
+  await page
+    .getByTestId("agent-relay-mesh-model")
+    .selectOption({ label: "SmolLM2 135M — Mock desktop" });
+
+  const before = (await commands(page)).length;
+  await page.getByTestId("create-agent-submit").click();
+  await expect
+    .poll(async () => (await commands(page)).slice(before))
+    .toContain("create_managed_agent");
+
+  const slice = (await commands(page)).slice(before);
+  expect(slice).toContain("mesh_ensure_client_node");
+  expect(
+    (await signedEvents(page)).filter((event) => event.kind === 24621),
+  ).toHaveLength(0);
+});
+
 test("Run-on-relay-mesh canonicalizes the mesh connect #p target", async ({
   page,
 }) => {
@@ -191,7 +220,7 @@ test("Run-on-relay-mesh canonicalizes the mesh connect #p target", async ({
       mock: {
         ...(w.__SPROUT_E2E__?.mock ?? {}),
         meshReporterPubkey:
-          "  DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF  ",
+          "  CAFEBABECAFEBABECAFEBABECAFEBABECAFEBABECAFEBABECAFEBABECAFEBABE  ",
       },
     };
   });
@@ -217,7 +246,7 @@ test("Run-on-relay-mesh canonicalizes the mesh connect #p target", async ({
       tags: [
         [
           "p",
-          "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+          "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
         ],
       ],
     });
