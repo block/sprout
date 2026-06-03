@@ -169,7 +169,7 @@ export function SettingsView({
             data-testid="settings-title"
             id="settings-title"
           >
-            Settings
+            {mode === "profile" ? "Profile" : "Settings"}
           </h2>
           <button
             aria-label="Close settings"
