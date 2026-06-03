@@ -5491,6 +5491,12 @@ export function maybeInstallE2eTauriMocks() {
         return resolveMockUploadDescriptors(activeConfig);
       case "upload_media_bytes":
         return resolveMockUploadDescriptors(activeConfig)[0];
+      case "download_image":
+      case "download_file":
+        // The save dialog can't run headlessly; report a successful save so the
+        // FileCard / image-menu click handlers resolve. Specs assert the
+        // command was invoked via `__SPROUT_E2E_COMMANDS__`, not the dialog.
+        return true;
       case "get_event":
         return handleGetEvent(
           payload as Parameters<typeof handleGetEvent>[0],

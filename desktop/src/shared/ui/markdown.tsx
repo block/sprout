@@ -155,23 +155,37 @@ function ImageContextMenu({
   React.useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    window.addEventListener("click", close);
-    window.addEventListener("contextmenu", close);
-    window.addEventListener("scroll", close, true);
+    // Defer attaching the dismiss listeners until after the current event
+    // loop turn. The right-click that opens the menu (a `contextmenu` on
+    // mousedown) is often followed by a trailing `click`/`pointerup` on the
+    // same interaction; attaching synchronously lets that trailing event —
+    // and the platform `click` some webviews emit on right-button release —
+    // immediately dismiss the menu, so it only flashes. Deferring guarantees
+    // the opening interaction can never be the one that closes it.
+    let attached = false;
+    const timer = window.setTimeout(() => {
+      attached = true;
+      window.addEventListener("click", close);
+      window.addEventListener("contextmenu", close);
+      window.addEventListener("scroll", close, true);
+    }, 0);
     return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("contextmenu", close);
-      window.removeEventListener("scroll", close, true);
+      window.clearTimeout(timer);
+      if (attached) {
+        window.removeEventListener("click", close);
+        window.removeEventListener("contextmenu", close);
+        window.removeEventListener("scroll", close, true);
+      }
     };
   }, [menu]);
 
   return (
     <>
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: context menu handler on image wrapper */}
       <div
-        onContextMenu={(e) => {
+        onContextMenuCapture={(e) => {
           e.preventDefault();
           e.stopPropagation();
+          e.nativeEvent.stopImmediatePropagation();
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
@@ -300,8 +314,13 @@ function formatFileSize(bytes: number): string {
 
 /**
  * File card for a generic (non-image, non-video) attachment: icon, filename,
- * size, and a download action. The blob is served with
- * `Content-Disposition: attachment`, so following the link downloads it.
+ * size, and a download action.
+ *
+ * Downloads go through the native `download_file` Tauri command (HTTP inside
+ * the app's tunnel + a save dialog), not a plain `<a download>` link. A bare
+ * link navigates the webview to the blob URL, which escapes to the OS browser
+ * and gets bounced to a corporate CDN interstitial ("browser not supported").
+ * The native command mirrors the image-download path.
  */
 function FileCard({
   href,
@@ -314,11 +333,18 @@ function FileCard({
 }) {
   const sizeLabel = size != null ? formatFileSize(size) : "";
   return (
-    <a
-      href={href}
-      download={filename}
+    <button
+      type="button"
+      onClick={() => {
+        invokeTauri("download_file", { url: href, filename }).catch(
+          (err: unknown) => {
+            const msg = err instanceof Error ? err.message : "Download failed";
+            toast.error(msg);
+          },
+        );
+      }}
       data-testid="file-card"
-      className="my-1 inline-flex max-w-sm items-center gap-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2 no-underline transition-colors hover:bg-muted/70"
+      className="my-1 inline-flex max-w-sm items-center gap-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2 text-left no-underline transition-colors hover:bg-muted/70"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
         <FileText className="h-5 w-5" />
@@ -334,7 +360,7 @@ function FileCard({
         ) : null}
       </span>
       <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
-    </a>
+    </button>
   );
 }
 
@@ -647,7 +673,12 @@ function createMarkdownComponents(
           <ImageContextMenu src={src}>
             <DialogPrimitive.Root>
               <DialogPrimitive.Trigger asChild>
-                <div className="mt-1 max-w-sm cursor-pointer">
+                <div
+                  className="mt-1 max-w-sm cursor-pointer"
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) e.preventDefault();
+                  }}
+                >
                   <img
                     alt={alt}
                     className="max-h-64 max-w-full rounded-xl object-contain"

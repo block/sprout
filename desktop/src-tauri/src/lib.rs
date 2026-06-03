@@ -633,6 +633,7 @@ pub fn run() {
             pick_and_upload_media,
             upload_media_bytes,
             download_image,
+            download_file,
             list_relay_members,
             get_my_relay_membership,
             add_relay_member,

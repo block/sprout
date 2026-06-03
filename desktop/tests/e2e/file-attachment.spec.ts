@@ -39,16 +39,24 @@ test("upload a file and see a FileCard in the timeline", async ({ page }) => {
   // Send the (attachment-only) message.
   await page.getByTestId("send-message").click();
 
-  // A FileCard renders in the timeline: a download link carrying the filename
-  // and pointing at the blob URL.
+  // A FileCard renders in the timeline: a button carrying the filename. It
+  // downloads via the native `download_file` command (HTTP inside the app's
+  // tunnel + save dialog), NOT a plain `<a download>` link — a bare link
+  // escapes the webview to the OS browser and hits a corporate CDN page.
   const card = page.getByTestId("file-card");
   await expect(card).toBeVisible();
   await expect(card).toContainText("quarterly-report.pdf");
-  await expect(card).toHaveAttribute(
-    "href",
-    `https://mock.relay/media/${"a".repeat(64)}.pdf`,
-  );
-  await expect(card).toHaveAttribute("download", "quarterly-report.pdf");
+
+  await card.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
+            .__SPROUT_E2E_COMMANDS__ ?? [],
+      ),
+    )
+    .toContain("download_file");
 });
 
 test("forum posts emit a FileCard for generic attachments, not a broken image", async ({
@@ -75,14 +83,20 @@ test("forum posts emit a FileCard for generic attachments, not a broken image", 
   await page.getByTestId("send-message").click();
 
   // The post renders through the shared Markdown component as a FileCard —
-  // a download link carrying the filename and pointing at the blob URL — NOT
-  // an inline image.
+  // a button carrying the filename that downloads via the native
+  // `download_file` command — NOT an inline image and NOT a bare link.
   const card = page.getByTestId("file-card");
   await expect(card).toBeVisible();
   await expect(card).toContainText("quarterly-report.pdf");
-  await expect(card).toHaveAttribute(
-    "href",
-    `https://mock.relay/media/${"a".repeat(64)}.pdf`,
-  );
-  await expect(card).toHaveAttribute("download", "quarterly-report.pdf");
+
+  await card.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { __SPROUT_E2E_COMMANDS__?: string[] })
+            .__SPROUT_E2E_COMMANDS__ ?? [],
+      ),
+    )
+    .toContain("download_file");
 });
