@@ -27,7 +27,7 @@ fi
 
 EXISTING_ENTRIES=""
 if git fetch origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null; then
-  EXISTING_ENTRIES=$(git ls-tree "origin/${BRANCH}" | grep -v $'\t'"pr-${PR}--" || true)
+  EXISTING_ENTRIES=$(git ls-tree "origin/${BRANCH}" | grep -v $'\t'"\"\\{0,1\\}pr-${PR}--" || true)
 fi
 
 NEW_ENTRIES=""
@@ -36,7 +36,7 @@ for PNG in "${PNGS[@]}"; do
   FILENAME=$(basename "$PNG")
   BLOB=$(git hash-object -w "$PNG")
   TREE_PATH="pr-${PR}--${FILENAME}"
-  NEW_ENTRIES+=$(printf '100644 blob %s\t%s\n' "$BLOB" "$TREE_PATH")
+  NEW_ENTRIES+="$(printf '100644 blob %s\t%s' "$BLOB" "$TREE_PATH")"$'\n'
   IMAGE_URLS+=("${RAW_BASE}/${TREE_PATH}")
 done
 

@@ -202,7 +202,8 @@ desktop-e2e-integration: _ensure-migrations
 desktop-screenshot *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    cd ..; just desktop-build; cd {{desktop_dir}}
+    just desktop-build
+    cd {{desktop_dir}}
     if ! curl -sf http://127.0.0.1:4173/ >/dev/null 2>&1; then
         python3 -m http.server 4173 -d dist >/dev/null 2>&1 &
         trap "kill $! 2>/dev/null || true" EXIT
