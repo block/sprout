@@ -112,78 +112,101 @@ await page.addInitScript(() => {
   window.__SPROUT_E2E_APP_BADGE_COUNT__ = 0;
 });
 
-if (args.messages) {
-  let messages;
-  try {
-    messages = JSON.parse(readFileSync(resolve(args.messages), "utf8"));
-  } catch (err) {
-    console.error(`Failed to read messages file: ${err.message}`);
-    await browser.close();
-    process.exit(1);
-  }
+try {
+  if (args.messages) {
+    if (args.route !== "/") {
+      console.warn("warning: --route is ignored when --messages is provided");
+    }
 
-  if (
-    !Array.isArray(messages) ||
-    messages.length === 0 ||
-    messages.some(
-      (m) => typeof m.channelName !== "string" || typeof m.content !== "string",
-    )
-  ) {
-    console.error(
-      "messages file must be a non-empty array of { channelName: string, content: string, pubkey?: string, kind?: number }",
+    let messages;
+    try {
+      messages = JSON.parse(readFileSync(resolve(args.messages), "utf8"));
+    } catch (err) {
+      console.error(`Failed to read messages file: ${err.message}`);
+      process.exitCode = 1;
+      throw err;
+    }
+
+    if (
+      !Array.isArray(messages) ||
+      messages.length === 0 ||
+      messages.some(
+        (m) =>
+          typeof m.channelName !== "string" || typeof m.content !== "string",
+      )
+    ) {
+      const msg =
+        "messages file must be a non-empty array of { channelName: string, content: string, pubkey?: string, kind?: number }";
+      console.error(msg);
+      process.exitCode = 1;
+      throw new Error(msg);
+    }
+
+    const channels = new Set(messages.map((m) => m.channelName));
+    if (channels.size > 1) {
+      const msg =
+        "All messages must target the same channelName for a single screenshot";
+      console.error(msg);
+      process.exitCode = 1;
+      throw new Error(msg);
+    }
+
+    const channelName = messages[0].channelName;
+
+    if (!/^[a-z0-9-]+$/.test(channelName)) {
+      const msg = `Invalid channel name: ${channelName}`;
+      console.error(msg);
+      process.exitCode = 1;
+      throw new Error(msg);
+    }
+
+    await page.goto(BASE_URL);
+    await page.waitForSelector(`[data-testid="channel-${channelName}"]`, {
+      timeout: 10000,
+    });
+    await page.click(`[data-testid="channel-${channelName}"]`);
+
+    await page.waitForFunction(
+      (name) =>
+        window.__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+          channelName: name,
+        }) ?? false,
+      channelName,
+      { timeout: 10000 },
     );
-    await browser.close();
-    process.exit(1);
+
+    for (const msg of messages) {
+      await page.evaluate(
+        (m) => {
+          window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.(m);
+        },
+        {
+          channelName: msg.channelName,
+          content: msg.content,
+          pubkey: msg.pubkey ?? DEFAULT_MOCK_PUBKEY,
+          kind: msg.kind,
+        },
+      );
+    }
+
+    await page.waitForTimeout(waitMs);
+  } else {
+    const url = args.route === "/" ? BASE_URL : `${BASE_URL}/#${args.route}`;
+    await page.goto(url);
+    await page.waitForTimeout(waitMs);
   }
 
-  const channelName = messages[0].channelName;
-
-  await page.goto(BASE_URL);
-  await page.waitForSelector(`[data-testid="channel-${channelName}"]`, {
-    timeout: 10000,
-  });
-  await page.click(`[data-testid="channel-${channelName}"]`);
-
-  await page.waitForFunction(
-    (name) =>
-      window.__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
-        channelName: name,
-      }) ?? false,
-    channelName,
-    { timeout: 10000 },
-  );
-
-  for (const msg of messages) {
-    await page.evaluate(
-      (m) => {
-        window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.(m);
-      },
-      {
-        channelName: msg.channelName,
-        content: msg.content,
-        pubkey: msg.pubkey ?? DEFAULT_MOCK_PUBKEY,
-        kind: msg.kind,
-      },
-    );
+  if (args.click) {
+    const selector = args.click.startsWith("[")
+      ? args.click
+      : `[data-testid="${args.click}"]`;
+    await page.click(selector);
+    await page.waitForTimeout(500);
   }
 
-  await page.waitForTimeout(waitMs);
-} else {
-  const url = args.route === "/" ? BASE_URL : `${BASE_URL}/#${args.route}`;
-  await page.goto(url);
-  await page.waitForTimeout(waitMs);
+  const filepath = join(outdir, `${args.name}.png`);
+  await page.screenshot({ path: filepath });
+  console.log(filepath);
+} finally {
+  await browser.close();
 }
-
-if (args.click) {
-  const selector = args.click.startsWith("[")
-    ? args.click
-    : `[data-testid="${args.click}"]`;
-  await page.click(selector);
-  await page.waitForTimeout(500);
-}
-
-const filepath = join(outdir, `${args.name}.png`);
-await page.screenshot({ path: filepath });
-console.log(filepath);
-
-await browser.close();

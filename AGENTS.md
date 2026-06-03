@@ -259,11 +259,12 @@ just desktop-screenshot --name code-blocks --messages /tmp/msgs.json
 ```
 
 Each message requires `channelName` and `content`; optional fields are `pubkey`
-and `kind`. When `--messages` is provided, the script navigates to the channel
-from the first message (ignoring `--route`), waits for the live subscription,
-injects all messages, then captures. Available mock channels: `general`,
-`random`, `design`, `sales`, `engineering`, `agents`, `watercooler`,
-`announcements`, `alice-tyler`, `bob-tyler`.
+and `kind`. All messages must target the same channel. When `--messages` is
+provided, the script navigates to the channel from the first message (ignoring
+`--route`), waits for the live subscription, injects all messages, then
+captures. Channel names must match `[a-z0-9-]+`. Available mock channels:
+`general`, `random`, `design`, `sales`, `engineering`, `agents`,
+`watercooler`, `announcements`, `alice-tyler`, `bob-tyler`.
 
 #### Posting screenshots to a PR
 
@@ -279,9 +280,11 @@ just desktop-screenshot --name feature-demo --messages /tmp/msgs.json --outdir t
 ./scripts/post-screenshots.sh 803 test-results/screenshots body.md
 ```
 
-The orphan branch accumulates images across PRs, namespaced as `pr-<N>/`. Re-runs
-for the same PR overwrite previous images. Delete the branch when no longer
-needed: `git push origin --delete agent-screenshots`.
+The orphan branch accumulates images across PRs, namespaced as `pr-<N>--`. Re-runs
+for the same PR overwrite previous images. Concurrent runs for different PRs may
+conflict (the push uses `--force-with-lease` and will fail if the branch was
+updated since fetch; retry if needed). Delete the branch when no longer needed:
+`git push origin --delete agent-screenshots`.
 
 The Playwright MCP browser (`@playwright/mcp`) is also configured but cannot
 drive the desktop app directly because it evaluates JS after page load — too

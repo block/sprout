@@ -10,6 +10,11 @@ PR="$1"
 PNG_DIR="$2"
 BODY_FILE="${3:-}"
 
+if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+  echo "error: PR number must be a positive integer" >&2
+  exit 1
+fi
+
 BRANCH="agent-screenshots"
 REPO="block/sprout"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}"
@@ -22,7 +27,7 @@ fi
 
 EXISTING_ENTRIES=""
 if git fetch origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null; then
-  EXISTING_ENTRIES=$(git ls-tree "origin/${BRANCH}" | grep -v "	pr-${PR}/" || true)
+  EXISTING_ENTRIES=$(git ls-tree "origin/${BRANCH}" | grep -v $'\t'"pr-${PR}--" || true)
 fi
 
 NEW_ENTRIES=""
@@ -30,8 +35,8 @@ IMAGE_URLS=()
 for PNG in "${PNGS[@]}"; do
   FILENAME=$(basename "$PNG")
   BLOB=$(git hash-object -w "$PNG")
-  TREE_PATH="pr-${PR}/${FILENAME}"
-  NEW_ENTRIES+="100644 blob ${BLOB}	${TREE_PATH}"$'\n'
+  TREE_PATH="pr-${PR}--${FILENAME}"
+  NEW_ENTRIES+=$(printf '100644 blob %s\t%s\n' "$BLOB" "$TREE_PATH")
   IMAGE_URLS+=("${RAW_BASE}/${TREE_PATH}")
 done
 
@@ -39,23 +44,19 @@ COMBINED=$(printf '%s\n' "$EXISTING_ENTRIES" "$NEW_ENTRIES" | grep -v '^$')
 TREE=$(echo "$COMBINED" | git mktree)
 
 COMMIT=$(git commit-tree "$TREE" -m "screenshots: PR #${PR}")
-git push --force origin "${COMMIT}:refs/heads/${BRANCH}"
+git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
+
+IMAGES_SECTION=""
+for URL in "${IMAGE_URLS[@]}"; do
+  FILENAME=$(basename "$URL")
+  NAME="${FILENAME%.png}"
+  IMAGES_SECTION+="![${NAME}](${URL})"$'\n\n'
+done
 
 if [[ -n "$BODY_FILE" ]]; then
-  COMMENT_BODY=$(cat "$BODY_FILE")
-  COMMENT_BODY+=$'\n\n'
-  for URL in "${IMAGE_URLS[@]}"; do
-    FILENAME=$(basename "$URL")
-    NAME="${FILENAME%.png}"
-    COMMENT_BODY+="![${NAME}](${URL})"$'\n\n'
-  done
+  COMMENT_BODY="$(cat "$BODY_FILE")"$'\n\n'"${IMAGES_SECTION}"
 else
-  COMMENT_BODY="## Screenshots"$'\n\n'
-  for URL in "${IMAGE_URLS[@]}"; do
-    FILENAME=$(basename "$URL")
-    NAME="${FILENAME%.png}"
-    COMMENT_BODY+="![${NAME}](${URL})"$'\n\n'
-  done
+  COMMENT_BODY="## Screenshots"$'\n\n'"${IMAGES_SECTION}"
 fi
 
 gh pr comment "$PR" --repo "$REPO" --body "$COMMENT_BODY"
