@@ -89,6 +89,30 @@ test("Share compute starts and stops a serve node", async ({ page }) => {
     .toContain("mesh_stop_node");
 });
 
+test("Share compute model draft persists across reload", async ({ page }) => {
+  await gotoApp(page);
+  await openSettings(page, "compute");
+
+  const model = page.getByTestId("mesh-share-compute-model");
+  await expect(model).toBeVisible({ timeout: 10_000 });
+  await model.fill("unsloth/Qwen3.6-35B-A3B-GGUF@main:UD-Q4_K_S");
+
+  await page.getByText("Advanced").click();
+  await page.getByTestId("mesh-share-compute-vram").fill("42");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("open-agents-view")).toBeVisible({
+    timeout: 10_000,
+  });
+  await openSettings(page, "compute");
+
+  await expect(page.getByTestId("mesh-share-compute-model")).toHaveValue(
+    "unsloth/Qwen3.6-35B-A3B-GGUF@main:UD-Q4_K_S",
+  );
+  await page.getByText("Advanced").click();
+  await expect(page.getByTestId("mesh-share-compute-vram")).toHaveValue("42");
+});
+
 test("Run-on-relay-mesh ensures the client node BEFORE spawning the agent", async ({
   page,
 }) => {
