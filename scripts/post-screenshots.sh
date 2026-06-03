@@ -48,10 +48,9 @@ COMMIT=$(git commit-tree "$TREE" -m "screenshots: PR #${PR}")
 git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
 
 declare -A IMAGE_URL_MAP
-for URL in "${IMAGE_URLS[@]}"; do
-  FILENAME=$(basename "$URL")
-  NAME="${FILENAME%.png}"
-  IMAGE_URL_MAP["$NAME"]="$URL"
+for i in "${!PNGS[@]}"; do
+  ORIG_NAME="$(basename "${PNGS[$i]}" .png)"
+  IMAGE_URL_MAP["$ORIG_NAME"]="${IMAGE_URLS[$i]}"
 done
 
 if [[ -n "$BODY_FILE" ]]; then
