@@ -51,5 +51,7 @@ export function StatusEmoji({ value, className }: StatusEmojiProps) {
   }
 
   // Native glyph, or an unknown shortcode we can't resolve — render as text.
-  return <span>{value}</span>;
+  // Thread the caller's className through so native statuses keep the spacing
+  // (e.g. `mr-1`) every display site applies to the image branch above.
+  return <span className={className}>{value}</span>;
 }

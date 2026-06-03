@@ -77,6 +77,21 @@ export function registerCustomEmojiMarkdownIt(
     // Fast bail: a shortcode must start with `:`.
     if (state.src.charCodeAt(state.pos) !== 0x3a /* : */) return false;
 
+    // Word-boundary guard: don't fire when the `:` is glued to a preceding
+    // word char. This keeps prose and URLs intact — `not:sprout:` and
+    // `http://x:y:sprout:` must NOT turn the inner `:sprout:` into an image;
+    // only a `:shortcode:` at a boundary (start of line, after whitespace or
+    // punctuation) materializes. Slack-style boundary semantics.
+    if (state.pos > 0) {
+      const prev = state.src.charCodeAt(state.pos - 1);
+      const isWordChar =
+        (prev >= 0x30 && prev <= 0x39) /* 0-9 */ ||
+        (prev >= 0x41 && prev <= 0x5a) /* A-Z */ ||
+        (prev >= 0x61 && prev <= 0x7a) /* a-z */ ||
+        prev === 0x5f; /* _ */
+      if (isWordChar) return false;
+    }
+
     const alternation = buildKnownShortcodeAlternation(options.shortcodes());
     if (!alternation) return false;
 

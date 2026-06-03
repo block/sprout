@@ -62,3 +62,77 @@ test("dedupes and ignores blank entries", () => {
   const alt = buildKnownShortcodeAlternation(["wave", "wave", "", "  "]);
   assert.equal(alt, "wave");
 });
+
+// ── markdown-it inline rule: word-boundary behavior ──────────────────────
+// These drive the *actual* rule registered by registerCustomEmojiMarkdownIt
+// (no reimplementation), using a minimal fake markdown-it that captures the
+// rule and a minimal `state` shaped like markdown-it's inline state. The guard
+// added for the edit-composer parse path must not fire mid-word or inside URLs.
+import { registerCustomEmojiMarkdownIt } from "./customEmojiNode.ts";
+
+function captureRule(shortcodes) {
+  let captured = null;
+  const md = {
+    renderer: { rules: {} },
+    inline: {
+      ruler: {
+        before(_anchor, _name, fn) {
+          captured = fn;
+        },
+      },
+    },
+    utils: { escapeHtml: (s) => s },
+  };
+  registerCustomEmojiMarkdownIt(md, {
+    shortcodes: () => shortcodes,
+    resolveUrl: (sc) => `https://b/${sc}.png`,
+  });
+  return captured;
+}
+
+// Run the rule at `pos`; return whether it matched and how far it advanced.
+function runRule(rule, src, pos) {
+  const state = {
+    src,
+    pos,
+    push: () => ({ meta: {} }),
+  };
+  const matched = rule(state, false);
+  return { matched, advanced: state.pos - pos };
+}
+
+test("rule fires for a boundary :shortcode: (start of string)", () => {
+  const rule = captureRule(["sprout"]);
+  const { matched, advanced } = runRule(rule, ":sprout:", 0);
+  assert.equal(matched, true);
+  assert.equal(advanced, ":sprout:".length);
+});
+
+test("rule fires for a :shortcode: preceded by whitespace", () => {
+  const rule = captureRule(["sprout"]);
+  // pos points at the `:` after the space.
+  const { matched } = runRule(rule, "hi :sprout:", 3);
+  assert.equal(matched, true);
+});
+
+test("rule does NOT fire when the colon is glued to a word char (not:sprout:)", () => {
+  const rule = captureRule(["sprout"]);
+  // pos points at the `:` immediately after `not`.
+  const { matched } = runRule(rule, "not:sprout:", 3);
+  assert.equal(matched, false);
+});
+
+test("rule does NOT fire inside a URL-like sequence (http://x:y:sprout:)", () => {
+  const rule = captureRule(["sprout"]);
+  const src = "http://x:y:sprout:";
+  // pos points at the `:` immediately after `y` (a word char).
+  const { matched } = runRule(rule, src, src.indexOf(":sprout:"));
+  assert.equal(matched, false);
+});
+
+test("rule fires after punctuation boundary (e.g. parenthesis)", () => {
+  const rule = captureRule(["sprout"]);
+  // `(` is not a word char, so a `:shortcode:` after it still materializes.
+  const { matched } = runRule(rule, "(:sprout:)", 1);
+  assert.equal(matched, true);
+});
