@@ -224,10 +224,9 @@ See [TESTING.md](TESTING.md) for the full multi-agent E2E guide.
 
 ### Desktop Screenshots (Playwright)
 
-The desktop app is a Tauri app that cannot render in a plain browser without the
-E2E mock bridge. A standalone screenshot helper at
-`desktop/tests/helpers/screenshot.mjs` wraps the same mock bridge setup the E2E
-tests use (`addInitScript` + `window.__SPROUT_E2E__`) into a CLI tool.
+The desktop app requires the E2E mock bridge to render — it cannot run in a plain
+browser. Use `just desktop-screenshot` to capture screenshots (builds frontend,
+starts preview server, runs Playwright automatically):
 
 ```bash
 just desktop-screenshot --name home
@@ -239,56 +238,36 @@ just desktop-screenshot --name settings --click open-settings
 Options: `--name` (filename), `--route` (client route), `--click` (data-testid
 or CSS selector), `--wait` (ms, default 2000), `--viewport` (WxH, default
 1280x720), `--outdir` (default `test-results/screenshots`),
-`--messages` (JSON file path). Screenshots are saved as PNGs and the path is
-printed to stdout. The `just desktop-screenshot` target handles building the
-frontend and starting the preview server automatically.
+`--messages` (JSON file path). Output is a PNG path on stdout.
 
-#### Injecting messages
-
-Use `--messages` to inject content into the channel timeline before screenshotting.
-The JSON file contains an array of messages to inject:
+Use `--messages` to inject content into a channel before capture. The JSON file
+is an array of `{ channelName, content, pubkey?, kind? }` objects — all must
+target the same channel (`[a-z0-9-]+`). When provided, `--route` is ignored.
 
 ```bash
-cat > /tmp/msgs.json << 'EOF'
-[
-  { "channelName": "general", "content": "```typescript\nconst x: number = 42;\n```" },
-  { "channelName": "general", "content": "plain text message" }
-]
-EOF
 just desktop-screenshot --name code-blocks --messages /tmp/msgs.json
 ```
 
-Each message requires `channelName` and `content`; optional fields are `pubkey`
-and `kind`. All messages must target the same channel. When `--messages` is
-provided, the script navigates to the channel from the first message (ignoring
-`--route`), waits for the live subscription, injects all messages, then
-captures. Channel names must match `[a-z0-9-]+`. Available mock channels:
-`general`, `random`, `design`, `sales`, `engineering`, `agents`,
-`watercooler`, `announcements`, `alice-tyler`, `bob-tyler`.
-
-#### Posting screenshots to a PR
-
-`scripts/post-screenshots.sh` hosts PNGs on a per-developer orphan branch
-(`agent-screenshots/<github-username>`) and posts them as a PR comment:
-
-```bash
-# Take screenshots, then post them
-just desktop-screenshot --name feature-demo --messages /tmp/msgs.json --outdir test-results/screenshots
-./scripts/post-screenshots.sh 803 test-results/screenshots
-
-# Or provide a custom comment body (images are appended)
-./scripts/post-screenshots.sh 803 test-results/screenshots body.md
+```json
+[
+  { "channelName": "general", "content": "```typescript\nconst x = 42;\n```" },
+  { "channelName": "general", "content": "plain text message" }
+]
 ```
 
-The orphan branch accumulates images across PRs, namespaced as `pr-<N>--`. Re-runs
-for the same PR overwrite previous images. Concurrent runs by the same developer's
-agents may conflict (the push uses `--force-with-lease`; retry if needed). Delete
-the branch when no longer needed:
-`git push origin --delete agent-screenshots/<username>`.
+Available mock channels: `general`, `random`, `design`, `sales`, `engineering`,
+`agents`, `watercooler`, `announcements`, `alice-tyler`, `bob-tyler`.
 
-The Playwright MCP browser (`@playwright/mcp`) is also configured but cannot
-drive the desktop app directly because it evaluates JS after page load — too
-late for the mock bridge. Use the MCP browser for non-Tauri pages only.
+`scripts/post-screenshots.sh` hosts PNGs on a per-developer orphan branch
+(`agent-screenshots/<github-username>`) and posts a PR comment:
+
+```bash
+./scripts/post-screenshots.sh 803 test-results/screenshots
+./scripts/post-screenshots.sh 803 test-results/screenshots body.md  # custom body prepended
+```
+
+Re-runs for the same PR overwrite previous images. Cleanup:
+`git push origin --delete agent-screenshots/<username>`.
 
 ---
 
