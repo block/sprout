@@ -2,6 +2,9 @@ use tauri::{AppHandle, State};
 
 use crate::{app_state::AppState, mesh_llm, relay};
 
+const RELAY_MESH_RUNTIME_NO_TARGET: &str =
+    "relay mesh client start requires a concrete serve target; reopen the agent with Run on relay mesh selected to refresh its target";
+
 pub type CmdResult<T> = Result<T, String>;
 
 #[tauri::command]
@@ -93,27 +96,7 @@ pub(crate) async fn ensure_client_node_for_model(
         .filter(|value| !value.is_empty())
     {
         Some(value) => value,
-        None => {
-            let availability =
-                match relay::query_relay(state, &[mesh_llm::mesh_status_filter()]).await {
-                    Ok(events) => mesh_llm::availability_from_events(events),
-                    Err(error) => return Err(format!("failed to read relay mesh status: {error}")),
-                };
-            if !availability.available {
-                return Err(availability
-                    .reason
-                    .unwrap_or_else(|| "relay mesh is not available".to_string()));
-            }
-            let target = availability
-                .serve_targets
-                .iter()
-                .find(|target| target.model_id == requested_model)
-                .cloned()
-                .ok_or_else(|| {
-                    format!("relay mesh has no serve target for model {requested_model}")
-                })?;
-            target.endpoint_addr
-        }
+        None => return Err(RELAY_MESH_RUNTIME_NO_TARGET.to_string()),
     };
 
     let start = mesh_llm::StartMeshNodeRequest {
@@ -222,6 +205,15 @@ mod tests {
     use super::*;
     use crate::app_state::build_app_state;
 
+    #[tokio::test]
+    async fn cold_client_preflight_requires_explicit_target() {
+        let state = build_app_state();
+        let error = ensure_client_node_for_model(&state, "demo/model", None)
+            .await
+            .expect_err("cold relay-mesh preflight must not auto-pick a target");
+        assert_eq!(error, RELAY_MESH_RUNTIME_NO_TARGET);
+    }
+
     /// Acceptance-critical regression for dropping the serve-vs-client guard.
     ///
     /// Before this change, `ensure_client_node_for_model` hard-errored whenever
@@ -231,11 +223,10 @@ mod tests {
     /// through the same `9337` ingress.
     ///
     /// This test starts a real serve runtime and asserts that a follow-up
-    /// preflight for a *different* model:
-    ///   1. does NOT reject on mode, and
-    ///   2. returns the existing runtime's status (same `9337` ingress), so the
-    ///      agent keeps talking to the running node and mesh-llm's router
-    ///      resolves the model per request.
+    /// preflight for a *different* model and no explicit target still reuses the
+    /// existing runtime. Cold starts without a target are rejected before mesh-llm
+    /// startup; running runtimes are already joined to whatever target the
+    /// frontend selected earlier.
     ///
     /// Hardware-gated (`#[ignore]`): loads a real model. Run with:
     ///   cargo test -p sprout-desktop --features mesh-llm \

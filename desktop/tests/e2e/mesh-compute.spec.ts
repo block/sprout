@@ -66,6 +66,17 @@ async function setMesh(
   }, mesh);
 }
 
+async function openManagedAgentActions(
+  page: import("@playwright/test").Page,
+  pubkey: string,
+) {
+  const trigger = page.getByTestId(`managed-agent-actions-${pubkey}`);
+  await trigger.scrollIntoViewIfNeeded();
+  await trigger.focus();
+  await trigger.press("Enter");
+  await expect(trigger).toHaveAttribute("data-state", "open");
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
 });
@@ -236,4 +247,71 @@ test("a non-member cannot enable relay-mesh — membership is the gate", async (
   // entry point itself. Sanity-check we never created an agent on the mesh.
   const seq = await commands(page);
   expect(seq).not.toContain("create_managed_agent");
+});
+
+test("saved relay-mesh agents require a fresh serve target before manual start", async ({
+  page,
+}) => {
+  await gotoApp(page);
+  await page.getByTestId("open-agents-view").click();
+  await page.getByRole("button", { name: "New" }).click();
+  await page.getByText("Custom Agent").click();
+  await page.getByTestId("agent-name-input").fill("Saved relay mesh agent");
+
+  const toggle = page.getByTestId("agent-relay-mesh-toggle");
+  await expect(toggle).toBeEnabled({ timeout: 10_000 });
+  await toggle.click();
+  await page
+    .getByTestId("agent-relay-mesh-model")
+    .selectOption({ label: "SmolLM2 135M — Mock desktop" });
+
+  await page.getByTestId("create-agent-submit").click();
+  await expect
+    .poll(async () => await commands(page))
+    .toContain("create_managed_agent");
+
+  const agents = await page.evaluate(async () => {
+    const w = window as E2eWindow & {
+      __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: (
+        command: string,
+        payload?: Record<string, unknown>,
+      ) => Promise<Array<{ name: string; pubkey: string }>>;
+    };
+    const invoke = w.__SPROUT_E2E_INVOKE_MOCK_COMMAND__;
+    if (!invoke) throw new Error("Mock invoke bridge is unavailable.");
+    return invoke("list_managed_agents");
+  });
+  const pubkey = agents.find(
+    (agent) => agent.name === "Saved relay mesh agent",
+  )?.pubkey;
+  expect(pubkey).toBeTruthy();
+
+  const row = page.getByTestId(`managed-agent-${pubkey}`);
+  await expect(row).toContainText("Saved relay mesh agent");
+  await expect(row).toContainText("running");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(page.getByRole("dialog", { name: "Agent created" })).toHaveCount(
+    0,
+  );
+
+  await openManagedAgentActions(page, pubkey);
+  await page.getByRole("menuitem", { name: "Stop" }).click();
+  await expect
+    .poll(async () => await commands(page))
+    .toContain("stop_managed_agent");
+  await expect(row).toContainText("stopped");
+
+  const before = (await commands(page)).length;
+  await openManagedAgentActions(page, pubkey);
+  await page.getByRole("menuitem", { name: "Spawn" }).click();
+
+  await expect(
+    page
+      .locator("[data-sonner-toast]")
+      .filter({ hasText: "Relay-mesh agents need a fresh serve target" }),
+  ).toBeVisible();
+  expect((await commands(page)).slice(before)).not.toContain(
+    "start_managed_agent",
+  );
+  await expect(row).toContainText("stopped");
 });

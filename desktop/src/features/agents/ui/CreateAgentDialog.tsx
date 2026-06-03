@@ -396,7 +396,9 @@ export function CreateAgentDialog({
             envVars,
             model: useMesh ? meshModelId.trim() || undefined : undefined,
             spawnAfterCreate,
-            startOnAppLaunch,
+            // Relay-mesh agents need a freshly selected serve target to start;
+            // do not auto-restore them later with only the saved model/env.
+            startOnAppLaunch: useMesh ? false : startOnAppLaunch,
             backend: { type: "local" },
             ...respondToFields,
           };

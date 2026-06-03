@@ -352,7 +352,9 @@ function AgentActionsMenu({
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
+            aria-label={`Agent actions for ${agent.name}`}
             className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            data-testid={`managed-agent-actions-${agent.pubkey}`}
             type="button"
           >
             <Ellipsis className="h-4 w-4" />
