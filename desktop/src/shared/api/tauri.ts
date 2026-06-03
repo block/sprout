@@ -791,12 +791,14 @@ export async function editMessage(
   eventId: string,
   content: string,
   mediaTags?: string[][],
+  emojiTags?: string[][],
 ): Promise<void> {
   await invokeTauri("edit_message", {
     channelId,
     eventId,
     content,
     mediaTags: mediaTags ?? [],
+    emojiTags: emojiTags ?? [],
   });
 }
 

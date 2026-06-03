@@ -402,6 +402,7 @@ pub async fn edit_message(
     event_id: String,
     content: String,
     media_tags: Vec<Vec<String>>,
+    emoji_tags: Option<Vec<Vec<String>>>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let channel_uuid = uuid::Uuid::parse_str(&channel_id)
@@ -413,7 +414,9 @@ pub async fn edit_message(
     if trimmed.is_empty() && media_tags.is_empty() {
         return Err("edit must have content or attachments".into());
     }
-    let builder = events::build_message_edit(channel_uuid, target_eid, trimmed, &media_tags)?;
+    let emoji = emoji_tags.unwrap_or_default();
+    let builder =
+        events::build_message_edit(channel_uuid, target_eid, trimmed, &media_tags, &emoji)?;
     submit_event(builder, &state).await?;
     Ok(())
 }

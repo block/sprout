@@ -47,6 +47,77 @@ export function buildKnownShortcodeAlternation(
   return sorted.map((s) => escapeRegExp(s)).join("|");
 }
 
+/**
+ * Register a markdown-it inline rule that turns a known `:shortcode:` into an
+ * `<img data-custom-emoji ...>` (the same shape `renderHTML` emits). Used by the
+ * node's markdown `parse.setup` so loading content via `setContent` — editing
+ * an existing message — materializes custom-emoji nodes instead of leaving raw
+ * `:shortcode:` text. Unknown shortcodes are left untouched (rendered as the
+ * literal text they are).
+ *
+ * The rule and renderer are self-contained: matching uses the *current* known
+ * set (read lazily on each parse), and the token carries the resolved url so
+ * the renderer needs no further lookup.
+ */
+export function registerCustomEmojiMarkdownIt(
+  // biome-ignore lint/suspicious/noExplicitAny: markdown-it is untyped here
+  md: any,
+  options: CustomEmojiNodeOptions,
+): void {
+  const RULE_NAME = "sprout_custom_emoji";
+  const TOKEN_TYPE = "sprout_custom_emoji";
+
+  // `parse.setup` runs on every parse against the *same* markdown-it instance,
+  // so only register the rule + renderer once — `ruler.before` throws on a
+  // duplicate rule name.
+  if (md.renderer.rules[TOKEN_TYPE]) return;
+
+  // biome-ignore lint/suspicious/noExplicitAny: markdown-it state/silent
+  const rule = (state: any, silent: boolean): boolean => {
+    // Fast bail: a shortcode must start with `:`.
+    if (state.src.charCodeAt(state.pos) !== 0x3a /* : */) return false;
+
+    const alternation = buildKnownShortcodeAlternation(options.shortcodes());
+    if (!alternation) return false;
+
+    // Match a known `:shortcode:` anchored at the current position. `y` (sticky)
+    // anchors at lastIndex without `^`, so we don't accidentally match later in
+    // the line.
+    const re = new RegExp(`:(?:${alternation}):`, "iy");
+    re.lastIndex = state.pos;
+    const match = re.exec(state.src);
+    if (!match) return false;
+
+    if (!silent) {
+      const matched = match[0];
+      const shortcode = matched.slice(1, -1).toLowerCase();
+      const token = state.push(TOKEN_TYPE, "img", 0);
+      token.meta = { shortcode, src: options.resolveUrl(shortcode) ?? "" };
+    }
+    state.pos += match[0].length;
+    return true;
+  };
+
+  // Run before markdown-it's own `:` handling (emphasis etc. are unaffected;
+  // there is no built-in inline rule named "text" collision here). Inserting
+  // before "emphasis" is safe and early enough.
+  md.inline.ruler.before("emphasis", RULE_NAME, rule);
+
+  // biome-ignore lint/suspicious/noExplicitAny: markdown-it token
+  md.renderer.rules[TOKEN_TYPE] = (tokens: any[], idx: number): string => {
+    const { shortcode, src } = tokens[idx].meta as {
+      shortcode: string;
+      src: string;
+    };
+    const esc = md.utils.escapeHtml;
+    // Mirror renderHTML(): the resolved url is rewritten through the media
+    // proxy at PM-render time, so here we emit the raw `src`; `parseHTML`
+    // re-derives the node from `data-shortcode` and the palette supplies the
+    // live url. We still set `src` so a fully-formed <img> round-trips cleanly.
+    return `<img data-custom-emoji data-shortcode="${esc(shortcode)}" src="${esc(src)}" alt=":${esc(shortcode)}:" />`;
+  };
+}
+
 export const CustomEmojiNode = Node.create<CustomEmojiNodeOptions>({
   name: CUSTOM_EMOJI_NODE_NAME,
 
@@ -132,7 +203,22 @@ export const CustomEmojiNode = Node.create<CustomEmojiNodeOptions>({
         ) {
           state.write(`:${node.attrs.shortcode}:`);
         },
-        parse: {},
+        // Parse loaded markdown (e.g. editing an existing message via
+        // `setContent`) so a known `:shortcode:` becomes the atom node instead
+        // of staying plain text. Input rules only fire on live keystrokes, so
+        // without this an edited message shows the raw `:shortcode:`.
+        //
+        // We add a markdown-it inline rule that emits an `<img data-custom-emoji>`
+        // — the same shape `renderHTML` produces — which the node's `parseHTML`
+        // (`img[data-custom-emoji]`) then materializes. Using our own token +
+        // renderer sidesteps the `html: false` gate (that only blocks raw HTML
+        // the *user* typed, not tokens we synthesize).
+        parse: {
+          // biome-ignore lint/suspicious/noExplicitAny: markdown-it is untyped here
+          setup(this: { options: CustomEmojiNodeOptions }, md: any) {
+            registerCustomEmojiMarkdownIt(md, this.options);
+          },
+        },
       },
     };
   },

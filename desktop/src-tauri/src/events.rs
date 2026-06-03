@@ -302,12 +302,15 @@ pub fn build_forum_comment(
 
 /// Kind 40003 — edit a message. Carries the full new content AND a fresh
 /// imeta tag set; the receiver overlays the imeta tags onto the original
-/// event so the rendered message reflects exactly the edited state.
+/// event so the rendered message reflects exactly the edited state. NIP-30
+/// custom-emoji tags ride along the same way so an edited body's `:shortcode:`s
+/// stay resolvable (the send path attaches these too).
 pub fn build_message_edit(
     channel_id: Uuid,
     target_event_id: EventId,
     content: &str,
     media_tags: &[Vec<String>],
+    custom_emoji_tags: &[Vec<String>],
 ) -> Result<EventBuilder, String> {
     check_content(content)?;
     let mut tags = vec![
@@ -315,6 +318,7 @@ pub fn build_message_edit(
         tag(vec!["e", &target_event_id.to_hex()])?,
     ];
     imeta_tags(media_tags, &mut tags)?;
+    emoji_tags(custom_emoji_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(40003), content).tags(tags))
 }
 

@@ -12,6 +12,9 @@
 /**
  * Merge the original event's tags with an edit's tags so that:
  *   - `imeta` tags come exclusively from the edit (full new attachment set);
+ *   - `emoji` (NIP-30 custom-emoji) tags come exclusively from the edit (the
+ *     edited body may add or remove custom emoji, so the shortcode→url set is
+ *     rebuilt from the edit);
  *   - all other tag kinds (`h`, `e`, `p` mentions, etc.) come exclusively
  *     from the original — the edit can't rewrite channel membership,
  *     thread refs, or mention targets.
@@ -20,7 +23,12 @@
  */
 export function applyEditTagOverlay(originalTags, editTags) {
   if (!editTags) return originalTags;
-  const nonImetaOriginal = originalTags.filter((t) => t[0] !== "imeta");
-  const imetaFromEdit = editTags.filter((t) => t[0] === "imeta");
-  return [...nonImetaOriginal, ...imetaFromEdit];
+  // Drop the original's imeta + emoji; both are fully replaced by the edit.
+  const baseFromOriginal = originalTags.filter(
+    (t) => t[0] !== "imeta" && t[0] !== "emoji",
+  );
+  const overlaidFromEdit = editTags.filter(
+    (t) => t[0] === "imeta" || t[0] === "emoji",
+  );
+  return [...baseFromOriginal, ...overlaidFromEdit];
 }

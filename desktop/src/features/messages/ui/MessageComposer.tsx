@@ -456,6 +456,17 @@ export function MessageComposer({
         currentPendingImeta,
       );
 
+      // NIP-30: attach `["emoji", shortcode, url]` tags for custom emoji in the
+      // edited body, exactly like the send path. Without this an edited message
+      // ships with no emoji tags, so the receiver can't resolve a `:shortcode:`
+      // and renders the literal text. `?? []` preserves edit semantics (a
+      // defined-but-empty media set means "wipe attachments").
+      const outgoingTags =
+        mergeOutgoingTags(
+          mediaTags,
+          buildCustomEmojiTags(finalContent, customEmoji),
+        ) ?? [];
+
       const savedContent = trimmed;
       const savedImeta = [...currentPendingImeta];
       setContent("");
@@ -468,7 +479,7 @@ export function MessageComposer({
       setIsEmojiPickerOpen(false);
 
       try {
-        await onEditSaveRef.current(finalContent, mediaTags ?? []);
+        await onEditSaveRef.current(finalContent, outgoingTags);
       } catch {
         setContent(savedContent);
         contentRef.current = savedContent;

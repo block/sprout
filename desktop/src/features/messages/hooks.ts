@@ -491,7 +491,13 @@ export function useEditMessageMutation(channel: Channel | null) {
         throw new Error("No channel selected.");
       }
 
-      await editMessage(channel.id, eventId, content, mediaTags);
+      // `mediaTags` arrives as the merged outgoing set (imeta + NIP-30 emoji).
+      // Split so each rides its own validated Tauri arg — emoji tags must NOT
+      // go through the imeta-only `mediaTags` channel (the Rust `imeta_tags`
+      // guard rejects any non-imeta prefix), mirroring the send path.
+      const { mediaTags: imetaTags, emojiTags } = splitOutgoingTags(mediaTags);
+
+      await editMessage(channel.id, eventId, content, imetaTags, emojiTags);
     },
     onSuccess: (_data, { eventId, content, mediaTags }) => {
       if (!channel) {
