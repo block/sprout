@@ -52,27 +52,16 @@ export class ReadStateManager {
   private relayClient: RelayClient;
   private clientId: string;
   private slotId: string;
-
-  // Effective merged state across all blobs
   private effectiveState = new Map<string, number>();
-
-  // Contexts this client is allowed to include in its published blob. This
-  // excludes first-load local baselines for channels the user has not opened.
   private publishableContextIds = new Set<string>();
-
-  // Last-published blob content (for diff to suppress no-op publishes)
   private lastPublishedContexts: Record<string, number> = {};
   private debounceTimer: number | null = null;
   private listeners = new Set<() => void>();
   private unsubscribeLive: (() => void) | null = null;
   private initialized = false;
-
-  // Track the max created_at seen from fetched blobs so publishes can satisfy
-  // NIP-RS clock-skew monotonicity for our d-tag coordinate.
   private maxFetchedCreatedAt = 0;
-
-  // Contexts rolled back by mark-unread, protected from merge until next publish.
   private forcedContexts = new Set<string>();
+  private contextSourceCreatedAt = new Map<string, number>();
 
   constructor(pubkey: string, relayClient: RelayClient) {
     this.pubkey = pubkey;
@@ -103,6 +92,10 @@ export class ReadStateManager {
   markContextRead(contextId: string, unixTimestamp: number): void {
     this.forcedContexts.delete(contextId);
     this.advanceContext(contextId, unixTimestamp, { publishable: true });
+    this.contextSourceCreatedAt.set(
+      contextId,
+      Math.max(Math.floor(Date.now() / 1_000), this.maxFetchedCreatedAt + 1),
+    );
   }
 
   seedContextRead(contextId: string, unixTimestamp: number): void {
@@ -110,9 +103,6 @@ export class ReadStateManager {
   }
 
   markContextUnread(contextId: string, lastMessageUnix: number): void {
-    // Roll back the read timestamp to just before the last message so the
-    // channel appears unread. This is published via NIP-RS and syncs across
-    // devices.
     const rollbackTo = lastMessageUnix - 1;
     this.effectiveState.set(contextId, rollbackTo);
     this.publishableContextIds.add(contextId);
@@ -128,7 +118,6 @@ export class ReadStateManager {
     options: { publishable: boolean },
   ): void {
     const current = this.effectiveState.get(contextId) ?? 0;
-    // Monotonic: only advance, never lower
     if (unixTimestamp <= current) {
       if (!options.publishable || this.publishableContextIds.has(contextId)) {
         return;
@@ -203,16 +192,13 @@ export class ReadStateManager {
     let ownBlobCreatedAt = 0;
 
     for (const event of events) {
-      // Only process our own events
       if (event.pubkey !== this.pubkey) continue;
 
-      // Validate d tag (exactly one, with correct prefix)
       const dTags = event.tags.filter((t) => t[0] === "d");
       if (dTags.length !== 1) continue;
       const dTag = dTags[0];
       if (!isValidReadStateDTag(dTag[1])) continue;
 
-      // Validate t tag (exactly one)
       const tTags = event.tags.filter(
         (t) => t[0] === "t" && t[1] === "read-state",
       );
@@ -237,17 +223,19 @@ export class ReadStateManager {
         continue;
       }
 
-      // Merge into effective state
       for (const [ctx, ts] of Object.entries(blob.contexts)) {
         if (this.forcedContexts.has(ctx)) continue;
+        const sourceCreatedAt = this.contextSourceCreatedAt.get(ctx) ?? 0;
         const current = this.effectiveState.get(ctx) ?? 0;
-        if (ts > current) {
+        if (event.created_at > sourceCreatedAt) {
+          this.effectiveState.set(ctx, ts);
+          this.contextSourceCreatedAt.set(ctx, event.created_at);
+        } else if (event.created_at === sourceCreatedAt && ts > current) {
           this.effectiveState.set(ctx, ts);
         }
         this.publishableContextIds.add(ctx);
       }
 
-      // Track own blob (most recent event for our client_id)
       if (blob.client_id === this.clientId) {
         if (event.created_at > ownBlobCreatedAt) {
           ownBlob = blob;
@@ -307,13 +295,11 @@ export class ReadStateManager {
   private async handleIncomingEvent(event: RelayEvent): Promise<void> {
     if (event.pubkey !== this.pubkey) return;
 
-    // Validate d tag (exactly one, with correct prefix)
     const dTags = event.tags.filter((t) => t[0] === "d");
     if (dTags.length !== 1) return;
     const dTag = dTags[0];
     if (!isValidReadStateDTag(dTag[1])) return;
 
-    // Validate t tag (exactly one)
     const tTags = event.tags.filter(
       (t) => t[0] === "t" && t[1] === "read-state",
     );
@@ -338,16 +324,25 @@ export class ReadStateManager {
       return;
     }
 
-    // Merge into effective state
     let anyAdvanced = false;
     for (const [ctx, ts] of Object.entries(blob.contexts)) {
       if (this.forcedContexts.has(ctx)) continue;
+      const sourceCreatedAt = this.contextSourceCreatedAt.get(ctx) ?? 0;
       const current = this.effectiveState.get(ctx) ?? 0;
-      if (ts > current) {
+      if (event.created_at > sourceCreatedAt) {
+        if (this.effectiveState.get(ctx) !== ts) {
+          this.effectiveState.set(ctx, ts);
+          anyAdvanced = true;
+        }
+        this.contextSourceCreatedAt.set(ctx, event.created_at);
+      } else if (event.created_at === sourceCreatedAt && ts > current) {
         this.effectiveState.set(ctx, ts);
         anyAdvanced = true;
       }
-      this.publishableContextIds.add(ctx);
+      if (!this.publishableContextIds.has(ctx)) {
+        this.publishableContextIds.add(ctx);
+        anyAdvanced = true;
+      }
     }
 
     if (anyAdvanced) {
@@ -416,6 +411,9 @@ export class ReadStateManager {
 
       this.lastPublishedContexts = contexts;
       this.forcedContexts.clear();
+      for (const key of Object.keys(contexts)) {
+        this.contextSourceCreatedAt.set(key, createdAt);
+      }
       this.maxFetchedCreatedAt = Math.max(
         this.maxFetchedCreatedAt,
         event.created_at,
@@ -473,6 +471,9 @@ export class ReadStateManager {
     for (const contextId of stored.publishableContextIds) {
       this.publishableContextIds.add(contextId);
     }
+    for (const [contextId, createdAt] of stored.contextSourceCreatedAt) {
+      this.contextSourceCreatedAt.set(contextId, createdAt);
+    }
     this.persistLocalState();
   }
 
@@ -481,6 +482,7 @@ export class ReadStateManager {
       this.pubkey,
       this.effectiveState,
       this.publishableContextIds,
+      this.contextSourceCreatedAt,
     );
   }
 

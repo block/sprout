@@ -10,6 +10,7 @@ import 'channel.dart';
 import 'channel_management_provider.dart' show channelDetailsProvider;
 import 'read_state/read_state_provider.dart';
 import 'unread_badge/is_high_priority_event.dart';
+import 'unread_badge/should_notify_for_event.dart';
 
 const _channelTypeOrder = {'stream': 0, 'forum': 1, 'dm': 2};
 
@@ -409,6 +410,7 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       var maxHighPriority = 0;
       for (final event in events) {
         if (event.pubkey == myPk) continue;
+        if (!EventKind.channelMessageEventKinds.contains(event.kind)) continue;
         if (isHighPriorityEvent(event.tags, myPk) &&
             event.createdAt > maxHighPriority) {
           maxHighPriority = event.createdAt;
@@ -432,6 +434,8 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
     final channelId = event.channelId;
     if (channelId == null) return;
 
+    final myPk = ref.read(myPubkeyProvider);
+
     state = state.whenData((channels) {
       final idx = channels.indexWhere((c) => c.id == channelId);
       if (idx == -1) {
@@ -440,16 +444,18 @@ class ChannelsNotifier extends AsyncNotifier<List<Channel>> {
       }
       final updated = List<Channel>.of(channels);
       final channel = updated[idx];
-      final eventTime = DateTime.fromMillisecondsSinceEpoch(
-        event.createdAt * 1000,
-        isUtc: true,
-      );
-      if (channel.lastMessageAt == null ||
-          eventTime.isAfter(channel.lastMessageAt!)) {
-        updated[idx] = channel.copyWith(lastMessageAt: eventTime);
+
+      if (myPk != null && shouldNotifyForEvent(event, myPk)) {
+        final eventTime = DateTime.fromMillisecondsSinceEpoch(
+          event.createdAt * 1000,
+          isUtc: true,
+        );
+        if (channel.lastMessageAt == null ||
+            eventTime.isAfter(channel.lastMessageAt!)) {
+          updated[idx] = channel.copyWith(lastMessageAt: eventTime);
+        }
       }
 
-      final myPk = ref.read(myPubkeyProvider);
       if (myPk != null &&
           event.pubkey != myPk &&
           (channel.isDm || isHighPriorityEvent(event.tags, myPk))) {
