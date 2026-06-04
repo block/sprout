@@ -882,12 +882,20 @@ pub fn uninstall_persona_pack(app: &AppHandle, pack_id: &str) -> Result<(), Stri
         ));
     }
 
-    // Remove pack directory
+    // Remove pack directory (or symlink)
     let packs = packs_dir(app)?;
     let pack_dir = packs.join(pack_id);
     if pack_dir.exists() {
-        fs::remove_dir_all(&pack_dir)
-            .map_err(|e| format!("failed to remove pack directory: {e}"))?;
+        let is_symlink = fs::symlink_metadata(&pack_dir)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink {
+            fs::remove_file(&pack_dir)
+                .map_err(|e| format!("failed to remove pack symlink: {e}"))?;
+        } else {
+            fs::remove_dir_all(&pack_dir)
+                .map_err(|e| format!("failed to remove pack directory: {e}"))?;
+        }
     }
 
     // Remove pack PersonaRecords
@@ -909,10 +917,11 @@ pub fn list_installed_packs(app: &AppHandle) -> Result<Vec<PackSummary>, String>
 
     for entry in fs::read_dir(&packs).map_err(|e| format!("failed to read packs dir: {e}"))? {
         let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        let pack_dir = entry.path();
+        // Use stat (follows symlinks) rather than lstat so symlinked packs are recognised.
+        if !pack_dir.is_dir() {
             continue;
         }
-        let pack_dir = entry.path();
         if let Ok(resolved) = sprout_persona::resolve::resolve_pack(&pack_dir) {
             summaries.push(PackSummary {
                 id: resolved.id,
