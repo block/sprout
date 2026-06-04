@@ -1,7 +1,7 @@
 import { useSyncExternalStore, useCallback } from "react";
 import { getFeature } from "./manifest";
+import { resolveEnabled } from "./resolveEnabled";
 import { getOverrides, getDevToggle, setOverride, setDevToggle } from "./store";
-import type { FeatureTier } from "./types";
 
 // ---------------------------------------------------------------------------
 // Reactive store — components re-render when overrides change
@@ -15,18 +15,54 @@ function subscribe(listener: Listener): () => void {
   return () => listeners.delete(listener);
 }
 
-function emitChange(): void {
+/** Notify all subscribers that feature state changed */
+export function emitChange(): void {
+  // Invalidate cached snapshot
+  cachedRaw = null;
+  cachedParsed = null;
   for (const listener of listeners) listener();
 }
 
-// Snapshot: a combined key of overrides + dev toggle for change detection
+// ---------------------------------------------------------------------------
+// Cached snapshot — avoids JSON.parse on every render per hook instance
+// ---------------------------------------------------------------------------
+
+interface ParsedSnapshot {
+  o: Record<string, boolean>;
+  d: boolean;
+}
+
+let cachedRaw: string | null = null;
+let cachedParsed: ParsedSnapshot | null = null;
+
 function getSnapshot(): string {
-  return JSON.stringify({ o: getOverrides(), d: getDevToggle() });
+  const raw = JSON.stringify({ o: getOverrides(), d: getDevToggle() });
+  if (raw !== cachedRaw) {
+    cachedRaw = raw;
+    cachedParsed = JSON.parse(raw) as ParsedSnapshot;
+  }
+  return raw;
+}
+
+function getParsedSnapshot(): ParsedSnapshot {
+  // Ensure snapshot is fresh
+  getSnapshot();
+  return cachedParsed!;
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * Returns the current parsed feature state (overrides + dev toggle).
+ * Reactive — re-renders when any feature toggle changes.
+ * Use this in components that need the full state (e.g. SettingsView filtering).
+ */
+export function useFeatureSnapshot(): ParsedSnapshot {
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return getParsedSnapshot();
+}
 
 /**
  * Returns whether a feature is enabled given its tier and user overrides.
@@ -36,16 +72,19 @@ function getSnapshot(): string {
  * - dev: true only if in dev build AND global dev toggle is on
  */
 export function useFeatureEnabled(featureId: string): boolean {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const parsed = JSON.parse(snapshot) as {
-    o: Record<string, boolean>;
-    d: boolean;
-  };
+  const snapshot = useFeatureSnapshot();
 
   const feature = getFeature(featureId);
-  if (!feature) return false;
+  if (!feature) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[FeatureFlags] Unknown feature id: "${featureId}". Check features.json.`,
+      );
+    }
+    return false;
+  }
 
-  return resolveEnabled(feature.tier, featureId, parsed.o, parsed.d);
+  return resolveEnabled(feature.tier, featureId, snapshot.o, snapshot.d);
 }
 
 /**
@@ -71,38 +110,15 @@ export function useFeatureToggle(
  * Hook for the global dev toggle. Returns [enabled, toggle].
  */
 export function useDevToggle(): [boolean, (enabled: boolean) => void] {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const parsed = JSON.parse(snapshot) as { d: boolean };
+  const snapshot = useFeatureSnapshot();
 
   const toggle = useCallback((value: boolean) => {
     setDevToggle(value);
     emitChange();
   }, []);
 
-  return [parsed.d, toggle];
+  return [snapshot.d, toggle];
 }
 
-// ---------------------------------------------------------------------------
-// Pure resolution logic (exported for testing)
-// ---------------------------------------------------------------------------
-
-export function resolveEnabled(
-  tier: FeatureTier,
-  featureId: string,
-  overrides: Record<string, boolean>,
-  devToggle: boolean,
-): boolean {
-  switch (tier) {
-    case "stable":
-      return true;
-    case "experimental":
-      return overrides[featureId] === true;
-    case "dev":
-      if (!import.meta.env.DEV) return false;
-      if (!devToggle) return false;
-      // Allow per-feature suppression even in dev
-      return overrides[featureId] !== false;
-    default:
-      return false;
-  }
-}
+// Re-export for consumers that imported from here
+export { resolveEnabled } from "./resolveEnabled";

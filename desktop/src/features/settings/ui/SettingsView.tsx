@@ -4,8 +4,10 @@ import { ArrowLeft } from "lucide-react";
 
 import { useMyRelayMembershipQuery } from "@/features/relay-members/hooks";
 import { getFeature } from "@/shared/features/manifest";
-import { getOverrides, getDevToggle } from "@/shared/features/store";
-import { resolveEnabled } from "@/shared/features/useFeatureEnabled";
+import {
+  resolveEnabled,
+  useFeatureSnapshot,
+} from "@/shared/features/useFeatureEnabled";
 import { cn } from "@/shared/lib/cn";
 import {
   Sidebar,
@@ -117,16 +119,15 @@ export function SettingsView({
 }: SettingsViewProps) {
   const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipQuery();
+  const featureState = useFeatureSnapshot();
   const visibleSections = React.useMemo(() => {
     const membership = myMembershipQuery.data;
-    const overrides = getOverrides();
-    const devToggle = getDevToggle();
 
     return settingsSections.filter((s) => {
       // Feature gate check
       if (s.featureGate) {
         const feature = getFeature(s.featureGate);
-        if (feature && !resolveEnabled(feature.tier, feature.id, overrides, devToggle)) {
+        if (feature && !resolveEnabled(feature.tier, feature.id, featureState.o, featureState.d)) {
           return false;
         }
       }
@@ -139,7 +140,7 @@ export function SettingsView({
       }
       return true;
     });
-  }, [myMembershipQuery.data]);
+  }, [myMembershipQuery.data, featureState]);
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);

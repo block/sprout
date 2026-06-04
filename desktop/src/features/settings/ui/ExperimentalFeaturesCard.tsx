@@ -1,5 +1,6 @@
 import { desktopFeatures, useFeatureToggle, useDevToggle } from "@/shared/features";
 import type { FeatureDefinition } from "@/shared/features";
+import { Switch } from "@/shared/ui/switch";
 
 function FeatureRow({ feature }: { feature: FeatureDefinition }) {
   const [enabled, toggle] = useFeatureToggle(feature.id);
@@ -10,11 +11,10 @@ function FeatureRow({ feature }: { feature: FeatureDefinition }) {
         <p className="text-sm font-medium">{feature.name}</p>
         <p className="text-xs text-muted-foreground">{feature.description}</p>
       </div>
-      <input
+      <Switch
         checked={enabled}
-        className="h-4 w-4 accent-primary"
-        onChange={(e) => toggle(e.target.checked)}
-        type="checkbox"
+        data-testid={`feature-toggle-${feature.id}`}
+        onCheckedChange={toggle}
       />
     </label>
   );
@@ -66,11 +66,10 @@ export function ExperimentalFeaturesCard() {
                 When off, all dev-tier features are hidden
               </p>
             </div>
-            <input
+            <Switch
               checked={devEnabled}
-              className="h-4 w-4 accent-primary"
-              onChange={(e) => setDevEnabled(e.target.checked)}
-              type="checkbox"
+              data-testid="feature-toggle-dev-global"
+              onCheckedChange={setDevEnabled}
             />
           </label>
 

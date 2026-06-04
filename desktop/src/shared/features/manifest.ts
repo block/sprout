@@ -1,4 +1,4 @@
-import manifestJson from "../../../../features.json";
+import manifestJson from "@features-manifest";
 import type { FeatureDefinition, FeaturesManifest } from "./types";
 
 const manifest = manifestJson as FeaturesManifest;

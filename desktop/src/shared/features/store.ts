@@ -1,15 +1,43 @@
 /**
  * Persistence layer for feature flag overrides.
  *
- * localStorage keys:
- *   sprout-feature-overrides  — JSON object of { [featureId]: boolean }
- *   sprout-dev-features       — "true" | "false" (global dev toggle)
+ * localStorage keys (versioned to match manifest):
+ *   sprout-feature-overrides-v1  — JSON object of { [featureId]: boolean }
+ *   sprout-dev-features-v1       — "true" | "false" (global dev toggle)
+ *   sprout-features-migrated-v1  — "true" if migration has run
  */
 
-const OVERRIDES_KEY = "sprout-feature-overrides";
-const DEV_TOGGLE_KEY = "sprout-dev-features";
+import { desktopFeatures } from "./manifest";
+
+const OVERRIDES_KEY = "sprout-feature-overrides-v1";
+const DEV_TOGGLE_KEY = "sprout-dev-features-v1";
+const MIGRATED_KEY = "sprout-features-migrated-v1";
 
 export type FeatureOverrides = Record<string, boolean>;
+
+/**
+ * One-time migration: if no overrides exist yet, seed experimental features
+ * as enabled so existing users don't lose functionality on upgrade.
+ * New installs (no prior localStorage at all) also get this — but that's fine
+ * because new users will see the features as they always have.
+ */
+export function runMigrationIfNeeded(): void {
+  try {
+    if (window.localStorage.getItem(MIGRATED_KEY) === "true") return;
+
+    // Seed all desktop experimental features as enabled
+    const seed: FeatureOverrides = {};
+    for (const f of desktopFeatures) {
+      if (f.tier === "experimental") {
+        seed[f.id] = true;
+      }
+    }
+    window.localStorage.setItem(OVERRIDES_KEY, JSON.stringify(seed));
+    window.localStorage.setItem(MIGRATED_KEY, "true");
+  } catch {
+    // localStorage unavailable — no-op
+  }
+}
 
 /** Read all user overrides from localStorage */
 export function getOverrides(): FeatureOverrides {
