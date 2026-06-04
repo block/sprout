@@ -2615,7 +2615,11 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
         return vec![];
     }
     vec![McpServer {
-        name: "sprout-mcp".to_string(),
+        name: std::path::Path::new(&config.mcp_command)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mcp")
+            .to_string(),
         command: config.mcp_command.clone(),
         args: vec![],
         env: {
@@ -2796,7 +2800,7 @@ mod build_mcp_servers_tests {
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
-            mcp_command: "sprout-mcp-server".into(),
+            mcp_command: "test-mcp-server".into(),
             idle_timeout_secs: config::DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: 3600,
             agents: 1,
@@ -2835,7 +2839,7 @@ mod build_mcp_servers_tests {
         let servers = build_mcp_servers(&config);
         assert_eq!(servers.len(), 1);
         let server = &servers[0];
-        assert_eq!(server.name, "sprout-mcp");
+        assert_eq!(server.name, "test-mcp-server");
 
         let names: Vec<&str> = server.env.iter().map(|e| e.name.as_str()).collect();
         assert!(

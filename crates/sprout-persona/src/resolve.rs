@@ -458,16 +458,16 @@ mod tests {
     fn mcp_merge_shared_only() {
         let shared = serde_json::json!({
             "mcpServers": {
-                "sprout-mcp": {
+                "example-mcp": {
                     "command": "npx",
-                    "args": ["-y", "sprout-mcp"],
+                    "args": ["-y", "example-mcp"],
                     "env": { "TOKEN": "abc" }
                 }
             }
         });
         let result = merge_mcp_servers(Some(&shared), &[]);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "sprout-mcp");
+        assert_eq!(result[0].name, "example-mcp");
         assert_eq!(result[0].command, "npx");
         assert_eq!(result[0].env, vec![("TOKEN".into(), "abc".into())]);
     }

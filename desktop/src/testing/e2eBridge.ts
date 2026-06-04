@@ -3879,13 +3879,8 @@ async function handleDiscoverManagedAgentPrereqs(
       available: configuredPrereqs?.acp?.available ?? true,
     },
     mcp: {
-      command:
-        configuredPrereqs?.mcp?.command ??
-        args.input?.mcpCommand ??
-        "sprout-mcp-server",
-      resolved_path:
-        configuredPrereqs?.mcp?.resolvedPath ??
-        "/Users/wesb/dev/sprout/target/debug/sprout-mcp-server",
+      command: configuredPrereqs?.mcp?.command ?? args.input?.mcpCommand ?? "",
+      resolved_path: configuredPrereqs?.mcp?.resolvedPath ?? "",
       available: configuredPrereqs?.mcp?.available ?? true,
     },
   };
@@ -4207,7 +4202,7 @@ async function handleCreateManagedAgent(args: {
       args.input.agentArgs && args.input.agentArgs.length > 0
         ? [...args.input.agentArgs]
         : ["acp"],
-    mcp_command: args.input.mcpCommand ?? "sprout-mcp-server",
+    mcp_command: args.input.mcpCommand ?? "",
     turn_timeout_seconds: args.input.turnTimeoutSeconds ?? 320,
     idle_timeout_seconds: args.input.idleTimeoutSeconds ?? null,
     max_turn_duration_seconds: args.input.maxTurnDurationSeconds ?? null,

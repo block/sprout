@@ -58,8 +58,7 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
 /// - Direct reply (parent is top-level): `root == parent`.
 /// - Nested reply: `root` is the parent's own root marker; `parent` is unchanged.
 ///
-/// This matches the behavior of `sprout-mcp`'s `resolve_thread_ref` so that
-/// CLI-sent replies thread identically to MCP-sent replies.
+/// Ensures CLI-sent replies thread correctly using the same NIP-10 logic.
 async fn resolve_thread_ref(
     client: &SproutClient,
     parent_event_id: &str,

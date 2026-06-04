@@ -1349,8 +1349,8 @@ mod tests {
     fn session_new_mcp_server_has_required_fields() {
         // Schema requires name, command, args, env — all present, args/env may be empty.
         let server = McpServer {
-            name: "sprout-mcp".into(),
-            command: "/usr/local/bin/sprout-mcp-server".into(),
+            name: "test-mcp".into(),
+            command: "/usr/local/bin/test-mcp-server".into(),
             args: vec![],
             env: vec![
                 EnvVar {
@@ -1364,10 +1364,10 @@ mod tests {
             ],
         };
         let serialized = serde_json::to_value(&server).unwrap();
-        assert_eq!(serialized["name"].as_str(), Some("sprout-mcp"));
+        assert_eq!(serialized["name"].as_str(), Some("test-mcp"));
         assert_eq!(
             serialized["command"].as_str(),
-            Some("/usr/local/bin/sprout-mcp-server")
+            Some("/usr/local/bin/test-mcp-server")
         );
         assert!(serialized["args"].is_array());
         assert_eq!(serialized["args"].as_array().unwrap().len(), 0);

@@ -1,3 +1,9 @@
+#![deny(unsafe_code)]
+#![warn(missing_docs)]
+
+//! WebSocket client for the Sprout relay with NIP-42 authentication,
+//! subscription management, and automatic reconnection.
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -814,7 +820,8 @@ impl RelayClient {
         relay_ws_to_http(&self.relay_url)
     }
 
-    pub(crate) fn pubkey_hex(&self) -> String {
+    /// Returns the hex-encoded public key for this client's keypair.
+    pub fn pubkey_hex(&self) -> String {
         self.keys.public_key().to_hex()
     }
 
@@ -985,7 +992,7 @@ impl RelayClient {
 /// Converts `ws://` → `http://` and `wss://` → `https://`, strips trailing slash.
 ///
 /// Extracted as a free function so it can be unit-tested without a live connection.
-pub(crate) fn relay_ws_to_http(url: &str) -> String {
+pub fn relay_ws_to_http(url: &str) -> String {
     url.replace("wss://", "https://")
         .replace("ws://", "http://")
         .trim_end_matches('/')

@@ -209,11 +209,7 @@ pub struct CliArgs {
     )]
     pub agent_args: Vec<String>,
 
-    #[arg(
-        long,
-        env = "SPROUT_ACP_MCP_COMMAND",
-        default_value = "sprout-mcp-server"
-    )]
+    #[arg(long, env = "SPROUT_ACP_MCP_COMMAND", default_value = "")]
     pub mcp_command: String,
 
     /// Idle timeout: max seconds of silence before killing a turn.
@@ -1170,7 +1166,7 @@ mod tests {
             relay_url: "ws://localhost:3000".into(),
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
-            mcp_command: "sprout-mcp-server".into(),
+            mcp_command: "".into(),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
             max_turn_duration_secs: 3600,
             agents: 1,

@@ -450,7 +450,6 @@ pub struct UpdateTeamRequest {
 
 pub const DEFAULT_ACP_COMMAND: &str = "sprout-acp";
 pub const DEFAULT_AGENT_COMMAND: &str = "goose";
-pub const DEFAULT_MCP_COMMAND: &str = "sprout-mcp-server";
 /// ~5 min (320s) — matches the CLI harness default (SPROUT_ACP_IDLE_TIMEOUT).
 pub const DEFAULT_AGENT_TURN_TIMEOUT_SECONDS: u64 = 320;
 /// 1 hour — absolute wall-clock safety cap per turn.
@@ -569,7 +568,7 @@ mod tests {
                 "acp_command": "sprout-acp",
                 "agent_command": "goose",
                 "agent_args": [],
-                "mcp_command": "sprout-mcp-server",
+                "mcp_command": "",
                 "turn_timeout_seconds": 320,
                 "system_prompt": null,
                 "created_at": "2026-01-01T00:00:00Z",
@@ -598,7 +597,7 @@ mod tests {
             "acp_command": "sprout-acp",
             "agent_command": "goose",
             "agent_args": [],
-            "mcp_command": "sprout-mcp-server",
+            "mcp_command": "",
             "turn_timeout_seconds": 320,
             "system_prompt": null,
             "created_at": "2026-01-01T00:00:00Z",
@@ -676,7 +675,7 @@ mod tests {
                 "acp_command": "sprout-acp",
                 "agent_command": "goose",
                 "agent_args": [],
-                "mcp_command": "sprout-mcp-server",
+                "mcp_command": "",
                 "turn_timeout_seconds": 320,
                 "system_prompt": null,
                 "created_at": "2026-01-01T00:00:00Z",

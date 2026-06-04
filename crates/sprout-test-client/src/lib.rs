@@ -14,7 +14,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tracing::debug;
 
-pub use sprout_mcp::relay_client::{parse_relay_message, OkResponse, RelayMessage};
+pub use sprout_relay_client::{parse_relay_message, OkResponse, RelayMessage};
 
 /// Errors returned by [`SproutTestClient`] operations.
 #[derive(Debug, Error)]
@@ -67,9 +67,9 @@ impl From<nostr::event::builder::Error> for TestClientError {
 }
 
 // Map RelayClientError → TestClientError for parse_relay_message calls.
-impl From<sprout_mcp::relay_client::RelayClientError> for TestClientError {
-    fn from(e: sprout_mcp::relay_client::RelayClientError) -> Self {
-        use sprout_mcp::relay_client::RelayClientError as E;
+impl From<sprout_relay_client::RelayClientError> for TestClientError {
+    fn from(e: sprout_relay_client::RelayClientError) -> Self {
+        use sprout_relay_client::RelayClientError as E;
         match e {
             E::WebSocket(e) => TestClientError::WebSocket(e),
             E::Json(e) => TestClientError::Json(e),

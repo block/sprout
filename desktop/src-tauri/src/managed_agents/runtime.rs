@@ -30,8 +30,6 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "codex-acp",
     "codex_acp",
     "goose",
-    "sprout-mcp",
-    "sprout_mcp",
     // sprout-dev-mcp's multicall personalities (rg, tree, sprout,
     // git-credential-nostr, git-sign-nostr) are short-lived per-tool-call
     // invocations — not listed here.
@@ -860,7 +858,6 @@ pub fn spawn_agent_child(
         }
     }
     // Enable MCP hook tools (_Stop, _PostCompact) for agents that need them.
-    // Uses "*" because build_mcp_servers() hard-codes the server name to "sprout-mcp".
     if known_acp_provider(&record.agent_command).is_some_and(|p| p.mcp_hooks) {
         command.env("MCP_HOOK_SERVERS", "*");
     }
@@ -1213,7 +1210,7 @@ mod tests {
             acp_command: "sprout-acp".into(),
             agent_command: "goose".into(),
             agent_args: vec![],
-            mcp_command: "sprout-mcp-server".into(),
+            mcp_command: String::new(),
             turn_timeout_seconds: 320,
             idle_timeout_seconds: None,
             max_turn_duration_seconds: None,

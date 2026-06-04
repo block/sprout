@@ -291,10 +291,9 @@ sprout-pubsub     ← Redis fan-out
 sprout-search     ← Typesense full-text search
 sprout-audit      ← Tamper-evident hash-chain audit log
 sprout-workflow   ← YAML-as-code workflow engine
-sprout-mcp        ← stdio MCP server (agent API surface)
 sprout-acp        ← ACP harness (bridges Sprout relay events to AI agents via stdio)
 sprout-proxy      ← Nostr client compatibility layer
-sprout-sdk        ← Typed Nostr event builders (used by sprout-mcp and sprout-cli)
+sprout-sdk        ← Typed Nostr event builders (used by sprout-cli)
 sprout-media      ← Blossom/S3 media storage
 sprout-cli        ← Agent-first CLI for interacting with the relay
 sprout-admin      ← Operator CLI
@@ -377,61 +376,6 @@ to existing clients.
 
 9. **Document** — `kind.rs` is the authoritative registry of all kind numbers.
    Update `README.md` if it's a user-facing feature.
-
----
-
-## How to Add a New MCP Tool
-
-MCP tools live in `crates/sprout-mcp/src/server.rs`. The `rmcp` crate
-provides the `#[tool]` and `#[tool_router]` macros.
-
-1. **Define a parameter struct:**
-
-   ```rust
-   #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
-   pub struct MyToolParams {
-       /// UUID of the target channel.
-       pub channel_id: String,
-       /// Optional limit on results.
-       #[serde(default)]
-       pub limit: Option<u32>,
-   }
-   ```
-
-   Use doc comments (`///`) on fields — they become the tool's parameter
-   descriptions in the MCP schema.
-
-2. **Implement the handler method** on `SproutMcpServer`:
-
-   ```rust
-   #[tool(
-       name = "my_tool",
-       description = "One-sentence description of what this tool does"
-   )]
-   pub async fn my_tool(&self, Parameters(p): Parameters<MyToolParams>) -> String {
-       // Validate inputs at the boundary
-       if uuid::Uuid::parse_str(&p.channel_id).is_err() {
-           return format!("Error: channel_id '{}' is not a valid UUID", p.channel_id);
-       }
-       // Read tools call the relay REST API
-       match self.client.get(&format!("/api/channels/{}/my-resource", p.channel_id)).await {
-           Ok(body) => body,
-           Err(e) => format!("Error: {e}"),
-       }
-   }
-   ```
-
-   **Read vs. write tools:** Read tools use `self.client.get()` (REST).
-   Write tools build a signed Nostr event and call
-   `self.client.send_event(event)` — see `send_message` for the canonical
-   pattern.
-
-3. **The `#[tool_router]` macro** on the `impl SproutMcpServer` block
-   automatically discovers all `#[tool]`-annotated methods — no manual
-   registration or doc updates needed.
-
-4. **Write a test** — add an integration test in
-   `crates/sprout-test-client/tests/e2e_mcp.rs` that exercises the new tool end-to-end.
 
 ---
 
