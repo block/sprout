@@ -24,6 +24,7 @@ import 'channel_management_provider.dart';
 import 'channel_mutes/channel_mutes_provider.dart';
 import 'channel_sections/channel_sections_provider.dart';
 import 'channel_sections/channel_sections_storage.dart';
+import 'channel_stars/channel_stars_provider.dart';
 import 'channels_provider.dart';
 import 'read_state/deferred_read_state_update.dart';
 import 'read_state/read_state_provider.dart';
@@ -281,6 +282,11 @@ class _SliverChannelsList extends HookConsumerWidget {
       for (final entry in mutesState.store.channels.entries)
         if (entry.value.muted) entry.key,
     };
+    final starsState = ref.watch(channelStarsProvider);
+    final starredChannelIds = {
+      for (final entry in starsState.store.channels.entries)
+        if (entry.value.starred) entry.key,
+    };
     final visibleChannels = channels
         .where((channel) => channel.isMember && !channel.isArchived)
         .toList();
@@ -294,6 +300,7 @@ class _SliverChannelsList extends HookConsumerWidget {
         .where((channel) => channel.isDm)
         .toList();
 
+    final starredExpanded = useState(true);
     final channelsExpanded = useState(true);
     final forumsExpanded = useState(true);
     final dmsExpanded = useState(true);
@@ -354,8 +361,17 @@ class _SliverChannelsList extends HookConsumerWidget {
       for (final entry in sectionAssignments.entries)
         if (validSectionIds.contains(entry.value)) entry.key,
     };
+    // Starred is exclusive: a starred channel lives only in the Starred section,
+    // not in its custom section or the default Channels list.
+    final starredStreamChannels = streamChannels
+        .where((c) => starredChannelIds.contains(c.id))
+        .toList();
     final ungroupedStreamChannels = streamChannels
-        .where((c) => !assignedChannelIds.contains(c.id))
+        .where(
+          (c) =>
+              !assignedChannelIds.contains(c.id) &&
+              !starredChannelIds.contains(c.id),
+        )
         .toList();
 
     final sectionExpandedStates = useState<Map<String, bool>>({});
@@ -377,12 +393,30 @@ class _SliverChannelsList extends HookConsumerWidget {
           if (visibleChannels.isEmpty)
             const _EmptyState()
           else ...[
+            // Starred channels (exclusive — pinned above all sections).
+            if (starredStreamChannels.isNotEmpty)
+              _ChannelSection(
+                title: 'Starred',
+                icon: LucideIcons.star,
+                expanded: starredExpanded.value,
+                onToggle: () => starredExpanded.value = !starredExpanded.value,
+                channels: starredStreamChannels,
+                unreadChannelIds: unreadChannelIds,
+                mutedChannelIds: mutedChannelIds,
+                currentPubkey: currentPubkey,
+                emptyLabel: '',
+                onSelectChannel: onSelectChannel,
+              ),
             // User-defined sections for stream channels, in user-defined order.
             for (final section in userSections)
               _CustomChannelSection(
                 section: section,
                 channels: streamChannels
-                    .where((c) => sectionAssignments[c.id] == section.id)
+                    .where(
+                      (c) =>
+                          sectionAssignments[c.id] == section.id &&
+                          !starredChannelIds.contains(c.id),
+                    )
                     .toList(),
                 unreadChannelIds: unreadChannelIds,
                 mutedChannelIds: mutedChannelIds,
@@ -1006,6 +1040,13 @@ class _ChannelTile extends ConsumerWidget {
       builder: (sheetContext) {
         final sections = ref.read(channelSectionsProvider).store.sections
           ..sort((a, b) => a.order.compareTo(b.order));
+        final isStarred =
+            ref
+                .read(channelStarsProvider)
+                .store
+                .channels[channel.id]
+                ?.starred ==
+            true;
 
         return SafeArea(
           child: Padding(
@@ -1013,6 +1054,24 @@ class _ChannelTile extends ConsumerWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                ListTile(
+                  leading: Icon(
+                    isStarred ? LucideIcons.starOff : LucideIcons.star,
+                  ),
+                  title: Text(isStarred ? 'Unstar channel' : 'Star channel'),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    if (isStarred) {
+                      ref
+                          .read(channelStarsProvider.notifier)
+                          .unstarChannel(channel.id);
+                    } else {
+                      ref
+                          .read(channelStarsProvider.notifier)
+                          .starChannel(channel.id);
+                    }
+                  },
+                ),
                 ListTile(
                   leading: const Icon(LucideIcons.folderInput),
                   title: const Text('Move to section'),
