@@ -224,6 +224,11 @@ See [TESTING.md](TESTING.md) for the full multi-agent E2E guide.
 
 ### Desktop Screenshots (Playwright)
 
+> **Do NOT use `sprout upload`, the relay media endpoint, or any third-party
+> image host for PR screenshots.** Relay media URLs fail through GitHub's camo
+> proxy. Always use `scripts/post-screenshots.sh` — see the `desktop-screenshot`
+> skill for the full workflow.
+
 The desktop app requires the E2E mock bridge to render — it cannot run in a plain
 browser. Use `just desktop-screenshot` to capture screenshots (builds frontend,
 starts preview server, runs Playwright automatically):
