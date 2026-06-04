@@ -216,19 +216,16 @@ function PairingDialog({
                   <p className="text-xs font-medium text-muted-foreground">
                     Pairing code
                   </p>
-                  <div className="flex items-center gap-2">
-                    <code className="min-w-0 flex-1 break-all rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs">
-                      {qrUri}
-                    </code>
-                    <Button
-                      data-testid="copy-pairing-code"
-                      onClick={handleCopy}
-                      size="sm"
-                      variant="outline"
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+                  <button
+                    className="flex w-full min-w-0 items-center gap-2 break-all rounded-lg border border-border bg-muted/50 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/70"
+                    data-testid="copy-pairing-code"
+                    onClick={handleCopy}
+                    title="Copy pairing code"
+                    type="button"
+                  >
+                    <code className="min-w-0 flex-1 break-all">{qrUri}</code>
+                    <Copy className="h-3.5 w-3.5 shrink-0" />
+                  </button>
                 </div>
 
                 <p className="text-center text-xs text-muted-foreground">
