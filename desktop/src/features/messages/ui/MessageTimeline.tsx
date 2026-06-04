@@ -18,7 +18,6 @@ type MessageTimelineProps = {
   isLoading?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
-  activeReplyTargetId?: string | null;
   currentPubkey?: string;
   fetchOlder?: () => Promise<void>;
   hasOlderMessages?: boolean;
@@ -58,7 +57,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
   isLoading = false,
   emptyTitle = "No messages yet",
   emptyDescription = "Send the first message to start the thread.",
-  activeReplyTargetId = null,
   currentPubkey,
   fetchOlder,
   hasOlderMessages = true,
@@ -192,7 +190,6 @@ export const MessageTimeline = React.memo(function MessageTimeline({
 
             {!isLoading && messages.length > 0 ? (
               <TimelineMessageList
-                activeReplyTargetId={activeReplyTargetId}
                 channelId={channelId}
                 currentPubkey={currentPubkey}
                 followThreadById={followThreadById}

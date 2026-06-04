@@ -28,7 +28,6 @@ const NESTED_REPLY_OFFSET_PX = 28;
 
 export const MessageRow = React.memo(
   function MessageRow({
-    activeReplyTargetId = null,
     channelId = null,
     highlighted = false,
     isFollowingThread,
@@ -44,7 +43,6 @@ export const MessageRow = React.memo(
     profiles,
     searchQuery,
   }: {
-    activeReplyTargetId?: string | null;
     channelId?: string | null;
     highlighted?: boolean;
     isFollowingThread?: boolean;
@@ -212,7 +210,6 @@ export const MessageRow = React.memo(
     const actionBarNode = (
       <div className="absolute right-2 top-1 z-10">
         <MessageActionBar
-          activeReplyTargetId={activeReplyTargetId}
           channelId={channelId}
           isFollowingThread={isFollowingThread}
           message={message}
@@ -451,7 +448,6 @@ export const MessageRow = React.memo(
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
-    prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.isFollowingThread === next.isFollowingThread &&
     prev.layoutVariant === next.layoutVariant &&
     prev.profiles === next.profiles &&

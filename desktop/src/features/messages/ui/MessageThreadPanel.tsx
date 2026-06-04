@@ -63,7 +63,6 @@ type MessageThreadPanelProps = {
     remove: boolean,
   ) => Promise<void>;
   profiles?: UserProfileLookup;
-  replyTargetId: string | null;
   replyTargetMessage: TimelineMessage | null;
   scrollTargetId: string | null;
   threadHead: TimelineMessage | null;
@@ -116,7 +115,6 @@ export function MessageThreadPanel({
   onToggleReaction,
   onUnfollowThread,
   profiles,
-  replyTargetId,
   replyTargetMessage,
   scrollTargetId,
   threadHead,
@@ -275,7 +273,6 @@ export function MessageThreadPanel({
             <div className="px-3 pb-1 pt-0" data-testid="message-thread-head">
               <div className="rounded-2xl">
                 <MessageRow
-                  activeReplyTargetId={replyTargetId}
                   channelId={channelId}
                   isFollowingThread={isFollowingThread}
                   layoutVariant="thread-reply"
@@ -316,7 +313,6 @@ export function MessageThreadPanel({
                         key={entry.message.id}
                       >
                         <MessageRow
-                          activeReplyTargetId={replyTargetId}
                           channelId={channelId}
                           layoutVariant="thread-reply"
                           message={entry.message}

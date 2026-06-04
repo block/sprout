@@ -324,7 +324,6 @@ export function InboxDetailPane({
                   <div className="mx-6 my-3 border-t border-border/60" />
                 ) : null}
                 <InboxMessageRow
-                  activeReplyTargetId={replyTargetId}
                   canReply={canReply}
                   channelId={item.item.channelId}
                   isFocusHighlightVisible={isFocusHighlightVisible}

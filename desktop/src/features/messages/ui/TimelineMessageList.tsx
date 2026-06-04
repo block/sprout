@@ -15,7 +15,6 @@ import { MessageThreadSummaryRow } from "./MessageThreadSummaryRow";
 import { SystemMessageRow } from "./SystemMessageRow";
 
 type TimelineMessageListProps = {
-  activeReplyTargetId?: string | null;
   channelId?: string | null;
   currentPubkey?: string;
   followThreadById?: (rootId: string) => void;
@@ -45,7 +44,6 @@ type TimelineMessageListProps = {
 };
 
 export const TimelineMessageList = React.memo(function TimelineMessageList({
-  activeReplyTargetId = null,
   channelId,
   currentPubkey,
   followThreadById,
@@ -116,7 +114,6 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
           )}
         >
           <MessageRow
-            activeReplyTargetId={activeReplyTargetId}
             channelId={channelId}
             highlighted={false}
             isFollowingThread={
@@ -165,7 +162,6 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       currentDayGroup?.elements.push(
         <div key={message.id} className="flex flex-col gap-1">
           <MessageRow
-            activeReplyTargetId={activeReplyTargetId}
             channelId={channelId}
             highlighted={message.id === highlightedMessageId || isSearchActive}
             message={message}
