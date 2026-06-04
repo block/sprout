@@ -60,9 +60,16 @@ test.describe("channel muting screenshots", () => {
     await expect(page.getByTestId("chat-title")).toHaveText("random");
 
     await page.getByTestId("channel-general").click({ button: "right" });
-    await expect(
-      page.getByRole("menuitem", { name: "Mute channel" }),
-    ).toBeVisible();
+    const muteItem = page.getByRole("menuitem", { name: "Mute channel" });
+    await expect(muteItem).toBeVisible();
+    await muteItem.evaluate((el) =>
+      Promise.all(
+        el
+          .closest("[data-state]")!
+          .getAnimations()
+          .map((a) => a.finished),
+      ),
+    );
 
     await page.screenshot({
       path: `${SHOTS}/01-context-menu-mute.png`,
@@ -146,9 +153,16 @@ test.describe("channel muting screenshots", () => {
     await expect(page.getByTestId("chat-title")).toHaveText("random");
 
     await page.getByTestId("channel-engineering").click({ button: "right" });
-    await expect(
-      page.getByRole("menuitem", { name: "Unmute channel" }),
-    ).toBeVisible();
+    const unmuteItem = page.getByRole("menuitem", { name: "Unmute channel" });
+    await expect(unmuteItem).toBeVisible();
+    await unmuteItem.evaluate((el) =>
+      Promise.all(
+        el
+          .closest("[data-state]")!
+          .getAnimations()
+          .map((a) => a.finished),
+      ),
+    );
 
     await page.screenshot({
       path: `${SHOTS}/04-context-menu-unmute.png`,
