@@ -18,7 +18,6 @@ fi
 GH_USER=$(gh api user --jq .login)
 BRANCH="agent-screenshots/${GH_USER}"
 REPO="block/sprout"
-RAW_BASE="https://raw.githubusercontent.com/${REPO}/refs/heads/${BRANCH}"
 
 mapfile -t PNGS < <(find "$PNG_DIR" -maxdepth 1 -name "*.png" -type f | sort)
 if [[ ${#PNGS[@]} -eq 0 ]]; then
@@ -32,7 +31,7 @@ if git fetch origin "refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/
 fi
 
 NEW_ENTRIES=""
-IMAGE_URLS=()
+TREE_PATHS=()
 for PNG in "${PNGS[@]}"; do
   FILENAME=$(basename "$PNG")
   if ! [[ "$FILENAME" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
@@ -42,19 +41,28 @@ for PNG in "${PNGS[@]}"; do
   BLOB=$(git hash-object -w "$PNG")
   TREE_PATH="pr-${PR}--${FILENAME}"
   NEW_ENTRIES+="$(printf '100644 blob %s\t%s' "$BLOB" "$TREE_PATH")"$'\n'
-  IMAGE_URLS+=("${RAW_BASE}/${TREE_PATH}")
+  TREE_PATHS+=("$TREE_PATH")
 done
 
 COMBINED=$(printf '%s\n' "$EXISTING_ENTRIES" "$NEW_ENTRIES" | grep -v '^$')
 TREE=$(echo "$COMBINED" | git mktree)
 
-COMMIT=$(git commit-tree "$TREE" -m "screenshots: PR #${PR}")
+PARENT_ARGS=()
+if git rev-parse "origin/${BRANCH}" >/dev/null 2>&1; then
+  PARENT_ARGS=(-p "origin/${BRANCH}")
+fi
+COMMIT=$(git commit-tree "$TREE" "${PARENT_ARGS[@]}" -m "screenshots: PR #${PR}")
 git push --force-with-lease origin "${COMMIT}:refs/heads/${BRANCH}"
 
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/${COMMIT}"
+
 declare -A IMAGE_URL_MAP
+IMAGE_URLS=()
 for i in "${!PNGS[@]}"; do
   ORIG_NAME="$(basename "${PNGS[$i]}" .png)"
-  IMAGE_URL_MAP["$ORIG_NAME"]="${IMAGE_URLS[$i]}"
+  URL="${RAW_BASE}/${TREE_PATHS[$i]}"
+  IMAGE_URLS+=("$URL")
+  IMAGE_URL_MAP["$ORIG_NAME"]="$URL"
 done
 
 if [[ -n "$BODY_FILE" ]]; then

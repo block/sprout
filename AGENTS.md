@@ -292,8 +292,9 @@ just desktop-screenshot --name copy-hover \
 Available mock channels: `general`, `random`, `design`, `sales`, `engineering`,
 `agents`, `watercooler`, `announcements`, `alice-tyler`, `bob-tyler`.
 
-`scripts/post-screenshots.sh` hosts PNGs on a per-developer orphan branch
-(`agent-screenshots/<github-username>`) and posts a PR comment:
+`scripts/post-screenshots.sh` hosts PNGs on a per-developer branch
+(`agent-screenshots/<github-username>`) and posts a PR comment with
+commit-SHA-based image URLs (immutable — safe from later overwrites):
 
 ```bash
 ./scripts/post-screenshots.sh 803 test-results/screenshots
