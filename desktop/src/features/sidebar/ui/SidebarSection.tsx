@@ -193,8 +193,15 @@ export function ChannelMenuButton({
           variant="sidebar"
         />
       ) : null}
-      {isMuted && !isActive ? (
-        <BellOff className="ml-auto h-3 w-3 shrink-0 text-sidebar-foreground/40" />
+      {isMuted ? (
+        <BellOff
+          className={cn(
+            "ml-auto h-3 w-3 shrink-0",
+            isActive
+              ? "text-sidebar-primary-foreground/60"
+              : "text-sidebar-foreground/40",
+          )}
+        />
       ) : null}
       {hasUnread && !isActive && channel.channelType !== "dm" ? (
         <span

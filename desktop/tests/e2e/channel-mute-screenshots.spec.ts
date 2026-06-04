@@ -169,4 +169,21 @@ test.describe("channel muting screenshots", () => {
       clip: { x: 0, y: 0, width: 450, height: 720 },
     });
   });
+
+  test("05 — muted icon visible on selected channel", async ({ page }) => {
+    await seedMuteState(page, ENGINEERING_CHANNEL_ID);
+    await installMockBridge(page);
+
+    await page.goto("/");
+    await page.getByTestId("channel-engineering").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("engineering");
+
+    const engRow = page.getByTestId("channel-engineering");
+    await expect(engRow.locator("svg.lucide-bell-off")).toHaveCount(1);
+
+    await page.screenshot({
+      path: `${SHOTS}/05-muted-icon-on-selected.png`,
+      clip: { x: 0, y: 0, width: 256, height: 720 },
+    });
+  });
 });
