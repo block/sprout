@@ -397,6 +397,7 @@ async fn serverless_burst_no_rate_limit() {
             None,
             &[],
             &[],
+            &[],
         )
         .expect("build message");
         let resp = submit_event(builder, &state)
@@ -469,7 +470,7 @@ async fn serverless_live_subscription_multi_relay() {
 
     // 2. Publish a message (multi-relay fanout — lands wherever accepts).
     let builder =
-        crate::events::build_message(channel, &secret, None, &[], &[]).expect("build message");
+        crate::events::build_message(channel, &secret, None, &[], &[], &[]).expect("build message");
     let resp = submit_event(builder, &state).await.expect("publish");
     eprintln!(
         "published: accepted={} msg={:?}",

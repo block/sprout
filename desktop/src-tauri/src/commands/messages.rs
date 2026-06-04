@@ -406,7 +406,6 @@ async fn resolve_thread_ref(
 // arg count is idiomatic here rather than a struct.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
 pub async fn send_channel_message(
     channel_id: String,
     content: String,

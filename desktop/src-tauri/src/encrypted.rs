@@ -325,7 +325,8 @@ mod tests {
 
         // Build the rumor exactly as the command does for an encrypted reply.
         let builder =
-            events::build_message(channel, "threaded reply", Some(&thread_ref), &[], &[]).unwrap();
+            events::build_message(channel, "threaded reply", Some(&thread_ref), &[], &[], &[])
+                .unwrap();
         let rumor = builder.build(a.public_key());
 
         let recipients = [a.public_key(), b.public_key()];
