@@ -74,7 +74,6 @@ export function ProfilePopover({
   const [presenceMenuOpen, setPresenceMenuOpen] = React.useState(false);
   const presenceHoverTimer = React.useRef<number | null>(null);
   const hasUserStatus = Boolean(userStatusText || userStatusEmoji);
-  const profileShortcutLabel = isMacPlatform() ? "⌘U" : "Ctrl+U";
   const preferencesShortcutLabel = isMacPlatform() ? "⌘," : "Ctrl+,";
 
   function clearPresenceHoverTimer() {
@@ -281,9 +280,6 @@ export function ProfilePopover({
               type="button"
             >
               <span className="flex-1">Profile</span>
-              <kbd className="text-xs text-muted-foreground">
-                {profileShortcutLabel}
-              </kbd>
             </button>
             <button
               className={MENU_ITEM_CLASS}

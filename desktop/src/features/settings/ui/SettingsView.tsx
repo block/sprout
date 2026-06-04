@@ -221,9 +221,9 @@ export function SettingsView({
             </aside>
           ) : null}
 
-          <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
+          <section className="flex min-h-0 flex-col overflow-y-auto px-4 pt-4 sm:px-6">
             <div
-              className="mx-auto flex w-full max-w-4xl flex-col gap-4"
+              className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4"
               data-testid={`settings-panel-${section}`}
             >
               {renderSettingsSection(section, {

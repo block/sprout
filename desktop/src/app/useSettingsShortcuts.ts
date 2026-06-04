@@ -2,56 +2,32 @@ import * as React from "react";
 
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 
-const EDITABLE_SHORTCUT_TARGET_SELECTOR =
-  'input, textarea, select, [contenteditable="true"]';
-
-type SettingsMode = "profile" | "preferences";
-
 type UseSettingsShortcutsOptions = {
-  mode: SettingsMode;
   onClose: () => void;
-  onOpenSettings: (section?: "profile") => void;
+  onOpenSettings: () => void;
   open: boolean;
 };
 
-function isEditableShortcutTarget(event: KeyboardEvent) {
-  const target = event.target;
-  return (
-    target instanceof Element &&
-    target.closest(EDITABLE_SHORTCUT_TARGET_SELECTOR)
-  );
-}
-
 export function useSettingsShortcuts({
-  mode,
   onClose,
   onOpenSettings,
   open,
 }: UseSettingsShortcutsOptions) {
   React.useLayoutEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      const hasSettingsShortcutModifiers =
-        hasPrimaryShortcutModifier(event) && !event.altKey && !event.shiftKey;
       const isSettingsShortcut =
-        hasSettingsShortcutModifiers &&
+        hasPrimaryShortcutModifier(event) &&
+        !event.altKey &&
+        !event.shiftKey &&
         (event.key === "," || event.code === "Comma");
-      const isProfileShortcut =
-        hasSettingsShortcutModifiers &&
-        event.key.toLowerCase() === "u" &&
-        !isEditableShortcutTarget(event);
 
-      if (!isSettingsShortcut && !isProfileShortcut) {
+      if (!isSettingsShortcut) {
         return;
       }
 
       event.preventDefault();
-      if (open && (!isProfileShortcut || mode === "profile")) {
+      if (open) {
         onClose();
-        return;
-      }
-
-      if (isProfileShortcut) {
-        onOpenSettings("profile");
         return;
       }
 
@@ -62,5 +38,5 @@ export function useSettingsShortcuts({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [mode, onClose, onOpenSettings, open]);
+  }, [onClose, onOpenSettings, open]);
 }

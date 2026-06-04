@@ -592,7 +592,6 @@ export function AppShell() {
   ]);
 
   useSettingsShortcuts({
-    mode: settingsMode,
     onClose: handleCloseSettings,
     onOpenSettings: handleOpenSettings,
     open: settingsOpen,

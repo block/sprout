@@ -162,6 +162,7 @@ export function ProfileSettingsCard({
         >
           <form
             className="min-w-0 space-y-4"
+            id="profile-settings-form"
             onSubmit={(event) => {
               event.preventDefault();
               if (!canSave) {
@@ -218,22 +219,6 @@ export function ProfileSettingsCard({
                 />
               </div>
             </div>
-
-            <Button
-              data-testid="profile-save"
-              disabled={!canSave}
-              size="sm"
-              type="submit"
-            >
-              {updateProfileMutation.isPending ? "Saving..." : "Save profile"}
-            </Button>
-
-            {hasPendingClearRequest ? (
-              <p className="text-sm text-muted-foreground">
-                Clearing existing profile fields is not supported yet. Blank
-                display name, avatar, and about values are ignored for now.
-              </p>
-            ) : null}
           </form>
         </Section>
 
@@ -256,6 +241,25 @@ export function ProfileSettingsCard({
             />
           </div>
         </Section>
+      </div>
+
+      <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-6 flex flex-col gap-2 border-t border-border bg-background px-4 pt-4 pb-4 sm:-mx-6 sm:px-6">
+        <Button
+          data-testid="profile-save"
+          disabled={!canSave}
+          form="profile-settings-form"
+          size="sm"
+          type="submit"
+        >
+          {updateProfileMutation.isPending ? "Saving..." : "Save profile"}
+        </Button>
+
+        {hasPendingClearRequest ? (
+          <p className="text-sm text-muted-foreground">
+            Clearing existing profile fields is not supported yet. Blank display
+            name, avatar, and about values are ignored for now.
+          </p>
+        ) : null}
       </div>
     </section>
   );
