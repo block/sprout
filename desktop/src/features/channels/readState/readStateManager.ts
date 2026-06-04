@@ -63,6 +63,7 @@ export class ReadStateManager {
   private forcedContexts = new Set<string>();
   private contextSourceCreatedAt = new Map<string, number>();
   private pendingSyncedRollbacks = new Set<string>();
+  private destroyed = false;
 
   constructor(pubkey: string, relayClient: RelayClient) {
     this.pubkey = pubkey;
@@ -76,7 +77,7 @@ export class ReadStateManager {
   }
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    if (this.initialized || this.destroyed) return;
     console.debug(
       `[ReadStateManager] initialize pubkey=${this.pubkey.substring(0, 8)}… clientId=${this.clientId.substring(0, 8)}… slotId=${this.slotId}`,
     );
@@ -84,7 +85,9 @@ export class ReadStateManager {
     this.hydrateFromLocalStorage();
 
     await this.fetchAndMerge();
+    if (this.destroyed) return;
     await this.startLiveSubscription();
+    if (this.destroyed) return;
     if (!this.isIdenticalToLastPublished(this.currentContexts())) {
       this.schedulePublish();
     }
@@ -159,6 +162,7 @@ export class ReadStateManager {
   }
 
   destroy(): void {
+    this.destroyed = true;
     // Flush any pending writes immediately
     if (this.debounceTimer !== null) {
       window.clearTimeout(this.debounceTimer);
@@ -302,6 +306,10 @@ export class ReadStateManager {
           void this.handleIncomingEvent(event);
         },
       );
+      if (this.destroyed) {
+        unsub();
+        return;
+      }
       this.unsubscribeLive = unsub;
       console.debug("[ReadStateManager] live subscription established");
     } catch (error) {
@@ -312,6 +320,7 @@ export class ReadStateManager {
 
   private async handleIncomingEvent(event: RelayEvent): Promise<void> {
     if (event.pubkey !== this.pubkey) return;
+    if (this.destroyed) return;
     console.debug(
       `[ReadStateManager] incoming event=${event.id.substring(0, 8)}… created_at=${event.created_at}`,
     );
@@ -447,11 +456,13 @@ export class ReadStateManager {
         `[ReadStateManager] publish accepted createdAt=${createdAt}`,
       );
 
+      for (const key of Object.keys(contexts)) {
+        if (this.lastPublishedContexts[key] !== contexts[key]) {
+          this.contextSourceCreatedAt.set(key, createdAt);
+        }
+      }
       this.lastPublishedContexts = contexts;
       this.forcedContexts.clear();
-      for (const key of Object.keys(contexts)) {
-        this.contextSourceCreatedAt.set(key, createdAt);
-      }
       this.maxFetchedCreatedAt = Math.max(
         this.maxFetchedCreatedAt,
         event.created_at,

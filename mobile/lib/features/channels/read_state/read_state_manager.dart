@@ -146,7 +146,7 @@ class ReadStateManager {
   }
 
   Future<void> reinitializeRemote() async {
-    if (_disposed || !_remoteEnabled) return;
+    if (_disposed || !_remoteEnabled || !_initialized) return;
     debugPrint('[ReadStateManager] reinitializeRemote');
     if (_isPublishing) {
       await _publishCompleter?.future;
@@ -282,7 +282,7 @@ class ReadStateManager {
 
   Future<void> _startLiveSubscription() async {
     try {
-      _unsubscribeLive = await _relaySession!.subscribe(
+      final unsub = await _relaySession!.subscribe(
         NostrFilter(
           kinds: const [EventKind.readState],
           authors: [pubkey],
@@ -293,6 +293,11 @@ class ReadStateManager {
         ),
         _handleIncomingEvent,
       );
+      if (_disposed) {
+        unsub.call();
+        return;
+      }
+      _unsubscribeLive = unsub;
       debugPrint('[ReadStateManager] live subscription established');
     } catch (e) {
       debugPrint('[ReadStateManager] live subscription FAILED: $e');
@@ -411,11 +416,13 @@ class ReadStateManager {
       );
       debugPrint('[ReadStateManager] publish accepted createdAt=$createdAt');
 
+      for (final key in contexts.keys) {
+        if (_lastPublishedContexts[key] != contexts[key]) {
+          _contextSourceCreatedAt[key] = createdAt;
+        }
+      }
       _lastPublishedContexts = contexts;
       _forcedContextIds.clear();
-      for (final key in contexts.keys) {
-        _contextSourceCreatedAt[key] = createdAt;
-      }
       _maxFetchedCreatedAt = max(_maxFetchedCreatedAt, createdAt);
       _persistLocalState();
     } catch (error) {
