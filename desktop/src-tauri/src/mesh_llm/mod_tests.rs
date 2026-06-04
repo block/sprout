@@ -32,3 +32,35 @@ fn model_ref_is_family_agnostic() {
     assert!(!looks_like_model_ref("Qwen3-35B"));
     assert!(!looks_like_model_ref(""));
 }
+
+#[test]
+fn agent_preset_runs_on_sprout_agent_not_goose() {
+    // Regression (Tyler): the relay-mesh preset used to hand the agent the
+    // global default runtime (goose), which ignores the OpenAI-compat env
+    // vars and falls back to its own provider. Mesh agents must run on
+    // sprout-agent, which reads those vars.
+    let preset = super::agent_preset(super::MeshAgentPresetRequest {
+        model_id: "Qwen3-8B-Q4_K_M".to_string(),
+    })
+    .expect("preset for a valid model id");
+
+    assert_eq!(preset.agent_command, "sprout-agent");
+    assert_ne!(preset.agent_command, "goose");
+    assert_eq!(preset.mcp_command, "sprout-dev-mcp");
+
+    // The env vars sprout-agent's config layer reads (crates/sprout-agent).
+    assert_eq!(
+        preset
+            .env_vars
+            .get("SPROUT_AGENT_PROVIDER")
+            .map(String::as_str),
+        Some("openai")
+    );
+    assert_eq!(
+        preset
+            .env_vars
+            .get("OPENAI_COMPAT_MODEL")
+            .map(String::as_str),
+        Some("Qwen3-8B-Q4_K_M")
+    );
+}
