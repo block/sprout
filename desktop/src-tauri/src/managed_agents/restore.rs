@@ -1,9 +1,9 @@
+#[cfg(feature = "mesh-llm")]
+use super::relay_mesh_model_id;
 use super::{
     find_managed_agent_mut, kill_stale_tracked_processes, load_managed_agents, save_managed_agents,
     spawn_agent_child, sync_managed_agent_processes, BackendKind, ManagedAgentProcess,
 };
-#[cfg(feature = "mesh-llm")]
-use super::{relay_mesh_model_id, RELAY_MESH_API_BASE_URL};
 use crate::app_state::AppState;
 use crate::util;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -111,16 +111,15 @@ pub async fn restore_managed_agents_on_launch(
             if relay_mesh_model_id(record).is_none() {
                 continue;
             }
-
-            persist_restore_error(
-                app,
-                &state,
-                &record.pubkey,
-                format!(
-                    "relay mesh agents cannot auto-start because the selected serve target is not persisted. Create a new agent with Run on relay mesh selected to refresh the target for {RELAY_MESH_API_BASE_URL}."
-                ),
-            )?;
-            mesh_preflight_failures.insert(record.pubkey.clone());
+            // Auto-start after relaunch: re-resolve a live bootstrap target and
+            // dial it. Skip (with an actionable error) only when no live target
+            // serves this model right now.
+            if let Err(error) =
+                crate::commands::ensure_relay_mesh_for_record(&state, record, false).await
+            {
+                persist_restore_error(app, &state, &record.pubkey, error)?;
+                mesh_preflight_failures.insert(record.pubkey.clone());
+            }
         }
         agents_to_start
             .into_iter()
