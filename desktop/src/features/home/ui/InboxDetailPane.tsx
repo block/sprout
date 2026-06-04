@@ -342,7 +342,7 @@ export function InboxDetailPane({
             <MessageComposer
               channelId={item.item.channelId}
               channelName={item.channelLabel ?? "channel"}
-              containerClassName="px-4 pb-4 sm:px-4 [&>div]:mx-auto [&>div]:max-w-4xl"
+              containerClassName="px-4 pb-4 sm:px-4"
               disabled={!canReply}
               draftKey={`inbox-reply:${item.id}`}
               isSending={isSendingReply}
