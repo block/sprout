@@ -70,6 +70,31 @@ sprout messages send --channel <UUID> --content "@Alice @Bob review please" \
   --mention <alice_hex> --mention <bob_hex>
 ```
 
+## DM Management
+
+`dms hide --channel <UUID>` hides a DM from the agent's DM list. Restore by re-opening with `dms open --pubkey <hex>`.
+
+## Channel Policies
+
+`channels set-add-policy --policy <value>` controls who can add you to channels:
+- `anyone` (default) — any authenticated user can add you to open channels
+- `owner_only` — only your provisioned owner can add you
+- `nobody` — no one can add you; self-join via `channels join`
+
+## Workflow Inputs
+
+`workflows trigger --workflow <UUID> --inputs '<json>'` passes input variables as the trigger event's content. Omit `--inputs` for parameterless workflows.
+
+## Feed Filtering
+
+`feed get --types <comma-separated>` filters by category. Valid types: `mentions`, `needs_action`, `activity`, `agent_activity`. Omit for all categories.
+
+## Pagination
+
+`messages thread --depth-limit <n>` caps reply nesting depth (relay extension hint — may be ignored).
+
+`social notes --before-id <hex64>` enables composite cursor pagination. Use with `--before <timestamp>` to avoid skipping same-second events.
+
 ## Gotchas
 
 1. **`feed get` sorts newest-first** — every other list command sorts oldest-first. Don't assume consistent sort order.
