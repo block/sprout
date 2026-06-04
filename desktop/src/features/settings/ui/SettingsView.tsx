@@ -3,6 +3,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { ArrowLeft } from "lucide-react";
 
 import { useMyRelayMembershipQuery } from "@/features/relay-members/hooks";
+import { getFeature } from "@/shared/features/manifest";
+import { getOverrides, getDevToggle } from "@/shared/features/store";
+import { resolveEnabled } from "@/shared/features/useFeatureEnabled";
 import { cn } from "@/shared/lib/cn";
 import {
   Sidebar,
@@ -116,7 +119,18 @@ export function SettingsView({
   const myMembershipQuery = useMyRelayMembershipQuery();
   const visibleSections = React.useMemo(() => {
     const membership = myMembershipQuery.data;
+    const overrides = getOverrides();
+    const devToggle = getDevToggle();
+
     return settingsSections.filter((s) => {
+      // Feature gate check
+      if (s.featureGate) {
+        const feature = getFeature(s.featureGate);
+        if (feature && !resolveEnabled(feature.tier, feature.id, overrides, devToggle)) {
+          return false;
+        }
+      }
+      // Relay members requires admin/owner role
       if (s.value === "relay-members") {
         return (
           membership != null &&

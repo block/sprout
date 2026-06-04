@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "features": [
+    {
+      "id": "managed-agents",
+      "name": "Managed Agents",
+      "description": "Create, configure, and run AI agents in your workspace",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "channel-templates",
+      "name": "Channel Templates",
+      "description": "Pre-configured channel setups with agents and workflows",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "workflows",
+      "name": "Workflows",
+      "description": "YAML-defined automations with approval gates",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "projects",
+      "name": "Projects",
+      "description": "Git repository browser and collaboration",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "custom-emoji",
+      "name": "Custom Emoji",
+      "description": "Workspace emoji palette for reactions and messages",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "huddles",
+      "name": "Huddles",
+      "description": "Voice sessions with humans and agents via TTS/STT",
+      "tier": "dev",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "mesh-compute",
+      "name": "Mesh Compute",
+      "description": "Peer-to-peer inference sharing across workspace members",
+      "tier": "dev",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "identity-archive",
+      "name": "Identity Archive",
+      "description": "Archive and unarchive relay member identities",
+      "tier": "dev",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "relay-members",
+      "name": "Relay Members",
+      "description": "Relay membership administration panel",
+      "tier": "dev",
+      "platforms": ["desktop"]
+    },
+    {
+      "id": "doctor",
+      "name": "Doctor",
+      "description": "Diagnostic and debug panel for troubleshooting",
+      "tier": "dev",
+      "platforms": ["desktop"]
+    }
+  ]
+}

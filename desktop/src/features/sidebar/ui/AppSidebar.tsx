@@ -10,6 +10,7 @@ import {
   Zap,
 } from "lucide-react";
 import * as React from "react";
+import { FeatureGate } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
@@ -455,50 +456,56 @@ export function AppSidebar({
               <span>Pulse</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-projects-view"
-              isActive={selectedView === "projects"}
-              onClick={onSelectProjects}
-              tooltip="Projects"
-              type="button"
-            >
-              <FolderGit2 className="h-4 w-4" />
-              <span>Projects</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-agents-view"
-              isActive={selectedView === "agents"}
-              onClick={onSelectAgents}
-              tooltip="Agents"
-              type="button"
-            >
-              <Bot className="h-4 w-4" />
-              <span>Agents</span>
-            </SidebarMenuButton>
-            {shouldShowAgentCount ? (
-              <SidebarMenuBadge
-                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-                data-testid="sidebar-agents-count"
+          <FeatureGate feature="projects">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-projects-view"
+                isActive={selectedView === "projects"}
+                onClick={onSelectProjects}
+                tooltip="Projects"
+                type="button"
               >
-                {totalAgentCount}
-              </SidebarMenuBadge>
-            ) : null}
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-workflows-view"
-              isActive={selectedView === "workflows"}
-              onClick={onSelectWorkflows}
-              tooltip="Workflows"
-              type="button"
-            >
-              <Zap className="h-4 w-4" />
-              <span>Workflows</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+                <FolderGit2 className="h-4 w-4" />
+                <span>Projects</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </FeatureGate>
+          <FeatureGate feature="managed-agents">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-agents-view"
+                isActive={selectedView === "agents"}
+                onClick={onSelectAgents}
+                tooltip="Agents"
+                type="button"
+              >
+                <Bot className="h-4 w-4" />
+                <span>Agents</span>
+              </SidebarMenuButton>
+              {shouldShowAgentCount ? (
+                <SidebarMenuBadge
+                  className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+                  data-testid="sidebar-agents-count"
+                >
+                  {totalAgentCount}
+                </SidebarMenuBadge>
+              ) : null}
+            </SidebarMenuItem>
+          </FeatureGate>
+          <FeatureGate feature="workflows">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-workflows-view"
+                isActive={selectedView === "workflows"}
+                onClick={onSelectWorkflows}
+                tooltip="Workflows"
+                type="button"
+              >
+                <Zap className="h-4 w-4" />
+                <span>Workflows</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </FeatureGate>
         </SidebarMenu>
       </SidebarHeader>
 
