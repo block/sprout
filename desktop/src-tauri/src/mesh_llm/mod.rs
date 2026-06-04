@@ -4,6 +4,9 @@ mod discovery;
 pub use discovery::{availability_from_events, mesh_status_filter};
 use discovery::{device_name_from_status, endpoint_id_from_status, enrich_status_payload_identity};
 
+mod preset;
+pub use preset::{agent_preset, MeshAgentPreset, MeshAgentPresetRequest};
+
 use mesh_llm_sdk::{client, serve, EmbeddedNodeHandle, MeshDiscoveryMode};
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +16,12 @@ const MESH_STATUS_KIND: u64 = 30_621;
 const MESH_API_PORT_ENV: &str = "SPROUT_MESH_API_PORT";
 const MESH_CONSOLE_PORT_ENV: &str = "SPROUT_MESH_CONSOLE_PORT";
 const RELAY_MESH_API_KEY_PLACEHOLDER: &str = "sprout-mesh-local";
+/// ACP provider relay-mesh agents run on. Sources of truth for its command +
+/// MCP live in the provider catalog (`known_acp_provider_exact`); these are
+/// only the fallbacks. `sprout-agent` reads the `SPROUT_AGENT_PROVIDER` /
+/// `OPENAI_COMPAT_*` env vars below — goose (the global default) does not.
+const MESH_AGENT_PROVIDER_ID: &str = "sprout-agent";
+const MESH_AGENT_MCP_COMMAND: &str = "sprout-dev-mcp";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -440,54 +449,6 @@ pub(super) fn dedupe_models(models: Vec<MeshModelOption>) -> Vec<MeshModelOption
         .into_iter()
         .map(|(id, name)| MeshModelOption { id, name })
         .collect()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MeshAgentPresetRequest {
-    pub model_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MeshAgentPreset {
-    pub provider_id: String,
-    pub label: String,
-    pub acp_command: String,
-    pub agent_command: String,
-    pub agent_args: Vec<String>,
-    pub mcp_command: String,
-    pub model: String,
-    pub env_vars: BTreeMap<String, String>,
-}
-
-pub fn agent_preset(request: MeshAgentPresetRequest) -> Result<MeshAgentPreset, String> {
-    let model = request.model_id.trim();
-    if model.is_empty() {
-        return Err("modelId is required".to_string());
-    }
-    Ok(MeshAgentPreset {
-        provider_id: "relay-mesh".to_string(),
-        label: "Relay mesh".to_string(),
-        acp_command: crate::managed_agents::DEFAULT_ACP_COMMAND.to_string(),
-        agent_command: crate::managed_agents::DEFAULT_AGENT_COMMAND.to_string(),
-        agent_args: Vec::new(),
-        mcp_command: crate::managed_agents::DEFAULT_MCP_COMMAND.to_string(),
-        model: model.to_string(),
-        env_vars: BTreeMap::from([
-            ("SPROUT_AGENT_PROVIDER".to_string(), "openai".to_string()),
-            (
-                "OPENAI_COMPAT_BASE_URL".to_string(),
-                relay_mesh_api_base_url()?,
-            ),
-            ("OPENAI_COMPAT_MODEL".to_string(), model.to_string()),
-            (
-                "OPENAI_COMPAT_API_KEY".to_string(),
-                RELAY_MESH_API_KEY_PLACEHOLDER.to_string(),
-            ),
-            ("OPENAI_COMPAT_API".to_string(), "chat".to_string()),
-        ]),
-    })
 }
 
 #[cfg(test)]
