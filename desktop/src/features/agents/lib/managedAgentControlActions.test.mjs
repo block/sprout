@@ -12,7 +12,7 @@ function agent(overrides = {}) {
     acpCommand: "sprout-acp",
     agentCommand: "goose",
     agentArgs: [],
-    mcpCommand: "sprout-mcp-server",
+    mcpCommand: "",
     turnTimeoutSeconds: 320,
     idleTimeoutSeconds: null,
     maxTurnDurationSeconds: null,

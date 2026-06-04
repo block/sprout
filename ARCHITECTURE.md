@@ -745,7 +745,7 @@ All e2e tests are `#[ignore]` — require a running relay. Total: **134 e2e test
 
 `src/main.rs` is a manual testing CLI (`sprout-test-cli`) with `--send`, `--subscribe`, `--channel`, `--url`, `--kind` flags.
 
-Re-exports `parse_relay_message`, `OkResponse`, `RelayMessage` from `sprout-relay-client`.
+Defines `parse_relay_message`, `OkResponse`, `RelayMessage` directly in `src/lib.rs`.
 
 ---
 

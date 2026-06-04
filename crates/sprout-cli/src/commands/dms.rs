@@ -115,6 +115,7 @@ pub async fn cmd_add_dm_member(
     pubkey: &str,
 ) -> Result<(), CliError> {
     let channel_uuid = parse_uuid(channel_id)?;
+    validate_hex64(pubkey)?;
 
     let builder = sprout_sdk::build_dm_add_member(channel_uuid, pubkey).map_err(sdk_err)?;
     let event = client.sign_event(builder)?;
