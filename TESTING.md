@@ -215,7 +215,7 @@ sprout channels add-member --channel "$CHANNEL" --pubkey "$AGENT_PUBKEY" --role 
 export SPROUT_PRIVATE_KEY="$AGENT_SK"
 export SPROUT_RELAY_URL=ws://localhost:3000   # match step 3 (e.g. ws://localhost:3030 if overridden)
 export SPROUT_ACP_RESPOND_TO=anyone           # default is owner-only; opens the gate for testing
-export SPROUT_ACP_MEMORY=true                 # opt in to NIP-AE core-memory prompt injection
+# NIP-AE core-memory prompt injection is on by default; set SPROUT_ACP_NO_MEMORY=true to opt out.
 export SPROUT_ACP_MCP_COMMAND="$PWD/target/release/sprout-mcp-server"  # explicit path beats $PATH
 export GOOSE_MODE=auto                        # must be 'auto' or goose hangs on prompts
 

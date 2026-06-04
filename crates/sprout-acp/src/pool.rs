@@ -219,8 +219,8 @@ pub struct PromptContext {
     /// Whether NIP-AE agent core memory injection is enabled. When false,
     /// the per-session core engram fetch is skipped and `core_sections`
     /// remains empty for every channel, so `format_prompt` renders no
-    /// `[Agent Memory — core]` section. Driven by `--memory` /
-    /// `SPROUT_ACP_MEMORY`.
+    /// `[Agent Memory — core]` section. On by default; disabled via
+    /// `--no-memory` / `SPROUT_ACP_NO_MEMORY`.
     pub memory_enabled: bool,
 }
 
@@ -760,10 +760,11 @@ pub async fn run_prompt_task(
     // happens when a session is invalidated and recreated (see
     // `SessionState::invalidate_channel`).
     //
-    // Operator opt-in: `--memory` / `SPROUT_ACP_MEMORY` enables the NIP-AE
-    // injection path. By default we skip the fetch outright and leave
-    // `state.core_sections` empty, so `format_prompt` renders no core
-    // section. The `sprout mem` CLI and the relay's acceptance of
+    // Operator opt-out: `--no-memory` / `SPROUT_ACP_NO_MEMORY` disables the
+    // NIP-AE injection path. By default we run the fetch and populate
+    // `state.core_sections`, so `format_prompt` renders the core section.
+    // When disabled we skip the fetch outright and leave `core_sections`
+    // empty. The `sprout mem` CLI and the relay's acceptance of
     // kind:30174 engrams are unaffected.
     if is_new_session && ctx.memory_enabled {
         if let (PromptSource::Channel(cid), Some(owner_pk)) =
