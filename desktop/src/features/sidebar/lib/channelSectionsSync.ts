@@ -8,6 +8,7 @@ import type { RelayEvent } from "@/shared/api/types";
 import { KIND_CHANNEL_SECTIONS } from "@/shared/constants/kinds";
 import {
   parseChannelSectionPayload,
+  type ChannelSection,
   type ChannelSectionStore,
 } from "./channelSectionsStorage";
 
@@ -19,10 +20,6 @@ export type RemoteSections = {
   createdAt: number;
   eventId: string;
 };
-
-let debounceTimer: number | null = null;
-let lastRemoteCreatedAt = 0;
-let pendingStore: ChannelSectionStore | null = null;
 
 async function decryptAndParse(
   event: RelayEvent,
@@ -37,111 +34,187 @@ async function decryptAndParse(
   }
 }
 
-export async function fetchRemoteSections(
-  pubkey: string,
-): Promise<RemoteSections | null> {
-  try {
-    const events = await relayClient.fetchEvents({
-      kinds: [KIND_CHANNEL_SECTIONS],
-      authors: [pubkey],
-      "#d": [D_TAG],
-      limit: 1,
-    });
-    if (events.length === 0) return null;
-    if (events[0].pubkey !== pubkey) return null;
-    const result = await decryptAndParse(events[0]);
-    if (result) {
-      lastRemoteCreatedAt = Math.max(lastRemoteCreatedAt, result.createdAt);
-    }
-    return result;
-  } catch {
-    return null;
+export class ChannelSectionSyncManager {
+  private pubkey: string;
+  private debounceTimer: number | null = null;
+  private lastRemoteCreatedAt = 0;
+  private pendingStore: ChannelSectionStore | null = null;
+  private lastPublishedStore: ChannelSectionStore | null = null;
+
+  constructor(pubkey: string) {
+    this.pubkey = pubkey;
   }
-}
 
-export function cancelPendingPublish(): void {
-  if (debounceTimer !== null) {
-    window.clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
-}
-
-export function getPendingStore(): ChannelSectionStore | null {
-  return pendingStore;
-}
-
-export function publishSections(store: ChannelSectionStore): void {
-  pendingStore = store;
-  if (debounceTimer !== null) {
-    window.clearTimeout(debounceTimer);
-  }
-  debounceTimer = window.setTimeout(() => {
-    debounceTimer = null;
-    void doPublish(store);
-  }, DEBOUNCE_MS);
-}
-
-async function doPublish(store: ChannelSectionStore): Promise<void> {
-  try {
-    const payload = {
-      version: 1,
-      sections: store.sections,
-      assignments: store.assignments,
-    };
-    const ciphertext = await nip44EncryptToSelf(JSON.stringify(payload));
-    const createdAt = Math.max(
-      Math.floor(Date.now() / 1_000),
-      lastRemoteCreatedAt + 1,
-    );
-    const event = await signRelayEvent({
-      kind: KIND_CHANNEL_SECTIONS,
-      content: ciphertext,
-      createdAt,
-      tags: [
-        ["d", D_TAG],
-        ["t", D_TAG], // relay discoverability; not used in our filters
-      ],
-    });
-    await relayClient.publishEvent(
-      event,
-      "Timed out publishing channel sections.",
-      "Failed to publish channel sections.",
-    );
-    lastRemoteCreatedAt = Math.max(lastRemoteCreatedAt, event.created_at);
-    pendingStore = null;
-  } catch (error) {
-    console.warn("[channelSectionsSync] publish failed:", error);
-  }
-}
-
-export async function subscribeToSections(
-  pubkey: string,
-  onUpdate: (remote: RemoteSections) => void,
-): Promise<() => Promise<void>> {
-  return relayClient.subscribeLive(
-    {
-      kinds: [KIND_CHANNEL_SECTIONS],
-      authors: [pubkey],
-      "#d": [D_TAG],
-      limit: 0,
-    },
-    (event: RelayEvent) => {
-      if (event.pubkey !== pubkey) return;
-      void decryptAndParse(event).then((result) => {
-        if (result) {
-          lastRemoteCreatedAt = Math.max(lastRemoteCreatedAt, result.createdAt);
-          onUpdate(result);
-        }
+  async fetchRemoteSections(): Promise<RemoteSections | null> {
+    try {
+      const events = await relayClient.fetchEvents({
+        kinds: [KIND_CHANNEL_SECTIONS],
+        authors: [this.pubkey],
+        "#d": [D_TAG],
+        limit: 1,
       });
-    },
-  );
-}
-
-export function resetSyncState(): void {
-  if (debounceTimer !== null) {
-    window.clearTimeout(debounceTimer);
-    debounceTimer = null;
+      if (events.length === 0) return null;
+      if (events[0].pubkey !== this.pubkey) return null;
+      const result = await decryptAndParse(events[0]);
+      if (result) {
+        this.lastRemoteCreatedAt = Math.max(
+          this.lastRemoteCreatedAt,
+          result.createdAt,
+        );
+      }
+      return result;
+    } catch {
+      return null;
+    }
   }
-  lastRemoteCreatedAt = 0;
-  pendingStore = null;
+
+  cancelPendingPublish(): void {
+    if (this.debounceTimer !== null) {
+      window.clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+  }
+
+  getPendingStore(): ChannelSectionStore | null {
+    return this.pendingStore;
+  }
+
+  publishSections(store: ChannelSectionStore): void {
+    this.pendingStore = store;
+    if (this.debounceTimer !== null) {
+      window.clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = window.setTimeout(() => {
+      this.debounceTimer = null;
+      void this.doPublish(store);
+    }, DEBOUNCE_MS);
+  }
+
+  private async fetchOwnBlobBeforePublish(
+    store: ChannelSectionStore,
+  ): Promise<ChannelSectionStore> {
+    try {
+      const events = await relayClient.fetchEvents({
+        kinds: [KIND_CHANNEL_SECTIONS],
+        authors: [this.pubkey],
+        "#d": [D_TAG],
+        limit: 1,
+      });
+      if (events.length === 0 || events[0].pubkey !== this.pubkey) return store;
+      const remote = await decryptAndParse(events[0]);
+      if (!remote) return store;
+      // Sections use whole-blob LWW: take whichever is newer
+      if (remote.createdAt > this.lastRemoteCreatedAt) {
+        this.lastRemoteCreatedAt = remote.createdAt;
+        return remote.store;
+      }
+      return store;
+    } catch {
+      return store;
+    }
+  }
+
+  private isIdenticalToLastPublished(store: ChannelSectionStore): boolean {
+    if (!this.lastPublishedStore) return false;
+    const lastSections = this.lastPublishedStore.sections;
+    const currentSections = store.sections;
+    if (lastSections.length !== currentSections.length) return false;
+    for (let i = 0; i < currentSections.length; i++) {
+      const last = lastSections[i] as ChannelSection | undefined;
+      const current = currentSections[i] as ChannelSection;
+      if (
+        !last ||
+        last.id !== current.id ||
+        last.name !== current.name ||
+        last.order !== current.order
+      )
+        return false;
+    }
+    const lastAssignKeys = Object.keys(this.lastPublishedStore.assignments);
+    const currentAssignKeys = Object.keys(store.assignments);
+    if (lastAssignKeys.length !== currentAssignKeys.length) return false;
+    for (const key of currentAssignKeys) {
+      if (this.lastPublishedStore.assignments[key] !== store.assignments[key])
+        return false;
+    }
+    return true;
+  }
+
+  private async doPublish(store: ChannelSectionStore): Promise<void> {
+    try {
+      const merged = await this.fetchOwnBlobBeforePublish(store);
+      if (this.isIdenticalToLastPublished(merged)) {
+        this.pendingStore = null;
+        return;
+      }
+      const payload = {
+        version: 1,
+        sections: merged.sections,
+        assignments: merged.assignments,
+      };
+      const ciphertext = await nip44EncryptToSelf(JSON.stringify(payload));
+      const createdAt = Math.max(
+        Math.floor(Date.now() / 1_000),
+        this.lastRemoteCreatedAt + 1,
+      );
+      const event = await signRelayEvent({
+        kind: KIND_CHANNEL_SECTIONS,
+        content: ciphertext,
+        createdAt,
+        tags: [
+          ["d", D_TAG],
+          ["t", D_TAG], // relay discoverability; not used in our filters
+        ],
+      });
+      await relayClient.publishEvent(
+        event,
+        "Timed out publishing channel sections.",
+        "Failed to publish channel sections.",
+      );
+      this.lastRemoteCreatedAt = Math.max(
+        this.lastRemoteCreatedAt,
+        event.created_at,
+      );
+      this.lastPublishedStore = merged;
+      this.pendingStore = null;
+    } catch (error) {
+      console.warn("[channelSectionsSync] publish failed:", error);
+    }
+  }
+
+  async subscribeToSections(
+    onUpdate: (remote: RemoteSections) => void,
+  ): Promise<() => Promise<void>> {
+    return relayClient.subscribeLive(
+      {
+        kinds: [KIND_CHANNEL_SECTIONS],
+        authors: [this.pubkey],
+        "#d": [D_TAG],
+        limit: 0,
+      },
+      (event: RelayEvent) => {
+        if (event.pubkey !== this.pubkey) return;
+        void decryptAndParse(event).then((result) => {
+          if (result) {
+            this.lastRemoteCreatedAt = Math.max(
+              this.lastRemoteCreatedAt,
+              result.createdAt,
+            );
+            onUpdate(result);
+          }
+        });
+      },
+    );
+  }
+
+  destroy(): void {
+    if (this.debounceTimer !== null && this.pendingStore !== null) {
+      window.clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+      void this.doPublish(this.pendingStore);
+    } else if (this.debounceTimer !== null) {
+      window.clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+  }
 }

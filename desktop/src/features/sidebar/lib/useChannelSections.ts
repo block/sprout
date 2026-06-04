@@ -7,14 +7,7 @@ import {
   storageKey,
   writeChannelSectionsStore,
 } from "./channelSectionsStorage";
-import {
-  cancelPendingPublish,
-  fetchRemoteSections,
-  getPendingStore,
-  publishSections,
-  resetSyncState,
-  subscribeToSections,
-} from "./channelSectionsSync";
+import { ChannelSectionSyncManager } from "./channelSectionsSync";
 import type { RemoteSections } from "./channelSectionsSync";
 import { swapSectionOrder } from "./channelSectionsHelpers";
 
@@ -44,6 +37,7 @@ export function useChannelSections(pubkey: string | undefined): {
     return readChannelSectionsStore(pubkey);
   });
 
+  const managerRef = React.useRef<ChannelSectionSyncManager | null>(null);
   const lastAppliedRemoteTs = React.useRef(0);
   const lastAppliedEventId = React.useRef("");
 
@@ -57,8 +51,10 @@ export function useChannelSections(pubkey: string | undefined): {
     setStore(readChannelSectionsStore(pubkey));
     lastAppliedRemoteTs.current = 0;
     lastAppliedEventId.current = "";
+    managerRef.current = new ChannelSectionSyncManager(pubkey);
     return () => {
-      resetSyncState();
+      managerRef.current?.destroy();
+      managerRef.current = null;
     };
   }, [pubkey]);
 
@@ -93,7 +89,7 @@ export function useChannelSections(pubkey: string | undefined): {
           return prev;
         lastAppliedRemoteTs.current = remote.createdAt;
         lastAppliedEventId.current = remote.eventId;
-        cancelPendingPublish();
+        managerRef.current?.cancelPendingPublish();
         if (!writeChannelSectionsStore(pubkey, remote.store)) return prev;
         return remote.store;
       };
@@ -104,14 +100,14 @@ export function useChannelSections(pubkey: string | undefined): {
   React.useEffect(() => {
     if (!pubkey) return;
     let cancelled = false;
-    void fetchRemoteSections(pubkey).then((remote) => {
+    void managerRef.current?.fetchRemoteSections().then((remote) => {
       if (cancelled) return;
       if (remote) {
         setStore(applyRemote(remote));
       } else {
         const local = readChannelSectionsStore(pubkey);
         if (local.sections.length > 0) {
-          publishSections(local);
+          managerRef.current?.publishSections(local);
         }
       }
     });
@@ -124,16 +120,18 @@ export function useChannelSections(pubkey: string | undefined): {
     if (!pubkey) return;
     let unsub: (() => Promise<void>) | null = null;
     let cancelled = false;
-    void subscribeToSections(pubkey, (remote) => {
-      if (cancelled) return;
-      setStore(applyRemote(remote));
-    }).then((dispose) => {
-      if (cancelled) {
-        void dispose();
-      } else {
-        unsub = dispose;
-      }
-    });
+    void managerRef.current
+      ?.subscribeToSections((remote) => {
+        if (cancelled) return;
+        setStore(applyRemote(remote));
+      })
+      .then((dispose) => {
+        if (cancelled) {
+          void dispose();
+        } else {
+          unsub = dispose;
+        }
+      });
     return () => {
       cancelled = true;
       if (unsub) void unsub();
@@ -144,14 +142,14 @@ export function useChannelSections(pubkey: string | undefined): {
     if (!pubkey) return;
     let cancelled = false;
     const unsub = relayClient.subscribeToReconnects(() => {
-      void fetchRemoteSections(pubkey).then((remote) => {
+      void managerRef.current?.fetchRemoteSections().then((remote) => {
         if (cancelled) return;
         if (remote) {
           setStore(applyRemote(remote));
         }
-        const pending = getPendingStore();
+        const pending = managerRef.current?.getPendingStore();
         if (pending) {
-          publishSections(pending);
+          managerRef.current?.publishSections(pending);
         }
       });
     });
@@ -185,7 +183,7 @@ export function useChannelSections(pubkey: string | undefined): {
           sections: [...current.sections, section],
         };
         if (!writeChannelSectionsStore(pubkey, next)) return current;
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
       return section;
@@ -208,7 +206,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },
@@ -235,7 +233,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },
@@ -248,7 +246,7 @@ export function useChannelSections(pubkey: string | undefined): {
       setStore((prev) => {
         const next = swapSectionOrder(prev, sectionId, "up");
         if (!next || !writeChannelSectionsStore(pubkey, next)) return prev;
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },
@@ -261,7 +259,7 @@ export function useChannelSections(pubkey: string | undefined): {
       setStore((prev) => {
         const next = swapSectionOrder(prev, sectionId, "down");
         if (!next || !writeChannelSectionsStore(pubkey, next)) return prev;
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },
@@ -278,7 +276,7 @@ export function useChannelSections(pubkey: string | undefined): {
         });
         const next: ChannelSectionStore = { ...prev, sections };
         if (!writeChannelSectionsStore(pubkey, next)) return prev;
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },
@@ -298,7 +296,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },
@@ -317,7 +315,7 @@ export function useChannelSections(pubkey: string | undefined): {
         if (!writeChannelSectionsStore(pubkey, next)) {
           return prev;
         }
-        publishSections(next);
+        managerRef.current?.publishSections(next);
         return next;
       });
     },

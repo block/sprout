@@ -38,6 +38,7 @@ class ChannelMutesManager {
   final VoidCallback _onChanged;
 
   ChannelMuteStore _store;
+  ChannelMuteStore? _lastPublishedStore;
   Timer? _publishDebounce;
   int _lastRemoteCreatedAt = 0;
   String? _lastRemoteEventId;
@@ -213,12 +214,34 @@ class ChannelMutesManager {
     if (!_disposed) _onChanged();
   }
 
+  bool _isIdenticalToLastPublished() {
+    final last = _lastPublishedStore;
+    if (last == null) return false;
+    if (last.channels.length != _store.channels.length) return false;
+    for (final key in _store.channels.keys) {
+      final lastEntry = last.channels[key];
+      final currentEntry = _store.channels[key];
+      if (lastEntry == null ||
+          lastEntry.muted != currentEntry!.muted ||
+          lastEntry.updatedAt != currentEntry.updatedAt) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   Future<void> _publish({bool allowDisposed = false}) async {
     if ((!allowDisposed && _disposed) ||
         !_remoteEnabled ||
         _signedEventRelay == null) {
       return;
     }
+
+    // Read-before-write: merge remote state before publishing
+    await _fetchAndMerge();
+
+    // No-op suppression: skip if nothing changed
+    if (_isIdenticalToLastPublished()) return;
 
     try {
       final payload = jsonEncode(_store.toJson());
@@ -236,6 +259,7 @@ class ChannelMutesManager {
       );
 
       _lastRemoteCreatedAt = max(_lastRemoteCreatedAt, createdAt);
+      _lastPublishedStore = ChannelMuteStore(channels: Map.of(_store.channels));
     } catch (error) {
       debugPrint('[ChannelMutesManager] publish failed: $error');
     }

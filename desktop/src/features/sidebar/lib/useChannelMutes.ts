@@ -11,14 +11,7 @@ import {
   type ChannelMuteEntry,
   type ChannelMuteStore,
 } from "./channelMutesStorage";
-import {
-  cancelPendingMutePublish,
-  fetchRemoteMutes,
-  getPendingMuteStore,
-  publishMutes,
-  resetMuteSyncState,
-  subscribeToMutes,
-} from "./channelMutesSync";
+import { ChannelMuteSyncManager } from "./channelMutesSync";
 import type { RemoteMutes } from "./channelMutesSync";
 
 export function useChannelMutes(pubkey: string | undefined): {
@@ -33,6 +26,7 @@ export function useChannelMutes(pubkey: string | undefined): {
     return readChannelMutesStore(pubkey);
   });
 
+  const managerRef = React.useRef<ChannelMuteSyncManager | null>(null);
   const lastAppliedRemoteTs = React.useRef(0);
   const lastAppliedEventId = React.useRef("");
 
@@ -46,8 +40,10 @@ export function useChannelMutes(pubkey: string | undefined): {
     setStore(readChannelMutesStore(pubkey));
     lastAppliedRemoteTs.current = 0;
     lastAppliedEventId.current = "";
+    managerRef.current = new ChannelMuteSyncManager(pubkey);
     return () => {
-      resetMuteSyncState();
+      managerRef.current?.destroy();
+      managerRef.current = null;
     };
   }, [pubkey]);
 
@@ -80,7 +76,7 @@ export function useChannelMutes(pubkey: string | undefined): {
           return prev;
         lastAppliedRemoteTs.current = remote.createdAt;
         lastAppliedEventId.current = remote.eventId;
-        cancelPendingMutePublish();
+        managerRef.current?.cancelPendingMutePublish();
         const merged = mergeStores(prev, remote.store);
         if (!writeChannelMutesStore(pubkey, merged)) return prev;
         return merged;
@@ -92,14 +88,14 @@ export function useChannelMutes(pubkey: string | undefined): {
   React.useEffect(() => {
     if (!pubkey) return;
     let cancelled = false;
-    void fetchRemoteMutes(pubkey).then((remote) => {
+    void managerRef.current?.fetchRemoteMutes().then((remote) => {
       if (cancelled) return;
       if (remote) {
         setStore(applyRemote(remote));
       } else {
         const local = readChannelMutesStore(pubkey);
         if (Object.keys(local.channels).length > 0) {
-          publishMutes(local);
+          managerRef.current?.publishMutes(local);
         }
       }
     });
@@ -112,16 +108,18 @@ export function useChannelMutes(pubkey: string | undefined): {
     if (!pubkey) return;
     let unsub: (() => Promise<void>) | null = null;
     let cancelled = false;
-    void subscribeToMutes(pubkey, (remote) => {
-      if (cancelled) return;
-      setStore(applyRemote(remote));
-    }).then((dispose) => {
-      if (cancelled) {
-        void dispose();
-      } else {
-        unsub = dispose;
-      }
-    });
+    void managerRef.current
+      ?.subscribeToMutes((remote) => {
+        if (cancelled) return;
+        setStore(applyRemote(remote));
+      })
+      .then((dispose) => {
+        if (cancelled) {
+          void dispose();
+        } else {
+          unsub = dispose;
+        }
+      });
     return () => {
       cancelled = true;
       if (unsub) void unsub();
@@ -132,14 +130,14 @@ export function useChannelMutes(pubkey: string | undefined): {
     if (!pubkey) return;
     let cancelled = false;
     const unsub = relayClient.subscribeToReconnects(() => {
-      void fetchRemoteMutes(pubkey).then((remote) => {
+      void managerRef.current?.fetchRemoteMutes().then((remote) => {
         if (cancelled) return;
         if (remote) {
           setStore(applyRemote(remote));
         }
-        const pending = getPendingMuteStore();
+        const pending = managerRef.current?.getPendingMuteStore();
         if (pending) {
-          publishMutes(pending);
+          managerRef.current?.publishMutes(pending);
         }
       });
     });
@@ -168,7 +166,7 @@ export function useChannelMutes(pubkey: string | undefined): {
           channels: { ...prev.channels, [channelId]: entry },
         };
         if (!writeChannelMutesStore(pubkey, next)) return prev;
-        publishMutes(next);
+        managerRef.current?.publishMutes(next);
         return next;
       });
     },
