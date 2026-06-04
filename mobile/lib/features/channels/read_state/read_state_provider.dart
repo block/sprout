@@ -174,7 +174,8 @@ String? _normalizePubkey(String? value) {
 String? _safeDerivedPubkey(SignedEventRelay relay) {
   try {
     return _normalizePubkey(relay.pubkey);
-  } catch (_) {
+  } catch (e) {
+    debugPrint('[ReadStateManager] pubkey derivation failed: $e');
     return null;
   }
 }

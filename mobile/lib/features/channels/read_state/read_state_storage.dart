@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -110,7 +111,8 @@ class ReadStateStorage {
     final Object? parsed;
     try {
       parsed = jsonDecode(raw);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ReadStateManager] storage: contexts JSON corrupt: $e');
       return {};
     }
 
@@ -141,7 +143,10 @@ class ReadStateStorage {
     final Object? parsed;
     try {
       parsed = jsonDecode(raw);
-    } catch (_) {
+    } catch (e) {
+      debugPrint(
+        '[ReadStateManager] storage: publishableContextIds JSON corrupt: $e',
+      );
       return {};
     }
 
@@ -162,7 +167,10 @@ class ReadStateStorage {
     final Object? parsed;
     try {
       parsed = jsonDecode(raw);
-    } catch (_) {
+    } catch (e) {
+      debugPrint(
+        '[ReadStateManager] storage: sourceCreatedAt JSON corrupt: $e',
+      );
       return {};
     }
 

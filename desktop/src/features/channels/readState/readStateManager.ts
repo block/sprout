@@ -76,6 +76,9 @@ export class ReadStateManager {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    console.debug(
+      `[ReadStateManager] initialize pubkey=${this.pubkey.substring(0, 8)}… clientId=${this.clientId.substring(0, 8)}… slotId=${this.slotId}`,
+    );
 
     this.hydrateFromLocalStorage();
 
@@ -86,6 +89,9 @@ export class ReadStateManager {
     }
 
     this.initialized = true;
+    console.debug(
+      `[ReadStateManager] initialize complete maxFetchedCreatedAt=${this.maxFetchedCreatedAt} contexts=${this.effectiveState.size}`,
+    );
     this.notifyListeners();
   }
 
@@ -177,7 +183,8 @@ export class ReadStateManager {
         since: Math.floor(Date.now() / 1_000) - READ_STATE_HORIZON_SECONDS,
         limit: READ_STATE_FETCH_LIMIT,
       });
-    } catch {
+    } catch (error) {
+      console.debug("[ReadStateManager] fetchAndMerge failed:", error);
       // If fetch fails, proceed with local state only
       return;
     }
@@ -219,7 +226,11 @@ export class ReadStateManager {
           client_id: parsed.client_id,
           contexts: sanitizeContexts(parsed.contexts),
         };
-      } catch {
+      } catch (error) {
+        console.debug(
+          `[ReadStateManager] mergeEvents decrypt failed event=${event.id.substring(0, 8)}…:`,
+          error,
+        );
         continue;
       }
 
@@ -260,7 +271,11 @@ export class ReadStateManager {
           localStorage.setItem(slotIdKey(this.pubkey), this.slotId);
           break;
         }
-      } catch {
+      } catch (error) {
+        console.debug(
+          `[ReadStateManager] conflict check decrypt failed event=${event.id.substring(0, 8)}…:`,
+          error,
+        );
         // Decrypt failure — skip this event
       }
     }
@@ -287,13 +302,18 @@ export class ReadStateManager {
         },
       );
       this.unsubscribeLive = unsub;
-    } catch {
+      console.debug("[ReadStateManager] live subscription established");
+    } catch (error) {
+      console.debug("[ReadStateManager] live subscription FAILED:", error);
       // Non-fatal: we can still work with local state
     }
   }
 
   private async handleIncomingEvent(event: RelayEvent): Promise<void> {
     if (event.pubkey !== this.pubkey) return;
+    console.debug(
+      `[ReadStateManager] incoming event=${event.id.substring(0, 8)}… created_at=${event.created_at}`,
+    );
 
     const dTags = event.tags.filter((t) => t[0] === "d");
     if (dTags.length !== 1) return;
@@ -320,7 +340,11 @@ export class ReadStateManager {
         client_id: parsed.client_id,
         contexts: sanitizeContexts(parsed.contexts),
       };
-    } catch {
+    } catch (error) {
+      console.debug(
+        `[ReadStateManager] incoming event decrypt/parse failed event=${event.id.substring(0, 8)}…:`,
+        error,
+      );
       return;
     }
 
@@ -329,6 +353,9 @@ export class ReadStateManager {
       if (this.forcedContexts.has(ctx)) continue;
       const sourceCreatedAt = this.contextSourceCreatedAt.get(ctx) ?? 0;
       const current = this.effectiveState.get(ctx) ?? 0;
+      console.debug(
+        `[ReadStateManager] LWW ctx=${ctx.substring(0, 12)}… event.created_at=${event.created_at} sourceCreatedAt=${sourceCreatedAt} current=${current} incoming=${ts}`,
+      );
       if (event.created_at > sourceCreatedAt) {
         if (this.effectiveState.get(ctx) !== ts) {
           this.effectiveState.set(ctx, ts);
@@ -344,6 +371,9 @@ export class ReadStateManager {
         anyAdvanced = true;
       }
     }
+    console.debug(
+      `[ReadStateManager] incoming result anyAdvanced=${anyAdvanced} clientId=${blob.client_id.substring(0, 8)}…`,
+    );
 
     if (anyAdvanced) {
       this.persistLocalState();
@@ -369,6 +399,7 @@ export class ReadStateManager {
 
   private async publish(): Promise<void> {
     await this.fetchOwnBlobBeforePublish();
+    console.debug(`[ReadStateManager] publish starting slotId=${this.slotId}`);
 
     // Build blob from contexts this client is allowed to publish.
     const contexts = this.currentContexts();
@@ -408,6 +439,9 @@ export class ReadStateManager {
         "Timed out publishing read state.",
         "Failed to publish read state.",
       );
+      console.debug(
+        `[ReadStateManager] publish accepted createdAt=${createdAt}`,
+      );
 
       this.lastPublishedContexts = contexts;
       this.forcedContexts.clear();
@@ -420,7 +454,7 @@ export class ReadStateManager {
       );
     } catch (error) {
       // Non-fatal: will retry on next debounce
-      console.warn("[ReadStateManager] publish failed:", error);
+      console.debug("[ReadStateManager] publish failed:", error);
     }
   }
 
@@ -435,7 +469,11 @@ export class ReadStateManager {
 
       await this.mergeEvents(events);
       this.persistLocalState();
-    } catch {
+    } catch (error) {
+      console.debug(
+        "[ReadStateManager] fetchOwnBlobBeforePublish failed:",
+        error,
+      );
       // Per NIP-RS, proceed with reachable data and merge on a later fetch.
     }
   }
@@ -490,7 +528,8 @@ export class ReadStateManager {
     for (const listener of this.listeners) {
       try {
         listener();
-      } catch {
+      } catch (error) {
+        console.debug("[ReadStateManager] listener threw:", error);
         // Don't let a broken listener break the manager
       }
     }

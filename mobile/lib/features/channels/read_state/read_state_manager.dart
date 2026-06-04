@@ -27,7 +27,8 @@ class ReadStateCrypto {
         return null;
       }
       return ReadStateCrypto._(getConversationKey(privkeyHex, pubkey));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[ReadStateManager] crypto init failed: $e');
       return null;
     }
   }
@@ -91,6 +92,9 @@ class ReadStateManager {
   Future<void> initialize() async {
     if (_initialized || _disposed) return;
     _initialized = true;
+    debugPrint(
+      '[ReadStateManager] initialize pubkey=${pubkey.substring(0, 8)}… clientId=${_clientId.substring(0, 8)}… slotId=$_slotId',
+    );
 
     if (!_remoteEnabled || _relaySession == null) {
       _onChanged();
@@ -104,6 +108,9 @@ class ReadStateManager {
     }
 
     _onChanged();
+    debugPrint(
+      '[ReadStateManager] initialize complete maxFetchedCreatedAt=$_maxFetchedCreatedAt contexts=${_effectiveState.length}',
+    );
   }
 
   void markContextRead(String contextId, int unixTimestamp) {
@@ -139,6 +146,7 @@ class ReadStateManager {
 
   Future<void> reinitializeRemote() async {
     if (_disposed || !_remoteEnabled) return;
+    debugPrint('[ReadStateManager] reinitializeRemote');
     if (_isPublishing) {
       await _publishCompleter?.future;
     }
@@ -218,8 +226,8 @@ class ReadStateManager {
       _mergeEvents(events);
       _persistLocalState();
       _onChanged();
-    } catch (_) {
-      // Local state remains usable when relay history is unavailable.
+    } catch (e) {
+      debugPrint('[ReadStateManager] fetchAndMerge failed: $e');
     }
   }
 
@@ -234,6 +242,9 @@ class ReadStateManager {
         decrypt: _crypto.decrypt,
       );
       if (decoded == null) {
+        debugPrint(
+          '[ReadStateManager] mergeEvents skipped event=${event.id.substring(0, 8)}…',
+        );
         continue;
       }
 
@@ -286,13 +297,17 @@ class ReadStateManager {
         ),
         _handleIncomingEvent,
       );
-    } catch (_) {
-      // Non-fatal; history and local writes still work.
+      debugPrint('[ReadStateManager] live subscription established');
+    } catch (e) {
+      debugPrint('[ReadStateManager] live subscription FAILED: $e');
     }
   }
 
   void _handleIncomingEvent(NostrEvent event) {
     if (_disposed) return;
+    debugPrint(
+      '[ReadStateManager] incoming event=${event.id.substring(0, 8)}… created_at=${event.createdAt}',
+    );
 
     final decoded = decodeReadStateEvent(
       event,
@@ -300,6 +315,7 @@ class ReadStateManager {
       decrypt: _crypto.decrypt,
     );
     if (decoded == null) {
+      debugPrint('[ReadStateManager] incoming event decode returned null');
       return;
     }
 
@@ -317,6 +333,9 @@ class ReadStateManager {
       if (_forcedContextIds.contains(entry.key)) continue;
       final sourceCreatedAt = _contextSourceCreatedAt[entry.key] ?? 0;
       final current = _effectiveState[entry.key] ?? 0;
+      debugPrint(
+        '[ReadStateManager] LWW ctx=${entry.key.substring(0, min(12, entry.key.length))}… event.createdAt=${event.createdAt} sourceCreatedAt=$sourceCreatedAt current=$current incoming=${entry.value}',
+      );
       if (event.createdAt > sourceCreatedAt) {
         if (_effectiveState[entry.key] != entry.value) {
           _effectiveState[entry.key] = entry.value;
@@ -331,6 +350,9 @@ class ReadStateManager {
         changed = true;
       }
     }
+    debugPrint(
+      '[ReadStateManager] incoming result changed=$changed clientId=${decoded.blob.clientId.substring(0, 8)}…',
+    );
 
     if (decoded.blob.clientId == _clientId) {
       _lastPublishedContexts = Map<String, int>.from(decoded.blob.contexts);
@@ -369,6 +391,7 @@ class ReadStateManager {
     final completer = Completer<void>();
     _publishCompleter = completer;
     _isPublishing = true;
+    debugPrint('[ReadStateManager] publish starting slotId=$_slotId');
     try {
       await _fetchOwnBlobBeforePublish();
 
@@ -390,6 +413,7 @@ class ReadStateManager {
         ],
         createdAt: createdAt,
       );
+      debugPrint('[ReadStateManager] publish accepted createdAt=$createdAt');
 
       _lastPublishedContexts = contexts;
       _forcedContextIds.clear();
@@ -438,8 +462,8 @@ class ReadStateManager {
       if (!_disposed) {
         _onChanged();
       }
-    } catch (_) {
-      // Per NIP-RS, proceed with reachable data and merge later.
+    } catch (e) {
+      debugPrint('[ReadStateManager] fetchOwnBlobBeforePublish failed: $e');
     }
   }
 

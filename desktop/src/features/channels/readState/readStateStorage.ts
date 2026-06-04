@@ -31,7 +31,8 @@ function mergeLocalStorageKey(
         contexts.set(channelId, unixSeconds);
       }
     }
-  } catch {
+  } catch (error) {
+    console.debug("[ReadStateManager] storage: contexts JSON corrupt:", error);
     // Corrupt localStorage, ignore.
   }
 }
@@ -50,7 +51,11 @@ function readPublishableContextIds(pubkey: string): Set<string> {
         result.add(value);
       }
     }
-  } catch {
+  } catch (error) {
+    console.debug(
+      "[ReadStateManager] storage: publishableContextIds JSON corrupt:",
+      error,
+    );
     // Corrupt localStorage, ignore.
   }
 
@@ -71,7 +76,11 @@ function readContextSourceCreatedAt(pubkey: string): Map<string, number> {
         result.set(key, value);
       }
     }
-  } catch {
+  } catch (error) {
+    console.debug(
+      "[ReadStateManager] storage: sourceCreatedAt JSON corrupt:",
+      error,
+    );
     // Corrupt localStorage, ignore.
   }
 
