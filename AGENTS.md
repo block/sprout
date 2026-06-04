@@ -321,6 +321,48 @@ Right-click shows "Mark as read".
 Re-runs for the same PR overwrite previous images. Cleanup:
 `git push origin --delete agent-screenshots/<username>`.
 
+### Writing E2E Screenshot Specs
+
+When screenshots need seeded state, live messages, or UI interaction before
+capture, write a Playwright spec instead of using `just desktop-screenshot`.
+Add specs to `desktop/tests/e2e/` and register them in `playwright.config.ts`
+(`smoke` project `testMatch`). Every test calls `installMockBridge(page)` for
+mock Tauri IPC. Mock pubkey, channel names, and UUIDs live in `e2eBridge.ts`.
+
+**Stale server:** `reuseExistingServer: true` means a previous build's server
+serves old code. Kill port 4173 and `pnpm run build` before re-running tests
+after code changes.
+
+**`addInitScript` before bridge:** `page.addInitScript` (localStorage seeding)
+must run BEFORE `installMockBridge(page)` — React reads state on mount, the
+bridge triggers mount.
+
+**Live messages:** Call `waitForMockLiveSubscription(page, channelName)` before
+`__SPROUT_E2E_EMIT_MOCK_MESSAGE__` — messages are silently dropped without a
+subscription. Navigate to the channel first (triggers subscription), then away
+(so unread indicators appear), then inject.
+
+**Animation timing:** Radix components animate in via CSS. `toBeVisible()`
+resolves mid-animation — wait for completion before screenshotting:
+
+```ts
+await menuItem.evaluate((el) =>
+  Promise.all(
+    el.closest("[data-state]")?.getAnimations().map((a) => a.finished) ?? [],
+  ),
+);
+```
+
+**Cropping:** Use `clip` — full-window (1280x720) screenshots are unreadable
+for sidebar features. Sidebar = 256px; context menus ~450px.
+
+**`general` has pre-seeded messages** making `hasUnread` always true. Use
+`engineering` for "muted + no unread" visual states.
+
+**PR comments:** Use a body template (3rd arg to `post-screenshots.sh`) with
+`{{filename}}` placeholders. Each screenshot gets a `###` heading + one-line
+description. See [PR #803](https://github.com/block/sprout/pull/803).
+
 ---
 
 ## Common Gotchas
