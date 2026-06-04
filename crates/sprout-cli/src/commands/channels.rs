@@ -502,6 +502,31 @@ pub async fn cmd_remove_channel_member(
     Ok(())
 }
 
+/// Set the channel addition policy — sign and submit a kind:10100 (agent profile) event.
+pub async fn cmd_set_add_policy(client: &SproutClient, policy: &str) -> Result<(), CliError> {
+    match policy {
+        "anyone" | "owner_only" | "nobody" => {}
+        _ => {
+            return Err(CliError::Usage(format!(
+                "--policy must be 'anyone', 'owner_only', or 'nobody' (got: {policy})"
+            )))
+        }
+    }
+
+    let content = serde_json::json!({ "channel_add_policy": policy }).to_string();
+    use nostr::{EventBuilder, Kind};
+    let builder = EventBuilder::new(
+        Kind::Custom(sprout_sdk::kind::KIND_AGENT_PROFILE as u16),
+        &content,
+    )
+    .tags([]);
+    let event = client.sign_event(builder)?;
+
+    let resp = client.submit_event(event).await?;
+    println!("{}", normalize_write_response(&resp));
+    Ok(())
+}
+
 pub async fn cmd_set_canvas(
     client: &SproutClient,
     channel_id: &str,
@@ -585,6 +610,7 @@ pub async fn dispatch(
         ChannelsCmd::RemoveMember { channel, pubkey } => {
             cmd_remove_channel_member(client, &channel, &pubkey).await
         }
+        ChannelsCmd::SetAddPolicy { policy } => cmd_set_add_policy(client, &policy).await,
     }
 }
 

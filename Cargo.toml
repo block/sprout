@@ -7,7 +7,6 @@ members = [
     "crates/sprout-auth",
     "crates/sprout-search",
     "crates/sprout-audit",
-    "crates/sprout-relay-client",
     "crates/sprout-acp",
     "crates/sprout-agent",
     "crates/sprig",
@@ -113,7 +112,6 @@ sprout-auth = { path = "crates/sprout-auth" }
 sprout-pubsub = { path = "crates/sprout-pubsub" }
 sprout-search = { path = "crates/sprout-search" }
 sprout-audit = { path = "crates/sprout-audit" }
-sprout-relay-client = { path = "crates/sprout-relay-client" }
 sprout-proxy = { path = "crates/sprout-proxy" }
 sprout-workflow = { path = "crates/sprout-workflow" }
 sprout-media = { path = "crates/sprout-media" }

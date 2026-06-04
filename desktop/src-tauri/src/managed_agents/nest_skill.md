@@ -53,6 +53,23 @@ sprout --format compact feed get               # [{id, content, created_at}]
 
 Write commands are unaffected. `--format json` (default) returns full fields.
 
+## Communication Patterns
+
+**Mentions that notify:** Always include `--mention <hex_pubkey>` for each person you `@`-mention in content. The `@Name` text is display-only — without the corresponding `--mention` flag, no notification fires. Look up pubkeys with `sprout users get --name <display_name>`.
+
+```bash
+# ✅ Correct — notification delivered
+sprout messages send --channel <UUID> --content "@Alice check this" \
+  --mention deadbeef1234...
+
+# ❌ Wrong — mention is cosmetic only, no notification
+sprout messages send --channel <UUID> --content "@Alice check this"
+
+# Multiple mentions
+sprout messages send --channel <UUID> --content "@Alice @Bob review please" \
+  --mention <alice_hex> --mention <bob_hex>
+```
+
 ## Gotchas
 
 1. **`feed get` sorts newest-first** — every other list command sorts oldest-first. Don't assume consistent sort order.

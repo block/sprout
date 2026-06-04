@@ -333,6 +333,9 @@ pub enum MessagesCmd {
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
+        /// Maximum reply nesting depth to include
+        #[arg(long)]
+        depth_limit: Option<u32>,
     },
     /// Full-text search across messages
     Search {
@@ -506,6 +509,13 @@ pub enum ChannelsCmd {
         #[arg(long)]
         pubkey: String,
     },
+    /// Set your channel addition policy
+    #[command(name = "set-add-policy")]
+    SetAddPolicy {
+        /// Policy: anyone | owner_only | nobody
+        #[arg(long)]
+        policy: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +628,12 @@ pub enum DmsCmd {
         #[arg(long)]
         pubkey: String,
     },
+    /// Hide a DM conversation from your DM list
+    Hide {
+        /// DM conversation UUID
+        #[arg(long)]
+        channel: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -712,11 +728,16 @@ pub enum WorkflowsCmd {
         workflow: String,
     },
     /// Trigger a workflow run
-    #[command(after_help = "Examples:\n  sprout workflows trigger --workflow <UUID>")]
+    #[command(
+        after_help = "Examples:\n  sprout workflows trigger --workflow <UUID>\n  sprout workflows trigger --workflow <UUID> --inputs '{\"key\":\"value\"}'"
+    )]
     Trigger {
         /// Workflow UUID
         #[arg(long)]
         workflow: String,
+        /// JSON object of input variables passed to the workflow as event content
+        #[arg(long)]
+        inputs: Option<String>,
     },
     /// List runs for a workflow
     Runs {
@@ -758,6 +779,9 @@ pub enum FeedCmd {
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
+        /// Comma-separated feed types to include: mentions, needs_action, activity, agent_activity
+        #[arg(long)]
+        types: Option<String>,
     },
 }
 
@@ -803,6 +827,9 @@ pub enum SocialCmd {
         /// Unix timestamp cursor — return notes created before this time.
         #[arg(long)]
         before: Option<i64>,
+        /// Event ID cursor — return notes created before this event (composite pagination with --before).
+        #[arg(long)]
+        before_id: Option<String>,
     },
     /// Get a user's contact list
     #[command(name = "contacts")]
@@ -1251,6 +1278,7 @@ mod tests {
                 "purpose",
                 "remove-member",
                 "search",
+                "set-add-policy",
                 "topic",
                 "unarchive",
                 "update"
@@ -1259,7 +1287,10 @@ mod tests {
         assert_eq!(names(&cmd, "canvas"), vec!["get", "set"]);
         assert_eq!(names(&cmd, "reactions"), vec!["add", "get", "remove"]);
         assert_eq!(names(&cmd, "emoji"), vec!["list", "rm", "set"]);
-        assert_eq!(names(&cmd, "dms"), vec!["add-member", "list", "open"]);
+        assert_eq!(
+            names(&cmd, "dms"),
+            vec!["add-member", "hide", "list", "open"]
+        );
         assert_eq!(
             names(&cmd, "users"),
             vec!["get", "presence", "set-presence", "set-profile"]
@@ -1290,8 +1321,8 @@ mod tests {
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
             ("canvas", 2),
-            ("channels", 15),
-            ("dms", 3),
+            ("channels", 16),
+            ("dms", 4),
             ("emoji", 3),
             ("feed", 1),
             ("messages", 8),

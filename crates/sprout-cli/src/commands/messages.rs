@@ -288,6 +288,7 @@ pub async fn cmd_get_thread(
     channel_id: &str,
     event_id: &str,
     limit: Option<u32>,
+    depth_limit: Option<u32>,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
@@ -297,12 +298,15 @@ pub async fn cmd_get_thread(
     // Two filters ORed in a single HTTP call:
     // 1. Replies referencing this event via e-tag (no kind restriction)
     // 2. The root event itself by ID
-    let reply_filter = serde_json::json!({
+    let mut reply_filter = serde_json::json!({
         "kinds": [9, 40002, 40003, 40008, 45003],
         "#h": [channel_id],
         "#e": [event_id],
         "limit": limit
     });
+    if let Some(d) = depth_limit {
+        reply_filter["depth_limit"] = serde_json::json!(d);
+    }
     let root_filter = serde_json::json!({
         "ids": [event_id],
         "limit": 1
@@ -700,7 +704,8 @@ pub async fn dispatch(
             channel,
             event,
             limit,
-        } => cmd_get_thread(client, &channel, &event, limit, format).await,
+            depth_limit,
+        } => cmd_get_thread(client, &channel, &event, limit, depth_limit, format).await,
         MessagesCmd::Search { query, limit } => cmd_search(client, &query, limit, format).await,
         MessagesCmd::Vote { event, direction } => {
             cmd_vote_on_post(client, &event, &direction).await

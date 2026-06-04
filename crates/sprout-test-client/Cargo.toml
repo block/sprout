@@ -10,7 +10,6 @@ description = "Integration test client and E2E test suite for Sprout"
 [dependencies]
 anyhow = { workspace = true }
 sprout-core = { workspace = true }
-sprout-relay-client = { workspace = true }
 nostr = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }

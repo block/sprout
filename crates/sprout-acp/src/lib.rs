@@ -2640,16 +2640,6 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
                         .expect("secret key bech32 encoding should never fail"),
                 },
             ];
-            // Forward SPROUT_TOOLSETS so the MCP server enables the
-            // same toolsets the operator configured for this harness.
-            if let Ok(ts) = std::env::var("SPROUT_TOOLSETS") {
-                if !ts.is_empty() {
-                    env.push(EnvVar {
-                        name: "SPROUT_TOOLSETS".into(),
-                        value: ts,
-                    });
-                }
-            }
             // Forward SPROUT_AUTH_TAG (NIP-OA owner attestation credential)
             // so the MCP server can attach it to every signed event.
             if let Ok(auth_tag) = std::env::var("SPROUT_AUTH_TAG") {
@@ -2893,6 +2883,39 @@ mod build_mcp_servers_tests {
         assert!(
             servers.is_empty(),
             "empty mcp_command should produce no MCP servers"
+        );
+    }
+
+    #[test]
+    fn absolute_path_mcp_command_uses_file_stem_as_name() {
+        let mut config = test_config();
+        config.mcp_command = "/opt/bin/my-mcp-server".into();
+        let servers = build_mcp_servers(&config);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "my-mcp-server");
+    }
+
+    #[test]
+    fn mcp_command_with_no_stem_falls_back_to_mcp() {
+        // Path::new("").file_stem() returns None — exercises the unwrap_or("mcp") path.
+        let mut config = test_config();
+        config.mcp_command = "".into();
+        // Empty command returns no servers; test the stem logic directly.
+        assert_eq!(
+            std::path::Path::new("")
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("mcp"),
+            "mcp"
+        );
+
+        // Confirm a non-empty command with no stem (e.g. just a dot) also falls back.
+        config.mcp_command = ".".into();
+        let servers = build_mcp_servers(&config);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(
+            servers[0].name, "mcp",
+            "Path::new(\".\").file_stem() is None — should fall back to \"mcp\""
         );
     }
 }

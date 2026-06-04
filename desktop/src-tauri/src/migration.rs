@@ -278,7 +278,8 @@ fn reconcile_mcp_commands_in_file(path: &Path) {
             .get("mcp_command")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if current != expected {
+        // Only clear the known stale default — never touch user-customized values.
+        if current == "sprout-mcp-server" {
             eprintln!(
                 "sprout-desktop: provider-reconcile: {:?} ({:?}): mcp_command {:?} → {:?}",
                 obj.get("name").and_then(|v| v.as_str()).unwrap_or("?"),
@@ -799,34 +800,26 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_adds_mcp_command_when_key_absent() {
+    fn reconcile_leaves_absent_mcp_command_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        write_agents_json(
-            dir.path(),
-            &serde_json::json!([{
-                "name": "Solo",
-                "agent_command": "sprout-agent"
-            }]),
-        );
-        reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
-        let records = read_agents_json(dir.path());
-        assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
+        let json = serde_json::json!([{"name": "Solo", "agent_command": "sprout-agent"}]);
+        write_agents_json(dir.path(), &json);
+        let path = dir.path().join("agents/managed-agents.json");
+        let before = std::fs::read_to_string(&path).unwrap();
+        reconcile_mcp_commands_in_file(&path);
+        assert_eq!(before, std::fs::read_to_string(&path).unwrap());
     }
 
     #[test]
-    fn reconcile_treats_null_mcp_command_as_empty() {
+    fn reconcile_leaves_null_mcp_command_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        write_agents_json(
-            dir.path(),
-            &serde_json::json!([{
-                "name": "Solo",
-                "agent_command": "sprout-agent",
-                "mcp_command": null
-            }]),
-        );
-        reconcile_mcp_commands_in_file(&dir.path().join("agents/managed-agents.json"));
-        let records = read_agents_json(dir.path());
-        assert_eq!(records[0]["mcp_command"], "sprout-dev-mcp");
+        let json =
+            serde_json::json!([{"name":"Solo","agent_command":"sprout-agent","mcp_command":null}]);
+        write_agents_json(dir.path(), &json);
+        let path = dir.path().join("agents/managed-agents.json");
+        let before = std::fs::read_to_string(&path).unwrap();
+        reconcile_mcp_commands_in_file(&path);
+        assert_eq!(before, std::fs::read_to_string(&path).unwrap());
     }
 
     #[test]
