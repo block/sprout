@@ -16,16 +16,28 @@ export function hasMentionForEvent(
   );
 }
 
+export type NotifyOptions = {
+  participatedRootIds: ReadonlySet<string>;
+  followedRootIds: ReadonlySet<string>;
+  authoredRootIds: ReadonlySet<string>;
+  mutedRootIds?: ReadonlySet<string>;
+  mutedChannelIds?: ReadonlySet<string>;
+  channelId?: string | null;
+};
+
 export function shouldNotifyForEvent(
   event: RelayEvent,
   currentPubkey: string,
-  participatedRootIds: ReadonlySet<string>,
-  followedRootIds: ReadonlySet<string>,
-  authoredRootIds: ReadonlySet<string>,
-  mutedRootIds: ReadonlySet<string> = new Set(),
-  mutedChannelIds: ReadonlySet<string> = new Set(),
-  channelId: string | null = null,
+  options: NotifyOptions,
 ): boolean {
+  const {
+    participatedRootIds,
+    followedRootIds,
+    authoredRootIds,
+    mutedRootIds = new Set(),
+    mutedChannelIds = new Set(),
+    channelId = null,
+  } = options;
   const { parentId, rootId } = getThreadReference(event.tags);
 
   if (isBroadcastReply(event.tags)) {

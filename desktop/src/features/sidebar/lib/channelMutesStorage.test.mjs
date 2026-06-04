@@ -75,6 +75,24 @@ test("parseMutePayload: malformed channel entries missing muted/updatedAt are fi
   });
 });
 
+test("parseMutePayload: NaN/Infinity/negative updatedAt entries are filtered out", () => {
+  const payload = {
+    version: 1,
+    channels: {
+      nan: { muted: true, updatedAt: NaN },
+      inf: { muted: true, updatedAt: Infinity },
+      "neg-inf": { muted: true, updatedAt: -Infinity },
+      neg: { muted: true, updatedAt: -1 },
+      valid: { muted: true, updatedAt: 100 },
+    },
+  };
+  const result = parseMutePayload(payload);
+  assert.deepEqual(result, {
+    version: 1,
+    channels: { valid: { muted: true, updatedAt: 100 } },
+  });
+});
+
 test("parseMutePayload: empty channels returns store with empty channels", () => {
   const result = parseMutePayload({ version: 1, channels: {} });
   assert.deepEqual(result, { version: 1, channels: {} });

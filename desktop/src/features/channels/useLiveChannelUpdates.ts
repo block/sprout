@@ -176,16 +176,14 @@ export function useLiveChannelUpdates(
       UNREAD_TRIGGER_KINDS.has(event.kind) &&
       (normalizedCurrentPubkey.length === 0 ||
         event.pubkey.toLowerCase() !== normalizedCurrentPubkey) &&
-      shouldNotifyForEvent(
-        event,
-        normalizedCurrentPubkey,
-        options.participatedRootIds ?? EMPTY_SET,
-        options.followedRootIds ?? EMPTY_SET,
-        options.authoredRootIds ?? EMPTY_SET,
-        options.mutedRootIds ?? EMPTY_SET,
-        options.mutedChannelIds ?? EMPTY_SET,
+      shouldNotifyForEvent(event, normalizedCurrentPubkey, {
+        participatedRootIds: options.participatedRootIds ?? EMPTY_SET,
+        followedRootIds: options.followedRootIds ?? EMPTY_SET,
+        authoredRootIds: options.authoredRootIds ?? EMPTY_SET,
+        mutedRootIds: options.mutedRootIds ?? EMPTY_SET,
+        mutedChannelIds: options.mutedChannelIds ?? EMPTY_SET,
         channelId,
-      )
+      })
     ) {
       options.onChannelMessage?.(channelId, event);
       if (channelId !== activeChannelId) {

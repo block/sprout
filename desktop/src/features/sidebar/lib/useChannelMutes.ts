@@ -3,8 +3,8 @@ import * as React from "react";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   DEFAULT_STORE,
-  mutedChannelIdsFromStore,
   mergeStores,
+  mutedChannelIdsFromStore,
   readChannelMutesStore,
   storageKey,
   writeChannelMutesStore,
@@ -155,18 +155,18 @@ export function useChannelMutes(pubkey: string | undefined): {
     [store.channels],
   );
 
-  const muteChannel = React.useCallback(
-    (channelId: string) => {
+  const setMuteState = React.useCallback(
+    (channelId: string, muted: boolean) => {
       if (!pubkey) return;
       const entry: ChannelMuteEntry = {
-        muted: true,
+        muted,
         updatedAt: Math.floor(Date.now() / 1000),
       };
       setStore((prev) => {
-        const next: ChannelMuteStore = mergeStores(prev, {
+        const next: ChannelMuteStore = {
           version: 1,
-          channels: { [channelId]: entry },
-        });
+          channels: { ...prev.channels, [channelId]: entry },
+        };
         if (!writeChannelMutesStore(pubkey, next)) return prev;
         publishMutes(next);
         return next;
@@ -175,24 +175,13 @@ export function useChannelMutes(pubkey: string | undefined): {
     [pubkey],
   );
 
+  const muteChannel = React.useCallback(
+    (channelId: string) => setMuteState(channelId, true),
+    [setMuteState],
+  );
   const unmuteChannel = React.useCallback(
-    (channelId: string) => {
-      if (!pubkey) return;
-      const entry: ChannelMuteEntry = {
-        muted: false,
-        updatedAt: Math.floor(Date.now() / 1000),
-      };
-      setStore((prev) => {
-        const next: ChannelMuteStore = mergeStores(prev, {
-          version: 1,
-          channels: { [channelId]: entry },
-        });
-        if (!writeChannelMutesStore(pubkey, next)) return prev;
-        publishMutes(next);
-        return next;
-      });
-    },
-    [pubkey],
+    (channelId: string) => setMuteState(channelId, false),
+    [setMuteState],
   );
 
   return {

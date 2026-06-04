@@ -224,8 +224,7 @@ export function AppShell() {
     void homeFeedQuery.refetch();
   });
   const handleChannelNotification = React.useEffectEvent(
-    (channelId: string, _event: RelayEvent) => {
-      if (mutedChannelIds.has(channelId)) return;
+    (_channelId: string, _event: RelayEvent) => {
       if (!notificationSettings.settings.desktopEnabled) return;
       void requestDockBounce();
     },
@@ -233,7 +232,6 @@ export function AppShell() {
 
   const handleDmNotification = React.useEffectEvent(
     (event: RelayEvent, channel: Channel) => {
-      if (mutedChannelIds.has(channel.id)) return;
       if (!notificationSettings.settings.desktopEnabled) {
         return;
       }

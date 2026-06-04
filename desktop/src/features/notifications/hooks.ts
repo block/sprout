@@ -329,7 +329,11 @@ export function useHomeFeedNotificationState(
     let total = 0;
     let excludingHighPriority = 0;
     for (const item of currentFeedItems) {
-      if (item.channelId && mutedChannelIds?.has(item.channelId)) {
+      if (
+        item.channelId &&
+        mutedChannelIds?.has(item.channelId) &&
+        item.category !== "mention"
+      ) {
         continue;
       }
       let isUnread: boolean;

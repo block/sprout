@@ -154,7 +154,10 @@ export function useFeedDesktopNotifications(
         })
           .filter((item) => !nextSeenItemIds.has(item.id))
           .filter(
-            (item) => !item.channelId || !mutedChannelIds?.has(item.channelId),
+            (item) =>
+              !item.channelId ||
+              !mutedChannelIds?.has(item.channelId) ||
+              item.category === "mention",
           )
       : [];
 

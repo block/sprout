@@ -132,11 +132,11 @@ export function ChannelContextMenuItems({
   isMuted?: boolean;
   sections?: ChannelSection[];
   assignments?: Record<string, string>;
-  onMarkChannelRead: (
+  onMarkChannelRead?: (
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread: (
+  onMarkChannelUnread?: (
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
@@ -148,21 +148,21 @@ export function ChannelContextMenuItems({
 }) {
   return (
     <>
-      {hasUnread ? (
+      {hasUnread && onMarkChannelRead ? (
         <ContextMenuItem
           onClick={() => onMarkChannelRead(channel.id, channel.lastMessageAt)}
         >
           <CheckCircle2 className="h-4 w-4" />
           Mark as read
         </ContextMenuItem>
-      ) : (
+      ) : !hasUnread && onMarkChannelUnread ? (
         <ContextMenuItem
           onClick={() => onMarkChannelUnread(channel.id, channel.lastMessageAt)}
         >
           <CircleDot className="h-4 w-4" />
           Mark unread
         </ContextMenuItem>
-      )}
+      ) : null}
       {onMuteChannel && onUnmuteChannel ? (
         <>
           <ContextMenuSeparator />

@@ -65,16 +65,13 @@ test("hasMentionForEvent: empty currentPubkey returns false", () => {
 test("top-level message in muted channel is suppressed", () => {
   const event = makeEvent([hTag(CHANNEL_ID)]);
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      new Set([CHANNEL_ID]),
-      CHANNEL_ID,
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: EMPTY,
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      mutedChannelIds: new Set([CHANNEL_ID]),
+      channelId: CHANNEL_ID,
+    }),
     false,
   );
 });
@@ -82,16 +79,13 @@ test("top-level message in muted channel is suppressed", () => {
 test("mention in muted channel still notifies (mention fires before mute check)", () => {
   const event = makeEvent([hTag(CHANNEL_ID), pTag(PUBKEY)]);
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      new Set([CHANNEL_ID]),
-      CHANNEL_ID,
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: EMPTY,
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      mutedChannelIds: new Set([CHANNEL_ID]),
+      channelId: CHANNEL_ID,
+    }),
     true,
   );
 });
@@ -103,16 +97,13 @@ test("thread reply in muted channel is suppressed", () => {
     replyTag(PARENT_ID),
   ]);
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      new Set([ROOT_ID]),
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      new Set([CHANNEL_ID]),
-      CHANNEL_ID,
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: new Set([ROOT_ID]),
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      mutedChannelIds: new Set([CHANNEL_ID]),
+      channelId: CHANNEL_ID,
+    }),
     false,
   );
 });
@@ -124,16 +115,13 @@ test("broadcast reply in muted channel still notifies (broadcast fires before mu
     broadcastTag(),
   ]);
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      new Set([CHANNEL_ID]),
-      CHANNEL_ID,
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: EMPTY,
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      mutedChannelIds: new Set([CHANNEL_ID]),
+      channelId: CHANNEL_ID,
+    }),
     true,
   );
 });
@@ -141,16 +129,12 @@ test("broadcast reply in muted channel still notifies (broadcast fires before mu
 test("top-level message in unmuted channel notifies", () => {
   const event = makeEvent([hTag(CHANNEL_ID)]);
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      CHANNEL_ID,
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: EMPTY,
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      channelId: CHANNEL_ID,
+    }),
     true,
   );
 });
@@ -159,15 +143,12 @@ test("no channelId passed behaves as if unmuted (top-level notifies)", () => {
   const event = makeEvent([hTag(CHANNEL_ID)]);
   // mutedChannelIds has the channel but channelId is null (default)
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      EMPTY,
-      new Set([CHANNEL_ID]),
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: EMPTY,
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      mutedChannelIds: new Set([CHANNEL_ID]),
+    }),
     true,
   );
 });
@@ -180,16 +161,14 @@ test("thread in mutedRootIds AND in muted channel is suppressed", () => {
   ]);
   // Both the root thread and the channel are muted; mute channel check fires first
   assert.equal(
-    shouldNotifyForEvent(
-      event,
-      PUBKEY,
-      new Set([ROOT_ID]),
-      EMPTY,
-      EMPTY,
-      new Set([ROOT_ID]),
-      new Set([CHANNEL_ID]),
-      CHANNEL_ID,
-    ),
+    shouldNotifyForEvent(event, PUBKEY, {
+      participatedRootIds: new Set([ROOT_ID]),
+      followedRootIds: EMPTY,
+      authoredRootIds: EMPTY,
+      mutedRootIds: new Set([ROOT_ID]),
+      mutedChannelIds: new Set([CHANNEL_ID]),
+      channelId: CHANNEL_ID,
+    }),
     false,
   );
 });

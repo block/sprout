@@ -6,12 +6,7 @@ import {
 } from "@/shared/api/tauri";
 import type { RelayEvent } from "@/shared/api/types";
 import { KIND_CHANNEL_MUTES } from "@/shared/constants/kinds";
-import {
-  mergeStores,
-  parseMutePayload,
-  readChannelMutesStore,
-  type ChannelMuteStore,
-} from "./channelMutesStorage";
+import { parseMutePayload, type ChannelMuteStore } from "./channelMutesStorage";
 
 const D_TAG = "channel-mutes";
 const DEBOUNCE_MS = 2_000;
@@ -52,8 +47,6 @@ export async function fetchRemoteMutes(
     const result = await decryptAndParse(events[0]);
     if (result) {
       lastRemoteCreatedAt = Math.max(lastRemoteCreatedAt, result.createdAt);
-      const local = readChannelMutesStore(pubkey);
-      return { ...result, store: mergeStores(local, result.store) };
     }
     return result;
   } catch {

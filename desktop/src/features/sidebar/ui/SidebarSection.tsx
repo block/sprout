@@ -1,8 +1,6 @@
 import type * as React from "react";
 import {
-  Bell,
   BellOff,
-  CheckCircle2,
   ChevronDown,
   CircleDot,
   FileText,
@@ -14,11 +12,10 @@ import {
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/shared/ui/context-menu";
 
+import { ChannelContextMenuItems } from "@/features/sidebar/ui/CustomChannelSection";
 import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -173,9 +170,8 @@ export function ChannelMenuButton({
       className={cn(
         !isActive &&
           hasUnread &&
-          !isMuted &&
           "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
-        !isActive && isMuted && "opacity-50",
+        !isActive && isMuted && !hasUnread && "opacity-50",
       )}
       data-channel-id={channel.id}
       data-testid={`channel-${channel.name}`}
@@ -200,7 +196,7 @@ export function ChannelMenuButton({
       {isMuted && !isActive ? (
         <BellOff className="ml-auto h-3 w-3 shrink-0 text-sidebar-foreground/40" />
       ) : null}
-      {hasUnread && !isActive && channel.channelType !== "dm" && !isMuted ? (
+      {hasUnread && !isActive && channel.channelType !== "dm" ? (
         <span
           aria-hidden="true"
           className="ml-auto h-2.5 w-2.5 shrink-0 rounded-full bg-primary"
@@ -347,48 +343,15 @@ export function SidebarSection({
                   <ContextMenu key={channel.id}>
                     <ContextMenuTrigger asChild>{menuItem}</ContextMenuTrigger>
                     <ContextMenuContent>
-                      {unreadChannelIds.has(channel.id) && onMarkChannelRead ? (
-                        <ContextMenuItem
-                          onClick={() =>
-                            onMarkChannelRead(channel.id, channel.lastMessageAt)
-                          }
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                          Mark as read
-                        </ContextMenuItem>
-                      ) : onMarkChannelUnread ? (
-                        <ContextMenuItem
-                          onClick={() =>
-                            onMarkChannelUnread(
-                              channel.id,
-                              channel.lastMessageAt,
-                            )
-                          }
-                        >
-                          <CircleDot className="h-4 w-4" />
-                          Mark unread
-                        </ContextMenuItem>
-                      ) : null}
-                      {onMuteChannel && onUnmuteChannel ? (
-                        <>
-                          <ContextMenuSeparator />
-                          {mutedChannelIds?.has(channel.id) ? (
-                            <ContextMenuItem
-                              onClick={() => onUnmuteChannel(channel.id)}
-                            >
-                              <Bell className="h-4 w-4" />
-                              Unmute channel
-                            </ContextMenuItem>
-                          ) : (
-                            <ContextMenuItem
-                              onClick={() => onMuteChannel(channel.id)}
-                            >
-                              <BellOff className="h-4 w-4" />
-                              Mute channel
-                            </ContextMenuItem>
-                          )}
-                        </>
-                      ) : null}
+                      <ChannelContextMenuItems
+                        channel={channel}
+                        hasUnread={unreadChannelIds.has(channel.id)}
+                        isMuted={mutedChannelIds?.has(channel.id)}
+                        onMarkChannelRead={onMarkChannelRead}
+                        onMarkChannelUnread={onMarkChannelUnread}
+                        onMuteChannel={onMuteChannel}
+                        onUnmuteChannel={onUnmuteChannel}
+                      />
                     </ContextMenuContent>
                   </ContextMenu>
                 ) : (

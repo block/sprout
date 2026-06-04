@@ -35,7 +35,11 @@ export function parseMutePayload(json: unknown): ChannelMuteStore | null {
                 typeof v === "object" &&
                 v !== null &&
                 typeof (v as Record<string, unknown>).muted === "boolean" &&
-                typeof (v as Record<string, unknown>).updatedAt === "number"
+                typeof (v as Record<string, unknown>).updatedAt === "number" &&
+                Number.isFinite(
+                  (v as Record<string, unknown>).updatedAt as number,
+                ) &&
+                ((v as Record<string, unknown>).updatedAt as number) >= 0
               );
             },
           ),
