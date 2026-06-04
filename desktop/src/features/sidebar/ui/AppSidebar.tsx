@@ -304,6 +304,7 @@ export function AppSidebar({
     const sectionIds = new Set(channelSections.map((s) => s.id));
 
     for (const channel of streamChannels) {
+      if (starredChannelIds?.has(channel.id)) continue;
       const sectionId = channelAssignments[channel.id];
       if (sectionId && sectionIds.has(sectionId)) {
         if (!bySection[sectionId]) {
@@ -315,7 +316,7 @@ export function AppSidebar({
       }
     }
     return { bySection, unassigned };
-  }, [streamChannels, channelSections, channelAssignments]);
+  }, [streamChannels, channelSections, channelAssignments, starredChannelIds]);
 
   const starredChannels = React.useMemo(() => {
     if (!starredChannelIds || starredChannelIds.size === 0) return [];

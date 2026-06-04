@@ -101,7 +101,7 @@ test.describe("channel starring screenshots", () => {
     });
   });
 
-  test("04 — starred channel still appears in Channels group", async ({
+  test("04 — starred channel is removed from the Channels group", async ({
     page,
   }) => {
     await seedStarState(page, ENGINEERING_CHANNEL_ID);
@@ -111,13 +111,13 @@ test.describe("channel starring screenshots", () => {
     await page.getByTestId("channel-general").click();
     await expect(page.getByTestId("chat-title")).toHaveText("general");
 
-    // Overlay behavior: the channel is in both the Starred section and the
-    // default Channels group.
+    // Exclusive behavior (Slack-style): the starred channel lives only in the
+    // Starred section and no longer appears in the default Channels group.
     await expect(
       page.getByTestId("starred-list").getByTestId("channel-engineering"),
     ).toBeVisible();
     await expect(
       page.getByTestId("stream-list").getByTestId("channel-engineering"),
-    ).toBeVisible();
+    ).toHaveCount(0);
   });
 });
