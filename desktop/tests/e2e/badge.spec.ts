@@ -205,3 +205,132 @@ test("mark-as-unread via context menu shows dot badge", async ({ page }) => {
   await expect(page.getByTestId("channel-unread-random")).toBeVisible();
   await waitForBadgeState(page, { state: "dot" });
 });
+
+test("synced mark-as-unread from another device shows dot, synced mark-as-read clears it", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+
+  // Baseline: random has no unread dot
+  await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+
+  // Wait for ReadStateManager's live subscription (kind:30078) to be
+  // established before injecting events.
+  await expect
+    .poll(async () => {
+      return page.evaluate(() => {
+        return (
+          (
+            window as Window & {
+              __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
+                channelName: string;
+                kind?: number;
+              }) => boolean;
+            }
+          ).__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: "general",
+            kind: 30078,
+          }) ?? false
+        );
+      });
+    })
+    .toBe(true);
+
+  const REMOTE_CLIENT_ID = "other-device-client-id";
+  const REMOTE_SLOT_ID = "e2e00000000000000000000000000000";
+  const RANDOM_CHANNEL_ID = "9dae0116-799b-5071-a0a8-fdd30a91a35d";
+  const now = Math.floor(Date.now() / 1000);
+
+  // Step 1: seed a "read at now" state from the remote device so the
+  // local manager has a baseline value for this channel context.
+  await page.evaluate(
+    ({ clientId, slotId, channelId, ts }) => {
+      (
+        window as Window & {
+          __SPROUT_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+            clientId: string;
+            contexts: Record<string, number>;
+            createdAt: number;
+            slotId: string;
+          }) => unknown;
+        }
+      ).__SPROUT_E2E_EMIT_MOCK_READ_STATE__?.({
+        clientId,
+        slotId,
+        contexts: { [channelId]: ts },
+        createdAt: ts,
+      });
+    },
+    {
+      clientId: REMOTE_CLIENT_ID,
+      slotId: REMOTE_SLOT_ID,
+      channelId: RANDOM_CHANNEL_ID,
+      ts: now,
+    },
+  );
+
+  // Step 2: rollback — read timestamp drops (another device marks unread).
+  // createdAt must be strictly greater than step 1 to pass LWW gate.
+  await page.evaluate(
+    ({ clientId, slotId, channelId, ts, createdAt }) => {
+      (
+        window as Window & {
+          __SPROUT_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+            clientId: string;
+            contexts: Record<string, number>;
+            createdAt: number;
+            slotId: string;
+          }) => unknown;
+        }
+      ).__SPROUT_E2E_EMIT_MOCK_READ_STATE__?.({
+        clientId,
+        slotId,
+        contexts: { [channelId]: ts },
+        createdAt,
+      });
+    },
+    {
+      clientId: REMOTE_CLIENT_ID,
+      slotId: REMOTE_SLOT_ID,
+      channelId: RANDOM_CHANNEL_ID,
+      ts: now - 100,
+      createdAt: now + 5,
+    },
+  );
+
+  // The unread dot should appear.
+  await expect(page.getByTestId("channel-unread-random")).toBeVisible();
+
+  // Step 3: advance — read timestamp moves forward (device marks read).
+  await page.evaluate(
+    ({ clientId, slotId, channelId, ts, createdAt }) => {
+      (
+        window as Window & {
+          __SPROUT_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+            clientId: string;
+            contexts: Record<string, number>;
+            createdAt: number;
+            slotId: string;
+          }) => unknown;
+        }
+      ).__SPROUT_E2E_EMIT_MOCK_READ_STATE__?.({
+        clientId,
+        slotId,
+        contexts: { [channelId]: ts },
+        createdAt,
+      });
+    },
+    {
+      clientId: REMOTE_CLIENT_ID,
+      slotId: REMOTE_SLOT_ID,
+      channelId: RANDOM_CHANNEL_ID,
+      ts: now,
+      createdAt: now + 10,
+    },
+  );
+
+  // The unread dot should disappear.
+  await expect(page.getByTestId("channel-unread-random")).toHaveCount(0);
+});

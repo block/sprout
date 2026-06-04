@@ -526,6 +526,12 @@ declare global {
       models?: Array<{ id: string; name: string | null }>;
       denyReason?: string;
     }) => void;
+    __SPROUT_E2E_EMIT_MOCK_READ_STATE__?: (input: {
+      clientId: string;
+      contexts: Record<string, number>;
+      createdAt: number;
+      slotId: string;
+    }) => unknown;
   }
 }
 
@@ -5098,6 +5104,11 @@ function sendToMockSocket(args: {
       return;
     }
 
+    if (event.kind === 30078) {
+      sendWsText(socket.handler, ["OK", event.id, true, ""]);
+      return;
+    }
+
     const channelId = getChannelIdFromTags(event.tags);
     if (!channelId) {
       sendWsText(socket.handler, [
@@ -5200,6 +5211,30 @@ export function maybeInstallE2eTauriMocks() {
     mockFeedOverrides[category].unshift(item);
     window.dispatchEvent(new CustomEvent("sprout:e2e-home-feed-updated"));
     return item;
+  };
+  window.__SPROUT_E2E_EMIT_MOCK_READ_STATE__ = ({
+    clientId,
+    contexts,
+    createdAt,
+    slotId,
+  }) => {
+    const blob = JSON.stringify({
+      v: 1,
+      client_id: clientId,
+      contexts,
+    });
+    const event = createMockEvent(
+      30078,
+      blob,
+      [
+        ["d", `read-state:${slotId}`],
+        ["t", "read-state"],
+      ],
+      getMockMemberPubkey(config),
+      createdAt,
+    );
+    emitMockLiveEvent(GLOBAL_MOCK_SUBSCRIPTION, event);
+    return event;
   };
   window.__SPROUT_E2E_SET_STALL_WEBSOCKET_SENDS__ = (stall) => {
     const config = getConfig();
@@ -5652,6 +5687,10 @@ export function maybeInstallE2eTauriMocks() {
             (payload as { createdAt?: number }).createdAt,
           ),
         );
+      case "nip44_encrypt_to_self":
+        return (payload as { plaintext: string }).plaintext;
+      case "nip44_decrypt_from_self":
+        return (payload as { ciphertext: string }).ciphertext;
       case "create_auth_event":
         if (identity) {
           return JSON.stringify(

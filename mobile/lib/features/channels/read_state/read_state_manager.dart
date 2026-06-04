@@ -66,6 +66,7 @@ class ReadStateManager {
   final Set<String> _forcedContextIds = {};
   final Map<String, int> _contextSourceCreatedAt = {};
   final Set<String> _pendingSyncedRollbacks = {};
+  final Set<String> _pendingSyncedAdvances = {};
 
   ReadStateManager({
     required this.pubkey,
@@ -335,9 +336,13 @@ class ReadStateManager {
         if (_effectiveState[entry.key] != entry.value) {
           if (entry.value < current && current > 0) {
             _pendingSyncedRollbacks.add(entry.key);
+            _pendingSyncedAdvances.remove(entry.key);
             debugPrint(
               '[ReadStateManager] synced rollback ctx=${entry.key.substring(0, min(12, entry.key.length))}… from=$current to=${entry.value}',
             );
+          } else if (entry.value > current) {
+            _pendingSyncedAdvances.add(entry.key);
+            _pendingSyncedRollbacks.remove(entry.key);
           }
           _effectiveState[entry.key] = entry.value;
           changed = true;
@@ -485,6 +490,12 @@ class ReadStateManager {
   Set<String> drainSyncedRollbacks() {
     final drained = Set<String>.from(_pendingSyncedRollbacks);
     _pendingSyncedRollbacks.clear();
+    return drained;
+  }
+
+  Set<String> drainSyncedAdvances() {
+    final drained = Set<String>.from(_pendingSyncedAdvances);
+    _pendingSyncedAdvances.clear();
     return drained;
   }
 

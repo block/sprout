@@ -248,6 +248,7 @@ export function useUnreadChannels(
     markContextRead,
     markContextUnread,
     drainSyncedRollbacks,
+    drainSyncedAdvances,
     readStateVersion,
   } = useReadState(pubkey, relayClient);
 
@@ -276,10 +277,12 @@ export function useUnreadChannels(
   // When a synced event rolls back a read marker (cross-device mark-as-unread),
   // merge into forcedUnreadRef so the badge appears immediately without waiting
   // for a catch-up REQ that already ran with the old (higher) marker.
+  // When a synced event advances a read marker (cross-device mark-as-read),
+  // remove from forcedUnreadRef so the dot clears immediately.
   // biome-ignore lint/correctness/useExhaustiveDependencies: readStateVersion is the intentional drain trigger
   React.useEffect(() => {
     const rolled = drainSyncedRollbacks();
-    if (rolled.size === 0) return;
+    const advanced = drainSyncedAdvances();
     let anyNew = false;
     for (const channelId of rolled) {
       if (!forcedUnreadRef.current.has(channelId)) {
@@ -287,8 +290,13 @@ export function useUnreadChannels(
         anyNew = true;
       }
     }
+    for (const channelId of advanced) {
+      if (forcedUnreadRef.current.delete(channelId)) {
+        anyNew = true;
+      }
+    }
     if (anyNew) bumpLatestVersion();
-  }, [readStateVersion, drainSyncedRollbacks]);
+  }, [readStateVersion, drainSyncedRollbacks, drainSyncedAdvances]);
 
   // Root event IDs of threads where the current user has replied at least once.
   // Used to determine if thread replies should trigger unread notifications.

@@ -146,7 +146,9 @@ class ReadStateNotifier extends Notifier<ReadStateState> {
   void _emitManagerState(ReadStateManager manager) {
     if (_manager != manager) return;
     final rollbacks = manager.drainSyncedRollbacks();
+    final advances = manager.drainSyncedAdvances();
     _syncedForcedChannelIds.addAll(rollbacks);
+    _syncedForcedChannelIds.removeAll(advances);
     state = _stateFromManager(
       manager,
       isReady: _isInitialized,

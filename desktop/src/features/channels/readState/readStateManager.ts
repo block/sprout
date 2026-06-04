@@ -63,6 +63,7 @@ export class ReadStateManager {
   private forcedContexts = new Set<string>();
   private contextSourceCreatedAt = new Map<string, number>();
   private pendingSyncedRollbacks = new Set<string>();
+  private pendingSyncedAdvances = new Set<string>();
   private destroyed = false;
 
   constructor(pubkey: string, relayClient: RelayClient) {
@@ -367,9 +368,13 @@ export class ReadStateManager {
         if (this.effectiveState.get(ctx) !== ts) {
           if (ts < current && current > 0) {
             this.pendingSyncedRollbacks.add(ctx);
+            this.pendingSyncedAdvances.delete(ctx);
             console.debug(
               `[ReadStateManager] synced rollback ctx=${ctx.substring(0, 12)}… from=${current} to=${ts}`,
             );
+          } else if (ts > current) {
+            this.pendingSyncedAdvances.add(ctx);
+            this.pendingSyncedRollbacks.delete(ctx);
           }
           this.effectiveState.set(ctx, ts);
           anyAdvanced = true;
@@ -542,6 +547,12 @@ export class ReadStateManager {
   drainSyncedRollbacks(): ReadonlySet<string> {
     const drained = this.pendingSyncedRollbacks;
     this.pendingSyncedRollbacks = new Set<string>();
+    return drained;
+  }
+
+  drainSyncedAdvances(): ReadonlySet<string> {
+    const drained = this.pendingSyncedAdvances;
+    this.pendingSyncedAdvances = new Set<string>();
     return drained;
   }
 

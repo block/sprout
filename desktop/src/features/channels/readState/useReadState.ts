@@ -6,6 +6,7 @@ const noopGetTimestamp = () => null;
 const noopMarkRead = () => {};
 const noopMarkUnread = () => {};
 const noopDrainRollbacks = (): ReadonlySet<string> => new Set<string>();
+const noopDrainAdvances = (): ReadonlySet<string> => new Set<string>();
 
 /**
  * React hook that creates and manages a ReadStateManager instance.
@@ -83,6 +84,10 @@ export function useReadState(
     return managerRef.current?.drainSyncedRollbacks() ?? new Set<string>();
   }, []);
 
+  const drainSyncedAdvances = React.useCallback((): ReadonlySet<string> => {
+    return managerRef.current?.drainSyncedAdvances() ?? new Set<string>();
+  }, []);
+
   const isReady = Boolean(
     pubkey && relayClient && initializedPubkey === pubkey,
   );
@@ -95,6 +100,7 @@ export function useReadState(
       markContextUnread: noopMarkUnread,
       seedContextRead: noopMarkRead,
       drainSyncedRollbacks: noopDrainRollbacks,
+      drainSyncedAdvances: noopDrainAdvances,
       readStateVersion: 0,
     };
   }
@@ -106,6 +112,7 @@ export function useReadState(
     markContextUnread,
     seedContextRead,
     drainSyncedRollbacks,
+    drainSyncedAdvances,
     readStateVersion,
   };
 }
