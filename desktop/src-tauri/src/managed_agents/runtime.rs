@@ -990,6 +990,13 @@ pub fn spawn_agent_child(
         );
     }
 
+    // Baked-in Databricks defaults for internal builds (sprout-releases sets
+    // SPROUT_BUILD_DATABRICKS_* at compile time; OSS builds bake nothing).
+    // Written BEFORE user env_vars so a GUI/persona override still wins.
+    for (key, value) in build_databricks_defaults() {
+        command.env(key, value);
+    }
+
     // ── User env vars: persona first, then per-agent (last wins) ────────
     //
     // Precedence: desktop parent env < persona env_vars < agent env_vars.
@@ -1041,6 +1048,23 @@ fn child_rust_log_filter() -> String {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing},sprout_acp=info"),
         _ => "sprout_acp=info".to_string(),
     }
+}
+
+/// Databricks host/model baked in at compile time for internal builds. Empty
+/// in OSS builds, where the `SPROUT_BUILD_DATABRICKS_*` env is unset.
+fn build_databricks_defaults() -> Vec<(&'static str, &'static str)> {
+    let mut defaults = Vec::new();
+    if let Some(host) = option_env!("SPROUT_DESKTOP_BUILD_DATABRICKS_HOST") {
+        if !host.is_empty() {
+            defaults.push(("DATABRICKS_HOST", host));
+        }
+    }
+    if let Some(model) = option_env!("SPROUT_DESKTOP_BUILD_DATABRICKS_MODEL") {
+        if !model.is_empty() {
+            defaults.push(("DATABRICKS_MODEL", model));
+        }
+    }
+    defaults
 }
 
 pub fn start_managed_agent_process(
@@ -1172,6 +1196,13 @@ mod tests {
         let p = known_acp_provider("sprout-agent").expect("should resolve");
         assert!(p.mcp_hooks);
         assert_eq!(p.mcp_command, Some("sprout-dev-mcp"));
+    }
+
+    #[test]
+    fn databricks_defaults_empty_in_oss_build() {
+        // OSS (and normal test) builds set neither SPROUT_BUILD_DATABRICKS_*,
+        // so nothing is baked in and no DATABRICKS_* is injected on spawn.
+        assert!(super::build_databricks_defaults().is_empty());
     }
 
     #[test]
