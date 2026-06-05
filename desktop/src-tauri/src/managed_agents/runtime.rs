@@ -1234,6 +1234,7 @@ mod tests {
             last_error: None,
             respond_to,
             respond_to_allowlist: allowlist,
+            relay_mesh: None,
         }
     }
 

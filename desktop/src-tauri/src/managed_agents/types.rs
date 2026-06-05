@@ -141,6 +141,29 @@ pub struct ManagedAgentRecord {
     /// Preserved across mode toggles so users don't lose state.
     #[serde(default)]
     pub respond_to_allowlist: Vec<String>,
+    /// Typed marker for relay-mesh agents. `Some(_)` means this agent runs its
+    /// inference through Sprout's relay-mesh local endpoint; the `model_ref` is
+    /// the served model id to route to. `None` is a normal agent.
+    ///
+    /// This is the source of truth for "is this a mesh agent + which model" —
+    /// replacing the old practice of sniffing it back out of `env_vars`
+    /// (`relay_mesh_config`). Spawn-time env vars are *derived from* this, not
+    /// the other way around. `#[serde(default)]` so pre-existing saved records
+    /// deserialize as `None` and are resolved via the env-var fallback until
+    /// they are rewritten with this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_mesh: Option<RelayMeshConfig>,
+}
+
+/// Typed relay-mesh configuration carried on a [`ManagedAgentRecord`].
+///
+/// Feature-independent on purpose: the field is always present in the record
+/// schema so saved agents round-trip identically whether or not the `mesh-llm`
+/// feature is compiled in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayMeshConfig {
+    /// The served model id this agent routes to (e.g. "Qwen3").
+    pub model_ref: String,
 }
 
 #[derive(Debug)]

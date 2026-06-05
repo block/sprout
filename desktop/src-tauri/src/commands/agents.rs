@@ -499,6 +499,7 @@ pub async fn create_managed_agent(
             last_error: None,
             respond_to: input.respond_to,
             respond_to_allowlist: respond_to_allowlist.clone(),
+            relay_mesh: None,
         };
 
         records.push(record);
