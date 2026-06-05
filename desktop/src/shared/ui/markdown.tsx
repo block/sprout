@@ -843,6 +843,7 @@ function createMarkdownComponents(
       return (
         <img
           alt={alt}
+          title={alt}
           src={resolvedSrc}
           data-custom-emoji=""
           className="mx-px inline-block h-[1.25em] w-auto max-w-none align-text-bottom"

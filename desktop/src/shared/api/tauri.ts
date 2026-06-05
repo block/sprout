@@ -761,7 +761,7 @@ export type BlobDescriptor = {
   thumb?: string;
   duration?: number;
   image?: string;
-  /** Original filename for generic (non-media) file attachments. */
+  /** Original filename captured client-side. */
   filename?: string;
 };
 
