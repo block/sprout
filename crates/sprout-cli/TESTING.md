@@ -201,9 +201,8 @@ REPLY=$(sprout messages send --channel "$CHANNEL_ID" --content "Reply" \
 echo "$REPLY"
 REPLY_ID=$(echo "$REPLY" | jq -r '.event_id')
 
-# messages send with mentions
-sprout messages send --channel "$CHANNEL_ID" --content "Hey @someone" \
-  --mention "0000000000000000000000000000000000000000000000000000000000000001" | jq .
+# messages send with mentions — @name in content is auto-resolved, no flag needed
+sprout messages send --channel "$CHANNEL_ID" --content "Hey @someone" | jq .
 
 # messages send from stdin — safe path for content with shell metacharacters
 # (backticks, $vars, code blocks) that would otherwise be expanded by the shell.
