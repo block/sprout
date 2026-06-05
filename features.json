@@ -68,21 +68,7 @@
       "id": "mesh-compute",
       "name": "Mesh Compute",
       "description": "Peer-to-peer inference sharing across workspace members",
-      "tier": "unstable",
-      "platforms": ["desktop"]
-    },
-    {
-      "id": "identity-archive",
-      "name": "Identity Archive",
-      "description": "Archive and unarchive relay member identities",
-      "tier": "unstable",
-      "platforms": ["desktop"]
-    },
-    {
-      "id": "relay-members",
-      "name": "Relay Members",
-      "description": "Relay membership administration panel",
-      "tier": "unstable",
+      "tier": "preview",
       "platforms": ["desktop"]
     }
   ]

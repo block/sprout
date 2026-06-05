@@ -14,8 +14,6 @@ export function resolveEnabled(
       return true;
     case "preview":
       return overrides[featureId] === true;
-    case "unstable":
-      return overrides[featureId] === true;
     default:
       return false;
   }

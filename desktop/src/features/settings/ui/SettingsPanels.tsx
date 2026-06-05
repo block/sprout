@@ -130,7 +130,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "relay-members",
     label: "Relay Access",
     icon: LockKeyhole,
-    featureGate: "relay-members",
   },
   {
     value: "custom-emoji",

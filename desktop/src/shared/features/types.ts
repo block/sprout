@@ -1,5 +1,5 @@
 /** Feature visibility tiers */
-export type FeatureTier = "stable" | "preview" | "unstable";
+export type FeatureTier = "stable" | "preview";
 
 /** Platforms a feature is available on */
 export type FeaturePlatform = "desktop" | "mobile";

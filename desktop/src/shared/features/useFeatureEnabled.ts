@@ -64,7 +64,6 @@ export function useFeatureSnapshot(): Record<string, boolean> {
  *
  * - stable: always true
  * - preview: true only if user opted in
- * - unstable: true only if user opted in
  */
 export function useFeatureEnabled(featureId: string): boolean {
   const overrides = useFeatureSnapshot();
