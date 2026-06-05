@@ -156,6 +156,40 @@ test("reacting with a custom emoji renders via the localhost media proxy", async
     ),
   );
 
+  const inlineAddReactionButton = row.getByLabel("Add reaction");
+  await expect
+    .poll(() =>
+      inlineAddReactionButton.evaluate((button) => {
+        return getComputedStyle(button).opacity;
+      }),
+    )
+    .toBe("0");
+  await expect
+    .poll(() =>
+      inlineAddReactionButton.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        return `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      }),
+    )
+    .toBe("40x32");
+  await expect
+    .poll(() =>
+      inlineAddReactionButton.evaluate((button) => {
+        return getComputedStyle(button).transitionProperty;
+      }),
+    )
+    .not.toContain("width");
+  await row.hover();
+  await expect(inlineAddReactionButton).toBeVisible();
+  await expect
+    .poll(() =>
+      inlineAddReactionButton.evaluate((button) => {
+        const rect = button.getBoundingClientRect();
+        return `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      }),
+    )
+    .toBe("40x32");
+
   // Toggle the reaction back off: click the pill, which fires remove_reaction
   // -> emits a kind:5 deletion targeting the reaction event. The pill must
   // disappear. Guards the mock-bridge deletion path: the reaction event needs a

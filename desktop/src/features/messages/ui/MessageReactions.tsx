@@ -1,12 +1,21 @@
+import { SmilePlus } from "lucide-react";
 import * as React from "react";
 
+import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import type { TimelineReaction } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
+import { Spinner } from "@/shared/ui/spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MAX_VISIBLE_REACTORS = 10;
+const REACTION_PILL_BASE_CLASSES =
+  "inline-flex h-8 items-center rounded-full border text-xs font-medium leading-none transition-colors";
+const REACTION_GLYPH_CLASSES = "-translate-y-px h-3.5 w-3.5 text-sm";
+const REACTION_PILL_HOVER_CLASSES =
+  "hover:bg-primary/10 hover:text-foreground focus-visible:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
  * Render a reaction's emoji: a custom (image) emoji when `emojiUrl` is set,
@@ -35,7 +44,16 @@ function EmojiGlyph({
       />
     );
   }
-  return <span>{reaction.emoji}</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center justify-center leading-none",
+        className,
+      )}
+    >
+      {reaction.emoji}
+    </span>
+  );
 }
 
 function ReactionPopoverContent({ reaction }: { reaction: TimelineReaction }) {
@@ -96,9 +114,10 @@ export function MessageReactions({
   return (
     <div
       className={cn(
-        "mt-1.5 flex flex-wrap items-center gap-1.5 pt-1",
+        "group/reactions mt-1.5 flex flex-wrap items-center gap-1.5 pt-1",
         className,
       )}
+      data-testid="message-reactions"
     >
       {reactions.map((reaction) => (
         <ReactionPill
@@ -109,7 +128,76 @@ export function MessageReactions({
           onSelect={onSelect}
         />
       ))}
+      {canToggle ? (
+        <InlineReactionPicker
+          messageId={messageId}
+          onSelect={onSelect}
+          pending={pending}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function InlineReactionPicker({
+  messageId,
+  onSelect,
+  pending,
+}: {
+  messageId: string;
+  onSelect: (emoji: string) => void;
+  pending: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+
+  return (
+    <Popover onOpenChange={setOpen} open={open}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              aria-label="Add reaction"
+              className={cn(
+                REACTION_PILL_BASE_CLASSES,
+                "pointer-events-none w-10 min-w-10 justify-center p-0 text-muted-foreground opacity-0",
+                "group-hover/message:pointer-events-auto group-hover/message:opacity-100",
+                "group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100",
+                "group-hover/reactions:pointer-events-auto group-hover/reactions:opacity-100",
+                "group-focus-within/reactions:pointer-events-auto group-focus-within/reactions:opacity-100",
+                open
+                  ? "pointer-events-auto border-border/80 bg-background text-foreground opacity-100 shadow-xs"
+                  : "border-border/70 bg-muted/70",
+                REACTION_PILL_HOVER_CLASSES,
+              )}
+              data-testid={`add-reaction-${messageId}`}
+              disabled={pending}
+              type="button"
+            >
+              {pending ? (
+                <Spinner className="h-4 w-4" />
+              ) : (
+                <SmilePlus className="h-4 w-4" />
+              )}
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>React</TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        align="start"
+        className="w-auto overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
+        side="top"
+        sideOffset={8}
+      >
+        <EmojiPicker
+          autoFocus
+          onSelect={(value) => {
+            onSelect(value);
+            setOpen(false);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -161,12 +249,15 @@ function ReactionPill({
   }, [clearTimers]);
 
   const pillClasses = cn(
-    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors",
+    REACTION_PILL_BASE_CLASSES,
+    "min-w-12 justify-center gap-1.5 px-2",
     reaction.reactedByCurrentUser
       ? "border-primary/40 bg-primary/10 text-primary"
       : "border-border/70 bg-muted/70 text-foreground/90",
     canToggle
-      ? "hover:bg-accent hover:text-accent-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+      ? reaction.reactedByCurrentUser
+        ? "hover:bg-primary/10 hover:text-primary focus-visible:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+        : REACTION_PILL_HOVER_CLASSES
       : "cursor-default",
   );
 
@@ -185,7 +276,7 @@ function ReactionPill({
         onClick={handleClick}
         type="button"
       >
-        <EmojiGlyph reaction={reaction} className="h-[1.1em] w-[1.1em]" />
+        <EmojiGlyph reaction={reaction} className={REACTION_GLYPH_CLASSES} />
         <span className="text-muted-foreground">{reaction.count}</span>
       </button>
     );
@@ -210,7 +301,10 @@ function ReactionPill({
             onClick={handleClick}
             type="button"
           >
-            <EmojiGlyph reaction={reaction} className="h-[1.1em] w-[1.1em]" />
+            <EmojiGlyph
+              reaction={reaction}
+              className={REACTION_GLYPH_CLASSES}
+            />
             <span className="text-muted-foreground">{reaction.count}</span>
           </button>
         </span>
