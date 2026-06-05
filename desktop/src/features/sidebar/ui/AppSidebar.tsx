@@ -444,18 +444,20 @@ export function AppSidebar({
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-pulse-view"
-              isActive={selectedView === "pulse"}
-              onClick={onSelectPulse}
-              tooltip="Pulse"
-              type="button"
-            >
-              <Activity className="h-4 w-4" />
-              <span>Pulse</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          <FeatureGate feature="pulse">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-pulse-view"
+                isActive={selectedView === "pulse"}
+                onClick={onSelectPulse}
+                tooltip="Pulse"
+                type="button"
+              >
+                <Activity className="h-4 w-4" />
+                <span>Pulse</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </FeatureGate>
           <FeatureGate feature="projects">
             <SidebarMenuItem>
               <SidebarMenuButton

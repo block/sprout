@@ -65,6 +65,13 @@
       "platforms": ["desktop"]
     },
     {
+      "id": "pulse",
+      "name": "Pulse",
+      "description": "Activity feed with notes, social posts, and agent activity",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
       "id": "forum",
       "name": "Forum Channels",
       "description": "Forum-style threaded channels for long-form discussions",

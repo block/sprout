@@ -1,6 +1,7 @@
 import * as React from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
 
+import { FeatureGate } from "@/shared/features";
 import { ViewLoadingFallback } from "@/shared/ui/ViewLoadingFallback";
 
 const PulseScreen = React.lazy(async () => {
@@ -14,10 +15,12 @@ export const Route = createFileRoute("/pulse")({
 
 function PulseRouteComponent() {
   return (
-    <React.Suspense
-      fallback={<ViewLoadingFallback includeHeader kind="pulse" />}
-    >
-      <PulseScreen />
-    </React.Suspense>
+    <FeatureGate feature="pulse" fallback={<Navigate to="/" />}>
+      <React.Suspense
+        fallback={<ViewLoadingFallback includeHeader kind="pulse" />}
+      >
+        <PulseScreen />
+      </React.Suspense>
+    </FeatureGate>
   );
 }
