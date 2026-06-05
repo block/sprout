@@ -64,5 +64,4 @@ url = { workspace = true }
 sprout-persona = { path = "../sprout-persona" }
 
 # WebSocket client — ephemeral event publish (kind:20001 is WS-only on the relay)
-tokio-tungstenite = { workspace = true }
-futures-util = { workspace = true }
+sprout-ws-client = { path = "../sprout-ws-client" }

@@ -2,11 +2,8 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
-use nostr::{EventBuilder, JsonUtil, Keys, Kind, RelayUrl, Tag};
+use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
 use sha2::{Digest, Sha256};
-use tokio::time::timeout;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::error::CliError;
 
@@ -292,164 +289,28 @@ impl SproutClient {
 
     /// Publish an ephemeral event via WebSocket with NIP-42 authentication.
     ///
-    /// The relay rejects ephemeral kinds (20000–29999) over HTTP. This method
-    /// opens a fresh WebSocket connection, authenticates via NIP-42, sends the
-    /// event, waits for the OK frame, then closes the connection.
+    /// The relay rejects ephemeral kinds (20000–29999) over HTTP. Delegates to
+    /// `sprout_ws_client::publish_event` which handles connect, NIP-42 auth,
+    /// EVENT send, OK wait, and graceful close.
     pub async fn publish_ephemeral_event(&self, event: nostr::Event) -> Result<String, CliError> {
         let ws_url = to_ws_url(&self.relay_url);
-        let event_id = event.id.to_hex();
-
-        let result = timeout(Duration::from_secs(10), async {
-            let (mut ws, _) = connect_async(&ws_url)
+        let ok =
+            sprout_ws_client::publish_event(&ws_url, event, &self.keys, self.auth_tag.as_ref(), 10)
                 .await
-                .map_err(|e| CliError::Other(format!("WebSocket connect failed: {e}")))?;
+                .map_err(|e| CliError::Other(e.to_string()))?;
 
-            // Wait for the NIP-42 AUTH challenge.
-            let challenge = loop {
-                let raw = ws
-                    .next()
-                    .await
-                    .ok_or_else(|| {
-                        CliError::Other("connection closed before AUTH challenge".into())
-                    })?
-                    .map_err(|e| CliError::Other(format!("WebSocket recv error: {e}")))?;
-                if let Message::Ping(data) = &raw {
-                    let _ = ws.send(Message::Pong(data.clone())).await;
-                    continue;
-                }
-                if let Message::Close(_) = &raw {
-                    return Err(CliError::Other("connection closed by relay".into()));
-                }
-                if let Message::Text(text) = raw {
-                    let arr: serde_json::Value = serde_json::from_str(&text)
-                        .map_err(|e| CliError::Other(format!("invalid relay frame: {e}")))?;
-                    if arr.get(0).and_then(|v| v.as_str()) == Some("AUTH") {
-                        if let Some(c) = arr.get(1).and_then(|v| v.as_str()) {
-                            break c.to_string();
-                        }
-                    }
-                }
-            };
-
-            if challenge.len() > 1024 {
-                return Err(CliError::Other("AUTH challenge exceeds 1024 bytes".into()));
-            }
-
-            // Sign and send the NIP-42 AUTH event.
-            let relay_url = RelayUrl::parse(&ws_url)
-                .map_err(|e| CliError::Other(format!("invalid relay URL: {e}")))?;
-            let auth_builder = EventBuilder::auth(&challenge, relay_url);
-            let auth_builder = if let Some(ref tag) = self.auth_tag {
-                auth_builder.tags([tag.clone()])
-            } else {
-                auth_builder
-            };
-            let auth_event = auth_builder
-                .sign_with_keys(&self.keys)
-                .map_err(|e| CliError::Other(format!("AUTH signing failed: {e}")))?;
-            let auth_id = auth_event.id.to_hex();
-
-            let auth_frame = serde_json::to_string(&serde_json::json!(["AUTH", auth_event]))
-                .map_err(|e| CliError::Other(format!("AUTH serialization failed: {e}")))?;
-            ws.send(Message::Text(auth_frame.into()))
-                .await
-                .map_err(|e| CliError::Other(format!("WebSocket send failed: {e}")))?;
-
-            // Wait for AUTH OK.
-            loop {
-                let raw = ws
-                    .next()
-                    .await
-                    .ok_or_else(|| CliError::Other("connection closed waiting for AUTH OK".into()))?
-                    .map_err(|e| CliError::Other(format!("WebSocket recv error: {e}")))?;
-                if let Message::Ping(data) = &raw {
-                    let _ = ws.send(Message::Pong(data.clone())).await;
-                    continue;
-                }
-                if let Message::Close(_) = &raw {
-                    return Err(CliError::Other("connection closed by relay".into()));
-                }
-                if let Message::Text(text) = raw {
-                    let arr: serde_json::Value = serde_json::from_str(&text)
-                        .map_err(|e| CliError::Other(format!("invalid relay frame: {e}")))?;
-                    if arr.get(0).and_then(|v| v.as_str()) == Some("OK")
-                        && arr.get(1).and_then(|v| v.as_str()) == Some(auth_id.as_str())
-                    {
-                        let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
-                        if !accepted {
-                            let msg = arr
-                                .get(3)
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("auth rejected")
-                                .to_string();
-                            return Err(CliError::Relay {
-                                status: 401,
-                                body: msg,
-                            });
-                        }
-                        break;
-                    }
-                }
-            }
-
-            // Send the ephemeral event.
-            let event_frame = serde_json::to_string(&serde_json::json!(["EVENT", event]))
-                .map_err(|e| CliError::Other(format!("event serialization failed: {e}")))?;
-            ws.send(Message::Text(event_frame.into()))
-                .await
-                .map_err(|e| CliError::Other(format!("WebSocket send failed: {e}")))?;
-
-            // Wait for EVENT OK.
-            loop {
-                let raw = ws
-                    .next()
-                    .await
-                    .ok_or_else(|| {
-                        CliError::Other("connection closed waiting for EVENT OK".into())
-                    })?
-                    .map_err(|e| CliError::Other(format!("WebSocket recv error: {e}")))?;
-                if let Message::Ping(data) = &raw {
-                    let _ = ws.send(Message::Pong(data.clone())).await;
-                    continue;
-                }
-                if let Message::Close(_) = &raw {
-                    return Err(CliError::Other("connection closed by relay".into()));
-                }
-                if let Message::Text(text) = raw {
-                    let arr: serde_json::Value = serde_json::from_str(&text)
-                        .map_err(|e| CliError::Other(format!("invalid relay frame: {e}")))?;
-                    if arr.get(0).and_then(|v| v.as_str()) == Some("OK")
-                        && arr.get(1).and_then(|v| v.as_str()) == Some(event_id.as_str())
-                    {
-                        let accepted = arr.get(2).and_then(|v| v.as_bool()).unwrap_or(false);
-                        let message = arr
-                            .get(3)
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-
-                        let _ = ws.close(None).await;
-
-                        if !accepted {
-                            return Err(CliError::Relay {
-                                status: 400,
-                                body: message,
-                            });
-                        }
-                        return Ok(serde_json::json!({
-                            "event_id": event_id,
-                            "accepted": true,
-                            "message": message,
-                        })
-                        .to_string());
-                    }
-                }
-            }
+        if !ok.accepted {
+            return Err(CliError::Relay {
+                status: 400,
+                body: ok.message,
+            });
+        }
+        Ok(serde_json::json!({
+            "event_id": ok.event_id,
+            "accepted": true,
+            "message": ok.message,
         })
-        .await
-        .map_err(|_| CliError::Other("WebSocket publish timed out after 10 seconds".into()))?;
-
-        result
+        .to_string())
     }
 
     // -----------------------------------------------------------------------
