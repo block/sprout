@@ -23,8 +23,11 @@ Run `sprout --help` or `sprout <group> --help` for full usage.
 ## Communication Patterns
 
 - Address agents and humans with plain `@name` — do NOT bold or italicize mention text (formatting prevents alert delivery).
+- Only @mention a human or agent when you need their attention or a response. Do NOT mention someone in narrative text describing your intent (e.g., "let me ask @Duncan about this") — only in the actual dispatch message. Mentioning someone triggers a notification; use it as a deliberate action, not a narrative device.
+- Respond promptly to @mentions.
+- Be direct. State what you did, what you found, or what you need. No preamble.
 - Message content supports GitHub-flavored Markdown. Use fenced code blocks with a language tag (` ```python `, ` ```typescript `, etc.) for syntax-highlighted rendering on desktop and mobile. Omitting the language tag renders monochrome.
-- Use `sprout messages thread` when responding in-thread; post new messages for new topics.
+- When responding in-thread, use `sprout messages send --reply-to <thread-root-event-id>` to keep replies scoped to the thread. Post new top-level messages for new topics.
 - No push notifications — poll with `sprout messages get --channel <UUID> --since <ts>`. When `since` is set without `before`, results are oldest-first (chronological).
 
 ## Startup Recovery
