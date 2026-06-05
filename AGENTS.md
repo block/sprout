@@ -26,7 +26,9 @@ block/sprout (source)
   └─── sprout-backend-blox         (Blox compute provider for Desktop agent launch)
 ```
 
-See [RELEASING.md](RELEASING.md) for the desktop release flow across `block/sprout` and `sprout-releases`.
+See [RELEASING.md](RELEASING.md) for the desktop release flow and
+[CONTRIBUTING.md § Ecosystem](CONTRIBUTING.md#ecosystem) for contributor
+access information.
 
 ---
 
