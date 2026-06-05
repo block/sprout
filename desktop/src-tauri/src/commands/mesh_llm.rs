@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::{app_state::AppState, managed_agents::RELAY_MESH_API_BASE_URL, mesh_llm, relay};
 
@@ -185,7 +185,7 @@ pub(crate) async fn ensure_client_node_for_model(
 pub(crate) async fn resolve_mesh_bootstrap_target(
     state: &AppState,
     model_id: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<mesh_llm::MeshServeTarget>, String> {
     let model_id = model_id.trim();
     if model_id.is_empty() {
         return Ok(None);
@@ -198,16 +198,17 @@ pub(crate) async fn resolve_mesh_bootstrap_target(
 }
 
 /// Pure target-selection used by `resolve_mesh_bootstrap_target`: the first
-/// gossiped serve target that hosts `model_id`. Split out so the matching rule
-/// is unit-testable without a relay round-trip.
+/// gossiped serve target that hosts `model_id`. Returns the full target so the
+/// caller has the reporter pubkey (to address the paired connect-request) as
+/// well as the dial pointer. Split out so the matching rule is unit-testable
+/// without a relay round-trip.
 fn pick_serve_target_for_model(
     targets: Vec<mesh_llm::MeshServeTarget>,
     model_id: &str,
-) -> Option<String> {
+) -> Option<mesh_llm::MeshServeTarget> {
     targets
         .into_iter()
         .find(|target| target.model_id == model_id)
-        .map(|target| target.endpoint_addr)
 }
 
 /// Decide whether a relay-mesh agent may start, and bring up its local mesh
@@ -216,34 +217,64 @@ fn pick_serve_target_for_model(
 /// Fresh create (`allow_fresh_create_start`) has just run the client-start flow
 /// from the dialog, so it spawns as-is. For a saved/manual start the serve
 /// target's dial pointer was never persisted (it is live discovery state), so
-/// re-resolve a current bootstrap target from the relay's gossiped targets and
-/// dial it. The two failure modes get distinct, actionable copy: a relay query
-/// failure ("could not refresh targets") is not the same as a relay that
-/// answered with no live target for this model ("peer offline"). Non relay-mesh
-/// records are a no-op.
+/// re-resolve a current bootstrap target from the relay's gossiped targets,
+/// bring up the local client node, then publish a paired connect-request
+/// (kind:24621) through the runtime coordinator so the peer dials back — the
+/// hole-punch needs *both* ends dialing. This is the fix for saved agents
+/// flaking on restart: before, saved-start did a one-sided dial and never told
+/// the peer to dial back. The two failure modes get distinct, actionable copy:
+/// a relay query failure ("could not refresh targets") is not the same as a
+/// relay that answered with no live target for this model ("peer offline").
+/// Non relay-mesh records are a no-op.
 pub(crate) async fn ensure_relay_mesh_for_record(
-    state: &AppState,
+    app: &AppHandle,
     record: &crate::managed_agents::ManagedAgentRecord,
     allow_fresh_create_start: bool,
 ) -> Result<(), String> {
     if allow_fresh_create_start {
         return Ok(());
     }
+    let state = app.state::<AppState>();
     let Some(model_id) = crate::managed_agents::relay_mesh_model_id(record) else {
         return Ok(());
     };
-    match resolve_mesh_bootstrap_target(state, &model_id).await {
-        Ok(Some(endpoint_addr)) => {
-            ensure_client_node_for_model(state, &model_id, Some(endpoint_addr)).await?;
-            Ok(())
+    let target = match resolve_mesh_bootstrap_target(&state, &model_id).await {
+        Ok(Some(target)) => target,
+        Ok(None) => {
+            return Err(format!(
+                "relay mesh agents cannot be started from saved state because no live serve target is available for this model. Start serving on a mesh peer, or create a new agent with Run on relay mesh selected to refresh the target for {RELAY_MESH_API_BASE_URL}."
+            ));
         }
-        Ok(None) => Err(format!(
-            "relay mesh agents cannot be started from saved state because no live serve target is available for this model. Start serving on a mesh peer, or create a new agent with Run on relay mesh selected to refresh the target for {RELAY_MESH_API_BASE_URL}."
-        )),
-        Err(error) => Err(format!(
-            "could not refresh relay mesh serve targets to start this agent: {error}"
-        )),
+        Err(error) => {
+            return Err(format!(
+                "could not refresh relay mesh serve targets to start this agent: {error}"
+            ));
+        }
+    };
+
+    // Bring up the local client node (and dial the peer). Its status carries
+    // our own invite token — the addr we advertise to the peer in the 24621.
+    let status =
+        ensure_client_node_for_model(&state, &model_id, Some(target.endpoint_addr.clone())).await?;
+
+    // Publish the paired connect-request so the peer dials *us* back. Needs the
+    // target's reporter pubkey (whom to address) and our invite token (where to
+    // dial). If either is missing we have already done the one-sided dial above
+    // — no worse than the old behavior — so degrade rather than fail the start.
+    if let (Some(target_pubkey), Some(self_addr)) = (
+        target.reporter_pubkey.as_deref(),
+        status.invite_token.as_deref(),
+    ) {
+        if let Err(error) =
+            crate::mesh_llm::start_client(app, target_pubkey, &target.endpoint_addr, self_addr)
+                .await
+        {
+            // Non-fatal: the one-sided dial may still punch on a favorable NAT.
+            // Surface the reason without blocking the agent's spawn.
+            eprintln!("sprout-mesh: saved-start connect-request failed: {error}");
+        }
     }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -352,9 +383,10 @@ mod tests {
             target("model-b", "addr-b1"),
             target("model-b", "addr-b2"),
         ];
-        // Matches by model id, returns the first such target's dial pointer.
+        // Matches by model id, returns the first such target (full struct, so
+        // the caller has the reporter pubkey as well as the dial pointer).
         assert_eq!(
-            pick_serve_target_for_model(targets, "model-b"),
+            pick_serve_target_for_model(targets, "model-b").map(|t| t.endpoint_addr),
             Some("addr-b1".to_string())
         );
     }

@@ -62,7 +62,6 @@ impl MeshCoordinator {
     /// Await the listener becoming active, bounded by `timeout`. Returns
     /// `Err` if it does not come up in time (relay unreachable / auth failed),
     /// so `start_client` fails loudly rather than publishing into the void.
-    #[allow(dead_code)] // used by start_client (wired into start paths next commit)
     async fn await_listener(&self, timeout: Duration) -> Result<(), String> {
         if self.listener_active() {
             return Ok(());
@@ -185,11 +184,6 @@ async fn listener_session(app: &AppHandle, active: &watch::Sender<bool>) -> Resu
 /// Blocks until the listener is active so we never request a connection we
 /// cannot receive the pairing for. One `attempt_id` per call correlates the
 /// retries in logs and tests.
-///
-/// Infrastructure landing ahead of its consumer: wired into the saved-start /
-/// fresh-create paths in the next commit (the `ensure_relay_mesh_for_record`
-/// rewire). `allow(dead_code)` keeps this commit clippy-clean meanwhile.
-#[allow(dead_code)]
 pub async fn start_client(
     app: &AppHandle,
     target_pubkey: &str,
@@ -242,7 +236,6 @@ pub async fn start_client(
 }
 
 /// Build + sign + submit the kind:24621 connect-request as the Sprout identity.
-#[allow(dead_code)] // used by start_client (wired next commit)
 async fn publish_connect_request(
     state: &AppState,
     target_pubkey: &str,

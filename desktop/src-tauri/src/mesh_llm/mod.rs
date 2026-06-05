@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 
 mod coordinator;
-// `start_client` is re-exported by the commit that wires it into the start
-// paths; this commit lands the listener + module only.
-pub use coordinator::{spawn_listener, MeshCoordinator};
+pub use coordinator::{spawn_listener, start_client, MeshCoordinator};
 
 mod discovery;
 pub use discovery::{availability_from_events, mesh_status_filter};

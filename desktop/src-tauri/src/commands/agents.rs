@@ -28,16 +28,16 @@ fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
 
 #[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
-    state: &AppState,
+    app: &AppHandle,
     record: &ManagedAgentRecord,
     allow_fresh_create_start: bool,
 ) -> Result<(), String> {
-    crate::commands::ensure_relay_mesh_for_record(state, record, allow_fresh_create_start).await
+    crate::commands::ensure_relay_mesh_for_record(app, record, allow_fresh_create_start).await
 }
 
 #[cfg(not(feature = "mesh-llm"))]
 async fn ensure_relay_mesh_for_record(
-    _state: &AppState,
+    _app: &AppHandle,
     _record: &ManagedAgentRecord,
     _allow_fresh_create_start: bool,
 ) -> Result<(), String> {
@@ -68,7 +68,7 @@ async fn start_local_agent_with_preflight(
         return Err(format!("agent {pubkey} is not a local agent"));
     }
 
-    ensure_relay_mesh_for_record(state, &record_snapshot, allow_fresh_create_start).await?;
+    ensure_relay_mesh_for_record(app, &record_snapshot, allow_fresh_create_start).await?;
 
     let _store_guard = state
         .managed_agents_store_lock
