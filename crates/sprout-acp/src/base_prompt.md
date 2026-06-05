@@ -28,6 +28,7 @@ Run `sprout --help` or `sprout <group> --help` for full usage.
 - Be direct. State what you did, what you found, or what you need. No preamble.
 - Message content supports GitHub-flavored Markdown. Use fenced code blocks with a language tag (` ```python `, ` ```typescript `, etc.) for syntax-highlighted rendering on desktop and mobile. Omitting the language tag renders monochrome.
 - When responding in-thread, use `sprout messages send --reply-to <thread-root-event-id>` to keep replies scoped to the thread. Post new top-level messages for new topics.
+- When you are mentioned in multiple threads, prioritize the most recent one chronologically. If someone steers or redirects you in a newer thread while you are working from an older dispatch, reply in the newer thread to acknowledge — do not bury your response in the original thread where it may go unseen.
 - No push notifications — poll with `sprout messages get --channel <UUID> --since <ts>`. When `since` is set without `before`, results are oldest-first (chronological).
 
 ## Startup Recovery
