@@ -118,10 +118,7 @@ type AppSidebarProps = {
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
   onHideDm: (channelId: string) => void;
-  onMarkChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread: (channelId: string) => void;
   onMarkChannelRead: (
     channelId: string,
     lastMessageAt: string | null | undefined,

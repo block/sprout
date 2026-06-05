@@ -7,10 +7,7 @@ type AppShellContextValue = {
     channelId: string,
     readAt: string | null | undefined,
   ) => void;
-  markChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  markChannelUnread: (channelId: string) => void;
   openChannelManagement: () => void;
   // NIP-RS read marker for a channel as a unix-seconds timestamp, or null
   // when unknown. Backed by the single AppShell-mounted ReadStateManager so

@@ -34,7 +34,6 @@ import {
 } from "@/features/messages/lib/formatTimelineMessages";
 import { buildThreadPanelData } from "@/features/messages/lib/threadPanel";
 import { imetaMediaFromTags } from "@/features/messages/lib/imetaMediaMarkdown";
-import type { TimelineMessage } from "@/features/messages/types";
 import { useFetchOlderMessages } from "@/features/messages/useFetchOlderMessages";
 import { useLoadMissingAncestors } from "@/features/messages/useLoadMissingAncestors";
 import { useChannelTyping } from "@/features/messages/useChannelTyping";
@@ -334,14 +333,10 @@ export function ChannelScreen({
         : undefined,
     [activeChannel, handleToggleReaction],
   );
-  const handleMarkUnread = React.useCallback(
-    (message: TimelineMessage) => {
-      if (!activeChannelId) return;
-      const messageIso = new Date(message.createdAt * 1_000).toISOString();
-      markChannelUnread(activeChannelId, messageIso);
-    },
-    [activeChannelId, markChannelUnread],
-  );
+  const handleMarkUnread = React.useCallback(() => {
+    if (!activeChannelId) return;
+    markChannelUnread(activeChannelId);
+  }, [activeChannelId, markChannelUnread]);
   const {
     channelAgentSessionAgents,
     closeAgentSession: handleCloseAgentSession,

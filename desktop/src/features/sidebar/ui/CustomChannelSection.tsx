@@ -142,10 +142,7 @@ export function ChannelContextMenuItems({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread?: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread?: (channelId: string) => void;
   onMuteChannel?: (channelId: string) => void;
   onUnmuteChannel?: (channelId: string) => void;
   onStarChannel?: (channelId: string) => void;
@@ -182,9 +179,7 @@ export function ChannelContextMenuItems({
           Mark as read
         </ContextMenuItem>
       ) : !hasUnread && onMarkChannelUnread ? (
-        <ContextMenuItem
-          onClick={() => onMarkChannelUnread(channel.id, channel.lastMessageAt)}
-        >
+        <ContextMenuItem onClick={() => onMarkChannelUnread(channel.id)}>
           <CircleDot className="h-4 w-4" />
           Mark unread
         </ContextMenuItem>
@@ -340,10 +335,7 @@ export function ChannelGroupSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
   onToggleCollapsed: () => void;
   selectedChannelId: string | null;
@@ -517,10 +509,7 @@ export function CustomChannelSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread: (channelId: string) => void;
   onMarkSectionRead: () => void;
   onAssignChannel: (channelId: string, sectionId: string) => void;
   onUnassignChannel: (channelId: string) => void;

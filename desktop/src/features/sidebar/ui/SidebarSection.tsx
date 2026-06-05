@@ -253,10 +253,7 @@ export function SidebarSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread?: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
   onToggleCollapsed?: () => void;
   mutedChannelIds?: ReadonlySet<string>;
