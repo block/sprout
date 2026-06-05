@@ -248,9 +248,6 @@ pub enum MessagesCmd {
         /// Also publish to the Nostr network
         #[arg(long, default_value_t = false)]
         broadcast: bool,
-        /// [DEPRECATED] Explicit mention pubkeys — use @name in content instead.
-        #[arg(long = "mention", hide = true)]
-        mentions: Vec<String>,
         /// Attach file(s) — uploads and includes as imeta tags
         #[arg(long = "file")]
         files: Vec<String>,

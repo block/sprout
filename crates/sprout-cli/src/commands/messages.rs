@@ -8,10 +8,7 @@ use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
-use sprout_sdk::mentions::{
-    extract_at_names, match_names_to_profiles, merge_mentions, normalize_mention_pubkeys,
-    MentionProfile, MENTION_CAP,
-};
+use sprout_sdk::mentions::{extract_at_names, match_names_to_profiles, MentionProfile};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -348,7 +345,6 @@ pub struct SendMessageParams {
     pub kind: Option<u16>,
     pub reply_to: Option<String>,
     pub broadcast: bool,
-    pub mentions: Vec<String>,
     pub files: Vec<String>,
 }
 
@@ -365,13 +361,6 @@ pub async fn cmd_send_message(
     if let Some(ref r) = p.reply_to {
         validate_hex64(r)?;
     }
-    for m in &p.mentions {
-        validate_hex64(m)?;
-    }
-    if !p.mentions.is_empty() {
-        eprintln!("warning: --mention is deprecated and will be removed in a future release. Use @name in message content instead.");
-    }
-
     let channel_uuid = parse_uuid(&p.channel_id)?;
 
     // Upload files and build imeta tags
@@ -405,13 +394,10 @@ pub async fn cmd_send_message(
         None
     };
 
-    // Normalize explicit mentions, then merge auto-resolved up to the SDK mention cap.
-    // Auto-resolution scans the author-written body only — not the media markdown we
+    // Resolve @name mentions in the author-written body only — not the media markdown we
     // append above, which is derived from upload metadata and can't carry `@names`.
-    let mut merged: Vec<String> = normalize_mention_pubkeys(&p.mentions, None);
     let auto_resolved = resolve_content_mentions(client, &p.channel_id, &p.content).await;
-    merge_mentions(&mut merged, &auto_resolved, MENTION_CAP);
-    let mention_refs: Vec<&str> = merged.iter().map(|s| s.as_str()).collect();
+    let mention_refs: Vec<&str> = auto_resolved.iter().map(|s| s.as_str()).collect();
 
     let builder = match p.kind {
         Some(45001) => {
@@ -633,7 +619,6 @@ pub async fn dispatch(
             kind,
             reply_to,
             broadcast,
-            mentions,
             files,
         } => {
             cmd_send_message(
@@ -644,7 +629,6 @@ pub async fn dispatch(
                     kind,
                     reply_to,
                     broadcast,
-                    mentions,
                     files,
                 },
             )
