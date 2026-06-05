@@ -33,7 +33,7 @@
       "id": "custom-emoji",
       "name": "Custom Emoji",
       "description": "Workspace emoji palette for reactions and messages",
-      "tier": "experimental",
+      "tier": "stable",
       "platforms": ["desktop"]
     },
     {
