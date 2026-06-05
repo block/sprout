@@ -8216,6 +8216,7 @@ dependencies = [
  "hex",
  "infer",
  "libc",
+ "mesh-llm-host-runtime",
  "mesh-llm-sdk",
  "neteq",
  "nostr",
