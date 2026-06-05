@@ -54,6 +54,7 @@ import {
   type SettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
+import { FeatureGate } from "@/shared/features";
 import { useMeshRelayOrchestrator } from "@/features/mesh-compute/hooks/useMeshRelayOrchestrator";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
 import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
@@ -887,7 +888,9 @@ export function AppShell() {
                   }}
                 />
               </SidebarProvider>
-              <HuddleBar />
+              <FeatureGate feature="huddles">
+                <HuddleBar />
+              </FeatureGate>
             </div>
           </HuddleProvider>
         </AppShellProvider>
