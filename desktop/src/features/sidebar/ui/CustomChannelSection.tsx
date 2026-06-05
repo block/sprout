@@ -50,7 +50,7 @@ import { cn } from "@/shared/lib/cn";
 // ---------------------------------------------------------------------------
 
 const SECTION_ICON_BUTTON_CLASS =
-  "flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground";
+  "flex size-6 items-center justify-center rounded-[4px] p-1 text-sidebar-foreground/50 transition-colors hover:bg-sidebar-border/35 hover:text-sidebar-foreground focus-visible:bg-sidebar-border/35 focus-visible:text-sidebar-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring [&>svg]:size-4 [&>svg]:shrink-0";
 export const SECTION_ACTION_VISIBILITY_CLASS =
   "opacity-0 transition-opacity group-hover/sidebar-section:opacity-100 group-focus-within/sidebar-section:opacity-100";
 const SECTION_LABEL_BUTTON_CLASS =
@@ -275,7 +275,7 @@ function SectionHeaderActions({
           onClick={onBrowse}
           type="button"
         >
-          <Search className="h-3.5 w-3.5" />
+          <Search className="h-4 w-4" />
         </button>
       ) : null}
       {onCreateClick ? (

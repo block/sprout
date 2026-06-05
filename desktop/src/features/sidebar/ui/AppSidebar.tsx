@@ -679,7 +679,7 @@ export function AppSidebar({
                     aria-expanded={isNewDmOpen}
                     aria-label="Start a direct message"
                     className={cn(
-                      "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                      "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-border/35 hover:text-sidebar-foreground",
                       SECTION_ACTION_VISIBILITY_CLASS,
                     )}
                     data-testid="new-dm-trigger"

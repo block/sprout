@@ -29,6 +29,9 @@ function GlobalTopDivider() {
   );
 }
 
+const TOP_CHROME_ICON_BUTTON_CLASS =
+  "size-6 rounded-[4px] p-1 text-muted-foreground/70 hover:bg-border/45 hover:text-foreground";
+
 export function AppTopChrome({
   canGoBack,
   canGoForward,
@@ -49,28 +52,28 @@ export function AppTopChrome({
       />
       <GlobalTopDivider />
       <div className="fixed left-[80px] top-[9px] z-[45] flex items-center gap-0.5">
-        <SidebarTrigger className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground" />
+        <SidebarTrigger className={TOP_CHROME_ICON_BUTTON_CLASS} />
         <Button
           aria-label="Go back"
-          className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
+          className={TOP_CHROME_ICON_BUTTON_CLASS}
           data-testid="global-back"
           disabled={!canGoBack}
           onClick={onGoBack}
           size="icon"
           variant="ghost"
         >
-          <ChevronLeft className="h-3 w-3" />
+          <ChevronLeft className="h-4 w-4" />
         </Button>
         <Button
           aria-label="Go forward"
-          className="h-[22px] w-[22px] text-muted-foreground/70 hover:bg-muted/60 hover:text-foreground"
+          className={TOP_CHROME_ICON_BUTTON_CLASS}
           data-testid="global-forward"
           disabled={!canGoForward}
           onClick={onGoForward}
           size="icon"
           variant="ghost"
         >
-          <ChevronRight className="h-3 w-3" />
+          <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
       <TopbarSearch
