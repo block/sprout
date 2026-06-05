@@ -90,6 +90,8 @@ test("custom emoji round-trips through select-all + send to the timeline", async
     .getByTestId("message-timeline")
     .locator(`img[data-custom-emoji][alt=":${SHORTCODE}:"]`);
   await expect(sentEmoji.last()).toBeVisible();
+  await sentEmoji.last().hover();
+  await expect(page.getByText(`:${SHORTCODE}:`).last()).toBeVisible();
   // The composer clears after send.
   await expect(input.locator("img[data-custom-emoji]")).toHaveCount(0);
 });
