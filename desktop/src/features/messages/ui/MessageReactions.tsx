@@ -2,11 +2,9 @@ import * as React from "react";
 
 import type { TimelineReaction } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
+import { emojiDisplayName } from "@/shared/lib/emojiName";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
-import { UserAvatar } from "@/shared/ui/UserAvatar";
-
-const MAX_VISIBLE_REACTORS = 10;
 
 /**
  * Render a reaction's emoji: a custom (image) emoji when `emojiUrl` is set,
@@ -22,10 +20,12 @@ function EmojiGlyph({
   reaction: TimelineReaction;
   className?: string;
 }) {
+  const displayName = emojiDisplayName(reaction.emoji);
   if (reaction.emojiUrl) {
     return (
       <img
         alt={reaction.emoji}
+        title={displayName}
         src={rewriteRelayUrl(reaction.emojiUrl)}
         className={cn(
           "inline-block object-contain align-text-bottom",
@@ -35,41 +35,46 @@ function EmojiGlyph({
       />
     );
   }
-  return <span>{reaction.emoji}</span>;
+  return (
+    <span
+      className={cn("inline-block leading-none", className)}
+      title={displayName}
+    >
+      {reaction.emoji}
+    </span>
+  );
+}
+
+function formatReactionUsers(reaction: TimelineReaction): string {
+  const names = reaction.users.map((user) => user.displayName).filter(Boolean);
+  if (reaction.reactedByCurrentUser) {
+    const others = names.filter((name) => name !== "You");
+    names.splice(0, names.length, "You (click to remove)", ...others);
+  }
+  if (names.length === 0) return `${reaction.count} people`;
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
 function ReactionPopoverContent({ reaction }: { reaction: TimelineReaction }) {
-  const visible = reaction.users.slice(0, MAX_VISIBLE_REACTORS);
-  const overflow = reaction.users.length - MAX_VISIBLE_REACTORS;
+  const displayName = emojiDisplayName(reaction.emoji);
+  const userText = formatReactionUsers(reaction);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-2 pb-1 border-b border-border/50">
-        <EmojiGlyph reaction={reaction} className="h-6 w-6 text-2xl" />
-        <span className="text-xs text-muted-foreground">
-          {reaction.count} {reaction.count === 1 ? "reaction" : "reactions"}
-        </span>
+    <div className="flex flex-col items-center text-center">
+      <div className="mb-2 flex h-14 w-14 items-center justify-center">
+        <EmojiGlyph
+          reaction={reaction}
+          className={reaction.emojiUrl ? "h-12 w-12" : "text-4xl"}
+        />
       </div>
-      <div className="flex flex-col gap-1.5">
-        {visible.map((user) => (
-          <div key={user.pubkey} className="flex items-center gap-2 min-w-0">
-            <UserAvatar
-              avatarUrl={user.avatarUrl}
-              displayName={user.displayName}
-              size="xs"
-            />
-            <span className="text-sm truncate">{user.displayName}</span>
-          </div>
-        ))}
+      <div className="max-w-[14rem] text-balance text-sm font-semibold leading-snug text-popover-foreground">
+        {userText} <span className="text-muted-foreground">reacted with</span>
       </div>
-      {overflow > 0 && (
-        <span className="text-xs text-muted-foreground">+{overflow} more</span>
-      )}
-      {reaction.reactedByCurrentUser && (
-        <span className="text-xs text-muted-foreground border-t border-border/50 pt-1.5">
-          Click to remove your reaction
-        </span>
-      )}
+      <div className="mt-0.5 text-sm font-semibold leading-snug text-muted-foreground">
+        {displayName}
+      </div>
     </div>
   );
 }
@@ -175,11 +180,14 @@ function ReactionPill({
     onSelect(reaction.emoji);
   };
 
+  const displayName = emojiDisplayName(reaction.emoji);
+
   if (reaction.users.length === 0) {
     return (
       <button
         aria-label={`Toggle ${reaction.emoji} reaction`}
         aria-pressed={reaction.reactedByCurrentUser}
+        title={displayName}
         className={pillClasses}
         disabled={!canToggle || pending}
         onClick={handleClick}
@@ -205,6 +213,7 @@ function ReactionPill({
           <button
             aria-label={`Toggle ${reaction.emoji} reaction`}
             aria-pressed={reaction.reactedByCurrentUser}
+            title={displayName}
             className={pillClasses}
             disabled={!canToggle || pending}
             onClick={handleClick}
@@ -219,7 +228,7 @@ function ReactionPill({
         align="start"
         side="top"
         sideOffset={6}
-        className="w-auto min-w-48 max-w-64 p-3"
+        className="w-auto min-w-56 max-w-72 rounded-xl p-3"
         onMouseEnter={handleMouseEnter}
         onMouseLeave={scheduleClose}
         onOpenAutoFocus={(e) => e.preventDefault()}

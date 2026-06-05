@@ -141,8 +141,10 @@ test("reacting with a custom emoji renders via the localhost media proxy", async
   // to surface the custom emoji, then click it.
   const picker = page.locator("em-emoji-picker");
   await picker.locator("input[type='search']").fill(REACTION_SHORTCODE);
-  // Custom emoji buttons carry the shortcode as their `title` (no aria-label).
-  await picker.locator(`button[title='${REACTION_SHORTCODE}']`).first().click();
+  await picker
+    .getByRole("button", { name: `:${REACTION_SHORTCODE}:` })
+    .first()
+    .click();
 
   // The reaction pill renders the custom emoji as an <img alt=":react:">. Its
   // src must be the localhost proxy URL — proving rewriteRelayUrl() ran. A raw
@@ -281,7 +283,10 @@ test("a system message accepts a custom-emoji reaction", async ({ page }) => {
 
   const picker = page.locator("em-emoji-picker");
   await picker.locator("input[type='search']").fill(REACTION_SHORTCODE);
-  await picker.locator(`button[title='${REACTION_SHORTCODE}']`).first().click();
+  await picker
+    .getByRole("button", { name: `:${REACTION_SHORTCODE}:` })
+    .first()
+    .click();
 
   const reactionImg = row.locator(`img[alt=':${REACTION_SHORTCODE}:']`);
   await expect(reactionImg).toBeVisible();
