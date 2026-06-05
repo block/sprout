@@ -27,6 +27,9 @@ tauri-build = { version = "2", features = [] }
 libc = "0.2"
 ctrlc = { version = "3", features = ["termination"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSHapticFeedback"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 

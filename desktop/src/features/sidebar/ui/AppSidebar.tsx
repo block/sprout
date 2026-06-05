@@ -60,6 +60,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
+  SidebarRail,
 } from "@/shared/ui/sidebar";
 
 type CollapsibleSidebarGroup =
@@ -438,7 +439,7 @@ export function AppSidebar({
             </SidebarMenuButton>
             {homeBadgeCount > 0 ? (
               <SidebarMenuBadge
-                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
                 data-testid="sidebar-home-count"
               >
                 {Math.min(homeBadgeCount, 99)}
@@ -482,7 +483,7 @@ export function AppSidebar({
             </SidebarMenuButton>
             {shouldShowAgentCount ? (
               <SidebarMenuBadge
-                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
                 data-testid="sidebar-agents-count"
               >
                 {totalAgentCount}
@@ -832,6 +833,7 @@ export function AppSidebar({
           setDeleteSectionTarget(null);
         }}
       />
+      <SidebarRail />
     </Sidebar>
   );
 }

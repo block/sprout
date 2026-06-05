@@ -198,7 +198,7 @@ export function ChannelMenuButton({
           className={cn(
             "ml-auto h-3 w-3 shrink-0",
             isActive
-              ? "text-sidebar-primary-foreground/60"
+              ? "text-sidebar-active-foreground/60"
               : "text-sidebar-foreground/40",
           )}
         />

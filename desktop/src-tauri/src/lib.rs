@@ -335,6 +335,22 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     }
 }
 
+#[tauri::command]
+fn perform_sidebar_default_haptic() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{
+            NSHapticFeedbackManager, NSHapticFeedbackPattern, NSHapticFeedbackPerformanceTime,
+            NSHapticFeedbackPerformer,
+        };
+
+        NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
+            NSHapticFeedbackPattern::Alignment,
+            NSHapticFeedbackPerformanceTime::Now,
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -718,6 +734,7 @@ pub fn run() {
             add_agent_to_huddle,
             check_pipeline_hotstart,
             confirm_huddle_active,
+            perform_sidebar_default_haptic,
             get_huddle_agent_pubkeys,
             set_voice_input_mode,
             get_voice_input_mode,

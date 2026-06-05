@@ -8678,6 +8678,7 @@ dependencies = [
  "mesh-llm-sdk",
  "neteq",
  "nostr",
+ "objc2-app-kit",
  "opus",
  "png 0.18.1",
  "regex",
