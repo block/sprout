@@ -65,6 +65,13 @@
       "platforms": ["desktop"]
     },
     {
+      "id": "forum",
+      "name": "Forum Channels",
+      "description": "Forum-style threaded channels for long-form discussions",
+      "tier": "experimental",
+      "platforms": ["desktop"]
+    },
+    {
       "id": "doctor",
       "name": "Doctor",
       "description": "Diagnostic and debug panel for troubleshooting",

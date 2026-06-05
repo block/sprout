@@ -654,29 +654,31 @@ export function AppSidebar({
                   onUnstarChannel={onUnstarChannel}
                 />
               </SidebarDndContext>
-              <ChannelGroupSection
-                browseAriaLabel="Browse forums"
-                browseTestId="browse-forums"
-                createAriaLabel="Create a forum"
-                hasUnread={unreadChannelIds.size > 0}
-                isCollapsed={collapsedGroups.forums}
-                isActiveChannel={selectedView === "channel"}
-                items={forumChannels}
-                listTestId="forum-list"
-                onBrowse={onOpenBrowseForums}
-                onCreateClick={() => setCreateDialogKind("forum")}
-                onMarkAllRead={onMarkAllChannelsRead}
-                onMarkChannelRead={onMarkChannelRead}
-                onMarkChannelUnread={onMarkChannelUnread}
-                onSelectChannel={onSelectChannel}
-                onToggleCollapsed={() => toggleCollapsedGroup("forums")}
-                selectedChannelId={selectedChannelId}
-                title="Forums"
-                unreadChannelIds={unreadChannelIds}
-                mutedChannelIds={mutedChannelIds}
-                onMuteChannel={onMuteChannel}
-                onUnmuteChannel={onUnmuteChannel}
-              />
+              <FeatureGate feature="forum">
+                <ChannelGroupSection
+                  browseAriaLabel="Browse forums"
+                  browseTestId="browse-forums"
+                  createAriaLabel="Create a forum"
+                  hasUnread={unreadChannelIds.size > 0}
+                  isCollapsed={collapsedGroups.forums}
+                  isActiveChannel={selectedView === "channel"}
+                  items={forumChannels}
+                  listTestId="forum-list"
+                  onBrowse={onOpenBrowseForums}
+                  onCreateClick={() => setCreateDialogKind("forum")}
+                  onMarkAllRead={onMarkAllChannelsRead}
+                  onMarkChannelRead={onMarkChannelRead}
+                  onMarkChannelUnread={onMarkChannelUnread}
+                  onSelectChannel={onSelectChannel}
+                  onToggleCollapsed={() => toggleCollapsedGroup("forums")}
+                  selectedChannelId={selectedChannelId}
+                  title="Forums"
+                  unreadChannelIds={unreadChannelIds}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={onMuteChannel}
+                  onUnmuteChannel={onUnmuteChannel}
+                />
+              </FeatureGate>
               <SidebarSection
                 action={
                   <SidebarGroupAction
