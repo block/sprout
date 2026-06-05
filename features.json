@@ -5,14 +5,14 @@
       "id": "managed-agents",
       "name": "Managed Agents",
       "description": "Create, configure, and run AI agents in your workspace",
-      "tier": "experimental",
+      "tier": "stable",
       "platforms": ["desktop"]
     },
     {
       "id": "channel-templates",
       "name": "Channel Templates",
       "description": "Pre-configured channel setups with agents and workflows",
-      "tier": "experimental",
+      "tier": "stable",
       "platforms": ["desktop"]
     },
     {
@@ -68,7 +68,7 @@
       "id": "doctor",
       "name": "Doctor",
       "description": "Diagnostic and debug panel for troubleshooting",
-      "tier": "dev",
+      "tier": "stable",
       "platforms": ["desktop"]
     }
   ]
