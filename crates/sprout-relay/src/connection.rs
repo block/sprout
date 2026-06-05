@@ -192,6 +192,10 @@ pub async fn handle_connection(socket: WebSocket, state: Arc<AppState>, addr: So
 
     state.sub_registry.remove_connection(conn.conn_id);
     state.conn_manager.deregister(conn.conn_id);
+    // Clear presence so disconnected users don't appear online until TTL expires.
+    if let AuthState::Authenticated(ref auth_ctx) = *conn.auth_state.read().await {
+        let _ = state.pubsub.clear_presence(&auth_ctx.pubkey).await;
+    }
     metrics::gauge!("sprout_ws_connections_active").decrement(1.0);
     info!(conn_id = %conn_id, addr = %addr, "WebSocket connection closed");
 
