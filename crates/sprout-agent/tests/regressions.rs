@@ -1209,9 +1209,10 @@ async fn token_usage_over_budget_triggers_handoff() {
 async fn stale_usage_plus_history_growth_triggers_handoff() {
     // window 10_000, output 1_000 -> threshold = min(7_500, 9_000) = 7_500.
     // req1 reports usage 7_000 (UNDER 7_500). Its response is a tool_call;
-    // the fake MCP returns a ~6 KB result, appended to history. At 2 bytes/
-    // token that's ~3_000 estimated tokens, so projected ~10_000 >= 7_500 ->
-    // the next loop iteration hands off before the follow-up complete().
+    // the fake MCP returns a ~6 KB result, appended to history. At the
+    // conservative 1 byte/token estimate that's ~6_000 projected tokens, so
+    // projected ~13_000 >= 7_500 -> the next loop iteration hands off before
+    // the follow-up complete().
     //   req1: tool_call + usage(7000)
     //   (tool result ~6KB appended)
     //   req2: summarize() (handoff)
