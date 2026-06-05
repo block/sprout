@@ -1,6 +1,8 @@
 import {
   ArrowDown,
   ArrowUp,
+  Bell,
+  BellOff,
   Check,
   CheckCheck,
   CheckCircle2,
@@ -10,6 +12,8 @@ import {
   Pencil,
   Plus,
   Search,
+  Star,
+  StarOff,
   Trash2,
 } from "lucide-react";
 
@@ -114,47 +118,93 @@ function MoveToSectionSubmenu({
 export function ChannelContextMenuItems({
   channel,
   hasUnread,
+  isMuted,
+  isStarred,
   sections,
   assignments,
   onMarkChannelRead,
   onMarkChannelUnread,
+  onMuteChannel,
+  onUnmuteChannel,
+  onStarChannel,
+  onUnstarChannel,
   onAssignChannel,
   onUnassignChannel,
   onCreateSectionForChannel,
 }: {
   channel: Channel;
   hasUnread: boolean;
+  isMuted?: boolean;
+  isStarred?: boolean;
   sections?: ChannelSection[];
   assignments?: Record<string, string>;
-  onMarkChannelRead: (
+  onMarkChannelRead?: (
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread: (
+  onMarkChannelUnread?: (
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
+  onMuteChannel?: (channelId: string) => void;
+  onUnmuteChannel?: (channelId: string) => void;
+  onStarChannel?: (channelId: string) => void;
+  onUnstarChannel?: (channelId: string) => void;
   onAssignChannel?: (channelId: string, sectionId: string) => void;
   onUnassignChannel?: (channelId: string) => void;
   onCreateSectionForChannel?: (channelId: string) => void;
 }) {
+  const showStar = Boolean(onStarChannel && onUnstarChannel);
+  const showReadToggle = hasUnread
+    ? Boolean(onMarkChannelRead)
+    : Boolean(onMarkChannelUnread);
   return (
     <>
-      {hasUnread ? (
+      {showStar ? (
+        isStarred ? (
+          <ContextMenuItem onClick={() => onUnstarChannel?.(channel.id)}>
+            <StarOff className="h-4 w-4" />
+            Unstar channel
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem onClick={() => onStarChannel?.(channel.id)}>
+            <Star className="h-4 w-4" />
+            Star channel
+          </ContextMenuItem>
+        )
+      ) : null}
+      {showStar && showReadToggle ? <ContextMenuSeparator /> : null}
+      {hasUnread && onMarkChannelRead ? (
         <ContextMenuItem
           onClick={() => onMarkChannelRead(channel.id, channel.lastMessageAt)}
         >
           <CheckCircle2 className="h-4 w-4" />
           Mark as read
         </ContextMenuItem>
-      ) : (
+      ) : !hasUnread && onMarkChannelUnread ? (
         <ContextMenuItem
           onClick={() => onMarkChannelUnread(channel.id, channel.lastMessageAt)}
         >
           <CircleDot className="h-4 w-4" />
           Mark unread
         </ContextMenuItem>
-      )}
+      ) : null}
+      {onMuteChannel && onUnmuteChannel ? (
+        <>
+          <ContextMenuSeparator />
+          {isMuted ? (
+            <ContextMenuItem onClick={() => onUnmuteChannel(channel.id)}>
+              <Bell className="h-4 w-4" />
+              Unmute channel
+            </ContextMenuItem>
+          ) : (
+            <ContextMenuItem onClick={() => onMuteChannel(channel.id)}>
+              <BellOff className="h-4 w-4" />
+              Mute channel
+            </ContextMenuItem>
+          )}
+        </>
+      ) : null}
       {sections &&
       assignments &&
       onAssignChannel &&
@@ -183,7 +233,6 @@ export function ChannelContextMenuItems({
 function SectionHeaderActions({
   browseAriaLabel,
   browseTestId,
-  className,
   createAriaLabel,
   hasUnread,
   onBrowse,
@@ -192,24 +241,21 @@ function SectionHeaderActions({
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
-  className?: string;
   createAriaLabel: string;
   hasUnread?: boolean;
-  onBrowse: () => void;
-  onCreateClick: () => void;
+  onBrowse?: () => void;
+  onCreateClick?: () => void;
   onMarkAllRead?: () => void;
 }) {
   return (
-    <div
-      className={cn(
-        "absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5",
-        className,
-      )}
-    >
+    <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
       {hasUnread && onMarkAllRead ? (
         <button
           aria-label="Mark all as read"
-          className={SECTION_ICON_BUTTON_CLASS}
+          className={cn(
+            SECTION_ICON_BUTTON_CLASS,
+            SECTION_ACTION_VISIBILITY_CLASS,
+          )}
           onClick={onMarkAllRead}
           title="Mark all as read"
           type="button"
@@ -217,23 +263,27 @@ function SectionHeaderActions({
           <CheckCheck className="h-3.5 w-3.5" />
         </button>
       ) : null}
-      <button
-        aria-label={browseAriaLabel}
-        className={SECTION_ICON_BUTTON_CLASS}
-        data-testid={browseTestId}
-        onClick={onBrowse}
-        type="button"
-      >
-        <Search className="h-3.5 w-3.5" />
-      </button>
-      <button
-        aria-label={createAriaLabel}
-        className={SECTION_ICON_BUTTON_CLASS}
-        onClick={onCreateClick}
-        type="button"
-      >
-        <Plus className="h-4 w-4" />
-      </button>
+      {onBrowse ? (
+        <button
+          aria-label={browseAriaLabel}
+          className={SECTION_ICON_BUTTON_CLASS}
+          data-testid={browseTestId}
+          onClick={onBrowse}
+          type="button"
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
+      {onCreateClick ? (
+        <button
+          aria-label={createAriaLabel}
+          className={SECTION_ICON_BUTTON_CLASS}
+          onClick={onCreateClick}
+          type="button"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -268,6 +318,12 @@ export function ChannelGroupSection({
   onAssignChannel,
   onUnassignChannel,
   onCreateSectionForChannel,
+  mutedChannelIds,
+  onMuteChannel,
+  onUnmuteChannel,
+  starredChannelIds,
+  onStarChannel,
+  onUnstarChannel,
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
@@ -278,8 +334,8 @@ export function ChannelGroupSection({
   isActiveChannel: boolean;
   items: Channel[];
   listTestId: string;
-  onBrowse: () => void;
-  onCreateClick: () => void;
+  onBrowse?: () => void;
+  onCreateClick?: () => void;
   onMarkChannelRead: (
     channelId: string,
     lastMessageAt: string | null | undefined,
@@ -292,7 +348,7 @@ export function ChannelGroupSection({
   onToggleCollapsed: () => void;
   selectedChannelId: string | null;
   title: string;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   hasUnread?: boolean;
   onMarkAllRead?: () => void;
   sections?: ChannelSection[];
@@ -300,6 +356,12 @@ export function ChannelGroupSection({
   onAssignChannel?: (channelId: string, sectionId: string) => void;
   onUnassignChannel?: (channelId: string) => void;
   onCreateSectionForChannel?: (channelId: string) => void;
+  mutedChannelIds?: ReadonlySet<string>;
+  onMuteChannel?: (channelId: string) => void;
+  onUnmuteChannel?: (channelId: string) => void;
+  starredChannelIds?: ReadonlySet<string>;
+  onStarChannel?: (channelId: string) => void;
+  onUnstarChannel?: (channelId: string) => void;
 }) {
   const contentId = `sidebar-${listTestId}`;
 
@@ -315,6 +377,7 @@ export function ChannelGroupSection({
                     <ChannelMenuButton
                       channel={channel}
                       hasUnread={unreadChannelIds.has(channel.id)}
+                      isMuted={mutedChannelIds?.has(channel.id)}
                       isActive={
                         isActiveChannel && selectedChannelId === channel.id
                       }
@@ -325,6 +388,7 @@ export function ChannelGroupSection({
                   <ChannelMenuButton
                     channel={channel}
                     hasUnread={unreadChannelIds.has(channel.id)}
+                    isMuted={mutedChannelIds?.has(channel.id)}
                     isActive={
                       isActiveChannel && selectedChannelId === channel.id
                     }
@@ -337,10 +401,16 @@ export function ChannelGroupSection({
               <ChannelContextMenuItems
                 channel={channel}
                 hasUnread={unreadChannelIds.has(channel.id)}
+                isMuted={mutedChannelIds?.has(channel.id)}
+                isStarred={starredChannelIds?.has(channel.id)}
                 sections={sections}
                 assignments={assignments}
                 onMarkChannelRead={onMarkChannelRead}
                 onMarkChannelUnread={onMarkChannelUnread}
+                onMuteChannel={onMuteChannel}
+                onUnmuteChannel={onUnmuteChannel}
+                onStarChannel={onStarChannel}
+                onUnstarChannel={onUnstarChannel}
                 onAssignChannel={onAssignChannel}
                 onUnassignChannel={onUnassignChannel}
                 onCreateSectionForChannel={onCreateSectionForChannel}
@@ -375,7 +445,6 @@ export function ChannelGroupSection({
         <SectionHeaderActions
           browseAriaLabel={browseAriaLabel}
           browseTestId={browseTestId}
-          className={SECTION_ACTION_VISIBILITY_CLASS}
           createAriaLabel={createAriaLabel}
           hasUnread={hasUnread}
           onBrowse={onBrowse}
@@ -424,6 +493,12 @@ export function CustomChannelSection({
   onDeleteSection,
   onMoveSectionUp,
   onMoveSectionDown,
+  mutedChannelIds,
+  onMuteChannel,
+  onUnmuteChannel,
+  starredChannelIds,
+  onStarChannel,
+  onUnstarChannel,
 }: {
   section: ChannelSection;
   channels: Channel[];
@@ -431,7 +506,7 @@ export function CustomChannelSection({
   isCollapsed: boolean;
   isActiveChannel: boolean;
   selectedChannelId: string | null;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   sections: ChannelSection[];
   assignments: Record<string, string>;
   isFirst: boolean;
@@ -454,6 +529,12 @@ export function CustomChannelSection({
   onDeleteSection: () => void;
   onMoveSectionUp: () => void;
   onMoveSectionDown: () => void;
+  mutedChannelIds?: ReadonlySet<string>;
+  onMuteChannel?: (channelId: string) => void;
+  onUnmuteChannel?: (channelId: string) => void;
+  starredChannelIds?: ReadonlySet<string>;
+  onStarChannel?: (channelId: string) => void;
+  onUnstarChannel?: (channelId: string) => void;
 }) {
   const contentId = `sidebar-section-${section.id}`;
 
@@ -573,6 +654,7 @@ export function CustomChannelSection({
                               <ChannelMenuButton
                                 channel={channel}
                                 hasUnread={unreadChannelIds.has(channel.id)}
+                                isMuted={mutedChannelIds?.has(channel.id)}
                                 isActive={
                                   isActiveChannel &&
                                   selectedChannelId === channel.id
@@ -586,10 +668,16 @@ export function CustomChannelSection({
                           <ChannelContextMenuItems
                             channel={channel}
                             hasUnread={unreadChannelIds.has(channel.id)}
+                            isMuted={mutedChannelIds?.has(channel.id)}
+                            isStarred={starredChannelIds?.has(channel.id)}
                             sections={sections}
                             assignments={assignments}
                             onMarkChannelRead={onMarkChannelRead}
                             onMarkChannelUnread={onMarkChannelUnread}
+                            onMuteChannel={onMuteChannel}
+                            onUnmuteChannel={onUnmuteChannel}
+                            onStarChannel={onStarChannel}
+                            onUnstarChannel={onUnstarChannel}
                             onAssignChannel={onAssignChannel}
                             onUnassignChannel={onUnassignChannel}
                             onCreateSectionForChannel={

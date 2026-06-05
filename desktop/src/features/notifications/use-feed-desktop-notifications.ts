@@ -69,6 +69,7 @@ export function useFeedDesktopNotifications(
   settings: NotificationSettings,
   setDesktopEnabled: (enabled: boolean) => Promise<boolean>,
   profiles?: UserProfileLookup,
+  mutedChannelIds?: ReadonlySet<string>,
 ) {
   const normalizedPubkey = pubkey?.trim().toLowerCase() ?? "";
   const seenItemIdsRef = React.useRef<Set<string>>(
@@ -150,7 +151,14 @@ export function useFeedDesktopNotifications(
       ? eligibleFeedNotificationItems(feed, {
           mentions: settings.mentions,
           needsAction: settings.needsAction,
-        }).filter((item) => !nextSeenItemIds.has(item.id))
+        })
+          .filter((item) => !nextSeenItemIds.has(item.id))
+          .filter(
+            (item) =>
+              !item.channelId ||
+              !mutedChannelIds?.has(item.channelId) ||
+              item.category === "mention",
+          )
       : [];
 
     for (const item of currentFeedItems) {
@@ -192,6 +200,7 @@ export function useFeedDesktopNotifications(
     }
   }, [
     feed,
+    mutedChannelIds,
     normalizedPubkey,
     profiles,
     settings.desktopEnabled,

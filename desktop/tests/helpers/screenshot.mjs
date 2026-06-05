@@ -10,15 +10,20 @@
 //   node tests/helpers/screenshot.mjs [options]
 //
 // Options:
-//   --name <name>        Screenshot filename without extension (default: screenshot)
-//   --route <path>       Client-side route to navigate to (default: /)
-//   --click <selector>   CSS selector or data-testid to click before capture
-//   --wait <ms>          Milliseconds to wait before capture (default: 2000)
-//   --viewport <WxH>     Viewport dimensions (default: 1280x720)
-//   --outdir <path>      Output directory (default: test-results/screenshots)
+//   --name <name>              Screenshot filename without extension (default: screenshot)
+//   --route <path>             Client-side route to navigate to (default: /)
+//   --active-channel <name>    Channel to navigate to and view (channel-aware navigation)
+//   --click <selector>         CSS selector or data-testid to click before capture
+//   --right-click <selector>   Right-click a selector (for context menus)
+//   --hover <selector>         Hover over a selector before capture
+//   --clip <x,y,w,h>           Crop to a region (e.g. 0,0,256,720 for sidebar)
+//   --wait <ms>                Milliseconds to wait before capture (default: 2000)
+//   --viewport <WxH>           Viewport dimensions (default: 1280x720)
+//   --outdir <path>            Output directory (default: test-results/screenshots)
+//   --messages <path>          JSON file with messages to inject before capture
 
 import { parseArgs } from "node:util";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -26,13 +31,21 @@ const { values: args } = parseArgs({
   options: {
     name: { type: "string", default: "screenshot" },
     route: { type: "string", default: "/" },
+    "active-channel": { type: "string" },
     click: { type: "string" },
+    "right-click": { type: "string" },
+    hover: { type: "string" },
+    clip: { type: "string" },
     wait: { type: "string", default: "2000" },
     viewport: { type: "string", default: "1280x720" },
     outdir: { type: "string", default: "test-results/screenshots" },
+    messages: { type: "string" },
   },
   strict: true,
 });
+
+const activeChannel = args["active-channel"];
+const rightClick = args["right-click"];
 
 const [vpWidth, vpHeight] = args.viewport.split("x").map(Number);
 const waitMs = Number(args.wait);
@@ -40,6 +53,16 @@ const outdir = resolve(args.outdir);
 
 if (!existsSync(outdir)) {
   mkdirSync(outdir, { recursive: true });
+}
+
+function resolveSelector(value) {
+  return value.startsWith("[") ? value : `[data-testid="${value}"]`;
+}
+
+function bail(msg) {
+  console.error(msg);
+  process.exitCode = 1;
+  throw new Error(msg);
 }
 
 const BASE_URL = "http://127.0.0.1:4173";
@@ -110,20 +133,114 @@ await page.addInitScript(() => {
   window.__SPROUT_E2E_APP_BADGE_COUNT__ = 0;
 });
 
-const url = args.route === "/" ? BASE_URL : `${BASE_URL}/#${args.route}`;
-await page.goto(url);
-await page.waitForTimeout(waitMs);
+try {
+  if (args.messages) {
+    if (args.route !== "/" && !activeChannel) {
+      console.warn("warning: --route is ignored when --messages is provided");
+    }
 
-if (args.click) {
-  const selector = args.click.startsWith("[")
-    ? args.click
-    : `[data-testid="${args.click}"]`;
-  await page.click(selector);
-  await page.waitForTimeout(500);
+    let messages;
+    try {
+      messages = JSON.parse(readFileSync(resolve(args.messages), "utf8"));
+    } catch (err) {
+      bail(`Failed to read messages file: ${err.message}`);
+    }
+
+    if (
+      !Array.isArray(messages) ||
+      messages.length === 0 ||
+      messages.some(
+        (m) =>
+          typeof m.channelName !== "string" || typeof m.content !== "string",
+      )
+    ) {
+      bail(
+        "messages file must be a non-empty array of { channelName, content, pubkey?, kind?, mentionPubkeys?, extraTags?, parentEventId? }",
+      );
+    }
+
+    const targetChannels = new Set(messages.map((m) => m.channelName));
+
+    if (!activeChannel && targetChannels.size > 1) {
+      bail(
+        "All messages must target the same channelName, or use --active-channel to specify the viewing channel",
+      );
+    }
+
+    const viewChannel = activeChannel ?? [...targetChannels][0];
+
+    for (const ch of [...targetChannels, viewChannel]) {
+      if (!/^[a-z0-9-]+$/.test(ch)) {
+        bail(`Invalid channel name: ${ch}`);
+      }
+    }
+
+    await page.goto(BASE_URL);
+    await page.waitForSelector(`[data-testid="channel-${viewChannel}"]`, {
+      timeout: 10000,
+    });
+    await page.click(`[data-testid="channel-${viewChannel}"]`);
+
+    for (const ch of targetChannels) {
+      await page.waitForFunction(
+        (name) =>
+          window.__SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: name,
+          }) ?? false,
+        ch,
+        { timeout: 10000 },
+      );
+    }
+
+    for (const msg of messages) {
+      await page.evaluate(
+        (m) => {
+          window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__?.(m);
+        },
+        { ...msg, pubkey: msg.pubkey ?? DEFAULT_MOCK_PUBKEY },
+      );
+    }
+
+    await page.waitForTimeout(waitMs);
+  } else if (activeChannel) {
+    if (!/^[a-z0-9-]+$/.test(activeChannel)) {
+      bail(`Invalid channel name: ${activeChannel}`);
+    }
+
+    await page.goto(BASE_URL);
+    await page.waitForSelector(`[data-testid="channel-${activeChannel}"]`, {
+      timeout: 10000,
+    });
+    await page.click(`[data-testid="channel-${activeChannel}"]`);
+    await page.waitForTimeout(waitMs);
+  } else {
+    const url = args.route === "/" ? BASE_URL : `${BASE_URL}/#${args.route}`;
+    await page.goto(url);
+    await page.waitForTimeout(waitMs);
+  }
+
+  if (args.hover) {
+    await page.hover(resolveSelector(args.hover));
+    await page.waitForTimeout(500);
+  }
+
+  if (args.click) {
+    await page.click(resolveSelector(args.click));
+    await page.waitForTimeout(500);
+  } else if (rightClick) {
+    await page.click(resolveSelector(rightClick), { button: "right" });
+    await page.waitForTimeout(500);
+  }
+
+  const filepath = join(outdir, `${args.name}.png`);
+  const clipOpts = args.clip
+    ? (() => {
+        const [x, y, w, h] = args.clip.split(",").map(Number);
+        return { clip: { x, y, width: w, height: h } };
+      })()
+    : {};
+  await page.screenshot({ path: filepath, ...clipOpts });
+  console.log(filepath);
+} finally {
+  await browser.close();
 }
-
-const filepath = join(outdir, `${args.name}.png`);
-await page.screenshot({ path: filepath });
-console.log(filepath);
-
-await browser.close();

@@ -103,3 +103,101 @@ test("edit's non-imeta tags are dropped (only imeta wins)", () => {
   // Imeta from the edit is present.
   assert.equal(out.filter((t) => t[0] === "imeta").length, 1);
 });
+
+const EMOJI = (shortcode, url) => ["emoji", shortcode, url];
+
+test("edit replaces the original's emoji tags with the edit's set", () => {
+  // Original had :catjam:; edit adds :rickroll: and keeps :catjam: — the
+  // merged emoji set must come entirely from the edit (add/remove honored).
+  const original = [
+    ["h", "uuid"],
+    ["p", "mention1"],
+    EMOJI("catjam", "https://b/catjam.gif"),
+  ];
+  const edit = [
+    ["h", "uuid"],
+    ["e", "x"],
+    EMOJI("catjam", "https://b/catjam.gif"),
+    EMOJI("rickroll", "https://b/rickroll.gif"),
+  ];
+
+  const out = applyEditTagOverlay(original, edit);
+
+  // Emoji tags now match the edit's set (catjam + rickroll).
+  const emoji = out.filter((t) => t[0] === "emoji").map((t) => t[1]);
+  assert.deepEqual(emoji, ["catjam", "rickroll"]);
+  // Original mention preserved.
+  assert.ok(out.some((t) => t[0] === "p" && t[1] === "mention1"));
+});
+
+test("a tag-less edit (legacy/cross-client) PRESERVES the original's emoji tags", () => {
+  // The bug this guards: an edit event that carries no emoji tags — from an
+  // older build or a client that doesn't know the emoji_tags path — must NOT
+  // strip the original's emoji resolution. Otherwise an unrelated text edit
+  // would re-break a `:catjam:` the original rendered fine.
+  const original = [
+    ["h", "uuid"],
+    ["p", "mention1"],
+    EMOJI("catjam", "https://b/catjam.gif"),
+  ];
+  const edit = [
+    ["h", "uuid"],
+    ["e", "x"],
+  ];
+
+  const out = applyEditTagOverlay(original, edit);
+
+  // The original's emoji tag survives intact.
+  assert.deepEqual(
+    out.filter((t) => t[0] === "emoji"),
+    [EMOJI("catjam", "https://b/catjam.gif")],
+  );
+  // Other original tags survive too.
+  assert.ok(out.some((t) => t[0] === "h"));
+  assert.ok(out.some((t) => t[0] === "p" && t[1] === "mention1"));
+});
+
+test("a tag-less edit still fully replaces imeta (attachments), unlike emoji", () => {
+  // imeta is always rebuilt from the edit (the composer re-emits the full
+  // attachment set), so a tag-less edit removes attachments — but it must NOT
+  // remove emoji. This pins the asymmetry between the two tag kinds.
+  const original = [
+    ["h", "uuid"],
+    IMETA("https://b/a.png"),
+    EMOJI("catjam", "https://b/catjam.gif"),
+  ];
+  const edit = [
+    ["h", "uuid"],
+    ["e", "x"],
+  ];
+
+  const out = applyEditTagOverlay(original, edit);
+  // imeta gone (replaced by the edit's empty set).
+  assert.equal(out.filter((t) => t[0] === "imeta").length, 0);
+  // emoji preserved (edit supplied none → keep original).
+  assert.equal(out.filter((t) => t[0] === "emoji").length, 1);
+});
+
+test("imeta and emoji are overlaid together from the edit", () => {
+  const original = [
+    ["h", "uuid"],
+    IMETA("https://b/a.png"),
+    EMOJI("catjam", "https://b/catjam.gif"),
+  ];
+  const edit = [
+    ["h", "uuid"],
+    ["e", "x"],
+    IMETA("https://b/c.png"),
+    EMOJI("rickroll", "https://b/rickroll.gif"),
+  ];
+
+  const out = applyEditTagOverlay(original, edit);
+  assert.deepEqual(
+    out.filter((t) => t[0] === "imeta").map((t) => t[1]),
+    ["url https://b/c.png"],
+  );
+  assert.deepEqual(
+    out.filter((t) => t[0] === "emoji").map((t) => t[1]),
+    ["rickroll"],
+  );
+});

@@ -4,30 +4,55 @@ import {
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
 
+export function hasMentionForEvent(
+  event: RelayEvent,
+  currentPubkey: string,
+): boolean {
+  return (
+    currentPubkey.length > 0 &&
+    event.tags.some(
+      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === currentPubkey,
+    )
+  );
+}
+
+export type NotifyOptions = {
+  participatedRootIds: ReadonlySet<string>;
+  followedRootIds: ReadonlySet<string>;
+  authoredRootIds: ReadonlySet<string>;
+  mutedRootIds?: ReadonlySet<string>;
+  mutedChannelIds?: ReadonlySet<string>;
+  channelId?: string | null;
+};
+
 export function shouldNotifyForEvent(
   event: RelayEvent,
   currentPubkey: string,
-  participatedRootIds: ReadonlySet<string>,
-  followedRootIds: ReadonlySet<string>,
-  authoredRootIds: ReadonlySet<string>,
-  mutedRootIds: ReadonlySet<string> = new Set(),
+  options: NotifyOptions,
 ): boolean {
+  const {
+    participatedRootIds,
+    followedRootIds,
+    authoredRootIds,
+    mutedRootIds = new Set(),
+    mutedChannelIds = new Set(),
+    channelId = null,
+  } = options;
   const { parentId, rootId } = getThreadReference(event.tags);
-
-  if (parentId === null) {
-    return true;
-  }
 
   if (isBroadcastReply(event.tags)) {
     return true;
   }
 
-  if (
-    currentPubkey.length > 0 &&
-    event.tags.some(
-      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === currentPubkey,
-    )
-  ) {
+  if (hasMentionForEvent(event, currentPubkey)) {
+    return true;
+  }
+
+  if (channelId !== null && mutedChannelIds.has(channelId)) {
+    return false;
+  }
+
+  if (parentId === null) {
     return true;
   }
 
@@ -47,5 +72,23 @@ export function shouldNotifyForEvent(
     return true;
   }
 
+  return false;
+}
+
+export function isHighPriorityEventForUser(
+  event: RelayEvent,
+  currentPubkey: string,
+): boolean {
+  if (
+    currentPubkey.length > 0 &&
+    event.tags.some(
+      (tag) => tag[0] === "p" && tag[1]?.toLowerCase() === currentPubkey,
+    )
+  ) {
+    return true;
+  }
+  if (isBroadcastReply(event.tags)) {
+    return true;
+  }
   return false;
 }

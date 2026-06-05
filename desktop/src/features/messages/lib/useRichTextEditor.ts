@@ -9,11 +9,14 @@ import { Extension, type KeyboardShortcutCommand } from "@tiptap/core";
 import { Selection, TextSelection } from "@tiptap/pm/state";
 
 import { isMacPlatform } from "@/shared/lib/platform";
+import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
 import {
   MentionHighlightExtension,
   mentionHighlightKey,
 } from "./mentionHighlightExtension";
+import { CUSTOM_EMOJI_NODE_NAME } from "./customEmojiNode";
+import { useComposerCustomEmoji } from "./useComposerCustomEmoji";
 import { buildPlainTextProjection } from "./plainTextProjection";
 import {
   CodeBlockAfterHardBreak,
@@ -30,6 +33,14 @@ export type AutocompleteEdit = {
   replaceFromOffset: number;
   replaceToOffset: number;
   insertText: string;
+  /**
+   * When set, the replaced range becomes a CustomEmojiNode for this
+   * shortcode (followed by `insertText`, which carries the trailing space)
+   * instead of literal `:shortcode:` text. Lets the emoji autocomplete
+   * insert the same selectable/copyable atom the input rule produces when
+   * typing — input rules don't fire on programmatic inserts.
+   */
+  customEmojiShortcode?: string;
 };
 
 export type RichTextEditorOptions = {
@@ -38,6 +49,8 @@ export type RichTextEditorOptions = {
   editable?: boolean;
   mentionNames?: string[];
   channelNames?: string[];
+  /** Known custom-emoji set; used to render `:shortcode:` inline as images. */
+  customEmoji?: CustomEmoji[];
   /** Called on plain Enter (submit). Handled inside Tiptap's extension system
    *  so it fires *before* ProseMirror's default splitBlock behaviour. */
   onSubmit?: () => void;
@@ -74,6 +87,7 @@ export function useRichTextEditor({
   editable = true,
   mentionNames,
   channelNames,
+  customEmoji,
   onSubmit,
   onEditLastOwnMessage,
   isAutocompleteOpen,
@@ -89,6 +103,10 @@ export function useRichTextEditor({
 
   const placeholderRef = React.useRef(placeholder);
   placeholderRef.current = placeholder;
+
+  // Custom-emoji atom node wiring (config + src re-resolve). Kept in a sibling
+  // hook so this file stays focused on generic editor setup.
+  const customEmojiWiring = useComposerCustomEmoji(customEmoji);
 
   const editor = useEditor(
     {
@@ -272,6 +290,7 @@ export function useRichTextEditor({
         }),
         CodeBlockAfterHardBreak,
         MentionHighlightExtension,
+        customEmojiWiring.extension,
         Placeholder.configure({
           placeholder: () => placeholderRef.current ?? "Write a message…",
         }),
@@ -416,6 +435,13 @@ export function useRichTextEditor({
     }
   }, [editor, mentionNames, channelNames]);
 
+  // Custom-emoji set changes: re-resolve the `src` attr on any existing
+  // node in the doc (e.g. an emoji's image was just published).
+  React.useEffect(() => {
+    if (!editor) return;
+    customEmojiWiring.syncEmojiSrc(editor);
+  }, [editor, customEmojiWiring.syncEmojiSrc]);
+
   const getMarkdown = React.useCallback((): string => {
     if (!editor) return "";
     return getMarkdownFromEditor(editor);
@@ -498,11 +524,41 @@ export function useRichTextEditor({
    * applied.
    */
   const replacePlainTextRange = React.useCallback(
-    (fromOffset: number, toOffset: number, text: string) => {
+    (
+      fromOffset: number,
+      toOffset: number,
+      text: string,
+      customEmojiShortcode?: string,
+    ) => {
       if (!editor) return;
       const projection = buildPlainTextProjection(editor.state.doc);
       const fromPM = projection.mapTextOffsetToPM(fromOffset);
       const toPM = projection.mapTextOffsetToPM(toOffset);
+
+      if (customEmojiShortcode) {
+        // Replace the range with a CustomEmojiNode (the selectable/copyable
+        // atom) followed by `text` (the trailing space). Equivalent to what
+        // the input rule builds when the user types a known `:shortcode:`.
+        const shortcode = customEmojiShortcode.toLowerCase();
+        const emojiType = editor.schema.nodes[CUSTOM_EMOJI_NODE_NAME];
+        if (emojiType) {
+          const node = emojiType.create({
+            shortcode,
+            src: customEmojiWiring.resolveUrl(shortcode) ?? "",
+          });
+          let tr = editor.state.tr.replaceRangeWith(fromPM, toPM, node);
+          // Insert the trailing space after the node, then place the cursor
+          // after it.
+          const afterNode = tr.mapping.map(toPM);
+          if (text) tr = tr.insertText(text, afterNode);
+          const cursorPM = afterNode + (text ? text.length : 0);
+          tr = tr.setSelection(TextSelection.create(tr.doc, cursorPM));
+          editor.view.dispatch(tr);
+          editor.view.focus();
+          return;
+        }
+        // No node type (shouldn't happen) → fall through to literal text.
+      }
 
       const tr = editor.state.tr.insertText(text, fromPM, toPM);
       // Place cursor at the end of the inserted text. We map `toPM` (the
@@ -517,7 +573,7 @@ export function useRichTextEditor({
       editor.view.dispatch(tr);
       editor.view.focus();
     },
-    [editor],
+    [editor, customEmojiWiring.resolveUrl],
   );
 
   return {

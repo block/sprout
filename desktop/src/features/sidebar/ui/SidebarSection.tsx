@@ -1,6 +1,6 @@
 import type * as React from "react";
 import {
-  CheckCircle2,
+  BellOff,
   ChevronDown,
   CircleDot,
   FileText,
@@ -12,10 +12,10 @@ import {
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
   ContextMenuTrigger,
 } from "@/shared/ui/context-menu";
 
+import { ChannelContextMenuItems } from "@/features/sidebar/ui/CustomChannelSection";
 import { getEphemeralChannelDisplay } from "@/features/channels/lib/ephemeralChannel";
 import { EphemeralChannelBadge } from "@/features/channels/ui/EphemeralChannelBadge";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
@@ -148,6 +148,7 @@ export function ChannelMenuButton({
   label,
   isActive,
   hasUnread,
+  isMuted,
   dmParticipants,
   presenceStatus,
   onSelectChannel,
@@ -156,6 +157,7 @@ export function ChannelMenuButton({
   label?: string;
   isActive: boolean;
   hasUnread: boolean;
+  isMuted?: boolean;
   dmParticipants?: SidebarDmParticipant[];
   presenceStatus?: PresenceStatus;
   onSelectChannel: (channelId: string) => void;
@@ -169,6 +171,7 @@ export function ChannelMenuButton({
         !isActive &&
           hasUnread &&
           "font-semibold text-sidebar-foreground hover:text-sidebar-foreground",
+        !isActive && isMuted && !hasUnread && "opacity-50",
       )}
       data-channel-id={channel.id}
       data-testid={`channel-${channel.name}`}
@@ -188,6 +191,16 @@ export function ChannelMenuButton({
           display={ephemeralDisplay}
           testId={`channel-ephemeral-${channel.name}`}
           variant="sidebar"
+        />
+      ) : null}
+      {isMuted ? (
+        <BellOff
+          className={cn(
+            "ml-auto h-3 w-3 shrink-0",
+            isActive
+              ? "text-sidebar-primary-foreground/60"
+              : "text-sidebar-foreground/40",
+          )}
         />
       ) : null}
       {hasUnread && !isActive && channel.channelType !== "dm" ? (
@@ -219,6 +232,9 @@ export function SidebarSection({
   onMarkChannelUnread,
   onSelectChannel,
   onToggleCollapsed,
+  mutedChannelIds,
+  onMuteChannel,
+  onUnmuteChannel,
 }: {
   action?: React.ReactNode;
   dmParticipantsByChannelId?: Record<string, SidebarDmParticipant[]>;
@@ -231,7 +247,7 @@ export function SidebarSection({
   selectedChannelId: string | null;
   title: string;
   testId: string;
-  unreadChannelIds: Set<string>;
+  unreadChannelIds: ReadonlySet<string>;
   onHideDm?: (channelId: string) => void;
   onMarkChannelRead?: (
     channelId: string,
@@ -243,6 +259,9 @@ export function SidebarSection({
   ) => void;
   onSelectChannel: (channelId: string) => void;
   onToggleCollapsed?: () => void;
+  mutedChannelIds?: ReadonlySet<string>;
+  onMuteChannel?: (channelId: string) => void;
+  onUnmuteChannel?: (channelId: string) => void;
 }) {
   if (items.length === 0 && !action && !emptyState) {
     return null;
@@ -292,6 +311,7 @@ export function SidebarSection({
                       channel={channel}
                       dmParticipants={dmParticipantsByChannelId?.[channel.id]}
                       hasUnread={unreadChannelIds.has(channel.id)}
+                      isMuted={mutedChannelIds?.has(channel.id)}
                       isActive={
                         isActiveChannel && selectedChannelId === channel.id
                       }
@@ -323,34 +343,22 @@ export function SidebarSection({
 
                 const hasContextAction =
                   (unreadChannelIds.has(channel.id) && onMarkChannelRead) ||
-                  (!unreadChannelIds.has(channel.id) && onMarkChannelUnread);
+                  (!unreadChannelIds.has(channel.id) && onMarkChannelUnread) ||
+                  (onMuteChannel && onUnmuteChannel);
 
                 return hasContextAction ? (
                   <ContextMenu key={channel.id}>
                     <ContextMenuTrigger asChild>{menuItem}</ContextMenuTrigger>
                     <ContextMenuContent>
-                      {unreadChannelIds.has(channel.id) && onMarkChannelRead ? (
-                        <ContextMenuItem
-                          onClick={() =>
-                            onMarkChannelRead(channel.id, channel.lastMessageAt)
-                          }
-                        >
-                          <CheckCircle2 className="h-4 w-4" />
-                          Mark as read
-                        </ContextMenuItem>
-                      ) : onMarkChannelUnread ? (
-                        <ContextMenuItem
-                          onClick={() =>
-                            onMarkChannelUnread(
-                              channel.id,
-                              channel.lastMessageAt,
-                            )
-                          }
-                        >
-                          <CircleDot className="h-4 w-4" />
-                          Mark unread
-                        </ContextMenuItem>
-                      ) : null}
+                      <ChannelContextMenuItems
+                        channel={channel}
+                        hasUnread={unreadChannelIds.has(channel.id)}
+                        isMuted={mutedChannelIds?.has(channel.id)}
+                        onMarkChannelRead={onMarkChannelRead}
+                        onMarkChannelUnread={onMarkChannelUnread}
+                        onMuteChannel={onMuteChannel}
+                        onUnmuteChannel={onUnmuteChannel}
+                      />
                     </ContextMenuContent>
                   </ContextMenu>
                 ) : (

@@ -12,6 +12,7 @@ import {
   Moon,
   Search,
   Smartphone,
+  Smile,
   Stethoscope,
   Sun,
   UserRound,
@@ -22,6 +23,7 @@ import type {
   NotificationSettings,
 } from "@/features/notifications/hooks";
 import { RelayMembersSettingsCard } from "@/features/relay-members/ui/RelayMembersSettingsCard";
+import { CustomEmojiSettingsCard } from "@/features/custom-emoji/ui/CustomEmojiSettingsCard";
 import { cn } from "@/shared/lib/cn";
 import {
   ACCENT_COLORS,
@@ -48,6 +50,7 @@ export type SettingsSection =
   | "appearance"
   | "shortcuts"
   | "relay-members"
+  | "custom-emoji"
   | "mobile"
   | "updates"
   | "doctor";
@@ -76,6 +79,11 @@ export type SettingsPanelProps = {
 
 export const settingsSections: SettingsSectionDescriptor[] = [
   {
+    value: "appearance",
+    label: "Appearance",
+    icon: MonitorCog,
+  },
+  {
     value: "profile",
     label: "Profile",
     icon: UserRound,
@@ -101,11 +109,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     icon: Cpu,
   },
   {
-    value: "appearance",
-    label: "Appearance",
-    icon: MonitorCog,
-  },
-  {
     value: "shortcuts",
     label: "Shortcuts",
     icon: Keyboard,
@@ -114,6 +117,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "relay-members",
     label: "Relay Access",
     icon: LockKeyhole,
+  },
+  {
+    value: "custom-emoji",
+    label: "Custom Emoji",
+    icon: Smile,
   },
   {
     value: "mobile",
@@ -300,6 +308,8 @@ export function renderSettingsSection(
       return <KeyboardShortcutsCard />;
     case "relay-members":
       return <RelayMembersSettingsCard currentPubkey={props.currentPubkey} />;
+    case "custom-emoji":
+      return <CustomEmojiSettingsCard />;
     case "mobile":
       return <MobilePairingCard currentPubkey={props.currentPubkey} />;
     case "updates":

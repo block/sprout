@@ -1,5 +1,60 @@
 # Changelog
 
+## v0.3.11
+
+269b35e8de7 fix(mobile+desktop): cross-device read state sync + diagnostic logging (#843)
+3ddfe5fcc25 feat(mobile): star channels (Slack-style favorites) (#863)
+36d7dbd7cae feat: desktop-screenshot skill to stop agents uploading relay media to PRs (#862)
+c10b4f8f5c6 feat(desktop): star channels (Slack-style favorites) (#860)
+f748f71268e fix(desktop): handle symlinked persona pack directories (#859)
+1fe7bf28725 feat: channel muting for desktop and mobile (#838)
+4ead7de4630 feat(acp): default SPROUT_ACP_MEMORY to on (#854)
+759e5cd9235 fix(desktop): eliminate image-hover layout jump in messages (#813)
+
+
+## v0.3.10
+
+34ac3ba1d18 fix(desktop): harden relay mesh connect p-tag (#834)
+b3aefae152e fix(desktop): scroll activity panel to bottom on open (#848)
+a13691b6207 Polish desktop profile menu interactions (#836)
+0d9b8148f86 fix(desktop): outline thread hover targets (#845)
+b3be9ecba70 fix(desktop): keep message actions hover-only (#844)
+db46c425463 fix(desktop): let inbox composer fill available width (#841)
+2a0572c0d8e fix: use immutable commit-SHA URLs in screenshot PR comments (#842)
+3b78dc5690b feat(mobile+desktop): two-tier Slack-style app icon badge (#802)
+0c225f4d7d3 chore: simplify file-size check to a flat 1000-line limit (#839)
+d8b602a3595 fix(desktop): robust emoji picker — unify picker + fix custom emoji in editing, status, reactions (#837)
+06bc67fd342 feat(desktop): reusable screenshot workflow for agents (#826)
+9f0c22a43a6 desktop(mesh-llm): let a serving node route a different model (#833)
+
+
+## v0.3.9
+
+82ae85f79a9 fix: native arbitrary-file download + image context-menu flash (#830)
+7797ae77f64 fix(desktop): custom emoji reaction rendering + picker autofocus (#831)
+33cfc852932 Mesh-LLM v1: relay-gated direct-iroh inference between users (WAN) (#822)
+
+
+## v0.3.8
+
+
+
+## v0.3.7
+
+2349421304d feat: custom emoji — user-owned NIP-30 sets with a client-side union (#816)
+7a12e50518e Install sprout-cli skill at repo root + fix desktop clippy (#818)
+2ea3fd88d23 fix(desktop): use public re-export path for ensure_client_node_for_model (#824)
+fb514c8918d refactor(desktop): feature-gate mesh-llm-sdk behind optional Cargo feature (#823)
+b72eee365f0 fix(desktop): align workflow read/save commands to the frontend contract (#820)
+5b572d6f5e9 fix(desktop): disable mesh-llm auto-build to prevent git config corruption (#819)
+192388a3cbf fix(desktop): clear clippy lints in agents/mesh_llm commands (#817)
+41a3fc1589b fix(desktop): let channel members add members and bots without admin (#815)
+a25ca5d1bfb Desktop #806 follow-ups: panel/inbox fixes + top-bar backdrop (#814)
+5bed17a1173 Fix desktop right-side panel chrome overlap (#806)
+ede8ddb425c Sprout × mesh-llm: in-process mesh node (serve/consume) + relay admission (#798)
+6481428e2b9 fix(desktop): resolve flaky integration tests via project-level assertion timeout (#812)
+
+
 ## v0.3.6
 
 5cbedb180af feat(mobile): add channel sections with relay sync (#800)

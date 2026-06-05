@@ -19,7 +19,7 @@ test("updates the relay-backed profile from settings", async ({ page }) => {
   await page.goto("/");
 
   await openSettings(page, "profile");
-  await expect(page.getByTestId("settings-title")).toHaveText("Settings");
+  await expect(page.getByTestId("settings-title")).toHaveText("Profile");
 
   await expect(page.getByTestId("profile-pubkey")).toContainText("deadbeef");
   await expect(page.getByTestId("profile-nip05")).toContainText("Not set");

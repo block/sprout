@@ -34,6 +34,7 @@ export type UseLiveChannelUpdatesOptions = {
   followedRootIds?: ReadonlySet<string>;
   authoredRootIds?: ReadonlySet<string>;
   mutedRootIds?: ReadonlySet<string>;
+  mutedChannelIds?: ReadonlySet<string>;
 };
 
 const LIVE_SUBSCRIPTION_RETRY_BASE_MS = 1_000;
@@ -173,24 +174,25 @@ export function useLiveChannelUpdates(
     // reactions / edits / system messages aren't "new content".
     if (
       UNREAD_TRIGGER_KINDS.has(event.kind) &&
-      channelId !== activeChannelId &&
       (normalizedCurrentPubkey.length === 0 ||
         event.pubkey.toLowerCase() !== normalizedCurrentPubkey) &&
-      shouldNotifyForEvent(
-        event,
-        normalizedCurrentPubkey,
-        options.participatedRootIds ?? EMPTY_SET,
-        options.followedRootIds ?? EMPTY_SET,
-        options.authoredRootIds ?? EMPTY_SET,
-        options.mutedRootIds ?? EMPTY_SET,
-      )
+      shouldNotifyForEvent(event, normalizedCurrentPubkey, {
+        participatedRootIds: options.participatedRootIds ?? EMPTY_SET,
+        followedRootIds: options.followedRootIds ?? EMPTY_SET,
+        authoredRootIds: options.authoredRootIds ?? EMPTY_SET,
+        mutedRootIds: options.mutedRootIds ?? EMPTY_SET,
+        mutedChannelIds: options.mutedChannelIds ?? EMPTY_SET,
+        channelId,
+      })
     ) {
       options.onChannelMessage?.(channelId, event);
-      const ref = getThreadReference(event.tags);
-      const isThreadReply =
-        ref.parentId !== null && !isBroadcastReply(event.tags);
-      if (isThreadReply) {
-        options.onThreadReplyNotification?.(channelId, event);
+      if (channelId !== activeChannelId) {
+        const ref = getThreadReference(event.tags);
+        const isThreadReply =
+          ref.parentId !== null && !isBroadcastReply(event.tags);
+        if (isThreadReply) {
+          options.onThreadReplyNotification?.(channelId, event);
+        }
       }
     }
 

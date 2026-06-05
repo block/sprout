@@ -12,6 +12,7 @@ import { AppTopChrome } from "@/app/AppTopChrome";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useBackForwardControls } from "@/app/navigation/useBackForwardControls";
 import { useMarkAsReadShortcuts } from "@/app/useMarkAsReadShortcuts";
+import { useSettingsShortcuts } from "@/app/useSettingsShortcuts";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import {
   channelsQueryKey,
@@ -32,7 +33,7 @@ import {
   requestDockBounce,
   revealDesktopAppWindow,
   sendDesktopNotification,
-  setDesktopAppBadgeCount,
+  setDesktopAppBadge,
   type DesktopNotificationTarget,
 } from "@/features/notifications/lib/desktop";
 import { playNotificationSound } from "@/features/notifications/lib/sound";
@@ -46,13 +47,17 @@ import {
   useUserStatusQuery,
   useUserStatusSubscription,
 } from "@/features/user-status/hooks";
+import { useWorkspaceEmojiLiveUpdates } from "@/features/custom-emoji/hooks";
 import { useProfileQuery } from "@/features/profile/hooks";
 import {
   DEFAULT_SETTINGS_SECTION,
   type SettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
+import { useMeshRelayOrchestrator } from "@/features/mesh-compute/hooks/useMeshRelayOrchestrator";
 import { AppSidebar } from "@/features/sidebar/ui/AppSidebar";
+import { useChannelMutes } from "@/features/sidebar/lib/useChannelMutes";
+import { useChannelStars } from "@/features/sidebar/lib/useChannelStars";
 import { useWorkspaces } from "@/features/workspaces/useWorkspaces";
 import { useApplyTemplate } from "@/features/channel-templates/useApplyTemplate";
 import { relayClient } from "@/shared/api/relayClient";
@@ -168,6 +173,9 @@ export function AppShell() {
   const [settingsSection, setSettingsSection] = React.useState<SettingsSection>(
     DEFAULT_SETTINGS_SECTION,
   );
+  const [settingsMode, setSettingsMode] = React.useState<
+    "profile" | "preferences"
+  >("preferences");
 
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
@@ -197,10 +205,18 @@ export function AppShell() {
   const startupReady = useDeferredStartup();
 
   const identityQuery = useIdentityQuery();
+  useMeshRelayOrchestrator(identityQuery.data?.pubkey);
+  const { mutedChannelIds, muteChannel, unmuteChannel } = useChannelMutes(
+    identityQuery.data?.pubkey,
+  );
+  const { starredChannelIds, starChannel, unstarChannel } = useChannelStars(
+    identityQuery.data?.pubkey,
+  );
   const profileQuery = useProfileQuery();
   const deferredPubkey = startupReady ? identityQuery.data?.pubkey : undefined;
   usePresenceSubscription();
   useUserStatusSubscription();
+  useWorkspaceEmojiLiveUpdates();
   const presenceSession = usePresenceSession(deferredPubkey);
   const selfStatusQuery = useUserStatusQuery(
     deferredPubkey ? [deferredPubkey] : [],
@@ -211,10 +227,12 @@ export function AppShell() {
   const refetchHomeFeedOnLiveMention = React.useEffectEvent(() => {
     void homeFeedQuery.refetch();
   });
-  const handleChannelNotification = React.useEffectEvent(() => {
-    if (!notificationSettings.settings.desktopEnabled) return;
-    void requestDockBounce();
-  });
+  const handleChannelNotification = React.useEffectEvent(
+    (_channelId: string, _event: RelayEvent) => {
+      if (!notificationSettings.settings.desktopEnabled) return;
+      void requestDockBounce();
+    },
+  );
 
   const handleDmNotification = React.useEffectEvent(
     (event: RelayEvent, channel: Channel) => {
@@ -285,6 +303,7 @@ export function AppShell() {
     markChannelRead,
     markChannelUnread,
     unreadChannelIds,
+    highPriorityUnreadChannelIds,
     getEffectiveTimestamp: getChannelReadAt,
     readStateVersion,
     participatedRootIds,
@@ -303,6 +322,7 @@ export function AppShell() {
       pubkey: identityQuery.data?.pubkey,
       relayClient,
       currentPubkey: identityQuery.data?.pubkey,
+      mutedChannelIds,
       onChannelMessage: handleChannelNotification,
       onDmMessage: handleDmNotification,
       onLiveMention: refetchHomeFeedOnLiveMention,
@@ -315,16 +335,19 @@ export function AppShell() {
   // ReadStateManager mounted via useUnreadChannels above. Channel-backed
   // feed items contribute to the badge iff strictly newer than that
   // channel's read marker; non-channel items keep their seen-set fallback.
-  const homeBadgeCount = useHomeFeedNotificationState(
-    homeFeedQuery.data,
-    identityQuery.data?.pubkey,
-    notificationSettings.settings,
-    notificationSettings.setDesktopEnabled,
-    selectedView === "home",
-    getChannelReadAt,
-    readStateVersion,
-    feedProfilesQuery.data?.profiles,
-  );
+  const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
+    useHomeFeedNotificationState(
+      homeFeedQuery.data,
+      identityQuery.data?.pubkey,
+      notificationSettings.settings,
+      notificationSettings.setDesktopEnabled,
+      selectedView === "home",
+      getChannelReadAt,
+      readStateVersion,
+      highPriorityUnreadChannelIds,
+      feedProfilesQuery.data?.profiles,
+      mutedChannelIds,
+    );
 
   const isNotifiedForThread = React.useCallback(
     (rootId: string) =>
@@ -400,8 +423,9 @@ export function AppShell() {
   );
 
   const handleOpenSettings = React.useCallback(
-    (section: SettingsSection = DEFAULT_SETTINGS_SECTION) => {
+    (section: SettingsSection = "appearance") => {
       setIsChannelManagementOpen(false);
+      setSettingsMode(section === "profile" ? "profile" : "preferences");
       setSettingsSection(section);
       setSettingsOpen(true);
     },
@@ -488,8 +512,20 @@ export function AppShell() {
   }, []);
 
   React.useEffect(() => {
-    void setDesktopAppBadgeCount(unreadChannelIds.size + homeBadgeCount);
-  }, [homeBadgeCount, unreadChannelIds.size]);
+    const numericCount =
+      highPriorityUnreadChannelIds.size + homeBadgeCountExcludingHighPriority;
+    if (numericCount > 0) {
+      void setDesktopAppBadge({ kind: "count", count: numericCount });
+    } else if (unreadChannelIds.size > 0) {
+      void setDesktopAppBadge({ kind: "dot" });
+    } else {
+      void setDesktopAppBadge({ kind: "none" });
+    }
+  }, [
+    homeBadgeCountExcludingHighPriority,
+    highPriorityUnreadChannelIds.size,
+    unreadChannelIds.size,
+  ]);
 
   // Dispatch `sprout://message` deep links into the router.
   useMessageDeepLinks();
@@ -582,32 +618,11 @@ export function AppShell() {
     settingsOpen,
   ]);
 
-  React.useLayoutEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const isSettingsShortcut =
-        (event.key === "," || event.code === "Comma") &&
-        hasPrimaryShortcutModifier(event) &&
-        !event.altKey &&
-        !event.shiftKey;
-
-      if (!isSettingsShortcut) {
-        return;
-      }
-
-      event.preventDefault();
-      if (settingsOpen) {
-        handleCloseSettings();
-        return;
-      }
-
-      handleOpenSettings();
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleCloseSettings, handleOpenSettings, settingsOpen]);
+  useSettingsShortcuts({
+    onClose: handleCloseSettings,
+    onOpenSettings: handleOpenSettings,
+    open: settingsOpen,
+  });
 
   useMarkAsReadShortcuts({
     activeChannelId: activeChannel?.id ?? null,
@@ -804,6 +819,12 @@ export function AppShell() {
                   selectedChannelId={selectedChannelId}
                   selectedView={selectedView}
                   unreadChannelIds={unreadChannelIds}
+                  mutedChannelIds={mutedChannelIds}
+                  onMuteChannel={muteChannel}
+                  onUnmuteChannel={unmuteChannel}
+                  starredChannelIds={starredChannelIds}
+                  onStarChannel={starChannel}
+                  onUnstarChannel={unstarChannel}
                 />
 
                 <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
@@ -843,6 +864,7 @@ export function AppShell() {
                       notificationSettings={notificationSettings.settings}
                       onClose={handleCloseSettings}
                       onSectionChange={setSettingsSection}
+                      mode={settingsMode}
                       onSetDesktopNotificationsEnabled={
                         notificationSettings.setDesktopEnabled
                       }

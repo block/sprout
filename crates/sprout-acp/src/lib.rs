@@ -1104,7 +1104,7 @@ async fn tokio_main() -> Result<()> {
     if !config.memory_enabled {
         tracing::info!(
             target: "engram::core",
-            "NIP-AE core memory injection disabled by default (enable with --memory / SPROUT_ACP_MEMORY)"
+            "NIP-AE core memory injection disabled (re-enable by removing --no-memory / SPROUT_ACP_NO_MEMORY)"
         );
     }
 

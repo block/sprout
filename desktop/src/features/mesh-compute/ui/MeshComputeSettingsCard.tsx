@@ -14,6 +14,29 @@ import type { MeshModelOption, MeshNodeStatus } from "@/shared/api/tauriMesh";
 import { classifyModelRef, modelRefHintLabel } from "../classifyModelRef";
 import { useMeshNodeStatus } from "../hooks/useMeshNodeStatus";
 
+const MODEL_DRAFT_STORAGE_KEY = "sprout.mesh-compute.share.model.v1";
+const MAX_VRAM_DRAFT_STORAGE_KEY = "sprout.mesh-compute.share.max-vram-gb.v1";
+
+function readDraft(key: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeDraft(key: string, value: string): void {
+  try {
+    if (value === "") {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, value);
+    }
+  } catch {
+    // Ignore unavailable/full storage; the input still works for this session.
+  }
+}
+
 /**
  * Settings → Compute → Share compute.
  *
@@ -31,8 +54,12 @@ export function MeshComputeSettingsCard() {
   const [installedModels, setInstalledModels] = React.useState<
     MeshModelOption[]
   >([]);
-  const [modelInput, setModelInput] = React.useState("");
-  const [maxVramGb, setMaxVramGb] = React.useState<string>("");
+  const [modelInput, setModelInput] = React.useState(() =>
+    readDraft(MODEL_DRAFT_STORAGE_KEY),
+  );
+  const [maxVramGb, setMaxVramGb] = React.useState<string>(() =>
+    readDraft(MAX_VRAM_DRAFT_STORAGE_KEY),
+  );
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [actionInFlight, setActionInFlight] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
@@ -63,6 +90,7 @@ export function MeshComputeSettingsCard() {
   React.useEffect(() => {
     if (status?.state === "running" && status.modelId && modelInput === "") {
       setModelInput(status.modelId);
+      writeDraft(MODEL_DRAFT_STORAGE_KEY, status.modelId);
     }
   }, [status?.state, status?.modelId, modelInput]);
 
@@ -153,7 +181,11 @@ export function MeshComputeSettingsCard() {
           </legend>
           <Input
             data-testid="mesh-share-compute-model"
-            onChange={(e) => setModelInput(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              setModelInput(next);
+              writeDraft(MODEL_DRAFT_STORAGE_KEY, next);
+            }}
             placeholder="Qwen3-8B-Q4_K_M or hf://meshllm/qwen3-8b@main"
             value={modelInput}
           />
@@ -177,7 +209,10 @@ export function MeshComputeSettingsCard() {
                   <li key={m.id}>
                     <button
                       className="rounded border border-border/60 bg-muted/20 px-2 py-0.5 text-xs hover:bg-muted/40"
-                      onClick={() => setModelInput(m.id)}
+                      onClick={() => {
+                        setModelInput(m.id);
+                        writeDraft(MODEL_DRAFT_STORAGE_KEY, m.id);
+                      }}
                       type="button"
                     >
                       {m.name ?? m.id}
@@ -217,7 +252,11 @@ export function MeshComputeSettingsCard() {
               data-testid="mesh-share-compute-vram"
               id="mesh-vram"
               inputMode="decimal"
-              onChange={(e) => setMaxVramGb(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setMaxVramGb(next);
+                writeDraft(MAX_VRAM_DRAFT_STORAGE_KEY, next);
+              }}
               placeholder="No limit"
               value={maxVramGb}
             />

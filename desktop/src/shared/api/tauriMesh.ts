@@ -15,6 +15,10 @@ export type MeshServeTarget = {
   endpointAddr: string;
   nodeName: string | null;
   capacity: { vramGb: number | null } | null;
+  reporterPubkey?: string | null;
+  endpointId?: string | null;
+  deviceId?: string | null;
+  deviceName?: string | null;
 };
 
 export type MeshAvailability = {
@@ -39,8 +43,6 @@ export type StartMeshNodeRequest = {
   modelId?: string;
   maxVramGb?: number;
   joinToken?: string;
-  irohRelayUrl?: string;
-  irohRelayAuth?: string;
 };
 
 export type MeshNodeStatus = {
@@ -52,6 +54,18 @@ export type MeshNodeStatus = {
   modelId: string | null;
   modelName: string | null;
   inviteToken?: string | null;
+  endpointId?: string | null;
+  deviceId?: string | null;
+  deviceName?: string | null;
+};
+
+export type MeshCallMeNow = {
+  v: 1;
+  type: "sprout-iroh-call-me-now";
+  peer_endpoint_addr: string;
+  peer_endpoint_id?: string;
+  attempt_id: string;
+  expires_at: number;
 };
 
 export type MeshAgentPreset = {
@@ -77,10 +91,33 @@ export async function meshStartNode(
 
 export async function meshEnsureClientNode(
   modelId: string,
+  target?: MeshServeTarget | null,
 ): Promise<MeshNodeStatus> {
   return await invokeTauri<MeshNodeStatus>("mesh_ensure_client_node", {
-    request: { modelId },
+    request: {
+      modelId,
+      endpointAddr: target?.endpointAddr,
+      reporterPubkey: target?.reporterPubkey,
+      peerEndpointId: target?.endpointId,
+    },
   });
+}
+
+export async function meshDialEndpointAddr(
+  endpointAddr: string,
+): Promise<MeshNodeStatus> {
+  return await invokeTauri<MeshNodeStatus>("mesh_dial_endpoint_addr", {
+    request: { endpointAddr },
+  });
+}
+
+export async function meshStatusReportPayload(): Promise<Record<
+  string,
+  unknown
+> | null> {
+  return await invokeTauri<Record<string, unknown> | null>(
+    "mesh_status_report_payload",
+  );
 }
 
 export async function meshStopNode(): Promise<MeshNodeStatus> {

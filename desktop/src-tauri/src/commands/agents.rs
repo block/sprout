@@ -7,13 +7,13 @@ use crate::{
         build_managed_agent_summary, discover_provider_candidates, ensure_persona_is_active,
         find_managed_agent_mut, invoke_provider, load_managed_agents, load_personas,
         managed_agent_avatar_url, managed_agent_log_path, managed_agents_base_dir,
-        normalize_agent_args, provider_deploy, read_log_tail, relay_mesh_model_id,
-        resolve_provider_binary, save_managed_agents, start_managed_agent_process,
-        stop_managed_agent_process, sync_managed_agent_processes, try_regenerate_nest,
-        validate_provider_config, BackendKind, BackendProviderInfo, CreateManagedAgentRequest,
-        CreateManagedAgentResponse, ManagedAgentLogResponse, ManagedAgentRecord,
-        ManagedAgentSummary, DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
-        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS, DEFAULT_MCP_COMMAND,
+        normalize_agent_args, provider_deploy, read_log_tail, resolve_provider_binary,
+        save_managed_agents, start_managed_agent_process, stop_managed_agent_process,
+        sync_managed_agent_processes, try_regenerate_nest, validate_provider_config, BackendKind,
+        BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
+        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary, DEFAULT_ACP_COMMAND,
+        DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        DEFAULT_MCP_COMMAND,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
@@ -27,14 +27,21 @@ fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     Ok(keys.public_key().to_hex())
 }
 
+#[cfg(feature = "mesh-llm")]
 async fn ensure_relay_mesh_for_record(
     state: &AppState,
     record: &ManagedAgentRecord,
+    allow_fresh_create_start: bool,
 ) -> Result<(), String> {
-    let Some(model_id) = relay_mesh_model_id(record) else {
-        return Ok(());
-    };
-    crate::commands::mesh_llm::ensure_client_node_for_model(state, model_id).await?;
+    crate::commands::ensure_relay_mesh_for_record(state, record, allow_fresh_create_start).await
+}
+
+#[cfg(not(feature = "mesh-llm"))]
+async fn ensure_relay_mesh_for_record(
+    _state: &AppState,
+    _record: &ManagedAgentRecord,
+    _allow_fresh_create_start: bool,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -43,6 +50,7 @@ async fn start_local_agent_with_preflight(
     state: &AppState,
     pubkey: &str,
     owner_hex: &str,
+    allow_fresh_create_start: bool,
 ) -> Result<ManagedAgentSummary, String> {
     let record_snapshot = {
         let _store_guard = state
@@ -61,7 +69,7 @@ async fn start_local_agent_with_preflight(
         return Err(format!("agent {pubkey} is not a local agent"));
     }
 
-    ensure_relay_mesh_for_record(state, &record_snapshot).await?;
+    ensure_relay_mesh_for_record(state, &record_snapshot, allow_fresh_create_start).await?;
 
     let _store_guard = state
         .managed_agents_store_lock
@@ -508,7 +516,7 @@ pub async fn create_managed_agent(
     // ── Phase 3b: local spawn (async preflight outside store lock) ───────────
     let mut spawn_error = None;
     let agent = if input.spawn_after_create && input.backend == BackendKind::Local {
-        match start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex).await {
+        match start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex, true).await {
             Ok(agent) => agent,
             Err(error) => {
                 let _store_guard = state
@@ -682,7 +690,7 @@ pub async fn start_managed_agent(
 
     match target {
         StartTarget::Local => {
-            start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex).await
+            start_local_agent_with_preflight(&app, &state, &pubkey, &owner_hex, false).await
         }
         StartTarget::Provider {
             backend: BackendKind::Provider { id, config },

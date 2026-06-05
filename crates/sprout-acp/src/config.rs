@@ -330,26 +330,25 @@ pub struct CliArgs {
 
     /// Enable NIP-AE agent core memory injection.
     ///
-    /// Memory injection is off by default for now. When enabled, the harness
+    /// Memory injection is on by default. When enabled, the harness
     /// fetches the agent's per-session core engram and renders it as an
     /// `[Agent Memory — core]` prompt section (or renders the onboarding nudge
     /// when the relay confirms no core engram exists). The `sprout mem` CLI
     /// and the relay's acceptance of kind:30174 engrams are unaffected — this
     /// flag controls prompt-time injection in the ACP harness only.
-    #[arg(long, env = "SPROUT_ACP_MEMORY", conflicts_with = "no_memory")]
+    /// Pass `--no-memory` / `SPROUT_ACP_NO_MEMORY=true` to disable.
+    #[arg(
+        long,
+        env = "SPROUT_ACP_MEMORY",
+        conflicts_with = "no_memory",
+        default_value_t = true
+    )]
     pub memory: bool,
 
     /// Disable NIP-AE agent core memory injection.
     ///
-    /// Deprecated compatibility alias for the previous default-on behavior.
-    /// The flag/env var is still accepted, but memory injection is already off
-    /// unless `--memory` / `SPROUT_ACP_MEMORY=true` is provided.
-    #[arg(
-        long,
-        env = "SPROUT_ACP_NO_MEMORY",
-        conflicts_with = "memory",
-        hide = true
-    )]
+    /// Memory injection is on by default; set this flag/env var to opt out.
+    #[arg(long, env = "SPROUT_ACP_NO_MEMORY", conflicts_with = "memory")]
     pub no_memory: bool,
 
     /// Disable the [Base] platform-context section prepended to every prompt.
@@ -456,8 +455,8 @@ pub struct Config {
     pub typing_enabled: bool,
     /// Whether NIP-AE agent core memory injection is enabled. When false,
     /// the harness skips the per-session core engram fetch and renders no
-    /// `[Agent Memory — core]` section. Mirrors the `--memory` /
-    /// `SPROUT_ACP_MEMORY` opt-in.
+    /// `[Agent Memory — core]` section. On by default; disabled via the
+    /// `--no-memory` / `SPROUT_ACP_NO_MEMORY` opt-out.
     pub memory_enabled: bool,
     /// Desired LLM model ID. Applied after every `session_new_full()`.
     pub model: Option<String>,
@@ -1191,7 +1190,7 @@ mod tests {
             max_turns_per_session: 0,
             presence_enabled: true,
             typing_enabled: true,
-            memory_enabled: false,
+            memory_enabled: true,
             model: None,
             permission_mode: PermissionMode::BypassPermissions,
             respond_to: RespondTo::Anyone,
@@ -1780,21 +1779,21 @@ channels = "ALL"
     // ── memory toggle ───────────────────────────────────────────────────────
 
     #[test]
-    fn test_memory_enabled_default_false() {
+    fn test_memory_enabled_default_true() {
         let config = test_config(SubscribeMode::Mentions);
         assert!(
-            !config.memory_enabled,
-            "memory_enabled should default to false"
+            config.memory_enabled,
+            "memory_enabled should default to true"
         );
     }
 
     #[test]
-    fn test_summary_includes_memory_disabled() {
+    fn test_summary_includes_memory_enabled() {
         let config = test_config(SubscribeMode::Mentions);
         let s = config.summary();
         assert!(
-            s.contains("memory=false"),
-            "summary should include memory=false by default, got: {s}"
+            s.contains("memory=true"),
+            "summary should include memory=true by default, got: {s}"
         );
     }
 

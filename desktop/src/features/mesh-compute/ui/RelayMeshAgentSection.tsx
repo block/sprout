@@ -1,7 +1,7 @@
 import * as React from "react";
 import { AlertCircle, Network } from "lucide-react";
 
-import { meshAgentPreset } from "@/shared/api/tauriMesh";
+import { meshAgentPreset, type MeshServeTarget } from "@/shared/api/tauriMesh";
 import { Switch } from "@/shared/ui/switch";
 
 import {
@@ -24,9 +24,10 @@ import { useMeshAvailability } from "../hooks/useMeshAvailability";
 export function RelayMeshAgentSection({
   current,
   useMesh,
-  modelId,
+  targetEndpointAddr,
   onUseMeshChange,
   onModelIdChange,
+  onTargetChange,
 }: {
   /**
    * Current draft state of the *fields the preset would overwrite*. Used to
@@ -42,7 +43,8 @@ export function RelayMeshAgentSection({
     envVars: Record<string, string>;
   };
   useMesh: boolean;
-  modelId: string;
+  modelId: string; // Parent-owned selected model id; retained for API symmetry with onModelIdChange.
+  targetEndpointAddr: string;
   onUseMeshChange: (next: boolean) => void;
   /**
    * Fires when the user picks a model. The parent should fan out the
@@ -54,6 +56,7 @@ export function RelayMeshAgentSection({
     nextModelId: string,
     patch: ReturnType<typeof meshAgentPresetPatch> | null,
   ) => void;
+  onTargetChange: (target: MeshServeTarget | null) => void;
 }) {
   const { availability, error } = useMeshAvailability();
   const [presetError, setPresetError] = React.useState<string | null>(null);
@@ -68,23 +71,44 @@ export function RelayMeshAgentSection({
   // an arbitrary one — the warning must reflect what'll actually happen.
   const [overrides, setOverrides] = React.useState<string[]>([]);
 
-  async function pickModel(nextModelId: string) {
-    if (nextModelId === "") {
+  const targets = availability?.serveTargets ?? [];
+  const selectedValue = targetEndpointAddr;
+
+  async function pickTarget(endpointAddr: string) {
+    if (endpointAddr === "") {
+      onTargetChange(null);
       onModelIdChange("", null);
       setOverrides([]);
       setPresetError(null);
       return;
     }
+    const target = targets.find(
+      (candidate) => candidate.endpointAddr === endpointAddr,
+    );
+    if (!target) {
+      onTargetChange(null);
+      onModelIdChange("", null);
+      setPresetError("Selected relay mesh target is no longer available.");
+      return;
+    }
     setPresetError(null);
     try {
-      const preset = await meshAgentPreset(nextModelId);
+      const preset = await meshAgentPreset(target.modelId);
       const patch = meshAgentPresetPatch(preset);
       setOverrides(detectMeshPresetOverrides(current, preset));
-      onModelIdChange(nextModelId, patch);
+      onTargetChange(target);
+      onModelIdChange(target.modelId, patch);
     } catch (err) {
       setPresetError(err instanceof Error ? err.message : String(err));
-      onModelIdChange(nextModelId, null);
+      onTargetChange(target);
+      onModelIdChange(target.modelId, null);
     }
+  }
+
+  function targetLabel(target: MeshServeTarget) {
+    const model = target.modelName ?? target.modelId;
+    const device = target.deviceName ?? target.nodeName ?? target.endpointId;
+    return device ? `${model} — ${device}` : model;
   }
 
   return (
@@ -125,13 +149,13 @@ export function RelayMeshAgentSection({
             className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs"
             data-testid="agent-relay-mesh-model"
             id="agent-relay-mesh-model"
-            onChange={(e) => void pickModel(e.target.value)}
-            value={modelId}
+            onChange={(e) => void pickTarget(e.target.value)}
+            value={selectedValue}
           >
-            <option value="">Choose a model…</option>
-            {availability?.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name ?? model.id}
+            <option value="">Choose a target…</option>
+            {targets.map((target) => (
+              <option key={target.endpointAddr} value={target.endpointAddr}>
+                {targetLabel(target)}
               </option>
             ))}
           </select>

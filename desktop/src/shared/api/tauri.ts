@@ -726,6 +726,7 @@ export async function sendChannelMessage(
   mediaTags?: string[][],
   mentionPubkeys?: string[],
   kind?: number,
+  emojiTags?: string[][],
 ): Promise<SendChannelMessageResult> {
   const response = await invokeTauri<RawSendChannelMessageResult>(
     "send_channel_message",
@@ -734,6 +735,7 @@ export async function sendChannelMessage(
       content,
       parentEventId,
       mediaTags: mediaTags ?? null,
+      emojiTags: emojiTags ?? null,
       mentionPubkeys: mentionPubkeys ?? null,
       kind: kind ?? null,
     },
@@ -789,12 +791,14 @@ export async function editMessage(
   eventId: string,
   content: string,
   mediaTags?: string[][],
+  emojiTags?: string[][],
 ): Promise<void> {
   await invokeTauri("edit_message", {
     channelId,
     eventId,
     content,
     mediaTags: mediaTags ?? [],
+    emojiTags: emojiTags ?? [],
   });
 }
 
@@ -805,8 +809,9 @@ export async function deleteMessage(eventId: string): Promise<void> {
 export async function addReaction(
   eventId: string,
   emoji: string,
+  emojiUrl?: string,
 ): Promise<void> {
-  await invokeTauri("add_reaction", { eventId, emoji });
+  await invokeTauri("add_reaction", { eventId, emoji, emojiUrl });
 }
 
 export async function removeReaction(

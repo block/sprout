@@ -91,7 +91,6 @@ type ChannelPaneProps = {
   threadMessages: MainTimelineEntry[];
   threadPanelWidthPx: number;
   threadTypingPubkeys: string[];
-  threadReplyTargetId: string | null;
   threadReplyTargetMessage: TimelineMessage | null;
   threadScrollTargetId: string | null;
   targetMessageId: string | null;
@@ -160,7 +159,6 @@ export const ChannelPane = React.memo(function ChannelPane({
   threadPanelWidthPx,
   threadScrollTargetId,
   threadTypingPubkeys,
-  threadReplyTargetId,
   threadReplyTargetMessage,
   typingPubkeys,
 }: ChannelPaneProps) {
@@ -307,7 +305,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           ) : null}
           <MessageTimeline
             channelId={activeChannel?.id}
-            activeReplyTargetId={openThreadHeadId}
             scrollContainerRef={timelineScrollRef}
             currentPubkey={currentPubkey}
             fetchOlder={fetchOlder}
@@ -456,7 +453,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           onToggleReaction={onToggleReaction}
           onUnfollowThread={onUnfollowThread}
           profiles={profiles}
-          replyTargetId={threadReplyTargetId}
           replyTargetMessage={threadReplyTargetMessage}
           scrollTargetId={threadScrollTargetId}
           canResetWidth={canResetThreadPanelWidth}

@@ -11,6 +11,8 @@ import {
   buildOutgoingMessage,
   formatImetaMediaLine,
   imetaMediaFromTags,
+  mergeOutgoingTags,
+  splitOutgoingTags,
   stripImetaMediaLines,
 } from "./imetaMediaMarkdown.ts";
 
@@ -388,4 +390,43 @@ test("round-trip: sparse imeta from legacy tags rebuilds without empty x/size", 
     "url https://b/legacy.png",
     "m image/png",
   ]);
+});
+
+const IMETA = ["imeta", "url https://blossom/abc.png", "m image/png"];
+const EMOJI_A = ["emoji", "shipit", "https://relay/s.png"];
+const EMOJI_B = ["emoji", "party", "https://relay/p.gif"];
+
+test("splitOutgoingTags: undefined input yields two empty arrays", () => {
+  assert.deepEqual(splitOutgoingTags(undefined), {
+    mediaTags: [],
+    emojiTags: [],
+  });
+});
+
+test("splitOutgoingTags: separates emoji tags from imeta tags", () => {
+  const { mediaTags, emojiTags } = splitOutgoingTags([IMETA, EMOJI_A, EMOJI_B]);
+  assert.deepEqual(mediaTags, [IMETA]);
+  assert.deepEqual(emojiTags, [EMOJI_A, EMOJI_B]);
+});
+
+test("splitOutgoingTags: emoji-only set leaves mediaTags empty", () => {
+  const { mediaTags, emojiTags } = splitOutgoingTags([EMOJI_A]);
+  assert.deepEqual(mediaTags, []);
+  assert.deepEqual(emojiTags, [EMOJI_A]);
+});
+
+test("splitOutgoingTags: unknown prefixes stay with mediaTags (injection defense)", () => {
+  // A forged ["p", ...] must NOT be misrouted to the emoji channel; it stays on
+  // mediaTags where the server-side imeta guard rejects it.
+  const forged = ["p", "deadbeef"];
+  const { mediaTags, emojiTags } = splitOutgoingTags([forged, EMOJI_A]);
+  assert.deepEqual(mediaTags, [forged]);
+  assert.deepEqual(emojiTags, [EMOJI_A]);
+});
+
+test("splitOutgoingTags is the inverse of mergeOutgoingTags", () => {
+  const merged = mergeOutgoingTags([IMETA], [EMOJI_A, EMOJI_B]);
+  const { mediaTags, emojiTags } = splitOutgoingTags(merged);
+  assert.deepEqual(mediaTags, [IMETA]);
+  assert.deepEqual(emojiTags, [EMOJI_A, EMOJI_B]);
 });

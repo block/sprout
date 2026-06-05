@@ -173,6 +173,43 @@
   }
 }
 
+/* ── Code block line numbers & diff ────────────────────────────────── */
+.code-block-lines {
+  counter-reset: code-line;
+}
+
+.code-block-lines [data-line] {
+  display: block;
+  counter-increment: code-line;
+}
+
+.code-block-lines [data-line]::before {
+  content: counter(code-line);
+  display: inline-block;
+  width: 2.5ch;
+  margin-right: 1.5ch;
+  text-align: right;
+  color: hsl(var(--muted-foreground) / 0.4);
+  user-select: none;
+  pointer-events: none;
+}
+
+.code-line-diff-add {
+  background-color: hsl(120 40% 50% / 0.15);
+}
+
+.code-line-diff-remove {
+  background-color: hsl(0 60% 50% / 0.15);
+}
+
+.dark .code-line-diff-add {
+  background-color: hsl(120 40% 50% / 0.12);
+}
+
+.dark .code-line-diff-remove {
+  background-color: hsl(0 60% 50% / 0.12);
+}
+
 @layer base {
   :root {
     /* Catppuccin Latte (mauve accent) */
@@ -266,5 +303,29 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-family: "Geist", "Avenir Next", "Segoe UI", sans-serif;
+  }
+
+  /*
+   * Tailwind v4's preflight no longer sets `cursor: pointer` on buttons.
+   * Restore it for clearly actionable elements so hover affordance is
+   * consistent across the app. Disabled / aria-disabled elements keep
+   * the default cursor; explicit `cursor-*` utility classes still win
+   * because utilities are in a later layer than base.
+   */
+  button:not(:disabled),
+  a[href],
+  summary,
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="menuitemcheckbox"]:not([aria-disabled="true"]),
+  [role="menuitemradio"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="link"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: default;
   }
 }

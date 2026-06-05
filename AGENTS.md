@@ -165,7 +165,30 @@ check existing reply handlers for the pattern.
 
 `sprout` is the agent-first CLI replacing `sprout-mcp`. Auth env vars
 (`SPROUT_RELAY_URL`, `SPROUT_PRIVATE_KEY`, `SPROUT_AUTH_TAG`) are auto-injected
-by the ACP harness into managed agent subprocesses.
+by the ACP harness into managed agent subprocesses. In development, set
+`SPROUT_PRIVATE_KEY` and `SPROUT_RELAY_URL` in your environment manually.
+
+### Building the CLI
+
+```bash
+cargo build --release -p sprout-cli
+```
+
+Binary location: `./target/release/sprout`. Add `./target/release` to `PATH`
+or invoke with the full path.
+
+### Deep Links
+
+`sprout://message?channel=<uuid>&id=<hex>` links reference a specific message
+thread. To read the linked thread:
+
+```bash
+sprout messages thread --channel <uuid> --event <hex> --format compact
+```
+
+Extract `channel` and `id` from the URL query parameters. The optional
+`thread` parameter (root event ID) can be ignored — `messages thread` resolves
+the full thread from the event ID alone.
 
 All reads return sig-stripped JSON arrays; all writes return
 `{event_id, accepted, message}`; creates add the entity ID. Exit codes:
@@ -201,28 +224,149 @@ See [TESTING.md](TESTING.md) for the full multi-agent E2E guide.
 
 ### Desktop Screenshots (Playwright)
 
-The desktop app is a Tauri app that cannot render in a plain browser without the
-E2E mock bridge. A standalone screenshot helper at
-`desktop/tests/helpers/screenshot.mjs` wraps the same mock bridge setup the E2E
-tests use (`addInitScript` + `window.__SPROUT_E2E__`) into a CLI tool.
+> **Do NOT use `sprout upload`, the relay media endpoint, or any third-party
+> image host for PR screenshots.** Relay media URLs fail through GitHub's camo
+> proxy. Always use `scripts/post-screenshots.sh` — see the `desktop-screenshot`
+> skill for the full workflow.
+
+The desktop app requires the E2E mock bridge to render — it cannot run in a plain
+browser. Use `just desktop-screenshot` to capture screenshots (builds frontend,
+starts preview server, runs Playwright automatically):
 
 ```bash
-just desktop-build   # build the frontend first
-cd desktop
-node tests/helpers/screenshot.mjs --name home
-node tests/helpers/screenshot.mjs --name channel --route /channels/general
-node tests/helpers/screenshot.mjs --name search --click open-search
-node tests/helpers/screenshot.mjs --name settings --click open-settings
+just desktop-screenshot --name home
+just desktop-screenshot --name channel --route /channels/general
+just desktop-screenshot --name search --click open-search
+just desktop-screenshot --name settings --click open-settings
 ```
 
-Options: `--name` (filename), `--route` (client route), `--click` (data-testid
-or CSS selector), `--wait` (ms, default 2000), `--viewport` (WxH, default
-1280x720), `--outdir` (default `test-results/screenshots`). Screenshots are
-saved as PNGs and the path is printed to stdout.
+Options: `--name` (filename), `--route` (client route), `--active-channel`
+(channel to view), `--click` (left-click data-testid or CSS selector),
+`--right-click` (right-click for context menus), `--hover` (hover before
+capture), `--clip` (crop region as `x,y,w,h` — e.g. `0,0,256,720` for sidebar
+only), `--wait` (ms, default 2000), `--viewport` (WxH, default 1280x720),
+`--outdir` (default `test-results/screenshots`), `--messages` (JSON file path).
+Output is a PNG path on stdout.
 
-The Playwright MCP browser (`@playwright/mcp`) is also configured but cannot
-drive the desktop app directly because it evaluates JS after page load — too
-late for the mock bridge. Use the MCP browser for non-Tauri pages only.
+Use `--messages` to inject content into a channel before capture. The JSON file
+is an array of objects — `channelName` and `content` are required, all other
+fields are optional and passed through to `__SPROUT_E2E_EMIT_MOCK_MESSAGE__`:
+
+```json
+[
+  {
+    "channelName": "random",
+    "content": "Hey @tyler check this out",
+    "pubkey": "953d...",
+    "kind": 40002,
+    "mentionPubkeys": ["deadbeef..."],
+    "extraTags": [["broadcast", "1"], ["e", "some-root-id"]],
+    "parentEventId": "abc123"
+  }
+]
+```
+
+Without `--active-channel`, all messages must target the same channel and the
+helper navigates to that channel (useful for showing message content). With
+`--active-channel`, messages can target multiple channels while the "camera"
+stays on the specified channel (useful for unread indicators, badges, etc.).
+
+```bash
+# Messages in the channel you're viewing (code blocks, formatting, etc.)
+just desktop-screenshot --name code-blocks --messages /tmp/msgs.json
+
+# Messages in OTHER channels to trigger unread state
+just desktop-screenshot --name unread-dot \
+  --active-channel general --messages /tmp/badge-msgs.json
+
+# Cropped to sidebar only (256px wide)
+just desktop-screenshot --name sidebar-unread \
+  --active-channel general --messages /tmp/badge-msgs.json \
+  --clip 0,0,256,720
+
+# Context menu on an unread channel (wider crop to include popup)
+just desktop-screenshot --name ctx-mark-read \
+  --active-channel general --messages /tmp/badge-msgs.json \
+  --right-click channel-random --clip 0,200,320,300
+
+# Hover state (e.g. copy button reveal)
+just desktop-screenshot --name copy-hover \
+  --messages /tmp/code-msgs.json --hover "[data-testid='copy-code']"
+```
+
+Available mock channels: `general`, `random`, `design`, `sales`, `engineering`,
+`agents`, `watercooler`, `announcements`, `alice-tyler`, `bob-tyler`.
+
+`scripts/post-screenshots.sh` hosts PNGs on a per-developer branch
+(`agent-screenshots/<github-username>`) and posts a PR comment with
+commit-SHA-based image URLs (immutable — safe from later overwrites):
+
+```bash
+./scripts/post-screenshots.sh 803 test-results/screenshots
+./scripts/post-screenshots.sh 803 test-results/screenshots body.md  # custom body prepended
+```
+
+The body file supports `{{filename}}` placeholders (without `.png`) to inline
+images at specific positions. Images not referenced by any placeholder are
+appended at the end. Without placeholders, all images are appended (backward
+compatible).
+
+```markdown
+### Unread dot
+A message arrives in `#random`.
+
+{{01-unread-dot}}
+
+### Context menu
+Right-click shows "Mark as read".
+
+{{02-context-menu}}
+```
+
+Re-runs for the same PR overwrite previous images. Cleanup:
+`git push origin --delete agent-screenshots/<username>`.
+
+### Writing E2E Screenshot Specs
+
+When screenshots need seeded state, live messages, or UI interaction before
+capture, write a Playwright spec instead of using `just desktop-screenshot`.
+Add specs to `desktop/tests/e2e/` and register them in `playwright.config.ts`
+(`smoke` project `testMatch`). Every test calls `installMockBridge(page)` for
+mock Tauri IPC. Mock pubkey, channel names, and UUIDs live in `e2eBridge.ts`.
+
+**Stale server:** `reuseExistingServer: true` means a previous build's server
+serves old code. Kill port 4173 and `pnpm run build` before re-running tests
+after code changes.
+
+**`addInitScript` before bridge:** `page.addInitScript` (localStorage seeding)
+must run BEFORE `installMockBridge(page)` — React reads state on mount, the
+bridge triggers mount.
+
+**Live messages:** Call `waitForMockLiveSubscription(page, channelName)` before
+`__SPROUT_E2E_EMIT_MOCK_MESSAGE__` — messages are silently dropped without a
+subscription. Navigate to the channel first (triggers subscription), then away
+(so unread indicators appear), then inject.
+
+**Animation timing:** Radix components animate in via CSS. `toBeVisible()`
+resolves mid-animation — wait for completion before screenshotting:
+
+```ts
+await menuItem.evaluate((el) =>
+  Promise.all(
+    el.closest("[data-state]")?.getAnimations().map((a) => a.finished) ?? [],
+  ),
+);
+```
+
+**Cropping:** Use `clip` — full-window (1280x720) screenshots are unreadable
+for sidebar features. Sidebar = 256px; context menus ~450px.
+
+**`general` has pre-seeded messages** making `hasUnread` always true. Use
+`engineering` for "muted + no unread" visual states.
+
+**PR comments:** Use a body template (3rd arg to `post-screenshots.sh`) with
+`{{filename}}` placeholders. Each screenshot gets a `###` heading + one-line
+description. See [PR #803](https://github.com/block/sprout/pull/803).
 
 ---
 

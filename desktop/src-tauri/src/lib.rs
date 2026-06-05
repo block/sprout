@@ -4,6 +4,7 @@ mod events;
 mod huddle;
 mod managed_agents;
 mod media_proxy;
+#[cfg(feature = "mesh-llm")]
 mod mesh_llm;
 mod migration;
 mod models;
@@ -12,6 +13,77 @@ mod prevent_sleep;
 mod relay;
 mod templates;
 mod util;
+
+#[cfg(not(feature = "mesh-llm"))]
+mod mesh_llm_stubs {
+    use tauri::State;
+
+    use crate::app_state::AppState;
+
+    type CmdResult<T> = Result<T, String>;
+
+    #[tauri::command]
+    pub async fn mesh_availability(_state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_start_node(
+        _app: tauri::AppHandle,
+        _state: State<'_, AppState>,
+        _request: serde_json::Value,
+    ) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_ensure_client_node(
+        _state: State<'_, AppState>,
+        _request: serde_json::Value,
+    ) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_stop_node(_state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_node_status(_state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_installed_models(
+        _state: State<'_, AppState>,
+    ) -> CmdResult<Vec<serde_json::Value>> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub fn mesh_agent_preset(_request: serde_json::Value) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_dial_endpoint_addr(
+        _state: State<'_, AppState>,
+        _request: serde_json::Value,
+    ) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_status_report_payload(
+        _state: State<'_, AppState>,
+    ) -> CmdResult<Option<serde_json::Value>> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+}
+
+#[cfg(not(feature = "mesh-llm"))]
+use mesh_llm_stubs::*;
 
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use commands::*;
@@ -561,6 +633,7 @@ pub fn run() {
             pick_and_upload_media,
             upload_media_bytes,
             download_image,
+            download_file,
             list_relay_members,
             get_my_relay_membership,
             add_relay_member,
@@ -583,6 +656,8 @@ pub fn run() {
             mesh_availability,
             mesh_start_node,
             mesh_ensure_client_node,
+            mesh_dial_endpoint_addr,
+            mesh_status_report_payload,
             mesh_stop_node,
             mesh_node_status,
             mesh_installed_models,

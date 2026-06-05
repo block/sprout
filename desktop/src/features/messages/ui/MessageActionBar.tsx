@@ -1,5 +1,3 @@
-import Picker from "@emoji-mart/react";
-import data from "@emoji-mart/data";
 import {
   BellOff,
   BellRing,
@@ -16,6 +14,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { buildMessageLink } from "@/features/messages/lib/messageLink";
+import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import type {
   TimelineMessage,
@@ -258,7 +257,6 @@ function MoreActionsMenu({
 // ---------------------------------------------------------------------------
 
 export function MessageActionBar({
-  activeReplyTargetId = null,
   channelId,
   message,
   onDelete,
@@ -273,7 +271,6 @@ export function MessageActionBar({
   reactionPending = false,
   isFollowingThread,
 }: {
-  activeReplyTargetId?: string | null;
   /** Channel UUID — required for the "Copy link" action; when omitted the
    *  action is hidden (callers like the home inbox that lack the context). */
   channelId?: string | null;
@@ -307,7 +304,6 @@ export function MessageActionBar({
     return null;
   }
 
-  const isReplyingToMessage = activeReplyTargetId === message.id;
   const selectedReactionCount = reactions.filter(
     (reaction) => reaction.reactedByCurrentUser,
   ).length;
@@ -319,7 +315,7 @@ export function MessageActionBar({
         "opacity-100 sm:pointer-events-none sm:opacity-0",
         "sm:group-hover/message:pointer-events-auto sm:group-hover/message:opacity-100",
         "sm:group-focus-within/message:pointer-events-auto sm:group-focus-within/message:opacity-100",
-        isReplyingToMessage || isReactionPickerOpen || isDropdownOpen
+        isReactionPickerOpen || isDropdownOpen
           ? "sm:pointer-events-auto sm:opacity-100"
           : "",
       )}
@@ -370,23 +366,18 @@ export function MessageActionBar({
                   </p>
                 </div>
               ) : null}
-              <Picker
-                data={data}
-                onEmojiSelect={(emoji: { native: string }) => {
+              <EmojiPicker
+                autoFocus
+                onSelect={(value) => {
                   if (!onReactionSelect) {
                     return;
                   }
-
-                  void onReactionSelect(emoji.native).finally(() => {
+                  // `value` is already a `native` glyph or a `:shortcode:` for
+                  // custom emoji; the toggle mutation resolves the URL.
+                  void onReactionSelect(value).finally(() => {
                     setIsReactionPickerOpen(false);
                   });
                 }}
-                theme="auto"
-                previewPosition="none"
-                skinTonePosition="search"
-                set="native"
-                maxFrequentRows={2}
-                perLine={8}
               />
             </PopoverContent>
           </Popover>
@@ -396,7 +387,7 @@ export function MessageActionBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                aria-label={isReplyingToMessage ? "Cancel reply" : "Reply"}
+                aria-label="Reply"
                 className="h-6 w-6 rounded-full p-0"
                 data-testid={`reply-message-${message.id}`}
                 onClick={() => {
@@ -404,14 +395,12 @@ export function MessageActionBar({
                 }}
                 size="sm"
                 type="button"
-                variant={isReplyingToMessage ? "secondary" : "ghost"}
+                variant="ghost"
               >
                 <CornerUpLeft className="h-3 w-3" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>
-              {isReplyingToMessage ? "Cancel reply" : "Reply"}
-            </TooltipContent>
+            <TooltipContent>Reply</TooltipContent>
           </Tooltip>
         ) : null}
 

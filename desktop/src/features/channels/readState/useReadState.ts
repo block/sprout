@@ -5,6 +5,8 @@ import type { RelayClient } from "@/shared/api/relayClientSession";
 const noopGetTimestamp = () => null;
 const noopMarkRead = () => {};
 const noopMarkUnread = () => {};
+const noopDrainRollbacks = (): ReadonlySet<string> => new Set<string>();
+const noopDrainAdvances = (): ReadonlySet<string> => new Set<string>();
 
 /**
  * React hook that creates and manages a ReadStateManager instance.
@@ -78,6 +80,14 @@ export function useReadState(
     [],
   );
 
+  const drainSyncedRollbacks = React.useCallback((): ReadonlySet<string> => {
+    return managerRef.current?.drainSyncedRollbacks() ?? new Set<string>();
+  }, []);
+
+  const drainSyncedAdvances = React.useCallback((): ReadonlySet<string> => {
+    return managerRef.current?.drainSyncedAdvances() ?? new Set<string>();
+  }, []);
+
   const isReady = Boolean(
     pubkey && relayClient && initializedPubkey === pubkey,
   );
@@ -89,6 +99,8 @@ export function useReadState(
       markContextRead: noopMarkRead,
       markContextUnread: noopMarkUnread,
       seedContextRead: noopMarkRead,
+      drainSyncedRollbacks: noopDrainRollbacks,
+      drainSyncedAdvances: noopDrainAdvances,
       readStateVersion: 0,
     };
   }
@@ -99,6 +111,8 @@ export function useReadState(
     markContextRead,
     markContextUnread,
     seedContextRead,
+    drainSyncedRollbacks,
+    drainSyncedAdvances,
     readStateVersion,
   };
 }

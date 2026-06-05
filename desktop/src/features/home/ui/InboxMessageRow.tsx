@@ -27,7 +27,6 @@ function toTimelineMessage(message: InboxDisplayMessage): TimelineMessage {
 }
 
 type InboxMessageRowProps = {
-  activeReplyTargetId: string | null;
   canReply: boolean;
   /** Channel UUID for "Copy link" — passed straight through to MessageActionBar. */
   channelId?: string | null;
@@ -42,7 +41,6 @@ type InboxMessageRowProps = {
 };
 
 export function InboxMessageRow({
-  activeReplyTargetId,
   canReply,
   channelId = null,
   isFocusHighlightVisible,
@@ -89,7 +87,6 @@ export function InboxMessageRow({
         {canReply || canToggleReactions ? (
           <div className="absolute right-2 top-1 z-10">
             <MessageActionBar
-              activeReplyTargetId={activeReplyTargetId}
               channelId={channelId}
               message={timelineMessage}
               onReactionSelect={

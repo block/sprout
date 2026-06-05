@@ -1,0 +1,127 @@
+use super::ManagedAgentRecord;
+
+pub const RELAY_MESH_API_BASE_URL: &str = "http://127.0.0.1:9337/v1";
+pub const RELAY_MESH_API_KEY_PLACEHOLDER: &str = "sprout-mesh-local";
+
+/// Returns the relay-mesh model id for agents whose provider env points at the
+/// local mesh client endpoint created by Sprout's relay-mesh preset.
+#[cfg(feature = "mesh-llm")]
+pub fn relay_mesh_model_id(record: &ManagedAgentRecord) -> Option<String> {
+    let base_url = record.env_vars.get("OPENAI_COMPAT_BASE_URL")?.trim();
+    if base_url.trim_end_matches('/') != RELAY_MESH_API_BASE_URL {
+        return None;
+    }
+    let provider = record.env_vars.get("SPROUT_AGENT_PROVIDER")?.trim();
+    if provider != "openai" {
+        return None;
+    }
+    let api_key = record.env_vars.get("OPENAI_COMPAT_API_KEY")?.trim();
+    if api_key != RELAY_MESH_API_KEY_PLACEHOLDER {
+        return None;
+    }
+    record
+        .env_vars
+        .get("OPENAI_COMPAT_MODEL")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::managed_agents::{BackendKind, RespondTo};
+
+    fn fixture() -> ManagedAgentRecord {
+        ManagedAgentRecord {
+            pubkey: "p".into(),
+            name: "n".into(),
+            persona_id: None,
+            private_key_nsec: "nsec1fake".into(),
+            auth_tag: Some("tag".into()),
+            relay_url: "ws://localhost:3000".into(),
+            acp_command: "sprout-acp".into(),
+            agent_command: "goose".into(),
+            agent_args: vec![],
+            mcp_command: "sprout-mcp-server".into(),
+            turn_timeout_seconds: 320,
+            idle_timeout_seconds: None,
+            max_turn_duration_seconds: None,
+            parallelism: 1,
+            system_prompt: None,
+            model: None,
+            mcp_toolsets: None,
+            env_vars: BTreeMap::new(),
+            start_on_app_launch: false,
+            runtime_pid: None,
+            backend: BackendKind::Local,
+            backend_agent_id: None,
+            provider_binary_path: None,
+            persona_pack_path: None,
+            persona_name_in_pack: None,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+            last_started_at: None,
+            last_stopped_at: None,
+            last_exit_code: None,
+            last_error: None,
+            respond_to: RespondTo::OwnerOnly,
+            respond_to_allowlist: vec![],
+        }
+    }
+
+    #[cfg(feature = "mesh-llm")]
+    #[test]
+    fn relay_mesh_model_id_detects_mesh_preset_env() {
+        let mut rec = fixture();
+        rec.env_vars = BTreeMap::from([
+            ("SPROUT_AGENT_PROVIDER".to_string(), "openai".to_string()),
+            (
+                "OPENAI_COMPAT_BASE_URL".to_string(),
+                "http://127.0.0.1:9337/v1/".to_string(),
+            ),
+            ("OPENAI_COMPAT_MODEL".to_string(), "Qwen3".to_string()),
+            (
+                "OPENAI_COMPAT_API_KEY".to_string(),
+                RELAY_MESH_API_KEY_PLACEHOLDER.to_string(),
+            ),
+        ]);
+
+        assert_eq!(relay_mesh_model_id(&rec).as_deref(), Some("Qwen3"));
+    }
+
+    #[cfg(feature = "mesh-llm")]
+    #[test]
+    fn relay_mesh_model_id_ignores_non_mesh_openai_env() {
+        let mut rec = fixture();
+        rec.env_vars = BTreeMap::from([
+            ("SPROUT_AGENT_PROVIDER".to_string(), "openai".to_string()),
+            (
+                "OPENAI_COMPAT_BASE_URL".to_string(),
+                "https://api.openai.com/v1".to_string(),
+            ),
+            ("OPENAI_COMPAT_MODEL".to_string(), "gpt-5".to_string()),
+        ]);
+
+        assert_eq!(relay_mesh_model_id(&rec), None);
+    }
+
+    #[cfg(feature = "mesh-llm")]
+    #[test]
+    fn relay_mesh_model_id_ignores_user_openai_on_same_local_port() {
+        let mut rec = fixture();
+        rec.env_vars = BTreeMap::from([
+            ("SPROUT_AGENT_PROVIDER".to_string(), "openai".to_string()),
+            (
+                "OPENAI_COMPAT_BASE_URL".to_string(),
+                "http://127.0.0.1:9337/v1".to_string(),
+            ),
+            ("OPENAI_COMPAT_MODEL".to_string(), "Qwen3".to_string()),
+            ("OPENAI_COMPAT_API_KEY".to_string(), "real-key".to_string()),
+        ]);
+
+        assert_eq!(relay_mesh_model_id(&rec), None);
+    }
+}

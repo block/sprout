@@ -1,9 +1,9 @@
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use nostr::{EventBuilder, JsonUtil, Kind, Tag};
-use reqwest::Method;
 use tauri::{AppHandle, State};
 
-use crate::{app_state::AppState, mesh_llm, relay};
+use crate::{app_state::AppState, managed_agents::RELAY_MESH_API_BASE_URL, mesh_llm, relay};
+
+const RELAY_MESH_RUNTIME_NO_TARGET: &str =
+    "relay mesh client start requires a concrete serve target; reopen the agent with Run on relay mesh selected to refresh its target";
 
 pub type CmdResult<T> = Result<T, String>;
 
@@ -21,14 +21,12 @@ pub async fn mesh_availability(
 pub async fn mesh_start_node(
     _app: AppHandle,
     state: State<'_, AppState>,
-    mut request: mesh_llm::StartMeshNodeRequest,
+    request: mesh_llm::StartMeshNodeRequest,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
     let mut runtime = state.mesh_llm_runtime.lock().await;
     if runtime.is_some() {
         return Err("mesh node is already running".to_string());
     }
-
-    hydrate_private_relay_config(&state, &mut request).await?;
 
     let started = mesh_llm::DesktopMeshRuntime::start(request)
         .await
@@ -46,12 +44,13 @@ pub async fn mesh_ensure_client_node(
     state: State<'_, AppState>,
     request: mesh_llm::EnsureMeshClientRequest,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
-    ensure_client_node_for_model(&state, request.model_id).await
+    ensure_client_node_for_model(&state, request.model_id, request.endpoint_addr).await
 }
 
 pub(crate) async fn ensure_client_node_for_model(
     state: &AppState,
     model_id: impl AsRef<str>,
+    endpoint_addr: Option<String>,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
     let requested_model = model_id.as_ref().trim();
     if requested_model.is_empty() {
@@ -61,43 +60,51 @@ pub(crate) async fn ensure_client_node_for_model(
     {
         let runtime = state.mesh_llm_runtime.lock().await;
         if let Some(runtime) = runtime.as_ref() {
-            let status = runtime.status().await.map_err(|error| error.to_string())?;
-            return match status.mode {
-                Some(mesh_llm::MeshNodeMode::Client) => Ok(status),
-                Some(mesh_llm::MeshNodeMode::Serve) => Err(
-                    "this desktop is currently sharing compute; stop sharing before using relay mesh as a client"
-                        .to_string(),
-                ),
-                None => Ok(status),
-            };
+            // A running runtime — in any mode — is the mesh's local OpenAI
+            // ingress on `9337`. mesh-llm's router already resolves the
+            // requested model to a local, remote, or split target at request
+            // time (see `route_missing_local_model` -> `hosts_for_model`), so
+            // "serving" and "using the mesh as a client" are not mutually
+            // exclusive: a serve node can host model A and route model B to a
+            // peer through the same ingress. Hand the agent the existing
+            // runtime; the router decides routability per request rather than
+            // this preflight second-guessing it (a `/v1/models` check here
+            // would race model gossip and wrongly reject freshly-discovered
+            // remote/split models).
+            //
+            // If the caller selected a specific target, still dial it: that is
+            // how the runtime joins the chosen peer's mesh. Skipping it would
+            // let a serve runtime not yet connected to that target fail its
+            // first inference while the frontend has already signalled the
+            // peer to expect us.
+            if let Some(endpoint_addr) = endpoint_addr
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                runtime
+                    .dial_endpoint_addr(endpoint_addr)
+                    .await
+                    .map_err(|error| format!("mesh dial failed: {error}"))?;
+            }
+            return runtime.status().await.map_err(|error| error.to_string());
         }
     }
 
-    let availability = match relay::query_relay(state, &[mesh_llm::mesh_status_filter()]).await {
-        Ok(events) => mesh_llm::availability_from_events(events),
-        Err(error) => return Err(format!("failed to read relay mesh status: {error}")),
+    let join_token = match endpoint_addr
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => return Err(RELAY_MESH_RUNTIME_NO_TARGET.to_string()),
     };
-    if !availability.available {
-        return Err(availability
-            .reason
-            .unwrap_or_else(|| "relay mesh is not available".to_string()));
-    }
-    let target = availability
-        .serve_targets
-        .iter()
-        .find(|target| target.model_id == requested_model)
-        .ok_or_else(|| format!("relay mesh has no serve target for model {requested_model}"))?;
 
-    let mut start = mesh_llm::StartMeshNodeRequest {
+    let start = mesh_llm::StartMeshNodeRequest {
         mode: mesh_llm::MeshNodeMode::Client,
         model_id: None,
         max_vram_gb: None,
-        join_token: Some(target.endpoint_addr.clone()),
-        iroh_relay_url: None,
-        iroh_relay_auth: None,
+        join_token: Some(join_token),
     };
-    hydrate_private_relay_config(state, &mut start).await?;
-
     let mut runtime = state.mesh_llm_runtime.lock().await;
     if runtime.is_some() {
         return Err("mesh node changed while starting relay mesh client".to_string());
@@ -113,80 +120,124 @@ pub(crate) async fn ensure_client_node_for_model(
     Ok(status)
 }
 
-async fn hydrate_private_relay_config(
+/// Re-resolve a live serve target's dial pointer for a saved relay-mesh agent.
+///
+/// The serve target's `endpoint_addr` is live discovery state — it comes from
+/// the peer's replaceable kind:30621 status event and rotates when the peer's
+/// iroh endpoint changes — so it is never persisted onto the agent record.
+/// Instead, a saved agent re-resolves a current bootstrap target at start time
+/// by matching its configured model against the targets the relay is gossiping
+/// right now. We only need *any* live target for the model to bootstrap the
+/// client node; mesh-llm's router picks the per-request host afterwards.
+///
+/// `Err` means the relay query itself failed (relay down, auth, network) — we
+/// could not refresh targets at all and must not pretend the peer is offline.
+/// `Ok(None)` means the relay answered but no live target currently serves this
+/// model (genuine peer-offline). `Ok(Some(addr))` is a dialable bootstrap
+/// target.
+pub(crate) async fn resolve_mesh_bootstrap_target(
     state: &AppState,
-    request: &mut mesh_llm::StartMeshNodeRequest,
+    model_id: &str,
+) -> Result<Option<String>, String> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return Ok(None);
+    }
+    let events = relay::query_relay(state, &[mesh_llm::mesh_status_filter()]).await?;
+    Ok(pick_serve_target_for_model(
+        mesh_llm::availability_from_events(events).serve_targets,
+        model_id,
+    ))
+}
+
+/// Pure target-selection used by `resolve_mesh_bootstrap_target`: the first
+/// gossiped serve target that hosts `model_id`. Split out so the matching rule
+/// is unit-testable without a relay round-trip.
+fn pick_serve_target_for_model(
+    targets: Vec<mesh_llm::MeshServeTarget>,
+    model_id: &str,
+) -> Option<String> {
+    targets
+        .into_iter()
+        .find(|target| target.model_id == model_id)
+        .map(|target| target.endpoint_addr)
+}
+
+/// Decide whether a relay-mesh agent may start, and bring up its local mesh
+/// client when needed.
+///
+/// Fresh create (`allow_fresh_create_start`) has just run the client-start flow
+/// from the dialog, so it spawns as-is. For a saved/manual start the serve
+/// target's dial pointer was never persisted (it is live discovery state), so
+/// re-resolve a current bootstrap target from the relay's gossiped targets and
+/// dial it. The two failure modes get distinct, actionable copy: a relay query
+/// failure ("could not refresh targets") is not the same as a relay that
+/// answered with no live target for this model ("peer offline"). Non relay-mesh
+/// records are a no-op.
+pub(crate) async fn ensure_relay_mesh_for_record(
+    state: &AppState,
+    record: &crate::managed_agents::ManagedAgentRecord,
+    allow_fresh_create_start: bool,
 ) -> Result<(), String> {
-    if request.iroh_relay_url.is_none() {
-        request.iroh_relay_url = Some(fetch_iroh_relay_url(state).await?);
+    if allow_fresh_create_start {
+        return Ok(());
     }
-    if request.iroh_relay_auth.is_none() {
-        let relay = request
-            .iroh_relay_url
-            .as_deref()
-            .ok_or_else(|| "relay did not advertise iroh_relay_url".to_string())?;
-        request.iroh_relay_auth = Some(build_iroh_relay_bearer(state, relay)?);
-    }
-    Ok(())
-}
-
-async fn fetch_iroh_relay_url(state: &AppState) -> Result<String, String> {
-    #[derive(serde::Deserialize)]
-    struct Nip11Info {
-        iroh_relay_url: Option<String>,
-    }
-
-    let url = relay::relay_api_base_url_with_override(state);
-    let response = state
-        .http_client
-        .get(&url)
-        .header("Accept", "application/nostr+json")
-        .send()
-        .await
-        .map_err(|error| format!("failed to fetch relay NIP-11: {error}"))?;
-    if !response.status().is_success() {
-        return Err(relay::relay_error_message(response).await);
-    }
-    let info = response
-        .json::<Nip11Info>()
-        .await
-        .map_err(|error| format!("failed to parse relay NIP-11: {error}"))?;
-    info.iroh_relay_url
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "relay NIP-11 does not advertise iroh_relay_url".to_string())
-}
-
-fn build_iroh_relay_bearer(state: &AppState, relay_url: &str) -> Result<String, String> {
-    let canonical = canonical_iroh_relay_auth_url(relay_url)?;
-    let tags = vec![
-        Tag::parse(vec!["u", canonical.as_str()])
-            .map_err(|error| format!("url tag failed: {error}"))?,
-        Tag::parse(vec!["method", Method::GET.as_str()])
-            .map_err(|error| format!("method tag failed: {error}"))?,
-    ];
-    let keys = state.keys.lock().map_err(|error| error.to_string())?;
-    let event = EventBuilder::new(Kind::HttpAuth, "")
-        .tags(tags)
-        .sign_with_keys(&keys)
-        .map_err(|error| format!("sign failed: {error}"))?;
-    Ok(BASE64.encode(event.as_json().as_bytes()))
-}
-
-fn canonical_iroh_relay_auth_url(relay_url: &str) -> Result<String, String> {
-    let mut parsed = url::Url::parse(relay_url)
-        .map_err(|error| format!("invalid iroh relay URL {relay_url:?}: {error}"))?;
-    parsed.set_query(None);
-    parsed.set_fragment(None);
-    let mut path = parsed.path().trim_end_matches('/').to_string();
-    if !path.ends_with("/relay") {
-        if path.is_empty() {
-            path = "/relay".to_string();
-        } else {
-            path.push_str("/relay");
+    let Some(model_id) = crate::managed_agents::relay_mesh_model_id(record) else {
+        return Ok(());
+    };
+    match resolve_mesh_bootstrap_target(state, &model_id).await {
+        Ok(Some(endpoint_addr)) => {
+            ensure_client_node_for_model(state, &model_id, Some(endpoint_addr)).await?;
+            Ok(())
         }
+        Ok(None) => Err(format!(
+            "relay mesh agents cannot be started from saved state because no live serve target is available for this model. Start serving on a mesh peer, or create a new agent with Run on relay mesh selected to refresh the target for {RELAY_MESH_API_BASE_URL}."
+        )),
+        Err(error) => Err(format!(
+            "could not refresh relay mesh serve targets to start this agent: {error}"
+        )),
     }
-    parsed.set_path(&path);
-    Ok(parsed.to_string().trim_end_matches('/').to_string())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshDialEndpointRequest {
+    pub endpoint_addr: String,
+}
+
+#[tauri::command]
+pub async fn mesh_dial_endpoint_addr(
+    state: State<'_, AppState>,
+    request: MeshDialEndpointRequest,
+) -> CmdResult<mesh_llm::MeshNodeStatus> {
+    let endpoint_addr = request.endpoint_addr.trim();
+    if endpoint_addr.is_empty() {
+        return Err("endpointAddr is required".to_string());
+    }
+    let runtime = state.mesh_llm_runtime.lock().await;
+    let Some(runtime) = runtime.as_ref() else {
+        return Err("mesh node is not running".to_string());
+    };
+    runtime
+        .dial_endpoint_addr(endpoint_addr)
+        .await
+        .map_err(|error| format!("mesh dial failed: {error}"))?;
+    runtime.status().await.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn mesh_status_report_payload(
+    state: State<'_, AppState>,
+) -> CmdResult<Option<serde_json::Value>> {
+    let runtime = state.mesh_llm_runtime.lock().await;
+    match runtime.as_ref() {
+        Some(runtime) => runtime
+            .status_report_payload()
+            .await
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -226,4 +277,124 @@ pub fn mesh_agent_preset(
     request: mesh_llm::MeshAgentPresetRequest,
 ) -> CmdResult<mesh_llm::MeshAgentPreset> {
     mesh_llm::agent_preset(request)
+}
+
+#[cfg(all(test, feature = "mesh-llm"))]
+mod tests {
+    use super::*;
+    use crate::app_state::build_app_state;
+
+    fn target(model_id: &str, endpoint_addr: &str) -> mesh_llm::MeshServeTarget {
+        mesh_llm::MeshServeTarget {
+            model_id: model_id.to_string(),
+            model_name: None,
+            endpoint_addr: endpoint_addr.to_string(),
+            node_name: None,
+            capacity: None,
+            reporter_pubkey: None,
+            endpoint_id: None,
+            device_id: None,
+            device_name: None,
+        }
+    }
+
+    #[test]
+    fn pick_serve_target_returns_first_match_for_model() {
+        let targets = vec![
+            target("model-a", "addr-a"),
+            target("model-b", "addr-b1"),
+            target("model-b", "addr-b2"),
+        ];
+        // Matches by model id, returns the first such target's dial pointer.
+        assert_eq!(
+            pick_serve_target_for_model(targets, "model-b"),
+            Some("addr-b1".to_string())
+        );
+    }
+
+    #[test]
+    fn pick_serve_target_none_when_model_not_hosted() {
+        let targets = vec![target("model-a", "addr-a")];
+        // No live target serves this model -> caller falls closed.
+        assert_eq!(pick_serve_target_for_model(targets, "model-missing"), None);
+    }
+
+    #[tokio::test]
+    async fn cold_client_preflight_requires_explicit_target() {
+        let state = build_app_state();
+        let error = ensure_client_node_for_model(&state, "demo/model", None)
+            .await
+            .expect_err("cold relay-mesh preflight must not auto-pick a target");
+        assert_eq!(error, RELAY_MESH_RUNTIME_NO_TARGET);
+    }
+
+    /// Acceptance-critical regression for dropping the serve-vs-client guard.
+    ///
+    /// Before this change, `ensure_client_node_for_model` hard-errored whenever
+    /// the running runtime was in `Serve` mode ("stop sharing before using
+    /// relay mesh as a client"). That forbade the exact thing a user should be
+    /// able to do: host model A while pointing an agent at a different model B
+    /// through the same `9337` ingress.
+    ///
+    /// This test starts a real serve runtime and asserts that a follow-up
+    /// preflight for a *different* model and no explicit target still reuses the
+    /// existing runtime. Cold starts without a target are rejected before mesh-llm
+    /// startup; running runtimes are already joined to whatever target the
+    /// frontend selected earlier.
+    ///
+    /// Hardware-gated (`#[ignore]`): loads a real model. Run with:
+    ///   cargo test -p sprout-desktop --features mesh-llm \
+    ///     ensure_serve_runtime_serves_other_model -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "loads a real model; run manually with --ignored"]
+    async fn ensure_serve_runtime_serves_other_model() {
+        const HOSTED_MODEL: &str = "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M";
+        const OTHER_MODEL: &str = "some/other-model-not-hosted-locally:Q4_K_M";
+
+        let state = build_app_state();
+
+        // Start a serve runtime hosting HOSTED_MODEL — this is the "Share
+        // compute" path.
+        let serve = mesh_llm::DesktopMeshRuntime::start(mesh_llm::StartMeshNodeRequest {
+            mode: mesh_llm::MeshNodeMode::Serve,
+            model_id: Some(HOSTED_MODEL.to_string()),
+            max_vram_gb: None,
+            join_token: None,
+        })
+        .await
+        .expect("serve runtime should start");
+
+        let serve_status = serve.status().await.expect("serve status");
+        let serve_base = serve_status.api_base_url.clone();
+        assert_eq!(serve_status.mode, Some(mesh_llm::MeshNodeMode::Serve));
+
+        {
+            let mut runtime = state.mesh_llm_runtime.lock().await;
+            *runtime = Some(serve);
+        }
+
+        // Preflight for a DIFFERENT model with no explicit target. Old code:
+        // Err(...sharing compute...). New code: reuse the running ingress.
+        let status = ensure_client_node_for_model(&state, OTHER_MODEL, None)
+            .await
+            .expect("serve runtime must not reject a different-model preflight");
+
+        // It returns the SAME running node — agents keep using A's 9337, and
+        // the router decides routability for OTHER_MODEL per request.
+        assert_eq!(
+            status.mode,
+            Some(mesh_llm::MeshNodeMode::Serve),
+            "preflight should reuse the existing serve runtime, not spin up a client"
+        );
+        assert_eq!(
+            status.api_base_url, serve_base,
+            "agent must be pointed at the existing serve node's ingress"
+        );
+
+        // Clean up the runtime.
+        let taken = state.mesh_llm_runtime.lock().await.take();
+        if let Some(runtime) = taken {
+            let _ = runtime.stop().await;
+        }
+    }
 }

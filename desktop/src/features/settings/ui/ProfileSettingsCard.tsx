@@ -1,12 +1,12 @@
-import { AtSign, Check, UserRound } from "lucide-react";
+import { AtSign, Check, Copy, UserRound } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 
 import {
   useProfileQuery,
   useUpdateProfileMutation,
 } from "@/features/profile/hooks";
 import { AvatarUpload } from "@/features/profile/ui/AvatarUpload";
-import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Separator } from "@/shared/ui/separator";
@@ -42,20 +42,41 @@ function ReadOnlyField({
   label,
   value,
   testId,
+  copyValue,
 }: {
   label: string;
   value: string;
   testId: string;
+  copyValue?: string;
 }) {
+  const boxClassName =
+    "flex min-w-0 items-center gap-2 rounded-xl border border-border/80 bg-muted/25 px-3 py-2 text-sm text-muted-foreground";
+
   return (
     <div className="min-w-0 space-y-1.5">
       <p className="text-sm font-medium">{label}</p>
-      <div
-        className="min-w-0 break-all whitespace-normal rounded-xl border border-border/80 bg-muted/25 px-3 py-2 text-sm text-muted-foreground"
-        data-testid={testId}
-      >
-        {value}
-      </div>
+      {copyValue ? (
+        <button
+          aria-label={`Copy ${label}`}
+          className={`${boxClassName} w-full text-left transition-colors hover:bg-muted/50`}
+          data-testid={`copy-${testId}`}
+          onClick={async () => {
+            await navigator.clipboard.writeText(copyValue);
+            toast.success("Copied to clipboard");
+          }}
+          title={`Copy ${label}`}
+          type="button"
+        >
+          <span className="min-w-0 flex-1 break-all" data-testid={testId}>
+            {value}
+          </span>
+          <Copy className="h-3.5 w-3.5 shrink-0" />
+        </button>
+      ) : (
+        <div className={`${boxClassName} break-all`} data-testid={testId}>
+          {value}
+        </div>
+      )}
     </div>
   );
 }
@@ -117,26 +138,7 @@ export function ProfileSettingsCard({
 
   return (
     <section className="min-w-0" data-testid="settings-profile">
-      <div className="flex min-w-0 items-start gap-4">
-        <ProfileAvatar
-          avatarUrl={profile?.avatarUrl ?? null}
-          className="h-16 w-16 rounded-3xl text-lg"
-          iconClassName="h-6 w-6"
-          label={resolvedName}
-        />
-        <div className="min-w-0 space-y-2">
-          <div>
-            <h2 className="break-words text-base font-semibold tracking-tight">
-              {resolvedName}
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Manage how your identity appears across Sprout.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-6 space-y-6">
+      <div className="space-y-6">
         {profileQuery.error instanceof Error ? (
           <p className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {profileQuery.error.message}
@@ -156,86 +158,66 @@ export function ProfileSettingsCard({
           </div>
         ) : null}
 
-        <Section
-          description="These values are stored on the relay for your current identity."
-          title="Profile"
+        <form
+          className="min-w-0 space-y-4"
+          id="profile-settings-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canSave) {
+              return;
+            }
+
+            void updateProfileMutation.mutateAsync(updatePayload);
+          }}
         >
-          <form
-            className="min-w-0 space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!canSave) {
-                return;
-              }
-
-              void updateProfileMutation.mutateAsync(updatePayload);
-            }}
-          >
-            <div className="space-y-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="profile-display-name"
-              >
-                Display name
-              </label>
-              <div className="relative min-w-0">
-                <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  className="pl-9"
-                  data-testid="profile-display-name"
-                  disabled={updateProfileMutation.isPending}
-                  id="profile-display-name"
-                  onChange={(event) => setDisplayNameDraft(event.target.value)}
-                  placeholder="How people should see you"
-                  value={displayNameDraft}
-                />
-              </div>
-            </div>
-
-            <AvatarUpload
-              avatarUrl={avatarUrlDraft}
-              previewName={resolvedName}
-              onUrlChange={(url) => setAvatarUrlDraft(url)}
-              disabled={updateProfileMutation.isPending}
-              idleHint="Upload or paste a URL to change your avatar."
-              testIdPrefix="profile-avatar"
-            />
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="profile-about">
-                About
-              </label>
-              <div className="relative min-w-0">
-                <AtSign className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                <Textarea
-                  className="min-h-28 pl-9"
-                  data-testid="profile-about"
-                  disabled={updateProfileMutation.isPending}
-                  id="profile-about"
-                  onChange={(event) => setAboutDraft(event.target.value)}
-                  placeholder="A short description for your profile"
-                  value={aboutDraft}
-                />
-              </div>
-            </div>
-
-            <Button
-              data-testid="profile-save"
-              disabled={!canSave}
-              size="sm"
-              type="submit"
+          <div className="space-y-1.5">
+            <label
+              className="text-sm font-medium"
+              htmlFor="profile-display-name"
             >
-              {updateProfileMutation.isPending ? "Saving..." : "Save profile"}
-            </Button>
+              Display name
+            </label>
+            <div className="relative min-w-0">
+              <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                data-testid="profile-display-name"
+                disabled={updateProfileMutation.isPending}
+                id="profile-display-name"
+                onChange={(event) => setDisplayNameDraft(event.target.value)}
+                placeholder="How people should see you"
+                value={displayNameDraft}
+              />
+            </div>
+          </div>
 
-            {hasPendingClearRequest ? (
-              <p className="text-sm text-muted-foreground">
-                Clearing existing profile fields is not supported yet. Blank
-                display name, avatar, and about values are ignored for now.
-              </p>
-            ) : null}
-          </form>
-        </Section>
+          <AvatarUpload
+            avatarUrl={avatarUrlDraft}
+            previewName={resolvedName}
+            onUrlChange={(url) => setAvatarUrlDraft(url)}
+            disabled={updateProfileMutation.isPending}
+            idleHint="Upload or paste a URL to change your avatar."
+            testIdPrefix="profile-avatar"
+          />
+
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium" htmlFor="profile-about">
+              About
+            </label>
+            <div className="relative min-w-0">
+              <AtSign className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+              <Textarea
+                className="min-h-28 pl-9"
+                data-testid="profile-about"
+                disabled={updateProfileMutation.isPending}
+                id="profile-about"
+                onChange={(event) => setAboutDraft(event.target.value)}
+                placeholder="A short description for your profile"
+                value={aboutDraft}
+              />
+            </div>
+          </div>
+        </form>
 
         <Separator />
 
@@ -245,17 +227,38 @@ export function ProfileSettingsCard({
         >
           <div className="space-y-3">
             <ReadOnlyField
+              copyValue={profile?.pubkey ?? currentPubkey ?? undefined}
               label="Public key"
               testId="profile-pubkey"
               value={resolvedPubkey}
             />
             <ReadOnlyField
+              copyValue={profile?.nip05Handle ?? undefined}
               label="NIP-05 handle"
               testId="profile-nip05"
               value={nip05Handle}
             />
           </div>
         </Section>
+      </div>
+
+      <div className="sticky bottom-0 z-10 -mx-4 -mb-4 mt-6 flex flex-col gap-2 border-t border-border bg-background px-4 pt-4 pb-4 sm:-mx-6 sm:px-6">
+        <Button
+          data-testid="profile-save"
+          disabled={!canSave}
+          form="profile-settings-form"
+          size="sm"
+          type="submit"
+        >
+          {updateProfileMutation.isPending ? "Saving..." : "Save profile"}
+        </Button>
+
+        {hasPendingClearRequest ? (
+          <p className="text-sm text-muted-foreground">
+            Clearing existing profile fields is not supported yet. Blank display
+            name, avatar, and about values are ignored for now.
+          </p>
+        ) : null}
       </div>
     </section>
   );

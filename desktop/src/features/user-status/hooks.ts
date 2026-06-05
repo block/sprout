@@ -166,6 +166,11 @@ export function useSetUserStatusMutation(pubkey?: string) {
           ? { text, emoji, updatedAt: Math.floor(Date.now() / 1_000) }
           : null;
 
+      queryClient.setQueryData<UserStatusLookup>(
+        userStatusQueryKey([normalizedPubkey]),
+        (old) => ({ ...(old ?? {}), [normalizedPubkey]: status }),
+      );
+
       queryClient.setQueriesData<UserStatusLookup>(
         { queryKey: ["user-status"] },
         (old) => {

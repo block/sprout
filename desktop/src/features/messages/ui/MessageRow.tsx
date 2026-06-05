@@ -10,6 +10,7 @@ import { cn } from "@/shared/lib/cn";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
 import { parseImetaTags } from "@/features/messages/lib/parseImeta";
+import { customEmojiFromTags } from "@/shared/api/customEmoji";
 import {
   resolveMentionNames,
   resolveMentionPubkeysByName,
@@ -27,7 +28,6 @@ const NESTED_REPLY_OFFSET_PX = 28;
 
 export const MessageRow = React.memo(
   function MessageRow({
-    activeReplyTargetId = null,
     channelId = null,
     highlighted = false,
     isFollowingThread,
@@ -43,7 +43,6 @@ export const MessageRow = React.memo(
     profiles,
     searchQuery,
   }: {
-    activeReplyTargetId?: string | null;
     channelId?: string | null;
     highlighted?: boolean;
     isFollowingThread?: boolean;
@@ -84,6 +83,11 @@ export const MessageRow = React.memo(
 
     const imetaByUrl = React.useMemo(
       () => (message.tags ? parseImetaTags(message.tags) : undefined),
+      [message.tags],
+    );
+
+    const customEmoji = React.useMemo(
+      () => (message.tags ? customEmojiFromTags(message.tags) : undefined),
       [message.tags],
     );
 
@@ -144,6 +148,7 @@ export const MessageRow = React.memo(
               channelNames={channelNames}
               className="max-w-full"
               content={message.body}
+              customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
               mentionNames={mentionNames}
               mentionPubkeysByName={mentionPubkeysByName}
@@ -205,7 +210,6 @@ export const MessageRow = React.memo(
     const actionBarNode = (
       <div className="absolute right-2 top-1 z-10">
         <MessageActionBar
-          activeReplyTargetId={activeReplyTargetId}
           channelId={channelId}
           isFollowingThread={isFollowingThread}
           message={message}
@@ -444,7 +448,6 @@ export const MessageRow = React.memo(
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
-    prev.activeReplyTargetId === next.activeReplyTargetId &&
     prev.isFollowingThread === next.isFollowingThread &&
     prev.layoutVariant === next.layoutVariant &&
     prev.profiles === next.profiles &&

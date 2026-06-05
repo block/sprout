@@ -181,7 +181,7 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-$TARGET"
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --target {{target}}
+    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test
@@ -198,9 +198,22 @@ desktop-e2e-smoke:
 desktop-e2e-integration: _ensure-migrations
     cd {{desktop_dir}} && pnpm test:e2e:integration
 
-# Mesh-compute e2e: the CI-safe layers (admission invariant + Playwright UI)
+# Take desktop screenshots using the mock bridge
+desktop-screenshot *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just desktop-build
+    cd {{desktop_dir}}
+    if ! curl -sf http://127.0.0.1:4173/ >/dev/null 2>&1; then
+        python3 -m http.server 4173 -d dist >/dev/null 2>&1 &
+        trap "kill $! 2>/dev/null || true" EXIT
+        for i in $(seq 1 20); do curl -sf http://127.0.0.1:4173/ >/dev/null && break; sleep 0.5; done
+    fi
+    node tests/helpers/screenshot.mjs {{ARGS}}
+
+# Mesh-compute e2e: the CI-safe layers (relay mesh signaling invariants + Playwright UI)
 mesh-e2e:
-    cargo test -p sprout-relay iroh_relay::tests::admission
+    cargo test -p sprout-relay mesh_signaling
     cd {{desktop_dir}} && pnpm test:e2e:integration -- mesh-compute.spec.ts
 
 # Mesh-compute Layer 1: REAL serve->client->inference on this machine (not CI)
@@ -263,7 +276,7 @@ dev *ARGS: _ensure-sidecar-stubs
     [[ -d node_modules ]] || pnpm install
     source ../scripts/instance-env.sh
     echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
-    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
+    pnpm exec tauri dev --features mesh-llm --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop app against the internal staging relay (installs deps + builds agent tools automatically)
 staging *ARGS: _ensure-sidecar-stubs
@@ -279,7 +292,7 @@ staging *ARGS: _ensure-sidecar-stubs
     source ../scripts/instance-env.sh
     export SPROUT_RELAY_URL="wss://sprout-oss.stage.blox.sqprod.co"
     echo "Starting staging on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
-    pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
+    pnpm exec tauri dev --features mesh-llm --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
 
 # Run the desktop frontend dev server (port derived from worktree)
 desktop-dev:

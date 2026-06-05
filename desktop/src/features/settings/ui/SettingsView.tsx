@@ -17,6 +17,7 @@ export {
 } from "./SettingsPanels";
 
 type SettingsViewProps = SettingsPanelProps & {
+  mode: "profile" | "preferences";
   onClose: () => void;
   onSectionChange: (section: SettingsSection) => void;
   section: SettingsSection;
@@ -69,6 +70,7 @@ export function SettingsView({
   notificationErrorMessage,
   notificationPermission,
   notificationSettings,
+  mode,
   onClose,
   onSectionChange,
   onSetDesktopNotificationsEnabled,
@@ -82,6 +84,9 @@ export function SettingsView({
   const visibleSections = React.useMemo(() => {
     const membership = myMembershipQuery.data;
     return settingsSections.filter((s) => {
+      if (mode === "preferences" && s.value === "profile") {
+        return false;
+      }
       if (s.value === "relay-members") {
         return (
           membership != null &&
@@ -90,7 +95,7 @@ export function SettingsView({
       }
       return true;
     });
-  }, [myMembershipQuery.data]);
+  }, [mode, myMembershipQuery.data]);
 
   const [isLoaded, setIsLoaded] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState<string | null>(null);
@@ -103,10 +108,19 @@ export function SettingsView({
   }, []);
 
   React.useEffect(() => {
-    if (!visibleSections.some((entry) => entry.value === section)) {
-      onSectionChange("profile");
+    if (mode === "profile") {
+      if (section !== "profile") {
+        onSectionChange("profile");
+      }
+      return;
     }
-  }, [onSectionChange, section, visibleSections]);
+
+    if (!visibleSections.some((entry) => entry.value === section)) {
+      onSectionChange(visibleSections[0]?.value ?? "appearance");
+    }
+  }, [mode, onSectionChange, section, visibleSections]);
+
+  const showSectionNav = mode === "preferences";
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -155,7 +169,7 @@ export function SettingsView({
             data-testid="settings-title"
             id="settings-title"
           >
-            Settings
+            {mode === "profile" ? "Profile" : "Settings"}
           </h2>
           <button
             aria-label="Close settings"
@@ -168,39 +182,48 @@ export function SettingsView({
           </button>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-cols-[220px_minmax(0,1fr)] md:grid-rows-1">
-          <aside
-            className={cn(
-              "flex flex-col border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out md:border-b-0 md:border-r",
-              isLoaded
-                ? "opacity-100 translate-x-0"
-                : "opacity-0 -translate-x-2",
-            )}
-          >
-            <nav
-              aria-label="Settings sections"
-              className="flex gap-1 overflow-x-auto px-3 py-3 md:flex-1 md:flex-col md:overflow-y-auto md:pt-1"
+        <div
+          className={cn(
+            "grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-rows-1",
+            showSectionNav
+              ? "md:grid-cols-[220px_minmax(0,1fr)]"
+              : "md:grid-cols-1",
+          )}
+        >
+          {showSectionNav ? (
+            <aside
+              className={cn(
+                "flex flex-col border-b border-border/70 bg-muted/20 motion-safe:transition-all motion-safe:duration-200 motion-safe:ease-out md:border-b-0 md:border-r",
+                isLoaded
+                  ? "opacity-100 translate-x-0"
+                  : "opacity-0 -translate-x-2",
+              )}
             >
-              {visibleSections.map((entry) => (
-                <SettingsSectionButton
-                  active={entry.value === section}
-                  isLoaded={isLoaded}
-                  key={entry.value}
-                  onSelect={onSectionChange}
-                  section={entry}
-                />
-              ))}
-            </nav>
-            {appVersion ? (
-              <p className="hidden px-3 pb-3 text-xs text-muted-foreground/60 md:block">
-                v{appVersion}
-              </p>
-            ) : null}
-          </aside>
+              <nav
+                aria-label="Settings sections"
+                className="flex gap-1 overflow-x-auto px-3 py-3 md:flex-1 md:flex-col md:overflow-y-auto md:pt-1"
+              >
+                {visibleSections.map((entry) => (
+                  <SettingsSectionButton
+                    active={entry.value === section}
+                    isLoaded={isLoaded}
+                    key={entry.value}
+                    onSelect={onSectionChange}
+                    section={entry}
+                  />
+                ))}
+              </nav>
+              {appVersion ? (
+                <p className="hidden px-3 pb-3 text-xs text-muted-foreground/60 md:block">
+                  v{appVersion}
+                </p>
+              ) : null}
+            </aside>
+          ) : null}
 
-          <section className="min-h-0 overflow-y-auto px-4 py-4 sm:px-6">
+          <section className="flex min-h-0 flex-col overflow-y-auto px-4 pt-4 sm:px-6">
             <div
-              className="mx-auto flex w-full max-w-4xl flex-col gap-4"
+              className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4"
               data-testid={`settings-panel-${section}`}
             >
               {renderSettingsSection(section, {

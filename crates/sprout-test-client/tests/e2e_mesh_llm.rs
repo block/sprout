@@ -6,7 +6,7 @@
 //! All tests are `#[ignore]` by default — they need infra CI does not host
 //! (native llama, multi-node, model download). The deterministic trust
 //! invariants are unit-tested in `sprout-relay` (`mesh_status_publisher`,
-//! `iroh_relay`); this file is the opt-in full-stack acceptance layer.
+//! `mesh_signaling`); this file is the opt-in full-stack acceptance layer.
 //!
 //! # Running (manual / runbook)
 //!
@@ -32,7 +32,7 @@
 //! |---|-----------|-----------|-----------------|
 //! | 1 | member reads kind:30621 status w/ dial pointer, no secrets | `trust_member_reads_mesh_status` | relay `mesh_status_publisher` units |
 //! | 2 | non-member REQ for kind:30621 returns nothing | `trust_nonmember_read_denied` | — |
-//! | 3 | non-member iroh dial denied (NIP-98→membership) | runbook (needs iroh dial) | relay `iroh_relay` admission units |
+//! | 3 | non-member iroh dial denied (NIP-98→membership) | runbook (needs iroh dial) | relay `mesh_signaling` admission units |
 //! | 4 | B's agent completes a chat against A's model over mesh | `live_agent_completes_chat_over_mesh` | runbook |
 //! | 5 | dropped member → typed auth failure reaches lastError | runbook (desktop harness) | sprout-agent `-32001` unit |
 //! | 6 | split: model too big → 2 serve nodes → chat completes | `live_split_model_completes` | runbook |

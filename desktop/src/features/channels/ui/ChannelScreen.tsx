@@ -551,7 +551,6 @@ export function ChannelScreen({
                   threadMessages={threadMessages}
                   threadPanelWidthPx={threadPanelWidthPx}
                   threadTypingPubkeys={threadTypingPubkeys}
-                  threadReplyTargetId={threadReplyTargetId}
                   threadReplyTargetMessage={threadReplyTargetMessage}
                   threadScrollTargetId={threadScrollTargetId}
                   isJoining={joinChannelMutation.isPending}

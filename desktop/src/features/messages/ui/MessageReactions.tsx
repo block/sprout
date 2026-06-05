@@ -2,10 +2,41 @@ import * as React from "react";
 
 import type { TimelineReaction } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
+import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MAX_VISIBLE_REACTORS = 10;
+
+/**
+ * Render a reaction's emoji: a custom (image) emoji when `emojiUrl` is set,
+ * otherwise the unicode/text glyph. `className` sizes the image to match the
+ * surrounding text. The relay URL is rewritten through the localhost media
+ * proxy (like every other relay-hosted <img>) — WKWebView bypasses WARP, so a
+ * direct relay URL gets a Cloudflare Access 403 and renders as a broken image.
+ */
+function EmojiGlyph({
+  reaction,
+  className,
+}: {
+  reaction: TimelineReaction;
+  className?: string;
+}) {
+  if (reaction.emojiUrl) {
+    return (
+      <img
+        alt={reaction.emoji}
+        src={rewriteRelayUrl(reaction.emojiUrl)}
+        className={cn(
+          "inline-block object-contain align-text-bottom",
+          className,
+        )}
+        draggable={false}
+      />
+    );
+  }
+  return <span>{reaction.emoji}</span>;
+}
 
 function ReactionPopoverContent({ reaction }: { reaction: TimelineReaction }) {
   const visible = reaction.users.slice(0, MAX_VISIBLE_REACTORS);
@@ -14,7 +45,7 @@ function ReactionPopoverContent({ reaction }: { reaction: TimelineReaction }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2 pb-1 border-b border-border/50">
-        <span className="text-2xl">{reaction.emoji}</span>
+        <EmojiGlyph reaction={reaction} className="h-6 w-6 text-2xl" />
         <span className="text-xs text-muted-foreground">
           {reaction.count} {reaction.count === 1 ? "reaction" : "reactions"}
         </span>
@@ -154,7 +185,7 @@ function ReactionPill({
         onClick={handleClick}
         type="button"
       >
-        <span>{reaction.emoji}</span>
+        <EmojiGlyph reaction={reaction} className="h-[1.1em] w-[1.1em]" />
         <span className="text-muted-foreground">{reaction.count}</span>
       </button>
     );
@@ -179,7 +210,7 @@ function ReactionPill({
             onClick={handleClick}
             type="button"
           >
-            <span>{reaction.emoji}</span>
+            <EmojiGlyph reaction={reaction} className="h-[1.1em] w-[1.1em]" />
             <span className="text-muted-foreground">{reaction.count}</span>
           </button>
         </span>

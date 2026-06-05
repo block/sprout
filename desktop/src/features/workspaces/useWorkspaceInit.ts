@@ -10,15 +10,15 @@ import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { clearAllDrafts } from "@/features/messages/lib/useDrafts";
 import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
-import { resetSyncState } from "@/features/sidebar/lib/channelSectionsSync";
 
 import { initFirstWorkspace } from "./workspaceStorage";
 import type { Workspace } from "./types";
 
 /**
  * Tear down all workspace-scoped module singletons so the new
- * workspace starts with a clean slate. If you add a new module-level
- * cache or singleton that holds workspace data, add its reset here.
+ * workspace starts with a clean slate. Hook-managed singletons
+ * (e.g. ChannelMuteSyncManager, ChannelSectionSyncManager) are
+ * destroyed via effect cleanup and do not need entries here.
  * See AGENTS.md "Workspace Switching" for the full contract.
  */
 function resetWorkspaceState(): void {
@@ -27,7 +27,6 @@ function resetWorkspaceState(): void {
   resetMediaCaches();
   clearSearchHitEventCache();
   clearAllDrafts();
-  resetSyncState();
 }
 
 type WorkspaceInitResult =

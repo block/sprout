@@ -188,3 +188,40 @@ export function buildOutgoingMessage(
     pendingImeta.length > 0 ? buildImetaTags(pendingImeta) : undefined;
   return { content, mediaTags };
 }
+
+/**
+ * Merge optional imeta media tags with NIP-30 custom-emoji tags into the final
+ * outgoing tag set. Returns `undefined` when there are no tags of either kind
+ * (the publish path treats `undefined` as "no extra tags").
+ */
+export function mergeOutgoingTags(
+  mediaTags: string[][] | undefined,
+  emojiTags: string[][],
+): string[][] | undefined {
+  if (!mediaTags && emojiTags.length === 0) return undefined;
+  return [...(mediaTags ?? []), ...emojiTags];
+}
+
+/**
+ * Inverse of `mergeOutgoingTags`: split a merged outgoing tag set back into
+ * imeta media tags vs NIP-30 `["emoji", ...]` tags, so the send path can route
+ * each to its own validated Tauri arg. Emoji tags must never ride the
+ * imeta-only `media` channel (its guard rejects any non-imeta prefix). Any
+ * other prefix stays with `mediaTags` — the imeta guard will reject it, which
+ * is the intended injection defense.
+ */
+export function splitOutgoingTags(tags: string[][] | undefined): {
+  mediaTags: string[][];
+  emojiTags: string[][];
+} {
+  const mediaTags: string[][] = [];
+  const emojiTags: string[][] = [];
+  for (const tag of tags ?? []) {
+    if (tag[0] === "emoji") {
+      emojiTags.push(tag);
+    } else {
+      mediaTags.push(tag);
+    }
+  }
+  return { mediaTags, emojiTags };
+}

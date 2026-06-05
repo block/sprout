@@ -179,6 +179,9 @@ enum Cmd {
     /// Add, remove, and list emoji reactions
     #[command(subcommand)]
     Reactions(ReactionsCmd),
+    /// Manage your custom emoji set (workspace palette is the union of all members' sets)
+    #[command(subcommand)]
+    Emoji(EmojiCmd),
     /// List, open, and manage direct messages
     #[command(subcommand)]
     Dms(DmsCmd),
@@ -539,9 +542,12 @@ pub enum ReactionsCmd {
         /// Event ID (64-char hex)
         #[arg(long)]
         event: String,
-        /// Emoji character (e.g. '👍')
+        /// Emoji character (e.g. '👍') or custom emoji shortcode
         #[arg(long)]
         emoji: String,
+        /// Image URL for a custom emoji reaction; when set, content becomes `:shortcode:`
+        #[arg(long = "emoji-url")]
+        emoji_url: Option<String>,
     },
     /// Remove an emoji reaction from a message
     Remove {
@@ -557,6 +563,31 @@ pub enum ReactionsCmd {
         /// Event ID (64-char hex)
         #[arg(long)]
         event: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Custom emoji subcommands
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand)]
+pub enum EmojiCmd {
+    /// List the workspace custom emoji palette (union of every member's set)
+    List,
+    /// Add or update a custom emoji in your own set
+    Set {
+        /// Emoji shortcode, without surrounding colons
+        #[arg(long)]
+        shortcode: String,
+        /// Image URL for the emoji
+        #[arg(long)]
+        url: String,
+    },
+    /// Remove a custom emoji from your own set
+    Rm {
+        /// Emoji shortcode, without surrounding colons
+        #[arg(long)]
+        shortcode: String,
     },
 }
 
@@ -1104,6 +1135,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Channels(sub) => commands::channels::dispatch(sub, &client, &cli.format).await,
         Cmd::Canvas(sub) => commands::channels::dispatch_canvas(sub, &client).await,
         Cmd::Reactions(sub) => commands::reactions::dispatch(sub, &client).await,
+        Cmd::Emoji(sub) => commands::emoji::dispatch(sub, &client).await,
         Cmd::Dms(sub) => commands::dms::dispatch(sub, &client).await,
         Cmd::Users(sub) => commands::users::dispatch(sub, &client, &cli.format).await,
         Cmd::Workflows(sub) => commands::workflows::dispatch(sub, &client).await,
@@ -1138,6 +1170,7 @@ mod tests {
             "canvas",
             "channels",
             "dms",
+            "emoji",
             "feed",
             "mem",
             "messages",
@@ -1217,6 +1250,7 @@ mod tests {
                 "members",
                 "purpose",
                 "remove-member",
+                "search",
                 "topic",
                 "unarchive",
                 "update"
@@ -1224,6 +1258,7 @@ mod tests {
         );
         assert_eq!(names(&cmd, "canvas"), vec!["get", "set"]);
         assert_eq!(names(&cmd, "reactions"), vec!["add", "get", "remove"]);
+        assert_eq!(names(&cmd, "emoji"), vec!["list", "rm", "set"]);
         assert_eq!(names(&cmd, "dms"), vec!["add-member", "list", "open"]);
         assert_eq!(
             names(&cmd, "users"),
@@ -1255,8 +1290,9 @@ mod tests {
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
             ("canvas", 2),
-            ("channels", 14),
+            ("channels", 15),
             ("dms", 3),
+            ("emoji", 3),
             ("feed", 1),
             ("messages", 8),
             ("pack", 2),

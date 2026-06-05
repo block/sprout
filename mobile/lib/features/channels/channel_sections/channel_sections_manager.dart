@@ -41,8 +41,10 @@ class ChannelSectionsManager {
   final VoidCallback _onChanged;
 
   ChannelSectionStore _store;
+  ChannelSectionStore? _lastPublishedStore;
   Timer? _publishDebounce;
   int _lastRemoteCreatedAt = 0;
+  String? _lastRemoteEventId;
   void Function()? _unsubscribe;
   bool _disposed = false;
 
@@ -278,12 +280,26 @@ class ChannelSectionsManager {
     }
   }
 
-  String? _lastRemoteEventId;
-
   void _handleIncomingEvent(NostrEvent event) {
     if (_disposed) return;
     _mergeEvent(event);
     if (!_disposed) _onChanged();
+  }
+
+  bool _isIdenticalToLastPublished() {
+    final last = _lastPublishedStore;
+    if (last == null) return false;
+    if (last.sections.length != _store.sections.length) return false;
+    if (last.assignments.length != _store.assignments.length) return false;
+    for (var i = 0; i < _store.sections.length; i++) {
+      final a = last.sections[i];
+      final b = _store.sections[i];
+      if (a.id != b.id || a.name != b.name || a.order != b.order) return false;
+    }
+    for (final key in _store.assignments.keys) {
+      if (last.assignments[key] != _store.assignments[key]) return false;
+    }
+    return true;
   }
 
   Future<void> _publish({bool allowDisposed = false}) async {
@@ -292,6 +308,12 @@ class ChannelSectionsManager {
         _signedEventRelay == null) {
       return;
     }
+
+    // Read-before-write: merge remote state before publishing
+    await _fetchAndMerge();
+
+    // No-op suppression: skip if nothing changed
+    if (_isIdenticalToLastPublished()) return;
 
     try {
       final payload = jsonEncode(_store.toJson());
@@ -309,6 +331,10 @@ class ChannelSectionsManager {
       );
 
       _lastRemoteCreatedAt = max(_lastRemoteCreatedAt, createdAt);
+      _lastPublishedStore = ChannelSectionStore(
+        sections: List.of(_store.sections),
+        assignments: Map.of(_store.assignments),
+      );
     } catch (error) {
       debugPrint('[ChannelSectionsManager] publish failed: $error');
     }

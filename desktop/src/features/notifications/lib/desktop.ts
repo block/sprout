@@ -5,10 +5,16 @@ import {
   onAction,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
+import { isMacPlatform } from "@/shared/lib/platform";
 
 export type DesktopNotificationPermissionState =
   | NotificationPermission
   | "unsupported";
+
+export type AppBadgeState =
+  | { kind: "none" }
+  | { kind: "dot" }
+  | { kind: "count"; count: number };
 
 export type DesktopNotificationTarget = {
   channelId: string | null;
@@ -35,6 +41,7 @@ type DesktopNotificationOptions = NotificationOptions & {
 
 type TestWindow = Window & {
   __SPROUT_E2E_APP_BADGE_COUNT__?: number;
+  __SPROUT_E2E_APP_BADGE_STATE__?: AppBadgeState["kind"];
 };
 
 function hasNotificationApi() {
@@ -192,9 +199,12 @@ export async function listenForDesktopNotificationActions(
   };
 }
 
-export async function setDesktopAppBadgeCount(count: number): Promise<void> {
+export async function setDesktopAppBadge(state: AppBadgeState): Promise<void> {
   if (typeof window !== "undefined") {
-    (window as TestWindow).__SPROUT_E2E_APP_BADGE_COUNT__ = count;
+    const testWindow = window as TestWindow;
+    testWindow.__SPROUT_E2E_APP_BADGE_COUNT__ =
+      state.kind === "count" ? state.count : 0;
+    testWindow.__SPROUT_E2E_APP_BADGE_STATE__ = state.kind;
   }
 
   if (!isTauri()) {
@@ -202,7 +212,16 @@ export async function setDesktopAppBadgeCount(count: number): Promise<void> {
   }
 
   try {
-    await getCurrentWindow().setBadgeCount(count > 0 ? count : undefined);
+    if (state.kind === "count") {
+      await getCurrentWindow().setBadgeCount(state.count);
+    } else if (state.kind === "dot" && isMacPlatform()) {
+      await getCurrentWindow().setBadgeLabel(" ");
+    } else {
+      if (isMacPlatform()) {
+        await getCurrentWindow().setBadgeLabel("");
+      }
+      await getCurrentWindow().setBadgeCount(undefined);
+    }
   } catch {
     // Ignore unsupported platforms and best-effort badge sync failures.
   }
