@@ -684,7 +684,10 @@ export function AppShell() {
         >
           <HuddleProvider>
             <div className="flex h-dvh flex-col overflow-hidden overscroll-none">
-              <SidebarProvider className="min-h-0 flex-1 overflow-hidden">
+              <SidebarProvider
+                className="min-h-0 flex-1 overflow-hidden"
+                disableRail={settingsOpen}
+              >
                 <AppTopChrome
                   canGoBack={canGoBack}
                   canGoForward={canGoForward}

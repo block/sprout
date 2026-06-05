@@ -45,6 +45,7 @@ type SidebarContextProps = {
   openMobile: boolean;
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
+  isRailDisabled: boolean;
   isResizing: boolean;
   setIsResizing: (isResizing: boolean) => void;
   sidebarWidth: number;
@@ -133,6 +134,7 @@ const SidebarProvider = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"div"> & {
     defaultOpen?: boolean;
+    disableRail?: boolean;
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
   }
@@ -140,6 +142,7 @@ const SidebarProvider = React.forwardRef<
   (
     {
       defaultOpen = true,
+      disableRail = false,
       open: openProp,
       onOpenChange: setOpenProp,
       className,
@@ -227,6 +230,7 @@ const SidebarProvider = React.forwardRef<
         open,
         setOpen,
         isMobile,
+        isRailDisabled: disableRail,
         isResizing,
         setIsResizing,
         sidebarWidth,
@@ -240,6 +244,7 @@ const SidebarProvider = React.forwardRef<
         open,
         setOpen,
         isMobile,
+        disableRail,
         isResizing,
         sidebarWidth,
         setSidebarWidth,
@@ -431,6 +436,7 @@ const SidebarRail = React.forwardRef<
     const {
       setIsResizing,
       setSidebarWidth,
+      isRailDisabled,
       sidebarWidth,
       state,
       toggleSidebar,
@@ -480,7 +486,12 @@ const SidebarRail = React.forwardRef<
         data-sidebar="rail"
         aria-label="Resize or toggle sidebar"
         tabIndex={-1}
+        disabled={isRailDisabled}
         onClick={(event) => {
+          if (isRailDisabled) {
+            return;
+          }
+
           if (suppressClickRef.current) {
             event.preventDefault();
             event.stopPropagation();
@@ -499,6 +510,7 @@ const SidebarRail = React.forwardRef<
         onPointerDown={(event) => {
           onPointerDown?.(event);
           if (
+            isRailDisabled ||
             event.defaultPrevented ||
             event.button !== 0 ||
             state !== "expanded"
@@ -570,6 +582,7 @@ const SidebarRail = React.forwardRef<
           "group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:hover:bg-sidebar",
           "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",
           "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",
+          "disabled:pointer-events-none disabled:cursor-default",
           className,
         )}
         {...props}
