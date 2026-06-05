@@ -1,11 +1,6 @@
 export { FeatureGate } from "./FeatureGate";
 export { allFeatures, desktopFeatures, getFeature } from "./manifest";
-export {
-  getOverrides,
-  setOverride,
-  clearOverride,
-  runMigrationIfNeeded,
-} from "./store";
+export { getOverrides, setOverride, clearOverride } from "./store";
 export type {
   FeatureDefinition,
   FeaturesManifest,

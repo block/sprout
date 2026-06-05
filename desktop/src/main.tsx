@@ -2,7 +2,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "@/app/App";
 import "@/shared/styles/globals.css";
-import { runMigrationIfNeeded } from "@/shared/features";
 import { UpdaterProvider } from "@/features/settings/hooks/UpdaterProvider";
 import { WorkspacesProvider } from "@/features/workspaces/useWorkspaces";
 import { ThemeProvider } from "@/shared/theme/ThemeProvider";
@@ -46,7 +45,6 @@ async function installE2eBridgeIfConfigured() {
 
 async function bootstrap() {
   await installE2eBridgeIfConfigured();
-  runMigrationIfNeeded();
   renderApp();
 }
 
