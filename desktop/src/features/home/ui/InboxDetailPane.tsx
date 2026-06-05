@@ -214,9 +214,9 @@ export function InboxDetailPane({
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/45 backdrop-blur-xl supports-[backdrop-filter]:bg-background/35"
+          className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[84px] bg-background/45 backdrop-blur-xl supports-[backdrop-filter]:bg-background/35"
         />
-        <div className="absolute inset-x-0 top-[38px] z-50 flex min-h-[32px] items-center justify-between gap-3 py-[4px] pl-6 pr-3">
+        <div className="absolute inset-x-0 top-[46px] z-50 flex min-h-[32px] items-center justify-between gap-3 py-[4px] pl-6 pr-3">
           <div className="min-w-0">
             {canOpenChannel && contextChannelId && onOpenContext ? (
               <button

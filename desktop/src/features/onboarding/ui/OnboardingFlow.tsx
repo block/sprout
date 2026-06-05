@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 
 import {
   profileQueryKey,
@@ -14,9 +15,21 @@ import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { pubkeyToNpub } from "@/shared/lib/nostrUtils";
 import { relayClient } from "@/shared/api/relayClient";
+import { cn } from "@/shared/lib/cn";
+import { useSmoothCornerClipPath } from "@/shared/lib/useSmoothCornerClipPath";
+import { Button } from "@/shared/ui/button";
+import type { Profile } from "@/shared/api/types";
+import { AgentsStep } from "./AgentsStep";
+import { AvatarStep } from "./AvatarStep";
+import { CompleteStep } from "./CompleteStep";
 import { MembershipDenied } from "./MembershipDenied";
 import { ProfileStep } from "./ProfileStep";
 import { SetupStep } from "./SetupStep";
+import { TeamTasksStep } from "./TeamTasksStep";
+import {
+  playOnboardingSound,
+  preloadOnboardingSounds,
+} from "./onboardingSounds";
 import type {
   OnboardingActions,
   OnboardingPage,
@@ -63,6 +76,10 @@ type OnboardingFlowProps = {
   actions: OnboardingActions;
   initialProfile: OnboardingProfileSeed;
 };
+
+const ONBOARDING_PANEL_RADIUS = 12;
+const ONBOARDING_PANEL_SMOOTHING = 0.6;
+const ONBOARDING_RETURN_TO_WELCOME_MS = 700;
 
 function isFallbackDisplayName(value?: string | null) {
   const normalizedValue = value?.trim().toLowerCase() ?? "";
@@ -130,7 +147,15 @@ export function OnboardingFlow({
   actions,
   initialProfile,
 }: OnboardingFlowProps) {
-  const { complete, skipForNow } = actions;
+  const leftPanelClip = useSmoothCornerClipPath<HTMLElement>({
+    cornerRadius: ONBOARDING_PANEL_RADIUS,
+    cornerSmoothing: ONBOARDING_PANEL_SMOOTHING,
+  });
+  const contentPanelClip = useSmoothCornerClipPath<HTMLElement>({
+    cornerRadius: ONBOARDING_PANEL_RADIUS,
+    cornerSmoothing: ONBOARDING_PANEL_SMOOTHING,
+  });
+  const { complete, returnToWelcome, skipForNow } = actions;
   const savedProfile = resolveSavedProfile(initialProfile);
   const profileUpdateMutation = useUpdateProfileMutation();
   const { error: profileSaveError, isPending: isSavingProfile } =
@@ -141,6 +166,18 @@ export function OnboardingFlow({
     React.useState<OnboardingProfileValues>(savedProfile);
   const [deniedPubkey, setDeniedPubkey] = React.useState<string>("");
   const [isUploadingAvatar, setIsUploadingAvatar] = React.useState(false);
+  const [isReturningToWelcome, setIsReturningToWelcome] = React.useState(false);
+  const returnToWelcomeTimerRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    preloadOnboardingSounds();
+
+    return () => {
+      if (returnToWelcomeTimerRef.current !== null) {
+        window.clearTimeout(returnToWelcomeTimerRef.current);
+      }
+    };
+  }, []);
 
   // For displaying the current identity at the top of the profile step and
   // for refreshing the UI in place after `import_identity` completes — the
@@ -182,60 +219,122 @@ export function OnboardingFlow({
     [resetProfileSaveError],
   );
 
-  const showSetupPage = React.useCallback(() => {
-    setCurrentPage("setup");
+  const showAvatarPage = React.useCallback(() => {
+    setCurrentPage("avatar");
+  }, []);
+
+  const showAgentsPage = React.useCallback(() => {
+    setCurrentPage("agents");
+  }, []);
+
+  const showTeamPage = React.useCallback(() => {
+    setCurrentPage("team");
   }, []);
 
   const showProfilePage = React.useCallback(() => {
     setCurrentPage("profile");
   }, []);
 
-  const saveProfileAndContinue = React.useCallback(async () => {
-    if (profileDraft.displayName.trim().length === 0) {
+  const showWelcomeSetup = React.useCallback(() => {
+    if (returnToWelcomeTimerRef.current !== null) {
+      window.clearTimeout(returnToWelcomeTimerRef.current);
+    }
+
+    setIsReturningToWelcome(true);
+    returnToWelcomeTimerRef.current = window.setTimeout(() => {
+      returnToWelcomeTimerRef.current = null;
+      returnToWelcome();
+    }, ONBOARDING_RETURN_TO_WELCOME_MS);
+  }, [returnToWelcome]);
+
+  const seedLocalProfileDraft = React.useCallback(() => {
+    const pubkey = identityQuery.data?.pubkey;
+    if (!pubkey) {
       return;
     }
 
-    // Check membership before attempting the profile save. On open relays
-    // this passes instantly. On gated relays it prevents a 403 during save.
-    const denied = await checkMembershipDenied();
-    if (denied) {
-      try {
-        const identity = await getIdentity();
-        setDeniedPubkey(identity.pubkey);
-      } catch {
-        setDeniedPubkey("");
-      }
-      setCurrentPage("membership-denied");
-      return;
-    }
+    const displayName = profileDraft.displayName.trim();
+    const avatarUrl = profileDraft.avatarUrl.trim();
+    queryClient.setQueryData<Profile | undefined>(
+      profileQueryKey,
+      (existing) => ({
+        pubkey,
+        displayName: displayName || (existing?.displayName ?? null),
+        avatarUrl: avatarUrl || (existing?.avatarUrl ?? null),
+        about: existing?.about ?? null,
+        nip05Handle: existing?.nip05Handle ?? null,
+      }),
+    );
+  }, [
+    identityQuery.data?.pubkey,
+    profileDraft.avatarUrl,
+    profileDraft.displayName,
+    queryClient,
+  ]);
 
-    const updatePayload = createProfileUpdatePayload({
-      draftProfile: profileDraft,
-      savedProfile,
-    });
-
-    if (Object.keys(updatePayload).length > 0) {
-      try {
-        await profileUpdateMutation.mutateAsync(updatePayload);
-      } catch (error) {
-        if (isRelayMembershipDeniedError(error)) {
-          try {
-            const identity = await getIdentity();
-            setDeniedPubkey(identity.pubkey);
-          } catch {
-            setDeniedPubkey("");
-          }
-          setCurrentPage("membership-denied");
-          return;
-        }
-
-        // Error falls through to the error banner / recovery buttons.
+  const saveProfileAndContinue = React.useCallback(
+    async (nextPage: OnboardingPage) => {
+      if (profileDraft.displayName.trim().length === 0) {
         return;
       }
-    }
 
-    showSetupPage();
-  }, [profileDraft, profileUpdateMutation, savedProfile, showSetupPage]);
+      // Check membership before attempting the profile save. On open relays
+      // this passes instantly. On gated relays it prevents a 403 during save.
+      const denied = await checkMembershipDenied();
+      if (denied) {
+        try {
+          const identity = await getIdentity();
+          setDeniedPubkey(identity.pubkey);
+        } catch {
+          setDeniedPubkey("");
+        }
+        setCurrentPage("membership-denied");
+        return;
+      }
+
+      const updatePayload = createProfileUpdatePayload({
+        draftProfile: profileDraft,
+        savedProfile,
+      });
+
+      if (Object.keys(updatePayload).length > 0) {
+        try {
+          await profileUpdateMutation.mutateAsync(updatePayload);
+        } catch (error) {
+          if (isRelayMembershipDeniedError(error)) {
+            try {
+              const identity = await getIdentity();
+              setDeniedPubkey(identity.pubkey);
+            } catch {
+              setDeniedPubkey("");
+            }
+            setCurrentPage("membership-denied");
+            return;
+          }
+
+          // Temporary first-run bypass: local relay builds may not be able to
+          // persist profile metadata yet, but the design flow should continue.
+          console.warn(
+            "Profile save failed during onboarding; continuing with local draft.",
+            error,
+          );
+          seedLocalProfileDraft();
+          resetProfileSaveError();
+          setCurrentPage(nextPage);
+          return;
+        }
+      }
+
+      setCurrentPage(nextPage);
+    },
+    [
+      profileDraft,
+      profileUpdateMutation,
+      resetProfileSaveError,
+      savedProfile,
+      seedLocalProfileDraft,
+    ],
+  );
 
   const updateDisplayNameDraft = React.useCallback(
     (value: string) => {
@@ -274,6 +373,132 @@ export function OnboardingFlow({
       savedProfile.displayName,
     ),
   };
+  const canSubmitProfile =
+    profileStepState.name.draftValue.trim().length > 0 &&
+    !profileStepState.isSaving &&
+    !profileStepState.isUploadingAvatar;
+  const canSubmitAvatar =
+    profileStepState.avatar.draftUrl.trim().length > 0 &&
+    !profileStepState.isSaving &&
+    !profileStepState.isUploadingAvatar;
+  const canSubmitAgents = currentPage === "agents";
+  const canSubmitTeam = currentPage === "team";
+  const canSubmitComplete = currentPage === "complete";
+  const canSubmitCurrentStep =
+    currentPage === "complete"
+      ? canSubmitComplete
+      : currentPage === "team"
+        ? canSubmitTeam
+        : currentPage === "agents"
+          ? canSubmitAgents
+          : currentPage === "avatar"
+            ? canSubmitAvatar
+            : canSubmitProfile;
+  const activeIntroIndex =
+    currentPage === "profile"
+      ? 0
+      : currentPage === "avatar"
+        ? 1
+        : currentPage === "agents"
+          ? 2
+          : currentPage === "team"
+            ? 3
+            : currentPage === "complete"
+              ? 4
+              : 5;
+
+  const handleBack = React.useCallback(() => {
+    if (isReturningToWelcome) {
+      return;
+    }
+
+    if (currentPage === "team") {
+      showAgentsPage();
+      return;
+    }
+
+    if (currentPage === "agents") {
+      showAvatarPage();
+      return;
+    }
+
+    if (currentPage === "avatar") {
+      showProfilePage();
+      return;
+    }
+
+    showWelcomeSetup();
+  }, [
+    currentPage,
+    isReturningToWelcome,
+    showAgentsPage,
+    showAvatarPage,
+    showProfilePage,
+    showWelcomeSetup,
+  ]);
+
+  const handleNext = React.useCallback(() => {
+    if (isReturningToWelcome) {
+      return;
+    }
+
+    if (currentPage === "profile") {
+      void saveProfileAndContinue("avatar");
+      return;
+    }
+
+    if (currentPage === "avatar") {
+      void saveProfileAndContinue("agents");
+      return;
+    }
+
+    if (currentPage === "agents") {
+      setCurrentPage("team");
+      return;
+    }
+
+    if (currentPage === "team") {
+      setCurrentPage("complete");
+      return;
+    }
+
+    if (currentPage === "complete") {
+      complete();
+    }
+  }, [complete, currentPage, isReturningToWelcome, saveProfileAndContinue]);
+
+  const playButtonSoundOnPress = React.useCallback(
+    (soundName: "toggleA" | "toggleB") => {
+      if (isReturningToWelcome) {
+        return;
+      }
+
+      playOnboardingSound(soundName);
+    },
+    [isReturningToWelcome],
+  );
+
+  const playBackSoundOnPress = React.useCallback(() => {
+    playButtonSoundOnPress("toggleB");
+  }, [playButtonSoundOnPress]);
+
+  const playNextSoundOnPress = React.useCallback(() => {
+    playButtonSoundOnPress("toggleA");
+  }, [playButtonSoundOnPress]);
+
+  const playButtonSoundOnKeyboardPress = React.useCallback(
+    (
+      event: React.KeyboardEvent<HTMLButtonElement>,
+      soundName: "toggleA" | "toggleB",
+    ) => {
+      if (event.repeat || (event.key !== "Enter" && event.key !== " ")) {
+        return;
+      }
+
+      playButtonSoundOnPress(soundName);
+    },
+    [playButtonSoundOnPress],
+  );
 
   const handleImportIdentity = React.useCallback(
     async (nsec: string) => {
@@ -319,7 +544,7 @@ export function OnboardingFlow({
       <MembershipDenied
         onChangeKey={showProfilePage}
         onRetry={() => {
-          void saveProfileAndContinue();
+          void saveProfileAndContinue("avatar");
         }}
         pubkey={deniedPubkey}
       />
@@ -328,34 +553,304 @@ export function OnboardingFlow({
 
   return (
     <div
-      className="flex min-h-dvh items-center justify-center bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.16),transparent_44%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--muted)/0.5))] px-4 py-8"
+      className={cn(
+        "font-cash-sans min-h-dvh p-2 transition-[background-color,padding] duration-[700ms] ease-[cubic-bezier(0.19,1,0.22,1)]",
+        "bg-[#F2F2F2]",
+      )}
       data-testid="onboarding-gate"
+      style={
+        {
+          "--onboarding-panel-height": "calc(100dvh - 16px)",
+        } as React.CSSProperties
+      }
     >
-      <div className="w-full max-w-xl rounded-[32px] border border-border/70 bg-background/94 p-6 shadow-2xl backdrop-blur-sm sm:p-8">
-        {currentPage === "profile" ? (
-          <ProfileStep
-            actions={{
-              advanceWithoutSaving: showSetupPage,
-              clearAvatarDraft: resetAvatarDraft,
-              importIdentity: handleImportIdentity,
-              onUploadingChange: setIsUploadingAvatar,
-              skipForNow,
-              submit: () => {
-                void saveProfileAndContinue();
-              },
-              updateAvatarUrl: updateAvatarUrlDraft,
-              updateDisplayName: updateDisplayNameDraft,
-            }}
-            state={profileStepState}
-          />
-        ) : (
-          <SetupStep
-            actions={{
-              back: showProfilePage,
-              complete,
-            }}
-          />
+      <div
+        aria-hidden="true"
+        className="fixed inset-x-0 top-0 z-20 h-10 cursor-default select-none"
+        data-tauri-drag-region
+      />
+
+      <div
+        className={cn(
+          "grid min-h-[var(--onboarding-panel-height)] overflow-hidden transition-[gap,grid-template-columns,min-height] duration-[700ms] ease-[cubic-bezier(0.19,1,0.22,1)]",
+          isReturningToWelcome ? "gap-0" : "gap-2",
         )}
+        style={{
+          gridTemplateColumns: isReturningToWelcome
+            ? "minmax(0, 1fr) minmax(0, 0fr)"
+            : "minmax(280px, 1fr) minmax(0, 2fr)",
+        }}
+      >
+        <section
+          className="relative min-h-[var(--onboarding-panel-height)] min-w-0 overflow-hidden bg-black text-white transition-[min-height] duration-[700ms] ease-[cubic-bezier(0.19,1,0.22,1)]"
+          ref={leftPanelClip.ref}
+          style={leftPanelClip.style}
+        >
+          <div
+            aria-hidden={!isReturningToWelcome}
+            className={cn(
+              "absolute inset-0 flex items-center justify-center px-6 py-12 text-center transition-[opacity,transform] duration-[500ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
+              isReturningToWelcome
+                ? "opacity-100 delay-75"
+                : "pointer-events-none opacity-0",
+            )}
+          >
+            <div
+              className={cn(
+                "flex w-full max-w-[560px] flex-col items-center transition-transform duration-[500ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
+                isReturningToWelcome ? "scale-100" : "scale-[0.98]",
+              )}
+            >
+              <img
+                alt="Sprout"
+                className="h-16 w-16 object-contain"
+                src="/sprout-welcome.png"
+              />
+
+              <div className="arcade-type-welcome-kicker mt-8 rounded-full bg-white px-4 py-1.5 text-black">
+                BETA PREVIEW
+              </div>
+
+              <div className="mt-20 space-y-3 sm:mt-16">
+                <h1 className="arcade-type-welcome-title text-white">
+                  Welcome to Sprout
+                </h1>
+                <p className="arcade-type-welcome-subcopy text-white/45">
+                  Where people and AI agents work together
+                </p>
+              </div>
+
+              <div className="mt-20 grid w-full max-w-[560px] grid-cols-1 gap-5 justify-self-center sm:mt-16 sm:grid-cols-2">
+                <div className="arcade-type-body-medium h-auto min-h-0 rounded-full bg-white px-6 py-4 text-black">
+                  Continue with default settings
+                </div>
+
+                <div className="arcade-type-body-medium h-auto min-h-0 rounded-full bg-[#262626] px-6 py-4 text-white">
+                  Custom Relay
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            aria-hidden={isReturningToWelcome}
+            className={cn(
+              "relative flex min-h-[var(--onboarding-panel-height)] w-full flex-col p-12 transition-[opacity,transform,min-height] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]",
+              isReturningToWelcome
+                ? "pointer-events-none translate-x-8 opacity-0"
+                : "translate-x-0 opacity-100",
+            )}
+          >
+            <div className="relative min-h-[268px] max-w-[460px] overflow-hidden">
+              {[
+                {
+                  title: "First, let's start with your name",
+                  body: "Enter a nickname or whatever you want people to call you",
+                },
+                {
+                  title: "Next, add a display image",
+                  body: "Choose an image or emoji as your avatar",
+                },
+                {
+                  title: "Using agents to get work done.",
+                  body: "In sprout, you can create agents to help you look for files, create and submit PRs, or anything else you might be looking to do",
+                },
+                {
+                  title: "Use a single agent or a team for more intense tasks",
+                  body: "Pair builders, reviewers, researchers, and specialists to handle work that needs more than one perspective.",
+                },
+                {
+                  title: "That's it! — welcome to Sprout",
+                  body: "You're now ready to collaborate with teammates and agents to get work done.",
+                },
+                {
+                  title: "Next, let's check your setup",
+                  body: "Sprout can launch local tools when compatible runtimes are available.",
+                },
+              ].map((intro, index) => (
+                <div
+                  aria-hidden={activeIntroIndex !== index}
+                  className="absolute inset-x-0 top-0 transition-[opacity,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                  key={intro.title}
+                  style={{
+                    opacity: activeIntroIndex === index ? 1 : 0,
+                    transform: `translateX(${(index - activeIntroIndex) * 115}%)`,
+                  }}
+                >
+                  <h1 className="arcade-type-display-headline-small text-white">
+                    {intro.title}
+                  </h1>
+                  <p className="arcade-type-body-medium mt-4 text-white/45">
+                    {intro.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {currentPage === "profile" ||
+            currentPage === "avatar" ||
+            currentPage === "agents" ||
+            currentPage === "team" ||
+            currentPage === "complete" ? (
+              <div className="mt-auto flex w-full items-center gap-10">
+                {currentPage === "complete" ? null : (
+                  <Button
+                    aria-label="Back"
+                    className="h-14 w-14 shrink-0 rounded-full bg-[#262626] p-0 text-white shadow-none hover:bg-[#303030]"
+                    data-testid="onboarding-back-to-welcome"
+                    disabled={isReturningToWelcome}
+                    onClick={handleBack}
+                    onKeyDown={(event) =>
+                      playButtonSoundOnKeyboardPress(event, "toggleB")
+                    }
+                    onPointerDown={playBackSoundOnPress}
+                    type="button"
+                    variant="ghost"
+                  >
+                    <ArrowLeft className="!h-6 !w-6" strokeWidth={2.25} />
+                  </Button>
+                )}
+
+                <Button
+                  className={cn(
+                    "arcade-type-body-medium h-14 min-h-0 flex-1 rounded-full px-6 py-0 shadow-none",
+                    "bg-white text-black hover:bg-white/90",
+                    "disabled:bg-[#5A5A5A] disabled:text-black/45 disabled:opacity-100",
+                  )}
+                  data-testid={
+                    currentPage === "complete"
+                      ? "onboarding-finish"
+                      : "onboarding-next"
+                  }
+                  disabled={!canSubmitCurrentStep || isReturningToWelcome}
+                  onClick={handleNext}
+                  onKeyDown={(event) =>
+                    playButtonSoundOnKeyboardPress(event, "toggleA")
+                  }
+                  onPointerDown={playNextSoundOnPress}
+                  type="button"
+                >
+                  {currentPage === "complete"
+                    ? "Get started"
+                    : profileStepState.isSaving
+                      ? "Saving..."
+                      : "Next"}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section
+          aria-hidden={isReturningToWelcome}
+          className={cn(
+            "flex min-h-[var(--onboarding-panel-height)] min-w-0 items-center justify-center overflow-hidden bg-[#F2F2F2] px-6 py-12 text-black transition-[opacity,transform,min-height] duration-[420ms] [--background:0_0%_100%] [--border:0_0%_82%] [--foreground:0_0%_0%] [--input:0_0%_70%] [--muted-foreground:0_0%_38%] [--primary-foreground:0_0%_100%] [--primary:0_0%_0%] [--ring:0_0%_0%] ease-[cubic-bezier(0.16,1,0.3,1)] sm:px-10",
+            isReturningToWelcome
+              ? "pointer-events-none opacity-0"
+              : "opacity-100",
+          )}
+          ref={contentPanelClip.ref}
+          style={contentPanelClip.style}
+        >
+          {currentPage === "setup" ? (
+            <div className="w-full max-w-xl">
+              <SetupStep
+                actions={{
+                  back: showTeamPage,
+                  complete,
+                }}
+              />
+            </div>
+          ) : (
+            <div className="relative flex min-h-[704px] w-full max-w-[1120px] items-center justify-center overflow-visible">
+              <div
+                inert={currentPage !== "profile"}
+                className="absolute inset-0 flex items-center justify-center transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                style={{
+                  opacity: currentPage === "profile" ? 1 : 0,
+                  transform:
+                    currentPage === "profile" ? "scale(1)" : "scale(0.95)",
+                  pointerEvents: currentPage === "profile" ? "auto" : "none",
+                }}
+              >
+                <ProfileStep
+                  actions={{
+                    advanceWithoutSaving: showAvatarPage,
+                    clearAvatarDraft: resetAvatarDraft,
+                    importIdentity: handleImportIdentity,
+                    onUploadingChange: setIsUploadingAvatar,
+                    skipForNow,
+                    submit: () => {
+                      void saveProfileAndContinue("avatar");
+                    },
+                    updateAvatarUrl: updateAvatarUrlDraft,
+                    updateDisplayName: updateDisplayNameDraft,
+                  }}
+                  state={profileStepState}
+                />
+              </div>
+
+              <div
+                inert={currentPage !== "avatar"}
+                className="absolute inset-0 flex items-center justify-center transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                style={{
+                  opacity: currentPage === "avatar" ? 1 : 0,
+                  transform:
+                    currentPage === "avatar" ? "scale(1)" : "scale(0.95)",
+                  pointerEvents: currentPage === "avatar" ? "auto" : "none",
+                }}
+              >
+                <AvatarStep
+                  actions={{
+                    updateAvatarUrl: updateAvatarUrlDraft,
+                  }}
+                  state={profileStepState}
+                />
+              </div>
+
+              <div
+                inert={currentPage !== "agents"}
+                className="absolute inset-0 flex items-center justify-center transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                style={{
+                  opacity: currentPage === "agents" ? 1 : 0,
+                  transform:
+                    currentPage === "agents" ? "scale(1)" : "scale(0.95)",
+                  pointerEvents: currentPage === "agents" ? "auto" : "none",
+                }}
+              >
+                <AgentsStep />
+              </div>
+
+              <div
+                inert={currentPage !== "team"}
+                className="absolute inset-0 flex items-center justify-center transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                style={{
+                  opacity: currentPage === "team" ? 1 : 0,
+                  transform:
+                    currentPage === "team" ? "scale(1)" : "scale(0.95)",
+                  pointerEvents: currentPage === "team" ? "auto" : "none",
+                }}
+              >
+                {currentPage === "team" ? (
+                  <TeamTasksStep profile={profileDraft} />
+                ) : null}
+              </div>
+
+              <div
+                inert={currentPage !== "complete"}
+                className="absolute inset-0 flex items-center justify-center transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                style={{
+                  opacity: currentPage === "complete" ? 1 : 0,
+                  transform:
+                    currentPage === "complete" ? "scale(1)" : "scale(0.95)",
+                  pointerEvents: currentPage === "complete" ? "auto" : "none",
+                }}
+              >
+                {currentPage === "complete" ? <CompleteStep /> : null}
+              </div>
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

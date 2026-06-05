@@ -6,7 +6,10 @@ import { cn } from "@/shared/lib/cn";
 type EmojiAutocompleteProps = {
   suggestions: EmojiSuggestion[];
   selectedIndex: number;
-  onSelect: (suggestion: EmojiSuggestion) => void;
+  onSelect: (
+    suggestion: EmojiSuggestion,
+    origin?: React.MouseEvent<HTMLButtonElement>,
+  ) => void;
   position?: "above" | "below";
 };
 
@@ -51,7 +54,7 @@ export const EmojiAutocomplete = React.memo(function EmojiAutocomplete({
             key={suggestion.id}
             onMouseDown={(event) => {
               event.preventDefault();
-              onSelect(suggestion);
+              onSelect(suggestion, event);
             }}
             tabIndex={-1}
             type="button"

@@ -1,9 +1,17 @@
 import type { AcpProvider, Profile } from "@/shared/api/types";
 
-export type OnboardingPage = "profile" | "setup" | "membership-denied";
+export type OnboardingPage =
+  | "profile"
+  | "avatar"
+  | "agents"
+  | "team"
+  | "complete"
+  | "setup"
+  | "membership-denied";
 
 export type OnboardingActions = {
   complete: () => void;
+  returnToWelcome: () => void;
   skipForNow: () => void;
 };
 

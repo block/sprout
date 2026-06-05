@@ -2,11 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDisplayName</key>
-    <string>Sprout</string>
-    <key>CFBundleName</key>
-    <string>Sprout</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Sprout needs microphone access for voice huddles.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Sprout needs camera access to take a profile photo.</string>
 </dict>
 </plist>

@@ -368,7 +368,7 @@ export function HomeView({
           }
           type="button"
         >
-          <span className="absolute bottom-0 left-1/2 top-10 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border/80 group-focus-visible:bg-border/80" />
+          <span className="absolute bottom-0 left-1/2 top-12 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-border/80 group-focus-visible:bg-border/80" />
         </button>
 
         <InboxDetailPane

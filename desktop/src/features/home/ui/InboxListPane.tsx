@@ -47,9 +47,9 @@ export function InboxListPane({
     <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background/60">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/45 backdrop-blur-xl supports-[backdrop-filter]:bg-background/35"
+        className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[84px] bg-background/45 backdrop-blur-xl supports-[backdrop-filter]:bg-background/35"
       />
-      <div className="absolute inset-x-0 top-[42px] z-50 min-h-[32px] px-5 py-[4px]">
+      <div className="absolute inset-x-0 top-[50px] z-50 min-h-[32px] px-5 py-[4px]">
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-[6px]">
             <Inbox className="h-[14px] w-[14px] shrink-0 text-muted-foreground" />

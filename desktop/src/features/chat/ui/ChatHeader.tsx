@@ -92,7 +92,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const trimmedDescription = description?.trim() ?? "";
   const topRightActions = (
-    <div className="fixed right-3 top-[9px] z-[70] flex shrink-0 items-center gap-1">
+    <div className="fixed right-3 top-[10px] z-[70] flex shrink-0 items-center gap-1">
       <UpdateIndicator />
       {actions ? <div className="shrink-0">{actions}</div> : null}
     </div>
@@ -150,7 +150,7 @@ export function ChatHeader({
   }
 
   return (
-    <div className="relative z-30 h-[76px] -mb-[76px] bg-background/70 pt-[42px] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55">
+    <div className="relative z-30 h-[84px] -mb-[84px] bg-background/70 pt-[50px] backdrop-blur-xl supports-[backdrop-filter]:bg-background/55">
       {header}
     </div>
   );

@@ -93,7 +93,7 @@ export function AgentSessionThreadPanel({
         {!isOverlay ? (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-background/45 backdrop-blur-xl after:absolute after:bottom-0 after:left-0 after:top-10 after:w-px after:bg-border/80 supports-[backdrop-filter]:bg-background/35"
+            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[84px] bg-background/45 backdrop-blur-xl after:absolute after:bottom-0 after:left-0 after:top-12 after:w-px after:bg-border/80 supports-[backdrop-filter]:bg-background/35"
           />
         ) : null}
 

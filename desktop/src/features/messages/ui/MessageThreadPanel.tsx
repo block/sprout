@@ -183,14 +183,14 @@ export function MessageThreadPanel({
             }
             type="button"
           >
-            <span className="absolute bottom-0 left-1/2 top-10 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/thread-resize:bg-border/80 group-focus-visible/thread-resize:bg-border/80" />
+            <span className="absolute bottom-0 left-1/2 top-12 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/thread-resize:bg-border/80 group-focus-visible/thread-resize:bg-border/80" />
           </button>
         )}
 
         {!isOverlay ? (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[76px] bg-transparent after:absolute after:bottom-0 after:-left-px after:top-10 after:w-px after:bg-border/45 after:transition-colors peer-hover/thread-resize:after:bg-border/80 peer-focus-visible/thread-resize:after:bg-border/80"
+            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-[84px] bg-transparent after:absolute after:bottom-0 after:-left-px after:top-12 after:w-px after:bg-border/45 after:transition-colors peer-hover/thread-resize:after:bg-border/80 peer-focus-visible/thread-resize:after:bg-border/80"
           />
         ) : null}
 

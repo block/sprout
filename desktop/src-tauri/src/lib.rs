@@ -32,9 +32,14 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::{Emitter, Manager, RunEvent};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewWindow};
 use tauri_plugin_window_state::StateFlags;
 use url::Url;
+
+const DEFAULT_WINDOW_SCREEN_FRACTION: f64 = 0.70;
+const DEFAULT_WINDOW_ASPECT_RATIO: f64 = 1280.0 / 800.0;
+const DEFAULT_WINDOW_MIN_WIDTH: u32 = 800;
+const DEFAULT_WINDOW_MIN_HEIGHT: u32 = 500;
 
 fn shutdown_managed_agents(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -262,6 +267,74 @@ fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
     }
 }
 
+fn has_saved_main_window_state(app: &tauri::AppHandle) -> bool {
+    let Ok(app_config_dir) = app.path().app_config_dir() else {
+        return false;
+    };
+    let path = app_config_dir.join(".window-state.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(main) = value.get("main").and_then(|state| state.as_object()) else {
+        return false;
+    };
+
+    main.get("width")
+        .and_then(|width| width.as_u64())
+        .unwrap_or(0)
+        > 0
+        && main
+            .get("height")
+            .and_then(|height| height.as_u64())
+            .unwrap_or(0)
+            > 0
+}
+
+fn apply_default_main_window_bounds(window: &WebviewWindow) -> tauri::Result<()> {
+    if window.is_maximized()? || window.is_fullscreen()? {
+        return Ok(());
+    }
+
+    let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) else {
+        return Ok(());
+    };
+    let work_area = monitor.work_area();
+    let available_width = work_area.size.width;
+    let available_height = work_area.size.height;
+    if available_width == 0 || available_height == 0 {
+        return Ok(());
+    }
+
+    let max_width = f64::from(available_width) * DEFAULT_WINDOW_SCREEN_FRACTION;
+    let max_height = f64::from(available_height) * DEFAULT_WINDOW_SCREEN_FRACTION;
+    let mut width = max_width;
+    let mut height = width / DEFAULT_WINDOW_ASPECT_RATIO;
+
+    if height > max_height {
+        height = max_height;
+        width = height * DEFAULT_WINDOW_ASPECT_RATIO;
+    }
+
+    let width = width
+        .round()
+        .max(f64::from(DEFAULT_WINDOW_MIN_WIDTH))
+        .min(f64::from(available_width)) as u32;
+    let height = height
+        .round()
+        .max(f64::from(DEFAULT_WINDOW_MIN_HEIGHT))
+        .min(f64::from(available_height)) as u32;
+    let x = work_area.position.x + (available_width.saturating_sub(width) / 2) as i32;
+    let y = work_area.position.y + (available_height.saturating_sub(height) / 2) as i32;
+
+    window.set_size(PhysicalSize { width, height })?;
+    window.set_position(PhysicalPosition { x, y })?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -404,6 +477,14 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let shutdown_started = Arc::clone(&restore_shutdown_started);
+
+            if !has_saved_main_window_state(&app_handle) {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(error) = apply_default_main_window_bounds(&window) {
+                        eprintln!("sprout-desktop: failed to size main window: {error}");
+                    }
+                }
+            }
 
             // Sync shared agent data from the canonical dev data directory to
             // this worktree's data directory. Must run before
@@ -560,6 +641,8 @@ pub fn run() {
             pick_and_upload_media,
             upload_media_bytes,
             download_image,
+            check_camera_permission,
+            request_camera_permission,
             list_relay_members,
             get_my_relay_membership,
             add_relay_member,

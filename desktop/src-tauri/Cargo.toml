@@ -23,6 +23,11 @@ tauri-build = { version = "2", features = [] }
 libc = "0.2"
 ctrlc = { version = "3", features = ["termination"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 

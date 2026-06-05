@@ -62,9 +62,6 @@ export function deriveWorkspaceName(relayUrl: string): string {
       relayUrl.replace("ws://", "http://").replace("wss://", "https://"),
     );
     const host = url.hostname;
-    if (host === "localhost" || host === "127.0.0.1") {
-      return "Local Dev";
-    }
     const parts = host.split(".");
     // Detect staging environments (e.g. sprout-oss.stage.blox.sqprod.co)
     if (parts.some((p) => p === "stage" || p === "staging")) {

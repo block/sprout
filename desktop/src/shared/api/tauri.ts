@@ -346,6 +346,37 @@ export async function invokeTauri<T>(
   }
 }
 
+const CAMERA_PERMISSION_CHECK_DELAY_MS = 250;
+const CAMERA_PERMISSION_CHECK_ATTEMPTS = 32;
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+export async function checkCameraPermission(): Promise<boolean> {
+  return invokeTauri<boolean>("check_camera_permission");
+}
+
+export async function requestCameraPermission(): Promise<boolean> {
+  const granted = await invokeTauri<boolean>("request_camera_permission");
+  if (granted) {
+    return true;
+  }
+
+  for (
+    let attempt = 0;
+    attempt < CAMERA_PERMISSION_CHECK_ATTEMPTS;
+    attempt += 1
+  ) {
+    if (await checkCameraPermission()) {
+      return true;
+    }
+    await delay(CAMERA_PERMISSION_CHECK_DELAY_MS);
+  }
+
+  return checkCameraPermission();
+}
+
 function fromRawChannel(channel: RawChannel): Channel {
   return {
     id: channel.id,

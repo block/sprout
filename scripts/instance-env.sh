@@ -20,7 +20,9 @@ export VITE_PORT="$SPROUT_VITE_PORT"
 export VITE_HMR_PORT="$SPROUT_HMR_PORT"
 export SPROUT_RELAY_URL="${SPROUT_RELAY_URL:-ws://localhost:3000}"
 
-SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"xyz.block.sprout.app.dev\",\"productName\":\"Sprout Dev\"}"
+SPROUT_TAURI_IDENTIFIER="xyz.block.sprout.app.dev"
+SPROUT_TAURI_PRODUCT_NAME="Sprout Dev"
+SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"${SPROUT_TAURI_IDENTIFIER}\",\"productName\":\"${SPROUT_TAURI_PRODUCT_NAME}\"}"
 unset VITE_DEV_BRANCH
 
 # In worktrees, extract a label from the branch name and derive a unique app
@@ -57,9 +59,21 @@ if git rev-parse --is-inside-work-tree &>/dev/null; then
         if swift ../scripts/generate-dev-icon.swift src-tauri/icons/icon.icns "$DEV_ICON" "$SPROUT_WORKTREE_LABEL"; then
             echo "🌳 Worktree: ${SPROUT_WORKTREE_LABEL}"
             export VITE_DEV_BRANCH="$SPROUT_WORKTREE_LABEL"
-            SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"xyz.block.sprout.app.dev.${SPROUT_INSTANCE_SLUG}\",\"productName\":\"Sprout Dev (${SPROUT_WORKTREE_LABEL})\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
+            SPROUT_TAURI_IDENTIFIER="xyz.block.sprout.app.dev.${SPROUT_INSTANCE_SLUG}"
+            SPROUT_TAURI_PRODUCT_NAME="Sprout Dev (${SPROUT_WORKTREE_LABEL})"
+            SPROUT_TAURI_CONFIG="{\"build\":{\"devUrl\":\"http://localhost:${SPROUT_VITE_PORT}\",\"beforeDevCommand\":\"exec ./node_modules/.bin/vite --port ${SPROUT_VITE_PORT} --strictPort\"},\"identifier\":\"${SPROUT_TAURI_IDENTIFIER}\",\"productName\":\"${SPROUT_TAURI_PRODUCT_NAME}\",\"bundle\":{\"icon\":[\"$DEV_ICON\"]}}"
         fi
     fi
 fi
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    HOST_TRIPLE=$(rustc -vV | awk '/^host:/ { print $2 }')
+    HOST_TRIPLE_ENV=$(printf '%s' "$HOST_TRIPLE" | tr '[:lower:]-' '[:upper:]_')
+    RUNNER_ENV_NAME="CARGO_TARGET_${HOST_TRIPLE_ENV}_RUNNER"
+    export "$RUNNER_ENV_NAME"="$WORKTREE_ROOT/scripts/cargo-run-signed-macos.sh"
+    export SPROUT_TAURI_ENTITLEMENTS="$WORKTREE_ROOT/desktop/src-tauri/Entitlements.plist"
+fi
+
 export SPROUT_TAURI_CONFIG
+export SPROUT_TAURI_IDENTIFIER
+export SPROUT_TAURI_PRODUCT_NAME

@@ -15,6 +15,7 @@ type AvatarUploadProps = {
   disabled?: boolean;
   idleHint?: string;
   testIdPrefix?: string;
+  dark?: boolean;
 };
 
 export function AvatarUpload({
@@ -27,6 +28,7 @@ export function AvatarUpload({
   disabled,
   idleHint = "",
   testIdPrefix = "avatar",
+  dark = false,
 }: AvatarUploadProps) {
   const [isDragging, setIsDragging] = React.useState(false);
 
@@ -72,7 +74,11 @@ export function AvatarUpload({
 
   return (
     <div className="space-y-4">
-      <p className="text-sm font-medium">Add a profile photo</p>
+      <p
+        className={`text-sm font-medium ${dark ? "text-white" : "text-foreground"}`}
+      >
+        Add a profile photo
+      </p>
       <div className="flex items-center gap-4">
         <div className="relative h-20 w-20 shrink-0">
           <ProfileAvatar
@@ -102,7 +108,9 @@ export function AvatarUpload({
           className={`flex flex-1 cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed bg-transparent px-4 py-5 transition-colors ${
             isDragging
               ? "border-primary bg-primary/5"
-              : "border-primary/30 hover:border-primary/60 hover:bg-primary/5"
+              : dark
+                ? "border-white/15 hover:border-white/30 hover:bg-white/[0.04]"
+                : "border-primary/30 hover:border-primary/60 hover:bg-primary/5"
           }`}
           data-testid={`${testIdPrefix}-upload`}
           disabled={isInputDisabled}
@@ -127,17 +135,25 @@ export function AvatarUpload({
           type="button"
         >
           {isUploading ? (
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <Loader2
+              className={`h-5 w-5 animate-spin ${dark ? "text-white/60" : "text-muted-foreground"}`}
+            />
           ) : (
-            <Upload className="h-5 w-5 text-muted-foreground" />
+            <Upload
+              className={`h-5 w-5 ${dark ? "text-white/60" : "text-muted-foreground"}`}
+            />
           )}
-          <span className="text-xs text-muted-foreground">
+          <span
+            className={`text-xs ${dark ? "text-white/60" : "text-muted-foreground"}`}
+          >
             {isUploading ? (
               "Uploading..."
             ) : (
               <>
                 Drop an image or{" "}
-                <span className="font-medium text-foreground underline underline-offset-2">
+                <span
+                  className={`font-medium underline underline-offset-2 ${dark ? "text-white" : "text-foreground"}`}
+                >
                   browse
                 </span>
               </>
@@ -159,13 +175,18 @@ export function AvatarUpload({
       ) : null}
 
       <div className="space-y-1.5">
-        <label className="text-sm font-medium" htmlFor={`${testIdPrefix}-url`}>
+        <label
+          className={`text-sm font-medium ${dark ? "text-white" : "text-foreground"}`}
+          htmlFor={`${testIdPrefix}-url`}
+        >
           Avatar URL
         </label>
         <div className="relative min-w-0">
-          <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Link2
+            className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${dark ? "text-white/45" : "text-muted-foreground"}`}
+          />
           <Input
-            className="pl-9"
+            className={`pl-9 ${dark ? "border-white/12 bg-white/[0.04] text-white placeholder:text-white/35 focus-visible:ring-white/30" : ""}`}
             data-testid={`${testIdPrefix}-url`}
             disabled={isInputDisabled}
             id={`${testIdPrefix}-url`}
@@ -177,7 +198,9 @@ export function AvatarUpload({
             value={avatarUrl}
           />
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p
+          className={`text-xs ${dark ? "text-white/55" : "text-muted-foreground"}`}
+        >
           Or paste a direct image URL.
         </p>
       </div>

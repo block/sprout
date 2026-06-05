@@ -1,4 +1,8 @@
 fn main() {
+    println!("cargo:rerun-if-changed=Info.plist");
+    println!("cargo:rerun-if-changed=Entitlements.plist");
+    println!("cargo:rerun-if-changed=tauri.conf.json");
+    println!("cargo:rerun-if-changed=tauri.dev.conf.json");
     println!("cargo:rerun-if-env-changed=SPROUT_RELAY_URL");
     println!("cargo:rerun-if-env-changed=SPROUT_RELAY_HTTP");
     println!("cargo:rerun-if-env-changed=SPROUT_UPDATER_PUBLIC_KEY");

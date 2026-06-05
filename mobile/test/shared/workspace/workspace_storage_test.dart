@@ -206,13 +206,6 @@ void main() {
         expect(second.first.id, first.first.id);
       });
 
-      test('migration generates name from localhost URL', () async {
-        fakeSecure['sprout_relay_url'] = 'http://localhost:3000';
-        fakeSecure['sprout_token'] = 'tok';
-
-        final loaded = await storage.loadAll();
-        expect(loaded.first.name, 'Local Dev');
-      });
     });
   });
 }

@@ -251,7 +251,7 @@ dev *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
-    [[ -d node_modules ]] || pnpm install
+    [[ -x node_modules/.bin/tauri ]] || pnpm install --config.confirmModulesPurge=false
     source ../scripts/instance-env.sh
     echo "Starting on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
     pnpm exec tauri dev --config "$SPROUT_TAURI_CONFIG" {{ARGS}}
@@ -277,7 +277,7 @@ desktop-dev:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{desktop_dir}}
-    [[ -d node_modules ]] || pnpm install
+    [[ -x node_modules/.bin/vite ]] || pnpm install --config.confirmModulesPurge=false
     source ../scripts/instance-env.sh
     echo "Starting frontend dev server on Vite port ${SPROUT_VITE_PORT}, relay ${SPROUT_RELAY_URL}"
     pnpm exec vite --port "${SPROUT_VITE_PORT}" --strictPort

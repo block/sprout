@@ -23,6 +23,7 @@ export type UseWorkspacesReturn = {
   reinitKey: number;
   /** Add a workspace, deduplicating by relayUrl. Returns the final ID in the list. */
   addWorkspace: (workspace: Workspace) => string;
+  clearWorkspaces: () => void;
   removeWorkspace: (id: string) => void;
   switchWorkspace: (id: string) => void;
   /** Force the active workspace to re-init (e.g. after a deep-link reconnect). */
@@ -93,6 +94,14 @@ function useWorkspacesInternal(): UseWorkspacesReturn {
       return next;
     });
     return resolvedId;
+  }, []);
+
+  const clearWorkspaces = useCallback(() => {
+    saveWorkspaces([]);
+    localStorage.removeItem("sprout-active-workspace-id");
+    setWorkspacesState([]);
+    setActiveId(null);
+    setReinitKey((k) => k + 1);
   }, []);
 
   const removeWorkspace = useCallback(
@@ -166,6 +175,7 @@ function useWorkspacesInternal(): UseWorkspacesReturn {
     activeWorkspace,
     reinitKey,
     addWorkspace,
+    clearWorkspaces,
     removeWorkspace,
     switchWorkspace,
     reconnectWorkspace,
