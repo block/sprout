@@ -3,24 +3,12 @@ import type {
   TimelineThreadSummaryParticipant,
 } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
-import { formatShortMonthDayOrdinal } from "@/features/messages/lib/dateFormatters";
+import { formatThreadSummaryLastReplyTime } from "@/features/messages/lib/dateFormatters";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MESSAGE_TEXT_OFFSET_PX = 54;
 const MESSAGE_BODY_OFFSET_PX = MESSAGE_TEXT_OFFSET_PX + 4;
 const NESTED_REPLY_OFFSET_PX = 28;
-
-function formatLastReplyTime(unixSeconds: number): string {
-  const now = Date.now() / 1_000;
-  const diff = now - unixSeconds;
-
-  if (diff < 60) return "just now";
-  if (diff < 3_600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86_400) return `${Math.floor(diff / 3_600)}h ago`;
-  if (diff < 604_800) return `${Math.floor(diff / 86_400)}d ago`;
-
-  return `on ${formatShortMonthDayOrdinal(unixSeconds)}`;
-}
 
 function ParticipantAvatar({
   participant,
@@ -64,7 +52,7 @@ export function MessageThreadSummaryRow({
   const marginLeftPx = indentPx + MESSAGE_BODY_OFFSET_PX;
   const replyLabel = summary.replyCount === 1 ? "reply" : "replies";
   const summaryAriaLabel = summary.lastReplyAt
-    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatLastReplyTime(summary.lastReplyAt)}`
+    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}`
     : `View thread with ${summary.replyCount} ${replyLabel}`;
   const depthGuideOffsets =
     visibleDepth === 0
@@ -131,7 +119,8 @@ export function MessageThreadSummaryRow({
                     className="col-start-1 row-start-1 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
                     data-testid="message-thread-summary-last-reply"
                   >
-                    last reply {formatLastReplyTime(summary.lastReplyAt)}
+                    last reply{" "}
+                    {formatThreadSummaryLastReplyTime(summary.lastReplyAt)}
                   </span>
                   <span
                     className="col-start-1 row-start-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
