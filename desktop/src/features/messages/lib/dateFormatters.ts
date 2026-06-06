@@ -30,6 +30,10 @@ const DAY_HEADING_FORMATTER = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
 });
 
+const SHORT_MONTH_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+});
+
 /** Short clock time, e.g. "2:34 PM". */
 export function formatTime(unixSeconds: number): string {
   return TIME_FORMATTER.format(new Date(unixSeconds * 1_000));
@@ -66,10 +70,36 @@ export function isSameDay(a: number, b: number): boolean {
   return isSameDayDate(new Date(a * 1_000), new Date(b * 1_000));
 }
 
+/** Short month + ordinal day, e.g. "May 19th". */
+export function formatShortMonthDayOrdinal(unixSeconds: number): string {
+  const date = new Date(unixSeconds * 1_000);
+  return `${SHORT_MONTH_FORMATTER.format(date)} ${date.getDate()}${ordinalSuffix(
+    date.getDate(),
+  )}`;
+}
+
 function isSameDayDate(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+function ordinalSuffix(day: number): string {
+  const lastTwoDigits = day % 100;
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 13) {
+    return "th";
+  }
+
+  switch (day % 10) {
+    case 1:
+      return "st";
+    case 2:
+      return "nd";
+    case 3:
+      return "rd";
+    default:
+      return "th";
+  }
 }

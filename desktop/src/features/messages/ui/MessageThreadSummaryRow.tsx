@@ -3,6 +3,7 @@ import type {
   TimelineThreadSummaryParticipant,
 } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
+import { formatShortMonthDayOrdinal } from "@/features/messages/lib/dateFormatters";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 
 const MESSAGE_TEXT_OFFSET_PX = 54;
@@ -18,11 +19,7 @@ function formatLastReplyTime(unixSeconds: number): string {
   if (diff < 86_400) return `${Math.floor(diff / 3_600)}h ago`;
   if (diff < 604_800) return `${Math.floor(diff / 86_400)}d ago`;
 
-  const date = new Date(unixSeconds * 1_000).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-  return `on ${date}`;
+  return `on ${formatShortMonthDayOrdinal(unixSeconds)}`;
 }
 
 function ParticipantAvatar({
