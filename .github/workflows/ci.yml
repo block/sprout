@@ -446,7 +446,6 @@ jobs:
           cross build --release --target "$TARGET" \
             -p sprout-relay \
             -p sprout-acp \
-            -p sprout-mcp \
             -p sprout-agent \
             -p sprout-dev-mcp \
             -p git-credential-nostr \
@@ -474,7 +473,6 @@ jobs:
           TARGET=$(rustc -vV | sed -n 's|host: ||p')
           mkdir -p desktop/src-tauri/binaries
           touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
-          touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
           touch "desktop/src-tauri/binaries/sprout-agent-$TARGET"
           touch "desktop/src-tauri/binaries/sprout-dev-mcp-$TARGET"
           touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"

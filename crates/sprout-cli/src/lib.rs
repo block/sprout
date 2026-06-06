@@ -145,6 +145,14 @@ pub enum PresenceStatus {
     Offline,
 }
 
+#[derive(Clone, clap::ValueEnum)]
+pub enum EmojiScope {
+    #[value(name = "own")]
+    Own,
+    #[value(name = "workspace")]
+    Workspace,
+}
+
 impl std::fmt::Display for PresenceStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -246,9 +254,6 @@ pub enum MessagesCmd {
         /// Also publish to the Nostr network
         #[arg(long, default_value_t = false)]
         broadcast: bool,
-        /// Explicit mention pubkeys (64-char hex)
-        #[arg(long = "mention")]
-        mentions: Vec<String>,
         /// Attach file(s) — uploads and includes as imeta tags
         #[arg(long = "file")]
         files: Vec<String>,
@@ -339,6 +344,9 @@ pub enum MessagesCmd {
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
+        /// Maximum reply nesting depth to include
+        #[arg(long)]
+        depth_limit: Option<u32>,
     },
     /// Full-text search across messages
     Search {
@@ -512,6 +520,13 @@ pub enum ChannelsCmd {
         #[arg(long)]
         pubkey: String,
     },
+    /// Set your channel addition policy
+    #[command(name = "set-add-policy")]
+    SetAddPolicy {
+        /// Policy: anyone | owner_only | nobody
+        #[arg(long)]
+        policy: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +610,27 @@ pub enum EmojiCmd {
         #[arg(long)]
         shortcode: String,
     },
+    /// Export custom emojis to stdout or a file
+    Export {
+        /// Write JSON to this file path instead of stdout
+        #[arg(long)]
+        file: Option<String>,
+        /// Export your own set (default) or the full workspace palette
+        #[arg(long, value_enum, default_value = "own")]
+        scope: EmojiScope,
+    },
+    /// Import custom emojis from stdin or a file into your own set
+    Import {
+        /// Read JSON from this file path instead of stdin
+        #[arg(long)]
+        file: Option<String>,
+        /// Replace your entire set instead of merging
+        #[arg(long, default_value_t = false)]
+        replace: bool,
+        /// Print what would be published without writing
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -623,6 +659,12 @@ pub enum DmsCmd {
         /// User pubkey to add (64-char hex)
         #[arg(long)]
         pubkey: String,
+    },
+    /// Hide a DM conversation from your DM list
+    Hide {
+        /// DM conversation UUID
+        #[arg(long)]
+        channel: String,
     },
 }
 
@@ -718,11 +760,16 @@ pub enum WorkflowsCmd {
         workflow: String,
     },
     /// Trigger a workflow run
-    #[command(after_help = "Examples:\n  sprout workflows trigger --workflow <UUID>")]
+    #[command(
+        after_help = "Examples:\n  sprout workflows trigger --workflow <UUID>\n  sprout workflows trigger --workflow <UUID> --inputs '{\"key\":\"value\"}'"
+    )]
     Trigger {
         /// Workflow UUID
         #[arg(long)]
         workflow: String,
+        /// JSON object of input variables passed to the workflow as event content
+        #[arg(long)]
+        inputs: Option<String>,
     },
     /// List runs for a workflow
     Runs {
@@ -764,6 +811,9 @@ pub enum FeedCmd {
         /// Maximum number of results to return
         #[arg(long)]
         limit: Option<u32>,
+        /// Comma-separated feed types to include: mentions, needs_action, activity, agent_activity
+        #[arg(long)]
+        types: Option<String>,
     },
 }
 
@@ -809,6 +859,9 @@ pub enum SocialCmd {
         /// Unix timestamp cursor — return notes created before this time.
         #[arg(long)]
         before: Option<i64>,
+        /// Event ID cursor — return notes created before this event (composite pagination with --before).
+        #[arg(long)]
+        before_id: Option<String>,
     },
     /// Get a user's contact list
     #[command(name = "contacts")]
@@ -1292,6 +1345,7 @@ mod tests {
                 "purpose",
                 "remove-member",
                 "search",
+                "set-add-policy",
                 "topic",
                 "unarchive",
                 "update"
@@ -1299,8 +1353,14 @@ mod tests {
         );
         assert_eq!(names(&cmd, "canvas"), vec!["get", "set"]);
         assert_eq!(names(&cmd, "reactions"), vec!["add", "get", "remove"]);
-        assert_eq!(names(&cmd, "emoji"), vec!["list", "rm", "set"]);
-        assert_eq!(names(&cmd, "dms"), vec!["add-member", "list", "open"]);
+        assert_eq!(
+            names(&cmd, "emoji"),
+            vec!["export", "import", "list", "rm", "set"]
+        );
+        assert_eq!(
+            names(&cmd, "dms"),
+            vec!["add-member", "hide", "list", "open"]
+        );
         assert_eq!(
             names(&cmd, "users"),
             vec!["get", "presence", "set-presence", "set-profile"]
@@ -1331,9 +1391,9 @@ mod tests {
     fn subcommand_counts_are_stable() {
         let expected: Vec<(&str, usize)> = vec![
             ("canvas", 2),
-            ("channels", 15),
-            ("dms", 3),
-            ("emoji", 3),
+            ("channels", 16),
+            ("dms", 4),
+            ("emoji", 5),
             ("feed", 1),
             ("messages", 8),
             ("pack", 2),

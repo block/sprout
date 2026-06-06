@@ -198,7 +198,7 @@ export function ChannelMenuButton({
           className={cn(
             "ml-auto h-3 w-3 shrink-0",
             isActive
-              ? "text-sidebar-primary-foreground/60"
+              ? "text-sidebar-active-foreground/60"
               : "text-sidebar-foreground/40",
           )}
         />
@@ -253,10 +253,7 @@ export function SidebarSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread?: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread?: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
   onToggleCollapsed?: () => void;
   mutedChannelIds?: ReadonlySet<string>;

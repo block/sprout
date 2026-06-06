@@ -6,7 +6,7 @@ use crate::{
     managed_agents::{
         command_availability, AcpProviderCatalogEntry, DiscoverManagedAgentPrereqsRequest,
         InstallRuntimeResult, InstallStepResult, ManagedAgentPrereqsInfo, RelayAgentInfo,
-        DEFAULT_ACP_COMMAND, DEFAULT_MCP_COMMAND,
+        DEFAULT_ACP_COMMAND,
     },
     nostr_convert,
     relay::query_relay,
@@ -298,7 +298,7 @@ pub fn discover_managed_agent_prereqs(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_MCP_COMMAND);
+        .unwrap_or("");
 
     ManagedAgentPrereqsInfo {
         acp: command_availability(acp_command),

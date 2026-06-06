@@ -149,11 +149,6 @@ export type UserStatus = {
 
 export type UserStatusLookup = Record<string, UserStatus | null>;
 
-export type SetPresenceResult = {
-  status: PresenceStatus;
-  ttlSeconds: number;
-};
-
 export type RelayEvent = {
   id: string;
   pubkey: string;

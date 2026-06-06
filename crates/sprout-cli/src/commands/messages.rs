@@ -8,10 +8,7 @@ use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
-use sprout_sdk::mentions::{
-    extract_at_names, match_names_to_profiles, merge_mentions, normalize_mention_pubkeys,
-    MentionProfile, MENTION_CAP,
-};
+use sprout_sdk::mentions::{extract_at_names, match_names_to_profiles, MentionProfile};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,8 +55,7 @@ fn find_root_from_tags(tags: &serde_json::Value) -> Option<String> {
 /// - Direct reply (parent is top-level): `root == parent`.
 /// - Nested reply: `root` is the parent's own root marker; `parent` is unchanged.
 ///
-/// This matches the behavior of `sprout-mcp`'s `resolve_thread_ref` so that
-/// CLI-sent replies thread identically to MCP-sent replies.
+/// Ensures CLI-sent replies thread correctly using the same NIP-10 logic.
 async fn resolve_thread_ref(
     client: &SproutClient,
     parent_event_id: &str,
@@ -289,6 +285,7 @@ pub async fn cmd_get_thread(
     channel_id: &str,
     event_id: &str,
     limit: Option<u32>,
+    depth_limit: Option<u32>,
     format: &crate::OutputFormat,
 ) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
@@ -298,12 +295,15 @@ pub async fn cmd_get_thread(
     // Two filters ORed in a single HTTP call:
     // 1. Replies referencing this event via e-tag (no kind restriction)
     // 2. The root event itself by ID
-    let reply_filter = serde_json::json!({
+    let mut reply_filter = serde_json::json!({
         "kinds": [9, 40002, 40003, 40008, 45003],
         "#h": [channel_id],
         "#e": [event_id],
         "limit": limit
     });
+    if let Some(d) = depth_limit {
+        reply_filter["depth_limit"] = serde_json::json!(d);
+    }
     let root_filter = serde_json::json!({
         "ids": [event_id],
         "limit": 1
@@ -345,7 +345,6 @@ pub struct SendMessageParams {
     pub kind: Option<u16>,
     pub reply_to: Option<String>,
     pub broadcast: bool,
-    pub mentions: Vec<String>,
     pub files: Vec<String>,
 }
 
@@ -362,10 +361,6 @@ pub async fn cmd_send_message(
     if let Some(ref r) = p.reply_to {
         validate_hex64(r)?;
     }
-    for m in &p.mentions {
-        validate_hex64(m)?;
-    }
-
     let channel_uuid = parse_uuid(&p.channel_id)?;
 
     // Upload files and build imeta tags
@@ -399,13 +394,10 @@ pub async fn cmd_send_message(
         None
     };
 
-    // Normalize explicit mentions, then merge auto-resolved up to the SDK mention cap.
-    // Auto-resolution scans the author-written body only — not the media markdown we
+    // Resolve @name mentions in the author-written body only — not the media markdown we
     // append above, which is derived from upload metadata and can't carry `@names`.
-    let mut merged: Vec<String> = normalize_mention_pubkeys(&p.mentions, None);
     let auto_resolved = resolve_content_mentions(client, &p.channel_id, &p.content).await;
-    merge_mentions(&mut merged, &auto_resolved, MENTION_CAP);
-    let mention_refs: Vec<&str> = merged.iter().map(|s| s.as_str()).collect();
+    let mention_refs: Vec<&str> = auto_resolved.iter().map(|s| s.as_str()).collect();
 
     let builder = match p.kind {
         Some(45001) => {
@@ -627,7 +619,6 @@ pub async fn dispatch(
             kind,
             reply_to,
             broadcast,
-            mentions,
             files,
         } => {
             cmd_send_message(
@@ -638,7 +629,6 @@ pub async fn dispatch(
                     kind,
                     reply_to,
                     broadcast,
-                    mentions,
                     files,
                 },
             )
@@ -701,7 +691,8 @@ pub async fn dispatch(
             channel,
             event,
             limit,
-        } => cmd_get_thread(client, &channel, &event, limit, format).await,
+            depth_limit,
+        } => cmd_get_thread(client, &channel, &event, limit, depth_limit, format).await,
         MessagesCmd::Search { query, limit } => cmd_search(client, &query, limit, format).await,
         MessagesCmd::Vote { event, direction } => {
             cmd_vote_on_post(client, &event, &direction).await

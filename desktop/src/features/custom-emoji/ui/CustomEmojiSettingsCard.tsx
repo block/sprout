@@ -8,7 +8,10 @@ import {
   useRemoveCustomEmojiMutation,
   useSetCustomEmojiMutation,
 } from "@/features/custom-emoji/hooks";
-import { normalizeShortcode } from "@/shared/api/customEmoji";
+import {
+  normalizeShortcode,
+  suggestShortcodeFromFilename,
+} from "@/shared/api/customEmoji";
 import { pickAndUploadMedia } from "@/shared/api/tauri";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
 import { Button } from "@/shared/ui/button";
@@ -31,6 +34,10 @@ export function CustomEmojiSettingsCard() {
   const removeEmoji = useRemoveCustomEmojiMutation();
 
   const [name, setName] = React.useState("");
+  const [pendingUpload, setPendingUpload] = React.useState<{
+    url: string;
+    filename: string | null;
+  } | null>(null);
   const [isUploading, setIsUploading] = React.useState(false);
 
   const normalized = normalizeShortcode(name);
@@ -38,29 +45,63 @@ export function CustomEmojiSettingsCard() {
   // "Replace" only applies to MY set — that's the set the upload will rewrite.
   const ownDuplicate =
     normalized !== null && own.some((e) => e.shortcode === normalized);
-  const canSubmit = normalized !== null && !isUploading && !setEmoji.isPending;
+  const canSubmit =
+    pendingUpload !== null &&
+    normalized !== null &&
+    !isUploading &&
+    !setEmoji.isPending;
 
-  const handleAdd = React.useCallback(async () => {
-    if (normalized === null) return;
+  const handleUpload = React.useCallback(async () => {
     setIsUploading(true);
     try {
       const blobs = await pickAndUploadMedia();
-      const url = blobs[0]?.url;
-      if (!url) {
-        // User cancelled the picker, or nothing uploaded.
+      const blob = blobs[0];
+      if (!blob?.url) {
         return;
       }
-      const stored = await setEmoji.mutateAsync({ shortcode: normalized, url });
+      if (!blob.type.startsWith("image/")) {
+        toast.error("Choose an image file for custom emoji.");
+        return;
+      }
+      setPendingUpload({ url: blob.url, filename: blob.filename ?? null });
+      const suggested = blob.filename
+        ? suggestShortcodeFromFilename(blob.filename)
+        : null;
+      if (suggested && name.trim().length === 0) {
+        setName(suggested);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to upload emoji image.",
+      );
+    } finally {
+      setIsUploading(false);
+    }
+  }, [name]);
+
+  const handleAdd = React.useCallback(async () => {
+    if (normalized === null || pendingUpload === null) return;
+    try {
+      const stored = await setEmoji.mutateAsync({
+        shortcode: normalized,
+        url: pendingUpload.url,
+      });
       setName("");
+      setPendingUpload(null);
       toast.success(`Added :${stored}:`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to add emoji.",
       );
-    } finally {
-      setIsUploading(false);
     }
-  }, [normalized, setEmoji]);
+  }, [normalized, pendingUpload, setEmoji]);
+
+  const handleReset = React.useCallback(() => {
+    setName("");
+    setPendingUpload(null);
+  }, []);
 
   const handleRemove = React.useCallback(
     async (shortcode: string) => {
@@ -91,49 +132,117 @@ export function CustomEmojiSettingsCard() {
       </div>
 
       <form
-        className="flex items-end gap-2"
+        className="max-w-2xl space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (canSubmit) void handleAdd();
         }}
       >
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <label className="text-sm font-medium" htmlFor="custom-emoji-name">
-            Name
-          </label>
-          <div className="flex items-center gap-1">
-            <span className="text-muted-foreground">:</span>
+        <div className="space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold">1. Upload an image</h4>
+            <p className="text-sm text-muted-foreground">
+              Square images work best. GIF, PNG, JPEG, and WebP files are
+              supported.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md border bg-background">
+              {pendingUpload ? (
+                <img
+                  alt="Selected custom emoji preview"
+                  src={rewriteRelayUrl(pendingUpload.url)}
+                  className="h-14 w-14 object-contain"
+                  draggable={false}
+                />
+              ) : (
+                <ImagePlus className="h-6 w-6 text-muted-foreground" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="truncate text-sm text-muted-foreground">
+                {pendingUpload?.filename ?? "No image selected"}
+              </p>
+              <Button
+                type="button"
+                data-testid="custom-emoji-upload"
+                onClick={() => void handleUpload()}
+                disabled={isUploading || setEmoji.isPending}
+                variant="outline"
+              >
+                {isUploading
+                  ? "Uploading…"
+                  : pendingUpload
+                    ? "Choose different image"
+                    : "Upload image"}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3 border-t pt-4">
+          <div>
+            <h4 className="text-sm font-semibold">2. Give it a name</h4>
+            <p className="text-sm text-muted-foreground">
+              This is what you’ll type to add this emoji to messages and
+              reactions.
+            </p>
+          </div>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+              :
+            </span>
             <Input
               id="custom-emoji-name"
               data-testid="custom-emoji-name-input"
               autoCapitalize="none"
               autoCorrect="off"
+              className="px-6"
               placeholder="party-parrot"
               spellCheck={false}
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
-            <span className="text-muted-foreground">:</span>
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+              :
+            </span>
           </div>
+          {nameInvalid ? (
+            <p className="text-sm text-destructive">
+              Use only letters, numbers, hyphen, or underscore.
+            </p>
+          ) : pendingUpload === null ? (
+            <p className="text-sm text-muted-foreground">
+              Choose an image first; Sprout will suggest a name from the
+              filename.
+            </p>
+          ) : ownDuplicate ? (
+            <p className="text-sm text-muted-foreground">
+              You already have :{normalized}: — saving will replace its image.
+            </p>
+          ) : null}
         </div>
-        <Button
-          type="submit"
-          data-testid="custom-emoji-add"
-          disabled={!canSubmit}
-        >
-          <ImagePlus className="mr-2 h-4 w-4" />
-          {isUploading ? "Uploading…" : "Upload image"}
-        </Button>
+
+        <div className="flex justify-end gap-2 border-t pt-4">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleReset}
+            disabled={
+              setEmoji.isPending || (name.length === 0 && !pendingUpload)
+            }
+          >
+            Clear
+          </Button>
+          <Button
+            type="submit"
+            data-testid="custom-emoji-add"
+            disabled={!canSubmit}
+          >
+            {setEmoji.isPending ? "Saving…" : "Save emoji"}
+          </Button>
+        </div>
       </form>
-      {nameInvalid ? (
-        <p className="text-sm text-destructive">
-          Use only letters, numbers, hyphen, or underscore.
-        </p>
-      ) : ownDuplicate ? (
-        <p className="text-sm text-muted-foreground">
-          You already have :{normalized}: — uploading will replace its image.
-        </p>
-      ) : null}
 
       <div className="space-y-3" data-testid="custom-emoji-mine">
         <h3 className="text-sm font-medium">

@@ -28,7 +28,6 @@ import type {
   SendChannelMessageResult,
   SetCanvasInput,
   SetCanvasResult,
-  SetPresenceResult,
   SetChannelPurposeInput,
   SetChannelTopicInput,
   UpdateProfileInput,
@@ -82,11 +81,6 @@ type RawSearchUsersResponse = {
 };
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
-
-type RawSetPresenceResult = {
-  status: PresenceStatus;
-  ttl_seconds: number;
-};
 
 type RawChannel = {
   id: string;
@@ -526,19 +520,6 @@ export async function getPresence(pubkeys: string[]): Promise<PresenceLookup> {
   );
 }
 
-export async function setPresence(
-  status: PresenceStatus,
-): Promise<SetPresenceResult> {
-  const response = await invokeTauri<RawSetPresenceResult>("set_presence", {
-    status,
-  });
-
-  return {
-    status: response.status,
-    ttlSeconds: response.ttl_seconds,
-  };
-}
-
 export function getDefaultRelayUrl(): Promise<string> {
   return invokeTauri<string>("get_default_relay_url");
 }
@@ -838,7 +819,7 @@ export type BlobDescriptor = {
   thumb?: string;
   duration?: number;
   image?: string;
-  /** Original filename for generic (non-media) file attachments. */
+  /** Original filename captured client-side. */
   filename?: string;
 };
 

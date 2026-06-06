@@ -11,9 +11,7 @@ pub(crate) struct KnownAcpProvider {
     pub commands: &'static [&'static str],
     pub aliases: &'static [&'static str],
     pub avatar_url: &'static str,
-    /// MCP server binary to use instead of the default `sprout-mcp-server`.
-    /// `None` means this provider does not need a Sprout MCP server —
-    /// no MCP tools will be registered for the agent session.
+    /// MCP server binary for this runtime, or `None` for no MCP server.
     pub mcp_command: Option<&'static str>,
     /// Whether to enable MCP hook tools (`_Stop`, `_PostCompact`) for this agent.
     pub mcp_hooks: bool,

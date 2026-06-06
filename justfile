@@ -133,7 +133,8 @@ _ensure-sidecar-stubs:
             chmod +x "$f"
         fi
     done
-    for bin in sprout-mcp-server sprout-agent sprout-dev-mcp git-credential-nostr; do
+    # sprout-mcp-server dropped on main (sprout-mcp crate deprecated, #850).
+    for bin in sprout-agent sprout-dev-mcp git-credential-nostr; do
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 
@@ -190,7 +191,6 @@ desktop-release-build target="aarch64-apple-darwin":
     TARGET={{target}}
     mkdir -p desktop/src-tauri/binaries
     touch "desktop/src-tauri/binaries/sprout-acp-$TARGET"
-    touch "desktop/src-tauri/binaries/sprout-mcp-server-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-agent-$TARGET"
     touch "desktop/src-tauri/binaries/sprout-dev-mcp-$TARGET"
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
@@ -298,7 +298,7 @@ staging *ARGS: _ensure-sidecar-stubs
     #!/usr/bin/env bash
     set -euo pipefail
     pnpm install
-    cargo build --release -p sprout-acp -p sprout-mcp -p sprout-agent -p sprout-dev-mcp -p sprout-cli
+    cargo build --release -p sprout-acp -p sprout-agent -p sprout-dev-mcp -p sprout-cli
     # Replace the 0-byte sidecar stub with the real CLI binary so tauri dev picks it up.
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
     cp target/release/sprout "desktop/src-tauri/binaries/sprout-${TARGET}"
@@ -550,13 +550,12 @@ release *ARGS:
 goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY":
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --release -p sprout-acp -p sprout-mcp -p sprout-cli
+    cargo build --release -p sprout-acp -p sprout-cli
     env_args=(
         SPROUT_RELAY_URL="{{relay}}"
         SPROUT_PRIVATE_KEY="{{key}}"
         SPROUT_ACP_AGENT_COMMAND=goose
         SPROUT_ACP_AGENT_ARGS=acp
-        SPROUT_ACP_MCP_COMMAND=./target/release/sprout-mcp-server
         SPROUT_ACP_AGENTS="{{agents}}"
         GOOSE_MODE=auto
     )
@@ -570,13 +569,12 @@ goose relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROU
 goose-bg relay="ws://localhost:3000" agents="1" heartbeat="0" prompt="" key="$SPROUT_PRIVATE_KEY":
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --release -p sprout-acp -p sprout-mcp -p sprout-cli
+    cargo build --release -p sprout-acp -p sprout-cli
     env_args=(
         SPROUT_RELAY_URL="{{relay}}"
         SPROUT_PRIVATE_KEY="{{key}}"
         SPROUT_ACP_AGENT_COMMAND=goose
         SPROUT_ACP_AGENT_ARGS=acp
-        SPROUT_ACP_MCP_COMMAND=./target/release/sprout-mcp-server
         SPROUT_ACP_AGENTS="{{agents}}"
         GOOSE_MODE=auto
     )

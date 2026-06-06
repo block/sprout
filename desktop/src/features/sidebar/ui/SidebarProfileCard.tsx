@@ -119,7 +119,6 @@ export function SidebarProfileCard({
             open={profilePopoverOpen}
             onOpenChange={setProfilePopoverOpen}
             displayName={resolvedDisplayName}
-            nip05={profile?.nip05Handle}
             avatarUrl={profile?.avatarUrl ?? null}
             currentStatus={selfPresenceStatus}
             isStatusPending={isPresencePending}

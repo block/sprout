@@ -59,7 +59,7 @@ export function CreateAgentDialog({
   const [acpCommand, setAcpCommand] = React.useState("sprout-acp");
   const [agentCommand, setAgentCommand] = React.useState("goose");
   const [agentArgs, setAgentArgs] = React.useState("acp");
-  const [mcpCommand, setMcpCommand] = React.useState("sprout-mcp-server");
+  const [mcpCommand, setMcpCommand] = React.useState("");
   const [mcpToolsets, setMcpToolsets] = React.useState("");
   const prereqsQuery = useManagedAgentPrereqsQuery(acpCommand, mcpCommand);
   const [name, setName] = React.useState("");
@@ -143,7 +143,7 @@ export function CreateAgentDialog({
       setSelectedProviderId(remembered.id);
       setAgentCommand(remembered.command);
       setAgentArgs(remembered.defaultArgs.join(","));
-      setMcpCommand(remembered.mcpCommand ?? "sprout-mcp-server");
+      setMcpCommand(remembered.mcpCommand ?? "");
     } else {
       const matchingProvider =
         providers.find((provider) => provider.command === agentCommand) ?? null;
@@ -235,7 +235,7 @@ export function CreateAgentDialog({
     setAcpCommand("sprout-acp");
     setAgentCommand("goose");
     setAgentArgs("acp");
-    setMcpCommand("sprout-mcp-server");
+    setMcpCommand("");
     setMcpToolsets("");
     setTurnTimeoutSeconds("320");
     setParallelism("24");
@@ -282,7 +282,7 @@ export function CreateAgentDialog({
     setLastProvider(nextProviderId);
     setAgentCommand(provider.command);
     setAgentArgs(provider.defaultArgs.join(","));
-    setMcpCommand(provider.mcpCommand ?? "sprout-mcp-server");
+    setMcpCommand(provider.mcpCommand ?? "");
   }
 
   function handleRunOnChange(value: string) {

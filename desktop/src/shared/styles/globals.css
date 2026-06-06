@@ -243,6 +243,8 @@
     --sidebar-foreground: 234 16.02% 35.49%;
     --sidebar-primary: 266 85.05% 58.04%;
     --sidebar-primary-foreground: 220 23.08% 94.9%;
+    --sidebar-active: var(--sidebar-primary);
+    --sidebar-active-foreground: var(--sidebar-primary-foreground);
     --sidebar-accent: 220 23.08% 94.9%;
     --sidebar-accent-foreground: 234 16.02% 35.49%;
     --sidebar-border: 225 13.56% 76.86%;
@@ -281,6 +283,8 @@
     --sidebar-foreground: 227 68.25% 87.65%;
     --sidebar-primary: 267 82.69% 79.61%;
     --sidebar-primary-foreground: 232 23.4% 18.43%;
+    --sidebar-active: var(--sidebar-primary);
+    --sidebar-active-foreground: var(--sidebar-primary-foreground);
     --sidebar-accent: 232 23.4% 18.43%;
     --sidebar-accent-foreground: 227 68.25% 87.65%;
     --sidebar-border: 231 15.61% 33.92%;

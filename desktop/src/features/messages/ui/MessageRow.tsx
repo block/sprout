@@ -30,6 +30,7 @@ export const MessageRow = React.memo(
   function MessageRow({
     channelId = null,
     highlighted = false,
+    hoverBackground = true,
     isFollowingThread,
     layoutVariant = "default",
     message,
@@ -45,6 +46,7 @@ export const MessageRow = React.memo(
   }: {
     channelId?: string | null;
     highlighted?: boolean;
+    hoverBackground?: boolean;
     isFollowingThread?: boolean;
     layoutVariant?: "default" | "thread-reply";
     message: TimelineMessage;
@@ -314,10 +316,9 @@ export const MessageRow = React.memo(
 
         <article
           className={cn(
-            "group/message relative rounded-2xl px-2 py-1 transition-colors",
+            "group/message relative rounded-2xl px-3 py-2 transition-colors",
+            hoverBackground && "hover:bg-muted/50 focus-within:bg-muted/50",
             "flex items-start gap-2.5",
-            isThreadReplyLayout &&
-              "hover:ring-1 hover:ring-border/70 focus-within:ring-1 focus-within:ring-border/70",
             highlighted
               ? "-mx-4 rounded-none px-6 before:absolute before:-inset-y-1.5 before:inset-x-0 before:animate-[route-target-highlight-fade_2s_ease-out_forwards] before:bg-primary/10 before:content-[''] motion-reduce:before:animate-none sm:-mx-6 sm:px-8"
               : "",
@@ -450,6 +451,7 @@ export const MessageRow = React.memo(
     prev.message.role === next.message.role &&
     prev.message.personaDisplayName === next.message.personaDisplayName &&
     prev.highlighted === next.highlighted &&
+    prev.hoverBackground === next.hoverBackground &&
     prev.isFollowingThread === next.isFollowingThread &&
     prev.layoutVariant === next.layoutVariant &&
     prev.profiles === next.profiles &&

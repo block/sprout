@@ -50,7 +50,7 @@ import { cn } from "@/shared/lib/cn";
 // ---------------------------------------------------------------------------
 
 const SECTION_ICON_BUTTON_CLASS =
-  "flex h-5 w-5 items-center justify-center rounded-md text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground";
+  "flex size-6 items-center justify-center rounded-[4px] p-1 text-sidebar-foreground/50 transition-colors hover:bg-sidebar-border/35 hover:text-sidebar-foreground focus-visible:bg-sidebar-border/35 focus-visible:text-sidebar-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring [&>svg]:size-4 [&>svg]:shrink-0";
 export const SECTION_ACTION_VISIBILITY_CLASS =
   "opacity-0 transition-opacity group-hover/sidebar-section:opacity-100 group-focus-within/sidebar-section:opacity-100";
 const SECTION_LABEL_BUTTON_CLASS =
@@ -142,10 +142,7 @@ export function ChannelContextMenuItems({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread?: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread?: (channelId: string) => void;
   onMuteChannel?: (channelId: string) => void;
   onUnmuteChannel?: (channelId: string) => void;
   onStarChannel?: (channelId: string) => void;
@@ -182,9 +179,7 @@ export function ChannelContextMenuItems({
           Mark as read
         </ContextMenuItem>
       ) : !hasUnread && onMarkChannelUnread ? (
-        <ContextMenuItem
-          onClick={() => onMarkChannelUnread(channel.id, channel.lastMessageAt)}
-        >
+        <ContextMenuItem onClick={() => onMarkChannelUnread(channel.id)}>
           <CircleDot className="h-4 w-4" />
           Mark unread
         </ContextMenuItem>
@@ -233,7 +228,6 @@ export function ChannelContextMenuItems({
 function SectionHeaderActions({
   browseAriaLabel,
   browseTestId,
-  className,
   createAriaLabel,
   hasUnread,
   onBrowse,
@@ -242,7 +236,6 @@ function SectionHeaderActions({
 }: {
   browseAriaLabel: string;
   browseTestId?: string;
-  className?: string;
   createAriaLabel: string;
   hasUnread?: boolean;
   onBrowse?: () => void;
@@ -250,16 +243,14 @@ function SectionHeaderActions({
   onMarkAllRead?: () => void;
 }) {
   return (
-    <div
-      className={cn(
-        "absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5",
-        className,
-      )}
-    >
+    <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
       {hasUnread && onMarkAllRead ? (
         <button
           aria-label="Mark all as read"
-          className={SECTION_ICON_BUTTON_CLASS}
+          className={cn(
+            SECTION_ICON_BUTTON_CLASS,
+            SECTION_ACTION_VISIBILITY_CLASS,
+          )}
           onClick={onMarkAllRead}
           title="Mark all as read"
           type="button"
@@ -275,7 +266,7 @@ function SectionHeaderActions({
           onClick={onBrowse}
           type="button"
         >
-          <Search className="h-3.5 w-3.5" />
+          <Search className="h-4 w-4" />
         </button>
       ) : null}
       {onCreateClick ? (
@@ -344,10 +335,7 @@ export function ChannelGroupSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread: (channelId: string) => void;
   onSelectChannel: (channelId: string) => void;
   onToggleCollapsed: () => void;
   selectedChannelId: string | null;
@@ -449,7 +437,6 @@ export function ChannelGroupSection({
         <SectionHeaderActions
           browseAriaLabel={browseAriaLabel}
           browseTestId={browseTestId}
-          className={SECTION_ACTION_VISIBILITY_CLASS}
           createAriaLabel={createAriaLabel}
           hasUnread={hasUnread}
           onBrowse={onBrowse}
@@ -522,10 +509,7 @@ export function CustomChannelSection({
     channelId: string,
     lastMessageAt: string | null | undefined,
   ) => void;
-  onMarkChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread: (channelId: string) => void;
   onMarkSectionRead: () => void;
   onAssignChannel: (channelId: string, sectionId: string) => void;
   onUnassignChannel: (channelId: string) => void;

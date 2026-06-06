@@ -72,6 +72,17 @@ test("updates presence from the profile menu", async ({ page }) => {
   ).toContainText("Offline");
 });
 
+test("disables sidebar resize while settings are open", async ({ page }) => {
+  await page.goto("/");
+
+  const sidebarRail = page.locator('[data-sidebar="rail"]');
+  await expect(sidebarRail).toBeEnabled();
+
+  await openSettings(page, "appearance");
+  await expect(sidebarRail).toBeDisabled();
+  await expect(sidebarRail).toHaveCSS("pointer-events", "none");
+});
+
 test("notification settings drive the Home badge and desktop alerts", async ({
   page,
 }) => {

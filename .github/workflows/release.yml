@@ -72,7 +72,7 @@ jobs:
 
       - name: Build sidecars
         run: |
-          cargo build --release -p sprout-acp -p sprout-mcp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
+          cargo build --release -p sprout-acp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
           ./scripts/bundle-sidecars.sh
 
       # Mesh rev derived from Cargo.lock (no lockstep edit on dep bump); cache key tracks it.
@@ -317,7 +317,7 @@ jobs:
 
       - name: Build sidecars
         run: |
-          cargo build --release -p sprout-acp -p sprout-mcp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
+          cargo build --release -p sprout-acp -p sprout-agent -p sprout-dev-mcp -p git-credential-nostr -p sprout-cli
           ./scripts/bundle-sidecars.sh
 
       - name: Build Linux Tauri app

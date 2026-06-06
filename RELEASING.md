@@ -68,19 +68,10 @@ If the automated flow isn't suitable (e.g., building from a non-main ref):
 
 ## Internal Releases
 
-After the OSS release ships, trigger an internal build via the **sprout-releases** Buildkite pipeline:
-
-1. Go to the [sprout-releases pipeline](https://buildkite.com/runway/sprout-releases) and click **New Build**
-2. Fill in the input fields:
-
-   | Field | Value | Notes |
-   |-------|-------|-------|
-   | `version` | `0.3.0` | Semver, no `v` prefix |
-   | `sprout_ref` | `v0.3.0` | The OSS git tag — use the tag, not a branch name |
-   | `relay_url` | *(default)* | Pre-filled with the production relay; usually leave as-is |
-   | `publish_latest` | `true` | Updates `latest.json` on Artifactory so installed apps auto-update. Set to `false` for test builds. |
-
-Internal desktop builds display a `-block` suffix in the version (e.g., `v0.3.0-block` in the Settings panel). This distinguishes them from OSS builds at a glance. iOS builds and GitHub release tags use the clean version (`0.3.0`) since Apple's `CFBundleShortVersionString` rejects pre-release suffixes.
+After the OSS release ships, trigger an internal build via the
+[sprout-releases Buildkite pipeline](https://buildkite.com/runway/sprout-releases).
+See the [sprout-releases README](https://github.com/squareup/sprout-releases#cutting-a-release)
+for the full step-by-step instructions and input field reference.
 
 ---
 
@@ -88,9 +79,12 @@ Internal desktop builds display a `-block` suffix in the version (e.g., `v0.3.0-
 
 Each release produces two GitHub releases:
 
-1. **`v<version>`** — the user-facing release with the `.dmg` installer (macOS) and `.deb`/`.AppImage` (Linux).
+1. **`v<version>`** — the user-facing release with the `.dmg` installer
+   (macOS).
 
-2. **`sprout-desktop-latest`** — a rolling pre-release for the Tauri auto-updater containing `latest.json`, the signed `.tar.gz` archive, and its `.sig` signature.
+2. **`sprout-desktop-latest`** — a rolling pre-release for the Tauri
+   auto-updater containing `latest.json`, the signed `.tar.gz` archive,
+   and its `.sig` signature.
 
 ---
 

@@ -61,6 +61,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
+  SidebarRail,
 } from "@/shared/ui/sidebar";
 
 type CollapsibleSidebarGroup =
@@ -119,10 +120,7 @@ type AppSidebarProps = {
   onOpenBrowseChannels: () => void;
   onOpenBrowseForums: () => void;
   onHideDm: (channelId: string) => void;
-  onMarkChannelUnread: (
-    channelId: string,
-    lastMessageAt: string | null | undefined,
-  ) => void;
+  onMarkChannelUnread: (channelId: string) => void;
   onMarkChannelRead: (
     channelId: string,
     lastMessageAt: string | null | undefined,
@@ -442,7 +440,7 @@ export function AppSidebar({
             </SidebarMenuButton>
             {homeBadgeCount > 0 ? (
               <SidebarMenuBadge
-                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                className="right-2 rounded-full bg-primary/15 px-1.5 text-[11px] text-primary peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
                 data-testid="sidebar-home-count"
               >
                 {Math.min(homeBadgeCount, 99)}
@@ -490,7 +488,7 @@ export function AppSidebar({
             </SidebarMenuButton>
             {shouldShowAgentCount ? (
               <SidebarMenuBadge
-                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-primary-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-primary-foreground"
+                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
                 data-testid="sidebar-agents-count"
               >
                 {totalAgentCount}
@@ -688,7 +686,7 @@ export function AppSidebar({
                     aria-expanded={isNewDmOpen}
                     aria-label="Start a direct message"
                     className={cn(
-                      "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                      "top-1/2 -translate-y-1/2 text-sidebar-foreground/50 hover:bg-sidebar-border/35 hover:text-sidebar-foreground",
                       SECTION_ACTION_VISIBILITY_CLASS,
                     )}
                     data-testid="new-dm-trigger"
@@ -842,6 +840,7 @@ export function AppSidebar({
           setDeleteSectionTarget(null);
         }}
       />
+      <SidebarRail />
     </Sidebar>
   );
 }

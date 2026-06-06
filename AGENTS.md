@@ -26,7 +26,9 @@ block/sprout (source)
   └─── sprout-backend-blox         (Blox compute provider for Desktop agent launch)
 ```
 
-See [RELEASING.md](RELEASING.md) for the desktop release flow across `block/sprout` and `sprout-releases`.
+See [RELEASING.md](RELEASING.md) for the desktop release flow and
+[CONTRIBUTING.md § Ecosystem](CONTRIBUTING.md#ecosystem) for contributor
+access information.
 
 ---
 
@@ -44,7 +46,6 @@ crates/
   sprout-audit        # Hash-chain audit log
   sprout-media        # Blossom/S3 media storage
   # Agent surface
-  sprout-mcp          # MCP server providing AI agent tools (being phased out in favor of the CLI)
   sprout-acp          # ACP harness bridging Sprout events to AI agents
   sprout-agent        # Minimal ACP-compliant agent (non-streaming, tool-calls-as-output)
   sprout-dev-mcp      # Developer MCP server — shell + file-edit tools
@@ -60,6 +61,7 @@ crates/
   sprout-cli          # Agent-first CLI
   sprout-sdk          # Typed Nostr event builders
   sprout-admin        # Operator CLI for relay administration
+  sprout-ws-client    # Shared NIP-42 WebSocket client (connect, auth, publish)
   sprout-test-client  # Integration test client and E2E test suite
   sprig               # All-in-one harness bundling ACP, agent, and dev MCP
 
@@ -144,12 +146,7 @@ first, then implement handling in the relay.
 **Channel scoping**: Channels use `h` tags (NIP-29 group tag), not `e` tags.
 Filters and queries must scope to `h` tags when operating within a channel.
 
-**Agent-facing operations go in `sprout-cli`, not `sprout-mcp`**: `sprout-mcp`
-is being phased out. New agent-facing features belong in `sprout-cli` — add a
-subcommand there first, then wire the REST/WebSocket call in `client.rs`. Do
-not add new tools to `sprout-mcp` unless specifically required for backward
-compatibility. `sprout-dev-mcp` (shell + file tools for `sprout-agent`) is
-separate and not being phased out.
+**Agent-facing operations go in `sprout-cli`**: New agent-facing features belong in `sprout-cli` — add a subcommand there first, then wire the REST/WebSocket call in `client.rs`. `sprout-dev-mcp` (shell + file tools for `sprout-agent`) is separate.
 
 **Workflow conditions**: `sprout-workflow` uses
 [evalexpr](https://docs.rs/evalexpr) for condition evaluation. Keep expressions
@@ -163,7 +160,7 @@ check existing reply handlers for the pattern.
 
 ## Agent CLI (`sprout-cli`)
 
-`sprout` is the agent-first CLI replacing `sprout-mcp`. Auth env vars
+`sprout` is the agent-first CLI. Auth env vars
 (`SPROUT_RELAY_URL`, `SPROUT_PRIVATE_KEY`, `SPROUT_AUTH_TAG`) are auto-injected
 by the ACP harness into managed agent subprocesses. In development, set
 `SPROUT_PRIVATE_KEY` and `SPROUT_RELAY_URL` in your environment manually.
@@ -211,7 +208,6 @@ just test         # full integration suite (requires Postgres + Redis)
 E2E tests live in `crates/sprout-test-client/tests/`:
 - `e2e_relay.rs` — WebSocket relay protocol
 - `e2e_rest_api.rs` — REST endpoint coverage
-- `e2e_mcp.rs` — MCP tool surface
 - `e2e_tokens.rs` — auth token flows
 - `e2e_workflows.rs` — workflow engine
 - `e2e_media.rs` — media upload/download (Blossom)

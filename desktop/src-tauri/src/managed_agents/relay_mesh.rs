@@ -45,7 +45,7 @@ mod tests {
             acp_command: "sprout-acp".into(),
             agent_command: "goose".into(),
             agent_args: vec![],
-            mcp_command: "sprout-mcp-server".into(),
+            mcp_command: String::new(),
             turn_timeout_seconds: 320,
             idle_timeout_seconds: None,
             max_turn_duration_seconds: None,

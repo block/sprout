@@ -248,8 +248,8 @@ export function CreateAgentRuntimeFields({
             className="text-xs text-muted-foreground"
             id="help-agent-mcp-command"
           >
-            Command the ACP harness uses to start the MCP tool server for this
-            agent.
+            Optional. Only needed for agents that use a custom MCP server (e.g.
+            sprout-agent with sprout-dev-mcp). Leave blank for most agents.
           </p>
         </div>
 
@@ -402,7 +402,7 @@ export function CreateAgentOptionToggles({
         </p>
         <p className="mt-1 text-sm text-foreground/70">
           {prereqs !== null && !isSpawnSupported
-            ? "Requires both the ACP harness and MCP server binaries."
+            ? "Requires the ACP harness binary."
             : "Start the local ACP harness immediately after the profile is saved."}
         </p>
       </button>
