@@ -52,6 +52,9 @@ export function InboxMessageRow({
     () => toTimelineMessage(message),
     [message],
   );
+  const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
+    null,
+  );
   const {
     reactions,
     canToggle: canToggleReactions,
@@ -92,11 +95,13 @@ export function InboxMessageRow({
               onReactionSelect={
                 canToggleReactions ? handleReactionSelect : undefined
               }
+              onReactionBadgeBurstRequest={
+                reactionPending ? undefined : setBadgeBurstEmoji
+              }
               onReply={
                 canReply ? () => onSelectReplyTarget(message) : undefined
               }
               reactionErrorMessage={reactionErrorMessage}
-              reactionPending={reactionPending}
               reactions={reactions}
             />
           </div>
@@ -133,6 +138,12 @@ export function InboxMessageRow({
               messageId={message.id}
               onSelect={(emoji) => {
                 void handleReactionSelect(emoji);
+              }}
+              burstEmojiOnRender={badgeBurstEmoji}
+              onBurstEmojiRendered={(emoji) => {
+                setBadgeBurstEmoji((current) =>
+                  current === emoji ? null : current,
+                );
               }}
               pending={reactionPending}
               reactions={reactions}

@@ -18,6 +18,67 @@ type ReactionHandler = {
   select: (emoji: string) => Promise<void>;
 };
 
+function sortReactions(reactions: TimelineReaction[]): TimelineReaction[] {
+  return [...reactions].sort((left, right) => {
+    if (left.count !== right.count) {
+      return right.count - left.count;
+    }
+    return left.emoji.localeCompare(right.emoji);
+  });
+}
+
+function applyOptimisticReaction(
+  reactions: TimelineReaction[],
+  emoji: string,
+  remove: boolean,
+): TimelineReaction[] {
+  const existing = reactions.find((reaction) => reaction.emoji === emoji);
+
+  if (remove) {
+    if (!existing?.reactedByCurrentUser) return reactions;
+
+    const nextCount = Math.max(0, existing.count - 1);
+    if (nextCount === 0) {
+      return reactions.filter((reaction) => reaction.emoji !== emoji);
+    }
+
+    return reactions.map((reaction) =>
+      reaction.emoji === emoji
+        ? {
+            ...reaction,
+            count: nextCount,
+            reactedByCurrentUser: false,
+            users: reaction.users.filter((user) => user.displayName !== "You"),
+          }
+        : reaction,
+    );
+  }
+
+  if (existing) {
+    if (existing.reactedByCurrentUser) return reactions;
+
+    return reactions.map((reaction) =>
+      reaction.emoji === emoji
+        ? {
+            ...reaction,
+            count: reaction.count + 1,
+            reactedByCurrentUser: true,
+          }
+        : reaction,
+    );
+  }
+
+  return [
+    ...reactions,
+    {
+      emoji,
+      count: 1,
+      reactedByCurrentUser: true,
+      users: [{ pubkey: "", displayName: "You", avatarUrl: null }],
+    },
+  ];
+}
+
 /**
  * Shared reaction state + toggle logic used by both MessageRow and
  * SystemMessageRow. Keeps the pending/error/sorting concerns in one place.
@@ -32,15 +93,19 @@ export function useReactionHandler(
 ): ReactionHandler {
   const [pending, setPending] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const sourceReactions = message.reactions;
+  const [optimisticState, setOptimisticState] = React.useState<{
+    reactions: TimelineReaction[];
+    sourceReactions: TimelineReaction[] | undefined;
+  } | null>(null);
+  const optimisticReactions =
+    optimisticState && optimisticState.sourceReactions === sourceReactions
+      ? optimisticState.reactions
+      : null;
 
   const reactions = React.useMemo(() => {
-    return [...(message.reactions ?? [])].sort((left, right) => {
-      if (left.count !== right.count) {
-        return right.count - left.count;
-      }
-      return left.emoji.localeCompare(right.emoji);
-    });
-  }, [message.reactions]);
+    return sortReactions(optimisticReactions ?? sourceReactions ?? []);
+  }, [sourceReactions, optimisticReactions]);
 
   const canToggle = Boolean(onToggleReaction && !message.pending);
 
@@ -56,9 +121,21 @@ export function useReactionHandler(
 
       setErrorMessage(null);
       setPending(true);
+      setOptimisticState((current) => {
+        const baseReactions =
+          current && current.sourceReactions === sourceReactions
+            ? current.reactions
+            : reactions;
+
+        return {
+          reactions: applyOptimisticReaction(baseReactions, emoji, remove),
+          sourceReactions,
+        };
+      });
       try {
         await onToggleReaction(message, emoji, remove);
       } catch (error) {
+        setOptimisticState(null);
         const nextMessage =
           error instanceof Error
             ? error.message
@@ -69,7 +146,7 @@ export function useReactionHandler(
         setPending(false);
       }
     },
-    [message, onToggleReaction, pending, reactions],
+    [message, onToggleReaction, pending, reactions, sourceReactions],
   );
 
   return { reactions, canToggle, pending, errorMessage, select };

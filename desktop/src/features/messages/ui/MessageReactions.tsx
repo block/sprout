@@ -6,8 +6,11 @@ import type { TimelineReaction } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
 import { emojiDisplayName } from "@/shared/lib/emojiName";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import {
+  isPositiveEmojiParticle,
+  useEmojiBurst,
+} from "@/shared/ui/EmojiBurstProvider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
-import { Spinner } from "@/shared/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 const REACTION_PILL_BASE_CLASSES =
@@ -15,6 +18,38 @@ const REACTION_PILL_BASE_CLASSES =
 const REACTION_GLYPH_CLASSES = "-translate-y-px h-3.5 w-3.5 text-sm";
 const REACTION_PILL_HOVER_CLASSES =
   "hover:bg-primary/10 hover:text-foreground focus-visible:bg-primary/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring";
+const BADGE_BURST_STABLE_FRAMES = 2;
+const BADGE_BURST_MAX_FRAMES = 12;
+const BADGE_BURST_RECT_EPSILON = 0.5;
+
+type BadgeBurstRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+};
+
+function toBadgeBurstRect(rect: DOMRect): BadgeBurstRect {
+  return {
+    height: rect.height,
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+  };
+}
+
+function isSameBadgeBurstRect(
+  left: BadgeBurstRect | null,
+  right: BadgeBurstRect,
+) {
+  return (
+    left !== null &&
+    Math.abs(left.left - right.left) <= BADGE_BURST_RECT_EPSILON &&
+    Math.abs(left.top - right.top) <= BADGE_BURST_RECT_EPSILON &&
+    Math.abs(left.width - right.width) <= BADGE_BURST_RECT_EPSILON &&
+    Math.abs(left.height - right.height) <= BADGE_BURST_RECT_EPSILON
+  );
+}
 
 /**
  * Render a reaction's emoji: a custom (image) emoji when `emojiUrl` is set,
@@ -99,6 +134,8 @@ export function MessageReactions({
   pending,
   onSelect,
   className,
+  burstEmojiOnRender = null,
+  onBurstEmojiRendered,
 }: {
   messageId: string;
   reactions: TimelineReaction[];
@@ -106,7 +143,96 @@ export function MessageReactions({
   pending: boolean;
   onSelect: (emoji: string) => void;
   className?: string;
+  burstEmojiOnRender?: string | null;
+  onBurstEmojiRendered?: (emoji: string) => void;
 }) {
+  const { burstEmoji } = useEmojiBurst();
+  const [pendingBadgeBurstEmoji, setPendingBadgeBurstEmoji] = React.useState<
+    string | null
+  >(null);
+  const pillRefs = React.useRef(new Map<string, HTMLButtonElement>());
+  const deliveredBadgeBurstRef = React.useRef<string | null>(null);
+  const badgeBurstEmoji = burstEmojiOnRender ?? pendingBadgeBurstEmoji;
+
+  const registerPill = React.useCallback(
+    (emoji: string, element: HTMLButtonElement | null) => {
+      if (element) {
+        pillRefs.current.set(emoji, element);
+      } else {
+        pillRefs.current.delete(emoji);
+      }
+    },
+    [],
+  );
+
+  React.useEffect(() => {
+    if (!badgeBurstEmoji) {
+      deliveredBadgeBurstRef.current = null;
+      return;
+    }
+    if (
+      deliveredBadgeBurstRef.current === badgeBurstEmoji ||
+      !isPositiveEmojiParticle(badgeBurstEmoji)
+    ) {
+      return;
+    }
+
+    const reaction = reactions.find(
+      (candidate) =>
+        candidate.emoji === badgeBurstEmoji && candidate.reactedByCurrentUser,
+    );
+    if (!reaction || !pillRefs.current.get(badgeBurstEmoji)) return;
+
+    let frameId: number | null = null;
+    let frameCount = 0;
+    let stableFrameCount = 0;
+    let previousRect: BadgeBurstRect | null = null;
+
+    const cancelFrame = () => {
+      if (frameId === null) return;
+      window.cancelAnimationFrame(frameId);
+      frameId = null;
+    };
+
+    const emitFromSettledBadge = () => {
+      frameId = null;
+
+      const pill = pillRefs.current.get(badgeBurstEmoji);
+      if (!pill || !document.documentElement.contains(pill)) return;
+
+      const nextRect = toBadgeBurstRect(pill.getBoundingClientRect());
+      if (!nextRect.width && !nextRect.height) return;
+
+      stableFrameCount = isSameBadgeBurstRect(previousRect, nextRect)
+        ? stableFrameCount + 1
+        : 0;
+      previousRect = nextRect;
+      frameCount += 1;
+
+      if (
+        stableFrameCount < BADGE_BURST_STABLE_FRAMES &&
+        frameCount < BADGE_BURST_MAX_FRAMES
+      ) {
+        frameId = window.requestAnimationFrame(emitFromSettledBadge);
+        return;
+      }
+
+      deliveredBadgeBurstRef.current = badgeBurstEmoji;
+      burstEmoji(badgeBurstEmoji, {
+        clientX: nextRect.left + nextRect.width / 2,
+        clientY: nextRect.top + nextRect.height / 2,
+      });
+      setPendingBadgeBurstEmoji((current) =>
+        current === badgeBurstEmoji ? null : current,
+      );
+      onBurstEmojiRendered?.(badgeBurstEmoji);
+    };
+
+    frameId = window.requestAnimationFrame(emitFromSettledBadge);
+
+    return cancelFrame;
+  }, [badgeBurstEmoji, burstEmoji, onBurstEmojiRendered, reactions]);
+
   if (reactions.length === 0) {
     return null;
   }
@@ -125,6 +251,7 @@ export function MessageReactions({
           canToggle={canToggle}
           pending={pending}
           reaction={reaction}
+          registerPill={registerPill}
           onSelect={onSelect}
         />
       ))}
@@ -133,6 +260,8 @@ export function MessageReactions({
           messageId={messageId}
           onSelect={onSelect}
           pending={pending}
+          reactions={reactions}
+          requestBadgeBurst={setPendingBadgeBurstEmoji}
         />
       ) : null}
     </div>
@@ -143,12 +272,20 @@ function InlineReactionPicker({
   messageId,
   onSelect,
   pending,
+  reactions,
+  requestBadgeBurst,
 }: {
   messageId: string;
   onSelect: (emoji: string) => void;
   pending: boolean;
+  reactions: TimelineReaction[];
+  requestBadgeBurst: (emoji: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
+  const wouldAddReaction = (emoji: string) =>
+    !reactions.some(
+      (reaction) => reaction.emoji === emoji && reaction.reactedByCurrentUser,
+    );
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
@@ -173,11 +310,7 @@ function InlineReactionPicker({
               disabled={pending}
               type="button"
             >
-              {pending ? (
-                <Spinner className="h-4 w-4" />
-              ) : (
-                <SmilePlus className="h-4 w-4" />
-              )}
+              <SmilePlus className="h-4 w-4" />
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -192,6 +325,9 @@ function InlineReactionPicker({
         <EmojiPicker
           autoFocus
           onSelect={(value) => {
+            if (wouldAddReaction(value) && isPositiveEmojiParticle(value)) {
+              requestBadgeBurst(value);
+            }
             onSelect(value);
             setOpen(false);
           }}
@@ -205,13 +341,16 @@ function ReactionPill({
   reaction,
   canToggle,
   pending,
+  registerPill,
   onSelect,
 }: {
   reaction: TimelineReaction;
   canToggle: boolean;
   pending: boolean;
+  registerPill: (emoji: string, element: HTMLButtonElement | null) => void;
   onSelect: (emoji: string) => void;
 }) {
+  const { burstEmoji } = useEmojiBurst();
   const [open, setOpen] = React.useState(false);
   const openTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,6 +387,13 @@ function ReactionPill({
     return clearTimers;
   }, [clearTimers]);
 
+  const setPillRef = React.useCallback(
+    (element: HTMLButtonElement | null) => {
+      registerPill(reaction.emoji, element);
+    },
+    [reaction.emoji, registerPill],
+  );
+
   const pillClasses = cn(
     REACTION_PILL_BASE_CLASSES,
     "min-w-12 justify-center gap-1.5 px-2",
@@ -261,8 +407,14 @@ function ReactionPill({
       : "cursor-default",
   );
 
-  const handleClick = () => {
+  const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (!canToggle) return;
+    if (
+      !reaction.reactedByCurrentUser &&
+      isPositiveEmojiParticle(reaction.emoji)
+    ) {
+      burstEmoji(reaction.emoji, event);
+    }
     onSelect(reaction.emoji);
   };
 
@@ -277,6 +429,7 @@ function ReactionPill({
         className={pillClasses}
         disabled={!canToggle || pending}
         onClick={handleClick}
+        ref={setPillRef}
         type="button"
       >
         <EmojiGlyph reaction={reaction} className={REACTION_GLYPH_CLASSES} />
@@ -303,6 +456,7 @@ function ReactionPill({
             className={pillClasses}
             disabled={!canToggle || pending}
             onClick={handleClick}
+            ref={setPillRef}
             type="button"
           >
             <EmojiGlyph

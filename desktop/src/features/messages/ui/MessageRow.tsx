@@ -67,6 +67,9 @@ export const MessageRow = React.memo(
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
+    const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
+      null,
+    );
     const {
       reactions,
       canToggle: canToggleReactions,
@@ -219,13 +222,15 @@ export const MessageRow = React.memo(
           onEdit={onEdit}
           onFollowThread={onFollowThread}
           onMarkUnread={onMarkUnread}
+          onReactionBadgeBurstRequest={
+            reactionPending ? undefined : setBadgeBurstEmoji
+          }
           onReactionSelect={
             canToggleReactions ? handleReactionSelect : undefined
           }
           onReply={onReply}
           onUnfollowThread={onUnfollowThread}
           reactionErrorMessage={reactionErrorMessage}
-          reactionPending={reactionPending}
           reactions={reactions}
         />
       </div>
@@ -258,6 +263,10 @@ export const MessageRow = React.memo(
           reactions={reactions}
           canToggle={canToggleReactions}
           pending={reactionPending}
+          burstEmojiOnRender={badgeBurstEmoji}
+          onBurstEmojiRendered={(emoji) => {
+            setBadgeBurstEmoji((current) => (current === emoji ? null : current));
+          }}
           onSelect={(emoji) => {
             void handleReactionSelect(emoji);
           }}
