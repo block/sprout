@@ -103,7 +103,7 @@ export function ChatHeader({
   const header = (
     <header
       className={cn(
-        "relative z-30 flex min-w-0 shrink-0 cursor-default select-none items-center gap-[10px] bg-transparent pl-[16px] pr-[8px] transition-[margin,padding] duration-200 ease-linear sm:pl-[24px] sm:pr-[12px]",
+        "pointer-events-auto relative z-30 flex min-w-0 shrink-0 cursor-default select-none items-center gap-[10px] bg-transparent pl-[16px] pr-[8px] transition-[margin,padding] duration-200 ease-linear sm:pl-[24px] sm:pr-[12px]",
         density === "compact" ? "h-[32px] py-0" : "min-h-[44px] py-[6px]",
         overlaysContent && !belowSystemChrome && "-mb-[44px]",
       )}
@@ -155,7 +155,7 @@ export function ChatHeader({
   }
 
   return (
-    <div className="relative z-30 h-[92px] -mb-[92px] bg-background/80 pb-[9px] pt-[48px] backdrop-blur-md after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/35 after:content-[''] supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55">
+    <div className="pointer-events-none relative z-30 h-[92px] -mb-[92px] bg-background/80 pb-[9px] pt-[48px] backdrop-blur-md after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/35 after:content-[''] supports-[backdrop-filter]:bg-background/70 dark:bg-background/70 dark:backdrop-blur-xl dark:supports-[backdrop-filter]:bg-background/55">
       {header}
     </div>
   );
