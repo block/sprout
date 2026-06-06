@@ -309,6 +309,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             currentPubkey={currentPubkey}
             fetchOlder={fetchOlder}
             followThreadById={followThreadById}
+            hasComposerOverlay={!isNonMemberView}
             hasOlderMessages={hasOlderMessages}
             isFetchingOlder={isFetchingOlder}
             isFollowingThreadById={isFollowingThreadById}
