@@ -328,6 +328,7 @@ export function SidebarSection({
                     {channel.channelType === "dm" && onHideDm ? (
                       <SidebarMenuAction
                         aria-label="Close direct message"
+                        className="right-0 top-1/2 h-8 w-8 -translate-y-1/2 rounded-lg border border-border/40 [&>svg]:size-5 peer-data-[size=default]/menu-button:top-1/2 peer-data-[size=lg]/menu-button:top-1/2 peer-data-[size=sm]/menu-button:top-1/2"
                         data-testid={`hide-dm-${channel.name}`}
                         onClick={() => onHideDm(channel.id)}
                         showOnHover
