@@ -121,7 +121,7 @@
   font-size: 15px;
   line-height: 1;
   color: hsl(var(--primary));
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .agent-activity-shimmer {
