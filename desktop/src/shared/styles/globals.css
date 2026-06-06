@@ -114,11 +114,14 @@
 }
 
 .rich-text-composer .tiptap .mention-highlight {
+  display: inline-block;
   border-radius: 4px;
   background: hsl(var(--primary) / 0.15);
   padding: 3px 4px 2px;
+  font-size: 15px;
+  line-height: 1;
   color: hsl(var(--primary));
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .agent-activity-shimmer {

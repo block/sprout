@@ -226,12 +226,7 @@ function describeSystemEvent(
       }
       return {
         title: actorName,
-        action: (
-          <>
-            added <span className="font-medium">{targetName}</span> to the
-            channel
-          </>
-        ),
+        action: <>added {targetName} to the channel</>,
       };
     }
     case "member_left":
@@ -242,12 +237,7 @@ function describeSystemEvent(
     case "member_removed":
       return {
         title: actorName,
-        action: (
-          <>
-            removed <span className="font-medium">{targetName}</span> from the
-            channel
-          </>
-        ),
+        action: <>removed {targetName} from the channel</>,
       };
     case "topic_changed":
       return {
