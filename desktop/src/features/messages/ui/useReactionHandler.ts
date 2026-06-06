@@ -1,9 +1,13 @@
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
+import { customEmojiQueryKey } from "@/features/custom-emoji/hooks";
 import type {
   TimelineMessage,
   TimelineReaction,
 } from "@/features/messages/types";
+import { reactionEmojiUrl } from "@/shared/api/customEmoji";
+import type { CustomEmoji } from "@/shared/lib/remarkCustomEmoji";
 
 type ReactionHandler = {
   /** Reactions sorted by count (desc) then emoji (asc). */
@@ -31,6 +35,7 @@ function applyOptimisticReaction(
   reactions: TimelineReaction[],
   emoji: string,
   remove: boolean,
+  emojiUrl?: string,
 ): TimelineReaction[] {
   const existing = reactions.find((reaction) => reaction.emoji === emoji);
 
@@ -72,6 +77,7 @@ function applyOptimisticReaction(
     ...reactions,
     {
       emoji,
+      emojiUrl,
       count: 1,
       reactedByCurrentUser: true,
       users: [{ pubkey: "", displayName: "You", avatarUrl: null }],
@@ -91,6 +97,7 @@ export function useReactionHandler(
     remove: boolean,
   ) => Promise<void>,
 ): ReactionHandler {
+  const queryClient = useQueryClient();
   const [pending, setPending] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const sourceReactions = message.reactions;
@@ -121,6 +128,10 @@ export function useReactionHandler(
 
       setErrorMessage(null);
       setPending(true);
+      const emojiUrl = reactionEmojiUrl(
+        emoji,
+        queryClient.getQueryData<CustomEmoji[]>(customEmojiQueryKey),
+      );
       setOptimisticState((current) => {
         const baseReactions =
           current && current.sourceReactions === sourceReactions
@@ -128,7 +139,12 @@ export function useReactionHandler(
             : reactions;
 
         return {
-          reactions: applyOptimisticReaction(baseReactions, emoji, remove),
+          reactions: applyOptimisticReaction(
+            baseReactions,
+            emoji,
+            remove,
+            emojiUrl,
+          ),
           sourceReactions,
         };
       });
@@ -146,7 +162,14 @@ export function useReactionHandler(
         setPending(false);
       }
     },
-    [message, onToggleReaction, pending, reactions, sourceReactions],
+    [
+      message,
+      onToggleReaction,
+      pending,
+      queryClient,
+      reactions,
+      sourceReactions,
+    ],
   );
 
   return { reactions, canToggle, pending, errorMessage, select };
