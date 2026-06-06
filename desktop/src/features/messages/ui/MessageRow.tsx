@@ -265,7 +265,9 @@ export const MessageRow = React.memo(
           pending={reactionPending}
           burstEmojiOnRender={badgeBurstEmoji}
           onBurstEmojiRendered={(emoji) => {
-            setBadgeBurstEmoji((current) => (current === emoji ? null : current));
+            setBadgeBurstEmoji((current) =>
+              current === emoji ? null : current,
+            );
           }}
           onSelect={(emoji) => {
             void handleReactionSelect(emoji);
