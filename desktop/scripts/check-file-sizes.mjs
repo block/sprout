@@ -31,12 +31,13 @@ const rules = [
 // file is broken up. Tracked as a follow-up.
 const overrides = new Map([
   ["src-tauri/src/managed_agents/nest.rs", 1415],
-  ["src-tauri/src/managed_agents/runtime.rs", 1387],
+  ["src-tauri/src/managed_agents/runtime.rs", 1414], // + SPROUT_SERVERLESS env passthrough + current-workspace relay override
   ["src-tauri/src/huddle/tts.rs", 1364],
-  ["src/shared/api/tauri.ts", 1196],
+  ["src/shared/api/tauri.ts", 1275], // + serverless multi-relay message wrappers + decryptGiftWrap + rootEventId
   ["src-tauri/src/nostr_convert.rs", 1116],
-  ["src/shared/api/relayClientSession.ts", 1022],
+  ["src/shared/api/relayClientSession.ts", 1160], // + serverless mode (setServerless, AUTH-skip) + encrypted channel decrypt
   ["src-tauri/src/migration.rs", 1005],
+  ["src-tauri/src/events.rs", 1105], // + serverless addressable builders (39000/39002) + NIP-09 channel delete + self-p-tag guards
 ]);
 
 await runFileSizeCheck({

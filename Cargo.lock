@@ -7446,6 +7446,7 @@ dependencies = [
  "hex",
  "nix 0.31.3",
  "nostr",
+ "nostr-relay-pool",
  "reqwest 0.13.3",
  "rustls",
  "serde",
@@ -7548,10 +7549,12 @@ dependencies = [
  "base64",
  "clap",
  "diffy",
+ "futures-util",
  "hex",
  "infer",
  "nostr",
  "reqwest 0.13.3",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -7561,6 +7564,7 @@ dependencies = [
  "sprout-ws-client",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "url",
  "uuid",
 ]
@@ -9134,6 +9138,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

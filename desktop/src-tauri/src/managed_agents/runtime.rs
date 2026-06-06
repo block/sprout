@@ -846,7 +846,34 @@ pub fn spawn_agent_child(
     }
     command.env("RUST_LOG", child_rust_log_filter());
     command.env("SPROUT_PRIVATE_KEY", &record.private_key_nsec);
-    command.env("SPROUT_RELAY_URL", &record.relay_url);
+    // Relay URL: in serverless mode, use the CURRENT workspace relay list, not
+    // the list frozen into the agent record at creation time. Otherwise an
+    // agent created under an old workspace keeps hammering stale/paid relays
+    // (e.g. nostr.land/nostr.wine) that were since removed — and if the only
+    // healthy relay rate-limits, the agent's reply has nowhere to fail over to
+    // and silently vanishes. Server mode keeps the record's relay (it points at
+    // a specific Sprout server, not a swappable public-relay set).
+    use tauri::Manager;
+    let state = app.state::<crate::app_state::AppState>();
+    let current = crate::relay::relay_ws_url_with_override(&state);
+    let relay_url = if state.is_serverless() && !current.trim().is_empty() {
+        current
+    } else {
+        record.relay_url.clone()
+    };
+    command.env("SPROUT_RELAY_URL", &relay_url);
+    // Serverless mode: tell the ACP harness (and the sprout CLI it spawns for
+    // replies) to use plain-WS transport against a generic relay instead of the
+    // Sprout HTTP bridge. Inherited from the active workspace. See
+    // docs/SPROUT_LITE_MODE.md.
+    command.env(
+        "SPROUT_SERVERLESS",
+        if state.is_serverless() {
+            "true"
+        } else {
+            "false"
+        },
+    );
     command.env("SPROUT_ACP_AGENT_COMMAND", &resolved_agent_command);
     command.env("SPROUT_ACP_AGENT_ARGS", agent_args.join(","));
     match &resolved_mcp_command {

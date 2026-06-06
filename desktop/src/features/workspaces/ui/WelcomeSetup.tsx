@@ -4,6 +4,13 @@ import { getIdentity } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
+import {
+  DEFAULT_PUBLIC_RELAYS,
+  DEFAULT_SERVERLESS_RELAY,
+  normalizeRelayList,
+  relayListIncludes,
+  toggleRelayInList,
+} from "../defaultRelays";
 import { initFirstWorkspace, deriveWorkspaceName } from "../workspaceStorage";
 
 const LOCAL_RELAY_URL = "ws://localhost:3000";
@@ -19,8 +26,21 @@ export function WelcomeSetup({
 }: WelcomeSetupProps) {
   const isInternalBuild = defaultRelayUrl !== LOCAL_RELAY_URL;
   const [relayUrl, setRelayUrl] = React.useState(defaultRelayUrl);
+  const [serverless, setServerless] = React.useState(false);
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  const handleServerlessChange = React.useCallback(
+    (checked: boolean) => {
+      setServerless(checked);
+      setError(null);
+      // Offer a sensible public relay default when flipping into serverless.
+      if (checked && (relayUrl.trim() === "" || relayUrl === defaultRelayUrl)) {
+        setRelayUrl(DEFAULT_SERVERLESS_RELAY);
+      }
+    },
+    [relayUrl, defaultRelayUrl],
+  );
 
   const handleConnect = React.useCallback(async () => {
     const trimmedUrl = relayUrl.trim();
@@ -37,7 +57,11 @@ export function WelcomeSetup({
       // labels, etc.). The private key lives on disk in `identity.key` and
       // is the single source of truth — never copied into localStorage.
       const identity = await getIdentity();
-      initFirstWorkspace(trimmedUrl, identity.pubkey);
+      initFirstWorkspace(
+        serverless ? normalizeRelayList(trimmedUrl) : trimmedUrl,
+        identity.pubkey,
+        serverless ? "serverless" : "sprout",
+      );
 
       // The reload triggered by onComplete() will re-run useWorkspaceInit,
       // which calls applyWorkspace with the saved config. No need to apply here.
@@ -48,7 +72,7 @@ export function WelcomeSetup({
       );
       setIsConnecting(false);
     }
-  }, [relayUrl, onComplete]);
+  }, [relayUrl, serverless, onComplete]);
 
   const workspaceName = React.useMemo(
     () => deriveWorkspaceName(relayUrl.trim() || LOCAL_RELAY_URL),
@@ -71,7 +95,24 @@ export function WelcomeSetup({
         </p>
 
         <div className="mt-6 space-y-4">
-          {!isInternalBuild ? (
+          <label className="flex items-start gap-2.5 rounded-md border border-border/70 bg-muted/40 p-3">
+            <input
+              checked={serverless}
+              className="mt-0.5 h-4 w-4 accent-primary"
+              onChange={(e) => handleServerlessChange(e.target.checked)}
+              type="checkbox"
+            />
+            <span className="flex flex-col gap-0.5 text-left">
+              <span className="text-sm font-medium text-foreground">
+                Serverless mode
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Use a generic public Nostr relay — no Sprout server. Channels,
+                DMs, and agents only.
+              </span>
+            </span>
+          </label>
+          {!isInternalBuild || serverless ? (
             <div className="space-y-1.5">
               <label
                 className="text-xs font-medium text-muted-foreground"
@@ -85,10 +126,42 @@ export function WelcomeSetup({
                   setRelayUrl(e.target.value);
                   setError(null);
                 }}
-                placeholder="ws://localhost:3000"
+                placeholder={
+                  serverless ? DEFAULT_SERVERLESS_RELAY : "ws://localhost:3000"
+                }
                 type="url"
                 value={relayUrl}
               />
+              {serverless ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Connects to all listed relays for redundancy. Tap to
+                    add/remove.
+                  </p>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {DEFAULT_PUBLIC_RELAYS.map((relay) => {
+                      const selected = relayListIncludes(relayUrl, relay);
+                      return (
+                        <button
+                          className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
+                            selected
+                              ? "border-primary bg-primary/15 text-foreground"
+                              : "border-border bg-muted/40 text-muted-foreground hover:border-primary/60 hover:text-foreground"
+                          }`}
+                          key={relay}
+                          onClick={() => {
+                            setRelayUrl(toggleRelayInList(relayUrl, relay));
+                            setError(null);
+                          }}
+                          type="button"
+                        >
+                          {relay.replace("wss://", "")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
             </div>
           ) : null}
 

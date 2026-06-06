@@ -118,7 +118,23 @@ _ensure-sidecar-stubs:
     set -euo pipefail
     TARGET=$(rustc -vV | sed -n 's|host: ||p')
     mkdir -p desktop/src-tauri/binaries
-    for bin in sprout-acp sprout-agent sprout-dev-mcp git-credential-nostr sprout; do
+    # sprout-acp and sprout are REAL sidecars: serverless agents launch the ACP
+    # harness (sprout-acp) which shells out to the sprout CLI to post replies.
+    # A 0-byte stub here makes managed agents silently fail to launch/reply in
+    # `just dev`. Build them for real (only if missing or empty so we don't
+    # rebuild every dev start); the rest are genuine stubs (server-only paths).
+    for bin in sprout-acp sprout; do
+        f="desktop/src-tauri/binaries/${bin}-${TARGET}"
+        if [[ ! -s "$f" ]]; then
+            crate=$([[ "$bin" == "sprout" ]] && echo sprout-cli || echo "$bin")
+            echo "building real sidecar: $bin (crate $crate)"
+            cargo build -p "$crate"
+            cp "target/debug/${bin}" "$f"
+            chmod +x "$f"
+        fi
+    done
+    # sprout-mcp-server dropped on main (sprout-mcp crate deprecated, #850).
+    for bin in sprout-agent sprout-dev-mcp git-credential-nostr; do
         touch "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
 

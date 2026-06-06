@@ -14,6 +14,7 @@ import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 
 import { useManagedAgentsQuery } from "@/features/agents/hooks";
 import type { Workspace } from "@/features/workspaces/types";
+import { useIsServerless } from "@/features/workspaces/ServerlessContext";
 import { AddWorkspaceDialog } from "@/features/workspaces/ui/AddWorkspaceDialog";
 import { useDeferredLoad } from "@/shared/hooks/useDeferredStartup";
 import {
@@ -216,6 +217,9 @@ export function AppSidebar({
   onStarChannel,
   onUnstarChannel,
 }: AppSidebarProps) {
+  // Pulse, Projects (git hosting), and Workflows are Sprout-server features
+  // with no generic-relay equivalent. Hide them in serverless mode.
+  const serverless = useIsServerless();
   const skeletonRows = ["first", "second", "third", "fourth", "fifth", "sixth"];
   const [isNewDmOpenInternal, setIsNewDmOpenInternal] = React.useState(false);
   const isNewDmOpen = isNewDmOpenProp ?? isNewDmOpenInternal;
@@ -443,30 +447,34 @@ export function AppSidebar({
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-pulse-view"
-              isActive={selectedView === "pulse"}
-              onClick={onSelectPulse}
-              tooltip="Pulse"
-              type="button"
-            >
-              <Activity className="h-4 w-4" />
-              <span>Pulse</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-projects-view"
-              isActive={selectedView === "projects"}
-              onClick={onSelectProjects}
-              tooltip="Projects"
-              type="button"
-            >
-              <FolderGit2 className="h-4 w-4" />
-              <span>Projects</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          {!serverless && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-pulse-view"
+                isActive={selectedView === "pulse"}
+                onClick={onSelectPulse}
+                tooltip="Pulse"
+                type="button"
+              >
+                <Activity className="h-4 w-4" />
+                <span>Pulse</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
+          {!serverless && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-projects-view"
+                isActive={selectedView === "projects"}
+                onClick={onSelectProjects}
+                tooltip="Projects"
+                type="button"
+              >
+                <FolderGit2 className="h-4 w-4" />
+                <span>Projects</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
           <SidebarMenuItem>
             <SidebarMenuButton
               data-testid="open-agents-view"
@@ -487,18 +495,20 @@ export function AppSidebar({
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              data-testid="open-workflows-view"
-              isActive={selectedView === "workflows"}
-              onClick={onSelectWorkflows}
-              tooltip="Workflows"
-              type="button"
-            >
-              <Zap className="h-4 w-4" />
-              <span>Workflows</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          {!serverless && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="open-workflows-view"
+                isActive={selectedView === "workflows"}
+                onClick={onSelectWorkflows}
+                tooltip="Workflows"
+                type="button"
+              >
+                <Zap className="h-4 w-4" />
+                <span>Workflows</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarHeader>
 

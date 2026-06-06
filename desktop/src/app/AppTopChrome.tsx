@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
+import { useIsServerless } from "@/features/workspaces/ServerlessContext";
 import type { Channel, SearchHit } from "@/shared/api/types";
 import { Button } from "@/shared/ui/button";
 import { SidebarTrigger, useSidebar } from "@/shared/ui/sidebar";
@@ -43,6 +44,9 @@ export function AppTopChrome({
   onOpenResult,
   searchFocusRequest,
 }: AppTopChromeProps) {
+  // Search is Typesense-backed on the Sprout relay; a generic relay can't
+  // serve it. Hide the search bar in serverless mode.
+  const serverless = useIsServerless();
   return (
     <>
       <div
@@ -76,14 +80,16 @@ export function AppTopChrome({
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
-      <TopbarSearch
-        channels={channels}
-        className="fixed left-1/2 top-[7px] z-[45] block w-[220px] max-w-[calc(100vw-11rem)] -translate-x-1/2 md:w-[300px] md:max-w-[34vw] lg:w-[360px] lg:max-w-[38vw] xl:w-[420px] xl:max-w-[42vw] 2xl:w-[480px] 2xl:max-w-[44vw]"
-        currentPubkey={currentPubkey}
-        focusRequest={searchFocusRequest}
-        onOpenChannel={onOpenChannel}
-        onOpenResult={onOpenResult}
-      />
+      {!serverless && (
+        <TopbarSearch
+          channels={channels}
+          className="fixed left-1/2 top-[7px] z-[45] block w-[220px] max-w-[calc(100vw-11rem)] -translate-x-1/2 md:w-[300px] md:max-w-[34vw] lg:w-[360px] lg:max-w-[38vw] xl:w-[420px] xl:max-w-[42vw] 2xl:w-[480px] 2xl:max-w-[44vw]"
+          currentPubkey={currentPubkey}
+          focusRequest={searchFocusRequest}
+          onOpenChannel={onOpenChannel}
+          onOpenResult={onOpenResult}
+        />
+      )}
     </>
   );
 }
