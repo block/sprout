@@ -119,14 +119,14 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
             // Default role is "member" when no role tag is present.
             let role = extract_tag_value(event, "role").unwrap_or_else(|| "member".to_string());
 
-            // Owners can add admins or members; admins can only add members.
+            // Owners can add admins, members, or viewers; admins can only add members.
             if role == "owner" {
                 return Err("invalid role: use kind:9032 to promote to owner".to_string());
             }
             if role == "admin" && sender_role != "owner" {
                 return Err("actor not authorized: only owner can grant admin role".to_string());
             }
-            if role != "admin" && role != "member" {
+            if role != "admin" && role != "member" && role != "viewer" {
                 return Err(format!("invalid role: {role}"));
             }
 
@@ -172,16 +172,25 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
             }
 
             // Dispatch removal by sender role:
-            // - Admins: atomic conditional delete, only removes 'member' targets.
+            // - Admins: atomic conditional delete, only removes member/viewer targets.
             //   This eliminates the TOCTOU race where the target could be promoted
             //   between a prior role read and the delete.
-            // - Owners: can remove admins and members, not other owners.
+            // - Owners: can remove admins, members, and viewers, not other owners.
             let remove_result = if sender_role == "admin" {
-                state
+                let result = state
                     .db
                     .remove_relay_member_if_role(&target_hex, "member")
                     .await
-                    .map_err(|e| format!("database error: {e}"))?
+                    .map_err(|e| format!("database error: {e}"))?;
+                if result == RemoveResult::RoleMismatch {
+                    state
+                        .db
+                        .remove_relay_member_if_role(&target_hex, "viewer")
+                        .await
+                        .map_err(|e| format!("database error: {e}"))?
+                } else {
+                    result
+                }
             } else {
                 // Owner path — atomic delete that refuses to remove other owners.
                 state
@@ -239,7 +248,7 @@ pub async fn handle_relay_admin_event(state: &Arc<AppState>, event: &Event) -> R
             if new_role == "owner" {
                 return Err("cannot set role to owner".to_string());
             }
-            if new_role != "admin" && new_role != "member" {
+            if new_role != "admin" && new_role != "member" && new_role != "viewer" {
                 return Err(format!("invalid role: {new_role}"));
             }
 

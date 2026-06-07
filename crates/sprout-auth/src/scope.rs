@@ -112,6 +112,20 @@ impl Scope {
         ]
     }
 
+    /// Return the read-only scope set for relay viewers.
+    ///
+    /// Viewers may read channel messages, channel/user metadata, and files needed
+    /// to render allowed channel content. They intentionally receive no write,
+    /// admin, proxy, job, subscription, or repository scopes.
+    pub fn relay_viewer_read_only() -> Vec<Scope> {
+        vec![
+            Self::MessagesRead,
+            Self::ChannelsRead,
+            Self::UsersRead,
+            Self::FilesRead,
+        ]
+    }
+
     /// Return the canonical wire-format string for this scope (e.g. `"messages:read"`).
     pub fn as_str(&self) -> &str {
         match self {
@@ -233,6 +247,24 @@ mod tests {
             !scopes.contains(&Scope::AdminUsers),
             "all_non_admin() must not contain AdminUsers"
         );
+    }
+
+    #[test]
+    fn relay_viewer_read_only_contains_only_rendering_reads() {
+        let scopes = Scope::relay_viewer_read_only();
+        assert_eq!(
+            scopes,
+            vec![
+                Scope::MessagesRead,
+                Scope::ChannelsRead,
+                Scope::UsersRead,
+                Scope::FilesRead,
+            ]
+        );
+        assert!(scopes.iter().all(|scope| scope.as_str().ends_with(":read")));
+        assert!(!scopes.contains(&Scope::ReposRead));
+        assert!(!scopes.contains(&Scope::MessagesWrite));
+        assert!(!scopes.contains(&Scope::ProxySubmit));
     }
 
     #[test]

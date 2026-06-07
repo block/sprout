@@ -174,15 +174,21 @@ impl axum::extract::FromRequestParts<Arc<AppState>> for GitAuth {
         // The ±60s timestamp window + URL scoping + HTTPS transport provide sufficient
         // replay protection for v1. Per-request signing requires protocol changes.
 
-        // Relay membership gate (NIP-43).
+        // Relay membership gate (NIP-43). Viewer identities have no repo scopes.
         let auth_tag = parts
             .headers
             .get("x-auth-tag")
             .and_then(|v| v.to_str().ok());
-        if crate::api::relay_members::enforce_relay_membership(state, pubkey.as_bytes(), auth_tag)
-            .await
-            .is_err()
-        {
+        let membership =
+            crate::api::relay_members::check_relay_membership(state, pubkey.as_bytes(), auth_tag)
+                .await;
+        let allowed = matches!(
+            membership,
+            Ok(crate::api::relay_members::MembershipDecision::OpenRelay)
+                | Ok(crate::api::relay_members::MembershipDecision::Member)
+                | Ok(crate::api::relay_members::MembershipDecision::ViaOwner(_))
+        );
+        if !allowed {
             warn!(pubkey = %pubkey.to_hex(), "git: relay membership denied");
             return Err((StatusCode::FORBIDDEN, "restricted: not a relay member").into_response());
         }

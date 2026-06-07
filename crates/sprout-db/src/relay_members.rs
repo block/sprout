@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row as _};
+use uuid::Uuid;
 
 use crate::error::Result;
 
@@ -13,7 +14,7 @@ use crate::error::Result;
 pub struct RelayMember {
     /// 64-char lowercase hex pubkey.
     pub pubkey: String,
-    /// Role: `"owner"`, `"admin"`, or `"member"`.
+    /// Role: `"owner"`, `"admin"`, `"member"`, or `"viewer"`.
     pub role: String,
     /// Hex pubkey of who added this member, or `None` for bootstrap entries.
     pub added_by: Option<String>,
@@ -53,6 +54,64 @@ pub async fn get_relay_member(pool: &PgPool, pubkey: &str) -> Result<Option<Rela
     })
     .transpose()
     .map_err(crate::error::DbError::from)
+}
+
+/// Returns the explicit channel allowlist for a relay member.
+pub async fn get_relay_member_channel_allowlist(pool: &PgPool, pubkey: &str) -> Result<Vec<Uuid>> {
+    let rows = sqlx::query(
+        "SELECT rmca.channel_id \
+         FROM relay_member_channel_allowlist rmca \
+         JOIN channels c ON c.id = rmca.channel_id AND c.deleted_at IS NULL \
+         WHERE rmca.pubkey = $1 \
+         ORDER BY rmca.created_at ASC, rmca.channel_id ASC",
+    )
+    .bind(pubkey)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|r| {
+            let id: Uuid = r.try_get("channel_id")?;
+            Ok(id)
+        })
+        .collect()
+}
+
+/// Adds a channel to a relay member's explicit allowlist.
+///
+/// Returns `true` if inserted, `false` if the grant already existed.
+pub async fn add_relay_member_channel_allowlist(
+    pool: &PgPool,
+    pubkey: &str,
+    channel_id: Uuid,
+    added_by: Option<&str>,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "INSERT INTO relay_member_channel_allowlist (pubkey, channel_id, added_by) \
+         VALUES ($1, $2, $3) ON CONFLICT (pubkey, channel_id) DO NOTHING",
+    )
+    .bind(pubkey)
+    .bind(channel_id)
+    .bind(added_by)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Removes a channel from a relay member's explicit allowlist.
+pub async fn remove_relay_member_channel_allowlist(
+    pool: &PgPool,
+    pubkey: &str,
+    channel_id: Uuid,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "DELETE FROM relay_member_channel_allowlist WHERE pubkey = $1 AND channel_id = $2",
+    )
+    .bind(pubkey)
+    .bind(channel_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 /// Returns all relay members ordered by `created_at` ascending.

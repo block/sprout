@@ -1364,6 +1364,31 @@ impl Db {
         relay_members::get_relay_member(&self.pool, pubkey).await
     }
 
+    /// Returns the explicit channel allowlist for a relay member.
+    pub async fn get_relay_member_channel_allowlist(&self, pubkey: &str) -> Result<Vec<Uuid>> {
+        relay_members::get_relay_member_channel_allowlist(&self.pool, pubkey).await
+    }
+
+    /// Adds a channel to a relay member's explicit allowlist.
+    pub async fn add_relay_member_channel_allowlist(
+        &self,
+        pubkey: &str,
+        channel_id: Uuid,
+        added_by: Option<&str>,
+    ) -> Result<bool> {
+        relay_members::add_relay_member_channel_allowlist(&self.pool, pubkey, channel_id, added_by)
+            .await
+    }
+
+    /// Removes a channel from a relay member's explicit allowlist.
+    pub async fn remove_relay_member_channel_allowlist(
+        &self,
+        pubkey: &str,
+        channel_id: Uuid,
+    ) -> Result<bool> {
+        relay_members::remove_relay_member_channel_allowlist(&self.pool, pubkey, channel_id).await
+    }
+
     /// Returns all relay members ordered by `created_at` ascending.
     pub async fn list_relay_members(&self) -> Result<Vec<relay_members::RelayMember>> {
         relay_members::list_relay_members(&self.pool).await

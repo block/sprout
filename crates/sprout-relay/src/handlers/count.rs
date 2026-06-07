@@ -30,10 +30,12 @@ pub async fn handle_count(
     state: Arc<AppState>,
 ) {
     // Require auth
-    let pubkey_bytes = {
+    let (pubkey_bytes, token_channel_ids) = {
         let auth = conn.auth_state.read().await;
         match &*auth {
-            AuthState::Authenticated(ctx) => ctx.pubkey.to_bytes().to_vec(),
+            AuthState::Authenticated(ctx) => {
+                (ctx.pubkey.to_bytes().to_vec(), ctx.channel_ids.clone())
+            }
             _ => {
                 conn.send(RelayMessage::closed(
                     &sub_id,
@@ -63,7 +65,8 @@ pub async fn handle_count(
     }
 
     // Get channels this user can access — same enforcement as WS REQ handler.
-    let accessible_channels = match state.get_accessible_channel_ids_cached(&pubkey_bytes).await {
+    let mut accessible_channels = match state.get_accessible_channel_ids_cached(&pubkey_bytes).await
+    {
         Ok(ids) => ids,
         Err(e) => {
             warn!(sub_id = %sub_id, "Failed to get accessible channels: {e}");
@@ -71,10 +74,25 @@ pub async fn handle_count(
             return;
         }
     };
+    if let Some(allowed) = token_channel_ids.as_deref() {
+        accessible_channels.retain(|channel_id| allowed.contains(channel_id));
+    }
+    let restricted_to_channel_allowlist = token_channel_ids.is_some();
 
     // For each filter, count matching events with channel access enforcement.
     let mut total: u64 = 0;
     for filter in &filters {
+        if !super::req::filter_has_allowed_channel_scope(
+            filter,
+            &accessible_channels,
+            restricted_to_channel_allowlist,
+        ) {
+            conn.send(RelayMessage::closed(
+                &sub_id,
+                "restricted: read-only viewers must scope COUNT filters to allowed channels",
+            ));
+            return;
+        }
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             // Filter targets a specific channel — verify access.
             if !accessible_channels.contains(&ch_id) {

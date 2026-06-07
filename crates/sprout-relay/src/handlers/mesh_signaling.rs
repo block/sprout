@@ -383,6 +383,13 @@ mod tests {
     }
 
     #[test]
+    fn viewer_is_not_admitted_to_mesh() {
+        assert!(!membership_admits_mesh(&MembershipDecision::Viewer {
+            channel_ids: vec![uuid::Uuid::new_v4()],
+        }));
+    }
+
+    #[test]
     fn via_owner_is_not_admitted_in_v1() {
         // Delegated identities are excluded from v1 mesh on every desktop-facing
         // path (requester / target / reporter all run through this predicate).
@@ -390,6 +397,12 @@ mod tests {
         assert!(!membership_admits_mesh(&MembershipDecision::ViaOwner(
             owner
         )));
+        assert!(!membership_admits_mesh(
+            &MembershipDecision::ViaViewerOwner {
+                owner,
+                channel_ids: vec![uuid::Uuid::new_v4()],
+            }
+        ));
     }
 
     #[test]

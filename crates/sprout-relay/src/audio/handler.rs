@@ -159,20 +159,50 @@ async fn handle_audio_connection(socket: WebSocket, state: Arc<AppState>, channe
     let pubkey_hex = pubkey.to_hex();
     let pubkey_bytes = pubkey.to_bytes().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;
+    let viewer_scope_channel_id = parent_channel_id.unwrap_or(channel_id);
 
     // ── Relay membership gate (with NIP-OA fallback) ────────────────────────────
-    if crate::api::relay_members::enforce_relay_membership(
+    let membership_decision = match crate::api::relay_members::check_relay_membership(
         &state,
         pubkey.as_bytes(),
         auth_tag_json.as_deref(),
     )
     .await
-    .is_err()
     {
-        warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
+        Ok(crate::api::relay_members::MembershipDecision::Denied) => {
+            warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
+            let _ = ws_send
+                .send(WsMessage::Text(
+                    serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+        Ok(decision) => decision,
+        Err(e) => {
+            warn!(channel_id = %channel_id, pubkey = %pubkey_hex, error = %e, "audio: relay membership check failed");
+            let _ = ws_send
+                .send(WsMessage::Text(
+                    serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+    let (_, viewer_channel_ids) =
+        crate::api::relay_members::relay_access_profile_from_decision(membership_decision);
+    if viewer_channel_ids
+        .as_ref()
+        .is_some_and(|ids| !ids.contains(&viewer_scope_channel_id))
+    {
+        warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: viewer not allowed for parent channel");
         let _ = ws_send
             .send(WsMessage::Text(
-                serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                serde_json::json!({"type": "error", "message": "restricted: not a channel member"})
                     .to_string()
                     .into(),
             ))

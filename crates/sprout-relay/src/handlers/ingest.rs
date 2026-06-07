@@ -70,6 +70,8 @@ pub enum IngestAuth {
         pubkey: nostr::PublicKey,
         /// Permission scopes granted to this request.
         scopes: Vec<Scope>,
+        /// Token-level channel restriction, if the HTTP caller is a read-only viewer.
+        channel_ids: Option<Vec<Uuid>>,
         /// How the HTTP request was authenticated.
         auth_method: HttpAuthMethod,
     },
@@ -103,12 +105,16 @@ impl IngestAuth {
         }
     }
 
-    /// Token-level channel restriction (WS connections with scoped tokens — legacy).
-    /// In pure Nostr mode this always returns None; channel access is enforced
-    /// via NIP-29 membership checks instead.
+    /// Token-level channel restriction (WS connections with scoped tokens; HTTP viewers).
+    /// In pure Nostr mode this returns None; channel access is enforced via
+    /// NIP-29 membership checks instead.
     pub fn channel_ids(&self) -> Option<&[Uuid]> {
         match self {
             Self::Nip42 {
+                channel_ids: Some(ids),
+                ..
+            }
+            | Self::Http {
                 channel_ids: Some(ids),
                 ..
             } => Some(ids),
@@ -2003,6 +2009,7 @@ mod tests {
         let http_auth = IngestAuth::Http {
             pubkey: keys.public_key(),
             scopes: vec![],
+            channel_ids: None,
             auth_method: HttpAuthMethod::Nip98,
         };
         assert!(

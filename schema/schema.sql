@@ -334,13 +334,24 @@ CREATE TABLE pubkey_allowlist (
 
 CREATE TABLE IF NOT EXISTS relay_members (
     pubkey      TEXT PRIMARY KEY,
-    role        TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+    role        TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
     added_by    TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_relay_members_role ON relay_members(role);
+
+CREATE TABLE IF NOT EXISTS relay_member_channel_allowlist (
+    pubkey      TEXT NOT NULL REFERENCES relay_members(pubkey) ON DELETE CASCADE,
+    channel_id  UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    added_by    TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (pubkey, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relay_member_channel_allowlist_channel
+    ON relay_member_channel_allowlist(channel_id);
 
 -- ── Archived identities (NIP-IA) ──────────────────────────────────────────────
 

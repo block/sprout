@@ -94,6 +94,44 @@ fn check_nip98_replay(
     Ok(())
 }
 
+/// Enforce relay membership and return any viewer channel restriction.
+///
+/// `None` means the authenticated caller has the normal unrestricted relay member
+/// profile. `Some(ids)` means the caller is a read-only viewer and every bridge
+/// read/write path must be constrained to those explicit channels.
+async fn bridge_viewer_channel_ids(
+    state: &AppState,
+    pubkey_bytes: &[u8],
+    auth_tag: Option<&str>,
+) -> Result<Option<Vec<uuid::Uuid>>, (StatusCode, Json<Value>)> {
+    match super::relay_members::check_relay_membership(state, pubkey_bytes, auth_tag).await {
+        Ok(super::relay_members::MembershipDecision::OpenRelay)
+        | Ok(super::relay_members::MembershipDecision::Member)
+        | Ok(super::relay_members::MembershipDecision::ViaOwner(_)) => Ok(None),
+        Ok(super::relay_members::MembershipDecision::Viewer { channel_ids })
+        | Ok(super::relay_members::MembershipDecision::ViaViewerOwner { channel_ids, .. }) => {
+            Ok(Some(channel_ids))
+        }
+        Ok(super::relay_members::MembershipDecision::Denied) => Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "relay_membership_required",
+                "message": "You must be a relay member to access this relay"
+            })),
+        )),
+        Err(e) => Err(internal_error(&e)),
+    }
+}
+
+fn apply_viewer_channel_scope(
+    accessible_channels: &mut Vec<uuid::Uuid>,
+    viewer_channel_ids: Option<&[uuid::Uuid]>,
+) {
+    if let Some(allowed) = viewer_channel_ids {
+        accessible_channels.retain(|channel_id| allowed.contains(channel_id));
+    }
+}
+
 /// Reconstruct the canonical URL for NIP-98 verification from the relay config.
 fn canonical_url(relay_url: &str, path: &str) -> String {
     let base = relay_url
@@ -181,16 +219,20 @@ pub async fn submit_event(
     check_nip98_replay(&state, event_id_bytes)?;
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
-    // Enforce relay membership (with NIP-OA fallback via x-auth-tag header).
+    // Enforce relay membership and derive any viewer restriction.
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
+    let viewer_channel_ids = bridge_viewer_channel_ids(&state, &pubkey_bytes, auth_tag).await?;
 
     let event: nostr::Event = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid event JSON: {e}")))?;
 
     let auth = IngestAuth::Http {
         pubkey,
-        scopes: sprout_auth::Scope::all_known(), // Pure Nostr: full scopes, channel access via membership
+        scopes: viewer_channel_ids
+            .as_ref()
+            .map(|_| sprout_auth::Scope::relay_viewer_read_only())
+            .unwrap_or_else(sprout_auth::Scope::all_known),
+        channel_ids: viewer_channel_ids,
         auth_method: crate::handlers::ingest::HttpAuthMethod::Nip98,
     };
 
@@ -230,7 +272,7 @@ pub async fn query_events(
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
+    let viewer_channel_ids = bridge_viewer_channel_ids(&state, &pubkey_bytes, auth_tag).await?;
 
     // Two-pass parse: preserve raw JSON for custom extension fields (before_id,
     // depth_limit, feed_types) that nostr::Filter silently drops.
@@ -259,14 +301,23 @@ pub async fn query_events(
     }
 
     // Get channels this user can access — same enforcement as WS REQ handler.
-    let accessible_channels = state
+    let mut accessible_channels = state
         .get_accessible_channel_ids_cached(&pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
+    apply_viewer_channel_scope(&mut accessible_channels, viewer_channel_ids.as_deref());
+
+    let restricted_to_channel_allowlist = viewer_channel_ids.is_some();
 
     // ── NIP-50 search: route to Typesense if any filter has a `search` field ──
     if filters.iter().any(|f| f.search.is_some()) {
-        return handle_bridge_search(&state, &filters, &accessible_channels).await;
+        return handle_bridge_search(
+            &state,
+            &filters,
+            &accessible_channels,
+            !restricted_to_channel_allowlist,
+        )
+        .await;
     }
 
     // ── Presence: synthesize kind:20001 from Redis (ephemeral, never in DB) ──
@@ -279,6 +330,16 @@ pub async fn query_events(
 
     // ── feed_types: route to dedicated feed query functions ──
     for (idx, (raw, filter)) in raw_filters.iter().zip(filters.iter()).enumerate() {
+        if !crate::handlers::req::filter_has_allowed_channel_scope(
+            filter,
+            &accessible_channels,
+            restricted_to_channel_allowlist,
+        ) {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "restricted: read-only viewers must scope query filters to allowed channels",
+            ));
+        }
         let feed_types = match extract_feed_types(raw) {
             Some(t) => t,
             None => continue,
@@ -409,6 +470,17 @@ pub async fn query_events(
             continue;
         }
 
+        if !crate::handlers::req::filter_has_allowed_channel_scope(
+            filter,
+            &accessible_channels,
+            restricted_to_channel_allowlist,
+        ) {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "restricted: read-only viewers must scope query filters to allowed channels",
+            ));
+        }
+
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
                 continue;
@@ -475,7 +547,7 @@ pub async fn count_events(
     let pubkey_bytes = pubkey.to_bytes().to_vec();
 
     let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
-    super::relay_members::enforce_relay_membership(&state, &pubkey_bytes, auth_tag).await?;
+    let viewer_channel_ids = bridge_viewer_channel_ids(&state, &pubkey_bytes, auth_tag).await?;
 
     let filters: Vec<nostr::Filter> = serde_json::from_slice(&body)
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, &format!("invalid filters: {e}")))?;
@@ -496,13 +568,26 @@ pub async fn count_events(
     }
 
     // Get channels this user can access.
-    let accessible_channels = state
+    let mut accessible_channels = state
         .get_accessible_channel_ids_cached(&pubkey_bytes)
         .await
         .map_err(|e| internal_error(&format!("channel access lookup: {e}")))?;
+    apply_viewer_channel_scope(&mut accessible_channels, viewer_channel_ids.as_deref());
+    let restricted_to_channel_allowlist = viewer_channel_ids.is_some();
 
     let mut total: u64 = 0;
     for filter in &filters {
+        if !crate::handlers::req::filter_has_allowed_channel_scope(
+            filter,
+            &accessible_channels,
+            restricted_to_channel_allowlist,
+        ) {
+            return Err(api_error(
+                StatusCode::FORBIDDEN,
+                "restricted: read-only viewers must scope count filters to allowed channels",
+            ));
+        }
+
         // If filter targets a specific channel, verify access.
         if let Some(ch_id) = extract_channel_from_filter(filter) {
             if !accessible_channels.contains(&ch_id) {
@@ -614,11 +699,11 @@ async fn handle_bridge_search(
     state: &AppState,
     filters: &[nostr::Filter],
     accessible_channels: &[uuid::Uuid],
+    include_global: bool,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Bridge always includes global (non-channel) events — same as WS with full scopes.
     let channel_scope = match crate::handlers::req::build_search_channel_scope_filter(
         accessible_channels,
-        true, // include_global
+        include_global,
     ) {
         Some(f) => f,
         None => return Ok(Json(Value::Array(Vec::new()))),

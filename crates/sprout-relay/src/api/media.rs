@@ -86,15 +86,24 @@ impl FromRequestParts<Arc<AppState>> for AuthenticatedUpload {
         sprout_auth::require_scope(&scopes, Scope::FilesWrite)
             .map_err(|_| MediaError::InsufficientScope)?;
 
-        // 5. Relay membership gate (NIP-43).
+        // 5. Relay membership gate (NIP-43). Viewer identities may read media
+        // for allowlisted channels via event delivery, but cannot upload.
         let auth_tag = headers.get("x-auth-tag").and_then(|v| v.to_str().ok());
-        crate::api::relay_members::enforce_relay_membership(
+        match crate::api::relay_members::check_relay_membership(
             state,
             auth_event.pubkey.as_bytes(),
             auth_tag,
         )
         .await
-        .map_err(|_| MediaError::RelayMembershipRequired)?;
+        {
+            Ok(crate::api::relay_members::MembershipDecision::OpenRelay)
+            | Ok(crate::api::relay_members::MembershipDecision::Member)
+            | Ok(crate::api::relay_members::MembershipDecision::ViaOwner(_)) => {}
+            Ok(crate::api::relay_members::MembershipDecision::Viewer { .. })
+            | Ok(crate::api::relay_members::MembershipDecision::ViaViewerOwner { .. })
+            | Ok(crate::api::relay_members::MembershipDecision::Denied)
+            | Err(_) => return Err(MediaError::RelayMembershipRequired),
+        }
 
         Ok(AuthenticatedUpload { auth_event, scopes })
     }

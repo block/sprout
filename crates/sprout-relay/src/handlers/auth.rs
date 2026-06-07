@@ -110,16 +110,28 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
             }
 
             // Relay membership gate — uses the shared helper with NIP-OA fallback.
-            let nip_oa_owner = match crate::api::relay_members::enforce_relay_membership(
+            let membership_decision = match crate::api::relay_members::check_relay_membership(
                 &state,
                 pubkey.as_bytes(),
                 auth_tag_json.as_deref(),
             )
             .await
             {
-                Ok(owner) => owner,
+                Ok(crate::api::relay_members::MembershipDecision::Denied) => {
+                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "not a relay member");
+                    metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
+                        .increment(1);
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "restricted: not a relay member",
+                    ));
+                    return;
+                }
+                Ok(decision) => decision,
                 Err(e) => {
-                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = ?e, "not a relay member");
+                    warn!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), error = %e, "relay membership check failed");
                     metrics::counter!("sprout_auth_failures_total", "reason" => "not_relay_member")
                         .increment(1);
                     *conn.auth_state.write().await = AuthState::Failed;
@@ -131,6 +143,12 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                     return;
                 }
             };
+            let (nip_oa_owner, viewer_channel_ids) =
+                crate::api::relay_members::relay_access_profile_from_decision(membership_decision);
+            if let Some(channel_ids) = viewer_channel_ids {
+                auth_ctx.scopes = sprout_auth::Scope::relay_viewer_read_only();
+                auth_ctx.channel_ids = Some(channel_ids);
+            }
 
             // Open relay NIP-OA backfill: extract owner for agent→owner DB mapping
             // (needed for observer frame auth). Only runs on open relays — on closed

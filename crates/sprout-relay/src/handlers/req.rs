@@ -90,6 +90,18 @@ pub async fn handle_req(
 
     let channel_id = extract_channel_id_from_filters(&filters);
 
+    if token_channel_ids.is_some()
+        && filters
+            .iter()
+            .any(|filter| !filter_has_allowed_channel_scope(filter, &accessible_channels, true))
+    {
+        conn.send(RelayMessage::closed(
+            &sub_id,
+            "restricted: read-only viewers must scope REQ filters to allowed channels",
+        ));
+        return;
+    }
+
     // ── #p / engram gating for globally-stored sensitive kinds ───────────────
     // Applied BEFORE the NIP-50 search branch so that an authenticated member
     // cannot use `{"search":"...","kinds":[30174]}` (or similar for p-gated
@@ -706,6 +718,22 @@ fn extract_channel_id_from_filters(filters: &[Filter]) -> Option<uuid::Uuid> {
     found_id
 }
 
+pub(crate) fn filter_has_allowed_channel_scope(
+    filter: &Filter,
+    accessible_channels: &[uuid::Uuid],
+    restricted_to_channel_allowlist: bool,
+) -> bool {
+    let h_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::H);
+    match filter.generic_tags.get(&h_tag) {
+        Some(values) if !values.is_empty() => values.iter().all(|value| {
+            value
+                .parse::<uuid::Uuid>()
+                .is_ok_and(|id| accessible_channels.contains(&id))
+        }),
+        Some(_) | None => !restricted_to_channel_allowlist,
+    }
+}
+
 pub(crate) fn p_gated_filters_authorized(filters: &[Filter], authed_pubkey_hex: &str) -> bool {
     let p_tag = nostr::SingleLetterTag::lowercase(nostr::Alphabet::P);
     filters.iter().all(|filter| {
@@ -793,6 +821,46 @@ mod tests {
             SingleLetterTag::lowercase(Alphabet::H),
             channel_id.to_string(),
         )
+    }
+
+    #[test]
+    fn filter_channel_scope_allows_only_explicit_allowed_channels_when_restricted() {
+        let allowed = uuid::Uuid::new_v4();
+        let disallowed = uuid::Uuid::new_v4();
+
+        assert!(filter_has_allowed_channel_scope(
+            &filter_with_channel(allowed),
+            &[allowed],
+            true,
+        ));
+        assert!(!filter_has_allowed_channel_scope(
+            &filter_with_channel(disallowed),
+            &[allowed],
+            true,
+        ));
+        assert!(!filter_has_allowed_channel_scope(
+            &Filter::new(),
+            &[allowed],
+            true,
+        ));
+    }
+
+    #[test]
+    fn filter_channel_scope_rejects_malformed_h_tags_for_restricted_viewers() {
+        let allowed = uuid::Uuid::new_v4();
+        let h_tag = SingleLetterTag::lowercase(Alphabet::H);
+        let malformed = Filter::new().custom_tag(h_tag, "not-a-uuid");
+
+        assert!(!filter_has_allowed_channel_scope(
+            &malformed,
+            &[allowed],
+            true,
+        ));
+    }
+
+    #[test]
+    fn filter_channel_scope_preserves_unrestricted_global_queries() {
+        assert!(filter_has_allowed_channel_scope(&Filter::new(), &[], false));
     }
 
     #[test]

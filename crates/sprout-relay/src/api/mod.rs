@@ -45,8 +45,20 @@ pub mod relay_members {
         OpenRelay,
         /// Caller is directly present in `relay_members`.
         Member,
+        /// Caller is directly present in `relay_members` with the read-only viewer role.
+        Viewer {
+            /// Explicit channel allowlist for the viewer.
+            channel_ids: Vec<uuid::Uuid>,
+        },
         /// Caller is admitted through a NIP-OA owner that is a relay member.
         ViaOwner(nostr::PublicKey),
+        /// Caller is admitted through a NIP-OA owner with the read-only viewer role.
+        ViaViewerOwner {
+            /// The verified NIP-OA owner pubkey.
+            owner: nostr::PublicKey,
+            /// Explicit channel allowlist inherited from the owner.
+            channel_ids: Vec<uuid::Uuid>,
+        },
         /// Caller is not admitted.
         Denied,
     }
@@ -62,12 +74,20 @@ pub mod relay_members {
         }
 
         let pubkey_hex = hex::encode(pubkey_bytes);
-        let is_member = state
+        let member = state
             .db
-            .is_relay_member(&pubkey_hex)
+            .get_relay_member(&pubkey_hex)
             .await
             .map_err(|e| format!("relay membership check failed: {e}"))?;
-        if is_member {
+        if let Some(member) = member {
+            if member.role == "viewer" {
+                let channel_ids = state
+                    .db
+                    .get_relay_member_channel_allowlist(&pubkey_hex)
+                    .await
+                    .map_err(|e| format!("relay viewer allowlist lookup failed: {e}"))?;
+                return Ok(MembershipDecision::Viewer { channel_ids });
+            }
             return Ok(MembershipDecision::Member);
         }
 
@@ -79,16 +99,29 @@ pub mod relay_members {
                 match sprout_sdk::nip_oa::verify_auth_tag(tag_json, &agent_pubkey) {
                     Ok(owner_pubkey) => {
                         let owner_hex = owner_pubkey.to_hex();
-                        let owner_is_member =
-                            state.db.is_relay_member(&owner_hex).await.map_err(|e| {
+                        let owner_member =
+                            state.db.get_relay_member(&owner_hex).await.map_err(|e| {
                                 format!("relay membership check (owner) failed: {e}")
                             })?;
-                        if owner_is_member {
+                        if let Some(owner_member) = owner_member {
                             debug!(
                                 agent = %pubkey_hex,
                                 owner = %owner_hex,
                                 "NIP-OA membership granted via owner"
                             );
+                            if owner_member.role == "viewer" {
+                                let channel_ids = state
+                                    .db
+                                    .get_relay_member_channel_allowlist(&owner_hex)
+                                    .await
+                                    .map_err(|e| {
+                                        format!("relay viewer allowlist lookup (owner) failed: {e}")
+                                    })?;
+                                return Ok(MembershipDecision::ViaViewerOwner {
+                                    owner: owner_pubkey,
+                                    channel_ids,
+                                });
+                            }
                             return Ok(MembershipDecision::ViaOwner(owner_pubkey));
                         }
                     }
@@ -100,6 +133,25 @@ pub mod relay_members {
         }
 
         Ok(MembershipDecision::Denied)
+    }
+
+    /// Build the restricted scopes/channel allowlist implied by a membership decision.
+    ///
+    /// Returns `(agent_owner_pubkey, channel_ids)`. The caller applies read-only
+    /// scopes when `channel_ids` is `Some`; `None` means an unrestricted relay
+    /// member/open-relay context.
+    pub fn relay_access_profile_from_decision(
+        decision: MembershipDecision,
+    ) -> (Option<nostr::PublicKey>, Option<Vec<uuid::Uuid>>) {
+        match decision {
+            MembershipDecision::OpenRelay | MembershipDecision::Member => (None, None),
+            MembershipDecision::Viewer { channel_ids } => (None, Some(channel_ids)),
+            MembershipDecision::ViaOwner(owner) => (Some(owner), None),
+            MembershipDecision::ViaViewerOwner { owner, channel_ids } => {
+                (Some(owner), Some(channel_ids))
+            }
+            MembershipDecision::Denied => (None, None),
+        }
     }
 
     /// Enforce relay membership for a pubkey, with NIP-OA agent delegation fallback.
@@ -120,7 +172,9 @@ pub mod relay_members {
     ) -> Result<Option<nostr::PublicKey>, (StatusCode, Json<serde_json::Value>)> {
         match check_relay_membership(state, pubkey_bytes, auth_tag_header).await {
             Ok(MembershipDecision::OpenRelay) | Ok(MembershipDecision::Member) => Ok(None),
+            Ok(MembershipDecision::Viewer { .. }) => Ok(None),
             Ok(MembershipDecision::ViaOwner(owner)) => Ok(Some(owner)),
+            Ok(MembershipDecision::ViaViewerOwner { owner, .. }) => Ok(Some(owner)),
             Ok(MembershipDecision::Denied) => Err((
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({
