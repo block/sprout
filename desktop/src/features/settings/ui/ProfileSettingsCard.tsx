@@ -219,9 +219,12 @@ export function ProfileSettingsCard({
     nextDisplayName,
   ]);
 
+  const hasPendingDisplayNameClearRequest =
+    currentDisplayName.length > 0 && nextDisplayName.length === 0;
+  const hasPendingAvatarClearRequest =
+    currentAvatarUrl.length > 0 && nextAvatarUrl.length === 0;
   const hasPendingClearRequest =
-    (currentDisplayName.length > 0 && nextDisplayName.length === 0) ||
-    (currentAvatarUrl.length > 0 && nextAvatarUrl.length === 0);
+    hasPendingDisplayNameClearRequest || hasPendingAvatarClearRequest;
   const hasProfileChanges = Object.keys(updatePayload).length > 0;
   const canSave =
     hasProfileChanges && !updateProfileMutation.isPending && !isUploadingAvatar;
@@ -306,8 +309,10 @@ export function ProfileSettingsCard({
     }
 
     if (!hasProfileChanges) {
-      if (hasPendingClearRequest) {
+      if (hasPendingDisplayNameClearRequest) {
         setDisplayNameDraft(currentDisplayName);
+      }
+      if (hasPendingAvatarClearRequest) {
         setAvatarUrlDraft(currentAvatarUrl);
       }
       setIsEditingProfileMetadata(false);
@@ -318,7 +323,8 @@ export function ProfileSettingsCard({
   }, [
     currentAvatarUrl,
     currentDisplayName,
-    hasPendingClearRequest,
+    hasPendingAvatarClearRequest,
+    hasPendingDisplayNameClearRequest,
     hasProfileChanges,
     isEditingProfileMetadata,
     saveProfile,
@@ -326,6 +332,9 @@ export function ProfileSettingsCard({
 
   const handleAvatarEditorDone = React.useCallback(() => {
     if (!hasProfileChanges) {
+      if (hasPendingAvatarClearRequest) {
+        setAvatarUrlDraft(currentAvatarUrl);
+      }
       setIsAvatarEditorOpen(false);
       return;
     }
@@ -335,7 +344,12 @@ export function ProfileSettingsCard({
         setIsAvatarEditorOpen(false);
       }
     });
-  }, [hasProfileChanges, saveProfile]);
+  }, [
+    currentAvatarUrl,
+    hasPendingAvatarClearRequest,
+    hasProfileChanges,
+    saveProfile,
+  ]);
 
   const animateEmojiAvatarChange = React.useCallback(() => {
     setAvatarSquishKey((key) => key + 1);

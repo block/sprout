@@ -319,13 +319,25 @@ test("uploads local profile avatar files before saving", async ({ page }) => {
   await page.getByTestId("profile-avatar-edit").click();
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue("");
 
-  const pastedAvatarUrl = "https://example.com/change-my-mind.png";
+  const pastedAvatarUrl = await page.evaluate(
+    () => new URL("/sprout.svg", window.location.href).href,
+  );
   await page.getByTestId("profile-avatar-url").click();
   await page.keyboard.insertText(pastedAvatarUrl);
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(
     pastedAvatarUrl,
   );
   await page.getByTestId("profile-avatar-done").click();
+  await waitForAvatarEditorToClose(page);
+  await page.getByTestId("profile-avatar-edit").click();
+  await expect(page.getByTestId("profile-avatar-url")).toHaveValue(
+    pastedAvatarUrl,
+  );
+  await page.getByTestId("profile-avatar-url").fill("");
+  await page.getByTestId("profile-avatar-done").click();
+  await expect(
+    page.getByTestId("profile-avatar-preview").locator("img"),
+  ).toHaveCount(1);
   await waitForAvatarEditorToClose(page);
   await page.getByTestId("profile-avatar-edit").click();
   await expect(page.getByTestId("profile-avatar-url")).toHaveValue(
