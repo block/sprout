@@ -107,6 +107,8 @@ export function ProfileAvatarEditor({
     [customHue, customSaturation, customValue],
   );
   const shouldShowColorControls = mode === "emoji" && selectedEmoji !== null;
+  const isCustomColorPickerVisible =
+    isCustomColorPickerOpen && shouldShowColorControls;
   const handleUploadSuccess = React.useCallback(
     (uploadedUrl: string) => {
       setUrlDraft("");
@@ -657,9 +659,10 @@ export function ProfileAvatarEditor({
                 </div>
 
                 <div
+                  aria-hidden={!isCustomColorPickerVisible}
                   className={cn(
                     "absolute inset-0 z-40 flex origin-bottom flex-col rounded-xl bg-muted p-4 transition-[opacity,transform] duration-150 ease-out",
-                    isCustomColorPickerOpen && shouldShowColorControls
+                    isCustomColorPickerVisible
                       ? "pointer-events-auto translate-y-0 scale-y-100 opacity-100"
                       : "pointer-events-none translate-y-8 scale-y-[0.94] opacity-0",
                   )}
@@ -796,7 +799,7 @@ export function ProfileAvatarEditor({
                     onPointerUp={unlockHueDragSelection}
                     onLostPointerCapture={unlockHueDragSelection}
                     role="slider"
-                    tabIndex={0}
+                    tabIndex={isCustomColorPickerVisible ? 0 : -1}
                   >
                     <div
                       aria-hidden="true"
@@ -814,6 +817,7 @@ export function ProfileAvatarEditor({
                     className="mt-3 h-12 w-full rounded-xl bg-background px-6 text-sm font-medium text-foreground transition-colors hover:bg-background/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     data-testid={`${testIdPrefix}-custom-color-done`}
                     onClick={commitCustomColor}
+                    tabIndex={isCustomColorPickerVisible ? 0 : -1}
                     type="button"
                   >
                     Use color
