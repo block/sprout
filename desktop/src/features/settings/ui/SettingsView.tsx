@@ -16,7 +16,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarRail,
+  useSidebar,
 } from "@/shared/ui/sidebar";
 import {
   renderSettingsSection,
@@ -112,6 +112,7 @@ export function SettingsView({
   onSetSoundEnabled,
   section,
 }: SettingsViewProps) {
+  const { isMobile, open: sidebarOpen, setOpen: setSidebarOpen } = useSidebar();
   const myMembershipQuery = useMyRelayMembershipQuery();
   const visibleSections = React.useMemo(() => {
     const membership = myMembershipQuery.data;
@@ -143,6 +144,12 @@ export function SettingsView({
       onSectionChange(visibleSections[0]?.value ?? "appearance");
     }
   }, [onSectionChange, section, visibleSections]);
+
+  React.useEffect(() => {
+    if (!isMobile && !sidebarOpen) {
+      setSidebarOpen(true);
+    }
+  }, [isMobile, setSidebarOpen, sidebarOpen]);
 
   React.useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -229,7 +236,6 @@ export function SettingsView({
             </p>
           ) : null}
         </SidebarFooter>
-        <SidebarRail />
       </Sidebar>
 
       <SidebarInset
