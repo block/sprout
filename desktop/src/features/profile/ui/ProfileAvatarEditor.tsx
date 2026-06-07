@@ -127,7 +127,7 @@ export function ProfileAvatarEditor({
   } = useAvatarUpload({ onUploadSuccess: handleUploadSuccess });
   const isInputDisabled = disabled || isUploading;
 
-  useEmojiMartStyles(emojiPickerContainerRef);
+  useEmojiMartStyles(emojiPickerContainerRef, mode === "emoji");
 
   React.useEffect(() => {
     onUploadingChange?.(isUploading);
@@ -367,7 +367,7 @@ export function ProfileAvatarEditor({
     <fieldset
       className="mx-auto w-full max-w-[576px] border-0 p-0 text-sm"
       data-testid={`${testIdPrefix}-editor`}
-      disabled={disabled}
+      disabled={isInputDisabled}
       onDragEnter={(event) => {
         if (!dataTransferHasImage(event.dataTransfer)) {
           return;
@@ -423,7 +423,12 @@ export function ProfileAvatarEditor({
         <div className="relative grid w-full gap-4">
           <Tabs
             className="w-full"
-            onValueChange={(nextMode) => setMode(nextMode as AvatarMode)}
+            onValueChange={(nextMode) => {
+              if (isInputDisabled) {
+                return;
+              }
+              setMode(nextMode as AvatarMode);
+            }}
             value={mode}
           >
             <TabsList
@@ -440,12 +445,14 @@ export function ProfileAvatarEditor({
               />
               <TabsTrigger
                 className="relative z-10 h-full rounded-full bg-transparent text-sm font-medium shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                disabled={isInputDisabled}
                 value="image"
               >
                 Image
               </TabsTrigger>
               <TabsTrigger
                 className="relative z-10 h-full rounded-full bg-transparent text-sm font-medium shadow-none transition-colors data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                disabled={isInputDisabled}
                 value="emoji"
               >
                 Emoji
@@ -564,6 +571,9 @@ export function ProfileAvatarEditor({
                       emoji: EmojiMartEmoji,
                       event?: MouseEvent,
                     ) => {
+                      if (isInputDisabled) {
+                        return;
+                      }
                       if (!emoji.native) {
                         return;
                       }

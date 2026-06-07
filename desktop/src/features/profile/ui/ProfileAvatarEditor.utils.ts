@@ -443,8 +443,13 @@ export function visibleUrlDraft(
 
 export function useEmojiMartStyles(
   containerRef: React.RefObject<HTMLDivElement | null>,
+  enabled: boolean,
 ) {
   React.useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     let animationFrame = 0;
 
     const installEmojiMartStyles = () => {
@@ -469,7 +474,7 @@ export function useEmojiMartStyles(
     return () => {
       window.cancelAnimationFrame(animationFrame);
     };
-  }, [containerRef]);
+  }, [containerRef, enabled]);
 }
 
 export function useEmojiMartThemeVars() {
