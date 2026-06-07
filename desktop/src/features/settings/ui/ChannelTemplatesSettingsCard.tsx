@@ -103,12 +103,12 @@ export function ChannelTemplatesSettingsCard() {
 
   return (
     <section className="min-w-0" data-testid="settings-channel-templates">
-      <div className="mb-3 flex items-start justify-between gap-4 min-w-0">
+      <div className="mb-12 flex min-w-0 items-start justify-between gap-4">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold tracking-tight">
+          <h2 className="text-2xl font-semibold tracking-tight">
             Channel Templates
           </h2>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base font-normal text-muted-foreground">
             Save reusable channel configurations and apply them when creating
             new channels.
           </p>
@@ -222,7 +222,7 @@ function TemplateRow({
           ) : null}
         </div>
         {template.description ? (
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          <p className="mt-0.5 truncate text-sm font-normal text-muted-foreground">
             {template.description}
           </p>
         ) : null}
@@ -609,7 +609,7 @@ function TemplateTeamSelector({
     <div className="space-y-3">
       <div>
         <div className="text-sm font-medium">Teams</div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm font-normal text-muted-foreground">
           Select teams to include in this template.
         </p>
       </div>
@@ -688,7 +688,7 @@ function ProviderAssignments({
     <div className="space-y-3">
       <div>
         <div className="text-sm font-medium">Runtime providers</div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm font-normal text-muted-foreground">
           Choose which runtime to use for each agent.
         </p>
       </div>
