@@ -21,6 +21,8 @@ type AnimatedCountProps = {
   value: number;
 };
 
+const ANIMATED_COUNT_SETTLE_DELAY_MS = 260;
+
 function directionFor(previous: number, current: number): CountDirection {
   if (current > previous) return 1;
   if (current < previous) return -1;
@@ -125,6 +127,36 @@ export function AnimatedCount({ className, value }: AnimatedCountProps) {
       };
     });
   }, [formattedValue, normalizedValue]);
+
+  React.useEffect(() => {
+    if (
+      transition.direction === 0 ||
+      transition.previous === transition.current
+    ) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setTransition((currentTransition) => {
+        if (currentTransition.version !== transition.version) {
+          return currentTransition;
+        }
+
+        return {
+          ...currentTransition,
+          direction: 0,
+          previous: currentTransition.current,
+        };
+      });
+    }, ANIMATED_COUNT_SETTLE_DELAY_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    transition.current,
+    transition.direction,
+    transition.previous,
+    transition.version,
+  ]);
 
   const slots = getAnimatedCountSlots(transition.previous, transition.current);
 

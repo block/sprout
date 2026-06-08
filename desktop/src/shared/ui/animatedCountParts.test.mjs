@@ -23,3 +23,12 @@ test("getAnimatedCountSlots right-aligns digits for rollover", () => {
     { current: "0", isDigit: true, place: 0, previous: "9" },
   ]);
 });
+
+test("getAnimatedCountSlots shrinks to current width after settling", () => {
+  assert.equal(getAnimatedCountSlots("1,000", "999").length, 5);
+  assert.deepEqual(getAnimatedCountSlots("999", "999"), [
+    { current: "9", isDigit: true, place: 2, previous: "9" },
+    { current: "9", isDigit: true, place: 1, previous: "9" },
+    { current: "9", isDigit: true, place: 0, previous: "9" },
+  ]);
+});
