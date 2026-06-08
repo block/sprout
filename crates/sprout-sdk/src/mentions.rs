@@ -16,17 +16,9 @@
 //! explicit mentions ──► normalize ──► merge_mentions ──► p-tags
 //! ```
 //!
-//! For callers that have the set of known member display names available
-//! upfront, [`extract_at_mentions_with_known`] provides a two-pass approach
-//! that correctly handles multi-word display names (e.g. "Will Pfleger"):
-//!
-//! ```text
-//! body text + known_names ──► extract_at_mentions_with_known ──► names: Vec<String>
-//!                                                                      │
-//!                                                    direct name→pubkey lookup
-//!                                                                      │
-//!                                                              p-tags (merged)
-//! ```
+//! When the set of known member names is available upfront,
+//! [`extract_at_mentions_with_known`] replaces the first step to correctly
+//! handle multi-word display names.
 //!
 //! See [`crate::mentions::MENTION_CAP`] for the hard upper bound on tags.
 
@@ -51,7 +43,10 @@ pub struct MentionProfile<'a> {
     pub content_json: &'a str,
 }
 
-/// Extract `@mention` names from message content.
+/// Extract single-word `@mention` names from message content.
+///
+/// Prefer [`extract_at_mentions_with_known`] when known member names are
+/// available — it correctly handles multi-word display names.
 ///
 /// Returns lowercased names found after `@` tokens. An `@name` only matches
 /// when the `@` is at start-of-string or preceded by an ASCII whitespace
@@ -96,128 +91,63 @@ pub fn extract_at_names(content: &str) -> Vec<String> {
     names
 }
 
-/// Extract `@mention` names from message content when the set of known member
-/// display names is available upfront.
+/// Extract `@mention` names from message content using known member names.
 ///
-/// Uses a two-pass approach to correctly handle multi-word display names
-/// (e.g. "Will Pfleger"):
-///
-/// **Pass 1 — known-name matching:** At each `@` token (preceded by
-/// start-of-string or ASCII whitespace), try each known name longest-first,
-/// case-insensitively. A match is accepted only when the name is followed by a
-/// word boundary (whitespace, common punctuation, or end-of-string). When a
-/// known name matches, the lowercased name is emitted and the scan advances
-/// past the entire matched name.
-///
-/// **Pass 2 — single-word fallback:** If no known name matches at a given `@`,
-/// falls back to the existing single-word tokenizer (alphanumeric + `.` `-`
-/// `_`) so that `@alice` still works even when Alice's profile hasn't been
-/// fetched yet.
-///
-/// `known_names` should be the display names (or `name` fallbacks) of all
-/// channel members. Duplicates and empty strings are ignored. The function
-/// does **not** require `known_names` to be pre-sorted — it sorts
-/// longest-first internally.
-///
-/// Returns lowercased names in first-seen order, deduplicated.
+/// At each `@` preceded by whitespace or start-of-string, tries known names
+/// longest-first (case-insensitive, word-boundary-checked), then falls back
+/// to single-word tokenization. Returns lowercased names in first-seen order,
+/// deduplicated. Empty/whitespace-only entries in `known_names` are ignored.
 pub fn extract_at_mentions_with_known(content: &str, known_names: &[&str]) -> Vec<String> {
     if content.is_empty() || !content.contains('@') {
         return vec![];
     }
 
-    // Sort known names longest-first so multi-word names beat their prefixes.
-    let mut sorted_known: Vec<&str> = known_names
+    let mut sorted: Vec<&str> = known_names
         .iter()
         .copied()
         .filter(|n| !n.trim().is_empty())
         .collect();
-    sorted_known.sort_by_key(|k| std::cmp::Reverse(k.len()));
+    sorted.sort_by_key(|k| std::cmp::Reverse(k.len()));
 
-    let mut names: Vec<String> = Vec::new();
+    let mut names = Vec::new();
     let mut seen = HashSet::new();
-    let chars: Vec<char> = content.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
 
-    while i < len {
-        if chars[i] == '@' {
-            let preceded_by_ws = i == 0 || chars[i - 1].is_ascii_whitespace();
-            if preceded_by_ws && i + 1 < len {
-                // Build the remaining content after '@' as a &str for prefix matching.
-                let after_at: String = chars[i + 1..].iter().collect();
-
-                // Pass 1: try each known name (longest-first).
-                let mut matched: Option<(String, usize)> = None;
-                for known in &sorted_known {
-                    if after_at.len() < known.len() {
-                        continue;
-                    }
-                    // Use get() to safely handle byte boundaries — known.len()
-                    // may land mid-character when content contains multi-byte
-                    // UTF-8 (e.g. CJK, emoji). If the slice isn't on a char
-                    // boundary, skip this candidate.
-                    let candidate = match after_at.get(..known.len()) {
-                        Some(s) => s,
-                        None => continue,
-                    };
-                    if !candidate.eq_ignore_ascii_case(known) {
-                        continue;
-                    }
-                    // Word-boundary check: must be followed by whitespace,
-                    // common punctuation, or end-of-string.
-                    let after_name = &after_at[known.len()..];
-                    let boundary = after_name.is_empty()
-                        || after_name
-                            .chars()
-                            .next()
-                            .map(|c| {
-                                c.is_ascii_whitespace()
-                                    || matches!(
-                                        c,
-                                        ',' | ';' | '.' | '!' | '?' | ':' | ')' | ']' | '}'
-                                    )
-                            })
-                            .unwrap_or(true);
-                    if boundary {
-                        // Advance i past '@' + matched name length (in chars).
-                        let name_char_len = known.chars().count();
-                        matched = Some((known.to_ascii_lowercase(), name_char_len));
-                        break;
-                    }
-                }
-
-                if let Some((lower, char_len)) = matched {
-                    if seen.insert(lower.clone()) {
-                        names.push(lower);
-                    }
-                    // Skip past '@' + the matched name chars.
-                    i += 1 + char_len;
-                    continue;
-                }
-
-                // Pass 2: single-word fallback (alphanumeric + . - _).
-                let start = i + 1;
-                let mut end = start;
-                while end < len {
-                    let c = chars[end];
-                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
-                        end += 1;
-                    } else {
-                        break;
-                    }
-                }
-                if end > start {
-                    let name: String = chars[start..end].iter().collect();
-                    let lower = name.to_ascii_lowercase();
-                    if seen.insert(lower.clone()) {
-                        names.push(lower);
-                    }
-                }
-            }
+    for (i, _) in content.match_indices('@') {
+        let preceded = i == 0 || content.as_bytes()[i - 1].is_ascii_whitespace();
+        if !preceded {
+            continue;
         }
-        i += 1;
+        let rest = &content[i + 1..];
+        if rest.is_empty() {
+            continue;
+        }
+
+        let lower = if let Some(&known) = sorted.iter().find(|&&k| {
+            rest.get(..k.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(k) && is_word_boundary(&rest[k.len()..]))
+        }) {
+            known.to_ascii_lowercase()
+        } else {
+            let end = rest
+                .find(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '.' | '-' | '_'))
+                .unwrap_or(rest.len());
+            if end == 0 {
+                continue;
+            }
+            rest[..end].to_ascii_lowercase()
+        };
+
+        if seen.insert(lower.clone()) {
+            names.push(lower);
+        }
     }
     names
+}
+
+fn is_word_boundary(s: &str) -> bool {
+    s.chars().next().is_none_or(|c| {
+        c.is_ascii_whitespace() || matches!(c, ',' | ';' | '.' | '!' | '?' | ':' | ')' | ']' | '}')
+    })
 }
 
 /// Match extracted `@names` against channel-member profiles.

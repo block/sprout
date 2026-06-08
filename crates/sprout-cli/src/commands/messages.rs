@@ -8,9 +8,7 @@ use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
-use sprout_sdk::mentions::{
-    extract_at_mentions_with_known, match_names_to_profiles, MentionProfile,
-};
+use sprout_sdk::mentions::extract_at_mentions_with_known;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -124,22 +122,15 @@ async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uui
 
 /// Resolve `@name` mentions in `content` against this channel's members.
 ///
-/// Mirrors the MCP implementation: queries kind 39002 (channel members),
-/// then kind 0 (profiles for those members), and delegates parsing and
-/// case-insensitive matching to [`sprout_sdk::mentions`].
-///
-/// Uses [`extract_at_mentions_with_known`] so that multi-word display names
-/// (e.g. "Will Pfleger") are matched correctly — the known member names are
-/// extracted from profiles first and passed into the two-pass extractor.
-///
-/// On any I/O or parse failure, returns an empty vec — auto-tagging is
-/// best-effort and must never block a send.
+/// Queries kind 39002 (channel members) then kind 0 (profiles), parses
+/// display names once, and feeds them to [`extract_at_mentions_with_known`]
+/// for multi-word matching. On any I/O or parse failure, returns an empty
+/// vec — auto-tagging is best-effort and must never block a send.
 async fn resolve_content_mentions(
     client: &SproutClient,
     channel_id: &str,
     content: &str,
 ) -> Vec<String> {
-    // Quick pre-check: if there's no '@' at all we can skip all I/O.
     if !content.contains('@') {
         return vec![];
     }
@@ -166,43 +157,46 @@ async fn resolve_content_mentions(
         None => return vec![],
     };
 
-    // 3. Build profile entries and extract display names for the two-pass extractor.
-    let entries: Vec<MentionProfile<'_>> = profile_events
-        .iter()
-        .filter_map(|e| {
-            let pubkey = e.get("pubkey")?.as_str()?;
-            let content_json = e.get("content")?.as_str()?;
-            Some(MentionProfile {
-                pubkey,
-                content_json,
-            })
-        })
-        .collect();
-
-    // Extract the display names (with `name` fallback) from each profile so
-    // the two-pass extractor can match multi-word names like "Will Pfleger".
-    let display_names: Vec<String> = entries
-        .iter()
-        .filter_map(|e| {
-            let v: serde_json::Value = serde_json::from_str(e.content_json).ok()?;
-            let name = v
-                .get("display_name")
-                .or_else(|| v.get("name"))
-                .and_then(|n| n.as_str())
-                .filter(|n| !n.is_empty())?;
-            Some(name.to_string())
-        })
-        .collect();
+    // 3. Single parse: extract (pubkey, display_name) pairs from profile JSON.
+    let mut name_to_pubkeys: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut display_names: Vec<String> = Vec::new();
+    for e in &profile_events {
+        let Some(pubkey) = e.get("pubkey").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(content_json) = e.get("content").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(content_json) else {
+            continue;
+        };
+        let Some(name) = v
+            .get("display_name")
+            .or_else(|| v.get("name"))
+            .and_then(|n| n.as_str())
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        let lower = name.to_ascii_lowercase();
+        name_to_pubkeys
+            .entry(lower)
+            .or_default()
+            .push(pubkey.to_string());
+        display_names.push(name.to_string());
+    }
 
     // 4. Two-pass extraction: known multi-word names first, single-word fallback.
     let known_refs: Vec<&str> = display_names.iter().map(|s| s.as_str()).collect();
     let names = extract_at_mentions_with_known(content, &known_refs);
-    if names.is_empty() {
-        return vec![];
-    }
 
-    // 5. Map matched names back to pubkeys via the shared profile matcher.
-    match_names_to_profiles(&names, &entries)
+    // 5. Look up matched names → pubkeys via the map we already built.
+    names
+        .iter()
+        .flat_map(|n| name_to_pubkeys.get(n).into_iter().flatten())
+        .cloned()
+        .collect()
 }
 
 /// Fetch raw events for `filter` via the relay's `/query` endpoint.
@@ -736,7 +730,9 @@ pub async fn dispatch(
 mod tests {
     use super::{find_root_from_tags, parse_member_pubkeys};
     use serde_json::json;
-    use sprout_sdk::mentions::{extract_at_names, match_names_to_profiles, MentionProfile};
+    use sprout_sdk::mentions::{
+        extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
+    };
 
     const ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -864,6 +860,53 @@ mod tests {
         let names = extract_at_names("hello @alice and @CAROL");
         let resolved = match_names_to_profiles(&names, &entries);
         assert_eq!(resolved, vec![PK_VALID_A, PK_VALID_C]);
+    }
+
+    #[test]
+    fn cli_pipeline_resolves_multiword_display_names() {
+        let profile_events: Vec<serde_json::Value> = vec![
+            json!({
+                "pubkey": PK_VALID_A,
+                "content": r#"{"display_name":"Will Pfleger"}"#,
+            }),
+            json!({
+                "pubkey": PK_VALID_B,
+                "content": r#"{"display_name":"Alice"}"#,
+            }),
+        ];
+
+        // Simulate the single-parse pipeline from resolve_content_mentions.
+        let mut name_to_pubkeys: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut display_names: Vec<String> = Vec::new();
+        for e in &profile_events {
+            let pubkey = e.get("pubkey").unwrap().as_str().unwrap();
+            let content_json = e.get("content").unwrap().as_str().unwrap();
+            let v: serde_json::Value = serde_json::from_str(content_json).unwrap();
+            let name = v
+                .get("display_name")
+                .or_else(|| v.get("name"))
+                .and_then(|n| n.as_str())
+                .filter(|n| !n.is_empty())
+                .unwrap();
+            let lower = name.to_ascii_lowercase();
+            name_to_pubkeys
+                .entry(lower)
+                .or_default()
+                .push(pubkey.to_string());
+            display_names.push(name.to_string());
+        }
+
+        let known_refs: Vec<&str> = display_names.iter().map(|s| s.as_str()).collect();
+        let names = extract_at_mentions_with_known("hey @Will Pfleger and @alice!", &known_refs);
+        assert_eq!(names, vec!["will pfleger", "alice"]);
+
+        let resolved: Vec<String> = names
+            .iter()
+            .flat_map(|n| name_to_pubkeys.get(n).into_iter().flatten())
+            .cloned()
+            .collect();
+        assert_eq!(resolved, vec![PK_VALID_A, PK_VALID_B]);
     }
 
     #[test]

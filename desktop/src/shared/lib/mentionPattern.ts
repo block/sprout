@@ -5,6 +5,8 @@ export function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const NEVER_MATCH = /(?!)/gi;
+
 /**
  * Build a regex that matches a given prefix followed by known multi-word names
  * (longest-first to avoid partial matches). When known names are provided,
@@ -33,9 +35,7 @@ export function buildPrefixPattern(
     if (options?.fallbackToGeneric) {
       return new RegExp(`${escapedPrefix}\\S+`, "gi");
     }
-    // No known names and no fallback requested — don't highlight anything.
-    // Prevents false-positive mention styling for messages without p-tags.
-    return /(?!)/gi; // never matches
+    return NEVER_MATCH;
   }
 
   const nameAlternatives = sorted.map((name) => escapeRegExp(name)).join("|");
