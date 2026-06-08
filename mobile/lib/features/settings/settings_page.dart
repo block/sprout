@@ -31,149 +31,174 @@ class SettingsPage extends HookConsumerWidget {
 
     return FrostedScaffold(
       appBar: const FrostedAppBar(title: Text('Settings')),
-      body: ListView(
-        padding: EdgeInsets.only(
-          top: frostedAppBarHeight(context),
-          bottom: Grid.xs,
-        ),
+      body: Column(
         children: [
-          const SizedBox(height: Grid.xxs),
-
-          // Status — flush header row, like Slack's profile/status block.
-          _StatusRow(),
-
-          // Appearance
-          AppListSection(
-            label: 'Appearance',
-            children: [
-              AppListRow(
-                icon: LucideIcons.palette,
-                title: 'Color Scheme',
-                subtitle: selectedScheme == null
-                    ? 'Default (Catppuccin)'
-                    : findTheme(selectedScheme)?.displayName ?? selectedScheme,
-                trailing: Icon(
-                  LucideIcons.chevronRight,
-                  size: 18,
-                  color: context.colors.onSurfaceVariant,
-                ),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ThemePickerPage(),
-                  ),
-                ),
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.only(
+                top: frostedAppBarHeight(context),
+                bottom: Grid.xs,
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  Grid.xs,
-                  Grid.xxs,
-                  Grid.xs,
-                  Grid.twelve,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: Grid.xxs),
+
+                // Status — flush header row, like Slack's profile/status block.
+                _StatusRow(),
+
+                // Appearance
+                AppListSection(
+                  label: 'Appearance',
                   children: [
-                    Text(
-                      'Accent Color',
-                      style: context.textTheme.bodyMedium?.copyWith(
+                    AppListRow(
+                      icon: LucideIcons.palette,
+                      title: 'Color Scheme',
+                      subtitle: selectedScheme == null
+                          ? 'Default (Catppuccin)'
+                          : findTheme(selectedScheme)?.displayName ??
+                                selectedScheme,
+                      trailing: Icon(
+                        LucideIcons.chevronRight,
+                        size: 18,
                         color: context.colors.onSurfaceVariant,
                       ),
-                    ),
-                    const SizedBox(height: Grid.twelve),
-                    Wrap(
-                      spacing: Grid.xxs,
-                      runSpacing: Grid.xxs,
-                      children: [
-                        // Default (Mauve) swatch
-                        _AccentSwatch(
-                          color: context.colors.brightness == Brightness.light
-                              ? const Color(0xFF8839EF)
-                              : const Color(0xFFA875F5),
-                          label: 'Mauve',
-                          selected: selectedAccent == defaultAccentIndex,
-                          onTap: () => ref
-                              .read(accentProvider.notifier)
-                              .setAccent(defaultAccentIndex),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ThemePickerPage(),
                         ),
-                        for (var i = 0; i < accentColors.length; i++)
-                          _AccentSwatch(
-                            color: context.colors.brightness == Brightness.light
-                                ? accentColors[i].light
-                                : accentColors[i].dark,
-                            label: accentColors[i].name,
-                            selected: selectedAccent == i,
-                            onTap: () =>
-                                ref.read(accentProvider.notifier).setAccent(i),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        Grid.xs,
+                        Grid.xxs,
+                        Grid.xs,
+                        Grid.twelve,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Accent Color',
+                            style: context.textTheme.bodyMedium?.copyWith(
+                              color: context.colors.onSurfaceVariant,
+                            ),
                           ),
-                      ],
+                          const SizedBox(height: Grid.twelve),
+                          Wrap(
+                            spacing: Grid.xxs,
+                            runSpacing: Grid.xxs,
+                            children: [
+                              // Default (Mauve) swatch
+                              _AccentSwatch(
+                                color:
+                                    context.colors.brightness ==
+                                        Brightness.light
+                                    ? const Color(0xFF8839EF)
+                                    : const Color(0xFFA875F5),
+                                label: 'Mauve',
+                                selected: selectedAccent == defaultAccentIndex,
+                                onTap: () => ref
+                                    .read(accentProvider.notifier)
+                                    .setAccent(defaultAccentIndex),
+                              ),
+                              for (var i = 0; i < accentColors.length; i++)
+                                _AccentSwatch(
+                                  color:
+                                      context.colors.brightness ==
+                                          Brightness.light
+                                      ? accentColors[i].light
+                                      : accentColors[i].dark,
+                                  label: accentColors[i].name,
+                                  selected: selectedAccent == i,
+                                  onTap: () => ref
+                                      .read(accentProvider.notifier)
+                                      .setAccent(i),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
 
-          // Connection
-          AppListSection(
-            label: 'Connection',
-            children: [
-              AppListRow(
-                icon: LucideIcons.server,
-                title: 'Connected to',
-                subtitle: config.baseUrl,
-              ),
-              if (config.nsec != null && config.nsec!.isNotEmpty)
-                Builder(
-                  builder: (context) {
-                    final privHex = nostr.Nip19.decode(
-                      payload: config.nsec!,
-                    ).data;
-                    final pubkey = privHex.isNotEmpty
-                        ? nostr.Keys(privHex).public
-                        : 'unknown';
-                    return AppListRow(
-                      icon: LucideIcons.key,
-                      title: 'Identity (pubkey)',
-                      subtitle: pubkey,
-                      subtitleStyle: context.textTheme.bodySmall?.copyWith(
-                        color: context.colors.onSurfaceVariant,
-                        fontFamily: 'GeistMono',
-                        fontSize: 11,
-                      ),
-                      subtitleMaxLines: 2,
-                      trailing: IconButton(
-                        icon: const Icon(LucideIcons.copy, size: 16),
-                        onPressed: () async {
-                          await copyToClipboard(
-                            context,
-                            pubkey,
-                            message: 'Pubkey copied',
+                // Connection
+                AppListSection(
+                  label: 'Connection',
+                  children: [
+                    AppListRow(
+                      icon: LucideIcons.server,
+                      title: 'Connected to',
+                      subtitle: config.baseUrl,
+                    ),
+                    if (config.nsec != null && config.nsec!.isNotEmpty)
+                      Builder(
+                        builder: (context) {
+                          final privHex = nostr.Nip19.decode(
+                            payload: config.nsec!,
+                          ).data;
+                          final pubkey = privHex.isNotEmpty
+                              ? nostr.Keys(privHex).public
+                              : 'unknown';
+                          return AppListRow(
+                            icon: LucideIcons.key,
+                            title: 'Identity (pubkey)',
+                            subtitle: pubkey,
+                            subtitleStyle: context.textTheme.bodySmall
+                                ?.copyWith(
+                                  color: context.colors.onSurfaceVariant,
+                                  fontFamily: 'GeistMono',
+                                  fontSize: 11,
+                                ),
+                            subtitleMaxLines: 2,
+                            trailing: IconButton(
+                              icon: const Icon(LucideIcons.copy, size: 16),
+                              onPressed: () async {
+                                await copyToClipboard(
+                                  context,
+                                  pubkey,
+                                  message: 'Pubkey copied',
+                                );
+                              },
+                            ),
                           );
                         },
                       ),
-                    );
-                  },
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: Grid.xxs),
+                      child: Center(
+                        child: TextButton.icon(
+                          onPressed: () => _confirmSignOut(context, ref),
+                          icon: const Icon(LucideIcons.logOut, size: 18),
+                          label: const Text('Remove Workspace'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: context.colors.error,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              AppListRow(
-                icon: LucideIcons.logOut,
-                title: 'Remove Workspace',
-                titleColor: context.colors.error,
-                onTap: () => _confirmSignOut(context, ref),
-              ),
-            ],
+              ],
+            ),
           ),
-
-          if (packageInfo.hasData) ...[
-            const SizedBox(height: Grid.sm),
-            Center(
-              child: Text(
-                'v${packageInfo.data!.version}',
-                style: context.textTheme.bodySmall?.copyWith(
-                  color: context.colors.onSurfaceVariant.withValues(alpha: 0.6),
+          if (packageInfo.hasData)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: Grid.xs, top: Grid.xxs),
+                child: Center(
+                  child: Text(
+                    'v${packageInfo.data!.version}',
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.onSurfaceVariant.withValues(
+                        alpha: 0.6,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ],
         ],
       ),
     );
