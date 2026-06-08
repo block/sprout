@@ -7,6 +7,7 @@ import {
   FolderGit2,
   Home,
   PenSquare,
+  Sparkles,
   Zap,
 } from "lucide-react";
 import * as React from "react";
@@ -93,6 +94,7 @@ type AppSidebarProps = {
   selectedView:
     | "home"
     | "channel"
+    | "concierge"
     | "agents"
     | "workflows"
     | "pulse"
@@ -132,6 +134,7 @@ type AppSidebarProps = {
   ) => void;
   onRemoveWorkspace: (id: string) => void;
   onSelectAgents: () => void;
+  onSelectConcierge: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
@@ -193,6 +196,7 @@ export function AppSidebar({
   onUpdateWorkspace,
   onRemoveWorkspace,
   onSelectAgents,
+  onSelectConcierge,
   onSelectProjects,
   onSelectPulse,
   onSelectWorkflows,
@@ -442,6 +446,18 @@ export function AppSidebar({
                 {Math.min(homeBadgeCount, 99)}
               </SidebarMenuBadge>
             ) : null}
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-concierge-view"
+              isActive={selectedView === "concierge"}
+              onClick={onSelectConcierge}
+              tooltip="Concierge"
+              type="button"
+            >
+              <Sparkles className="h-4 w-4" />
+              <span>Concierge</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton

@@ -4,6 +4,7 @@ export const routes = rootRoute("root.tsx", [
   index("index.tsx"),
   route("/agents", "agents.tsx"),
   route("/pulse", "pulse.tsx"),
+  route("/concierge", "concierge.tsx"),
   route("/workflows", "workflows.tsx"),
   route("/workflows/$workflowId", "workflows.$workflowId.tsx"),
   route("/projects", "projects.tsx"),

@@ -79,6 +79,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goConcierge = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/concierge",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProjects = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -235,6 +246,7 @@ export function useAppNavigation() {
     goAgents,
     goChannel,
     goForumPost,
+    goConcierge,
     goHome,
     goProject,
     goProjects,

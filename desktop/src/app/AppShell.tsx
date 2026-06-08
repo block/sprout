@@ -74,6 +74,7 @@ type AppView =
   | "channel"
   | "agents"
   | "workflows"
+  | "concierge"
   | "pulse"
   | "projects";
 
@@ -149,6 +150,13 @@ function deriveShellRoute(pathname: string): {
     };
   }
 
+  if (pathname === "/concierge") {
+    return {
+      selectedChannelId: null,
+      selectedView: "concierge",
+    };
+  }
+
   if (pathname === "/pulse") {
     return {
       selectedChannelId: null,
@@ -186,6 +194,7 @@ export function AppShell() {
   const {
     goAgents,
     goChannel,
+    goConcierge,
     goHome,
     goProjects,
     goPulse,
@@ -816,6 +825,9 @@ export function AppShell() {
                       }}
                       onSelectAgents={() => {
                         void goAgents();
+                      }}
+                      onSelectConcierge={() => {
+                        void goConcierge();
                       }}
                       onSelectChannel={(channelId) => {
                         void goChannel(channelId);

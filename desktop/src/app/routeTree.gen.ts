@@ -8,6 +8,7 @@ import { Route as rootRouteImport } from "./routes/root";
 import { Route as workflowsRouteImport } from "./routes/workflows";
 import { Route as pulseRouteImport } from "./routes/pulse";
 import { Route as projectsRouteImport } from "./routes/projects";
+import { Route as conciergeRouteImport } from "./routes/concierge";
 import { Route as agentsRouteImport } from "./routes/agents";
 import { Route as indexRouteImport } from "./routes/index";
 import { Route as workflowsDotworkflowIdRouteImport } from "./routes/workflows.$workflowId";
@@ -28,6 +29,11 @@ const pulseRoute = pulseRouteImport.update({
 const projectsRoute = projectsRouteImport.update({
   id: "/projects",
   path: "/projects",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const conciergeRoute = conciergeRouteImport.update({
+  id: "/concierge",
+  path: "/concierge",
   getParentRoute: () => rootRouteImport,
 } as any);
 const agentsRoute = agentsRouteImport.update({
@@ -65,6 +71,7 @@ const channelsDotchannelIdDotpostsDotpostIdRoute =
 export interface FileRoutesByFullPath {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
+  "/concierge": typeof conciergeRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
   "/workflows": typeof workflowsRoute;
@@ -76,6 +83,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
+  "/concierge": typeof conciergeRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
   "/workflows": typeof workflowsRoute;
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof indexRoute;
   "/agents": typeof agentsRoute;
+  "/concierge": typeof conciergeRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
   "/workflows": typeof workflowsRoute;
@@ -101,6 +110,7 @@ export interface FileRouteTypes {
   fullPaths:
     | "/"
     | "/agents"
+    | "/concierge"
     | "/projects"
     | "/pulse"
     | "/workflows"
@@ -112,6 +122,7 @@ export interface FileRouteTypes {
   to:
     | "/"
     | "/agents"
+    | "/concierge"
     | "/projects"
     | "/pulse"
     | "/workflows"
@@ -123,6 +134,7 @@ export interface FileRouteTypes {
     | "__root__"
     | "/"
     | "/agents"
+    | "/concierge"
     | "/projects"
     | "/pulse"
     | "/workflows"
@@ -135,6 +147,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   indexRoute: typeof indexRoute;
   agentsRoute: typeof agentsRoute;
+  conciergeRoute: typeof conciergeRoute;
   projectsRoute: typeof projectsRoute;
   pulseRoute: typeof pulseRoute;
   workflowsRoute: typeof workflowsRoute;
@@ -165,6 +178,13 @@ declare module "@tanstack/react-router" {
       path: "/projects";
       fullPath: "/projects";
       preLoaderRoute: typeof projectsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/concierge": {
+      id: "/concierge";
+      path: "/concierge";
+      fullPath: "/concierge";
+      preLoaderRoute: typeof conciergeRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/agents": {
@@ -215,6 +235,7 @@ declare module "@tanstack/react-router" {
 const rootRouteChildren: RootRouteChildren = {
   indexRoute: indexRoute,
   agentsRoute: agentsRoute,
+  conciergeRoute: conciergeRoute,
   projectsRoute: projectsRoute,
   pulseRoute: pulseRoute,
   workflowsRoute: workflowsRoute,

@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { useAppShell } from "@/app/AppShellContext";
+import { ConciergeLauncher } from "@/features/concierge/ui/ConciergeLauncher";
 import { useHomeFeedQuery } from "@/features/home/hooks";
 import { HomeView } from "@/features/home/ui/HomeView";
 import type { ThreadActivityItem } from "@/features/channels/useUnreadChannels";
@@ -70,6 +71,7 @@ export function HomeScreen({
           void homeFeedQuery.refetch();
         }}
       />
+      <ConciergeLauncher />
     </div>
   );
 }
