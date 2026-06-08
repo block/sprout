@@ -8,7 +8,9 @@ use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
-use sprout_sdk::mentions::{extract_at_names, match_names_to_profiles, MentionProfile};
+use sprout_sdk::mentions::{
+    extract_at_mentions_with_known, match_names_to_profiles, MentionProfile,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -124,18 +126,24 @@ async fn resolve_channel_id(client: &SproutClient, event_id: &str) -> Result<Uui
 ///
 /// Mirrors the MCP implementation: queries kind 39002 (channel members),
 /// then kind 0 (profiles for those members), and delegates parsing and
-/// case-insensitive matching to [`sprout_sdk::mentions`]. On any I/O or
-/// parse failure, returns an empty vec — auto-tagging is best-effort and
-/// must never block a send.
+/// case-insensitive matching to [`sprout_sdk::mentions`].
+///
+/// Uses [`extract_at_mentions_with_known`] so that multi-word display names
+/// (e.g. "Will Pfleger") are matched correctly — the known member names are
+/// extracted from profiles first and passed into the two-pass extractor.
+///
+/// On any I/O or parse failure, returns an empty vec — auto-tagging is
+/// best-effort and must never block a send.
 async fn resolve_content_mentions(
     client: &SproutClient,
     channel_id: &str,
     content: &str,
 ) -> Vec<String> {
-    let names = extract_at_names(content);
-    if names.is_empty() {
+    // Quick pre-check: if there's no '@' at all we can skip all I/O.
+    if !content.contains('@') {
         return vec![];
     }
+
     // 1. Membership list (kind 39002 is parameterized-replaceable, addressed by `d` tag).
     let members_filter = serde_json::json!({
         "kinds": [39002],
@@ -158,7 +166,7 @@ async fn resolve_content_mentions(
         None => return vec![],
     };
 
-    // 3. Hand the parsed profile content + pubkey to the shared matcher.
+    // 3. Build profile entries and extract display names for the two-pass extractor.
     let entries: Vec<MentionProfile<'_>> = profile_events
         .iter()
         .filter_map(|e| {
@@ -170,6 +178,30 @@ async fn resolve_content_mentions(
             })
         })
         .collect();
+
+    // Extract the display names (with `name` fallback) from each profile so
+    // the two-pass extractor can match multi-word names like "Will Pfleger".
+    let display_names: Vec<String> = entries
+        .iter()
+        .filter_map(|e| {
+            let v: serde_json::Value = serde_json::from_str(e.content_json).ok()?;
+            let name = v
+                .get("display_name")
+                .or_else(|| v.get("name"))
+                .and_then(|n| n.as_str())
+                .filter(|n| !n.is_empty())?;
+            Some(name.to_string())
+        })
+        .collect();
+
+    // 4. Two-pass extraction: known multi-word names first, single-word fallback.
+    let known_refs: Vec<&str> = display_names.iter().map(|s| s.as_str()).collect();
+    let names = extract_at_mentions_with_known(content, &known_refs);
+    if names.is_empty() {
+        return vec![];
+    }
+
+    // 5. Map matched names back to pubkeys via the shared profile matcher.
     match_names_to_profiles(&names, &entries)
 }
 

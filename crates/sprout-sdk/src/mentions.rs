@@ -16,6 +16,18 @@
 //! explicit mentions ──► normalize ──► merge_mentions ──► p-tags
 //! ```
 //!
+//! For callers that have the set of known member display names available
+//! upfront, [`extract_at_mentions_with_known`] provides a two-pass approach
+//! that correctly handles multi-word display names (e.g. "Will Pfleger"):
+//!
+//! ```text
+//! body text + known_names ──► extract_at_mentions_with_known ──► names: Vec<String>
+//!                                                                      │
+//!                                                    direct name→pubkey lookup
+//!                                                                      │
+//!                                                              p-tags (merged)
+//! ```
+//!
 //! See [`crate::mentions::MENTION_CAP`] for the hard upper bound on tags.
 
 use std::collections::HashSet;
@@ -60,6 +72,123 @@ pub fn extract_at_names(content: &str) -> Vec<String> {
         if chars[i] == '@' {
             let preceded_by_ws = i == 0 || chars[i - 1].is_ascii_whitespace();
             if preceded_by_ws && i + 1 < len {
+                let start = i + 1;
+                let mut end = start;
+                while end < len {
+                    let c = chars[end];
+                    if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if end > start {
+                    let name: String = chars[start..end].iter().collect();
+                    let lower = name.to_ascii_lowercase();
+                    if seen.insert(lower.clone()) {
+                        names.push(lower);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+/// Extract `@mention` names from message content when the set of known member
+/// display names is available upfront.
+///
+/// Uses a two-pass approach to correctly handle multi-word display names
+/// (e.g. "Will Pfleger"):
+///
+/// **Pass 1 — known-name matching:** At each `@` token (preceded by
+/// start-of-string or ASCII whitespace), try each known name longest-first,
+/// case-insensitively. A match is accepted only when the name is followed by a
+/// word boundary (whitespace, common punctuation, or end-of-string). When a
+/// known name matches, the lowercased name is emitted and the scan advances
+/// past the entire matched name.
+///
+/// **Pass 2 — single-word fallback:** If no known name matches at a given `@`,
+/// falls back to the existing single-word tokenizer (alphanumeric + `.` `-`
+/// `_`) so that `@alice` still works even when Alice's profile hasn't been
+/// fetched yet.
+///
+/// `known_names` should be the display names (or `name` fallbacks) of all
+/// channel members. Duplicates and empty strings are ignored. The function
+/// does **not** require `known_names` to be pre-sorted — it sorts
+/// longest-first internally.
+///
+/// Returns lowercased names in first-seen order, deduplicated.
+pub fn extract_at_mentions_with_known(content: &str, known_names: &[&str]) -> Vec<String> {
+    if content.is_empty() || !content.contains('@') {
+        return vec![];
+    }
+
+    // Sort known names longest-first so multi-word names beat their prefixes.
+    let mut sorted_known: Vec<&str> = known_names
+        .iter()
+        .copied()
+        .filter(|n| !n.trim().is_empty())
+        .collect();
+    sorted_known.sort_by(|a, b| b.len().cmp(&a.len()));
+
+    let mut names: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '@' {
+            let preceded_by_ws = i == 0 || chars[i - 1].is_ascii_whitespace();
+            if preceded_by_ws && i + 1 < len {
+                // Build the remaining content after '@' as a &str for prefix matching.
+                let after_at: String = chars[i + 1..].iter().collect();
+
+                // Pass 1: try each known name (longest-first).
+                let mut matched: Option<(String, usize)> = None;
+                for known in &sorted_known {
+                    if after_at.len() < known.len() {
+                        continue;
+                    }
+                    let candidate = &after_at[..known.len()];
+                    if !candidate.eq_ignore_ascii_case(known) {
+                        continue;
+                    }
+                    // Word-boundary check: must be followed by whitespace,
+                    // common punctuation, or end-of-string.
+                    let after_name = &after_at[known.len()..];
+                    let boundary = after_name.is_empty()
+                        || after_name
+                            .chars()
+                            .next()
+                            .map(|c| {
+                                c.is_ascii_whitespace()
+                                    || matches!(
+                                        c,
+                                        ',' | ';' | '.' | '!' | '?' | ':' | ')' | ']' | '}'
+                                    )
+                            })
+                            .unwrap_or(true);
+                    if boundary {
+                        // Advance i past '@' + matched name length (in chars).
+                        let name_char_len = known.chars().count();
+                        matched = Some((known.to_ascii_lowercase(), name_char_len));
+                        break;
+                    }
+                }
+
+                if let Some((lower, char_len)) = matched {
+                    if seen.insert(lower.clone()) {
+                        names.push(lower);
+                    }
+                    // Skip past '@' + the matched name chars.
+                    i += 1 + char_len;
+                    continue;
+                }
+
+                // Pass 2: single-word fallback (alphanumeric + . - _).
                 let start = i + 1;
                 let mut end = start;
                 while end < len {
@@ -203,6 +332,98 @@ mod tests {
         assert!(extract_at_names("user@example.com").is_empty());
         assert!(extract_at_names("hello @ world").is_empty());
         assert!(extract_at_names("hello @").is_empty());
+    }
+
+    // ── extract_at_mentions_with_known ──────────────────────────────────
+
+    #[test]
+    fn known_multiword_name_matches_fully() {
+        // "Will Pfleger" should match @Will Pfleger, not just @Will.
+        let result = extract_at_mentions_with_known("hello @Will Pfleger!", &["Will Pfleger"]);
+        assert_eq!(result, vec!["will pfleger"]);
+    }
+
+    #[test]
+    fn partial_first_word_does_not_match_multiword_name() {
+        // @Will alone must NOT match "Will Pfleger" — partial matches are rejected.
+        let result = extract_at_mentions_with_known("hey @Will how are you", &["Will Pfleger"]);
+        // No known name matches @Will (boundary check: 'Will' is followed by ' h'
+        // which would match "Will Pfleger" only if the full name follows).
+        // Falls back to single-word tokenizer → emits "will".
+        assert_eq!(result, vec!["will"]);
+    }
+
+    #[test]
+    fn longest_first_wins_over_prefix() {
+        // With both "Will" and "Will Pfleger" known, "@Will Pfleger" should
+        // match the longer name, not just "Will".
+        let result = extract_at_mentions_with_known(
+            "@Will Pfleger sent a message",
+            &["Will", "Will Pfleger"],
+        );
+        assert_eq!(result, vec!["will pfleger"]);
+    }
+
+    #[test]
+    fn single_word_known_name_matches() {
+        let result = extract_at_mentions_with_known("ping @alice please", &["Alice"]);
+        assert_eq!(result, vec!["alice"]);
+    }
+
+    #[test]
+    fn unknown_name_falls_back_to_single_word() {
+        // @alice is not in known_names but single-word fallback still emits it.
+        let result = extract_at_mentions_with_known("hey @alice", &["Bob"]);
+        assert_eq!(result, vec!["alice"]);
+    }
+
+    #[test]
+    fn multiple_mentions_mixed_known_and_unknown() {
+        let result = extract_at_mentions_with_known(
+            "@Will Pfleger and @alice should review",
+            &["Will Pfleger"],
+        );
+        assert_eq!(result, vec!["will pfleger", "alice"]);
+    }
+
+    #[test]
+    fn deduplicates_case_insensitively() {
+        let result = extract_at_mentions_with_known(
+            "@Will Pfleger and @will pfleger again",
+            &["Will Pfleger"],
+        );
+        assert_eq!(result, vec!["will pfleger"]);
+    }
+
+    #[test]
+    fn multiword_name_at_end_of_string() {
+        let result = extract_at_mentions_with_known("cc @Will Pfleger", &["Will Pfleger"]);
+        assert_eq!(result, vec!["will pfleger"]);
+    }
+
+    #[test]
+    fn multiword_name_followed_by_punctuation() {
+        let result =
+            extract_at_mentions_with_known("thanks @Will Pfleger, great work", &["Will Pfleger"]);
+        assert_eq!(result, vec!["will pfleger"]);
+    }
+
+    #[test]
+    fn email_address_not_matched() {
+        let result = extract_at_mentions_with_known("user@example.com", &["example.com"]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_content_returns_empty() {
+        let result = extract_at_mentions_with_known("", &["Alice"]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_known_names_uses_single_word_fallback() {
+        let result = extract_at_mentions_with_known("hey @alice", &[]);
+        assert_eq!(result, vec!["alice"]);
     }
 
     // ── match_names_to_profiles ─────────────────────────────────────────
