@@ -958,6 +958,29 @@ mod tests {
     }
 
     #[test]
+    fn restricted_viewer_presence_filter_is_rejected() {
+        // The bridge `/query` presence shortcut (kind:20001/40902 + authors,
+        // no #h) cannot be channel-scoped, so for a restricted viewer the
+        // handler skips synthesis and falls through to this gate. A presence
+        // filter carries no allowed #h, so it must be rejected (fail closed).
+        let allowed = uuid::Uuid::new_v4();
+        let presence = Filter::new()
+            .kind(nostr::Kind::Custom(20001))
+            .author(nostr::Keys::generate().public_key());
+        assert!(!filter_has_allowed_channel_scope(
+            &presence,
+            &[allowed],
+            true,
+        ));
+        // Unrestricted callers (full members) keep presence access.
+        assert!(filter_has_allowed_channel_scope(
+            &presence,
+            &[allowed],
+            false
+        ));
+    }
+
+    #[test]
     fn test_extract_channel_id_single_channel() {
         let channel_id = uuid::Uuid::new_v4();
         let filters = vec![filter_with_channel(channel_id)];

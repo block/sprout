@@ -321,8 +321,13 @@ pub async fn query_events(
     }
 
     // ── Presence: synthesize kind:20001 from Redis (ephemeral, never in DB) ──
-    if let Some(presence_events) = synthesize_presence(&state, &filters).await {
-        return Ok(Json(Value::Array(presence_events)));
+    // Presence is keyed by pubkey, not channel, so it cannot be channel-scoped.
+    // Restricted viewers must fail closed: skip synthesis and fall through to the
+    // per-filter scope gate, which rejects the no-`#h` presence filter as FORBIDDEN.
+    if !restricted_to_channel_allowlist {
+        if let Some(presence_events) = synthesize_presence(&state, &filters).await {
+            return Ok(Json(Value::Array(presence_events)));
+        }
     }
 
     let mut events: Vec<Value> = Vec::new();
