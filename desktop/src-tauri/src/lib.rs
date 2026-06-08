@@ -747,6 +747,7 @@ pub fn run() {
             apply_workspace,
             get_active_workspace,
             set_prevent_sleep_active,
+            get_agent_memory,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
