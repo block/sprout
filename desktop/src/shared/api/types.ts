@@ -501,6 +501,14 @@ export type AgentTeam = {
   description: string | null;
   personaIds: string[];
   isBuiltin: boolean;
+  /** Absolute path to the team's backing directory (if directory-backed). */
+  sourceDir: string | null;
+  /** Whether sourceDir is a symlink to an external directory. */
+  isSymlink: boolean;
+  /** Resolved symlink target path (for display). Only set when isSymlink is true. */
+  symlinkTarget: string | null;
+  /** Version from the team's plugin.json manifest. */
+  version: string | null;
   createdAt: string;
   updatedAt: string;
 };
