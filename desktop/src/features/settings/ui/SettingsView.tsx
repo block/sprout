@@ -64,6 +64,10 @@ const settingsNavGroups: Array<{
     label: "App",
     sections: ["agents", "compute", "mobile", "updates", "doctor"],
   },
+  {
+    label: "Experiments",
+    sections: ["experimental"],
+  },
 ];
 
 function SettingsSectionButton({
@@ -127,7 +131,10 @@ export function SettingsView({
       // Feature gate check
       if (s.featureGate) {
         const feature = getFeature(s.featureGate);
-        if (feature && !resolveEnabled(feature.tier, feature.id, featureState)) {
+        if (
+          feature &&
+          !resolveEnabled(feature.tier, feature.id, featureState)
+        ) {
           return false;
         }
       }

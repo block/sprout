@@ -6,7 +6,10 @@ const srcRoot = path.resolve(
   "src",
 );
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 export function resolve(specifier, context, nextResolve) {
   if (specifier === "@features-manifest") {

@@ -35,6 +35,7 @@ export default defineConfig({
         "**/workflows.spec.ts",
         "**/identity-archive.spec.ts",
         "**/identity-archive-hide.spec.ts",
+        "**/screenshot-feature-flags.ts",
       ],
       use: {
         ...devices["Desktop Chrome"],
