@@ -472,28 +472,26 @@ export function AppSidebar({
               </SidebarMenuButton>
             </SidebarMenuItem>
           </FeatureGate>
-          <FeatureGate feature="managed-agents">
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                data-testid="open-agents-view"
-                isActive={selectedView === "agents"}
-                onClick={onSelectAgents}
-                tooltip="Agents"
-                type="button"
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-agents-view"
+              isActive={selectedView === "agents"}
+              onClick={onSelectAgents}
+              tooltip="Agents"
+              type="button"
+            >
+              <Bot className="h-4 w-4" />
+              <span>Agents</span>
+            </SidebarMenuButton>
+            {shouldShowAgentCount ? (
+              <SidebarMenuBadge
+                className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
+                data-testid="sidebar-agents-count"
               >
-                <Bot className="h-4 w-4" />
-                <span>Agents</span>
-              </SidebarMenuButton>
-              {shouldShowAgentCount ? (
-                <SidebarMenuBadge
-                  className="right-2 rounded-full bg-sidebar-accent/70 px-1.5 text-[11px] text-sidebar-foreground/75 peer-data-[active=true]/menu-button:bg-sidebar-active-foreground/20 peer-data-[active=true]/menu-button:text-sidebar-active-foreground"
-                  data-testid="sidebar-agents-count"
-                >
-                  {totalAgentCount}
-                </SidebarMenuBadge>
-              ) : null}
-            </SidebarMenuItem>
-          </FeatureGate>
+                {totalAgentCount}
+              </SidebarMenuBadge>
+            ) : null}
+          </SidebarMenuItem>
           <FeatureGate feature="workflows">
             <SidebarMenuItem>
               <SidebarMenuButton
