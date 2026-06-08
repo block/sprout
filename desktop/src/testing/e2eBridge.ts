@@ -3128,6 +3128,8 @@ async function handleUpdateChannel(
     channelId: string;
     name?: string;
     description?: string;
+    visibility?: "open" | "private";
+    ttlSeconds?: number | null;
   },
   config: E2eConfig | undefined,
 ) {
@@ -3140,6 +3142,16 @@ async function handleUpdateChannel(
     if (args.description !== undefined) {
       channel.description = args.description;
     }
+    if (args.visibility !== undefined) {
+      channel.visibility = args.visibility;
+    }
+    if (args.ttlSeconds !== undefined) {
+      channel.ttl_seconds = args.ttlSeconds;
+      channel.ttl_deadline =
+        args.ttlSeconds === null
+          ? null
+          : new Date(Date.now() + args.ttlSeconds * 1000).toISOString();
+    }
     touchMockChannel(channel);
     return toRawChannelDetail(channel, config);
   }
@@ -3151,6 +3163,12 @@ async function handleUpdateChannel(
   if (args.description !== undefined) {
     tags.push(["about", args.description]);
   }
+  if (args.visibility !== undefined) {
+    tags.push(["visibility", args.visibility]);
+  }
+  if (args.ttlSeconds !== undefined) {
+    tags.push(["ttl", args.ttlSeconds === null ? "" : String(args.ttlSeconds)]);
+  }
   await submitSignedEvent(config, { kind: 9002, content: "", tags });
 
   // Re-fetch updated metadata
@@ -3161,19 +3179,24 @@ async function handleUpdateChannel(
   const evTags = (ev?.tags ?? []) as string[][];
   const getTag = (name: string) =>
     evTags.find((t) => t[0] === name)?.[1] ?? null;
+  const ttlTag = getTag("ttl");
+  const ttlSeconds = ttlTag === null || ttlTag === "" ? null : Number(ttlTag);
   return {
     id: args.channelId,
     name: getTag("name") ?? "",
     description: getTag("about") ?? null,
     channel_type: getTag("t") ?? "stream",
-    visibility: evTags.some((t) => t[0] === "private") ? "private" : "open",
+    visibility: getTag("visibility") ?? "open",
     topic: getTag("topic") ?? null,
     purpose: getTag("purpose") ?? null,
     member_count: 0,
     role: "owner",
     archived_at: null,
-    ttl_seconds: null,
-    ttl_deadline: null,
+    ttl_seconds: ttlSeconds,
+    ttl_deadline:
+      ttlSeconds === null
+        ? null
+        : new Date(Date.now() + ttlSeconds * 1000).toISOString(),
     created_at: ev?.created_at
       ? new Date(ev.created_at * 1000).toISOString()
       : new Date().toISOString(),
@@ -5608,7 +5631,8 @@ export function maybeInstallE2eTauriMocks() {
         );
       case "update_channel":
         return handleUpdateChannel(
-          payload as Parameters<typeof handleUpdateChannel>[0],
+          (payload as { input: Parameters<typeof handleUpdateChannel>[0] })
+            .input,
           activeConfig,
         );
       case "set_channel_topic":

@@ -293,14 +293,22 @@ pub async fn validate_admin_event(
         }
         9002 => {
             // EDIT_METADATA: require at least one recognized metadata tag.
-            const RECOGNIZED_TAGS: &[&str] = &["name", "about", "archived", "topic", "purpose"];
+            const RECOGNIZED_TAGS: &[&str] = &[
+                "name",
+                "about",
+                "archived",
+                "topic",
+                "purpose",
+                "visibility",
+                "ttl",
+            ];
             let has_recognized = event
                 .tags
                 .iter()
                 .any(|t| RECOGNIZED_TAGS.contains(&t.kind().to_string().as_str()));
             if !has_recognized {
                 return Err(anyhow::anyhow!(
-                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose)"
+                    "kind:9002 must include at least one metadata tag (name, about, archived, topic, purpose, visibility, ttl)"
                 ));
             }
 
@@ -321,10 +329,53 @@ pub async fn validate_admin_event(
                 }
             }
 
-            // name/about/archived require owner/admin; topic/purpose allow any member
+            // Validate visibility values before storage.
+            for t in event.tags.iter() {
+                if t.kind().to_string() == "visibility" {
+                    match t.content() {
+                        Some("open") | Some("private") => {}
+                        Some(v) => {
+                            return Err(anyhow::anyhow!(
+                                "invalid visibility value: {v} (must be \"open\" or \"private\")"
+                            ));
+                        }
+                        None => {
+                            return Err(anyhow::anyhow!("visibility tag must have a value"));
+                        }
+                    }
+                }
+            }
+
+            // Validate ttl values before storage. Empty string clears the TTL
+            // (channel becomes permanent); any other value must parse as a
+            // positive integer number of seconds. A bare tag with no value is
+            // rejected so clearing is always explicit (`["ttl", ""]`).
+            for t in event.tags.iter() {
+                if t.kind().to_string() == "ttl" {
+                    match t.content() {
+                        Some("") => {}
+                        Some(v) => match v.parse::<i32>() {
+                            Ok(n) if n > 0 => {}
+                            _ => {
+                                return Err(anyhow::anyhow!(
+                                    "invalid ttl value: {v} (must be a positive integer of seconds, or empty to clear)"
+                                ));
+                            }
+                        },
+                        None => {
+                            return Err(anyhow::anyhow!(
+                                "ttl tag must have a value (seconds, or empty string to clear)"
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // name/about/archived/visibility/ttl require owner/admin;
+            // topic/purpose allow any member.
             let has_privileged_tag = event.tags.iter().any(|t| {
                 let k = t.kind().to_string();
-                k == "name" || k == "about" || k == "archived"
+                k == "name" || k == "about" || k == "archived" || k == "visibility" || k == "ttl"
             });
             if has_privileged_tag {
                 let members = state.db.get_members(channel_id).await?;
@@ -332,7 +383,7 @@ pub async fn validate_admin_event(
                 match actor_member {
                     Some(m) if m.role == "owner" || m.role == "admin" => Ok(()),
                     _ => Err(anyhow::anyhow!(
-                        "actor not authorized for name/about/archived changes"
+                        "actor not authorized for name/about/archived/visibility/ttl changes"
                     )),
                 }
             } else {
@@ -935,7 +986,7 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                             channel_id,
                             sprout_db::channel::ChannelUpdate {
                                 name: Some(val.to_string()),
-                                description: None,
+                                ..Default::default()
                             },
                         )
                         .await?;
@@ -946,8 +997,8 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         .update_channel(
                             channel_id,
                             sprout_db::channel::ChannelUpdate {
-                                name: None,
                                 description: Some(val.to_string()),
+                                ..Default::default()
                             },
                         )
                         .await?;
@@ -970,6 +1021,56 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                         channel_id,
                         serde_json::json!({
                             "type": "purpose_changed", "actor": actor_hex, "purpose": val
+                        }),
+                    )
+                    .await?;
+                }
+                "visibility" => {
+                    state
+                        .db
+                        .update_channel(
+                            channel_id,
+                            sprout_db::channel::ChannelUpdate {
+                                visibility: Some(val.to_string()),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    // A visibility flip changes who can see the channel, so the
+                    // accessible-channels cache must be cleared.
+                    state.invalidate_all_accessible_channels();
+                    emit_system_message(
+                        state,
+                        channel_id,
+                        serde_json::json!({
+                            "type": "visibility_changed", "actor": actor_hex, "visibility": val
+                        }),
+                    )
+                    .await?;
+                }
+                "ttl" => {
+                    // Empty string clears the TTL (permanent); otherwise it is a
+                    // positive integer of seconds, validated during authorization.
+                    let ttl_change: Option<i32> = if val.is_empty() {
+                        None
+                    } else {
+                        val.parse::<i32>().ok()
+                    };
+                    state
+                        .db
+                        .update_channel(
+                            channel_id,
+                            sprout_db::channel::ChannelUpdate {
+                                ttl_seconds: Some(ttl_change),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    emit_system_message(
+                        state,
+                        channel_id,
+                        serde_json::json!({
+                            "type": "ttl_changed", "actor": actor_hex, "ttl_seconds": ttl_change
                         }),
                     )
                     .await?;

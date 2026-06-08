@@ -57,6 +57,9 @@ export type UpdateChannelInput = {
   channelId: string;
   name?: string;
   description?: string;
+  visibility?: ChannelVisibility;
+  /** Omit to leave unchanged, `null` to clear (permanent), or a positive number of seconds to set. */
+  ttlSeconds?: number | null;
 };
 
 export type SetChannelTopicInput = {
