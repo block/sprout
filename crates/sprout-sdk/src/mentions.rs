@@ -131,7 +131,7 @@ pub fn extract_at_mentions_with_known(content: &str, known_names: &[&str]) -> Ve
         .copied()
         .filter(|n| !n.trim().is_empty())
         .collect();
-    sorted_known.sort_by(|a, b| b.len().cmp(&a.len()));
+    sorted_known.sort_by_key(|k| std::cmp::Reverse(k.len()));
 
     let mut names: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
@@ -152,7 +152,14 @@ pub fn extract_at_mentions_with_known(content: &str, known_names: &[&str]) -> Ve
                     if after_at.len() < known.len() {
                         continue;
                     }
-                    let candidate = &after_at[..known.len()];
+                    // Use get() to safely handle byte boundaries — known.len()
+                    // may land mid-character when content contains multi-byte
+                    // UTF-8 (e.g. CJK, emoji). If the slice isn't on a char
+                    // boundary, skip this candidate.
+                    let candidate = match after_at.get(..known.len()) {
+                        Some(s) => s,
+                        None => continue,
+                    };
                     if !candidate.eq_ignore_ascii_case(known) {
                         continue;
                     }
@@ -423,6 +430,32 @@ mod tests {
     #[test]
     fn empty_known_names_uses_single_word_fallback() {
         let result = extract_at_mentions_with_known("hey @alice", &[]);
+        assert_eq!(result, vec!["alice"]);
+    }
+
+    #[test]
+    fn unicode_content_does_not_panic() {
+        // Known name byte-length may land mid-character in multi-byte content.
+        // e.g. known "ab" (2 bytes) vs content starting with 日 (3 bytes) —
+        // byte offset 2 is not a char boundary. Must not panic; gracefully
+        // skips the candidate via get() returning None.
+        let result = extract_at_mentions_with_known("@日本語 hello", &["ab"]);
+        // "ab" doesn't match — falls through to single-word fallback which
+        // stops at non-ASCII, so no match. The key assertion: no panic.
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unicode_known_name_matches_with_boundary() {
+        // Multi-byte known name followed by a space (valid boundary).
+        let result = extract_at_mentions_with_known("@日本 hello", &["日本"]);
+        assert_eq!(result, vec!["日本"]);
+    }
+
+    #[test]
+    fn unicode_known_name_with_ascii_content_no_panic() {
+        // Reverse case: multi-byte known name against ASCII content.
+        let result = extract_at_mentions_with_known("@alice hello", &["日本語"]);
         assert_eq!(result, vec!["alice"]);
     }
 
