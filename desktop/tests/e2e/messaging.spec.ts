@@ -486,7 +486,7 @@ test("opens a single-level thread panel with inline expansion", async ({
           return `${Math.round(rect.width)}x${Math.round(rect.height)}`;
         }),
     )
-    .toBe("32x32");
+    .toBe("28x28");
 
   await page.mouse.move(0, 0);
   const rootSummaryWidthBeforeHover = await rootSummaryRow.evaluate((row) =>
