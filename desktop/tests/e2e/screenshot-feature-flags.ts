@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 import { openSettings } from "../helpers/settings";
+import { PREVIEW_FEATURE_IDS } from "../helpers/features";
 
 const WATERCOLOR_CHANNEL_ID = "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11";
 const FORUM_POST_ID = "mock-forum-release-thread";
@@ -155,10 +156,9 @@ test("screenshot: Settings → Experiments (all on)", async ({ page }) => {
   await openSettings(page);
   await page.getByTestId("settings-nav-experimental").click();
   await expect(page.getByTestId("settings-experimental")).toBeVisible();
-  await page.getByTestId("feature-toggle-workflows").click();
-  await page.getByTestId("feature-toggle-projects").click();
-  await page.getByTestId("feature-toggle-pulse").click();
-  await page.getByTestId("feature-toggle-forum").click();
+  for (const id of PREVIEW_FEATURE_IDS) {
+    await page.getByTestId(`feature-toggle-${id}`).click();
+  }
   await page.waitForTimeout(500);
   const view = page.getByTestId("settings-view");
   await view.screenshot({
