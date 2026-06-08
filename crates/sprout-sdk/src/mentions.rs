@@ -361,7 +361,10 @@ pub fn extract_nostr_uris(content: &str) -> Vec<String> {
         let bech32_start = start + "nostr:".len();
         let bech32_end = bech32_start + 5 + BECH32_SUFFIX_LEN; // "npub1" + 58
 
-        if bech32_end > content.len() {
+        // The fixed-width window can land mid-character when multi-byte UTF-8
+        // follows the prefix; slicing a non-boundary would panic. A real bech32
+        // suffix is 58 ASCII bytes, so any non-boundary here is a non-match.
+        if bech32_end > content.len() || !content.is_char_boundary(bech32_end) {
             continue;
         }
 
@@ -800,6 +803,14 @@ mod tests {
         let content = format!("こんにちは nostr:{}", TEST_NPUB1);
         let result = extract_nostr_uris(&content);
         assert_eq!(result, vec![TEST_HEX1]);
+    }
+
+    #[test]
+    fn extract_nostr_uris_multibyte_inside_window_does_not_panic() {
+        // Multi-byte UTF-8 within the fixed 58-char suffix window would make
+        // bech32_end land mid-character; the boundary guard must skip it.
+        let content = format!("nostr:npub1{}", "あ".repeat(20));
+        assert!(extract_nostr_uris(&content).is_empty());
     }
 
     #[test]
