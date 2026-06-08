@@ -38,74 +38,6 @@ class SettingsPage extends HookConsumerWidget {
           bottom: Grid.xs,
         ),
         children: [
-          // Connection info
-          Text('Connection', style: context.textTheme.titleMedium),
-          const SizedBox(height: Grid.twelve),
-          ListTile(
-            leading: const Icon(LucideIcons.server),
-            title: const Text('Connected to'),
-            subtitle: Text(
-              config.baseUrl,
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.onSurfaceVariant,
-              ),
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(Radii.md),
-              side: BorderSide(color: context.colors.outlineVariant),
-            ),
-          ),
-          if (config.nsec != null && config.nsec!.isNotEmpty) ...[
-            const SizedBox(height: Grid.xxs),
-            Builder(
-              builder: (context) {
-                final privHex = nostr.Nip19.decode(payload: config.nsec!).data;
-                final pubkey = privHex.isNotEmpty
-                    ? nostr.Keys(privHex).public
-                    : 'unknown';
-                return ListTile(
-                  leading: const Icon(LucideIcons.key),
-                  title: const Text('Identity (pubkey)'),
-                  subtitle: Text(
-                    pubkey,
-                    style: context.textTheme.bodySmall?.copyWith(
-                      color: context.colors.onSurfaceVariant,
-                      fontFamily: 'GeistMono',
-                      fontSize: 11,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(LucideIcons.copy, size: 16),
-                    onPressed: () async {
-                      await copyToClipboard(
-                        context,
-                        pubkey,
-                        message: 'Pubkey copied',
-                      );
-                    },
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(Radii.md),
-                    side: BorderSide(color: context.colors.outlineVariant),
-                  ),
-                );
-              },
-            ),
-          ],
-          const SizedBox(height: Grid.twelve),
-          OutlinedButton.icon(
-            onPressed: () => _confirmSignOut(context, ref),
-            icon: const Icon(LucideIcons.logOut),
-            label: const Text('Remove Workspace'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: context.colors.error,
-            ),
-          ),
-
-          const SizedBox(height: Grid.sm),
-
           // Status
           _StatusSection(),
 
@@ -164,6 +96,65 @@ class SettingsPage extends HookConsumerWidget {
                 ),
             ],
           ),
+
+          const SizedBox(height: Grid.sm),
+
+          // Connection info
+          Text('Connection', style: context.textTheme.titleMedium),
+          const SizedBox(height: Grid.twelve),
+          ListTile(
+            leading: const Icon(LucideIcons.server),
+            title: const Text('Connected to'),
+            subtitle: Text(
+              config.baseUrl,
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+          ),
+          if (config.nsec != null && config.nsec!.isNotEmpty)
+            Builder(
+              builder: (context) {
+                final privHex = nostr.Nip19.decode(payload: config.nsec!).data;
+                final pubkey = privHex.isNotEmpty
+                    ? nostr.Keys(privHex).public
+                    : 'unknown';
+                return ListTile(
+                  leading: const Icon(LucideIcons.key),
+                  title: const Text('Identity (pubkey)'),
+                  subtitle: Text(
+                    pubkey,
+                    style: context.textTheme.bodySmall?.copyWith(
+                      color: context.colors.onSurfaceVariant,
+                      fontFamily: 'GeistMono',
+                      fontSize: 11,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(LucideIcons.copy, size: 16),
+                    onPressed: () async {
+                      await copyToClipboard(
+                        context,
+                        pubkey,
+                        message: 'Pubkey copied',
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          const SizedBox(height: Grid.twelve),
+          OutlinedButton.icon(
+            onPressed: () => _confirmSignOut(context, ref),
+            icon: const Icon(LucideIcons.logOut),
+            label: const Text('Remove Workspace'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: context.colors.error,
+            ),
+          ),
+
           if (packageInfo.hasData) ...[
             const SizedBox(height: Grid.sm),
             Center(
@@ -246,10 +237,6 @@ class _StatusSection extends ConsumerWidget {
                   ),
                 )
               : null,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(Radii.md),
-            side: BorderSide(color: context.colors.outlineVariant),
-          ),
           onTap: () => showSetStatusSheet(context, currentStatus: status),
         ),
       ],
