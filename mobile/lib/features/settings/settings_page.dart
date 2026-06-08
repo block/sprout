@@ -13,6 +13,9 @@ import '../../shared/widgets/frosted_app_bar.dart';
 import '../../shared/widgets/frosted_scaffold.dart';
 import '../profile/set_status_sheet.dart';
 import '../profile/user_status_provider.dart';
+import '../custom_emoji/custom_emoji_provider.dart';
+import '../custom_emoji/custom_emoji_render.dart';
+import 'custom_emoji_settings_page.dart';
 import 'theme_picker_page.dart';
 
 class SettingsPage extends HookConsumerWidget {
@@ -106,6 +109,32 @@ class SettingsPage extends HookConsumerWidget {
 
           // Status
           _StatusSection(),
+
+          const SizedBox(height: Grid.sm),
+
+          // Custom emoji
+          Text('Custom Emoji', style: context.textTheme.titleMedium),
+          const SizedBox(height: Grid.twelve),
+          ListTile(
+            leading: const Icon(LucideIcons.smilePlus),
+            title: const Text('Manage Custom Emoji'),
+            subtitle: Text(
+              'Upload images and name them to use anywhere',
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
+            trailing: const Icon(LucideIcons.chevronRight, size: 18),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Radii.md),
+              side: BorderSide(color: context.colors.outlineVariant),
+            ),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const CustomEmojiSettingsPage(),
+              ),
+            ),
+          ),
 
           const SizedBox(height: Grid.sm),
 
@@ -223,12 +252,7 @@ class _StatusSection extends ConsumerWidget {
         Text('Status', style: context.textTheme.titleMedium),
         const SizedBox(height: Grid.twelve),
         ListTile(
-          leading: Text(
-            status != null && status.emoji.isNotEmpty
-                ? status.emoji
-                : '\u{1F4AC}',
-            style: const TextStyle(fontSize: 20),
-          ),
+          leading: _StatusEmojiIcon(emoji: status?.emoji ?? ''),
           title: Text(
             status != null && !status.isEmpty
                 ? status.text.isNotEmpty
@@ -257,6 +281,34 @@ class _StatusSection extends ConsumerWidget {
         ),
       ],
     );
+  }
+}
+
+class _StatusEmojiIcon extends ConsumerWidget {
+  final String emoji;
+
+  const _StatusEmojiIcon({required this.emoji});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (emoji.isEmpty) {
+      return const Text('\u{1F4AC}', style: TextStyle(fontSize: 20));
+    }
+    final shortcode = emoji.startsWith(':') && emoji.endsWith(':')
+        ? emoji.substring(1, emoji.length - 1).toLowerCase()
+        : null;
+    if (shortcode != null) {
+      for (final entry in ref.watch(customEmojiListProvider)) {
+        if (entry.shortcode == shortcode) {
+          return CustomEmojiImage(
+            shortcode: shortcode,
+            url: entry.url,
+            size: 24,
+          );
+        }
+      }
+    }
+    return Text(emoji, style: const TextStyle(fontSize: 20));
   }
 }
 
