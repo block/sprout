@@ -67,6 +67,9 @@ export const MessageRow = React.memo(
     const [expandedDiffId, setExpandedDiffId] = React.useState<string | null>(
       null,
     );
+    const [badgeBurstEmoji, setBadgeBurstEmoji] = React.useState<string | null>(
+      null,
+    );
     const {
       reactions,
       canToggle: canToggleReactions,
@@ -148,7 +151,7 @@ export const MessageRow = React.memo(
           return (
             <Markdown
               channelNames={channelNames}
-              className="max-w-full"
+              className="max-w-full text-[15px] leading-6"
               content={message.body}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
@@ -200,11 +203,11 @@ export const MessageRow = React.memo(
     );
 
     const authorNode = message.pubkey ? (
-      <span className="truncate text-sm font-semibold leading-none tracking-tight hover:underline">
+      <span className="truncate text-[15px] font-semibold leading-none tracking-tight hover:underline">
         {message.author}
       </span>
     ) : (
-      <h3 className="truncate text-sm font-semibold leading-none tracking-tight">
+      <h3 className="truncate text-[15px] font-semibold leading-none tracking-tight">
         {message.author}
       </h3>
     );
@@ -219,13 +222,15 @@ export const MessageRow = React.memo(
           onEdit={onEdit}
           onFollowThread={onFollowThread}
           onMarkUnread={onMarkUnread}
+          onReactionBadgeBurstRequest={
+            reactionPending ? undefined : setBadgeBurstEmoji
+          }
           onReactionSelect={
             canToggleReactions ? handleReactionSelect : undefined
           }
           onReply={onReply}
           onUnfollowThread={onUnfollowThread}
           reactionErrorMessage={reactionErrorMessage}
-          reactionPending={reactionPending}
           reactions={reactions}
         />
       </div>
@@ -258,6 +263,12 @@ export const MessageRow = React.memo(
           reactions={reactions}
           canToggle={canToggleReactions}
           pending={reactionPending}
+          burstEmojiOnRender={badgeBurstEmoji}
+          onBurstEmojiRendered={(emoji) => {
+            setBadgeBurstEmoji((current) =>
+              current === emoji ? null : current,
+            );
+          }}
           onSelect={(emoji) => {
             void handleReactionSelect(emoji);
           }}
