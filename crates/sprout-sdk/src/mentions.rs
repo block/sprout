@@ -1,4 +1,4 @@
-//! `@name` mention resolution helpers for Sprout chat messages.
+//! `@name` and NIP-27 `nostr:npub1…` mention resolution helpers for Sprout chat messages.
 //!
 //! These helpers are **pure** — no network calls, no async. Callers query
 //! channel membership (kind 39002) and profile (kind 0) events themselves,
@@ -11,18 +11,25 @@
 //!                                       │
 //! members + profiles (queried by caller) │
 //!                                       ▼
-//!                            match_names_to_profiles
-//!                                       │
-//! explicit mentions ──► normalize ──► merge_mentions ──► p-tags
+//!                            match_names_to_profiles ──► pubkeys
+//!                                                          │
+//! body text ──► strip_code_regions ──► extract_nostr_uris ─┤
+//!                                                          ▼
+//!                            explicit mentions ──► normalize ──► merge_mentions ──► p-tags
 //! ```
 //!
 //! When the set of known member names is available upfront,
 //! [`extract_at_mentions_with_known`] replaces the first step to correctly
 //! handle multi-word display names.
 //!
+//! [`extract_nostr_uris`] handles NIP-27 inline `nostr:npub1…` references,
+//! skipping those inside code blocks/spans via [`strip_code_regions`].
+//!
 //! See [`crate::mentions::MENTION_CAP`] for the hard upper bound on tags.
 
 use std::collections::HashSet;
+
+use nostr::{FromBech32, PublicKey};
 
 /// Maximum number of mention p-tags allowed on a single message.
 ///
@@ -227,6 +234,153 @@ pub fn normalize_mention_pubkeys(pubkeys: &[String], sender_pubkey: Option<&str>
         .filter(|pk| sender.as_deref() != Some(pk.as_str()))
         .filter(|pk| seen.insert(pk.clone()))
         .collect()
+}
+
+/// Remove fenced code blocks and inline code spans from content.
+///
+/// Returns a copy of `content` with ` ```…``` ` blocks and `` `…` `` spans
+/// replaced by spaces. Used only for mention scanning — the original
+/// content is stored verbatim. Preserves valid UTF-8 throughout.
+pub fn strip_code_regions(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut chars = content.char_indices().peekable();
+
+    while let Some(&(i, ch)) = chars.peek() {
+        // Fenced code block: ``` at line start (possibly after whitespace)
+        if ch == '`' && content[i..].starts_with("```") {
+            let is_fence_start = if i == 0 {
+                true
+            } else {
+                let before = &content[..i];
+                before.ends_with('\n')
+                    || before.chars().all(|c| c.is_ascii_whitespace())
+                    || before.rsplit_once('\n').is_some_and(|(_, after_nl)| {
+                        after_nl.chars().all(|c| c.is_ascii_whitespace())
+                    })
+            };
+
+            if is_fence_start {
+                // Find end of opening fence line
+                let after_fence = i + 3;
+                let rest = &content[after_fence..];
+                let line_end = rest
+                    .find('\n')
+                    .map_or(content.len(), |p| after_fence + p + 1);
+
+                // Find closing fence
+                let mut search_from = line_end;
+                let close_end = loop {
+                    if search_from >= content.len() {
+                        break content.len();
+                    }
+                    if let Some(pos) = content[search_from..].find("```") {
+                        let abs_pos = search_from + pos;
+                        let at_line_start = abs_pos == 0
+                            || content.as_bytes()[abs_pos - 1] == b'\n'
+                            || content[..abs_pos]
+                                .rsplit_once('\n')
+                                .is_some_and(|(_, after_nl)| {
+                                    after_nl.chars().all(|c| c.is_ascii_whitespace())
+                                });
+                        if at_line_start {
+                            // Skip to end of closing fence line
+                            let after_close = abs_pos + 3;
+                            let end = content[after_close..]
+                                .find('\n')
+                                .map_or(content.len(), |p| after_close + p + 1);
+                            break end;
+                        }
+                        search_from = abs_pos + 3;
+                    } else {
+                        break content.len();
+                    }
+                };
+
+                out.push(' ');
+                // Advance chars iterator past the fenced block
+                while let Some(&(ci, _)) = chars.peek() {
+                    if ci >= close_end {
+                        break;
+                    }
+                    chars.next();
+                }
+                continue;
+            }
+        }
+
+        // Inline code span: `…`
+        if ch == '`' {
+            let after_tick = i + 1;
+            if after_tick < content.len() {
+                // Find closing backtick on same line
+                if let Some(rel_end) = content[after_tick..].find('`') {
+                    let close_pos = after_tick + rel_end;
+                    // Only treat as code span if no newline between the backticks
+                    if !content[after_tick..close_pos].contains('\n') {
+                        out.push(' ');
+                        // Advance past closing backtick
+                        while let Some(&(ci, _)) = chars.peek() {
+                            if ci > close_pos {
+                                break;
+                            }
+                            chars.next();
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+
+        out.push(ch);
+        chars.next();
+    }
+
+    out
+}
+
+/// Bech32 alphabet used by NIP-19.
+// NIP-19 allows uppercase; normalize before decode
+fn is_bech32_char(c: char) -> bool {
+    matches!(c, '0'..='9' | 'a'..='z' | 'A'..='Z')
+}
+
+/// Extract pubkeys from NIP-27 `nostr:npub1…` URIs in content.
+///
+/// Scans `content` (which should already have code regions stripped via
+/// [`strip_code_regions`]) for `nostr:npub1` followed by 58 bech32 characters.
+/// Decodes each to a 32-byte pubkey hex string. Invalid bech32 is silently
+/// skipped. Returns deduplicated lowercase hex pubkeys.
+pub fn extract_nostr_uris(content: &str) -> Vec<String> {
+    const PREFIX: &str = "nostr:npub1";
+    const BECH32_SUFFIX_LEN: usize = 58; // chars after "npub1"
+
+    let mut pubkeys = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (start, _) in content.match_indices(PREFIX) {
+        let bech32_start = start + "nostr:".len();
+        let bech32_end = bech32_start + 5 + BECH32_SUFFIX_LEN; // "npub1" + 58
+
+        if bech32_end > content.len() {
+            continue;
+        }
+
+        let candidate = &content[bech32_start..bech32_end];
+        if !candidate.chars().all(is_bech32_char) {
+            continue;
+        }
+
+        // NIP-19 allows uppercase; normalize before decode
+        let normalized = candidate.to_ascii_lowercase();
+        if let Ok(pk) = PublicKey::from_bech32(&normalized) {
+            let hex = pk.to_hex();
+            if seen.insert(hex.clone()) {
+                pubkeys.push(hex);
+            }
+        }
+    }
+
+    pubkeys
 }
 
 #[cfg(test)]
@@ -510,5 +664,160 @@ mod tests {
     #[test]
     fn normalize_empty_input() {
         assert!(normalize_mention_pubkeys(&[], Some("anything")).is_empty());
+    }
+
+    // ── strip_code_regions ──────────────────────────────────────────────
+
+    #[test]
+    fn strip_code_regions_removes_fenced_block() {
+        let input = "before\n```rust\nlet x = 1;\n```\nafter";
+        let stripped = strip_code_regions(input);
+        assert!(!stripped.contains("let x = 1"));
+        assert!(stripped.contains("before"));
+        assert!(stripped.contains("after"));
+    }
+
+    #[test]
+    fn strip_code_regions_removes_inline_code() {
+        let input =
+            "see `nostr:npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg` here";
+        let stripped = strip_code_regions(input);
+        assert!(!stripped.contains("npub1"));
+        assert!(stripped.contains("see"));
+        assert!(stripped.contains("here"));
+    }
+
+    #[test]
+    fn strip_code_regions_preserves_prose() {
+        let input =
+            "hello nostr:npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg world";
+        let stripped = strip_code_regions(input);
+        assert!(stripped.contains("nostr:npub1"));
+    }
+
+    #[test]
+    fn strip_code_regions_handles_empty() {
+        assert_eq!(strip_code_regions(""), "");
+    }
+
+    #[test]
+    fn strip_code_regions_unclosed_backtick_preserved() {
+        // A lone backtick without a closing one is not a code span
+        let input = "hello `world";
+        let stripped = strip_code_regions(input);
+        assert!(stripped.contains("world"));
+    }
+
+    // ── extract_nostr_uris ──────────────────────────────────────────────
+
+    const TEST_NPUB1: &str = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg";
+    const TEST_HEX1: &str = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e";
+    const TEST_NPUB2: &str = "npub1fgdl5qqnh3k3f2xkqrvt7cujalhm623x4s7fdjdj5yrtp5fzjl9qrjpucw";
+    const TEST_HEX2: &str = "4a1bfa0013bc6d14a8d600d8bf6392efefbd2a26ac3c96c9b2a106b0d12297ca";
+
+    #[test]
+    fn extract_nostr_uris_valid_in_prose() {
+        let content = format!("hello nostr:{} world", TEST_NPUB1);
+        let result = extract_nostr_uris(&content);
+        assert_eq!(result, vec![TEST_HEX1]);
+    }
+
+    #[test]
+    fn extract_nostr_uris_not_extracted_in_backticks() {
+        let content = format!("see `nostr:{}` here", TEST_NPUB1);
+        let stripped = strip_code_regions(&content);
+        let result = extract_nostr_uris(&stripped);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_nostr_uris_not_extracted_in_fenced_code() {
+        let content = format!("before\n```\nnostr:{}\n```\nafter", TEST_NPUB1);
+        let stripped = strip_code_regions(&content);
+        let result = extract_nostr_uris(&stripped);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_nostr_uris_invalid_bech32_skipped() {
+        // Corrupt the last few chars to make invalid bech32
+        let invalid = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjaaaa";
+        let content = format!("nostr:{}", invalid);
+        let result = extract_nostr_uris(&content);
+        // Should not panic, just skip
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_nostr_uris_deduplicates() {
+        let content = format!("nostr:{} and again nostr:{}", TEST_NPUB1, TEST_NPUB1);
+        let result = extract_nostr_uris(&content);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], TEST_HEX1);
+    }
+
+    #[test]
+    fn extract_nostr_uris_multiple_different() {
+        let content = format!("nostr:{} and nostr:{}", TEST_NPUB1, TEST_NPUB2);
+        let result = extract_nostr_uris(&content);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&TEST_HEX1.to_string()));
+        assert!(result.contains(&TEST_HEX2.to_string()));
+    }
+
+    #[test]
+    fn extract_nostr_uris_at_name_and_npub_dedup() {
+        // Simulates the integration: @name resolves to same pubkey as nostr:npub
+        // The dedup happens at the merge_mentions level, but extract_nostr_uris
+        // itself deduplicates within its own output.
+        let content = format!("nostr:{}", TEST_NPUB1);
+        let uri_pubkeys = extract_nostr_uris(&content);
+        let name_pubkeys = vec![TEST_HEX1.to_string()];
+
+        // merge_mentions deduplicates
+        let mut merged = name_pubkeys;
+        merge_mentions(&mut merged, &uri_pubkeys, MENTION_CAP);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0], TEST_HEX1);
+    }
+
+    #[test]
+    fn extract_nostr_uris_empty_content() {
+        assert!(extract_nostr_uris("").is_empty());
+    }
+
+    #[test]
+    fn extract_nostr_uris_no_prefix() {
+        // npub without "nostr:" prefix should not match
+        let content = format!("just {} in text", TEST_NPUB1);
+        let result = extract_nostr_uris(&content);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_nostr_uris_after_unicode_does_not_panic() {
+        // Multi-byte UTF-8 before a nostr: URI must not cause panics
+        let content = format!("こんにちは nostr:{}", TEST_NPUB1);
+        let result = extract_nostr_uris(&content);
+        assert_eq!(result, vec![TEST_HEX1]);
+    }
+
+    #[test]
+    fn strip_code_regions_preserves_unicode() {
+        let input = "こんにちは `code` 世界";
+        let stripped = strip_code_regions(input);
+        assert!(stripped.contains("こんにちは"));
+        assert!(stripped.contains("世界"));
+        assert!(!stripped.contains("code"));
+    }
+
+    #[test]
+    fn extract_nostr_uris_uppercase_bech32_chars() {
+        // NIP-19 allows uppercase bech32 characters in the suffix
+        let upper_suffix = &TEST_NPUB1[5..].to_uppercase(); // uppercase the 58 chars after "npub1"
+        let npub_mixed = format!("npub1{}", upper_suffix);
+        let content = format!("nostr:{}", npub_mixed);
+        let result = extract_nostr_uris(&content);
+        assert_eq!(result, vec![TEST_HEX1]);
     }
 }

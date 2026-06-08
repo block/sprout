@@ -8,7 +8,10 @@ use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
-use sprout_sdk::mentions::extract_at_mentions_with_known;
+use sprout_sdk::mentions::{
+    extract_at_mentions_with_known, extract_nostr_uris, merge_mentions, strip_code_regions,
+    MENTION_CAP,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -422,7 +425,13 @@ pub async fn cmd_send_message(
 
     // Resolve @name mentions in the author-written body only — not the media markdown we
     // append above, which is derived from upload metadata and can't carry `@names`.
-    let auto_resolved = resolve_content_mentions(client, &p.channel_id, &p.content).await;
+    let mut auto_resolved = resolve_content_mentions(client, &p.channel_id, &p.content).await;
+
+    // NIP-27: also extract nostr:npub1… inline references (skipping code regions)
+    let stripped = strip_code_regions(&p.content);
+    let uri_pubkeys = extract_nostr_uris(&stripped);
+    merge_mentions(&mut auto_resolved, &uri_pubkeys, MENTION_CAP);
+
     let mention_refs: Vec<&str> = auto_resolved.iter().map(|s| s.as_str()).collect();
 
     let builder = match p.kind {
