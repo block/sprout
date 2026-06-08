@@ -56,13 +56,6 @@
       "description": "Forum-style threaded channels for long-form discussions",
       "tier": "preview",
       "platforms": ["desktop"]
-    },
-    {
-      "id": "huddles",
-      "name": "Huddles",
-      "description": "Voice sessions with humans and agents via TTS/STT",
-      "tier": "preview",
-      "platforms": ["desktop"]
     }
   ]
 }

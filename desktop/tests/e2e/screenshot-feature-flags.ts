@@ -125,18 +125,6 @@ test("screenshot: Forum with active thread (preview)", async ({ page }) => {
   });
 });
 
-test("screenshot: Huddles in channel header (preview)", async ({ page }) => {
-  await page.goto("/");
-  await enableFeature(page, "huddles");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await page.waitForTimeout(500);
-  await page.screenshot({
-    path: "tests/e2e/screenshots/view-huddles.png",
-    fullPage: false,
-  });
-});
-
 test("screenshot: Settings → Compute (stable)", async ({ page }) => {
   await page.goto("/");
   await openSettings(page);
@@ -169,7 +157,6 @@ test("screenshot: Settings → Experiments (all on)", async ({ page }) => {
   await page.getByTestId("feature-toggle-projects").click();
   await page.getByTestId("feature-toggle-pulse").click();
   await page.getByTestId("feature-toggle-forum").click();
-  await page.getByTestId("feature-toggle-huddles").click();
   await page.waitForTimeout(500);
   const view = page.getByTestId("settings-view");
   await view.screenshot({

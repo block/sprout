@@ -3,7 +3,6 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHuddle } from "@/features/huddle";
 import { HuddleIndicator } from "@/features/huddle/components/HuddleIndicator";
-import { FeatureGate } from "@/shared/features";
 import {
   useAvailableAcpRuntimes,
   useBackendProvidersQuery,
@@ -145,7 +144,7 @@ export function ChannelMembersBar({
               {memberCount}
             </span>
           </DropdownMenuItem>
-          <FeatureGate feature="huddles">{huddleIndicator}</FeatureGate>
+          {huddleIndicator}
           <DropdownMenuItem
             data-testid="channel-management-trigger"
             onSelect={onManageChannel}
@@ -186,7 +185,7 @@ export function ChannelMembersBar({
           </span>
         </Button>
 
-        <FeatureGate feature="huddles">{huddleIndicator}</FeatureGate>
+        {huddleIndicator}
 
         <Button
           aria-label="Manage channel"
