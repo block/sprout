@@ -63,13 +63,6 @@
       "description": "Voice sessions with humans and agents via TTS/STT",
       "tier": "preview",
       "platforms": ["desktop"]
-    },
-    {
-      "id": "mesh-compute",
-      "name": "Mesh Compute",
-      "description": "Peer-to-peer inference sharing across workspace members",
-      "tier": "preview",
-      "platforms": ["desktop"]
     }
   ]
 }

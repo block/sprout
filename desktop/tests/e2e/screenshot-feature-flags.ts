@@ -137,14 +137,9 @@ test("screenshot: Huddles in channel header (preview)", async ({ page }) => {
   });
 });
 
-test("screenshot: Settings → Compute (preview, after enabling)", async ({
-  page,
-}) => {
+test("screenshot: Settings → Compute (stable)", async ({ page }) => {
   await page.goto("/");
   await openSettings(page);
-  await page.getByTestId("settings-nav-experimental").click();
-  await page.getByTestId("feature-toggle-mesh-compute").click();
-  await page.waitForTimeout(300);
   await page.getByTestId("settings-nav-compute").click();
   await page.waitForTimeout(500);
   const view = page.getByTestId("settings-view");
@@ -175,7 +170,6 @@ test("screenshot: Settings → Experiments (all on)", async ({ page }) => {
   await page.getByTestId("feature-toggle-pulse").click();
   await page.getByTestId("feature-toggle-forum").click();
   await page.getByTestId("feature-toggle-huddles").click();
-  await page.getByTestId("feature-toggle-mesh-compute").click();
   await page.waitForTimeout(500);
   const view = page.getByTestId("settings-view");
   await view.screenshot({

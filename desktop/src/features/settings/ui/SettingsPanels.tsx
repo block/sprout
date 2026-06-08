@@ -119,7 +119,6 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "compute",
     label: "Compute",
     icon: Cpu,
-    featureGate: "mesh-compute",
   },
   {
     value: "shortcuts",
