@@ -1024,10 +1024,10 @@ export async function createManagedAgent(input: CreateManagedAgentInput) {
         backend: input.backend,
         respondTo: input.respondTo,
         respondToAllowlist: input.respondToAllowlist,
+        relayMesh: input.relayMesh,
       },
     },
   );
-
   return {
     agent: fromRawManagedAgent(response.agent),
     privateKeyNsec: response.private_key_nsec,

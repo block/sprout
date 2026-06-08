@@ -11,8 +11,9 @@ use crate::{
         save_managed_agents, start_managed_agent_process, stop_managed_agent_process,
         sync_managed_agent_processes, try_regenerate_nest, validate_provider_config, BackendKind,
         BackendProviderInfo, CreateManagedAgentRequest, CreateManagedAgentResponse,
-        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary, DEFAULT_ACP_COMMAND,
-        DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM, DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+        ManagedAgentLogResponse, ManagedAgentRecord, ManagedAgentSummary, RelayMeshConfig,
+        DEFAULT_ACP_COMMAND, DEFAULT_AGENT_COMMAND, DEFAULT_AGENT_PARALLELISM,
+        DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
     },
     relay::{relay_ws_url_with_override, sync_managed_agent_profile},
     util::now_iso,
@@ -24,6 +25,27 @@ use crate::{
 fn workspace_owner_hex(state: &AppState) -> Result<String, String> {
     let keys = state.keys.lock().map_err(|e| e.to_string())?;
     Ok(keys.public_key().to_hex())
+}
+
+fn normalize_relay_mesh(
+    config: Option<&RelayMeshConfig>,
+    backend: &BackendKind,
+) -> Result<Option<RelayMeshConfig>, String> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+
+    let model_ref = config.model_ref.trim();
+    if model_ref.is_empty() {
+        return Err("relay mesh modelRef is required".to_string());
+    }
+    if backend != &BackendKind::Local {
+        return Err("relay mesh agents must use the local backend".to_string());
+    }
+
+    Ok(Some(RelayMeshConfig {
+        model_ref: model_ref.to_string(),
+    }))
 }
 
 #[cfg(feature = "mesh-llm")]
@@ -337,6 +359,8 @@ pub async fn create_managed_agent(
         resolve_provider_binary(id)?;
     }
 
+    let relay_mesh = normalize_relay_mesh(input.relay_mesh.as_ref(), &input.backend)?;
+
     // ── Phase 2: compute NIP-OA auth tag (sync) ──────────────────────────────
     // Agents authenticate via the auth tag in their kind:0 profile event.
     // No tokens are minted. Fail closed: bad auth tag → don't create agent.
@@ -499,7 +523,7 @@ pub async fn create_managed_agent(
             last_error: None,
             respond_to: input.respond_to,
             respond_to_allowlist: respond_to_allowlist.clone(),
-            relay_mesh: None,
+            relay_mesh: relay_mesh.clone(),
         };
 
         records.push(record);
@@ -899,3 +923,50 @@ pub async fn probe_backend_provider(binary_path: String) -> Result<serde_json::V
 // 2. Harness sees it, exits gracefully, sets presence to "offline"
 // 3. Desktop's existing presence polling sees "offline" — UI updates automatically
 // No backend Tauri command needed. Presence IS the status.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_relay_mesh_rejects_empty_model_ref() {
+        let config = RelayMeshConfig {
+            model_ref: "  \t ".to_string(),
+        };
+
+        assert_eq!(
+            normalize_relay_mesh(Some(&config), &BackendKind::Local).unwrap_err(),
+            "relay mesh modelRef is required"
+        );
+    }
+
+    #[test]
+    fn normalize_relay_mesh_rejects_non_local_backend() {
+        let config = RelayMeshConfig {
+            model_ref: "Qwen3".to_string(),
+        };
+        let backend = BackendKind::Provider {
+            id: "blox".to_string(),
+            config: serde_json::json!({}),
+        };
+
+        assert_eq!(
+            normalize_relay_mesh(Some(&config), &backend).unwrap_err(),
+            "relay mesh agents must use the local backend"
+        );
+    }
+
+    #[test]
+    fn normalize_relay_mesh_trims_and_preserves_valid_config() {
+        let config = RelayMeshConfig {
+            model_ref: "  Qwen3  ".to_string(),
+        };
+
+        assert_eq!(
+            normalize_relay_mesh(Some(&config), &BackendKind::Local).unwrap(),
+            Some(RelayMeshConfig {
+                model_ref: "Qwen3".to_string(),
+            })
+        );
+    }
+}

@@ -36,8 +36,8 @@ import {
 } from "./ProviderConfigFields";
 import { CreateAgentRespondToField } from "./RespondToField";
 import { RelayMeshAgentSection } from "@/features/mesh-compute/ui/RelayMeshAgentSection";
+import { meshPrepareRelayMeshClient } from "@/shared/api/tauriMesh";
 import type { MeshServeTarget } from "@/shared/api/tauriMesh";
-import { startRelayMeshClientForTarget } from "@/features/mesh-compute/startRelayMeshClientForTarget";
 import { useLastRuntimeProvider } from "@/features/agents/lib/useLastRuntimeProvider";
 
 // ── Dialog ────────────────────────────────────────────────────────────────────
@@ -331,7 +331,13 @@ export function CreateAgentDialog({
     try {
       if (useMesh) {
         try {
-          await startRelayMeshClientForTarget(meshModelId.trim(), meshTarget);
+          if (!meshTarget) {
+            setMeshClientError(
+              "Select a relay mesh serve target before creating the agent.",
+            );
+            return;
+          }
+          await meshPrepareRelayMeshClient(meshModelId.trim(), meshTarget);
         } catch (err) {
           setMeshClientError(err instanceof Error ? err.message : String(err));
           return;
@@ -395,6 +401,7 @@ export function CreateAgentDialog({
             systemPrompt: systemPrompt.trim() || undefined,
             envVars,
             model: useMesh ? meshModelId.trim() || undefined : undefined,
+            relayMesh: useMesh ? { modelRef: meshModelId.trim() } : undefined,
             spawnAfterCreate,
             // Relay-mesh agents need a freshly selected serve target to start;
             // do not auto-restore them later with only the saved model/env.

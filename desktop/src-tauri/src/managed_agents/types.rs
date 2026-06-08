@@ -242,6 +242,8 @@ pub struct CreateManagedAgentRequest {
     /// before being written to the record.
     #[serde(default)]
     pub respond_to_allowlist: Vec<String>,
+    #[serde(default)]
+    pub relay_mesh: Option<RelayMeshConfig>,
 }
 
 #[derive(Debug, Serialize)]

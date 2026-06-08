@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
 mod coordinator;
+pub(crate) use coordinator::{
+    publish_current_status_once, publish_stopped_status_once, RelayMeshConnectRequest,
+};
 pub use coordinator::{spawn_listener, start_client, MeshCoordinator};
 
 mod discovery;

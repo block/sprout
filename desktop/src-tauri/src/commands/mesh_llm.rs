@@ -19,7 +19,7 @@ pub async fn mesh_availability(
 
 #[tauri::command]
 pub async fn mesh_start_node(
-    _app: AppHandle,
+    app: AppHandle,
     state: State<'_, AppState>,
     request: mesh_llm::StartMeshNodeRequest,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
@@ -36,6 +36,8 @@ pub async fn mesh_start_node(
         .await
         .map_err(|error| format!("mesh node started but status probe failed: {error}"))?;
     *runtime = Some(started);
+    drop(runtime);
+    mesh_llm::publish_current_status_once(&app, "start").await;
     Ok(status)
 }
 
@@ -45,6 +47,71 @@ pub async fn mesh_ensure_client_node(
     request: mesh_llm::EnsureMeshClientRequest,
 ) -> CmdResult<mesh_llm::MeshNodeStatus> {
     ensure_client_node_for_model(&state, request.model_id, request.endpoint_addr).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareRelayMeshClientRequest {
+    pub model_id: String,
+    pub target: mesh_llm::MeshServeTarget,
+}
+
+/// Fresh-create preflight for relay-mesh agents. Starts/dials the local mesh
+/// client and sends the paired connect-request through the Rust coordinator so
+/// fresh-created and saved relay-mesh agents use the same signaling path.
+#[tauri::command]
+pub async fn mesh_prepare_relay_mesh_client(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: PrepareRelayMeshClientRequest,
+) -> CmdResult<mesh_llm::MeshNodeStatus> {
+    prepare_relay_mesh_client(&app, &state, &request.model_id, request.target).await
+}
+
+pub(crate) async fn prepare_relay_mesh_client(
+    app: &AppHandle,
+    state: &AppState,
+    model_id: &str,
+    target: mesh_llm::MeshServeTarget,
+) -> CmdResult<mesh_llm::MeshNodeStatus> {
+    let target_pubkey = normalize_pubkey(target.reporter_pubkey.as_deref())
+        .ok_or_else(|| "Selected relay mesh target is missing its reporter pubkey.".to_string())?;
+    let status =
+        ensure_client_node_for_model(state, model_id, Some(target.endpoint_addr.clone())).await?;
+    let self_pubkey = workspace_pubkey(state)?;
+    if self_pubkey == target_pubkey {
+        return Ok(status);
+    }
+    let self_addr = status
+        .invite_token
+        .as_deref()
+        .ok_or_else(|| "Local mesh client did not publish an endpoint address.".to_string())?;
+    crate::mesh_llm::start_client(
+        app,
+        crate::mesh_llm::RelayMeshConnectRequest {
+            target_pubkey: &target_pubkey,
+            peer_endpoint_addr: &target.endpoint_addr,
+            self_endpoint_addr: self_addr,
+            peer_endpoint_id: target.endpoint_id.as_deref(),
+            self_endpoint_id: status.endpoint_id.as_deref(),
+        },
+    )
+    .await?;
+    Ok(status)
+}
+
+fn normalize_pubkey(value: Option<&str>) -> Option<String> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    if normalized.len() == 64 && normalized.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn workspace_pubkey(state: &AppState) -> Result<String, String> {
+    let keys = state.keys.lock().map_err(|e| e.to_string())?;
+    Ok(keys.public_key().to_hex())
 }
 
 /// Join a peer by endpoint addr without naming a model. Used by the runtime
@@ -262,16 +329,26 @@ pub(crate) async fn ensure_relay_mesh_for_record(
     // dial). If either is missing we have already done the one-sided dial above
     // — no worse than the old behavior — so degrade rather than fail the start.
     if let (Some(target_pubkey), Some(self_addr)) = (
-        target.reporter_pubkey.as_deref(),
+        normalize_pubkey(target.reporter_pubkey.as_deref()),
         status.invite_token.as_deref(),
     ) {
-        if let Err(error) =
-            crate::mesh_llm::start_client(app, target_pubkey, &target.endpoint_addr, self_addr)
-                .await
-        {
-            // Non-fatal: the one-sided dial may still punch on a favorable NAT.
-            // Surface the reason without blocking the agent's spawn.
-            eprintln!("sprout-mesh: saved-start connect-request failed: {error}");
+        if target_pubkey != workspace_pubkey(&state)? {
+            if let Err(error) = crate::mesh_llm::start_client(
+                app,
+                crate::mesh_llm::RelayMeshConnectRequest {
+                    target_pubkey: &target_pubkey,
+                    peer_endpoint_addr: &target.endpoint_addr,
+                    self_endpoint_addr: self_addr,
+                    peer_endpoint_id: target.endpoint_id.as_deref(),
+                    self_endpoint_id: status.endpoint_id.as_deref(),
+                },
+            )
+            .await
+            {
+                // Non-fatal: the one-sided dial may still punch on a favorable NAT.
+                // Surface the reason without blocking the agent's spawn.
+                eprintln!("sprout-mesh: saved-start connect-request failed: {error}");
+            }
         }
     }
     Ok(())
@@ -319,11 +396,15 @@ pub async fn mesh_status_report_payload(
 }
 
 #[tauri::command]
-pub async fn mesh_stop_node(state: State<'_, AppState>) -> CmdResult<mesh_llm::MeshNodeStatus> {
+pub async fn mesh_stop_node(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<mesh_llm::MeshNodeStatus> {
     let runtime = state.mesh_llm_runtime.lock().await.take();
     if let Some(runtime) = runtime {
         runtime.stop().await.map_err(|error| error.to_string())?;
     }
+    mesh_llm::publish_stopped_status_once(&app, "stop").await;
     Ok(mesh_llm::stopped_status())
 }
 

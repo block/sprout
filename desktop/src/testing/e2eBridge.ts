@@ -5143,9 +5143,9 @@ function sendToMockSocket(args: {
 
     // Mesh control events (24620 status report, 24621 connect request) are not
     // channel messages — they carry a `p` tag, not an `h` tag. The real relay
-    // accepts them after membership/shape checks; the mock just ACKs so the
-    // desktop mesh flow (publishMeshConnectRequest) can proceed. We do not model
-    // the paired 24622 here; that belongs in a dedicated call-me-now test.
+    // accepts them after membership/shape checks; the mock just ACKs so legacy
+    // direct-TS mesh helpers can proceed. Current create/start flows publish
+    // these from the Rust coordinator instead.
     if (event.kind === 24620 || event.kind === 24621) {
       if (
         event.kind === 24621 &&
@@ -5401,6 +5401,46 @@ export function maybeInstallE2eTauriMocks() {
         mockMeshState.nodeState = "running";
         mockMeshState.nodeMode = "client";
         return meshNodeStatus("running", "client");
+      case "mesh_prepare_relay_mesh_client": {
+        // The Rust coordinator owns connect signaling. In the browser e2e
+        // bridge, mirror the event template it would publish so specs can keep
+        // asserting canonical #p targets without resurrecting the old TS
+        // signaling helper.
+        if (!mockMeshState.admitted) {
+          throw new Error(mockMeshState.denyReason);
+        }
+        mockMeshState.nodeState = "running";
+        mockMeshState.nodeMode = "client";
+        const target = (
+          payload as {
+            request?: {
+              target?: {
+                endpointAddr?: string;
+                endpointId?: string | null;
+                reporterPubkey?: string;
+              };
+            };
+          } | null
+        )?.request?.target;
+        const reporterPubkey = target?.reporterPubkey?.trim().toLowerCase();
+        const selfPubkey = (
+          identity?.pubkey ?? DEFAULT_MOCK_IDENTITY.pubkey
+        ).toLowerCase();
+        if (reporterPubkey && reporterPubkey !== selfPubkey) {
+          window.__SPROUT_E2E_SIGNED_EVENTS__?.push({
+            kind: 24621,
+            tags: [["p", reporterPubkey]],
+            content: JSON.stringify({
+              self_endpoint_addr: "mock-endpoint-addr",
+              peer_endpoint_addr: target?.endpointAddr ?? "mock-endpoint-addr",
+              self_endpoint_id: "mock-endpoint-id",
+              peer_endpoint_id: target?.endpointId ?? undefined,
+              attempt_id: "mock-attempt-id",
+            }),
+          });
+        }
+        return meshNodeStatus("running", "client");
+      }
       case "mesh_dial_endpoint_addr":
         return meshNodeStatus("running", mockMeshState.nodeMode ?? "client");
       case "mesh_status_report_payload":

@@ -31,7 +31,9 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::watch;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use sprout_core::kind::{KIND_MESH_CALL_ME_NOW, KIND_MESH_CONNECT_REQUEST};
+use sprout_core::kind::{
+    KIND_MESH_CALL_ME_NOW, KIND_MESH_CONNECT_REQUEST, KIND_MESH_STATUS_REPORT,
+};
 
 use crate::app_state::AppState;
 
@@ -50,6 +52,7 @@ pub struct MeshCoordinator {
     /// without depending on wall-clock timing.
     listener_active: watch::Receiver<bool>,
     _listener: tokio::task::JoinHandle<()>,
+    _status_publisher: tokio::task::JoinHandle<()>,
 }
 
 impl MeshCoordinator {
@@ -80,7 +83,7 @@ impl MeshCoordinator {
     }
 }
 
-/// Start the runtime-owned call-me-now listener if it is not already running.
+/// Start the runtime-owned relay-mesh coordinator if it is not already running.
 /// Idempotent: a second call with a coordinator already present is a no-op.
 ///
 /// Spawned at identity-set time from `lib.rs` setup, *before* any restore or
@@ -97,20 +100,74 @@ pub async fn spawn_listener(app: AppHandle) {
     }
     let (active_tx, active_rx) = watch::channel(false);
     let listener_app = app.clone();
-    let handle = tokio::spawn(async move {
+    let listener = tokio::spawn(async move {
         listener_loop(listener_app, active_tx).await;
+    });
+    let publisher_app = app.clone();
+    let publisher = tokio::spawn(async move {
+        status_publisher_loop(publisher_app).await;
     });
     let state = app.state::<AppState>();
     let mut guard = state.mesh_coordinator.lock().await;
     if guard.is_none() {
         *guard = Some(MeshCoordinator {
             listener_active: active_rx,
-            _listener: handle,
+            _listener: listener,
+            _status_publisher: publisher,
         });
     } else {
         // Lost a race: another caller installed a coordinator first. Drop ours.
-        handle.abort();
+        listener.abort();
+        publisher.abort();
     }
+}
+
+async fn status_publisher_loop(app: AppHandle) {
+    loop {
+        publish_current_status_once(&app, "periodic").await;
+        tokio::time::sleep(Duration::from_secs(15)).await;
+    }
+}
+
+pub(crate) async fn publish_current_status_once(app: &AppHandle, reason: &str) {
+    let state = app.state::<AppState>();
+    if let Err(error) = publish_current_status_for_state(&state).await {
+        eprintln!("sprout-mesh: status report after {reason} failed: {error}");
+    }
+}
+
+pub(crate) async fn publish_stopped_status_once(app: &AppHandle, reason: &str) {
+    let state = app.state::<AppState>();
+    if let Err(error) = publish_stopped_status_for_state(&state).await {
+        eprintln!("sprout-mesh: stopped status report after {reason} failed: {error}");
+    }
+}
+
+async fn publish_current_status_for_state(state: &AppState) -> Result<(), String> {
+    let payload = {
+        let runtime = state.mesh_llm_runtime.lock().await;
+        match runtime.as_ref() {
+            Some(runtime) => runtime
+                .status_report_payload()
+                .await
+                .map_err(|error| error.to_string())?,
+            None => return Ok(()),
+        }
+    };
+    publish_status_report(state, payload).await
+}
+
+async fn publish_stopped_status_for_state(state: &AppState) -> Result<(), String> {
+    publish_status_report(state, stopped_status_payload()).await
+}
+
+fn stopped_status_payload() -> serde_json::Value {
+    serde_json::json!({
+        "token": "",
+        "hosted_models": [],
+        "serving_models": [],
+        "peers": [],
+    })
 }
 
 /// The listener task body. Connects, authenticates as the Sprout identity,
@@ -180,15 +237,21 @@ async fn listener_session(app: &AppHandle, active: &watch::Sender<bool>) -> Resu
     Ok(())
 }
 
+pub struct RelayMeshConnectRequest<'a> {
+    pub target_pubkey: &'a str,
+    pub peer_endpoint_addr: &'a str,
+    pub self_endpoint_addr: &'a str,
+    pub peer_endpoint_id: Option<&'a str>,
+    pub self_endpoint_id: Option<&'a str>,
+}
+
 /// Publish a `kind:24621` connect-request and drive bounded publish+dial retry.
 /// Blocks until the listener is active so we never request a connection we
 /// cannot receive the pairing for. One `attempt_id` per call correlates the
 /// retries in logs and tests.
 pub async fn start_client(
     app: &AppHandle,
-    target_pubkey: &str,
-    peer_endpoint_addr: &str,
-    self_endpoint_addr: &str,
+    request: RelayMeshConnectRequest<'_>,
 ) -> Result<String, String> {
     let attempt_id = uuid::Uuid::new_v4().to_string();
     {
@@ -204,20 +267,12 @@ pub async fn start_client(
     let mut last_error = String::new();
     while tokio::time::Instant::now() < deadline {
         let state = app.state::<AppState>();
-        match publish_connect_request(
-            &state,
-            target_pubkey,
-            self_endpoint_addr,
-            peer_endpoint_addr,
-            &attempt_id,
-        )
-        .await
-        {
+        match publish_connect_request(&state, &request, &attempt_id).await {
             Ok(()) => {
                 // Dial in the same attempt: hole-punch needs both ends dialing.
                 if let Err(error) = crate::commands::ensure_client_node_for_model_dial_only(
                     &state,
-                    peer_endpoint_addr,
+                    request.peer_endpoint_addr,
                 )
                 .await
                 {
@@ -238,26 +293,52 @@ pub async fn start_client(
 /// Build + sign + submit the kind:24621 connect-request as the Sprout identity.
 async fn publish_connect_request(
     state: &AppState,
-    target_pubkey: &str,
-    self_endpoint_addr: &str,
-    peer_endpoint_addr: &str,
+    request: &RelayMeshConnectRequest<'_>,
     attempt_id: &str,
 ) -> Result<(), String> {
-    let content = json!({
-        "v": 1,
-        "self_endpoint_addr": self_endpoint_addr,
-        "peer_endpoint_addr": peer_endpoint_addr,
-        "attempt_id": attempt_id,
-    })
-    .to_string();
-    let target = nostr::PublicKey::from_hex(target_pubkey)
-        .map_err(|e| format!("invalid target pubkey: {e}"))?;
-    let builder = nostr::EventBuilder::new(
-        nostr::Kind::Custom(KIND_MESH_CONNECT_REQUEST as u16),
-        content,
-    )
-    .tag(nostr::Tag::public_key(target));
+    let builder = build_connect_request_event(request, attempt_id)?;
     crate::relay::submit_event(builder, state).await.map(|_| ())
+}
+
+fn build_connect_request_event(
+    request: &RelayMeshConnectRequest<'_>,
+    attempt_id: &str,
+) -> Result<nostr::EventBuilder, String> {
+    let mut content = json!({
+        "v": 1,
+        "self_endpoint_addr": request.self_endpoint_addr,
+        "peer_endpoint_addr": request.peer_endpoint_addr,
+        "attempt_id": attempt_id,
+    });
+    if let Some(endpoint_id) = request.self_endpoint_id {
+        content["self_endpoint_id"] = serde_json::Value::String(endpoint_id.to_string());
+    }
+    if let Some(endpoint_id) = request.peer_endpoint_id {
+        content["peer_endpoint_id"] = serde_json::Value::String(endpoint_id.to_string());
+    }
+    let target = nostr::PublicKey::from_hex(request.target_pubkey)
+        .map_err(|e| format!("invalid target pubkey: {e}"))?;
+    Ok(nostr::EventBuilder::new(
+        nostr::Kind::Custom(KIND_MESH_CONNECT_REQUEST as u16),
+        content.to_string(),
+    )
+    .tag(nostr::Tag::public_key(target)))
+}
+
+pub(crate) fn build_status_report_event(payload: serde_json::Value) -> nostr::EventBuilder {
+    nostr::EventBuilder::new(
+        nostr::Kind::Custom(KIND_MESH_STATUS_REPORT as u16),
+        payload.to_string(),
+    )
+}
+
+pub(crate) async fn publish_status_report(
+    state: &AppState,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    crate::relay::submit_event(build_status_report_event(payload), state)
+        .await
+        .map(|_| ())
 }
 
 /// Extract the peer endpoint addr from a paired call-me-now (24622) event,
@@ -352,6 +433,74 @@ fn parse_relay_event(text: &str, sub_id: &str) -> Option<nostr::Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_request_event_includes_optional_endpoint_ids() {
+        let keys = nostr::Keys::generate();
+        let request = RelayMeshConnectRequest {
+            target_pubkey: &keys.public_key().to_hex(),
+            peer_endpoint_addr: "peer-addr",
+            self_endpoint_addr: "self-addr",
+            peer_endpoint_id: Some("peer-id"),
+            self_endpoint_id: Some("self-id"),
+        };
+        let event = build_connect_request_event(&request, "attempt-1")
+            .expect("build event")
+            .sign_with_keys(&keys)
+            .expect("sign event");
+        let content: serde_json::Value = serde_json::from_str(&event.content).unwrap();
+        assert_eq!(content["self_endpoint_id"], "self-id");
+        assert_eq!(content["peer_endpoint_id"], "peer-id");
+    }
+
+    #[test]
+    fn connect_request_event_omits_absent_endpoint_ids() {
+        let keys = nostr::Keys::generate();
+        let request = RelayMeshConnectRequest {
+            target_pubkey: &keys.public_key().to_hex(),
+            peer_endpoint_addr: "peer-addr",
+            self_endpoint_addr: "self-addr",
+            peer_endpoint_id: None,
+            self_endpoint_id: None,
+        };
+        let event = build_connect_request_event(&request, "attempt-1")
+            .expect("build event")
+            .sign_with_keys(&keys)
+            .expect("sign event");
+        let content: serde_json::Value = serde_json::from_str(&event.content).unwrap();
+        assert!(content.get("self_endpoint_id").is_none());
+        assert!(content.get("peer_endpoint_id").is_none());
+    }
+
+    #[test]
+    fn status_report_event_uses_kind_and_exact_content() {
+        let keys = nostr::Keys::generate();
+        let payload = json!({"v": 1, "models": ["demo"]});
+        let event = build_status_report_event(payload.clone())
+            .sign_with_keys(&keys)
+            .expect("sign event");
+        assert_eq!(
+            event.kind,
+            nostr::Kind::Custom(KIND_MESH_STATUS_REPORT as u16)
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&event.content).unwrap(),
+            payload
+        );
+    }
+
+    #[test]
+    fn stopped_status_payload_withdraws_all_targets() {
+        assert_eq!(
+            stopped_status_payload(),
+            json!({
+                "token": "",
+                "hosted_models": [],
+                "serving_models": [],
+                "peers": [],
+            })
+        );
+    }
 
     #[test]
     fn call_me_now_peer_addr_extracts_unexpired() {

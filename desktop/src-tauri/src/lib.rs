@@ -45,7 +45,19 @@ mod mesh_llm_stubs {
     }
 
     #[tauri::command]
-    pub async fn mesh_stop_node(_state: State<'_, AppState>) -> CmdResult<serde_json::Value> {
+    pub async fn mesh_prepare_relay_mesh_client(
+        _app: tauri::AppHandle,
+        _state: State<'_, AppState>,
+        _request: serde_json::Value,
+    ) -> CmdResult<serde_json::Value> {
+        Err("mesh-llm feature not enabled".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn mesh_stop_node(
+        _app: tauri::AppHandle,
+        _state: State<'_, AppState>,
+    ) -> CmdResult<serde_json::Value> {
         Err("mesh-llm feature not enabled".to_string())
     }
 
@@ -668,6 +680,7 @@ pub fn run() {
             mesh_availability,
             mesh_start_node,
             mesh_ensure_client_node,
+            mesh_prepare_relay_mesh_client,
             mesh_dial_endpoint_addr,
             mesh_status_report_payload,
             mesh_stop_node,

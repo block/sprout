@@ -323,6 +323,10 @@ export type BackendProviderProbeResult = {
   config_schema?: Record<string, unknown>;
 };
 
+export type RelayMeshConfig = {
+  modelRef: string;
+};
+
 export type CreateManagedAgentInput = {
   name: string;
   personaId?: string;
@@ -350,6 +354,7 @@ export type CreateManagedAgentInput = {
    * normalized server-side (must be 64 hex chars each).
    */
   respondToAllowlist?: string[];
+  relayMesh?: RelayMeshConfig;
 };
 
 export type CreateManagedAgentResponse = {
