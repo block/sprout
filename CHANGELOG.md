@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.13
+
+ecca5e77e4e Collapse channel header actions (#901)
+4ec7f8125e8 sprout-agent: make Databricks defaults env-only (#868)
+b384354e2bd Restyle settings sections (#894)
+fdcbb696fe0 Add emoji reaction particles (#890)
+32039b9a25b Move settings into the app shell (#893)
+45f3dfe5ba6 Tune chat text sizing (#891)
+29f6ccf9e9c Style channel header navigation (#889)
+2ebe5517410 fix: rename missed known_acp_provider_exact → known_acp_runtime_exact (#900)
+97bdb79ded5 chore(deps): update radix-ui-primitives monorepo (#898)
+4a93100e199 chore(deps): update actions/checkout digest to df4cb1c (#897)
+0a6067ca1be refactor: rename ACP "provider" to "runtime" across the codebase (#783)
+056b87d3da4 Unify avatar radius (#892)
+
+
 ## v0.3.12
 
 1b7b6978fc8 Show hover cards for inline message emoji (#885)
