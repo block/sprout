@@ -7,6 +7,7 @@ import { relayClient } from "@/shared/api/relayClient";
 import type { RelayEvent } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
+import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useHuddle } from "../HuddleContext";
 import { useHeadphonesGate } from "../lib/useHeadphonesGate";
@@ -26,6 +27,7 @@ type ActiveHuddle = {
 type HuddleIndicatorProps = {
   channelId: string;
   className?: string;
+  renderMode?: "button" | "menu-item";
   /** Called when the user clicks the button and no huddle is active (start). */
   onStart?: () => void;
   /** Whether the start action is disabled (e.g., permissions, already starting). */
@@ -40,6 +42,7 @@ type HuddleIndicatorProps = {
 export function HuddleIndicator({
   channelId,
   className,
+  renderMode = "button",
   onStart,
   startDisabled,
 }: HuddleIndicatorProps) {
@@ -226,6 +229,23 @@ export function HuddleIndicator({
   // No active huddle — render the start button (if onStart provided).
   if (!activeHuddle) {
     if (!onStart) return null;
+    if (renderMode === "menu-item") {
+      return (
+        <>
+          <DropdownMenuItem
+            className={className}
+            data-testid="channel-start-huddle-trigger"
+            disabled={startDisabled || isStarting}
+            onSelect={() => headphonesGate.gate(() => onStart())}
+          >
+            <Headphones />
+            <span>Start huddle</span>
+          </DropdownMenuItem>
+          {gateDialog}
+        </>
+      );
+    }
+
     return (
       <>
         <Button
@@ -265,6 +285,26 @@ export function HuddleIndicator({
     } finally {
       setIsJoining(false);
     }
+  }
+
+  if (renderMode === "menu-item") {
+    return (
+      <>
+        <DropdownMenuItem
+          className={className}
+          data-testid="channel-start-huddle-trigger"
+          disabled={isJoining || isStarting}
+          onSelect={() => headphonesGate.gate(() => void doJoin())}
+        >
+          <Headphones />
+          <span>Join huddle</span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {participantCount}
+          </span>
+        </DropdownMenuItem>
+        {gateDialog}
+      </>
+    );
   }
 
   return (

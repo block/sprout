@@ -718,6 +718,76 @@ test("thread panel width uses session storage and reset handle", async ({
     .toBe(defaultWidthPx);
 });
 
+test("narrow thread view collapses channel header actions into a menu", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 980, height: 720 });
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("channel-add-bot-trigger")).toBeVisible();
+  await expect(page.getByTestId("channel-actions-menu-trigger")).toHaveCount(0);
+
+  const rootMessage = page.locator('[data-message-id="mock-general-alice"]');
+  const threadPanel = page.getByTestId("message-thread-panel");
+
+  await rootMessage.hover();
+  await page.getByTestId("reply-message-mock-general-alice").click();
+  await expect(threadPanel).toBeVisible();
+  await expect(threadPanel.getByTestId("message-thread-back")).toHaveCount(0);
+
+  const menuTrigger = page.getByTestId("channel-actions-menu-trigger");
+  await expect(menuTrigger).toBeVisible();
+  await expect(page.getByTestId("channel-add-bot-trigger")).toBeHidden();
+  await expect(page.getByTestId("channel-members-trigger")).toBeHidden();
+  await expect(page.getByTestId("channel-management-trigger")).toBeHidden();
+
+  const menuBox = await menuTrigger.boundingBox();
+  const threadPanelBox = await threadPanel.boundingBox();
+  if (!menuBox || !threadPanelBox) {
+    throw new Error("Expected header action menu and thread panel bounds");
+  }
+  const menuGapPx = threadPanelBox.x - (menuBox.x + menuBox.width);
+  expect(menuGapPx).toBeGreaterThanOrEqual(10);
+  expect(menuGapPx).toBeLessThanOrEqual(14);
+
+  await menuTrigger.click();
+
+  await expect(page.getByTestId("channel-add-bot-trigger")).toBeVisible();
+  await expect(page.getByTestId("channel-members-trigger")).toBeVisible();
+  await expect(page.getByTestId("channel-start-huddle-trigger")).toBeVisible();
+  await expect(page.getByTestId("channel-management-trigger")).toBeVisible();
+});
+
+test("single-panel thread view hides topbar search and channel actions", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 860, height: 720 });
+
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("open-search")).toBeVisible();
+  await expect(page.getByTestId("channel-add-bot-trigger")).toBeVisible();
+
+  const rootMessage = page.locator('[data-message-id="mock-general-alice"]');
+  const threadPanel = page.getByTestId("message-thread-panel");
+
+  await rootMessage.hover();
+  await page.getByTestId("reply-message-mock-general-alice").click();
+  await expect(threadPanel).toBeVisible();
+  await expect(threadPanel.getByTestId("message-thread-back")).toBeVisible();
+  await expect(page.getByTestId("open-search")).toHaveCount(0);
+  await expect(page.getByTestId("channel-actions-menu-trigger")).toHaveCount(0);
+  await expect(page.getByTestId("channel-add-bot-trigger")).toHaveCount(0);
+
+  await threadPanel.getByTestId("message-thread-back").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("general");
+  await expect(page.getByTestId("open-search")).toBeVisible();
+  await expect(page.getByTestId("channel-add-bot-trigger")).toBeVisible();
+});
+
 test("composer is focused after selecting a channel", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("channel-general").click();

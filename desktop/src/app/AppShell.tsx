@@ -177,6 +177,7 @@ export function AppShell() {
   const [isChannelManagementOpen, setIsChannelManagementOpen] =
     React.useState(false);
   const [searchFocusRequest, setSearchFocusRequest] = React.useState(0);
+  const [topbarSearchHidden, setTopbarSearchHidden] = React.useState(false);
   const [browseDialogType, setBrowseDialogType] =
     React.useState<BrowseDialogType>(null);
   const [isNewDmOpen, setIsNewDmOpen] = React.useState(false);
@@ -675,6 +676,7 @@ export function AppShell() {
             unfollowThread: handleUnfollowThread,
             isFollowingThread,
             isNotifiedForThread,
+            setTopbarSearchHidden,
             threadActivityItems,
           }}
         >
@@ -693,6 +695,7 @@ export function AppShell() {
                       void goChannel(channelId);
                     }}
                     onOpenResult={handleOpenSearchResult}
+                    searchHidden={topbarSearchHidden}
                     searchFocusRequest={searchFocusRequest}
                   />
                 ) : null}

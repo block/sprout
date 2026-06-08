@@ -14,6 +14,7 @@ type AppTopChromeProps = {
   onGoForward: () => void;
   onOpenChannel: (channelId: string) => void;
   onOpenResult: (hit: SearchHit) => void;
+  searchHidden?: boolean;
   searchFocusRequest: number;
 };
 
@@ -41,6 +42,7 @@ export function AppTopChrome({
   onGoForward,
   onOpenChannel,
   onOpenResult,
+  searchHidden = false,
   searchFocusRequest,
 }: AppTopChromeProps) {
   return (
@@ -76,14 +78,16 @@ export function AppTopChrome({
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
-      <TopbarSearch
-        channels={channels}
-        className="fixed left-1/2 top-[7px] z-[45] block w-[220px] max-w-[calc(100vw-11rem)] -translate-x-1/2 md:w-[300px] md:max-w-[34vw] lg:w-[360px] lg:max-w-[38vw] xl:w-[420px] xl:max-w-[42vw] 2xl:w-[480px] 2xl:max-w-[44vw]"
-        currentPubkey={currentPubkey}
-        focusRequest={searchFocusRequest}
-        onOpenChannel={onOpenChannel}
-        onOpenResult={onOpenResult}
-      />
+      {searchHidden ? null : (
+        <TopbarSearch
+          channels={channels}
+          className="fixed left-1/2 top-[7px] z-[45] block w-[220px] max-w-[calc(100vw-11rem)] -translate-x-1/2 md:w-[300px] md:max-w-[34vw] lg:w-[360px] lg:max-w-[38vw] xl:w-[420px] xl:max-w-[42vw] 2xl:w-[480px] 2xl:max-w-[44vw]"
+          currentPubkey={currentPubkey}
+          focusRequest={searchFocusRequest}
+          onOpenChannel={onOpenChannel}
+          onOpenResult={onOpenResult}
+        />
+      )}
     </>
   );
 }

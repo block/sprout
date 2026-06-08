@@ -11,11 +11,9 @@ const MESSAGE_BODY_OFFSET_PX = MESSAGE_TEXT_OFFSET_PX + 4;
 const NESTED_REPLY_OFFSET_PX = 28;
 
 function ParticipantAvatar({
-  hasNextParticipant,
   participant,
   index,
 }: {
-  hasNextParticipant: boolean;
   participant: TimelineThreadSummaryParticipant;
   index: number;
 }) {
@@ -27,7 +25,7 @@ function ParticipantAvatar({
     >
       <UserAvatar
         avatarUrl={participant.avatarUrl}
-        className={`h-8 w-8 text-[10px] ${hasNextParticipant ? "ring-2 ring-background" : ""}`}
+        className="h-7 w-7 text-[10px] ring-2 ring-background"
         displayName={participant.author}
         size="sm"
       />
@@ -100,7 +98,6 @@ export function MessageThreadSummaryRow({
         <div className="flex shrink-0 items-center">
           {summary.participants.map((participant, index) => (
             <ParticipantAvatar
-              hasNextParticipant={index < summary.participants.length - 1}
               index={index}
               key={participant.id}
               participant={participant}

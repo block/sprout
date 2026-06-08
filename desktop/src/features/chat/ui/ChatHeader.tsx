@@ -136,13 +136,16 @@ export function ChatHeader({
         typeof document === "undefined" ? null : (
           createPortal(topRightActions, document.body)
         )
-      ) : (
+      ) : actionsRightInset ? (
         <div
-          className="flex shrink-0 items-center gap-1"
-          style={
-            actionsRightInset ? { marginRight: actionsRightInset } : undefined
-          }
+          className="absolute top-1/2 z-10 flex shrink-0 -translate-y-1/2 items-center gap-1"
+          style={{ right: actionsRightInset }}
         >
+          <UpdateIndicator />
+          {actions ? <div className="shrink-0">{actions}</div> : null}
+        </div>
+      ) : (
+        <div className="flex shrink-0 items-center gap-1">
           <UpdateIndicator />
           {actions ? <div className="shrink-0">{actions}</div> : null}
         </div>
