@@ -6,6 +6,7 @@ import type { TimelineReaction } from "@/features/messages/types";
 import { cn } from "@/shared/lib/cn";
 import { emojiDisplayName } from "@/shared/lib/emojiName";
 import { rewriteRelayUrl } from "@/shared/lib/mediaUrl";
+import { AnimatedCount } from "@/shared/ui/AnimatedCount";
 import {
   isPositiveEmojiParticle,
   useEmojiBurst,
@@ -433,7 +434,10 @@ function ReactionPill({
         type="button"
       >
         <EmojiGlyph reaction={reaction} className={REACTION_GLYPH_CLASSES} />
-        <span className="text-muted-foreground">{reaction.count}</span>
+        <AnimatedCount
+          className="text-muted-foreground"
+          value={reaction.count}
+        />
       </button>
     );
   }
@@ -463,7 +467,10 @@ function ReactionPill({
               reaction={reaction}
               className={REACTION_GLYPH_CLASSES}
             />
-            <span className="text-muted-foreground">{reaction.count}</span>
+            <AnimatedCount
+              className="text-muted-foreground"
+              value={reaction.count}
+            />
           </button>
         </span>
       </PopoverTrigger>
