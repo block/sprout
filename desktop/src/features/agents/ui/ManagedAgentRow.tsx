@@ -9,6 +9,7 @@ import {
   Pencil,
   Play,
   Power,
+  Sparkles,
   Square,
   Trash2,
   UserPlus,
@@ -31,6 +32,8 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { EditAgentDialog } from "./EditAgentDialog";
+import { writeConciergeSelection } from "@/features/concierge/lib/conciergeSelection";
+import { useIdentityQuery } from "@/shared/api/hooks";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { ManagedAgentLogPanel } from "./ManagedAgentLogPanel";
 import { ModelPicker } from "./ModelPicker";
@@ -345,6 +348,7 @@ function AgentActionsMenu({
   onStop: (pubkey: string) => void;
   onToggleStartOnAppLaunch: (pubkey: string, startOnAppLaunch: boolean) => void;
 }) {
+  const selfPubkey = useIdentityQuery().data?.pubkey;
   const [editOpen, setEditOpen] = React.useState(false);
 
   return (
@@ -422,6 +426,21 @@ function AgentActionsMenu({
           >
             <Clipboard className="h-4 w-4" />
             Copy pubkey
+          </DropdownMenuItem>
+
+          <DropdownMenuItem
+            disabled={!selfPubkey}
+            onClick={() => {
+              if (!selfPubkey) return;
+              if (writeConciergeSelection(selfPubkey, agent.pubkey)) {
+                toast.success(`${agent.name} is now your Home Concierge`);
+              } else {
+                toast.error("Couldn't save the Concierge selection");
+              }
+            }}
+          >
+            <Sparkles className="h-4 w-4" />
+            Set as Home Concierge
           </DropdownMenuItem>
 
           {agent.backend.type === "local" ? (

@@ -108,10 +108,13 @@
   animation: concierge-ring 1.1s ease-out infinite;
 }
 
+/* Specificity matches the [data-phase] rules above; later in the file wins. */
 @media (prefers-reduced-motion: reduce) {
   .concierge-orb__core,
-  .concierge-orb__ring {
-    animation: none !important;
+  .concierge-orb__ring,
+  .concierge-orb[data-phase] .concierge-orb__core,
+  .concierge-orb[data-phase] .concierge-orb__ring {
+    animation: none;
   }
 }
 
@@ -132,6 +135,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .concierge-launcher__orb {
-    animation: none !important;
+    animation: none;
   }
 }

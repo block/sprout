@@ -61,7 +61,7 @@ test("drops blocks with missing or blank required fields", () => {
   ]) {
     const { intents } = parseDispatchIntents(
       "m1",
-      "```dispatch\n" + body + "\n```",
+      `\`\`\`dispatch\n${body}\n\`\`\``,
     );
     assert.equal(intents.length, 0, body);
   }
