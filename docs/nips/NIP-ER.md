@@ -10,7 +10,7 @@ This NIP defines encrypted, author-only reminders as `kind:30300` addressable ev
 
 The relay learns that an author has a reminder due at a time. It does not learn what the reminder is about.
 
-Delivery is best-effort: relays SHOULD emit a due reminder to matching live subscriptions when `not_before` passes, and clients MUST enforce `not_before` locally.
+Delivery is relay-dependent: relays that advertise push-mode support MUST emit a due reminder to matching live subscriptions when `not_before` passes, and clients MUST enforce `not_before` locally.
 
 ## Motivation
 
@@ -22,7 +22,7 @@ This NIP defines the smallest interoperable reminder primitive: encrypted author
 
 This NIP does not define recurrence, shared reminders, push notifications, calendar events, or cryptographic time-locking. Recurrence is a client-side policy: a client that wants recurring reminders creates a new reminder with a fresh `d` tag for each occurrence.
 
-Relay due-time delivery is not guaranteed notification delivery. Clients remain responsible for local scheduling, recovery queries, deduplication, and final `not_before` enforcement.
+Relay due-time delivery is not guaranteed notification delivery. Clients remain responsible for recovery queries, deduplication, and final `not_before` enforcement. Clients that do not rely on local long-horizon scheduling can use the stateless notification profile in [Client behavior](#client-behavior), but that profile depends on relay redelivery and will not fire on relays that do not implement this NIP.
 
 ## Terminology
 
@@ -133,9 +133,9 @@ Relays MUST store only the latest version for each `(pubkey, 30300, d)` address.
 
 ### Due-time delivery
 
-For authenticated author subscriptions matching a latest event with a valid `not_before`, a supporting relay SHOULD send that event as an `EVENT` message when `not_before` passes. This is a due signal. It does not change the event, create a relay-authored event, or imply guaranteed notification delivery.
+For authenticated author subscriptions matching a latest event with a valid `not_before`, a supporting relay SHOULD send that event as an `EVENT` message when `not_before` passes. A relay that advertises `limitation.due_delivery_mode` as `"push"` MUST send that due-time `EVENT` message. This is a due signal. It does not change the event, create a relay-authored event, or imply guaranteed notification delivery.
 
-If a replacement with a future `not_before` is accepted while an authenticated author subscription is open, the relay SHOULD send that replacement immediately as state sync. The relay SHOULD send it again when it becomes due. Clients MUST deduplicate by event `id` and address.
+If a replacement with a future `not_before` is accepted while an authenticated author subscription is open, the relay SHOULD send that replacement immediately as state sync. The relay SHOULD send it again when it becomes due. Clients MUST deduplicate persisted reminder state by event `id` and address.
 
 Relays MAY implement due-time delivery with a timer, cron, sorted queue, or lazy query-time evaluation. Lazy implementations that do not proactively push due events still conform if they preserve the author-only privacy rules and return due reminders on later authenticated queries. Relays SHOULD advertise `limitation.due_delivery_mode` as `"push"` when they proactively emit due signals and `"lazy"` when they only surface due reminders on query.
 
@@ -150,6 +150,8 @@ Clients subscribe to their own reminders:
 ```
 
 Clients that expect due-time `EVENT` messages SHOULD keep reminder subscriptions unbounded by `since` and `until`, or use periodic recovery queries. `since` and `until` compare against `created_at`, not `not_before`, so a reminder created long ago may become due after the client's last cursor.
+
+For notification-only use, clients SHOULD ensure the receive path for `kind:30300` notifications does not suppress repeated `EVENT` messages by id; pool-level duplicate-id filtering can otherwise drop due-time redelivery before application code runs. On each delivery, if `not_before` is more than `W` seconds in the future, the notification path SHOULD discard the event without recording it; otherwise it SHOULD hold the event and notify at `not_before`, or immediately if `not_before` is already past. The RECOMMENDED value of `W` is 60 seconds. Reminder management and synchronization SHOULD use separate one-shot queries. This stateless notification profile depends on relay redelivery and will not fire on relays that do not implement this NIP.
 
 Clients MUST enforce `not_before` locally even when a relay serves an event early or does not support this NIP. A pending reminder with a future `not_before` may be shown in a reminder-management UI, but MUST NOT notify the user or be marked `done` before it is due. Because relays cannot read `status`, clients MUST omit `not_before` on `done` and `cancelled` replacements. If a latest replacement decrypts to `done` or `cancelled` but carries `not_before`, clients MUST treat it as terminal state and MUST NOT schedule or display a due notification for it.
 
@@ -185,7 +187,7 @@ Visible to supporting relays and storage observers:
 
 Relays can observe reminder ownership, due times, approximate payload sizes, and lifecycle timing. Users who do not want a relay to learn that they have a reminder due at a particular time should not publish reminders to that relay.
 
-A malicious or faulty relay can send due signals early, late, repeatedly, or not at all. Clients MUST enforce `not_before` locally and MUST deduplicate by event `id` and reminder address.
+A malicious or faulty relay can send due signals early, late, repeatedly, or not at all. Clients MUST enforce `not_before` locally and MUST deduplicate persisted reminder state by event `id` and reminder address.
 
 A relay that violates the NIP-42 author-only read requirement can leak reminder metadata or ciphertext. NIP-44 protects reminder contents from passive readers, but it does not hide schedule metadata and does not protect against compromise of the author's private key. A compromised author key can decrypt, modify, complete, cancel, or delete that author's reminders.
 
