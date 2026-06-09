@@ -323,8 +323,19 @@ pub fn build_message_edit(
 }
 
 /// Kind 5 — NIP-09 deletion (messages).
-pub fn build_delete_compat(target_event_id: EventId) -> Result<EventBuilder, String> {
-    let tags = vec![tag(vec!["e", &target_event_id.to_hex()])?];
+///
+/// The `h` tag is non-standard for NIP-09 but required so the desktop's
+/// channel subscription (`{ kinds: [...], "#h": [channelId] }`) actually
+/// receives the deletion. The relay derives the channel-scoped permission
+/// check from the target event, not the `h` tag, so extra tags are safe.
+pub fn build_delete_compat(
+    channel_id: Uuid,
+    target_event_id: EventId,
+) -> Result<EventBuilder, String> {
+    let tags = vec![
+        tag(vec!["h", &channel_id.to_string()])?,
+        tag(vec!["e", &target_event_id.to_hex()])?,
+    ];
     Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
 }
 

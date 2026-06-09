@@ -462,7 +462,10 @@ export function useDeleteMessageMutation(channel: Channel | null) {
 
   return useMutation<void, Error, { eventId: string }>({
     mutationFn: async ({ eventId }) => {
-      await deleteMessage(eventId);
+      if (!channel) {
+        throw new Error("No channel selected.");
+      }
+      await deleteMessage(channel.id, eventId);
     },
     onSuccess: (_data, { eventId }) => {
       if (!channel) return;

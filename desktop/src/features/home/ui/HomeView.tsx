@@ -414,9 +414,13 @@ export function HomeView({
               if (!selectedItem || !canDelete) {
                 return;
               }
+              const channelId = selectedItem.item.channelId;
+              if (!channelId) {
+                return;
+              }
 
               setIsDeletingMessage(true);
-              void deleteMessage(selectedItem.id)
+              void deleteMessage(channelId, selectedItem.id)
                 .then(() => {
                   onRefresh();
                 })

@@ -354,8 +354,21 @@ pub fn build_delete_message(
 // ── Builder 7: build_delete_compat ───────────────────────────────────────────
 
 /// Build a NIP-09 compatible deletion event (kind 5).
-pub fn build_delete_compat(target_event_id: nostr::EventId) -> Result<EventBuilder, SdkError> {
-    let tags = vec![tag(&["e", &target_event_id.to_hex()])?];
+///
+/// The `h` tag is non-standard for NIP-09, but Sprout's channel subscription
+/// filter requires it (`{ kinds: [...], "#h": [channelId] }`) — without it the
+/// kind:5 never matches the subscription and clients never observe the
+/// deletion until a non-channel-scoped fetch backfills it. Extra tags are
+/// safe per NIP-09; the relay derives the deletion target from the `e` tag
+/// and validates author permissions independently of the `h` tag.
+pub fn build_delete_compat(
+    channel_id: Uuid,
+    target_event_id: nostr::EventId,
+) -> Result<EventBuilder, SdkError> {
+    let tags = vec![
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["e", &target_event_id.to_hex()])?,
+    ];
     Ok(EventBuilder::new(Kind::Custom(5), "").tags(tags))
 }
 
@@ -1419,9 +1432,11 @@ mod tests {
 
     #[test]
     fn delete_compat_happy_path() {
+        let cid = uuid();
         let eid = event_id();
-        let ev = sign(build_delete_compat(eid).unwrap());
+        let ev = sign(build_delete_compat(cid, eid).unwrap());
         assert_eq!(ev.kind.as_u16(), 5);
+        assert!(has_tag(&ev, "h", &cid.to_string()));
         assert!(has_tag(&ev, "e", &eid.to_hex()));
         assert_eq!(ev.content, "");
     }
@@ -1723,8 +1738,8 @@ mod tests {
 
     #[test]
     fn extract_channel_id_absent() {
-        let eid = event_id();
-        let ev = sign(build_delete_compat(eid).unwrap());
+        // build_note (kind 1) is a global text note — no h tag.
+        let ev = sign(build_note("hello", None).unwrap());
         assert_eq!(extract_channel_id(&ev), None);
     }
 
