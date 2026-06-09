@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 mod paths;
+mod read_file;
 mod rg;
 mod shell;
 mod shim;
@@ -48,6 +49,17 @@ impl DevMcp {
     }
 
     #[tool(
+        name = "read_file",
+        description = "Read a text file and return its contents with line numbers. Returns lines in `{number}\\t{content}` format. Use `offset` (0-based) and `limit` (default 2000) to window into large files. Path resolved relative to workdir (defaults to server cwd). Prefer over cat/head/tail."
+    )]
+    async fn read_file(
+        &self,
+        Parameters(p): Parameters<read_file::ReadFileParams>,
+    ) -> Result<String, ErrorData> {
+        read_file::run(&self.state, p)
+    }
+
+    #[tool(
         name = "view_image",
         description = "Load an image from a file path, http(s) URL, or data: URL and return it as an MCP image content block that multimodal LLMs (Anthropic, OpenAI-compatible, etc.) can see. Resizes to a longest-edge of 1568px by default (override with `max_dim`, range 64..=2048). Pass-through for already-small PNG/JPEG; transcodes oversize input to PNG (if alpha) or JPEG q85. Animated GIF/WebP rejected — provide a still frame. Hard cap 20 MiB source, ~4 MiB on the wire. Relative paths resolve under `workdir` (defaults to server cwd) and may not escape it."
     )]
@@ -60,7 +72,7 @@ impl DevMcp {
 
     #[tool(
         name = "str_replace",
-        description = "Atomic find-and-replace in a file. old_str must occur exactly once. Returns a unified diff. Path resolved relative to workdir (defaults to server cwd). Prefer over sed/awk."
+        description = "Atomic find-and-replace in a file. old_str must occur exactly once unless replace_all is true, in which case all occurrences are replaced. Returns a unified diff. Path resolved relative to workdir (defaults to server cwd). Prefer over sed/awk."
     )]
     async fn str_replace(
         &self,

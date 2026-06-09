@@ -15,6 +15,10 @@ pub struct StrReplaceParams {
     pub path: String,
     pub old_str: String,
     pub new_str: String,
+    /// When true, replace ALL occurrences of old_str instead of requiring
+    /// exactly one match. Defaults to false.
+    #[serde(default)]
+    pub replace_all: Option<bool>,
     #[serde(default)]
     pub workdir: Option<String>,
 }
@@ -105,52 +109,91 @@ pub fn run(state: &SharedState, p: StrReplaceParams) -> Result<String, ErrorData
         }
     };
 
-    let count = count_occurrences_capped(&content, &p.old_str);
-    match count {
-        0 => {
+    if p.replace_all.unwrap_or(false) {
+        let count = content.matches(&p.old_str as &str).count();
+        if count == 0 {
             let hint = nearest_line_hint(&content, &p.old_str)
                 .map(|h| format!("\n{h}"))
                 .unwrap_or_default();
-            Err(ErrorData::invalid_params(
+            return Err(ErrorData::invalid_params(
                 format!(
                     "old_str not found in {}.\nold_str (truncated): {:?}{hint}",
                     target.display(),
                     truncate(&p.old_str, 80)
                 ),
                 None,
-            ))
+            ));
         }
-        1 => {
-            let new_content = content.replacen(&p.old_str, &p.new_str, 1);
-            if new_content.len() as u64 > MAX_FILE_BYTES {
-                return Err(ErrorData::invalid_params(
+        let new_content = content.replace(&p.old_str as &str, &p.new_str);
+        if new_content.len() as u64 > MAX_FILE_BYTES {
+            return Err(ErrorData::invalid_params(
+                format!(
+                    "result would exceed {} byte limit ({} bytes)",
+                    MAX_FILE_BYTES,
+                    new_content.len()
+                ),
+                None,
+            ));
+        }
+        if let Err(e) = atomic_write(&target, &new_content) {
+            return Err(ErrorData::internal_error(
+                format!("failed to write {}: {e}", target.display()),
+                None,
+            ));
+        }
+        let diff = unified_diff(&content, &new_content, &target);
+        Ok(format!(
+            "Replaced {count} occurrence(s) in {}.\n\n{diff}",
+            target.display()
+        ))
+    } else {
+        let count = count_occurrences_capped(&content, &p.old_str);
+        match count {
+            0 => {
+                let hint = nearest_line_hint(&content, &p.old_str)
+                    .map(|h| format!("\n{h}"))
+                    .unwrap_or_default();
+                Err(ErrorData::invalid_params(
                     format!(
-                        "result would exceed {} byte limit ({} bytes)",
-                        MAX_FILE_BYTES,
-                        new_content.len()
+                        "old_str not found in {}.\nold_str (truncated): {:?}{hint}",
+                        target.display(),
+                        truncate(&p.old_str, 80)
                     ),
                     None,
-                ));
+                ))
             }
-            if let Err(e) = atomic_write(&target, &new_content) {
-                return Err(ErrorData::internal_error(
-                    format!("failed to write {}: {e}", target.display()),
-                    None,
-                ));
+            1 => {
+                let new_content = content.replacen(&p.old_str, &p.new_str, 1);
+                if new_content.len() as u64 > MAX_FILE_BYTES {
+                    return Err(ErrorData::invalid_params(
+                        format!(
+                            "result would exceed {} byte limit ({} bytes)",
+                            MAX_FILE_BYTES,
+                            new_content.len()
+                        ),
+                        None,
+                    ));
+                }
+                if let Err(e) = atomic_write(&target, &new_content) {
+                    return Err(ErrorData::internal_error(
+                        format!("failed to write {}: {e}", target.display()),
+                        None,
+                    ));
+                }
+                let diff = unified_diff(&content, &new_content, &target);
+                Ok(format!(
+                    "Replaced 1 occurrence in {}.\n\n{diff}",
+                    target.display()
+                ))
             }
-            let diff = unified_diff(&content, &new_content, &target);
-            Ok(format!(
-                "Replaced 1 occurrence in {}.\n\n{diff}",
-                target.display()
-            ))
+            _ => Err(ErrorData::invalid_params(
+                format!(
+                    "old_str matched multiple locations in {}; provide more surrounding context to make the match unique.",
+                    target.display()
+                ),
+                None,
+            )),
         }
-        _ => Err(ErrorData::invalid_params(
-            format!(
-                "old_str matched multiple locations in {}; provide more surrounding context to make the match unique.",
-                target.display()
-            ),
-            None,
-        )),
     }
 }
 
@@ -294,6 +337,7 @@ mod tests {
             path: "a.txt".into(),
             old_str: "beta".into(),
             new_str: "BETA".into(),
+            replace_all: None,
             workdir: Some(dir.path().display().to_string()),
         };
         let out = run(&state, p).expect("ok");
@@ -312,6 +356,7 @@ mod tests {
             path: "/etc/hosts".into(),
             old_str: "x".into(),
             new_str: "y".into(),
+            replace_all: None,
             workdir: Some(dir.path().display().to_string()),
         };
         let err = run(&state, p).unwrap_err();
@@ -333,10 +378,66 @@ mod tests {
             path: "big.bin".into(),
             old_str: "a".into(),
             new_str: "b".into(),
+            replace_all: None,
             workdir: Some(dir.path().display().to_string()),
         };
         let err = run(&state, p).unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.contains("too large"), "msg: {msg}");
+    }
+
+    #[test]
+    fn run_replace_all_replaces_all_occurrences() {
+        let dir = tempdir().expect("tempdir");
+        let f = dir.path().join("multi.txt");
+        fs::write(&f, "foo bar foo baz foo\n").expect("write");
+        let state = make_state(dir.path());
+        let p = StrReplaceParams {
+            path: "multi.txt".into(),
+            old_str: "foo".into(),
+            new_str: "qux".into(),
+            replace_all: Some(true),
+            workdir: Some(dir.path().display().to_string()),
+        };
+        let out = run(&state, p).expect("ok");
+        assert!(out.contains("Replaced 3 occurrence(s)"), "out: {out}");
+        let contents = fs::read_to_string(&f).expect("read");
+        assert_eq!(contents, "qux bar qux baz qux\n");
+    }
+
+    #[test]
+    fn run_replace_all_errors_on_zero_matches() {
+        let dir = tempdir().expect("tempdir");
+        let f = dir.path().join("nomatch.txt");
+        fs::write(&f, "hello world\n").expect("write");
+        let state = make_state(dir.path());
+        let p = StrReplaceParams {
+            path: "nomatch.txt".into(),
+            old_str: "xyz".into(),
+            new_str: "abc".into(),
+            replace_all: Some(true),
+            workdir: Some(dir.path().display().to_string()),
+        };
+        let err = run(&state, p).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("not found"), "msg: {msg}");
+    }
+
+    #[test]
+    fn run_without_replace_all_preserves_single_match_behavior() {
+        let dir = tempdir().expect("tempdir");
+        let f = dir.path().join("multi2.txt");
+        fs::write(&f, "foo bar foo\n").expect("write");
+        let state = make_state(dir.path());
+        let p = StrReplaceParams {
+            path: "multi2.txt".into(),
+            old_str: "foo".into(),
+            new_str: "qux".into(),
+            replace_all: None,
+            workdir: Some(dir.path().display().to_string()),
+        };
+        let err = run(&state, p).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("matched multiple locations"), "msg: {msg}");
     }
 }
