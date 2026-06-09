@@ -117,6 +117,13 @@ impl SessionState {
         self.heartbeat_turn_count = 0;
         self.core_sections.clear();
     }
+
+    #[cfg(test)]
+    fn has_channel_state(&self, channel_id: &Uuid) -> bool {
+        self.sessions.contains_key(channel_id)
+            || self.turn_counts.contains_key(channel_id)
+            || self.core_sections.contains_key(channel_id)
+    }
 }
 
 /// An agent with its session state, owned by the pool or a running task.
@@ -2476,6 +2483,8 @@ mod tests {
         s.sessions.insert(ch_b, "sess-b".into());
         s.turn_counts.insert(ch_a, 5);
         s.turn_counts.insert(ch_b, 3);
+        s.core_sections.insert(ch_a, "core-a".into());
+        s.core_sections.insert(ch_b, "core-b".into());
         s.heartbeat_session = Some("sess-hb".into());
         s.heartbeat_turn_count = 7;
         (s, ch_a, ch_b)
@@ -2488,9 +2497,12 @@ mod tests {
 
         assert!(!s.sessions.contains_key(&ch_a));
         assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
         // ch_b untouched
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
         // heartbeat untouched
         assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
         assert_eq!(s.heartbeat_turn_count, 7);
@@ -2507,6 +2519,8 @@ mod tests {
         assert_eq!(s.sessions.len(), 2);
         assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_a).unwrap(), "core-a");
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
     }
 
     #[test]
@@ -2516,6 +2530,7 @@ mod tests {
 
         assert!(s.sessions.is_empty());
         assert!(s.turn_counts.is_empty());
+        assert!(s.core_sections.is_empty());
         assert!(s.heartbeat_session.is_none());
         assert_eq!(s.heartbeat_turn_count, 0);
     }
@@ -2531,6 +2546,8 @@ mod tests {
         assert_eq!(s.turn_counts.len(), 2);
         assert_eq!(*s.turn_counts.get(&ch_a).unwrap(), 5);
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_a).unwrap(), "core-a");
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
     }
 
     #[test]
@@ -2539,6 +2556,7 @@ mod tests {
         s.invalidate_all(); // should not panic
         assert!(s.sessions.is_empty());
         assert!(s.turn_counts.is_empty());
+        assert!(s.core_sections.is_empty());
     }
 
     #[test]
@@ -2547,9 +2565,12 @@ mod tests {
         assert!(s.invalidate_channel(&ch_a));
         assert!(!s.sessions.contains_key(&ch_a));
         assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
         // ch_b untouched
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
         // heartbeat untouched
         assert_eq!(s.heartbeat_session.as_deref(), Some("sess-hb"));
         assert_eq!(s.heartbeat_turn_count, 7);
@@ -2576,7 +2597,10 @@ mod tests {
         }
         assert!(!s.sessions.contains_key(&ch_a));
         assert!(!s.turn_counts.contains_key(&ch_a));
+        assert!(!s.core_sections.contains_key(&ch_a));
+        assert!(!s.has_channel_state(&ch_a));
         assert_eq!(s.sessions.get(&ch_b).unwrap(), "sess-b");
         assert_eq!(*s.turn_counts.get(&ch_b).unwrap(), 3);
+        assert_eq!(s.core_sections.get(&ch_b).unwrap(), "core-b");
     }
 }

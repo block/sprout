@@ -2776,6 +2776,42 @@ mod owner_control_command_tests {
             &agent
         ));
     }
+
+    #[tokio::test]
+    async fn signal_in_flight_task_sends_rotate_once() {
+        let mut pool = AgentPool::from_slots(vec![]);
+        let channel_id = Uuid::new_v4();
+        let other_channel_id = Uuid::new_v4();
+        let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+
+        let abort_handle = pool.join_set.spawn(async {});
+        pool.task_map_mut().insert(
+            abort_handle.id(),
+            pool::TaskMeta {
+                agent_index: 0,
+                channel_id: Some(channel_id),
+                recoverable_batch: None,
+                control_tx: Some(control_tx),
+            },
+        );
+
+        assert!(!signal_in_flight_task(
+            &mut pool,
+            other_channel_id,
+            ControlSignal::Rotate
+        ));
+        assert!(signal_in_flight_task(
+            &mut pool,
+            channel_id,
+            ControlSignal::Rotate
+        ));
+        assert_eq!(control_rx.await.unwrap(), ControlSignal::Rotate);
+        assert!(!signal_in_flight_task(
+            &mut pool,
+            channel_id,
+            ControlSignal::Rotate
+        ));
+    }
 }
 
 #[cfg(test)]
