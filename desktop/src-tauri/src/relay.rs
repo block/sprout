@@ -320,8 +320,9 @@ pub async fn query_agent_profile(
         return Ok(None);
     };
 
-    let content: serde_json::Value = serde_json::from_str(&event.content)
-        .map_err(|e| format!("failed to parse kind:0 content: {e}"))?;
+    let Ok(content) = serde_json::from_str::<serde_json::Value>(&event.content) else {
+        return Ok(None);
+    };
 
     Ok(Some(AgentProfileInfo {
         display_name: content

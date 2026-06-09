@@ -239,7 +239,10 @@ pub async fn update_managed_agent(
                 .map_err(|e| format!("failed to parse agent keys: {e}"))?;
             let relay_url = record.relay_url.clone();
             let display_name = record.name.clone();
-            let avatar_url = managed_agent_avatar_url(&record.agent_command);
+            let avatar_url = record
+                .avatar_url
+                .clone()
+                .or_else(|| managed_agent_avatar_url(&record.agent_command));
             let auth_tag = record.auth_tag.clone();
             Some((agent_keys, relay_url, display_name, avatar_url, auth_tag))
         } else {

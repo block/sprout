@@ -1149,6 +1149,16 @@ mod tests {
     }
 
     #[test]
+    fn profile_needs_sync_when_existing_name_is_none() {
+        let existing = profile(None, Some("https://x/a.png"));
+        assert!(profile_needs_sync(
+            Some(&existing),
+            "Duncan",
+            Some("https://x/a.png"),
+        ));
+    }
+
+    #[test]
     fn profile_needs_sync_when_expected_avatar_absent_but_published() {
         let existing = profile(Some("Duncan"), Some("https://x/a.png"));
         assert!(profile_needs_sync(Some(&existing), "Duncan", None));

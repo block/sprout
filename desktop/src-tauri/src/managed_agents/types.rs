@@ -621,6 +621,7 @@ mod tests {
         .expect("legacy agent record without auth_tag should deserialize");
 
         assert_eq!(record.auth_tag, None);
+        assert_eq!(record.avatar_url, None);
         assert_eq!(record.pubkey, "abcd1234");
     }
 
