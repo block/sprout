@@ -681,9 +681,11 @@ struct ProfileReconcileData {
     private_key_nsec: String,
     name: String,
     relay_url: String,
-    /// Avatar persisted at creation time. Reconciliation compares against this
-    /// rather than re-deriving from persona config, so a restart never
-    /// overwrites the originally published avatar.
+    /// Expected avatar URL for the published profile. Resolved at start from the
+    /// record's persisted `avatar_url` (the exact URL published at creation),
+    /// falling back to persona/command derivation only for pre-existing records
+    /// that have no stored value — so old records still self-heal without
+    /// regressing a user-overridden avatar.
     avatar_url: Option<String>,
     auth_tag: Option<String>,
 }
@@ -725,11 +727,18 @@ pub async fn start_managed_agent(
 
         let record = find_managed_agent_mut(&mut records, &pubkey)?;
 
+        // Prefer the avatar persisted at creation. For pre-existing records with
+        // no stored value, fall back to the legacy persona/command derivation so
+        // they still self-heal rather than regressing to no avatar.
+        let expected_avatar = record.avatar_url.clone().or_else(|| {
+            resolve_avatar_for_reconcile(&app, record.persona_id.as_deref(), &record.agent_command)
+        });
+
         let reconcile = ProfileReconcileData {
             private_key_nsec: record.private_key_nsec.clone(),
             name: record.name.clone(),
             relay_url: record.relay_url.clone(),
-            avatar_url: record.avatar_url.clone(),
+            avatar_url: expected_avatar,
             auth_tag: record.auth_tag.clone(),
         };
 
@@ -866,6 +875,27 @@ fn profile_needs_sync(
             !name_matches || !picture_matches
         }
     }
+}
+
+/// Legacy avatar derivation used only as a fallback for pre-existing records
+/// that have no persisted `avatar_url`. Prefers the persona's avatar, then the
+/// command-based default. New records store the resolved URL directly and never
+/// hit this path.
+fn resolve_avatar_for_reconcile(
+    app: &AppHandle,
+    persona_id: Option<&str>,
+    agent_command: &str,
+) -> Option<String> {
+    if let Some(persona_id) = persona_id {
+        if let Ok(personas) = load_personas(app) {
+            if let Some(persona) = personas.iter().find(|p| p.id == persona_id) {
+                if persona.avatar_url.is_some() {
+                    return persona.avatar_url.clone();
+                }
+            }
+        }
+    }
+    managed_agent_avatar_url(agent_command)
 }
 
 #[tauri::command]
