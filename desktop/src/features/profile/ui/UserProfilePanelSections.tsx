@@ -922,7 +922,7 @@ function ProfileAdminSection({
   return (
     <section className="space-y-2 pt-2">
       <h4 className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-        Danger zone
+        Admin
       </h4>
       <div className="overflow-hidden rounded-2xl bg-muted/20">
         {isArchived ? (

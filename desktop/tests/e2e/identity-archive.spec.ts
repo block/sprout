@@ -4,14 +4,11 @@ import { installMockBridge } from "../helpers/bridge";
 
 // NIP-IA archive button + "Archived" flair gate matrix.
 //
-// Guards the composition `canArchive = isRelayAdminOrOwner ||
-// isOaOwnerOfViewee` in UserProfilePanel.tsx. Self-archive is intentionally
-// NOT a path here — NIP-IA permits it but a zero-friction destructive button
-// on your own profile is a footgun. Unit tests cover each input in isolation;
-// this spec covers the OR composition and the destructive-confirm gate where
-// silent regressions (refactor turns OR into AND, role expansion bypasses a
-// branch, confirm dialog wired to fire-on-mount, etc.) would otherwise slip
-// past code review.
+// Guards the composition `canArchive = isSelf || isRelayAdminOrOwner ||
+// isOaOwnerOfViewee` in UserProfilePanel.tsx. Unit tests cover each input in
+// isolation; this spec covers the OR composition where silent regressions
+// (refactor turns OR into AND, role expansion bypasses a branch, etc.) would
+// otherwise slip past code review.
 
 const ALICE_PUBKEY =
   "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
@@ -40,14 +37,14 @@ async function openAliceProfile(page: import("@playwright/test").Page) {
 }
 
 test.describe("NIP-IA archive button gate", () => {
-  test("case 1 — self viewer + self target: Archive hidden (self-archive removed)", async ({
+  test("case 1 — self viewer + self target: Archive visible, no flair", async ({
     page,
   }) => {
     await installMockBridge(page, { relayRole: null, oaOwnerIsMe: false });
     await openSelfProfile(page);
-    await expect(page.getByTestId("user-profile-archive-identity")).toHaveCount(
-      0,
-    );
+    await expect(
+      page.getByTestId("user-profile-archive-identity"),
+    ).toBeVisible();
     await expect(page.getByTestId("user-profile-archived-flair")).toHaveCount(
       0,
     );
@@ -114,20 +111,5 @@ test.describe("NIP-IA archive button gate", () => {
     await expect(page.getByTestId("user-profile-archive-identity")).toHaveCount(
       0,
     );
-  });
-
-  test("case 6 — clicking Archive opens confirm dialog before firing", async ({
-    page,
-  }) => {
-    await installMockBridge(page, {
-      relayRole: null,
-      oaOwnerIsMe: true,
-      archivedIdentities: [],
-    });
-    await openAliceProfile(page);
-    // Confirm dialog not visible until the destructive action is clicked.
-    await expect(page.getByTestId("archive-identity-confirm")).toHaveCount(0);
-    await page.getByTestId("user-profile-archive-identity").click();
-    await expect(page.getByTestId("archive-identity-confirm")).toBeVisible();
   });
 });

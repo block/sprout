@@ -28,7 +28,6 @@ import {
   useUnfollowMutation,
   useUserProfileQuery,
 } from "@/features/profile/hooks";
-import { ArchiveIdentityConfirmDialog } from "@/features/profile/ui/ArchiveIdentityConfirmDialog";
 import {
   ChannelsFocusedView,
   MemoryFocusedView,
@@ -137,7 +136,6 @@ export function UserProfilePanel({
 
   const [view, setView] = React.useState<ProfilePanelView>("summary");
   const [editAgentOpen, setEditAgentOpen] = React.useState(false);
-  const [archiveConfirmOpen, setArchiveConfirmOpen] = React.useState(false);
 
   const profileQuery = useUserProfileQuery(pubkey);
   const currentProfileQuery = useProfileQuery(currentPubkey !== undefined);
@@ -198,16 +196,7 @@ export function UserProfilePanel({
   const myRole = myMembershipQuery.data?.role;
   const isRelayAdminOrOwner = myRole === "owner" || myRole === "admin";
   const isOaOwnerOfViewee = oaOwnerQuery.data?.isMe === true;
-  // Self-archive is intentionally NOT a path here — NIP-IA permits it but a
-  // zero-friction destructive button on your own profile is a footgun. If we
-  // ever re-home self-archive, it belongs under Settings → Advanced, not in
-  // the profile panel.
-  const canArchive = isRelayAdminOrOwner || isOaOwnerOfViewee;
-  // Picks the confirm-dialog copy/title and labels which consent path the
-  // mutation is publishing under (NIP-IA `consent=owner` vs admin authority).
-  const archiveConsentPath: "owner" | "admin" = isOaOwnerOfViewee
-    ? "owner"
-    : "admin";
+  const canArchive = isSelf || isRelayAdminOrOwner || isOaOwnerOfViewee;
 
   const profileChannels = React.useMemo(
     () =>
@@ -227,19 +216,10 @@ export function UserProfilePanel({
   }
 
   const handleArchive = React.useCallback(() => {
-    // Destructive: route through confirm dialog rather than firing on click.
-    // The actual mutation lives in `handleConfirmArchive`.
-    setArchiveConfirmOpen(true);
-  }, []);
-
-  const handleConfirmArchive = React.useCallback(() => {
     archiveMutation.mutate(
       { targetPubkey: pubkey },
       {
-        onSuccess: () => {
-          setArchiveConfirmOpen(false);
-          toast.success("Archived on this relay");
-        },
+        onSuccess: () => toast.success("Archived on this relay"),
         onError: (error) =>
           toast.error(
             `Archive failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -494,16 +474,6 @@ export function UserProfilePanel({
           agent={managedAgent}
           onOpenChange={setEditAgentOpen}
           open={editAgentOpen}
-        />
-      ) : null}
-      {canArchive ? (
-        <ArchiveIdentityConfirmDialog
-          consentPath={archiveConsentPath}
-          displayName={displayName}
-          isPending={archiveMutation.isPending}
-          onConfirm={handleConfirmArchive}
-          onOpenChange={setArchiveConfirmOpen}
-          open={archiveConfirmOpen}
         />
       ) : null}
     </>
