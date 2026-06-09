@@ -45,6 +45,18 @@ created: 2026-01-15
 - **Never push without approval** — do not `git push` to any remote
 - **Stay on task** — only stage files relevant to your current work
 
+## Git Commit Identity
+
+**Why this matters:** commits must land **Verified** on GitHub and be attributed to the human operator, not the sprout-agent identity. A sprout-agent npub as author produces unverified commits credited to the wrong identity — this bites the whole sprout team, not just one repo.
+
+- **Author identity:** commit as the human operator's GitHub identity (whatever their global `git config user.name`/`user.email` resolves to). Do **NOT** set a repo-local `user.name`/`user.email`, and do **NOT** export `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, that overrides the human's global config with a sprout-agent npub identity.
+- **Signing:** do **NOT** disable `commit.gpgsign`. Let the operator's global signing config apply (commonly `gpg.format=ssh` with a registered key) so commits land Verified. Don't pass `--no-gpg-sign`.
+- **Agent attribution:** record the agent's contribution with a `Co-authored-by:` trailer rather than hijacking the author field. Format:
+  `Co-authored-by: <agent-name> <agent-id@relay-host>`
+  One blank line must separate the trailer from the commit body — GitHub only parses trailers in the final paragraph.
+- **DCO sign-off:** keep `-s`/`--signoff` for DCO. With the human as author, the `Signed-off-by` trailer matches the author automatically, so DCO and Verified both pass under one identity.
+- **Verify before pushing:** `git log --show-signature -1` shows a good signature and the human as author.
+
 <!-- BEGIN SPROUT MANAGED — regenerated automatically, do not edit below -->
 ## Active Agents
 

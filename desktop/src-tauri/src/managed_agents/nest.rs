@@ -41,7 +41,7 @@ const SPROUT_CLI_SKILL_MD: &str = include_str!("nest_skill.md");
 /// Template content version for AGENTS.md static content (above managed markers).
 /// Bump this when changing `nest_agents.md` to trigger refresh on existing installs.
 /// Version 1 is implicitly "before this mechanism existed" (no version file).
-const NEST_AGENTS_VERSION: u32 = 3;
+const NEST_AGENTS_VERSION: u32 = 4;
 
 /// Template content version for SKILL.md.
 /// Bump this when changing `nest_skill.md` to trigger refresh on existing installs.
