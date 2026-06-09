@@ -106,7 +106,14 @@ export function useFeatureEnabled(featureId: string): boolean {
   const overrides = useFeatureSnapshot();
 
   const feature = getFeature(featureId);
-  if (!feature) return true;
+  if (!feature) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[FeatureFlags] Unknown feature id: "${featureId}". Check preview-features.json.`,
+      );
+    }
+    return true;
+  }
 
   return resolveEnabled(featureId, overrides);
 }

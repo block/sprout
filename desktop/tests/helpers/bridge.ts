@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { PREVIEW_FEATURE_IDS } from "./features";
+import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
   tyler: {
@@ -110,7 +110,6 @@ type BridgeOptions = {
 
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX =
   "sprout-onboarding-complete.v1:";
-const FEATURE_OVERRIDES_STORAGE_KEY = "sprout-feature-overrides-v1";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 const DEFAULT_RELAY_WS_URL = "ws://localhost:3000";
 

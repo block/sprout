@@ -1,8 +1,11 @@
-// Single source of truth for E2E tests: derive the preview-feature list from
+// Single source of truth for E2E tests: derive preview-feature data from
 // /preview-features.json so we don't have to hand-maintain a parallel array.
 //
-// New preview features added to the manifest are picked up automatically by
-// every test that imports from here.
+// Production reads the same JSON via the `@features-manifest` vite alias
+// (see `desktop/src/shared/features/manifest.ts`). The localStorage key
+// format matches `OVERRIDES_KEY` in `desktop/src/shared/features/store.ts`
+// — bumping `version` in `preview-features.json` updates production AND
+// every spec automatically.
 import featuresManifest from "../../../preview-features.json" with {
   type: "json",
 };
@@ -25,3 +28,10 @@ const manifest = featuresManifest as FeaturesManifest;
 export const PREVIEW_FEATURE_IDS: string[] = manifest.features
   .filter((f) => !f.platforms || f.platforms.includes("desktop"))
   .map((f) => f.id);
+
+/**
+ * The localStorage key the production store uses for feature overrides.
+ * Mirrors `OVERRIDES_KEY` in `src/shared/features/store.ts` so a manifest
+ * version bump flows through to E2E seeding without manual updates.
+ */
+export const FEATURE_OVERRIDES_STORAGE_KEY = `sprout-feature-overrides-v${manifest.version}`;
