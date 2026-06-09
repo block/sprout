@@ -107,6 +107,13 @@ impl ConnectionManager {
             .collect()
     }
 
+    /// Return the authenticated pubkey recorded for a connection, if any.
+    pub fn pubkey_for_conn(&self, conn_id: Uuid) -> Option<Vec<u8>> {
+        self.connections
+            .get(&conn_id)
+            .and_then(|entry| entry.authenticated_pubkey.read().ok()?.clone())
+    }
+
     /// Return the subscription map for a connection, if it is still live.
     pub fn subscriptions_for(&self, conn_id: Uuid) -> Option<ConnectionSubscriptions> {
         self.connections
@@ -660,5 +667,22 @@ mod tests {
 
         assert_eq!(mgr.connection_ids_for_pubkey(&pubkey), vec![conn_id]);
         assert!(mgr.subscriptions_for(conn_id).is_some());
+    }
+
+    #[tokio::test]
+    async fn pubkey_for_conn_returns_authenticated_pubkey() {
+        let mgr = ConnectionManager::new();
+        let conn_id = Uuid::new_v4();
+        let (tx, _rx) = mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let bp = Arc::new(AtomicU8::new(0));
+        let subscriptions = Arc::new(Mutex::new(HashMap::new()));
+        mgr.register(conn_id, tx, cancel, bp, subscriptions);
+
+        assert_eq!(mgr.pubkey_for_conn(conn_id), None);
+        let pubkey = vec![9u8; 32];
+        mgr.set_authenticated_pubkey(conn_id, pubkey.clone());
+        assert_eq!(mgr.pubkey_for_conn(conn_id), Some(pubkey));
+        assert_eq!(mgr.pubkey_for_conn(Uuid::new_v4()), None);
     }
 }

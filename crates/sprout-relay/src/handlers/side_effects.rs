@@ -40,27 +40,61 @@ async fn evict_live_channel_subscriptions(
     let conn_ids = state.conn_manager.connection_ids_for_pubkey(target_pubkey);
 
     for conn_id in conn_ids {
-        let removed = state
-            .sub_registry
-            .remove_channel_subscriptions(conn_id, channel_id);
-        if removed.is_empty() {
-            continue;
-        }
+        evict_conn_channel_subscriptions(state, channel_id, conn_id).await;
+    }
+}
 
-        if let Some(subscriptions) = state.conn_manager.subscriptions_for(conn_id) {
-            let mut conn_subscriptions = subscriptions.lock().await;
-            for sub_id in &removed {
-                conn_subscriptions.remove(sub_id);
-            }
-        }
+/// Close every live channel-scoped subscription on `conn_id`, removing them from
+/// the connection's local map and sending `CLOSED restricted` for each.
+async fn evict_conn_channel_subscriptions(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+    conn_id: uuid::Uuid,
+) {
+    let removed = state
+        .sub_registry
+        .remove_channel_subscriptions(conn_id, channel_id);
+    if removed.is_empty() {
+        return;
+    }
 
-        for sub_id in removed {
-            let _ = state.conn_manager.send_to(
-                conn_id,
-                RelayMessage::closed(&sub_id, "restricted: channel access revoked"),
-            );
+    if let Some(subscriptions) = state.conn_manager.subscriptions_for(conn_id) {
+        let mut conn_subscriptions = subscriptions.lock().await;
+        for sub_id in &removed {
+            conn_subscriptions.remove(sub_id);
         }
     }
+
+    for sub_id in removed {
+        let _ = state.conn_manager.send_to(
+            conn_id,
+            RelayMessage::closed(&sub_id, "restricted: channel access revoked"),
+        );
+    }
+}
+
+/// Revoke live channel subscriptions held by connections whose authenticated
+/// pubkey is not a current member. Used when an open channel flips to private:
+/// non-members could have subscribed while it was open, and fan-out does not
+/// re-check membership per event, so their subscriptions must be closed.
+async fn evict_non_member_channel_subscriptions(
+    state: &Arc<AppState>,
+    channel_id: Uuid,
+) -> anyhow::Result<()> {
+    let members = state.db.get_members(channel_id).await?;
+    let member_pubkeys: std::collections::HashSet<Vec<u8>> =
+        members.into_iter().map(|m| m.pubkey).collect();
+
+    for conn_id in state.sub_registry.channel_subscriber_conns(channel_id) {
+        let is_member = match state.conn_manager.pubkey_for_conn(conn_id) {
+            Some(pubkey) => member_pubkeys.contains(&pubkey),
+            None => false,
+        };
+        if !is_member {
+            evict_conn_channel_subscriptions(state, channel_id, conn_id).await;
+        }
+    }
+    Ok(())
 }
 
 /// Dispatch side effects for a stored event.
@@ -1026,6 +1060,12 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                     .await?;
                 }
                 "visibility" => {
+                    let was_open = state
+                        .db
+                        .get_channel(channel_id)
+                        .await
+                        .map(|c| c.visibility == "open")
+                        .unwrap_or(false);
                     state
                         .db
                         .update_channel(
@@ -1039,6 +1079,12 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                     // A visibility flip changes who can see the channel, so the
                     // accessible-channels cache must be cleared.
                     state.invalidate_all_accessible_channels();
+                    // On open -> private, revoke live subscriptions held by
+                    // non-members; fan-out does not re-check access per event,
+                    // so a non-member's existing sub would keep receiving events.
+                    if was_open && val == "private" {
+                        evict_non_member_channel_subscriptions(state, channel_id).await?;
+                    }
                     emit_system_message(
                         state,
                         channel_id,
@@ -1051,10 +1097,14 @@ async fn handle_edit_metadata(event: &Event, state: &Arc<AppState>) -> anyhow::R
                 "ttl" => {
                     // Empty string clears the TTL (permanent); otherwise it is a
                     // positive integer of seconds, validated during authorization.
+                    // Fail closed: a parse failure must reject, never silently
+                    // clear the TTL to permanent.
                     let ttl_change: Option<i32> = if val.is_empty() {
                         None
                     } else {
-                        val.parse::<i32>().ok()
+                        Some(val.parse::<i32>().map_err(|_| {
+                            anyhow::anyhow!("invalid ttl value: {val} (must be a positive integer)")
+                        })?)
                     };
                     state
                         .db
