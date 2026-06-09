@@ -495,6 +495,7 @@ declare global {
   interface Window {
     __SPROUT_E2E__?: E2eConfig;
     __SPROUT_E2E_COMMANDS__?: string[];
+    __SPROUT_E2E_LAST_START_HUDDLE__?: unknown;
     __SPROUT_E2E_WEBVIEW_ZOOM__?: number;
     __SPROUT_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
       channelName: string;
@@ -5205,6 +5206,7 @@ export function maybeInstallE2eTauriMocks() {
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__SPROUT_E2E_COMMANDS__ = [];
+  window.__SPROUT_E2E_LAST_START_HUDDLE__ = undefined;
   window.__SPROUT_E2E_SIGNED_EVENTS__ = [];
   window.__SPROUT_E2E_WEBVIEW_ZOOM__ = 1;
   window.__SPROUT_E2E_EMIT_MOCK_MESSAGE__ = ({
@@ -5885,6 +5887,14 @@ export function maybeInstallE2eTauriMocks() {
         const archived = activeConfig?.mock?.archivedIdentities ?? [];
         return { archived };
       }
+      case "start_huddle":
+        // Record the payload so specs can assert routing flags (e.g. the
+        // Concierge's transcriptsToParent). No audio machinery in mock mode.
+        window.__SPROUT_E2E_LAST_START_HUDDLE__ = payload;
+        return { ephemeral_channel_id: crypto.randomUUID() };
+      case "leave_huddle":
+      case "end_huddle":
+        return null;
       case "archive_identity":
       case "unarchive_identity":
         // The spec only verifies UI state, not the submitted request shape;

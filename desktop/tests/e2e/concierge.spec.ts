@@ -9,6 +9,7 @@ import { installMockBridge } from "../helpers/bridge";
 type E2eWindow = Window & {
   __SPROUT_E2E_COMMANDS__?: string[];
   __SPROUT_E2E_INVOKE_MOCK_COMMAND__?: unknown;
+  __SPROUT_E2E_LAST_START_HUDDLE__?: unknown;
   __TAURI_INTERNALS__?: { invoke?: unknown };
 };
 
@@ -86,6 +87,36 @@ test("typed turn lands in the DM transcript", async ({ page }) => {
   await expect(page.getByTestId("concierge-screen")).toContainText(message, {
     timeout: 10_000,
   });
+});
+
+test("voice attach routes transcripts to the DM spine", async ({ page }) => {
+  await gotoApp(page);
+  await page.getByTestId("concierge-launcher").click();
+
+  const orb = page.getByTestId("concierge-orb");
+  await expect(orb).toBeVisible({ timeout: 10_000 });
+  await orb.click();
+
+  // Regression: the Concierge huddle must use the persistent DM as parent
+  // AND opt into parent-routed transcripts — otherwise spoken turns post to
+  // the ephemeral huddle channel and never reach the DM memory spine.
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () => (window as E2eWindow).__SPROUT_E2E_LAST_START_HUDDLE__ ?? null,
+      ),
+    )
+    .not.toBeNull();
+  const startPayload = (await page.evaluate(
+    () => (window as E2eWindow).__SPROUT_E2E_LAST_START_HUDDLE__,
+  )) as { parentChannelId?: string; transcriptsToParent?: boolean };
+
+  expect(startPayload.transcriptsToParent).toBe(true);
+  // The parent must be the DM the transcript screen renders — the only DM
+  // open in the mock is the Concierge's.
+  const recorded = await commands(page);
+  expect(recorded).toContain("open_dm");
+  expect(startPayload.parentChannelId).toBeTruthy();
 });
 
 test("demo search params still render the static screenshot screen", async ({

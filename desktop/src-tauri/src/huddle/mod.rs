@@ -136,6 +136,7 @@ pub fn get_voice_input_mode(state: State<'_, AppState>) -> Result<VoiceInputMode
 pub async fn start_huddle(
     parent_channel_id: String,
     member_pubkeys: Vec<String>,
+    transcripts_to_parent: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<HuddleJoinInfo, String> {
     // Validate inputs at the Tauri boundary.
@@ -170,6 +171,7 @@ pub async fn start_huddle(
         }
         hs.phase = HuddlePhase::Creating;
         hs.parent_channel_id = Some(parent_channel_id.clone());
+        hs.transcripts_to_parent = transcripts_to_parent.unwrap_or(false);
     }
 
     let ephemeral_uuid = Uuid::new_v4();

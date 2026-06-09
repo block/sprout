@@ -58,10 +58,14 @@ interface HuddleContextValue {
   selectedOutputDevice: string;
   /** Select a different speaker — takes effect on next huddle start/join */
   setSelectedOutputDevice: (name: string) => void;
-  /** Start a new huddle — calls Rust start_huddle, then connects mic + AudioWorklet */
+  /** Start a new huddle — calls Rust start_huddle, then connects mic + AudioWorklet.
+   *  `transcriptsToParent` routes STT transcripts (and TTS listening) to the
+   *  parent channel instead of the ephemeral one — used by the Concierge,
+   *  where the parent DM is the persistent conversation spine. */
   startHuddle: (
     parentChannelId: string,
     memberPubkeys: string[],
+    options?: { transcriptsToParent?: boolean },
   ) => Promise<void>;
   /** Join an existing huddle — calls Rust join_huddle, then connects mic + AudioWorklet */
   joinHuddle: (
@@ -101,6 +105,11 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   voiceInputModeRef.current = voiceInputMode;
   /** Ephemeral channel ID — set after start_huddle/join_huddle, used for TTS subscription */
   const [ephemeralChannelId, setEphemeralChannelId] = React.useState<
+    string | null
+  >(null);
+  /** When transcripts route to the parent channel (Concierge), agent replies
+   *  land there too — point the TTS subscription at the parent instead. */
+  const [ttsChannelOverride, setTtsChannelOverride] = React.useState<
     string | null
   >(null);
   /** Self pubkey — fetched once, used to filter out own messages from TTS */
@@ -263,6 +272,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     setLocalAudioTrack(null);
     setMicConnected(false);
     setEphemeralChannelId(null);
+    setTtsChannelOverride(null);
     setActiveSpeakers([]);
   }, []); // Stable — reads track from ref, not state.
 
@@ -319,6 +329,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       setLocalAudioTrack(null);
       setMicConnected(false);
       setEphemeralChannelId(null);
+      setTtsChannelOverride(null);
       setActiveSpeakers([]);
       if (rustActiveRef.current) {
         if (isCreator) {
@@ -423,7 +434,11 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
   );
 
   const startHuddle = React.useCallback(
-    async (parentChannelId: string, memberPubkeys: string[]) => {
+    async (
+      parentChannelId: string,
+      memberPubkeys: string[],
+      options?: { transcriptsToParent?: boolean },
+    ) => {
       if (busyRef.current) return;
       busyRef.current = true;
 
@@ -437,8 +452,13 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         const joinInfo = await invoke<HuddleJoinInfo>("start_huddle", {
           parentChannelId,
           memberPubkeys,
+          transcriptsToParent: options?.transcriptsToParent ?? false,
         });
         rustActiveRef.current = true;
+        // Agent replies follow the transcripts — listen for TTS on the parent.
+        if (options?.transcriptsToParent) {
+          setTtsChannelOverride(parentChannelId);
+        }
         // Step 2–4: Get mic, setup AudioWorklet, confirm active
         try {
           await connectAndSetupMedia(joinInfo, myToken);
@@ -508,7 +528,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
     [cleanupFailedStart, connectAndSetupMedia],
   );
 
-  useTtsSubscription(ephemeralChannelId, selfPubkeyRef);
+  useTtsSubscription(ttsChannelOverride ?? ephemeralChannelId, selfPubkeyRef);
 
   // Pipeline hot-start — check if voice models finished downloading mid-huddle
   React.useEffect(() => {

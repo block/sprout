@@ -43,6 +43,12 @@ pub struct HuddleState {
     pub phase: HuddlePhase,
     pub parent_channel_id: Option<String>,
     pub ephemeral_channel_id: Option<String>,
+    /// Route STT transcripts (and the agent conversation) to the parent
+    /// channel instead of the ephemeral huddle channel. Used by the
+    /// Concierge: the parent DM is the persistent memory spine, while the
+    /// ephemeral channel stays pure audio transport. Group huddles keep the
+    /// default (`false`) so voice chatter never spams real channels.
+    pub transcripts_to_parent: bool,
     /// Cancellation token for the audio relay WS task.
     #[serde(skip)]
     pub audio_ws_cancel: Option<tokio_util::sync::CancellationToken>,
@@ -145,6 +151,7 @@ impl Clone for HuddleState {
             phase: self.phase.clone(),
             parent_channel_id: self.parent_channel_id.clone(),
             ephemeral_channel_id: self.ephemeral_channel_id.clone(),
+            transcripts_to_parent: self.transcripts_to_parent,
             audio_ws_cancel: None,    // Never clone handles.
             audio_relay_pcm_tx: None, // Never clone handles.
             participants: self.participants.clone(),
@@ -171,6 +178,7 @@ impl Default for HuddleState {
             phase: HuddlePhase::Idle,
             parent_channel_id: None,
             ephemeral_channel_id: None,
+            transcripts_to_parent: false,
             audio_ws_cancel: None,
             audio_relay_pcm_tx: None,
             participants: Vec::new(),

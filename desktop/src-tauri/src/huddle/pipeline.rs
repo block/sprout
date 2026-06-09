@@ -20,6 +20,26 @@ use super::state::{HuddlePhase, VoiceInputMode};
 use super::stt;
 use super::tts;
 
+/// Resolve where STT transcripts (and thus the voice conversation) are posted.
+///
+/// Default: the ephemeral huddle channel — voice chatter stays out of real
+/// channels. With `transcripts_to_parent` (Concierge): the parent channel,
+/// because the parent DM is the persistent conversation/memory spine and the
+/// ephemeral channel is audio transport only. Pure — unit tested below.
+pub(crate) fn resolve_transcript_channel(
+    transcripts_to_parent: bool,
+    parent_channel_id: Option<&str>,
+    ephemeral_channel_id: &str,
+) -> Result<String, String> {
+    if transcripts_to_parent {
+        parent_channel_id
+            .map(str::to_string)
+            .ok_or_else(|| "transcripts_to_parent set but no parent channel".to_string())
+    } else {
+        Ok(ephemeral_channel_id.to_string())
+    }
+}
+
 pub(crate) async fn post_connect_setup(
     state: &AppState,
     ephemeral_channel_id: &str,
@@ -86,7 +106,15 @@ pub(crate) async fn maybe_start_stt_pipeline(
     }
     let model_dir = models::stt_model_dir().ok_or("STT model directory not found")?;
 
-    let channel_uuid = parse_channel_uuid(ephemeral_channel_id)?;
+    let post_channel_id = {
+        let hs = state.huddle()?;
+        resolve_transcript_channel(
+            hs.transcripts_to_parent,
+            hs.parent_channel_id.as_deref(),
+            ephemeral_channel_id,
+        )?
+    };
+    let channel_uuid = parse_channel_uuid(&post_channel_id)?;
 
     // Atomically claim the construction slot (mirrors tts_starting pattern).
     {
@@ -320,4 +348,30 @@ pub(crate) fn spawn_transcription_task(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_transcript_channel;
+
+    const PARENT: &str = "11111111-1111-1111-1111-111111111111";
+    const EPHEMERAL: &str = "22222222-2222-2222-2222-222222222222";
+
+    #[test]
+    fn default_posts_to_ephemeral_channel() {
+        let got = resolve_transcript_channel(false, Some(PARENT), EPHEMERAL).unwrap();
+        assert_eq!(got, EPHEMERAL);
+    }
+
+    #[test]
+    fn transcripts_to_parent_posts_to_parent_channel() {
+        let got = resolve_transcript_channel(true, Some(PARENT), EPHEMERAL).unwrap();
+        assert_eq!(got, PARENT);
+    }
+
+    #[test]
+    fn transcripts_to_parent_without_parent_is_an_error() {
+        let err = resolve_transcript_channel(true, None, EPHEMERAL).unwrap_err();
+        assert!(err.contains("no parent channel"), "got: {err}");
+    }
 }

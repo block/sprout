@@ -154,7 +154,9 @@ export function ConciergeLiveScreen() {
     if (micConnected) {
       void leaveHuddle();
     } else if (!isStarting) {
-      void startHuddle(dm.id, [session.agent.pubkey]).catch(() => {
+      void startHuddle(dm.id, [session.agent.pubkey], {
+        transcriptsToParent: true,
+      }).catch(() => {
         /* surfaced via huddleError */
       });
     }
