@@ -1,7 +1,11 @@
 import * as React from "react";
 import { flushSync } from "react-dom";
-import { useUpdateProfileMutation } from "@/features/profile/hooks";
-import { getIdentity } from "@/shared/api/tauri";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  profileQueryKey,
+  useUpdateProfileMutation,
+} from "@/features/profile/hooks";
+import { getIdentity, importIdentity } from "@/shared/api/tauri";
 import { getMyRelayMembershipLookup } from "@/shared/api/relayMembers";
 import {
   ACCENT_STORAGE_KEY,
@@ -136,6 +140,7 @@ export function OnboardingFlow({
   onBackToWorkspaceSetup,
 }: OnboardingFlowProps) {
   const { complete, skipForNow } = actions;
+  const queryClient = useQueryClient();
   const savedProfile = resolveSavedProfile(initialProfile);
   const profileUpdateMutation = useUpdateProfileMutation();
   const { error: profileSaveError, isPending: isSavingProfile } =
@@ -339,6 +344,29 @@ export function OnboardingFlow({
       savedProfile.displayName,
     ),
   };
+  const avatarStepState: ProfileStepState = {
+    ...profileStepState,
+    saveRecovery: saveErrorMessage
+      ? {
+          canAdvanceWithoutSaving: true,
+          canSkipForNow: false,
+          errorMessage: saveErrorMessage,
+        }
+      : profileStepState.saveRecovery,
+  };
+
+  const importDeniedKey = React.useCallback(
+    async (nsec: string) => {
+      const identity = await importIdentity(nsec);
+      queryClient.setQueryData(["identity"], identity);
+      queryClient.removeQueries({ queryKey: profileQueryKey });
+      profileUpdateMutation.reset();
+      setDeniedPubkey("");
+      setTransitionDirection("backward");
+      setCurrentPage("profile");
+    },
+    [profileUpdateMutation, queryClient],
+  );
 
   if (currentPage === "membership-denied") {
     return (
@@ -351,6 +379,7 @@ export function OnboardingFlow({
               }
             : undefined
         }
+        onImportKey={canBackToWorkspaceSetup ? undefined : importDeniedKey}
         onRetry={() => {
           void saveProfileAndContinue(membershipRetryPage);
         }}
@@ -425,15 +454,17 @@ export function OnboardingFlow({
         ) : currentPage === "avatar" ? (
           <AvatarStep
             actions={{
+              advanceWithoutSaving: () => showThemePage(),
               back: showProfilePage,
               onUploadingChange: setIsUploadingAvatar,
+              skipForNow,
               submit: () => {
                 void saveProfileAndContinue("theme");
               },
               updateAvatarUrl: updateAvatarUrlDraft,
             }}
             direction={transitionDirection}
-            state={profileStepState}
+            state={avatarStepState}
           />
         ) : currentPage === "theme" ? (
           <ThemeStep

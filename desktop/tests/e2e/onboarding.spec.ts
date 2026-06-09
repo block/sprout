@@ -332,6 +332,40 @@ test("avatar step accepts an avatar URL before theme selection", async ({
   await expect(page.getByTestId("onboarding-runtime-goose")).toBeVisible();
 });
 
+test("failed avatar saves can continue without saving the avatar", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(page, {}, { skipOnboardingSeed: true });
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
+  await page
+    .getByTestId("onboarding-avatar-url")
+    .fill("https://example.com/morty.png");
+  await page.evaluate(() => {
+    const testWindow = window as Window & {
+      __SPROUT_E2E__?: { mock?: { profileUpdateError?: string } };
+    };
+    if (testWindow.__SPROUT_E2E__?.mock) {
+      testWindow.__SPROUT_E2E__.mock.profileUpdateError =
+        "Temporary avatar sync failure.";
+    }
+  });
+
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(page.getByText("Temporary avatar sync failure.")).toBeVisible();
+  await expect(
+    page.getByTestId("onboarding-next-without-saving"),
+  ).toBeVisible();
+  await page.getByTestId("onboarding-next-without-saving").click();
+
+  await expect(page.getByTestId("onboarding-page-theme")).toBeVisible();
+});
+
 test("theme step offers skip instead of going back", async ({ page }) => {
   await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
   await installMockBridge(page, undefined, { skipOnboardingSeed: true });
@@ -588,4 +622,47 @@ test("failed first profile saves can be skipped for the current session", async 
 
   await expect(page.getByTestId("onboarding-gate")).toHaveCount(0);
   await expectHomeView(page);
+});
+
+test("membership denial can import a different invited key", async ({
+  page,
+}) => {
+  await seedActiveIdentity(page, BLANK_TYLER_IDENTITY);
+  await installMockBridge(
+    page,
+    {
+      relayRole: null,
+    },
+    { skipOnboardingSeed: true },
+  );
+  await page.goto("/");
+
+  await page.getByTestId("onboarding-display-name").fill("Morty QA");
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(page.getByTestId("membership-denied")).toBeVisible();
+  await page.getByTestId("membership-denied-change-key").click();
+
+  const importedNsec = nsecEncode(hexToBytes(TEST_IDENTITIES.alice.privateKey));
+  await page.getByTestId("membership-denied-nsec-input").fill(importedNsec);
+  await expect(
+    page.getByTestId("membership-denied-npub-preview"),
+  ).toBeVisible();
+  await page.getByTestId("membership-denied-import-key").click();
+
+  await expect(page.getByTestId("onboarding-page-1")).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate((storageKey) => {
+        const rawIdentity = window.localStorage.getItem(storageKey);
+        const identity = rawIdentity
+          ? (JSON.parse(rawIdentity) as { pubkey?: string })
+          : null;
+        return identity?.pubkey ?? null;
+      }, E2E_IDENTITY_OVERRIDE_STORAGE_KEY),
+    )
+    .toBe(TEST_IDENTITIES.alice.pubkey);
+  await page.getByTestId("onboarding-next").click();
+
+  await expect(page.getByTestId("onboarding-page-avatar")).toBeVisible();
 });

@@ -19,8 +19,10 @@ import type { ProfileStepActions, ProfileStepState } from "./types";
 
 type AvatarStepProps = {
   actions: {
+    advanceWithoutSaving: ProfileStepActions["advanceWithoutSaving"];
     back: () => void;
     onUploadingChange: ProfileStepActions["onUploadingChange"];
+    skipForNow: ProfileStepActions["skipForNow"];
     submit: ProfileStepActions["submit"];
     updateAvatarUrl: ProfileStepActions["updateAvatarUrl"];
   };
@@ -123,14 +125,20 @@ function AvatarStepActions({
   isSaving,
   isUploadingAvatar,
   onBack,
+  onContinueWithoutSaving,
+  onSkipForNow,
   onSubmit,
+  saveRecovery,
 }: {
   canSubmit: boolean;
   hidden: boolean;
   isSaving: boolean;
   isUploadingAvatar: boolean;
   onBack: () => void;
+  onContinueWithoutSaving: () => void;
+  onSkipForNow: () => void;
   onSubmit: () => void;
+  saveRecovery: ProfileStepState["saveRecovery"];
 }) {
   return (
     <AnimatePresence initial={false} mode="popLayout">
@@ -168,6 +176,32 @@ function AvatarStepActions({
             )}
           </Button>
 
+          {saveRecovery.canSkipForNow ? (
+            <Button
+              className="h-10 w-full text-muted-foreground hover:text-accent-foreground max-lg:pointer-events-auto"
+              data-testid="onboarding-skip"
+              disabled={isSaving}
+              onClick={onSkipForNow}
+              type="button"
+              variant="ghost"
+            >
+              Skip for now
+            </Button>
+          ) : null}
+
+          {saveRecovery.canAdvanceWithoutSaving ? (
+            <Button
+              className="h-10 w-full text-muted-foreground hover:text-accent-foreground max-lg:pointer-events-auto"
+              data-testid="onboarding-next-without-saving"
+              disabled={isSaving}
+              onClick={onContinueWithoutSaving}
+              type="button"
+              variant="ghost"
+            >
+              Continue without saving
+            </Button>
+          ) : null}
+
           <Button
             className="h-10 w-full text-muted-foreground hover:text-accent-foreground max-lg:pointer-events-auto"
             data-testid="onboarding-back"
@@ -193,7 +227,14 @@ function AvatarStepActions({
 }
 
 export function AvatarStep({ actions, direction, state }: AvatarStepProps) {
-  const { back, onUploadingChange, submit, updateAvatarUrl } = actions;
+  const {
+    advanceWithoutSaving,
+    back,
+    onUploadingChange,
+    skipForNow,
+    submit,
+    updateAvatarUrl,
+  } = actions;
   const { avatar, isSaving, isUploadingAvatar, name, saveRecovery } = state;
   const [avatarSquishKey, setAvatarSquishKey] = React.useState(0);
   const [avatarEditorMode, setAvatarEditorMode] =
@@ -270,7 +311,10 @@ export function AvatarStep({ actions, direction, state }: AvatarStepProps) {
             isSaving={isSaving}
             isUploadingAvatar={isUploadingAvatar}
             onBack={back}
+            onContinueWithoutSaving={advanceWithoutSaving}
+            onSkipForNow={skipForNow}
             onSubmit={submit}
+            saveRecovery={saveRecovery}
           />
         </motion.div>
       </motion.div>
