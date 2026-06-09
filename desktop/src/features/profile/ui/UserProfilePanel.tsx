@@ -1,6 +1,5 @@
 import * as React from "react";
 import { ArrowLeft, X } from "lucide-react";
-import { toast } from "sonner";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
@@ -14,12 +13,6 @@ import {
 } from "@/features/agents/hooks";
 import { EditAgentDialog } from "@/features/agents/ui/EditAgentDialog";
 import { useChannelsQuery } from "@/features/channels/hooks";
-import {
-  useArchiveIdentityMutation,
-  useIsIdentityArchived,
-  useOaOwnerQuery,
-  useUnarchiveIdentityMutation,
-} from "@/features/identity-archive/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import {
   useContactListQuery,
@@ -33,7 +26,6 @@ import {
   MemoryFocusedView,
   ProfileSummaryView,
 } from "@/features/profile/ui/UserProfilePanelSections";
-import { useMyRelayMembershipQuery } from "@/features/relay-members/hooks";
 import { useUserStatusQuery } from "@/features/user-status/hooks";
 import { useAgentSession } from "@/shared/context/AgentSessionContext";
 import { useEscapeKey } from "@/shared/hooks/useEscapeKey";
@@ -151,18 +143,9 @@ export function UserProfilePanel({
   const channelsQuery = useChannelsQuery();
   const presenceQuery = usePresenceQuery([pubkey]);
   const userStatusQuery = useUserStatusQuery([pubkey]);
-  const myMembershipQuery = useMyRelayMembershipQuery();
-  const oaOwnerQuery = useOaOwnerQuery(
-    pubkey,
-    currentPubkey !== undefined &&
-      pubkey.toLowerCase() !== currentPubkey.toLowerCase(),
-  );
-  const isArchived = useIsIdentityArchived(pubkey);
   const contactListQuery = useContactListQuery(currentPubkey);
   const followMutation = useFollowMutation(currentPubkey);
   const unfollowMutation = useUnfollowMutation(currentPubkey);
-  const archiveMutation = useArchiveIdentityMutation();
-  const unarchiveMutation = useUnarchiveIdentityMutation();
   const { onOpenAgentSession } = useAgentSession();
   const { goChannel } = useAppNavigation();
 
@@ -193,11 +176,6 @@ export function UserProfilePanel({
     ) ??
       false);
 
-  const myRole = myMembershipQuery.data?.role;
-  const isRelayAdminOrOwner = myRole === "owner" || myRole === "admin";
-  const isOaOwnerOfViewee = oaOwnerQuery.data?.isMe === true;
-  const canArchive = isSelf || isRelayAdminOrOwner || isOaOwnerOfViewee;
-
   const profileChannels = React.useMemo(
     () =>
       deriveProfileChannels(
@@ -214,32 +192,6 @@ export function UserProfilePanel({
     prevPubkeyRef.current = pubkey;
     setView("summary");
   }
-
-  const handleArchive = React.useCallback(() => {
-    archiveMutation.mutate(
-      { targetPubkey: pubkey },
-      {
-        onSuccess: () => toast.success("Archived on this relay"),
-        onError: (error) =>
-          toast.error(
-            `Archive failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-      },
-    );
-  }, [archiveMutation, pubkey]);
-
-  const handleUnarchive = React.useCallback(() => {
-    unarchiveMutation.mutate(
-      { targetPubkey: pubkey },
-      {
-        onSuccess: () => toast.success("Unarchived on this relay"),
-        onError: (error) =>
-          toast.error(
-            `Unarchive failed: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-      },
-    );
-  }, [pubkey, unarchiveMutation]);
 
   const handleMessage = React.useCallback(() => {
     onOpenDm?.([pubkey]);
@@ -420,19 +372,15 @@ export function UserProfilePanel({
         >
           {view === "summary" ? (
             <ProfileSummaryView
-              canArchive={canArchive}
               canEditAgent={canEditAgent}
               canViewActivity={canViewActivity}
               channelCount={profileChannels.length}
               channelsLoading={channelsQuery.isLoading}
               displayName={displayName}
               followMutation={followMutation}
-              handleArchive={handleArchive}
               handleEditAgent={handleEditAgent}
               handleMessage={handleMessage}
               handleOpenActivity={handleOpenActivity}
-              handleUnarchive={handleUnarchive}
-              isArchived={isArchived}
               isBot={isBot}
               isFollowing={isFollowing}
               isOwner={isOwner}
@@ -445,14 +393,13 @@ export function UserProfilePanel({
               onOpenChannels={() => setView("channels")}
               onOpenMemories={() => setView("memories")}
               onOpenDm={onOpenDm}
+              presenceLoaded={presenceQuery.isSuccess}
               presenceStatus={presenceStatus}
               profile={profile}
               pubkey={pubkey}
               relayAgent={relayAgent}
               unfollowMutation={unfollowMutation}
               userStatus={userStatus}
-              archiveMutation={archiveMutation}
-              unarchiveMutation={unarchiveMutation}
             />
           ) : null}
 

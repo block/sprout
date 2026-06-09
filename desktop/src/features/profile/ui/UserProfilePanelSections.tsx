@@ -3,8 +3,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   Activity,
   ArrowUpRight,
-  Archive,
-  ArchiveRestore,
   Brain,
   ChevronDown,
   ChevronRight,
@@ -24,10 +22,7 @@ import {
 import { toast } from "sonner";
 
 import { MemorySection } from "@/features/agent-memory/ui/MemorySection";
-import type {
-  useArchiveIdentityMutation,
-  useUnarchiveIdentityMutation,
-} from "@/features/identity-archive/hooks";
+import { AgentStatusBadge } from "@/features/agents/ui/AgentStatusBadge";
 import { getPresenceLabel } from "@/features/presence/lib/presence";
 import { PresenceDot } from "@/features/presence/ui/PresenceBadge";
 import type {
@@ -61,20 +56,15 @@ async function copyToClipboard(value: string, label?: string) {
 // ── Summary view ─────────────────────────────────────────────────────────────
 
 export type ProfileSummaryViewProps = {
-  archiveMutation: ReturnType<typeof useArchiveIdentityMutation>;
-  canArchive: boolean;
   canEditAgent: boolean;
   canViewActivity: boolean;
   channelCount: number;
   channelsLoading: boolean;
   displayName: string;
   followMutation: ReturnType<typeof useFollowMutation>;
-  handleArchive: () => void;
   handleEditAgent: () => void;
   handleMessage: () => void;
   handleOpenActivity: () => void;
-  handleUnarchive: () => void;
-  isArchived: boolean | undefined;
   isBot: boolean;
   isFollowing: boolean;
   isOwner: boolean | undefined;
@@ -87,30 +77,25 @@ export type ProfileSummaryViewProps = {
   onOpenChannels: () => void;
   onOpenMemories: () => void;
   onOpenDm?: (pubkeys: string[]) => void;
+  presenceLoaded: boolean;
   presenceStatus: "online" | "away" | "offline" | undefined;
   profile: ReturnType<typeof useUserProfileQuery>["data"];
   pubkey: string;
   relayAgent: RelayAgent | undefined;
   unfollowMutation: ReturnType<typeof useUnfollowMutation>;
-  unarchiveMutation: ReturnType<typeof useUnarchiveIdentityMutation>;
   userStatus: { text: string; emoji: string } | null | undefined;
 };
 
 export function ProfileSummaryView({
-  archiveMutation,
-  canArchive,
   canEditAgent,
   canViewActivity,
   channelCount,
   channelsLoading,
   displayName,
   followMutation,
-  handleArchive,
   handleEditAgent,
   handleMessage,
   handleOpenActivity,
-  handleUnarchive,
-  isArchived,
   isBot,
   isFollowing,
   isOwner,
@@ -123,13 +108,13 @@ export function ProfileSummaryView({
   onOpenChannels,
   onOpenMemories,
   onOpenDm,
+  presenceLoaded,
   presenceStatus,
   profile,
   pubkey,
   relayAgent,
   unfollowMutation,
   userStatus,
-  unarchiveMutation,
 }: ProfileSummaryViewProps) {
   const metadataFields = [
     ...buildPublicFields({
@@ -143,6 +128,8 @@ export function ProfileSummaryView({
           managedAgent,
           ownerDisplayName,
           ownerHandle,
+          presenceLoaded,
+          presenceStatus,
           relayAgent,
         })
       : []),
@@ -156,7 +143,6 @@ export function ProfileSummaryView({
     <div className="flex flex-col gap-6 pt-4">
       <ProfileHero
         displayName={displayName}
-        isArchived={isArchived}
         isBot={isBot}
         presenceStatus={presenceStatus}
         profile={profile}
@@ -221,16 +207,6 @@ export function ProfileSummaryView({
       {metadataFields.length > 0 ? (
         <ProfileFieldGroup fields={metadataFields} />
       ) : null}
-
-      {canArchive && isArchived !== undefined ? (
-        <ProfileAdminSection
-          archiveMutation={archiveMutation}
-          handleArchive={handleArchive}
-          handleUnarchive={handleUnarchive}
-          isArchived={isArchived}
-          unarchiveMutation={unarchiveMutation}
-        />
-      ) : null}
     </div>
   );
 }
@@ -239,14 +215,12 @@ export function ProfileSummaryView({
 
 function ProfileHero({
   displayName,
-  isArchived,
   isBot,
   presenceStatus,
   profile,
   userStatus,
 }: {
   displayName: string;
-  isArchived: boolean | undefined;
   isBot: boolean;
   presenceStatus: "online" | "away" | "offline" | undefined;
   profile: ProfileSummaryViewProps["profile"];
@@ -310,17 +284,6 @@ function ProfileHero({
             ) : null}
             {userStatus.text}
           </p>
-        ) : null}
-
-        {isArchived ? (
-          <span
-            className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300"
-            data-testid="user-profile-archived-flair"
-            title="This identity is archived on this relay. Historical events remain attributed to it."
-          >
-            <Archive className="h-3 w-3" />
-            Archived on this relay
-          </span>
         ) : null}
       </div>
     </div>
@@ -520,7 +483,17 @@ function ProfileQuickAction({
 
 type ProfileField = {
   copyValue?: string;
+  /**
+   * Plain-text representation. Always required so non-visual surfaces (e.g. tooltips,
+   * copy-to-clipboard) keep working. When `displayNode` is set, the row renders that
+   * instead of the text — but the text still drives the title/tooltip.
+   */
   displayValue: string;
+  /**
+   * Optional rich rendering for the value cell (e.g. a status badge). When present,
+   * replaces the plain text node in the row.
+   */
+  displayNode?: React.ReactNode;
   icon: LucideIcon;
   label: string;
   testId?: string;
@@ -584,11 +557,15 @@ function buildOwnerFields({
   managedAgent,
   ownerDisplayName,
   ownerHandle,
+  presenceLoaded,
+  presenceStatus,
   relayAgent,
 }: {
   managedAgent: ManagedAgent | undefined;
   ownerDisplayName: string | null;
   ownerHandle: string | null;
+  presenceLoaded: boolean;
+  presenceStatus: "online" | "away" | "offline" | undefined;
   relayAgent: RelayAgent | undefined;
 }): ProfileField[] {
   const fields: ProfileField[] = [];
@@ -626,6 +603,13 @@ function buildOwnerFields({
       displayValue: managedAgent.status
         .replace(/_/g, " ")
         .replace(/\b\w/g, (char: string) => char.toUpperCase()),
+      displayNode: (
+        <AgentStatusBadge
+          presenceLoaded={presenceLoaded}
+          presenceStatus={presenceStatus}
+          status={managedAgent.status}
+        />
+      ),
       icon: Activity,
       label: "Status",
       testId: "user-profile-agent-status",
@@ -755,7 +739,7 @@ function ProfileFieldRow({ field }: { field: ProfileField }) {
           className="mt-0.5 block truncate text-sm text-muted-foreground"
           title={field.displayValue}
         >
-          {field.displayValue}
+          {field.displayNode ?? field.displayValue}
         </span>
       </span>
       {isCopyable ? (
@@ -901,56 +885,5 @@ export function ChannelsFocusedView({
         </li>
       ))}
     </ul>
-  );
-}
-
-// ── Admin / destructive actions ──────────────────────────────────────────────
-
-function ProfileAdminSection({
-  archiveMutation,
-  handleArchive,
-  handleUnarchive,
-  isArchived,
-  unarchiveMutation,
-}: {
-  archiveMutation: ReturnType<typeof useArchiveIdentityMutation>;
-  handleArchive: () => void;
-  handleUnarchive: () => void;
-  isArchived: boolean;
-  unarchiveMutation: ReturnType<typeof useUnarchiveIdentityMutation>;
-}) {
-  return (
-    <section className="space-y-2 pt-2">
-      <h4 className="px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-        Admin
-      </h4>
-      <div className="overflow-hidden rounded-2xl bg-muted/20">
-        {isArchived ? (
-          <button
-            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted/40"
-            data-testid="user-profile-unarchive-identity"
-            disabled={unarchiveMutation.isPending}
-            onClick={handleUnarchive}
-            type="button"
-          >
-            <ArchiveRestore className="h-4 w-4 shrink-0 text-muted-foreground" />
-            {unarchiveMutation.isPending
-              ? "Unarchiving…"
-              : "Unarchive identity"}
-          </button>
-        ) : (
-          <button
-            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium text-destructive transition-colors hover:bg-destructive/5"
-            data-testid="user-profile-archive-identity"
-            disabled={archiveMutation.isPending}
-            onClick={handleArchive}
-            type="button"
-          >
-            <Archive className="h-4 w-4 shrink-0" />
-            {archiveMutation.isPending ? "Archiving…" : "Archive identity"}
-          </button>
-        )}
-      </div>
-    </section>
   );
 }
